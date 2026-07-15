@@ -31,7 +31,6 @@ export function ChatControls({ className }: ChatControlsProps) {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const startNewSession = useSessionStore((s) => s.startNewSession)
   const addToast = useUiStore((s) => s.addToast)
-  const openSessionPanel = useUiStore((s) => s.openSessionPanel)
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -130,11 +129,12 @@ export function ChatControls({ className }: ChatControlsProps) {
         <span>New Chat</span>
       </button>
 
-      {/* 2. Sessions — always visible; "Sessions" label at @2xl+, icon-only below */}
+      {/* 2. Search — opens the cross-workspace session search modal (replaces the old Sessions panel,
+          which is now merged into the sidebar accordion). */}
       <button
         type="button"
-        onClick={openSessionPanel}
-        aria-label="Open sessions panel"
+        onClick={() => useUiStore.getState().openSearchModal()}
+        aria-label="Search sessions"
         className={cn(
           'flex items-center justify-center shrink-0 px-2 h-8 gap-1 rounded-md',
           'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',

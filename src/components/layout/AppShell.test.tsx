@@ -1,3 +1,4 @@
+import React from 'react'
 // AppShell.test.tsx — app-state fetch-failure banner (Wave 1 frontend-findings-fix).
 //
 // AppShell (src/components/layout/AppShell.tsx) fetches `['app-state']` via
@@ -38,7 +39,7 @@ vi.mock('@/components/chat/OmnipusRuntimeProvider', () => ({
   OmnipusRuntimeProvider: ({ children }: { children?: React.ReactNode }) => children ?? null,
 }))
 vi.mock('@/hooks/useVersionCheck', () => ({ useVersionCheck: vi.fn() }))
-vi.mock('@tanstack/react-router', () => ({ Outlet: () => null }))
+vi.mock('@tanstack/react-router', () => ({ Outlet: () => null, useNavigate: () => vi.fn(), useLocation: () => ({ pathname: '/' }), Link: ({ children, to, onClick, className }: { children: React.ReactNode; to: string; onClick?: () => void; className?: string }) => React.createElement('a', { href: to, onClick, className }, children) }))
 
 // Mock only the fetch functions AppShell touches directly (fetchAppState,
 // fetchNotifications) plus the two it prefetches on mount (fetchTasks,

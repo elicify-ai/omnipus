@@ -111,6 +111,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     enabled: inputEnabled,
   })
 
+  // Merge frontend-only client commands with the backend-served list so the
+  // synthetic entries (e.g. /search) participate in palette filtering, /help,
+  // and the send-path interception identically to a real backend command.
+  const allCommands: SlashCommand[] = [...commands]
+
   // Skills query: always enabled when input is enabled (not gated on
   // skill-arg mode). staleTime of 60s matches the commands query — skills
   // change rarely.
@@ -133,7 +138,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Commands section — hidden when typing "/skills" (D9)
   const visibleCommandItems: SlashItem[] = (() => {
     if (menuFilter === null || isSkillsFilter) return []
-    const all = commands.filter((cmd) => {
+    const all = allCommands.filter((cmd) => {
       const cmdName = cmd.label.slice(1).toLowerCase() // strip leading /
       return menuFilter === '' || cmdName.startsWith(menuFilter)
     })
@@ -206,7 +211,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
     if (name === 'help') {
       // US-4/AC-2: build the help text from the fetched command list.
-      const helpLines = commands
+      const helpLines = allCommands
         .map((c) => `- \`${c.label}\` — ${c.description}`)
         .join('\n')
       const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
@@ -273,7 +278,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     closeSlash()
 
     // Look up the full command definition by label to get the name + delivery.
-    const def = commands.find((c) => c.label === label)
+    const def = allCommands.find((c) => c.label === label)
 
     if (!def) {
       // Unknown label (shouldn't happen with API-driven palette, but be safe).
@@ -332,7 +337,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const currentText = composerRuntime.getState().text ?? inputValue
     const trimmed = currentText.trim()
     if (!trimmed.startsWith('/')) return false
-    const def = commands.find((c) => c.delivery === 'client' && c.label === trimmed)
+    const def = allCommands.find((c) => c.delivery === 'client' && c.label === trimmed)
     if (!def) return false
     composerRuntime.setText('')
     setInputValue('')
