@@ -781,3 +781,107 @@ func TestServeWebDisabledError(t *testing.T) {
 	require.True(t, result.IsError, "serve_web must error when preview_enabled is false")
 	assert.Contains(t, result.ForLLM, "preview disabled")
 }
+
+// --- SFH-2: fail-closed when CanonicalGatewayOrigin(cfg) cannot resolve ---
+//
+// wildcardHostsNoPublicURL is the set of gateway.host values that, combined
+// with an unset gateway.public_url, make middleware.CanonicalGatewayOrigin
+// return "" (MR-03 / FR-007e wildcard-bind rule in origin.go). Before the
+// SFH-2 fix, web_serve concatenated that empty origin with the /preview/
+// path and returned a schemeless/hostless URL as a SUCCESS result.
+var wildcardHostsNoPublicURL = []string{"0.0.0.0", "::", "::0"}
+
+// TestServeWebOriginUnresolved_StaticFailsClosed verifies SFH-2: static mode
+// fails closed (IsError, not a relative-path success) when gateway.host is a
+// wildcard bind and gateway.public_url is unset.
+func TestServeWebOriginUnresolved_StaticFailsClosed(t *testing.T) {
+	for _, host := range wildcardHostsNoPublicURL {
+		t.Run(host, func(t *testing.T) {
+			getConfig := func() *config.Config {
+				return &config.Config{
+					Gateway: config.GatewayConfig{
+						PublicURL: "", // unset — CanonicalGatewayOrigin cannot derive a scheme+host
+						Host:      host,
+						Port:      5000,
+					},
+				}
+			}
+			tool := NewWebServeTool(
+				t.TempDir(),
+				"test-agent",
+				getConfig,
+				&stubServedSubdirs{token: "wildcardtok"},
+				nil,
+				WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+				nil,
+				nil,
+				60,
+				86400,
+			)
+			ctx := WithAgentID(context.Background(), "test-agent")
+
+			result := tool.Execute(ctx, map[string]any{"path": "."})
+			require.True(t, result.IsError,
+				"static mode must fail closed when origin cannot be resolved (host=%q); got success: %s",
+				host, result.ForLLM)
+			assert.NotContains(t, result.ForLLM, "preview disabled",
+				"the origin-unresolved error must be distinct from the preview_enabled=false error")
+			assert.Contains(t, result.ForLLM, "public_url",
+				"error must actionably tell the operator to set gateway.public_url")
+		})
+	}
+}
+
+// TestServeWebOriginUnresolved_DevFailsClosed verifies SFH-2 for dev mode:
+// executeDev fails closed when gateway.host is a wildcard bind and
+// gateway.public_url is unset — and does so BEFORE reserving a port or
+// spawning a child (proven here by passing a nil devReg: if the origin check
+// did not fire first, this would instead fail with "registry not
+// configured", not the origin-unresolved message).
+func TestServeWebOriginUnresolved_DevFailsClosed(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("dev mode only reachable on Linux; non-Linux returns Tier3UnsupportedMessage first")
+	}
+	for _, host := range wildcardHostsNoPublicURL {
+		t.Run(host, func(t *testing.T) {
+			getConfig := func() *config.Config {
+				return &config.Config{
+					Gateway: config.GatewayConfig{
+						PublicURL: "",
+						Host:      host,
+						Port:      5000,
+					},
+				}
+			}
+			tool := NewWebServeTool(
+				t.TempDir(),
+				"test-agent",
+				getConfig,
+				&stubServedSubdirs{token: "wildcardtok"},
+				nil, // devReg nil — origin check must fire BEFORE this gate
+				WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+				nil,
+				nil,
+				60,
+				86400,
+			)
+			ctx := WithAgentID(context.Background(), "test-agent")
+
+			result := tool.Execute(ctx, map[string]any{
+				"path":    ".",
+				"command": "vite dev",
+				"port":    float64(18000),
+			})
+			require.True(t, result.IsError,
+				"dev mode must fail closed when origin cannot be resolved (host=%q); got success: %s",
+				host, result.ForLLM)
+			assert.NotContains(t, result.ForLLM, "registry not configured",
+				"origin check must run BEFORE the devReg-nil check (i.e. before any spawn), "+
+					"not surface as a downstream registry error")
+			assert.NotContains(t, result.ForLLM, "preview disabled",
+				"the origin-unresolved error must be distinct from the preview_enabled=false error")
+			assert.Contains(t, result.ForLLM, "public_url",
+				"error must actionably tell the operator to set gateway.public_url")
+		})
+	}
+}

@@ -56,6 +56,13 @@ export type IframePreviewProps =
 // Internal warmup state machine phases.
 type WarmupPhase = 'starting' | 'probing' | 'ready' | 'error'
 
+// Default port for a protocol when window.location.port is empty (browsers
+// omit .port for the scheme's default port).
+function defaultPortForProtocol(protocol: string): number {
+  if (protocol === 'https:') return 443
+  return 80
+}
+
 // ── Link-only fallback (for a raw/unvalidated legacy `url`) ───────────────────
 
 function LinkOnlyFallback({ href, label }: { href: string; label: string }) {
@@ -200,7 +207,7 @@ export function IframePreview(props: IframePreviewProps) {
   const origin = window.location.origin
   const port = window.location.port
     ? Number(window.location.port)
-    : protocol === 'https:' ? 443 : 80
+    : defaultPortForProtocol(protocol)
 
   const resolved = result
     ? resolvePreviewHref({ path: result.path, url: result.url, origin, hostname, port })
@@ -227,8 +234,9 @@ export function IframePreview(props: IframePreviewProps) {
         // Non-2xx/3xx (e.g. a 503 while the dev server is still starting):
         // not ready yet — the interval keeps polling.
       })
-      .catch(() => {
+      .catch((err) => {
         // Network error — dev server not reachable yet; interval keeps polling.
+        console.debug('preview.warmup_probe_failed', err)
       })
   }, [stopPolling])
 

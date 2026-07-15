@@ -162,6 +162,11 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 		if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
 			return AuthResult{Authenticated: true, User: user}
 		}
+		// SFH-1: surface "cookie present but invalid" (replay/probe/stale
+		// cookie) as a log line — silent for the routine "no cookie at all"
+		// case (see LogInvalidSessionCookiePresent's doc). Log-only: the
+		// fail-closed 401 below is unchanged either way.
+		middleware.LogInvalidSessionCookiePresent(r, cfg)
 		http.Error(w, "unauthorized: missing Bearer token", http.StatusUnauthorized)
 		return AuthResult{Authenticated: false}
 	}

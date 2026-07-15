@@ -341,8 +341,8 @@ var reservedGatewayCookieNames = map[string]struct{}{
 }
 
 // proxyDevRequest forwards the request to the dev-server's loopback port.
-// Strips the /preview/<agent>/<token> (or /dev/<agent>/<token>) prefix so the
-// embedded app sees its own root paths.
+// Strips the /preview/<agent>/<token> prefix so the embedded app sees its own
+// root paths.
 //
 // FR-007d: ModifyResponse strips upstream CSP/XFO so the gateway-injected
 // policy is authoritative.

@@ -1796,8 +1796,9 @@ export function refreshProviderModels(id: string): Promise<Provider> {
 // fetchCliDetect probes the host for installed external CLIs (claude-code /
 // codex / opencode), used by the Agents screen to gate the "+ External
 // subagent" runtime choices. UAT fix: this MUST go through the authed
-// `request()` wrapper so the bearer token rides along — the previous raw
-// `fetch('/api/v1/system/cli-detect')` sent no auth header and got a 401,
+// `request()` wrapper so the omnipus-session cookie rides along
+// (credentials:'include') — the previous raw
+// `fetch('/api/v1/system/cli-detect')` sent no credentials and got a 401,
 // surfacing a false "Could not detect installed external CLIs" banner.
 export function fetchCliDetect(): Promise<CliDetect> {
   return request<CliDetect>('/system/cli-detect', undefined, CliDetectSchema as ZodType<CliDetect>)

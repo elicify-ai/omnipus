@@ -4,8 +4,8 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package middleware — canonical-origin computation and Origin enforcement
-// middleware for the Omnipus gateway.
+// Package middleware — canonical-origin computation and an Origin-check
+// CSRF helper for the Omnipus gateway.
 //
 // canonicalGatewayOrigin (and its exported alias CanonicalGatewayOrigin)
 // derives the browser-facing origin for the main listener from the current
@@ -15,17 +15,32 @@
 // cfg.Gateway.PublicURL, then host:port heuristic, then empty-string fallback
 // for wildcard binds (see FR-022 / MR-03 / FR-007e).
 //
-// RequireMatchingOriginOnStateChanging is a general-purpose CSRF fence for the
-// SPA's own /api/v1/* routes. It is NOT applied to the /preview/<agent>/<token>/
-// reverse-proxy path (ADR-044 / FR-012 / FR-023a): /preview/ uses
-// path-token-only authentication, and a state-changing request originating
-// from inside a previewed app (or a form POST proxied through it) carries no
-// Origin header the SPA's main origin would recognise — by design, since the
-// previewed app is not the SPA. Applying the Origin check to /preview/ would
-// block legitimate previewed-app POSTs with 403. /preview/ is protected
-// against foreign embeds by the CSP frame-ancestors directive instead
-// (Threat Model T-04), and FR-013 additionally strips the operator's cookies
-// before the request is proxied to the dev server.
+// RequireMatchingOriginOnStateChanging is a general-purpose Origin-check CSRF
+// helper. It is NOT currently wired into the live gateway handler chain:
+// gateway.go's setupServices wraps the main mux with only
+// configSnapshotMiddleware and middleware.CSRFMiddleware (the double-submit
+// cookie check) — this function is not one of those wraps. The live
+// cross-origin defense for /api/v1/*'s state-changing routes today is that
+// wired CSRFMiddleware, not this helper. RequireMatchingOriginOnStateChanging
+// is kept as a tested, ready-to-use reference/building-block (see
+// origin_test.go) in case a future change wants an additional Origin-based
+// fence, but it cannot be wired in as-is: it 403s any state-changing request
+// whose Origin header is missing (originMatches("", expected) is always
+// false), which would reject every CLI/curl/webhook client (none send an
+// Origin header) and any same-origin browser POST from a user agent that
+// omits Origin. Wiring it would first require adding a bearer-authenticated /
+// no-Origin exemption alongside the /preview/ exemption below.
+//
+// The one exemption this helper DOES implement: it never applies to the
+// /preview/<agent>/<token>/ reverse-proxy path (ADR-044 / FR-012 / FR-023a):
+// /preview/ uses path-token-only authentication, and a state-changing request
+// originating from inside a previewed app (or a form POST proxied through it)
+// carries no Origin header the SPA's main origin would recognise — by
+// design, since the previewed app is not the SPA. Applying the Origin check
+// to /preview/ would block legitimate previewed-app POSTs with 403.
+// /preview/ is protected against foreign embeds by the CSP frame-ancestors
+// directive instead (Threat Model T-04), and FR-013 additionally strips the
+// operator's cookies before the request is proxied to the dev server.
 
 package middleware
 
@@ -151,6 +166,16 @@ func isStateChangingMethod(method string) bool {
 // RequireMatchingOriginOnStateChanging returns a middleware that rejects
 // state-changing requests (POST/PUT/PATCH/DELETE) whose Origin header is
 // missing or does not match the canonicalised cfg.Gateway.Host.
+//
+// NOT CURRENTLY WIRED: this middleware is not installed anywhere in the live
+// gateway.go handler chain (see the package doc above). It is kept as a
+// tested, ready-reference building block, not as an active protection layer
+// — do not assume requests are passing through this check. The live
+// cross-origin defense on /api/v1/*'s state-changing routes today is
+// middleware.CSRFMiddleware's double-submit cookie check. Wiring this helper
+// as-is would 403 every Origin-less request (all CLI/curl/webhook clients,
+// plus any browser that omits Origin on a same-origin POST) — it would need
+// a bearer-authenticated / no-Origin exemption added first.
 //
 // GET (and HEAD, OPTIONS) requests bypass the check entirely.
 //

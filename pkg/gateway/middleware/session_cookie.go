@@ -357,6 +357,47 @@ func hasOmnipusSessionCookie(r *http.Request) bool {
 	return err == nil
 }
 
+// LogInvalidSessionCookiePresent logs, at the level configured by
+// cfg.Gateway.AuthMismatchLogLevel, when r carried an omnipus-session cookie
+// that did NOT bcrypt-match any configured user (SFH-1, preview-on-main-
+// listener pass-2 fix round).
+//
+// This is the exported, call-site-usable twin of the detection
+// RequireSessionCookieOrBearer already performs internally (see its cookie-
+// resolution branch below, which now delegates here) — it lets the three
+// LIVE cookie-fallback sites that each re-derive their own
+// middleware.ResolveUserFromCookie fallback — gateway.checkBearerAuth
+// (auth.go), gateway.WSHandler.authenticateWS (websocket.go), and
+// gateway.BrowserWSHandler.authenticate (browser_ws.go) — surface the same
+// replay/probe/stale-cookie signal instead of silently falling through to
+// their next auth mechanism (bearer/frame/anonymous) with no trace.
+//
+// Silent (no log line, no side effect at all) when the request carries NO
+// omnipus-session cookie whatsoever — that is the routine "not authenticated
+// via cookie" case (e.g. a plain CLI/bearer request), not a security signal.
+// Only a cookie that was actually SENT but matched nothing is logged.
+//
+// LOG-ONLY: this function never changes an auth decision and has no return
+// value. Callers must still perform their own fail-closed/fallback logic
+// exactly as before regardless of whether this logs.
+//
+// cfg may be nil (defensive — production callers always have a non-nil
+// config in hand at this point, but tests may not); a nil cfg logs at the
+// resolver's default level ("warn") rather than skipping the log entirely,
+// since the cookie-present signal is still worth surfacing even without a
+// configured level.
+func LogInvalidSessionCookiePresent(r *http.Request, cfg *config.Config) {
+	if !hasOmnipusSessionCookie(r) {
+		return
+	}
+	var level string
+	if cfg != nil {
+		level = cfg.Gateway.AuthMismatchLogLevel
+	}
+	logFn := resolveAuthMismatchLogger(level)
+	logFn("auth: cookie present but invalid; falling back to bearer", "remote_addr", r.RemoteAddr)
+}
+
 // resolveBearerUser returns the user matching an Authorization: Bearer
 // token, or nil if there is no bearer header or the token doesn't match a
 // known user. This is intentionally a parallel implementation of
@@ -446,14 +487,20 @@ func RequireSessionCookieOrBearer(getCfg func() *config.Config) func(http.Handle
 				logFn := resolveAuthMismatchLogger(cfg.Gateway.AuthMismatchLogLevel)
 				logFn("auth: cookie resolution unexpected error",
 					"error", cookieErr, "remote_addr", r.RemoteAddr)
-			} else if errors.Is(cookieErr, ErrSessionNotFound) && hasOmnipusSessionCookie(r) {
+			} else if errors.Is(cookieErr, ErrSessionNotFound) {
 				// Cookie was sent but didn't bcrypt-match any stored hash.
 				// This is the signal of a replay attempt or a stale cookie
 				// after a server-side hash rotation. Log so operators can
 				// correlate spikes with attacks or password resets.
-				logFn := resolveAuthMismatchLogger(cfg.Gateway.AuthMismatchLogLevel)
-				logFn("auth: cookie present but invalid; falling back to bearer",
-					"remote_addr", r.RemoteAddr)
+				// Delegates to the exported helper (SFH-1) so this exact
+				// detection/message logic has a single source of truth shared
+				// with the three live cookie-fallback call sites in
+				// pkg/gateway (checkBearerAuth, authenticateWS,
+				// BrowserWSHandler.authenticate). LogInvalidSessionCookiePresent
+				// is itself a no-op when no cookie was present at all, so the
+				// hasOmnipusSessionCookie(r) guard that used to live here now
+				// lives inside the helper.
+				LogInvalidSessionCookiePresent(r, cfg)
 			}
 			bearerUser := resolveBearerUser(r, users)
 

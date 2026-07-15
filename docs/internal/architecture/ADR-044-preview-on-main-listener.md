@@ -51,7 +51,7 @@ Two additional defects compound the problem:
 | # | What's missing/ambiguous | Why it matters | Likely assumption if unresolved | Question to resolve |
 |---|---|---|---|---|
 | 1 | Is the auth token ever in `localStorage` in production? | Determines the severity of the same-origin risk. The SPA writes to `sessionStorage` (`auth.ts:23`), but `getAuthHeaders()` (`api.ts:609`) has a `localStorage` fallback. | The fallback exists for legacy/e2e compatibility; in normal desktop use, the token is in `sessionStorage` only. | Confirm the localStorage fallback is never written by the current SPA (it only reads it as a fallback). |
-| 2 | Does the CSRF middleware exempt `/preview/` or not? | Determines whether mounting `HandlePreview` on the main mux breaks (CSRF rejects unauthenticated GET) or requires exemption. The CSRF middleware wraps the main mux (`gateway.go:2289`); the preview handler sends no CSRF header. | `/preview/` must be exempted from CSRF (it's a GET-only reverse proxy with token-in-path auth). | Specify the exact exemption. |
+| 2 | Does the CSRF middleware exempt `/preview/` or not? | Determines whether mounting `HandlePreview` on the main mux breaks (CSRF rejects unauthenticated GET) or requires exemption. The CSRF middleware wraps the main mux (`gateway.go:2250`, the `WrapHTTPHandler(csrfMW)` call); the preview handler sends no CSRF header. | `/preview/` must be exempted from CSRF (it's a GET-only reverse proxy with token-in-path auth). | Specify the exact exemption. |
 | 3 | Does the deployment's reverse proxy support wildcard subdomains? | If it does, the subdomain approach (distinct origin, safer) is viable alongside the path approach. The operator has stated the path approach is required. | The hosting model does not support wildcard DNS; the path approach is the only option. | Confirm with the operator. |
 | 4 | What happens to the separate preview listener + `preview_listener_enabled` + `gatewayPreviewBaseURL` after the fix? | The legacy config keys need a clear deprecation/role. | The separate listener becomes optional (for operators who expose two ports); the main-listener path is the primary. | Declare in the ADR. |
 
@@ -127,11 +127,11 @@ Two additional defects compound the problem:
 
 ### Sub-decisions
 
-**D1: CSRF exemption for `/preview/`.** The preview handler is GET-only (reverse-proxy to the dev server); it sends no CSRF header. Mounting it on the CSRF-wrapped main mux (`gateway.go:2289`) requires exempting `/preview/` from the CSRF middleware. This is safe: the preview is token-gated (FR-023); CSRF protects state-changing requests against the gateway API, not against a GET reverse-proxy.
+**D1: CSRF exemption for `/preview/`.** The preview handler is GET-only (reverse-proxy to the dev server); it sends no CSRF header. Mounting it on the CSRF-wrapped main mux (`gateway.go:2250`, `WrapHTTPHandler(csrfMW)`) requires exempting `/preview/` from the CSRF middleware. This is safe: the preview is token-gated (FR-023); CSRF protects state-changing requests against the gateway API, not against a GET reverse-proxy. (Note: a separate Origin-check helper, `middleware.RequireMatchingOriginOnStateChanging` in `origin.go`, exists as tested reference code but is NOT wired into the live handler chain — the CSRFMiddleware wrap above is the sole active cross-origin defense for `/api/v1/*` state-changers; see `origin.go`'s package doc.)
 
 CONFIDENCE: High
-  Basis         : the CSRF middleware wraps the main mux (`WrapHTTPHandler`, gateway.go:2289); the preview handler is GET-only token-gated
-  Evidence      : csrf.go:256 (CSRFMiddleware), gateway.go:2289 (WrapHTTPHandler), rest_preview.go:15-16 (token-only auth)
+  Basis         : the CSRF middleware wraps the main mux (`WrapHTTPHandler(csrfMW)`, gateway.go:2250); the preview handler is GET-only token-gated
+  Evidence      : csrf.go:256 (CSRFMiddleware), gateway.go:2250 (WrapHTTPHandler(csrfMW) call site), rest_preview.go:15-16 (token-only auth)
   Missing       : the exact exempt-path registration (need to add `/preview/` to the exempt set or use `WithExemptPath`)
   Would improve : implement and test the exemption
 
