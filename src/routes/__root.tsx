@@ -6,7 +6,7 @@ import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 function NotFoundPage() {
   return (
     <div className="flex flex-col items-center justify-center h-full min-h-screen gap-6 p-8 text-center bg-[var(--color-primary)]">
-      <img src={OmnipusAvatar} alt="Omnipus" className="h-20 w-20 opacity-50" />
+      <img src={OmnipusAvatar} alt="omnipus.ai" className="h-20 w-20 opacity-50" />
       <div>
         <h1 className="font-headline text-5xl font-bold text-[var(--color-secondary)] mb-2">
           404

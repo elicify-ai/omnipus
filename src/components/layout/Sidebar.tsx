@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
+import { Wordmark } from '@/components/shared/Wordmark'
 
 // Library items — reusable assets that live outside any single workspace.
 // (Per-workspace work — chat, tasks, calendar, team — lives inside the
@@ -246,12 +247,10 @@ export function Sidebar() {
       <div className="flex items-center gap-2.5 px-4 h-chrome-header min-h-chrome-header shrink-0">
         <img
           src={avatarUrl}
-          alt="Omnipus"
+          alt="omnipus.ai"
           className="h-6 w-6 flex-shrink-0"
         />
-        <span className="font-headline text-sm font-bold text-[var(--color-secondary)]">
-          Omnipus
-        </span>
+        <Wordmark className="text-sm" />
         {/* Search icon — opens the cross-workspace session search modal */}
         <button
           type="button"

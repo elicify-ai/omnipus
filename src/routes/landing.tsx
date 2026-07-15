@@ -59,12 +59,12 @@ function LandingPage() {
         {/* Warning fix #6: explicit size at all 3 breakpoints (phone/tablet/desktop) */}
         <img
           src={OmnipusAvatar}
-          alt="Omnipus mascot — Master Tasker"
+          alt="omnipus.ai mark"
           className="h-24 w-24 sm:h-36 sm:w-36 md:h-48 md:w-48 drop-shadow-2xl"
         />
         <div className="max-w-2xl">
-          <h1 className="font-headline text-5xl md:text-7xl font-bold text-[var(--color-secondary)] leading-tight mb-4">
-            Omnipus
+          <h1 className="font-headline text-5xl md:text-7xl font-bold lowercase text-[var(--color-secondary)] leading-tight mb-4">
+            omnipus<span className="text-[var(--color-accent)]">.ai</span>
           </h1>
           {/* US-6: Tagline per brand guidelines */}
           <p className="text-[var(--color-accent)] font-headline text-xl md:text-2xl font-bold mb-4">
@@ -122,7 +122,7 @@ function LandingPage() {
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <img src={OmnipusAvatar} alt="Omnipus" className="h-8 w-8" />
-            <span className="font-headline font-bold text-[var(--color-secondary)]">Omnipus</span>
+            <span className="font-headline font-bold lowercase text-[var(--color-secondary)]">omnipus<span className="text-[var(--color-accent)]">.ai</span></span>
           </div>
           <div className="flex items-center gap-6 text-sm text-[var(--color-muted)]">
             <a

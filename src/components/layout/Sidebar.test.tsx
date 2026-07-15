@@ -188,10 +188,12 @@ describe('Sidebar — overlay rendering when open', () => {
     expect(screen.queryByText('Command Center')).toBeNull()
   })
 
-  it('shows "Omnipus" brand name in sidebar', () => {
+  it('shows the "omnipus.ai" wordmark in sidebar (gold .ai)', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
-    expect(screen.getByText('Omnipus')).toBeTruthy()
+    // The wordmark splits "omnipus" and ".ai" (gold) into separate spans.
+    expect(screen.getByText('omnipus')).toBeTruthy()
+    expect(screen.getByText('.ai')).toBeTruthy()
   })
 
   it('renders nothing visible when sidebar is closed', () => {
