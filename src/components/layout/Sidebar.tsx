@@ -11,7 +11,6 @@ import {
   PushPinSlash,
   SignOut,
   Plus,
-  Folder,
   Tray,
   CaretDown,
   CaretRight,
@@ -306,7 +305,7 @@ export function Sidebar() {
               + adds an editable row right in the list; Enter creates, Escape cancels. */}
           {creatingWorkspace && (
             <div className="flex items-center gap-2 px-4 py-1.5">
-              <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+              <Tray size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
               <input
                 autoFocus
                 type="text"
@@ -381,7 +380,6 @@ export function Sidebar() {
           {!projectsLoading && visibleProjects
             .map((project) => {
             const isActive = activeWorkspaceId === project.id
-            const isInbox = project.is_default === true
             const isExpanded = expandedWorkspaceIds.has(project.id)
             const workspaceSessions = allSessions
               .filter((s) => s.workspace_id === project.id)
@@ -412,13 +410,14 @@ export function Sidebar() {
                     }}
                     className="flex items-center gap-2 flex-1 min-w-0 text-left"
                   >
-                    {isActive ? (
-                      <span className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse flex-shrink-0" aria-hidden="true" />
-                    ) : isInbox ? (
-                      <Tray size={14} className="flex-shrink-0 text-[var(--color-accent)]" />
-                    ) : (
-                      <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
-                    )}
+                    {/* One icon for every workspace (the Inbox Tray glyph); the
+                        ACTIVE workspace keeps its icon too — gold + text styling
+                        mark it, not a pulsing dot swap. */}
+                    <Tray
+                      size={14}
+                      weight={isActive ? 'fill' : 'regular'}
+                      className={cn('flex-shrink-0', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')}
+                    />
                     <span className="flex-1 truncate">{project.name}</span>
                   </button>
                   <button
@@ -542,7 +541,7 @@ export function Sidebar() {
                 }}
                 className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
-                <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+                <Tray size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 <span className="flex-1 truncate">{project.name}</span>
               </button>
             )
