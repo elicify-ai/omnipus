@@ -79,15 +79,6 @@ vi.mock('@/store/session', () => ({
     return selector ? selector(state) : state
   },
 }))
-vi.mock('@/store/chat', () => ({
-  useChatStore: (selector?: (s: unknown) => unknown) => {
-    const state = { sessionsById: {} }
-    return selector ? selector(state) : state
-  },
-}))
-vi.mock('@/components/chat/SessionItem', () => ({
-  SessionItem: () => null,
-}))
 vi.mock('@/components/chat/useSelectSession', () => ({
   useSelectSession: () => vi.fn(),
 }))
