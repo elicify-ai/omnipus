@@ -104,7 +104,7 @@ function LoginScreen() {
       >
         <h1 className="font-headline text-3xl font-bold text-center mb-2"
           style={{ color: 'var(--color-secondary)' }}>
-          Sign in to Omnipus
+          Sign in to omnipus<span className="text-[var(--color-accent)]">.ai</span>
         </h1>
         <p className="text-sm text-center mb-8" style={{ color: 'var(--color-muted)' }}>
           Enter your username and password

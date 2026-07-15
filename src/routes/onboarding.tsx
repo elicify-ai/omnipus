@@ -1612,7 +1612,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         />
         <img
           src={OmnipusAvatar}
-          alt="Omnipus — Master Tasker"
+          alt="omnipus.ai mark"
           className="relative h-28 w-28 sm:h-36 sm:w-36 drop-shadow-2xl"
         />
       </motion.div>

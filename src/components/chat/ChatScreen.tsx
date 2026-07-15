@@ -1714,12 +1714,12 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
       <div className="flex flex-col items-center gap-6 text-center max-w-md">
         <img
           src={OmnipusAvatar}
-          alt="Omnipus mascot"
+          alt="omnipus.ai mark"
           className="h-20 w-20 drop-shadow-lg"
         />
         <div>
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)] mb-2">
-            Welcome to Omnipus
+            Welcome to omnipus<span className="text-[var(--color-accent)]">.ai</span>
           </h1>
           <p className="text-[var(--color-muted)] text-sm">
             {hasAgent

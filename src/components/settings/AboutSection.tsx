@@ -48,12 +48,12 @@ export function AboutSection() {
       <div className="flex flex-col items-center py-6 gap-3">
         <img
           src={omnipusLogo}
-          alt="Omnipus logo"
+          alt="omnipus.ai logo"
           data-testid="omnipus-logo"
           className="w-16 h-16 select-none"
         />
         <div className="text-center">
-          <h1 className="font-headline font-bold text-xl text-[var(--color-secondary)]">Omnipus</h1>
+          <h1 className="font-headline font-bold text-xl lowercase text-[var(--color-secondary)]">omnipus<span className="text-[var(--color-accent)]">.ai</span></h1>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">The Sovereign Deep — Agentic Core</p>
         </div>
       </div>
