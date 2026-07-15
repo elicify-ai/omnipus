@@ -103,7 +103,7 @@ describe('useSlashMenu — gating', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.shouldShowSlash).toBe(true)
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/clear', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'web-research', 'code-review',
+      '/resume', '/clear', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'web-research', 'code-review',
     ])
   })
 })
@@ -113,7 +113,7 @@ describe('useSlashMenu — streaming filter', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams({ isStreaming: true })))
     act(() => result.current.onInputChange('/'))
     const commandKeys = result.current.slashItems.filter((i) => i.section === 'commands').map((i) => i.key)
-    expect(commandKeys).toEqual(['/cancel'])
+    expect(commandKeys).toEqual(['/resume', '/cancel'])
     const skillKeys = result.current.slashItems.filter((i) => i.section === 'skills').map((i) => i.key)
     expect(skillKeys).toEqual(['web-research', 'code-review'])
   })
@@ -412,10 +412,10 @@ describe('useSlashMenu — onHoverItem', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.slashHighlight).toBe(0)
 
-    // Index 3 in the unified list is "/agents" (clear, help, model, agents, ...).
-    act(() => result.current.onHoverItem(3))
-    expect(result.current.slashHighlight).toBe(3)
-    expect(result.current.slashItems[3].key).toBe('/agents')
+    // Index 4 in the unified list is "/agents" (resume, clear, help, model, agents, ...).
+    act(() => result.current.onHoverItem(4))
+    expect(result.current.slashHighlight).toBe(4)
+    expect(result.current.slashItems[4].key).toBe('/agents')
 
     // Prove the hover-set index is the SAME one keyboard selection acts on —
     // not just a display-only value that Enter ignores.

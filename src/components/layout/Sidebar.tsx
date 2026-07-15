@@ -361,7 +361,10 @@ export function Sidebar() {
                   </button>
                 </div>
                 {isExpanded && (
-                  <div className="pb-1">
+                  /* Hierarchy via a connector rail (border-l) instead of deep
+                     pl-8 indentation — communicates "children of the workspace"
+                     by connectedness while reclaiming ~14px of row width. */
+                  <div className="pb-1 ml-5 border-l border-[var(--color-border)]">
                     <button
                       type="button"
                       onClick={() => {
@@ -370,18 +373,16 @@ export function Sidebar() {
                         navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                         if (!effectivelyPinned) close()
                       }}
-                      className="flex items-center gap-2 w-full pl-8 pr-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                      className="flex items-center gap-2 w-full pl-3 pr-4 py-1.5 text-[13px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
                     >
-                      <Plus size={11} /> New chat
+                      <Plus size={12} /> New chat
                     </button>
                     {sessionsError ? (
-                      <p className="pl-8 pr-4 py-1 text-xs text-[var(--color-error)]">Could not load sessions</p>
+                      <p className="pl-3 pr-4 py-1 text-[13px] text-[var(--color-error)]">Could not load sessions</p>
                     ) : workspaceSessions.length === 0 ? (
-                      <p className="pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] opacity-60">No sessions yet</p>
+                      <p className="pl-3 pr-4 py-1 text-[13px] text-[var(--color-muted)] opacity-60">No sessions yet</p>
                     ) : (
-                      // Pure navigation rows — no per-row manage icon (that
-                      // duplicated "More…" below, which is always visible and
-                      // opens the same search-&-manage view for this workspace).
+                      // Pure navigation rows — manage lives behind "More…".
                       visibleSessions.map((s) => {
                         const sActive = s.id === activeSessionId
                         return (
@@ -390,7 +391,7 @@ export function Sidebar() {
                             type="button"
                             onClick={() => selectSession(s)}
                             className={cn(
-                              'flex items-center gap-1.5 w-full pl-8 pr-4 py-1 text-xs transition-colors text-left',
+                              'flex items-center gap-1.5 w-full pl-3 pr-4 py-1.5 text-[13px] transition-colors text-left',
                               sActive
                                 ? 'text-[var(--color-accent)] font-medium'
                                 : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
@@ -410,7 +411,7 @@ export function Sidebar() {
                       <button
                         type="button"
                         onClick={() => useUiStore.getState().openSearchModal(project.id)}
-                        className="flex items-center gap-1 w-full pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+                        className="flex items-center gap-1 w-full pl-3 pr-4 py-1.5 text-[13px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
                       >
                         More…
                       </button>
