@@ -112,8 +112,8 @@ function AgentHeader({ agent, name, count, isCollapsed, onToggle, panelId }: { a
 
 // ── session row with metadata + edit/delete ──────────────────────────────────
 
-function SessionRow({ session, isActive, onSelect, onRename, onDelete, deleting }: {
-  session: Session; isActive: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
+function SessionRow({ session, isActive, isFirstResult, onSelect, onRename, onDelete, deleting }: {
+  session: Session; isActive: boolean; isFirstResult?: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -161,16 +161,24 @@ function SessionRow({ session, isActive, onSelect, onRename, onDelete, deleting 
   }
 
   return (
-    <div className="group flex items-center gap-2 rounded-md px-3 py-2 mx-1 transition-colors hover:bg-[var(--color-surface-2)]">
+    <div className={cn(
+      'group flex items-center gap-2 rounded-md px-3 py-2 mx-1 transition-colors hover:bg-[var(--color-surface-2)]',
+      // First result = what Enter selects; visible cue [Recognition over Recall]
+      isFirstResult && 'bg-[var(--color-surface-2)]',
+    )}>
       <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <div className={cn('truncate text-sm font-medium', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
-          {session.title || 'Untitled session'}
+        <div className={cn('truncate text-sm font-medium flex items-center gap-1.5', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
+          <span className="truncate">{session.title || 'Untitled session'}</span>
+          {isFirstResult && (
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-normal text-[var(--color-muted)]" aria-hidden="true">↵</span>
+          )}
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+        {/* flex-wrap + hiding the token count under 400px keeps the metadata legible on phones */}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0 text-[11px] text-[var(--color-muted)]">
           <span>Started {formatRelative(session.created_at)}</span>
           <span aria-hidden>·</span>
           <span>Active {formatRelative(session.updated_at)}</span>
-          {session.total_tokens ? (<><span aria-hidden>·</span><span className="font-mono">{formatTokens(session.total_tokens)}</span></>) : null}
+          {session.total_tokens ? (<span className="hidden min-[400px]:inline"><span aria-hidden>· </span><span className="font-mono">{formatTokens(session.total_tokens)}</span></span>) : null}
           {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[9px]">HB</span></>)}
         </div>
       </button>
@@ -374,7 +382,7 @@ export function SearchModal() {
                             {!agentCollapsed && (
                               <div id={`agent-panel-${agentKey}`} role="region" className={cn('space-y-0.5', group.agentGroups.length > 1 && 'pl-3')}>
                                 {ag.sessions.map((s) => (
-                                  <SessionRow key={s.id} session={s} isActive={false} onSelect={() => selectSession(s)}
+                                  <SessionRow key={s.id} session={s} isActive={false} isFirstResult={s.id === firstResult?.id} onSelect={() => selectSession(s)}
                                     onRename={(t) => renameMut.mutate({ id: s.id, title: t })}
                                     onDelete={() => deleteMut.mutate(s.id)}
                                     deleting={deleteMut.isPending && deleteMut.variables === s.id} />
