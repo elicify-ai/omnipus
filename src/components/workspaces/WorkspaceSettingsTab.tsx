@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, UsersThree, ArrowsClockwise } from '@phosphor-icons/react'
+import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, ArrowsClockwise } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -148,7 +148,6 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     },
   })
 
-  const teamCount = workspace.core_team?.length ?? 0
 
   return (
     <div className="absolute inset-0 overflow-y-auto">
@@ -215,26 +214,6 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               </a>
             )}
           </div>
-        </div>
-
-        {/* Default team (read-only summary → Team tab) */}
-        <div className="flex flex-col gap-1.5">
-          <Label>Default team</Label>
-          <button
-            type="button"
-            onClick={() =>
-              navigate({ to: '/workspaces/$workspaceId/team', params: { workspaceId: workspace.id } })
-            }
-            className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-sm text-[var(--color-secondary)] hover:border-[var(--color-accent)]/40 transition-colors text-left"
-          >
-            <span className="flex items-center gap-2">
-              <UsersThree size={15} className="text-[var(--color-accent)]" />
-              {teamCount > 0
-                ? `${teamCount} agent${teamCount === 1 ? '' : 's'} on this workspace`
-                : 'No team configured yet'}
-            </span>
-            <span className="text-xs text-[var(--color-muted)]">Edit on Team tab →</span>
-          </button>
         </div>
 
         {/* Workspace / Project Instructions */}
