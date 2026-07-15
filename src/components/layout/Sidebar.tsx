@@ -12,7 +12,6 @@ import {
   SignOut,
   Plus,
   Folder,
-  PencilSimple,
   Tray,
   CaretDown,
   CaretRight,
@@ -404,7 +403,7 @@ export function Sidebar() {
                     onClick={(e) => { e.stopPropagation(); toggleWorkspaceExpansion(project.id) }}
                     aria-expanded={isExpanded}
                     aria-label={isExpanded ? `Collapse ${project.name} sessions` : `Expand ${project.name} sessions`}
-                    className="shrink-0 rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+                    className="shrink-0 rounded p-1.5 -m-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
                   >
                     {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
                   </button>
@@ -451,15 +450,17 @@ export function Sidebar() {
                                 <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
                               )}
                             </button>
-                            {/* Rename — opens in the search modal which has the full inline editor */}
+                            {/* Manage (rename/delete) — lives in the search modal's rich editor.
+                                MagnifyingGlass (not pencil): the click opens search-&-manage, not
+                                an inline rename — the icon must not promise what it doesn't do. */}
                             <button
                               type="button"
                               onClick={() => useUiStore.getState().openSearchModal(project.id)}
-                              className="shrink-0 rounded p-0.5 text-[var(--color-muted)] opacity-0 group-hover/ses:opacity-100 hover:text-[var(--color-accent)] transition-all"
-                              aria-label="Manage sessions"
+                              className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 group-hover/ses:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] transition-all"
+                              aria-label={`Manage ${s.title || 'Untitled'}`}
                               title="Search & manage"
                             >
-                              <PencilSimple size={10} />
+                              <MagnifyingGlass size={11} />
                             </button>
                           </div>
                         )
