@@ -28,8 +28,6 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, workspacesQueryKeys, fetchSessions, fetchAgents } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
-import { useChatStore } from '@/store/chat'
-import { SessionItem } from '@/components/chat/SessionItem'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { NewWorkspaceSlideOver } from '@/components/workspaces/NewWorkspaceSlideOver'
 import {
@@ -123,10 +121,8 @@ export function Sidebar() {
     staleTime: 30_000,
   })
 
-  // Currently-active session — drives SessionItem's isActive highlight.
+  // Currently-active session — for the sidebar's simplified title-only rows.
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  // Per-session streaming flags — drives SessionItem's isStreaming pulse.
-  const sessionsById = useChatStore((s) => s.sessionsById)
 
   // Reusable session-selection logic (attach WS + navigate + close sidebar).
   const selectSession = useSelectSession({
@@ -361,7 +357,15 @@ export function Sidebar() {
             const isExpanded = expandedWorkspaceIds.has(project.id)
             const workspaceSessions = allSessions
               .filter((s) => s.workspace_id === project.id)
-              .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+              .sort((a, b) => {
+                // Heartbeat sessions on top, then recent-first
+                if (a.type === 'heartbeat' && b.type !== 'heartbeat') return -1
+                if (b.type === 'heartbeat' && a.type !== 'heartbeat') return 1
+                return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+              })
+            const maxVisible = 9
+            const visibleSessions = workspaceSessions.slice(0, maxVisible)
+            const hasMoreSessions = workspaceSessions.length > maxVisible
             return (
               <div key={project.id}>
                 <div
@@ -422,21 +426,37 @@ export function Sidebar() {
                     {workspaceSessions.length === 0 ? (
                       <p className="pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] opacity-60">No sessions yet</p>
                     ) : (
-                      workspaceSessions.slice(0, 20).map((s) => {
+                      visibleSessions.map((s) => {
                         const sActive = s.id === activeSessionId
-                        const sStreaming = sessionsById[s.id]?.isStreaming ?? false
                         return (
-                          <SessionItem
+                          <button
                             key={s.id}
-                            session={s}
-                            agents={agents}
-                            isActive={sActive}
-                            isStreaming={sStreaming}
-                            onSelect={selectSession}
-                            onDeleted={() => queryClient.invalidateQueries({ queryKey: ['sessions'] })}
-                          />
+                            type="button"
+                            onClick={() => selectSession(s)}
+                            className={cn(
+                              'flex items-center gap-1.5 w-full pl-8 pr-4 py-1 text-xs transition-colors text-left',
+                              sActive
+                                ? 'text-[var(--color-accent)] font-medium'
+                                : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
+                            )}
+                          >
+                            {sActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
+                            <span className="flex-1 truncate">{s.title || 'Untitled'}</span>
+                            {s.type === 'heartbeat' && (
+                              <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
+                            )}
+                          </button>
                         )
                       })
+                    )}
+                    {hasMoreSessions && (
+                      <button
+                        type="button"
+                        onClick={() => useUiStore.getState().openSearchModal()}
+                        className="flex items-center gap-1 w-full pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+                      >
+                        More…
+                      </button>
                     )}
                   </div>
                 )}

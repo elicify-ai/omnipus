@@ -116,54 +116,20 @@ describe('ChatControls — New Chat button', () => {
   })
 })
 
-// ── Control: Sessions button ──────────────────────────────────────────────────
-
-describe('ChatControls — Sessions/Search button', () => {
-  it('renders a Search sessions button', async () => {
-    renderControls()
-    const btn = await vi.waitFor(() =>
-      screen.getByRole('button', { name: /search sessions/i }),
-    )
-    expect(btn).toBeInTheDocument()
-  })
-
-  it('calls openSearchModal when clicked', async () => {
-    renderControls()
-    const btn = await vi.waitFor(() =>
-      screen.getByRole('button', { name: /search sessions/i }),
-    )
-    fireEvent.click(btn)
-    expect(useUiStore.getState().searchModalOpen).toBe(true)
-  })
-
-  it('Sessions text label is in the DOM with the @2xl: responsive class', async () => {
-    renderControls()
-    await vi.waitFor(() => screen.getByRole('button', { name: /search sessions/i }))
-    const sessionSpan = screen.getByText('Sessions')
-    expect(sessionSpan.className).toContain('hidden')
-    expect(sessionSpan.className).toContain('@2xl:inline')
-  })
-})
-
-// ── All three controls render in the single inline cluster ────────────────────
+// ── All controls render in the single inline cluster ─────────────────────────
 
 describe('ChatControls — all controls present (single cluster)', () => {
-  it('renders New Chat (with label), Sessions, and Open browser in the DOM', async () => {
+  it('renders New Chat and Open browser in the DOM', async () => {
     renderControls()
 
     // 1. New Chat — single button with visible label
     const newChat = await vi.waitFor(() => screen.getByRole('button', { name: /new chat/i }))
     expect(newChat.textContent).toMatch(/new chat/i)
 
-    // 2. Sessions button
-    expect(screen.getByRole('button', { name: /search sessions/i })).toBeInTheDocument()
-
-    // 3. Open browser button
+    // 2. Open browser button
     expect(screen.getByRole('button', { name: /open browser/i })).toBeInTheDocument()
 
     // Negative guard: the pickers must NEVER come back to the header cluster.
-    // AgentPicker's auto-select effect assumes a single mount (in the
-    // composer's context row) — re-adding it here would race two writers.
     expect(screen.queryByTestId('agent-picker-trigger')).not.toBeInTheDocument()
     expect(screen.queryByTestId('composer-model-selector')).not.toBeInTheDocument()
     expect(screen.queryByTestId('session-token-counter')).not.toBeInTheDocument()
@@ -202,14 +168,6 @@ describe('ChatControls — responsive layout (structural)', () => {
     // Should be exactly one New Chat button in the single-cluster layout
     const allNewChat = screen.getAllByRole('button', { name: /new chat/i })
     expect(allNewChat).toHaveLength(1)
-  })
-
-  it('Sessions button is present exactly once (single inline cluster)', async () => {
-    renderControls()
-    const sessionBtns = await vi.waitFor(() =>
-      screen.getAllByRole('button', { name: /search sessions/i }),
-    )
-    expect(sessionBtns).toHaveLength(1)
   })
 })
 

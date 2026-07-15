@@ -1,20 +1,10 @@
-// SearchModal — cross-workspace session search overlay (step 6 of the
-// sidebar-merge plan). A Radix Dialog driven by `useUiStore.searchModalOpen`,
-// mounted once at the AppShell root so both entry points — the sidebar search
-// icon (Sidebar.tsx) and the /search slash command (useSlashMenu.ts) — drive
-// the same single instance.
-//
-// Data: fetchSessions() + fetchWorkspaces({status:'active'}) + fetchAgents(),
-// all lazily enabled on open. Filtering, grouping, and sorting are client-side
-// (the session catalog is small enough for that and the workspace grouping is a
-// pure-SPA concern). Session selection reuses the shared `useSelectSession` hook
-// (same logic the sidebar accordion + SessionPanel use) so attach/navigate/close
-// behaviour is identical everywhere a session can be picked.
-//
-// Design: "Sovereign Deep" dark-first, CSS-variable tokens, Phosphor icons.
+// SearchModal — cross-workspace session search + management overlay.
+// Opened from the sidebar search icon. Full depth: workspace → agent grouping,
+// start/last-active dates, token count, inline rename (edit icon), delete.
+// Driven by useUiStore.searchModalOpen.
 
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -23,17 +13,15 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { MagnifyingGlass, Calendar } from '@phosphor-icons/react'
-import { fetchAgents, fetchSessions, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
-import type { Session, Workspace } from '@/lib/api'
+import { MagnifyingGlass, Calendar, PencilSimple, Trash, Check, X } from '@phosphor-icons/react'
+import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession, workspacesQueryKeys } from '@/lib/api'
+import type { Session, Workspace, Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { cn } from '@/lib/utils'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/** Debounce a fast-changing value (the search box) so filtering doesn't run on
- *  every keystroke. 200ms per the plan. */
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value)
   useEffect(() => {
@@ -43,9 +31,6 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced
 }
 
-/** Relative time — matches the formatter in SessionItem.tsx (not exported there,
- *  so inlined here to avoid touching Agent A's file). "just now" / "12m ago" /
- *  "3h ago" / "2d ago" / "Jul 14" for older. */
 function formatRelative(dateStr: string): string {
   const date = new Date(dateStr)
   if (isNaN(date.getTime())) return ''
@@ -60,34 +45,30 @@ function formatRelative(dateStr: string): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-/** Absolute timestamp for the native tooltip — full date/time on hover. */
-function formatAbsolute(dateStr: string): string {
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) return ''
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-/** Compact token counter: 850 → "850 tokens", 1200 → "1.2k tokens",
- *  15000 → "15k tokens", 2_400_000 → "2.4M tokens". */
 function formatTokens(n?: number): string {
   if (!n || n <= 0) return ''
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M tokens`
-  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k tokens`
-  return `${n} tokens`
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`
+  return `${n}`
+}
+
+function agentName(agentId: string | undefined, agents: Agent[]): string {
+  if (!agentId) return 'Unknown'
+  return agents.find((a) => a.id === agentId)?.name ?? 'Unknown'
 }
 
 // ── types ────────────────────────────────────────────────────────────────────
 
-interface WorkspaceGroup {
-  /** null = the "Unfiled" bucket (no workspace / workspace not found). */
-  workspace: Workspace | null
+interface AgentGroup {
+  agentId: string
+  agentName: string
   sessions: Session[]
+}
+
+interface WorkspaceGroup {
+  workspace: Workspace | null
+  agentGroups: AgentGroup[]
+  totalCount: number
 }
 
 // ── component ────────────────────────────────────────────────────────────────
@@ -95,6 +76,8 @@ interface WorkspaceGroup {
 export function SearchModal() {
   const open = useUiStore((s) => s.searchModalOpen)
   const closeSearchModal = useUiStore((s) => s.closeSearchModal)
+  const queryClient = useQueryClient()
+  const addToast = useUiStore((s) => s.addToast)
 
   const [searchText, setSearchText] = useState('')
   const [showDateFilter, setShowDateFilter] = useState(false)
@@ -103,7 +86,6 @@ export function SearchModal() {
 
   const debouncedSearch = useDebouncedValue(searchText, 200)
 
-  // Reset all filters the moment the modal closes so the next open starts clean.
   useEffect(() => {
     if (!open) {
       setSearchText('')
@@ -113,10 +95,6 @@ export function SearchModal() {
     }
   }, [open])
 
-  // Lazily fetch only while open — avoids loading the full session catalog on
-  // every app boot. The ['sessions'] / workspaces / agents query keys are shared
-  // with the rest of the app so a warm cache (e.g. SessionPanel just opened)
-  // makes the modal instant.
   const { data: sessions = [], isLoading: sessionsLoading } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
@@ -139,22 +117,33 @@ export function SearchModal() {
     onClose: closeSearchModal,
   })
 
-  // Client-side filter → group by workspace → sort recent-first.
+  // Rename mutation
+  const renameMut = useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) => renameSession(id, title),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+    onError: (err) => addToast({ message: err instanceof Error ? err.message : 'Rename failed', variant: 'error' }),
+  })
+
+  // Delete mutation
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => deleteSession(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+    onError: (err) => addToast({ message: err instanceof Error ? err.message : 'Delete failed', variant: 'error' }),
+  })
+
+  // Client-side filter → group by workspace → sub-group by agent → sort recent-first.
   const groups = useMemo<WorkspaceGroup[]>(() => {
     const wsMap = new Map(workspaces.map((w) => [w.id, w]))
     const query = debouncedSearch.trim().toLowerCase()
-
     const fromTime = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null
     const toTime = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null
 
     const filtered = sessions.filter((s) => {
-      // Text match against session title OR its workspace's name.
       if (query) {
         const wsName = s.workspace_id ? (wsMap.get(s.workspace_id)?.name ?? '').toLowerCase() : ''
         const title = (s.title ?? '').toLowerCase()
         if (!title.includes(query) && !wsName.includes(query)) return false
       }
-      // Date-range filter on updated_at (the "last interaction" timestamp).
       const updated = new Date(s.updated_at).getTime()
       if (fromTime !== null || toTime !== null) {
         if (isNaN(updated)) return false
@@ -164,56 +153,68 @@ export function SearchModal() {
       return true
     })
 
-    // Group by workspace; sessions whose workspace_id is absent or resolves to
-    // no active workspace land in the null ("Unfiled") bucket.
-    const buckets = new Map<string | null, Session[]>()
+    // Group by workspace
+    const wsBuckets = new Map<string | null, Session[]>()
     for (const s of filtered) {
       const key = s.workspace_id && wsMap.has(s.workspace_id) ? s.workspace_id : null
-      const arr = buckets.get(key)
+      const arr = wsBuckets.get(key)
       if (arr) arr.push(s)
-      else buckets.set(key, [s])
+      else wsBuckets.set(key, [s])
     }
 
-    // Sort each bucket's sessions by updated_at descending (recent first).
-    for (const arr of buckets.values()) {
-      arr.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-    }
-
-    // Build the group list; order groups by their most-recent session's
-    // updated_at, with the Unfiled bucket always pinned last.
+    // Within each workspace, sub-group by agent (first participating agent)
     const groupList: WorkspaceGroup[] = []
-    for (const [wsId, sess] of buckets) {
-      groupList.push({ workspace: wsId ? (wsMap.get(wsId) ?? null) : null, sessions: sess })
+    for (const [wsId, sess] of wsBuckets) {
+      const agentBuckets = new Map<string, Session[]>()
+      for (const s of sess) {
+        const aId = s.active_agent_id ?? s.agent_id ?? 'unknown'
+        const arr = agentBuckets.get(aId)
+        if (arr) arr.push(s)
+        else agentBuckets.set(aId, [s])
+      }
+      const agentGroups: AgentGroup[] = []
+      for (const [aId, aSess] of agentBuckets) {
+        aSess.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+        agentGroups.push({ agentId: aId, agentName: agentName(aId, agents), sessions: aSess })
+      }
+      // Sort agent groups by their most-recent session
+      agentGroups.sort((a, b) =>
+        new Date(b.sessions[0]?.updated_at ?? '').getTime() - new Date(a.sessions[0]?.updated_at ?? '').getTime()
+      )
+      groupList.push({
+        workspace: wsId ? (wsMap.get(wsId) ?? null) : null,
+        agentGroups,
+        totalCount: sess.length,
+      })
     }
+
+    // Sort workspace groups by their most-recent session
     groupList.sort((a, b) => {
       if (a.workspace === null && b.workspace !== null) return 1
       if (a.workspace !== null && b.workspace === null) return -1
-      const aMax = a.sessions[0]?.updated_at ?? ''
-      const bMax = b.sessions[0]?.updated_at ?? ''
+      const aMax = a.agentGroups[0]?.sessions[0]?.updated_at ?? ''
+      const bMax = b.agentGroups[0]?.sessions[0]?.updated_at ?? ''
       return new Date(bMax).getTime() - new Date(aMax).getTime()
     })
     return groupList
-  }, [sessions, workspaces, debouncedSearch, fromDate, toDate])
+  }, [sessions, workspaces, agents, debouncedSearch, fromDate, toDate])
 
-  const totalResults = groups.reduce((n, g) => n + g.sessions.length, 0)
+  const totalResults = groups.reduce((n, g) => n + g.totalCount, 0)
   const loading = sessionsLoading || workspacesLoading
-
-  // Flatten for Enter-selects-first: the first session across ordered groups.
-  const firstResult = groups[0]?.sessions[0]
+  const firstResult = groups[0]?.agentGroups[0]?.sessions[0]
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) closeSearchModal() }}>
-      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col">
-        <DialogHeader className="space-y-0 px-5 pt-5 pb-3">
+      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85vh]">
+        <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <MagnifyingGlass size={16} className="text-[var(--color-accent)]" />
             Search sessions
           </DialogTitle>
           <DialogDescription className="sr-only">
-            Search across all workspaces and sessions by title, workspace name, or date range.
+            Search across all workspaces and sessions. Grouped by workspace and agent.
           </DialogDescription>
 
-          {/* Search field with leading magnifier + trailing date-filter toggle */}
           <div className="relative mt-2">
             <MagnifyingGlass
               size={16}
@@ -225,8 +226,6 @@ export function SearchModal() {
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               onKeyDown={(e) => {
-                // Enter selects the first matching session — matches the plan's
-                // "Enter selects the first result" keyboard affordance.
                 if (e.key === 'Enter' && firstResult) {
                   e.preventDefault()
                   selectSession(firstResult)
@@ -252,7 +251,6 @@ export function SearchModal() {
             </button>
           </div>
 
-          {/* Date range — collapsed by default so it doesn't clutter the chrome */}
           {showDateFilter && (
             <div className="mt-2 flex items-center gap-2">
               <Input
@@ -283,29 +281,43 @@ export function SearchModal() {
           )}
         </DialogHeader>
 
-        {/* Results — the only scroll region; groups render beneath */}
+        {/* Results — workspace → agent sub-groups with metadata + edit/delete */}
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
           {loading ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
-              Loading sessions...
-            </div>
+            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">Loading sessions...</div>
           ) : totalResults === 0 ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
-              No sessions found
-            </div>
+            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">No sessions found</div>
           ) : (
             groups.map((group) => (
-              <section key={group.workspace?.id ?? 'unfiled'} className="mb-1">
+              <section key={group.workspace?.id ?? 'unfiled'} className="mb-2">
+                {/* Workspace header */}
                 <h3 className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                   {group.workspace?.name ?? 'Unfiled'}
-                  <span className="ml-1.5 font-normal opacity-60">({group.sessions.length})</span>
+                  <span className="ml-1.5 font-normal opacity-60">({group.totalCount})</span>
                 </h3>
-                {group.sessions.map((session) => (
-                  <SearchResultRow
-                    key={session.id}
-                    session={session}
-                    onSelect={() => selectSession(session)}
-                  />
+
+                {group.agentGroups.map((ag) => (
+                  <div key={ag.agentId} className="mb-0.5">
+                    {/* Agent sub-header */}
+                    {group.agentGroups.length > 1 && (
+                      <div className="flex items-center gap-1.5 px-5 py-0.5 text-[10px] text-[var(--color-muted)] opacity-70">
+                        <span className="h-1 w-1 rounded-full bg-[var(--color-muted)]" />
+                        {ag.agentName}
+                      </div>
+                    )}
+
+                    {/* Session rows with metadata + edit/delete */}
+                    {ag.sessions.map((session) => (
+                      <SearchResultRow
+                        key={session.id}
+                        session={session}
+                        onSelect={() => selectSession(session)}
+                        onRename={(title) => renameMut.mutate({ id: session.id, title })}
+                        onDelete={() => deleteMut.mutate(session.id)}
+                        deleting={deleteMut.isPending && deleteMut.variables === session.id}
+                      />
+                    ))}
+                  </div>
                 ))}
               </section>
             ))
@@ -316,22 +328,68 @@ export function SearchModal() {
   )
 }
 
-// ── result row ───────────────────────────────────────────────────────────────
+// ── result row with metadata + edit + delete ─────────────────────────────────
 
 interface SearchResultRowProps {
   session: Session
   onSelect: () => void
+  onRename: (title: string) => void
+  onDelete: () => void
+  deleting: boolean
 }
 
-function SearchResultRow({ session, onSelect }: SearchResultRowProps) {
+function SearchResultRow({ session, onSelect, onRename, onDelete, deleting }: SearchResultRowProps) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState(session.title || '')
+
+  const commitRename = () => {
+    const trimmed = editValue.trim()
+    if (trimmed && trimmed !== session.title) {
+      onRename(trimmed)
+    }
+    setIsEditing(false)
+  }
+
+  if (isEditing) {
+    return (
+      <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)]">
+        <Input
+          autoFocus
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+            if (e.key === 'Escape') { setIsEditing(false); setEditValue(session.title || '') }
+          }}
+          className="h-7 flex-1 text-sm"
+        />
+        <button
+          type="button"
+          onClick={commitRename}
+          className="shrink-0 rounded p-1 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]"
+          aria-label="Confirm rename"
+        >
+          <Check size={14} weight="bold" />
+        </button>
+        <button
+          type="button"
+          onClick={() => { setIsEditing(false); setEditValue(session.title || '') }}
+          className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+          aria-label="Cancel rename"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    )
+  }
+
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      title={`Started ${formatAbsolute(session.created_at)} · Last active ${formatAbsolute(session.updated_at)}`}
-      className="group flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)] focus-visible:outline-none"
-    >
-      <div className="min-w-0 flex-1">
+    <div className="group flex items-center gap-2 rounded-md px-3 py-2 transition-colors hover:bg-[var(--color-surface-2)]">
+      <button
+        type="button"
+        onClick={onSelect}
+        className="min-w-0 flex-1 text-left"
+      >
         <div className="truncate text-sm font-medium text-[var(--color-secondary)]">
           {session.title || 'Untitled session'}
         </div>
@@ -339,13 +397,37 @@ function SearchResultRow({ session, onSelect }: SearchResultRowProps) {
           <span>Started {formatRelative(session.created_at)}</span>
           <span aria-hidden="true">·</span>
           <span>Active {formatRelative(session.updated_at)}</span>
+          {session.total_tokens ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono">{formatTokens(session.total_tokens)}</span>
+            </>
+          ) : null}
         </div>
-      </div>
-      {session.total_tokens ? (
-        <span className="shrink-0 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 font-mono text-[10px] text-[var(--color-muted)] group-hover:bg-[var(--color-surface-3)]">
-          {formatTokens(session.total_tokens)}
-        </span>
-      ) : null}
-    </button>
+      </button>
+
+      {/* Edit icon — click to rename inline */}
+      <button
+        type="button"
+        onClick={() => { setEditValue(session.title || ''); setIsEditing(true) }}
+        className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
+        aria-label={`Rename ${session.title || 'session'}`}
+        title="Rename"
+      >
+        <PencilSimple size={13} />
+      </button>
+
+      {/* Delete icon */}
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={deleting || session.protected === true}
+        className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+        aria-label={`Delete ${session.title || 'session'}`}
+        title={session.protected === true ? 'Protected (heartbeat)' : 'Delete'}
+      >
+        <Trash size={13} />
+      </button>
+    </div>
   )
 }
