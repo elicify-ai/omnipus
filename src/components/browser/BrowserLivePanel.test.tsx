@@ -195,10 +195,8 @@ describe('BrowserLivePanel', () => {
   })
 
   describe('onPopOut', () => {
-    it('mirrors the sessionStorage auth token into localStorage and opens the hash-routed pop-out URL (unpinned)', () => {
+    it('opens the hash-routed pop-out URL (unpinned) without touching any auth token storage (ADR-044: cookie auth is inherited automatically)', () => {
       const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
-      sessionStorage.setItem('omnipus_auth_token', 'tok-123')
-      localStorage.removeItem('omnipus_auth_token')
 
       render(<BrowserLivePanel />)
       act(() => {
@@ -207,16 +205,15 @@ describe('BrowserLivePanel', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
-      expect(localStorage.getItem('omnipus_auth_token')).toBe('tok-123')
       expect(openSpy).toHaveBeenCalledWith(
         expect.stringMatching(/^\/#\/browser-live\?session=sess-1&agent=agent-1$/),
         '_blank',
         'noopener,noreferrer',
       )
+      expect(localStorage.length).toBe(0)
+      expect(sessionStorage.length).toBe(0)
 
       openSpy.mockRestore()
-      sessionStorage.clear()
-      localStorage.clear()
     })
 
     it('does NOT wire onPopOut when pinned (docked layout) — Pop-out makes no sense from an already-docked panel', () => {

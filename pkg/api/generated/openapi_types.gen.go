@@ -3331,14 +3331,8 @@ type AboutResponse struct {
 	// Pid Gateway process ID.
 	Pid int `json:"pid"`
 
-	// PreviewListenerEnabled Whether the iframe preview listener is currently bound and serving requests. Absent on old gateway versions (treat as true when absent).
-	PreviewListenerEnabled bool `json:"preview_listener_enabled"`
-
-	// PreviewOrigin Fully-qualified HTTPS origin operators set via gateway.preview_origin (e.g. "https://preview.acme.com"). Absent when not configured; the SPA constructs the origin from preview_port in that case.
-	PreviewOrigin *string `json:"preview_origin,omitempty"`
-
-	// PreviewPort Port the preview listener is bound on (FR-009). Default is gateway.port + 1.
-	PreviewPort int `json:"preview_port"`
+	// PreviewEnabled Whether the preview feature (gateway.preview_enabled) is currently enabled. When true, `/preview/` is served on the main gateway listener (no separate preview listener/port/origin exists).
+	PreviewEnabled bool `json:"preview_enabled"`
 
 	// Uptime Human-readable uptime string.
 	Uptime string `json:"uptime"`

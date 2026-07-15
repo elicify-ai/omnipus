@@ -565,7 +565,7 @@ export interface paths {
         };
         /**
          * Gateway metadata
-         * @description Returns version, runtime, uptime, PID, and preview listener fields. Used by the SPA to construct iframe preview URLs (FR-009).
+         * @description Returns version, runtime, uptime, PID, and the live preview_enabled flag. The SPA uses preview_enabled to decide whether to surface preview links, which resolve against the main gateway origin at /preview/ (no separate preview listener/port/origin exists — ADR-044).
          */
         get: operations["getAbout"];
         put?: never;
@@ -1289,7 +1289,7 @@ export interface paths {
         };
         /**
          * Serve agent-generated preview content (token-auth)
-         * @description Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the separate preview listener (default port gateway.port + 1). Unknown or expired tokens return 404. Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection.
+         * @description Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the MAIN gateway listener at the /preview/ path prefix (ADR-044) — there is no separate preview listener/port/origin. Gated by the live gateway.preview_enabled flag: when disabled the endpoint returns 404 with no restart required. Unknown or expired tokens return 404. All HTTP methods are proxied (previewed apps may POST). Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection; the proxy strips inbound Cookie/Authorization and neutralizes reserved Set-Cookie so a previewed app cannot read or plant the gateway session/CSRF cookies.
          */
         get: operations["getPreview"];
         put?: never;
@@ -4620,20 +4620,10 @@ export interface components {
              */
             pid: number;
             /**
-             * @description Port the preview listener is bound on (FR-009). Default is gateway.port + 1.
-             * @example 5001
-             */
-            preview_port: number;
-            /**
-             * @description Whether the iframe preview listener is currently bound and serving requests. Absent on old gateway versions (treat as true when absent).
+             * @description Whether the preview feature (gateway.preview_enabled) is currently enabled. When true, `/preview/` is served on the main gateway listener (no separate preview listener/port/origin exists).
              * @example true
              */
-            preview_listener_enabled: boolean;
-            /**
-             * @description Fully-qualified HTTPS origin operators set via gateway.preview_origin (e.g. "https://preview.acme.com"). Absent when not configured; the SPA constructs the origin from preview_port in that case.
-             * @example https://preview.acme.com
-             */
-            preview_origin?: string;
+            preview_enabled: boolean;
             /**
              * @description Dev-server warmup timeout from config.
              * @example 30

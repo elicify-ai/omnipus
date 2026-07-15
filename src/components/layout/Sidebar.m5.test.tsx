@@ -51,6 +51,7 @@ vi.mock('@/lib/api', () => ({
   workspacesQueryKeys: {
     list: (params?: unknown) => ['workspaces', params],
   },
+  logout: vi.fn().mockResolvedValue(undefined),
 }))
 
 // Mock useWorkspacesStore used by Sidebar

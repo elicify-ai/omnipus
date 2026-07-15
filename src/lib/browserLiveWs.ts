@@ -8,9 +8,9 @@
 // close event (see ws.onclose below), and the screencast is repaint-driven
 // (CDP only emits a frame when the page's compositor actually paints), so an
 // idle-but-healthy page can legitimately go quiet with no frames for a long
-// stretch — that is not, by itself, a liveness signal. Reuses the same
-// first-message `{type:"auth",token}` handshake and the same sessionStorage
-// → localStorage token lookup as ws.ts.
+// stretch — that is not, by itself, a liveness signal. Auth rides the
+// same-origin `omnipus-session` HttpOnly cookie on the WS handshake (ADR-044),
+// like ws.ts — no client-sent auth frame, no JS-readable token.
 //
 // Wire types are sourced exclusively from the generated AsyncAPI types/Zod —
 // hand-written interface declarations for wire-format frames are FORBIDDEN
@@ -125,13 +125,11 @@ export class BrowserLiveWsConnection {
 
     ws.onopen = () => {
       this.reconnectAttempts = 0
-      const token = sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')
-      if (!token) {
-        this.callbacks.onError('No auth token found — cannot open the live browser view.')
-        ws.close(1000, 'no auth token')
-        return
-      }
-      this._rawSend({ type: 'auth', token })
+      // Auth rides the WS handshake via the same-origin `omnipus-session`
+      // HttpOnly cookie (ADR-044): the browser attaches it automatically and
+      // the gateway's browser-WS handler authenticates the handshake from it.
+      // No client-sent `{type:"auth",token}` frame — there is no JS-readable
+      // token any more.
       const attach: BrowserAttachFrame = {
         type: 'browser_attach',
         session_id: this.sessionId,

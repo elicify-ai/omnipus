@@ -1,23 +1,22 @@
 /**
  * ServeWorkspaceUI tests — FR-008 / FR-019 / FR-015
+ * Also: docs/internal/specs/preview-on-main-listener-spec.md FR-016/FR-017 (US-9)
  *
  * Focus: verify that:
  *   - ServeWorkspaceUI is exported as an AssistantUI tool component
- *   - kind='serve_workspace' means no warmup (renders iframe immediately)
+ *   - kind='serve_workspace' means no warmup — renders a preview LINK immediately
+ *     (never an embedded iframe, per ADR-044)
  *   - result with both path and url (FR-008) renders correctly
  *   - legacy result with only url field (FR-019 replay) renders correctly
  *   - null result (running state) shows waiting message
- *   - two different paths produce two different iframe srcs (differentiation)
+ *   - two different paths produce two different link hrefs (differentiation)
  *
  * IframePreview internals are tested in IframePreview.test.tsx.
  * We test the no-warmup path by rendering IframePreview directly with
  * kind='serve_workspace' (matching what ServeWorkspaceBlock passes).
  *
- * Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md
- * FR-008: result includes both path and url
- * FR-013: serve_workspace does NOT require warmup
- * FR-015: link-only fallback for invalid path
- * FR-019: legacy transcript replay from url field
+ * IframePreview no longer reads /api/v1/about (ADR-044 — no separate preview
+ * origin/port to resolve), so there is no useQuery/fetchAboutInfo mock needed.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -30,29 +29,11 @@ vi.mock('@/store/ui', () => ({
   useUiStore: () => ({ addToast: vi.fn() }),
 }))
 
-vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({
-    data: {
-      preview_port: 5001,
-      preview_listener_enabled: true,
-      warmup_timeout_seconds: 60,
-    },
-  }),
-}))
-
-vi.mock('@/lib/api', () => ({
-  fetchAboutInfo: vi.fn().mockResolvedValue({}),
-}))
-
-vi.mock('@assistant-ui/react', () => ({
-  makeAssistantToolUI: (config: Record<string, unknown>) => config,
-}))
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   Object.defineProperty(window, 'location', {
-    value: { hostname: 'localhost', protocol: 'http:' },
+    value: { hostname: 'localhost', protocol: 'http:', origin: 'http://localhost:5000', port: '5000' },
     writable: true,
   })
 })
@@ -61,65 +42,62 @@ beforeEach(() => {
 
 describe('ServeWorkspaceUI — module structure', () => {
   it('exports ServeWorkspaceUI as a defined value (AssistantUI tool component)', async () => {
-    // Traces to: chat-served-iframe-preview-spec.md — Scenario: serve_workspace registers as AssistantUI tool
     const mod = await import('./ServeWorkspaceUI')
     expect(mod.ServeWorkspaceUI).toBeDefined()
   })
 })
 
-// ── kind='serve_workspace' — renders iframe immediately (no warmup) ───────────
+// ── kind='serve_workspace' — renders a link immediately (no warmup, no iframe) ─
 
-describe('ServeWorkspaceUI — kind=serve_workspace (FR-013)', () => {
-  // Traces to: chat-served-iframe-preview-spec.md — serve_workspace does NOT require warmup.
-  // The gateway's preview listener is already bound when the token is issued.
-  // IframePreview mounts the iframe at phase 'ready' with no warmup delay.
-  // We render IframePreview directly with kind='serve_workspace' (as ServeWorkspaceBlock does).
+describe('ServeWorkspaceUI — kind=serve_workspace (FR-013, US-9)', () => {
+  // serve_workspace does NOT require warmup. IframePreview resolves the link
+  // at phase 'ready' with no warmup delay AND without ever mounting an iframe
+  // (US-9 / FR-016 — /preview/ shares the SPA's own origin post-ADR-044).
+  // We render IframePreview directly with kind='serve_workspace' (as
+  // ServeWorkspaceBlock does).
 
-  it('renders visible iframe immediately without warmup placeholder (FR-013)', () => {
-    // Traces to: chat-served-iframe-preview-spec.md — Scenario: serve_workspace renders without warmup
+  it('renders a preview link immediately without warmup placeholder or iframe', () => {
     render(
       <IframePreview
         kind="serve_workspace"
         result={{
           path: '/serve/agent-1/abc123/',
-          url: 'http://localhost:5001/serve/agent-1/abc123/',
+          url: 'http://localhost:5000/serve/agent-1/abc123/',
           expires_at: '2099-01-01T00:00:00Z',
         }}
         warmupTimeoutSeconds={60}
       />
     )
 
-    // No warmup placeholder — iframe renders directly
+    // No warmup placeholder — link renders directly
     expect(screen.queryByText(/starting preview/i)).toBeNull()
     expect(screen.queryByText(/starting dev server/i)).toBeNull()
 
-    // Visible iframe is rendered
-    const iframes = document.querySelectorAll('iframe:not([aria-hidden])')
-    expect(iframes.length).toBeGreaterThan(0)
-    const src = iframes[0].getAttribute('src') ?? ''
-    expect(src).toContain('/serve/agent-1/abc123/')
+    // Never an iframe.
+    expect(document.querySelectorAll('iframe').length).toBe(0)
+
+    const link = screen.getByTestId('preview-link')
+    expect(link).toHaveAttribute('href', 'http://localhost:5000/serve/agent-1/abc123/')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
-  it('result with both path and url (FR-008): uses path field for iframe src', () => {
-    // Traces to: chat-served-iframe-preview-spec.md — FR-008: path field takes precedence over url
+  it('result with both path and url (FR-008): uses the absolute url for the link href', () => {
     render(
       <IframePreview
         kind="serve_workspace"
         result={{
           path: '/serve/agent-1/abc123/',
-          url: 'http://localhost:5001/serve/agent-1/abc123/',
+          url: 'http://localhost:5000/serve/agent-1/abc123/',
           expires_at: '2099-01-01T00:00:00Z',
         }}
       />
     )
-    const iframes = document.querySelectorAll('iframe:not([aria-hidden])')
-    expect(iframes.length).toBeGreaterThan(0)
-    const src = iframes[0].getAttribute('src') ?? ''
-    expect(src).toContain('/serve/agent-1/abc123/')
+    const link = screen.getByTestId('preview-link')
+    expect(link).toHaveAttribute('href', 'http://localhost:5000/serve/agent-1/abc123/')
   })
 
   it('null result shows waiting message (tool still running)', () => {
-    // Traces to: chat-served-iframe-preview-spec.md — running tool state
     render(
       <IframePreview
         kind="serve_workspace"
@@ -128,43 +106,40 @@ describe('ServeWorkspaceUI — kind=serve_workspace (FR-013)', () => {
     )
     expect(screen.getByText(/waiting for serve_workspace/i)).toBeInTheDocument()
     expect(document.querySelectorAll('iframe').length).toBe(0)
+    expect(document.querySelectorAll('a').length).toBe(0)
   })
 
-  it('legacy URL replay: renders iframe from url field when path is absent (FR-019)', () => {
-    // Traces to: chat-served-iframe-preview-spec.md — FR-019 legacy transcript replay
-    // Old transcripts only have the url field; extractPath parses pathname from it.
-    // We cast to ServeWorkspaceResult since url-only is a legacy compat scenario.
+  it('legacy URL replay: renders a link from the url field when path is absent (FR-019)', () => {
+    // Old transcripts only have the url field; resolvePreviewHref validates
+    // the URL's own pathname when `path` is empty/absent.
     render(
       <IframePreview
         kind="serve_workspace"
         result={{
           // Legacy transcript: only url, path is an empty string (legacy shape)
           path: '',
-          url: 'http://localhost:5001/serve/agent-1/abc123/',
+          url: 'http://localhost:5000/serve/agent-1/abc123/',
           expires_at: '2099-01-01T00:00:00Z',
         }}
       />
     )
-    const iframes = document.querySelectorAll('iframe:not([aria-hidden])')
-    expect(iframes.length).toBeGreaterThan(0)
-    const src = iframes[0].getAttribute('src') ?? ''
-    expect(src).toContain('/serve/agent-1/abc123/')
+    const link = screen.getByTestId('preview-link')
+    expect(link).toHaveAttribute('href', 'http://localhost:5000/serve/agent-1/abc123/')
   })
 
-  it('differentiation: two different serve paths produce two different iframe srcs', () => {
-    // Anti-shortcut: iframe src is computed from path, not hardcoded
-    // Traces to: chat-served-iframe-preview-spec.md — anti-shortcut differentiation
+  it('differentiation: two different serve paths produce two different link hrefs', () => {
+    // Anti-shortcut: link href is computed from the result, not hardcoded.
     const { unmount } = render(
       <IframePreview
         kind="serve_workspace"
         result={{
           path: '/serve/agent-a/tok1/',
-          url: 'http://localhost:5001/serve/agent-a/tok1/',
+          url: 'http://localhost:5000/serve/agent-a/tok1/',
           expires_at: '2099-01-01T00:00:00Z',
         }}
       />
     )
-    const src1 = document.querySelector('iframe:not([aria-hidden])')?.getAttribute('src') ?? ''
+    const href1 = screen.getByTestId('preview-link').getAttribute('href') ?? ''
     unmount()
 
     render(
@@ -172,15 +147,15 @@ describe('ServeWorkspaceUI — kind=serve_workspace (FR-013)', () => {
         kind="serve_workspace"
         result={{
           path: '/serve/agent-b/tok2/',
-          url: 'http://localhost:5001/serve/agent-b/tok2/',
+          url: 'http://localhost:5000/serve/agent-b/tok2/',
           expires_at: '2099-01-01T00:00:00Z',
         }}
       />
     )
-    const src2 = document.querySelector('iframe:not([aria-hidden])')?.getAttribute('src') ?? ''
+    const href2 = screen.getByTestId('preview-link').getAttribute('href') ?? ''
 
-    expect(src1).toContain('tok1')
-    expect(src2).toContain('tok2')
-    expect(src1).not.toBe(src2)
+    expect(href1).toContain('tok1')
+    expect(href2).toContain('tok2')
+    expect(href1).not.toBe(href2)
   })
 })

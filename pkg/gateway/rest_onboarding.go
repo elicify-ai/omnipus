@@ -56,6 +56,14 @@ var reservedUsernames = map[string]struct{}{
 // with a name reservedUsernames blocks.
 const reservedUsernameMsg = "this username is reserved and cannot be registered"
 
+// issueSessionCookieFn is FR-011's session-cookie issuer, indirected through a
+// package-level var (matching middleware.IssueSessionCookie's signature) so
+// tests can force a failure (e.g. simulating a disk fault mid-onboarding)
+// without needing real filesystem fault injection between the two
+// safeUpdateConfigJSON calls in HandleCompleteOnboarding. Production always
+// resolves to middleware.IssueSessionCookie.
+var issueSessionCookieFn = middleware.IssueSessionCookie
+
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
 // Two-phase commit invariant:
@@ -349,6 +357,22 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		// config.json write failed — defer will release the reservation so a retry is possible.
 		slog.Error("onboarding: complete transaction failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
+		return
+	}
+
+	// FR-011: issue the omnipus-session cookie bound to the new admin's
+	// username, now that gateway.users has been persisted above (
+	// IssueSessionCookie's configMutator locates the user by username and
+	// requires it to already exist — see session_cookie.go). Deliberately
+	// BEFORE commitOnboarding()/committed=true below: if this fails, we
+	// return 500 without ever marking onboarding complete in state.json, and
+	// the still-false `committed` lets the deferred ReleaseReservation() run
+	// so the client can retry (the mutate closure above is idempotent on a
+	// matching username — see the duplicate-username branch). This is the
+	// r4 MAJ-003 fix — never return 200 without the cookie.
+	if _, err := issueSessionCookieFn(w, r, body.Admin.Username, a.safeUpdateConfigJSON); err != nil {
+		slog.Error("onboarding: issue session cookie failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session init failed")
 		return
 	}
 

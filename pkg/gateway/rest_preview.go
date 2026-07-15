@@ -38,9 +38,31 @@ import (
 )
 
 // HandlePreview serves GET /preview/{agent_id}/{token}/{file_path...} on the
-// PREVIEW listener.  It routes to the dev proxy or static file handler by
-// looking up the token in the appropriate registry.
+// MAIN gateway listener (ADR-044 — there is no separate preview listener
+// anymore). It routes to the dev proxy or static file handler by looking up
+// the token in the appropriate registry.
+//
+// FR-006: gateway.preview_enabled is read LIVE on every request (via the
+// request-scoped config snapshot injected by configSnapshotMiddleware, same
+// as every other handler on the main mux) — disabling it 404s every /preview/
+// request immediately, no restart required, and does NOT tear down any
+// already-running dev server (those idle-TTL out via DevServerRegistry).
 func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+
+	cfg := configFromContext(r.Context())
+	if cfg == nil {
+		cfg = a.agentLoop.GetConfig()
+	}
+	if cfg == nil || !cfg.IsPreviewEnabled() {
+		// Distinguish this 404 from an unknown-token 404 (FR-021) — the
+		// event name lets operators tell "preview turned off" apart from
+		// "someone is probing for stale tokens" in the audit trail.
+		a.auditServeFailure(r, "preview.disabled", "deny", "", "", http.StatusNotFound, startedAt)
+		jsonErr(w, http.StatusNotFound, "preview disabled")
+		return
+	}
+
 	if r.Method == http.MethodOptions {
 		a.handleServePreviewPreflight(w, r)
 		return
@@ -48,7 +70,6 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 	// B1.3b: emit CORS headers on actual GET/HEAD responses so the SPA's
 	// cors-mode HEAD probe can read the status code.
 	a.addPreviewCORSHeaders(w, r)
-	startedAt := time.Now()
 
 	remainder := strings.TrimPrefix(r.URL.Path, "/preview/")
 	if strings.HasPrefix(remainder, "/") {
@@ -304,12 +325,31 @@ func (a *restAPI) serveStaticFile(
 	}
 }
 
+// reservedGatewayCookieNames are the gateway's own auth/CSRF cookie names.
+// FR-013 (ADR-044, anti-fixation): a previewed dev server's response MUST
+// NOT be able to plant or overwrite these on the shared browser origin — a
+// malicious agent-generated app could otherwise ride Set-Cookie to fixate
+// the operator's session or CSRF token. See middleware/session_cookie.go
+// (SessionCookieName) and middleware/csrf.go (the csrf / __Host-csrf names).
+var reservedGatewayCookieNames = map[string]struct{}{
+	"omnipus-session": {},
+	"csrf":            {},
+	"__Host-csrf":     {},
+}
+
 // proxyDevRequest forwards the request to the dev-server's loopback port.
 // Strips the /preview/<agent>/<token> (or /dev/<agent>/<token>) prefix so the
 // embedded app sees its own root paths.
 //
 // FR-007d: ModifyResponse strips upstream CSP/XFO so the gateway-injected
 // policy is authoritative.
+//
+// FR-013 (ADR-044): the Director strips EVERY request Cookie header (not just
+// Authorization) before forwarding — the dev server has no legitimate need for
+// the operator's origin cookies, and forwarding them would let a compromised
+// dev dependency read the session/CSRF cookie values. ModifyResponse then
+// neutralizes any upstream Set-Cookie for a reserved gateway cookie name
+// (anti-fixation) while leaving the previewed app's own cookies untouched.
 func (a *restAPI) proxyDevRequest(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -337,6 +377,14 @@ func (a *restAPI) proxyDevRequest(
 		origDirector(req)
 		req.URL.Path = "/" + remaining
 		req.URL.RawPath = ""
+		// FR-013: strip the ENTIRE Cookie header (not just Authorization) —
+		// the previewed dev server never legitimately needs the operator's
+		// origin cookies (omnipus-session, csrf, or anything else scoped to
+		// the main gateway origin). This closes the read-vector half of the
+		// session-riding threat via the proxy path (the accepted residual for
+		// a directly-opened preview tab is documented in the spec's
+		// Non-Behaviors section).
+		req.Header.Del("Cookie")
 		req.Header.Del("Authorization")
 		req.Header.Set("X-Forwarded-Host", r.Host)
 		req.Header.Set("X-Forwarded-Proto", schemeFromRequest(r))
@@ -346,6 +394,7 @@ func (a *restAPI) proxyDevRequest(
 		resp.Header.Del("Content-Security-Policy")
 		resp.Header.Del("Content-Security-Policy-Report-Only")
 		resp.Header.Del("X-Frame-Options")
+		neutralizeReservedSetCookies(resp)
 		setWorkspaceSecurityHeaders(responseHeaderWriter{resp.Header}, mainOrigin)
 		if emitFirstServed {
 			a.auditDevSuccess(r, "dev.proxied", agentID, token, resp.StatusCode, startedAt, -1)
@@ -388,6 +437,48 @@ func (a *restAPI) proxyDevRequest(
 	}
 
 	rp.ServeHTTP(w, r)
+}
+
+// neutralizeReservedSetCookies drops any upstream Set-Cookie header whose
+// cookie name matches one of the gateway's reserved auth/CSRF cookie names
+// (FR-013, anti-fixation) before the response reaches the browser. All other
+// Set-Cookie values — the previewed app's own cookies — pass through
+// unmodified, including their original attribute string (via Cookie.Raw), so
+// this never rewrites/breaks a legitimate previewed-app cookie.
+//
+// Uses resp.Cookies() (net/http's own Set-Cookie parser) rather than
+// hand-rolled string splitting so cookie names are extracted per RFC 6265
+// exactly the way the standard library — and the browser — would.
+func neutralizeReservedSetCookies(resp *http.Response) {
+	cookies := resp.Cookies()
+	if len(cookies) == 0 {
+		return
+	}
+	hasReserved := false
+	for _, c := range cookies {
+		if _, reserved := reservedGatewayCookieNames[c.Name]; reserved {
+			hasReserved = true
+			break
+		}
+	}
+	if !hasReserved {
+		// Common case: no reserved cookie present. Leave the header(s)
+		// exactly as the upstream sent them — no re-serialization risk.
+		return
+	}
+	resp.Header.Del("Set-Cookie")
+	for _, c := range cookies {
+		if _, reserved := reservedGatewayCookieNames[c.Name]; reserved {
+			slog.Warn("preview: dropped upstream Set-Cookie for a reserved gateway cookie name (anti-fixation)",
+				"cookie_name", c.Name)
+			continue
+		}
+		if c.Raw != "" {
+			resp.Header.Add("Set-Cookie", c.Raw)
+		} else {
+			resp.Header.Add("Set-Cookie", c.String())
+		}
+	}
 }
 
 // schemeFromRequest derives "https" or "http" for the X-Forwarded-Proto header.

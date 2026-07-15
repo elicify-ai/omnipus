@@ -114,8 +114,10 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, recallConversationMeta{})
 
 	// --- serve_web (CategoryWeb — Tier 1 static + Tier 3 dev server) ---
-	// Constructed with nil ServedSubdirs (metadata only; never executed).
-	out = append(out, NewWebServeTool("", "", "", nil, nil, WebServeDevConfig{}, nil, nil, 0, 0))
+	// Constructed with nil ServedSubdirs and nil getConfig (metadata only;
+	// never executed) — preview-on-main-listener v5 replaced the constructor-
+	// frozen preview base URL string with a live *config.Config accessor.
+	out = append(out, NewWebServeTool("", "", nil, nil, nil, WebServeDevConfig{}, nil, nil, 0, 0))
 
 	// --- Conditional tools (metadata-only; see package doc) ---
 	// These register per-agent only under certain conditions, but are listed here

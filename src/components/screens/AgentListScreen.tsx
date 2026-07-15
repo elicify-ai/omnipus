@@ -483,8 +483,12 @@ function AgentsLibraryView({
 
 export function AgentListScreen() {
   const { openCreateAgentModal, addToast } = useUiStore()
-  // MIN-9: defer authed fetches (including cli-detect) until the auth token is present.
-  const authToken = useAuthStore((s) => s.token)
+  // MIN-9: defer authed fetches (including cli-detect) until we know who's
+  // logged in. Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010) —
+  // there is no JS-visible token to gate on anymore, so this uses the
+  // display-only `username` (set at the same point login/onboarding used to
+  // set the token) as the "we've completed sign-in" signal instead.
+  const authToken = useAuthStore((s) => s.username)
   const queryClient = useQueryClient()
 
   const { data: agents = [], isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useQuery({

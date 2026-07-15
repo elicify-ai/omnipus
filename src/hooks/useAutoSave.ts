@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { isApiError } from '@/lib/api'
+import { isApiError, getCsrfCookie, CSRF_HEADER_NAME } from '@/lib/api'
 import { isReAuthCancelled } from '@/components/settings/useReAuthGate'
 
 export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
@@ -287,10 +287,16 @@ export function useAutoSave<T>(
     const payload = JSON.stringify(latestDataRef.current)
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (flushAuthToken) headers['Authorization'] = `Bearer ${flushAuthToken}`
+    // PUT is state-changing — auth is the omnipus-session cookie (US-5 /
+    // FR-010), which requires the CSRF double-submit header alongside it.
+    // Read fresh (never cache — see getCsrfCookie's own doc comment).
+    const csrf = getCsrfCookie()
+    if (csrf) headers[CSRF_HEADER_NAME] = csrf
     try {
       void fetch(flushUrl!, {
         method: 'PUT',
         keepalive: true,
+        credentials: 'include',
         headers,
         body: payload,
       })

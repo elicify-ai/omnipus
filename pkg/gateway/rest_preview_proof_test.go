@@ -14,6 +14,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -22,6 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -181,17 +184,25 @@ func TestCanonicalRemoteIP_PrefersForwardedFor(t *testing.T) {
 // tool (static mode) result JSON contains path, url, expires_at, and kind
 // fields. Rewritten from the deleted TestServeWorkspaceTool_ResultIncludesPath
 // to use the unified NewWebServeTool constructor.
+//
+// ADR-044 (preview-on-main-listener v5): NewWebServeTool's third parameter is
+// now a LIVE `getConfig func() *config.Config` accessor (not a boot-frozen
+// base-URL string) — the tool builds its URL from
+// middleware.CanonicalGatewayOrigin(cfg) on every call and reads
+// gateway.preview_enabled live (FR-005/FR-006).
 func TestWebServeTool_StaticResultIncludesPath(t *testing.T) {
 	dir := t.TempDir()
 	ss := agent.NewServedSubdirs()
 	t.Cleanup(ss.Stop)
 
+	cfg := &config.Config{Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 5001}}
+
 	tool := tools.NewWebServeTool(
-		dir,                     // workspace
-		"fr008-agent",           // agentID
-		"http://127.0.0.1:5001", // gatewayPreviewBaseURL
-		ss,                      // served
-		nil,                     // devReg — not needed for static mode
+		dir,                                  // workspace
+		"fr008-agent",                        // agentID
+		func() *config.Config { return cfg }, // getConfig — live accessor (ADR-044)
+		ss,                                   // served
+		nil,                                  // devReg — not needed for static mode
 		tools.WebServeDevConfig{
 			PortRange:     [2]int32{18000, 18999},
 			MaxConcurrent: 2,
@@ -227,4 +238,91 @@ func TestWebServeTool_StaticResultIncludesPath(t *testing.T) {
 	urlVal, _ := parsed["url"].(string)
 	assert.True(t, strings.HasSuffix(urlVal, pathVal),
 		"FR-008: url must end with path (replay-safe reconstruction), url=%q path=%q", urlVal, pathVal)
+}
+
+// ---------------------------------------------------------------------------
+// FR-013 (ADR-044) — proxy request-cookie strip + response Set-Cookie neutralize
+// ---------------------------------------------------------------------------
+
+// TestPreviewProxyStripsRequestCookies verifies FR-013 / S15: the reverse
+// proxy strips the operator's ENTIRE Cookie header (not just Authorization)
+// before forwarding to the dev server. A previewed app has no legitimate
+// need for the gateway's session/CSRF cookies — forwarding them would let a
+// compromised dev dependency read them (the read-vector half of the
+// session-riding threat the spec's Non-Behaviors section documents as an
+// accepted residual only for a directly-opened preview TAB, not the proxy).
+func TestPreviewProxyStripsRequestCookies(t *testing.T) {
+	var gotCookie, gotAuth string
+	var sawCookieHeader bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		gotAuth = r.Header.Get("Authorization")
+		_, sawCookieHeader = r.Header["Cookie"]
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	api := newPreviewTestAPI(t)
+	reg := sandbox.NewDevServerRegistry()
+	t.Cleanup(reg.Close)
+	api.devServers = reg
+
+	devReg, err := reg.Register("cookie-strip-agent", upstreamPort(t, upstream.URL), 0 /*pid*/, "npm run dev", 10)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/preview/cookie-strip-agent/"+devReg.Token+"/api/data", nil)
+	r.Header.Set("Cookie", "omnipus-session=abc123; csrf=def456; other=value")
+	r.Header.Set("Authorization", "Bearer secret-token")
+	api.HandlePreview(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, sawCookieHeader, "FR-013: forwarded request must carry NO Cookie header at all")
+	assert.Empty(t, gotCookie, "FR-013: forwarded request must carry no Cookie value")
+	assert.Empty(t, gotAuth, "FR-013: forwarded request must carry no Authorization header")
+}
+
+// TestPreviewProxyNeutralizesSetCookie verifies FR-013 / S15: a dev-server
+// Set-Cookie for a reserved gateway cookie name (omnipus-session, csrf,
+// __Host-csrf) is dropped from the response before it reaches the browser —
+// a previewed app cannot plant/overwrite the operator's session or CSRF
+// cookie (anti-fixation). A previewed app's OWN cookie passes through
+// untouched (differentiation — this isn't a blanket Set-Cookie strip).
+func TestPreviewProxyNeutralizesSetCookie(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "omnipus-session", Value: "attacker-value", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "csrf", Value: "attacker-csrf", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "__Host-csrf", Value: "attacker-host-csrf", Path: "/", Secure: true})
+		http.SetCookie(w, &http.Cookie{Name: "my-app-cookie", Value: "legit-value", Path: "/"})
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	api := newPreviewTestAPI(t)
+	reg := sandbox.NewDevServerRegistry()
+	t.Cleanup(reg.Close)
+	api.devServers = reg
+
+	devReg, err := reg.Register("set-cookie-agent", upstreamPort(t, upstream.URL), 0 /*pid*/, "npm run dev", 10)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/preview/set-cookie-agent/"+devReg.Token+"/", nil)
+	api.HandlePreview(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	setCookies := w.Result().Cookies()
+	byName := make(map[string]string, len(setCookies))
+	for _, c := range setCookies {
+		byName[c.Name] = c.Value
+	}
+	assert.NotContains(t, byName, "omnipus-session",
+		"FR-013: reserved cookie omnipus-session must be dropped from the browser response")
+	assert.NotContains(t, byName, "csrf",
+		"FR-013: reserved cookie csrf must be dropped from the browser response")
+	assert.NotContains(t, byName, "__Host-csrf",
+		"FR-013: reserved cookie __Host-csrf must be dropped from the browser response")
+	assert.Equal(t, "legit-value", byName["my-app-cookie"],
+		"differentiation: the previewed app's own cookie must pass through untouched")
 }

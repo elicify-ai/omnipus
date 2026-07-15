@@ -1578,3 +1578,92 @@ func TestLoadConfig_LegacySandboxProfileFields_Ignored(t *testing.T) {
 		t.Error("cfg.Sandbox.AuditLog should be true — must survive alongside the retired default_profile key")
 	}
 }
+
+// TestLoadConfig_LegacyPreviewFields_Ignored is a pinning test for ADR-044
+// (preview-on-main-listener): the separate preview listener and its
+// gateway.preview_port / preview_host / preview_origin / preview_listener_enabled
+// keys were deleted entirely with no back-compat, mirroring the ADR-035
+// SandboxProfile-removal precedent (TestLoadConfig_LegacySandboxProfileFields_Ignored
+// above). LoadConfig has no DisallowUnknownFields on the config-load path, so a
+// persisted config.json from before this change — carrying the four retired
+// preview keys — must still load without error today (unknown keys silently
+// ignored), with gateway.public_url and every other real field intact, and the
+// new gateway.preview_enabled resolving to its semantic default (true) since
+// the legacy config.json never set it.
+func TestLoadConfig_LegacyPreviewFields_Ignored(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096}
+		},
+		"gateway": {
+			"host": "127.0.0.1",
+			"port": 5000,
+			"public_url": "https://pod.example.com",
+			"preview_port": 5001,
+			"preview_host": "127.0.0.1",
+			"preview_origin": "https://preview.example.com",
+			"preview_listener_enabled": false
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig must not error on legacy preview fields, got: %v", err)
+	}
+
+	// Real sibling fields in the same gateway object must survive alongside the
+	// retired preview keys.
+	if cfg.Gateway.Host != "127.0.0.1" {
+		t.Errorf("cfg.Gateway.Host = %q, want %q", cfg.Gateway.Host, "127.0.0.1")
+	}
+	if cfg.Gateway.Port != 5000 {
+		t.Errorf("cfg.Gateway.Port = %d, want 5000", cfg.Gateway.Port)
+	}
+	if cfg.Gateway.PublicURL != "https://pod.example.com" {
+		t.Errorf("cfg.Gateway.PublicURL = %q, want %q — must survive alongside the retired preview keys",
+			cfg.Gateway.PublicURL, "https://pod.example.com")
+	}
+
+	// The retired preview_listener_enabled=false in the legacy JSON must NOT
+	// suppress the new preview_enabled default: the legacy key and the new key
+	// are unrelated on the wire (different JSON names), so a config that never
+	// set preview_enabled resolves to the semantic default (true).
+	if !cfg.IsPreviewEnabled() {
+		t.Error("cfg.IsPreviewEnabled() should be true — the legacy preview_listener_enabled key " +
+			"must not be silently reinterpreted as the new preview_enabled")
+	}
+}
+
+// TestConfig_IsPreviewEnabled verifies the semantic default of
+// gateway.preview_enabled (ADR-044, FR-006): nil resolves to true; the field
+// resolves to its explicit value otherwise. The method lives on *Config (not
+// *GatewayConfig) per the shared cross-agent contract for this feature.
+func TestConfig_IsPreviewEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	tests := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{name: "unset (nil) defaults to true", cfg: &Config{}, want: true},
+		{name: "explicit true", cfg: &Config{Gateway: GatewayConfig{PreviewEnabled: &trueVal}}, want: true},
+		{name: "explicit false", cfg: &Config{Gateway: GatewayConfig{PreviewEnabled: &falseVal}}, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.cfg.IsPreviewEnabled()
+			if got != tc.want {
+				t.Errorf("IsPreviewEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

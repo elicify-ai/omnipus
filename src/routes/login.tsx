@@ -11,7 +11,7 @@ import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 
 function LoginScreen() {
   const navigate = useNavigate()
-  const setToken = useAuthStore((s) => s.setToken)
+  const storeUsername = useAuthStore((s) => s.setUsername)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -25,9 +25,12 @@ function LoginScreen() {
     setError('')
     try {
       const resp = await login(username.trim(), password)
-      setToken(resp.token, resp.username)
-      // #359: a fresh login issues a new bearer token — drop any cached validation
-      // verdict so the /_app guard re-validates this session immediately.
+      // The gateway has already issued the omnipus-session HttpOnly cookie
+      // (US-5) — the SPA only remembers the display-only username.
+      storeUsername(resp.username)
+      // #359: a fresh login issues a new session cookie — drop any cached
+      // validation verdict so the /_app guard re-validates this session
+      // immediately.
       resetTokenValidationCache()
       // Check if onboarding is still needed
       const state = await fetchAppState()

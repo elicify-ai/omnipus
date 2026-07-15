@@ -36,7 +36,7 @@ vi.mock('@/store/ui', () => ({
 
 // ── Imports after mocks ────────────────────────────────────────────────────────
 
-import { fetchConfig, fetchGatewayStatus, fetchGodMode } from '@/lib/api'
+import { fetchConfig, updateConfig, fetchGatewayStatus, fetchGodMode } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { GatewaySection } from './GatewaySection'
 
@@ -45,6 +45,7 @@ import { GatewaySection } from './GatewaySection'
 function makeConfig(overrides: {
   bind_address?: string
   dev_mode_bypass?: boolean
+  preview_enabled?: boolean
 } = {}) {
   return {
     gateway: {
@@ -54,6 +55,7 @@ function makeConfig(overrides: {
       hot_reload: true,
       log_level: 'info',
       dev_mode_bypass: overrides.dev_mode_bypass ?? false,
+      preview_enabled: overrides.preview_enabled,
     },
     agents: { defaults: { default_agent_id: '' } },
     security: {
@@ -202,6 +204,114 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
 })
 
 // ── US-B2: bind_address risky control ────────────────────────────────────────
+
+// ── US-4 / FR-008: Preview toggle (ADR-044, preview-on-main-listener) ────────
+//
+// GatewaySection now routes the toggle through the standard
+// fetchConfig()/updateConfig() path (src/lib/api.ts), so these tests mock
+// the @/lib/api module like every other setting in this file, rather than
+// mocking global.fetch directly.
+
+describe('GatewaySection — Preview toggle (US-4 / FR-008)', () => {
+  beforeEach(() => {
+    vi.mocked(updateConfig).mockResolvedValue(makeConfig({}) as never)
+  })
+
+  it('renders the Preview toggle reflecting the persisted enabled value', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: true }) as never)
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('switch', { name: /preview server/i })).toBeInTheDocument()
+    })
+    const toggle = screen.getByRole('switch', { name: /preview server/i })
+    expect(toggle).toHaveAttribute('data-state', 'checked')
+  })
+
+  it('renders the toggle OFF when the persisted value is preview_enabled=false', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: false }) as never)
+    renderSection()
+
+    await waitFor(() => {
+      const toggle = screen.getByRole('switch', { name: /preview server/i })
+      expect(toggle).toHaveAttribute('data-state', 'unchecked')
+    })
+  })
+
+  it('defaults to ON (checked) when preview_enabled is absent from config', async () => {
+    // Semantic default per ADR-044/FR-006: absent/null → enabled.
+    const cfg = makeConfig({})
+    delete (cfg.gateway as Record<string, unknown>).preview_enabled
+    vi.mocked(fetchConfig).mockResolvedValue(cfg as never)
+    renderSection()
+
+    await waitFor(() => {
+      const toggle = screen.getByRole('switch', { name: /preview server/i })
+      expect(toggle).toHaveAttribute('data-state', 'checked')
+    })
+  })
+
+  it('toggling off calls updateConfig with { gateway: { preview_enabled: false } }', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: true }) as never)
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('switch', { name: /preview server/i })).toHaveAttribute('data-state', 'checked')
+    })
+
+    vi.mocked(updateConfig).mockResolvedValueOnce(makeConfig({ preview_enabled: false }) as never)
+    fireEvent.click(screen.getByRole('switch', { name: /preview server/i }))
+
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledWith({ gateway: { preview_enabled: false } })
+    })
+
+    await waitFor(() => {
+      expect(mockAddToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'success' })
+      )
+    })
+  })
+
+  it('toggling on calls updateConfig with { gateway: { preview_enabled: true } }', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: false }) as never)
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('switch', { name: /preview server/i })).toHaveAttribute('data-state', 'unchecked')
+    })
+
+    vi.mocked(updateConfig).mockResolvedValueOnce(makeConfig({ preview_enabled: true }) as never)
+    fireEvent.click(screen.getByRole('switch', { name: /preview server/i }))
+
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledWith({ gateway: { preview_enabled: true } })
+    })
+  })
+
+  it('shows an error toast and reverts the toggle when the save fails', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: true }) as never)
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('switch', { name: /preview server/i })).toHaveAttribute('data-state', 'checked')
+    })
+
+    vi.mocked(updateConfig).mockRejectedValueOnce(new Error('disk full'))
+    fireEvent.click(screen.getByRole('switch', { name: /preview server/i }))
+
+    await waitFor(() => {
+      expect(mockAddToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'error' })
+      )
+    })
+
+    // Reverted back to the persisted (checked) state after the failed save.
+    await waitFor(() => {
+      expect(screen.getByRole('switch', { name: /preview server/i })).toHaveAttribute('data-state', 'checked')
+    })
+  })
+})
 
 describe('GatewaySection — bind_address risky control (US-B2)', () => {
   it('shows standing badge when persisted bind_address is "0.0.0.0"', async () => {
