@@ -1355,7 +1355,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {slashMenu.shouldShowSlash && slashMenu.slashOpen && (
         <div
           data-testid="slash-menu"
-          className="mb-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl"
+          // max-h + scroll: the menu opens UPWARD from the composer, so a tall
+          // list (many commands + skills) pushed its top rows above the
+          // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
+          className="mb-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
         >
           {slashMenu.slashItems.map((item, globalIndex) => {
             const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
@@ -1374,6 +1377,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 )}
                 <button
                   type="button"
+                  ref={(el) => {
+                    // Keep the keyboard-highlighted row visible inside the
+                    // scroll-capped menu as ArrowUp/Down move the highlight.
+                    if (el && globalIndex === slashMenu.slashHighlight) {
+                      el.scrollIntoView({ block: 'nearest' })
+                    }
+                  }}
                   className={cn(
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
                     globalIndex === slashMenu.slashHighlight
@@ -1386,8 +1396,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   }}
                   onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
                 >
-                  <span className="font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
-                  <span className="text-[11px]">{item.description}</span>
+                  {/* Fixed-width label column so descriptions align across rows
+                      (a two-column table, not per-row flow). 9.5rem fits the
+                      longest current label; truncate guards outliers. */}
+                  <span className="w-[9.5rem] shrink-0 truncate font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
+                  <span className="text-[11px] flex-1 min-w-0 truncate">{item.description}</span>
                   {/* FR-014/R3: show argument_hint as muted help text for skills */}
                   {item.section === 'skills' && item.argumentHint && (
                     <span className="ml-auto text-[10px] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
