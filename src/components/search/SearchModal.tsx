@@ -324,7 +324,12 @@ export function SearchModal() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close() }}>
-      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85vh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl">
+      {/* max-h uses dvh (dynamic viewport height), not vh: on iPad/iOS Safari,
+          vh includes the collapsed-toolbar area, so an 85vh modal is taller
+          than the visible viewport and its top clips off-screen when the
+          result list grows (e.g. clearing the workspace filter). dvh tracks
+          the actual visible height. */}
+      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl">
         {/* Header with search input + date toggle */}
         <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0 border-b border-[var(--color-border)]">
           <DialogTitle className="flex items-center gap-2 text-base mb-2">
@@ -378,7 +383,7 @@ export function SearchModal() {
         </DialogHeader>
 
         {/* Results — collapsible workspace → agent → sessions */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-2">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2">
           {sessionsError ? (
             <div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>
           ) : loading ? (

@@ -243,7 +243,10 @@ export function Sidebar() {
       </div>
 
       {/* Workspaces (primary, scrollable) */}
-      <div className="flex-1 overflow-y-auto py-3">
+      {/* overscroll-contain: stop iOS scroll chaining — without it, hitting the
+          end of the sidebar scroll drags the page itself up, leaving a gap at
+          the bottom (the shell is fixed-position; the page should never move). */}
+      <div className="flex-1 overflow-y-auto overscroll-contain py-3">
         {/* Workspaces section. The old hidden `/`-to-filter input is removed —
             undiscoverable (no visual hint, focus-dependent) and a subset of
             what the search modal does; workspace lookup lives there now. */}
