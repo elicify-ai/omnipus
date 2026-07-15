@@ -176,8 +176,10 @@ export function AgentPicker({
           disabled={disabled}
           tabIndex={tabIndex}
           className={cn(
+            // Compact everywhere — deliberately NO pointer-coarse:min-h-[44px]:
+            // on touch devices the 44px floor inflated the control (operator
+            // wants the composer context row genuinely compact).
             'flex items-center gap-1.5 h-7 px-1.5 text-xs font-medium max-w-[200px] min-w-0',
-            'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
             className,
           )}
           title={activeAgent?.description || activeAgent?.name || 'Select agent'}
