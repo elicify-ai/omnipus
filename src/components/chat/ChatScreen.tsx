@@ -1530,7 +1530,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 // ~6px descender line-box gap below the element inside its block
                 // wrapper — the wrapper (not the textarea) is what items-end
                 // aligns, so the gap read as send sitting below the input.
-                'block w-full resize-none bg-transparent px-3 py-2.5 text-sm text-[var(--color-secondary)] outline-none',
+                'block w-full resize-none bg-transparent px-3 py-2 text-sm text-[var(--color-secondary)] outline-none',
                 'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
                 'focus:outline-none focus:ring-0',
                 (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
@@ -1613,7 +1613,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               disabled={!inputEnabled || isReplaying}
               data-testid="chat-send"
               className={cn(
-                'shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-colors',
+                'shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying
                   ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
                     // Muted accent while reconnecting — functional but visually signals

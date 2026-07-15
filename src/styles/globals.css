@@ -134,8 +134,15 @@ body {
   color: var(--color-secondary);
   font-family: var(--font-body);
   line-height: 1.6;
-  /* Mirror the html lock so every level of the document stack is
-     height-constrained and cannot scroll or rubber-band. */
+  /* THE iOS scroll lock (stable version). overflow:hidden alone does not
+     stop iPad/iOS Safari from PANNING THE VISUAL VIEWPORT when a scroll
+     gesture lands on non-scrollable chrome (sidebar whitespace, the top
+     menu) — the sidebar/header then drift off-screen. position:fixed on
+     body is the battle-tested lock: the page itself can never pan; only
+     inner overflow containers scroll. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;

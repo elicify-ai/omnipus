@@ -68,18 +68,33 @@ export function AppShell() {
   // falls back to (100dvh, 0) where visualViewport is unavailable / pre-hydrate.
   useEffect(() => {
     const vv = window.visualViewport
-    // Only track visualViewport on touch devices (iOS Safari needs it for
-    // toolbar/keyboard behavior). On desktop, visualViewport.height can differ
-    // slightly from the actual viewport (scrollbar, devtools, proxy chrome),
-    // causing the pinned sidebar to be cut off at the bottom. The CSS fallback
-    // (100dvh, 0px) is always correct on desktop.
+    // Only track visualViewport on touch devices (iOS Safari needs it for the
+    // on-screen keyboard). On desktop the CSS fallback (100dvh, 0px) is
+    // always correct.
     if (!vv || !window.matchMedia('(pointer: coarse)').matches) return undefined
     let raf = 0
     const setAppMetrics = () => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
-        document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
-        document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
+        // KEYBOARD-ONLY tracking (the stable version of this hook — earlier
+        // revisions repositioned on EVERY vv scroll/resize and made the whole
+        // shell — sidebar + top menu included — drift off-screen whenever a
+        // trackpad/momentum scroll nudged the visual viewport on iPad).
+        //
+        // Detection: the keyboard shrinks vv.height far below the layout
+        // viewport. Toolbar collapse/expand changes it only slightly (< 100px).
+        // Only when the keyboard is actually up do we pin the shell to the
+        // visual viewport (height + offsetTop); in every other state the vars
+        // are REMOVED so the CSS fallback (100dvh anchored at 0) rules and no
+        // scroll can ever displace the layout.
+        const keyboardUp = window.innerHeight - vv.height > 100
+        if (keyboardUp) {
+          document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
+          document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
+        } else {
+          document.documentElement.style.removeProperty('--app-vh')
+          document.documentElement.style.removeProperty('--app-top')
+        }
       })
     }
     setAppMetrics()

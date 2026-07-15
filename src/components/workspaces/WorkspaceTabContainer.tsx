@@ -170,8 +170,9 @@ function WorkspaceTabContainerView({
               navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId: workspace.id } })
             }
             title="Workspace settings"
+            role="tab"
             aria-label={`${workspace.name} — workspace settings`}
-            aria-current={activeSegment === 'settings' ? 'page' : undefined}
+            aria-selected={activeSegment === 'settings'}
             data-testid="workspace-name-button"
             className={cn(
               'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-sm font-headline whitespace-nowrap outline-none transition-colors',
