@@ -205,7 +205,7 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 
 	// Web surface: clear, help, model, cancel, agents, skills = 6 commands.
 	webHelp := formatHelpMessage(defs, SurfaceWeb)
-	for _, name := range []string{"clear", "help", "model", "cancel", "agents", "skills"} {
+	for _, name := range []string{"new", "help", "model", "cancel", "agents", "skills"} {
 		if !containsWord(webHelp, "/"+name) {
 			t.Errorf("web help must contain /%s, got:\n%s", name, webHelp)
 		}
@@ -228,7 +228,7 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 	// CLI surface: should show all 10 canonical commands.
 	cliHelp := formatHelpMessage(defs, SurfaceCLI)
 	allCanonical := []string{
-		"clear",
+		"new",
 		"help",
 		"model",
 		"cancel",
@@ -264,7 +264,7 @@ func TestChannelRegistrationFilter(t *testing.T) {
 
 	// The channel set must include all 10 canonical commands.
 	wantInChannel := []string{
-		"clear",
+		"new",
 		"help",
 		"model",
 		"cancel",
@@ -373,7 +373,7 @@ func TestDeliveryFields(t *testing.T) {
 	reg := NewRegistry(defs)
 
 	// Client-delivered commands (web SPA handles them locally).
-	clientCmds := []string{"clear", "help", "model", "cancel", "agents", "skills"}
+	clientCmds := []string{"new", "help", "model", "cancel", "agents", "skills"}
 	for _, name := range clientCmds {
 		def, ok := reg.Lookup(name)
 		if !ok {

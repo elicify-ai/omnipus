@@ -212,10 +212,10 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // text), false when the name is not a known client command (caller
   // should fall through to inserting as text — Issue 3 fallback).
   function runClientCommand(name: string): boolean {
-    if (name === 'clear') {
-      // US-4/AC-2: start a new conversation per spec — aligned to the "new
-      // conversation" semantic (startNewSession) rather than just wiping
-      // the local message list.
+    if (name === 'new' || name === 'clear') {
+      // Renamed /clear → /new (the palette advertises /new; 'clear' survives
+      // as a hidden backend alias for CLI/channel muscle memory). Starts a
+      // new conversation (startNewSession), not just a local wipe.
       startNewSession()
       return true
     }

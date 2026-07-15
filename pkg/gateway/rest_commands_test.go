@@ -95,7 +95,7 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	wantNames := map[string]bool{
-		"clear":  true,
+		"new":  true,
 		"help":   true,
 		"model":  true,
 		"cancel": true,
@@ -129,7 +129,7 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 
 	allCanonical := []string{
-		"clear",
+		"new",
 		"help",
 		"model",
 		"cancel",
@@ -240,7 +240,7 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	// Post ADR-026: all web commands are client-delivered (D7/D9 made /agents and
 	// /skills client commands that open the in-header selector / filter the menu).
 	clientCmds := map[string]bool{
-		"clear":  true,
+		"new":  true,
 		"help":   true,
 		"model":  true,
 		"cancel": true,
@@ -431,7 +431,7 @@ func TestClearHandler_CLI(t *testing.T) {
 	defs := commands.BuiltinDefinitions()
 	var clearDef *commands.Definition
 	for i := range defs {
-		if defs[i].Name == "clear" {
+		if defs[i].Name == "new" {
 			d := defs[i]
 			clearDef = &d
 			break
@@ -473,7 +473,7 @@ func TestClearHandler_NilRuntime(t *testing.T) {
 	defs := commands.BuiltinDefinitions()
 	var clearDef *commands.Definition
 	for i := range defs {
-		if defs[i].Name == "clear" {
+		if defs[i].Name == "new" {
 			d := defs[i]
 			clearDef = &d
 			break
