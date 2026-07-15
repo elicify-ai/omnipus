@@ -1450,7 +1450,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           vertical breathing room the focus ring on the controls was cut off
           at the top. Compact h-7 controls + py-0.5 keeps the ring visible. */}
       <div
-        className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 py-0.5 mb-1"
+        className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 py-1"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
         {/* Order per operator spec: agent → model → attach. */}
@@ -1461,7 +1461,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         <ComposerPrimitive.AddAttachment
           disabled={attachDisabled}
           tabIndex={4}
-          className="shrink-0 h-7 w-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          className="shrink-0 h-7 w-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Attach file"
           title="Attach file"
         >
