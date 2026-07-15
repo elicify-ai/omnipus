@@ -65,7 +65,7 @@ interface WsGroup {
 
 // ── collapsible workspace header ─────────────────────────────────────────────
 
-function WorkspaceHeader({ name, count, isCollapsed, onToggle, panelId }: { name: string; count: number; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
+function WorkspaceHeader({ name, isCollapsed, onToggle, panelId }: { name: string; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
     <button
       type="button"
@@ -77,14 +77,13 @@ function WorkspaceHeader({ name, count, isCollapsed, onToggle, panelId }: { name
       {isCollapsed ? <CaretRight size={10} className="shrink-0" /> : <CaretDown size={10} className="shrink-0" />}
       <Folder size={14} className="shrink-0" />
       <span className="flex-1 text-left truncate">{name}</span>
-      <span className="text-[9px] rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 shrink-0">{count}</span>
     </button>
   )
 }
 
 // ── collapsible agent header with avatar ──────────────────────────────────────
 
-function AgentHeader({ agent, name, count, isCollapsed, onToggle, panelId }: { agent: Agent | undefined; name: string; count: number; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
+function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: Agent | undefined; name: string; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
     <button
       type="button"
@@ -105,7 +104,6 @@ function AgentHeader({ agent, name, count, isCollapsed, onToggle, panelId }: { a
         )}
       </span>
       <span className="flex-1 text-left truncate">{name}</span>
-      <span className="text-[9px] rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 shrink-0">{count}</span>
     </button>
   )
 }
@@ -367,7 +365,7 @@ export function SearchModal() {
               const wsCollapsed = collapsedWs.has(wsKey)
               return (
                 <div key={wsKey} className="mb-1">
-                  <WorkspaceHeader name={group.workspace?.name ?? 'Unfiled'} count={group.totalCount} isCollapsed={wsCollapsed} onToggle={() => toggleWs(wsKey)} panelId={`ws-panel-${wsKey}`} />
+                  <WorkspaceHeader name={group.workspace?.name ?? 'Unfiled'} isCollapsed={wsCollapsed} onToggle={() => toggleWs(wsKey)} panelId={`ws-panel-${wsKey}`} />
                   {!wsCollapsed && (
                     <div id={`ws-panel-${wsKey}`} role="region" className="space-y-0.5 px-2 pb-1">
                       {group.agentGroups.map((ag) => {
@@ -377,7 +375,7 @@ export function SearchModal() {
                         return (
                           <div key={agentKey}>
                             {group.agentGroups.length > 1 && (
-                              <AgentHeader agent={ag.agent} name={agentName} count={ag.sessions.length} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
+                              <AgentHeader agent={ag.agent} name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
                             )}
                             {!agentCollapsed && (
                               <div id={`agent-panel-${agentKey}`} role="region" className={cn('space-y-0.5', group.agentGroups.length > 1 && 'pl-3')}>
