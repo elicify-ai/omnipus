@@ -12,6 +12,7 @@ import {
   SignOut,
   Plus,
   Folder,
+  PencilSimple,
   Tray,
   CaretDown,
   CaretRight,
@@ -431,30 +432,44 @@ export function Sidebar() {
                       visibleSessions.map((s) => {
                         const sActive = s.id === activeSessionId
                         return (
-                          <button
+                          <div
                             key={s.id}
-                            type="button"
-                            onClick={() => selectSession(s)}
                             className={cn(
-                              'flex items-center gap-1.5 w-full pl-8 pr-4 py-1 text-xs transition-colors text-left',
+                              'group/ses flex items-center gap-1.5 w-full pl-8 pr-2 py-1 text-xs transition-colors text-left',
                               sActive
                                 ? 'text-[var(--color-accent)] font-medium'
                                 : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
                             )}
                           >
-                            {sActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
-                            <span className="flex-1 truncate">{s.title || 'Untitled'}</span>
-                            {s.type === 'heartbeat' && (
-                              <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
-                            )}
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => selectSession(s)}
+                              className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+                            >
+                              {sActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
+                              <span className="flex-1 truncate">{s.title || 'Untitled'}</span>
+                              {s.type === 'heartbeat' && (
+                                <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
+                              )}
+                            </button>
+                            {/* Rename — opens in the search modal which has the full inline editor */}
+                            <button
+                              type="button"
+                              onClick={() => useUiStore.getState().openSearchModal(project.id)}
+                              className="shrink-0 rounded p-0.5 text-[var(--color-muted)] opacity-0 group-hover/ses:opacity-100 hover:text-[var(--color-accent)] transition-all"
+                              aria-label="Manage sessions"
+                              title="Search & manage"
+                            >
+                              <PencilSimple size={10} />
+                            </button>
+                          </div>
                         )
                       })
                     )}
                     {hasMoreSessions && (
                       <button
                         type="button"
-                        onClick={() => useUiStore.getState().openSearchModal()}
+                        onClick={() => useUiStore.getState().openSearchModal(project.id)}
                         className="flex items-center gap-1 w-full pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
                       >
                         More…

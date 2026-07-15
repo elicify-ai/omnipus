@@ -27,7 +27,8 @@ interface UiStore {
   // (useSlashMenu.ts). The SearchModal component is mounted once at the AppShell
   // root, so either entry point drives the same single instance.
   searchModalOpen: boolean
-  openSearchModal: () => void
+  searchModalWorkspaceFilter: string | null
+  openSearchModal: (workspaceId?: string) => void
   closeSearchModal: () => void
 
   // Create agent modal
@@ -165,8 +166,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
   closeSessionPanel: () => set({ sessionPanelOpen: false }),
 
   searchModalOpen: false,
-  openSearchModal: () => set({ searchModalOpen: true }),
-  closeSearchModal: () => set({ searchModalOpen: false }),
+  searchModalWorkspaceFilter: null,
+  openSearchModal: (workspaceId?: string) => set({ searchModalOpen: true, searchModalWorkspaceFilter: workspaceId ?? null }),
+  closeSearchModal: () => set({ searchModalOpen: false, searchModalWorkspaceFilter: null }),
 
   createAgentModalOpen: false,
   createAgentModalType: 'Main',
