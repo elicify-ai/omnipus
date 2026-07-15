@@ -366,7 +366,6 @@ export function Sidebar() {
               })
             const maxVisible = 9
             const visibleSessions = workspaceSessions.slice(0, maxVisible)
-            const hasMoreSessions = workspaceSessions.length > maxVisible
             return (
               <div key={project.id}>
                 <div
@@ -466,7 +465,8 @@ export function Sidebar() {
                         )
                       })
                     )}
-                    {hasMoreSessions && (
+                    {/* Always the last entry — opens the session search pre-filtered to this workspace */}
+                    {workspaceSessions.length > 0 && (
                       <button
                         type="button"
                         onClick={() => useUiStore.getState().openSearchModal(project.id)}
