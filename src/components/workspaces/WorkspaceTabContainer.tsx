@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { List } from '@phosphor-icons/react'
+import { List, GearSix } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -160,7 +160,9 @@ function WorkspaceTabContainerView({
 
           {/* Workspace name — the wayfinding anchor (which workspace am I in?).
               Clicking it opens workspace settings (Notion-style: the container's
-              name IS the entry point for configuring the container). */}
+              name IS the entry point for configuring the container). The
+              persistent gear glyph + hover underline signal clickability at
+              rest — a bare text label reads as static (affordance visibility). */}
           <button
             type="button"
             onClick={() =>
@@ -169,9 +171,13 @@ function WorkspaceTabContainerView({
             title="Workspace settings"
             aria-label={`${workspace.name} — workspace settings`}
             data-testid="workspace-name-button"
-            className="flex items-center gap-1.5 px-2 h-chrome-header min-h-chrome-header max-w-[20ch] flex-shrink-0 text-sm font-headline font-semibold text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)] transition-colors"
+            className="group/wsname flex items-center gap-1.5 px-2 h-chrome-header min-h-chrome-header max-w-[22ch] flex-shrink-0 text-sm font-headline font-semibold text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)] transition-colors"
           >
-            <span className="truncate">{workspace.name}</span>
+            <span className="truncate underline-offset-4 decoration-[var(--color-border)] group-hover/wsname:underline">{workspace.name}</span>
+            <GearSix
+              size={13}
+              className="flex-shrink-0 text-[var(--color-muted)] group-hover/wsname:text-[var(--color-accent)] transition-colors"
+            />
           </button>
 
           <WorkspaceTabBar workspaceId={workspace.id} />
