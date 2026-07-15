@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { List, GearSix } from '@phosphor-icons/react'
+import { List, Tray } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -9,6 +9,7 @@ import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
+import { cn } from '@/lib/utils'
 
 // React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -158,11 +159,11 @@ function WorkspaceTabContainerView({
             <List size={20} />
           </button>
 
-          {/* Workspace name — the wayfinding anchor (which workspace am I in?).
-              Clicking it opens workspace settings (Notion-style: the container's
-              name IS the entry point for configuring the container). The
-              persistent gear glyph + hover underline signal clickability at
-              rest — a bare text label reads as static (affordance visibility). */}
+          {/* Workspace name — a proper menu item, styled exactly like the
+              tab-strip entries (same type, spacing, hover, gold-when-active).
+              Icon = Tray, the workspace glyph the sidebar uses. Clicking opens
+              workspace settings; on the settings route this item is the gold
+              one (with the same underline the tabs use). */}
           <button
             type="button"
             onClick={() =>
@@ -170,14 +171,21 @@ function WorkspaceTabContainerView({
             }
             title="Workspace settings"
             aria-label={`${workspace.name} — workspace settings`}
+            aria-current={activeSegment === 'settings' ? 'page' : undefined}
             data-testid="workspace-name-button"
-            className="group/wsname flex items-center gap-1.5 px-2 h-chrome-header min-h-chrome-header max-w-[22ch] flex-shrink-0 text-sm font-headline font-semibold text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)] transition-colors"
+            className={cn(
+              'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-sm font-headline whitespace-nowrap outline-none transition-colors',
+              'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
+              activeSegment === 'settings'
+                ? 'text-[var(--color-accent)]'
+                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+            )}
           >
-            <span className="truncate underline-offset-4 decoration-[var(--color-border)] group-hover/wsname:underline">{workspace.name}</span>
-            <GearSix
-              size={13}
-              className="flex-shrink-0 text-[var(--color-muted)] group-hover/wsname:text-[var(--color-accent)] transition-colors"
-            />
+            <Tray size={16} weight={activeSegment === 'settings' ? 'fill' : 'regular'} className="flex-shrink-0" />
+            <span className="truncate">{workspace.name}</span>
+            {activeSegment === 'settings' && (
+              <span className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]" aria-hidden="true" />
+            )}
           </button>
 
           <WorkspaceTabBar workspaceId={workspace.id} />
