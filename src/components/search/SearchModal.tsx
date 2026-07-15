@@ -116,6 +116,7 @@ function SessionRow({ session, isActive, onSelect, onRename, onDelete, deleting 
   session: Session; isActive: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
 }) {
   const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [val, setVal] = useState(session.title || '')
   const commit = () => {
     const t = val.trim()
@@ -129,8 +130,32 @@ function SessionRow({ session, isActive, onSelect, onRename, onDelete, deleting 
         <Input autoFocus value={val} onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } if (e.key === 'Escape') { setEditing(false); setVal(session.title || '') } }}
           className="h-7 flex-1 text-sm" />
-        <button onClick={commit} className="shrink-0 rounded p-1 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm"><Check size={14} weight="bold" /></button>
-        <button onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel"><X size={14} /></button>
+        <button onClick={commit} className="shrink-0 rounded p-1.5 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></button>
+        <button onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></button>
+      </div>
+    )
+  }
+
+  // Destructive action requires explicit confirmation — mistakes must be cheap.
+  if (confirmDelete) {
+    return (
+      <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)] mx-2 text-sm">
+        <span className="flex-1 truncate text-[var(--color-secondary)]">Delete "{session.title || 'Untitled session'}"?</span>
+        <button
+          type="button"
+          onClick={() => { setConfirmDelete(false); onDelete() }}
+          disabled={deleting}
+          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-error)] hover:bg-[var(--color-error)]/10 disabled:opacity-50"
+        >
+          Delete
+        </button>
+        <button
+          type="button"
+          onClick={() => setConfirmDelete(false)}
+          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+        >
+          Cancel
+        </button>
       </div>
     )
   }
@@ -149,12 +174,13 @@ function SessionRow({ session, isActive, onSelect, onRename, onDelete, deleting 
           {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[9px]">HB</span></>)}
         </div>
       </button>
+      {/* Hover-revealed on pointer devices; always visible on touch ([@media(hover:none)]). */}
       <button type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
-        className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
-        aria-label="Rename" title="Rename"><PencilSimple size={13} /></button>
-      <button type="button" onClick={onDelete} disabled={deleting || session.protected === true}
-        className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-        aria-label="Delete" title={session.protected ? 'Protected' : 'Delete'}><Trash size={13} /></button>
+        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
+        aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></button>
+      <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
+        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+        aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : 'Delete'}><Trash size={13} /></button>
     </div>
   )
 }
@@ -310,10 +336,23 @@ export function SearchModal() {
 
         {/* Results — collapsible workspace → agent → sessions */}
         <div className="min-h-0 flex-1 overflow-y-auto py-2">
-          ({ sessionsError ? (<div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>) : loading ? (
+          {sessionsError ? (
+            <div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>
+          ) : loading ? (
             <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">Loading sessions...</div>
           ) : total === 0 ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">No sessions found</div>
+            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
+              <p>No sessions found{wsFilter ? ' in this workspace' : ''}{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
+              {(wsFilter || debouncedSearch || fromDate || toDate) && (
+                <button
+                  type="button"
+                  onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); useUiStore.setState({ searchModalWorkspaceFilter: null }) }}
+                  className="mt-2 text-xs text-[var(--color-accent)] hover:underline"
+                >
+                  Clear all filters
+                </button>
+              )}
+            </div>
           ) : (
             groups.map((group) => {
               const wsKey = group.workspace?.id ?? 'unfiled'
