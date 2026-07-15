@@ -19,6 +19,7 @@ import {
   CaretRight, CaretDown, Folder,
 } from '@phosphor-icons/react'
 import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession, workspacesQueryKeys } from '@/lib/api'
+import { formatTokens } from '@/lib/formatTokens'
 import type { Session, Workspace, Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useSelectSession } from '@/components/chat/useSelectSession'
@@ -49,13 +50,6 @@ function formatRelative(dateStr: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function formatTokens(n?: number): string {
-  if (!n || n <= 0) return ''
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
-  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`
-  return `${n}`
-}
-
 // ── types ────────────────────────────────────────────────────────────────────
 
 interface AgentGroup {
@@ -71,13 +65,14 @@ interface WsGroup {
 
 // ── collapsible workspace header ─────────────────────────────────────────────
 
-function WorkspaceHeader({ name, count, isCollapsed, onToggle }: { name: string; count: number; isCollapsed: boolean; onToggle: () => void }) {
+function WorkspaceHeader({ name, count, isCollapsed, onToggle, panelId }: { name: string; count: number; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
     <button
       type="button"
       onClick={onToggle}
       className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
       aria-expanded={!isCollapsed}
+      aria-controls={panelId}
     >
       {isCollapsed ? <CaretRight size={10} className="shrink-0" /> : <CaretDown size={10} className="shrink-0" />}
       <Folder size={14} className="shrink-0" />
@@ -89,13 +84,14 @@ function WorkspaceHeader({ name, count, isCollapsed, onToggle }: { name: string;
 
 // ── collapsible agent header with avatar ──────────────────────────────────────
 
-function AgentHeader({ agent, name, count, isCollapsed, onToggle }: { agent: Agent | undefined; name: string; count: number; isCollapsed: boolean; onToggle: () => void }) {
+function AgentHeader({ agent, name, count, isCollapsed, onToggle, panelId }: { agent: Agent | undefined; name: string; count: number; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
     <button
       type="button"
       onClick={onToggle}
       className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
       aria-expanded={!isCollapsed}
+      aria-controls={panelId}
     >
       {isCollapsed ? <CaretRight size={9} className="shrink-0" /> : <CaretDown size={9} className="shrink-0" />}
       <span
@@ -192,7 +188,7 @@ export function SearchModal() {
     if (!open) { setSearchText(''); setShowDateFilter(false); setFromDate(''); setToDate(''); setCollapsedWs(new Set()); setCollapsedAgent(new Set()) }
   }, [open])
 
-  const { data: sessions = [], isLoading: sLoading } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), enabled: open })
+  const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), enabled: open })
   const { data: workspaces = [], isLoading: wLoading } = useQuery({ queryKey: workspacesQueryKeys.list({ status: 'active' }), queryFn: () => fetchWorkspaces({ status: 'active' }), enabled: open })
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, enabled: open })
 
@@ -303,7 +299,7 @@ export function SearchModal() {
 
         {/* Results — collapsible workspace → agent → sessions */}
         <div className="min-h-0 flex-1 overflow-y-auto py-2">
-          {loading ? (
+          ({ sessionsError ? (<div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>) : loading ? (
             <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">Loading sessions...</div>
           ) : total === 0 ? (
             <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">No sessions found</div>
@@ -313,9 +309,9 @@ export function SearchModal() {
               const wsCollapsed = collapsedWs.has(wsKey)
               return (
                 <div key={wsKey} className="mb-1">
-                  <WorkspaceHeader name={group.workspace?.name ?? 'Unfiled'} count={group.totalCount} isCollapsed={wsCollapsed} onToggle={() => toggleWs(wsKey)} />
+                  <WorkspaceHeader name={group.workspace?.name ?? 'Unfiled'} count={group.totalCount} isCollapsed={wsCollapsed} onToggle={() => toggleWs(wsKey)} panelId={`ws-panel-${wsKey}`} />
                   {!wsCollapsed && (
-                    <div className="space-y-0.5 px-2 pb-1">
+                    <div id={`ws-panel-${wsKey}`} role="region" className="space-y-0.5 px-2 pb-1">
                       {group.agentGroups.map((ag) => {
                         const agentKey = `${wsKey}::${ag.agentId}`
                         const agentCollapsed = collapsedAgent.has(agentKey)
@@ -323,10 +319,10 @@ export function SearchModal() {
                         return (
                           <div key={agentKey}>
                             {group.agentGroups.length > 1 && (
-                              <AgentHeader agent={ag.agent} name={agentName} count={ag.sessions.length} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} />
+                              <AgentHeader agent={ag.agent} name={agentName} count={ag.sessions.length} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
                             )}
                             {!agentCollapsed && (
-                              <div className={cn('space-y-0.5', group.agentGroups.length > 1 && 'pl-3')}>
+                              <div id={`agent-panel-${agentKey}`} role="region" className={cn('space-y-0.5', group.agentGroups.length > 1 && 'pl-3')}>
                                 {ag.sessions.map((s) => (
                                   <SessionRow key={s.id} session={s} isActive={false} onSelect={() => selectSession(s)}
                                     onRename={(t) => renameMut.mutate({ id: s.id, title: t })}

@@ -75,18 +75,22 @@ export function useSelectSession(options: UseSelectSessionOptions) {
 
     // Same workspace, no workspace, or deleted-workspace session — attach in place.
     attachToSession(session.id, session.type, session.title, agentId)
-    // Seed the token counter from the persisted total so historic sessions
-    // show their total immediately rather than starting at 0.
     if (session.total_tokens && session.total_tokens > 0) {
       seedSessionTokens(session.total_tokens)
     }
     if (session.type !== 'task') {
-      // Track the active agent type for composer behavior (chat-only concern).
       const agent = agents.find((a) => a.id === agentId)
       if (agent?.type) {
         setActiveAgentType(agent.type)
       }
     }
     onClose()
+    // Always navigate to the workspace chat route if the session has a known
+    // workspace — the sidebar/search-modal entry points are globally reachable
+    // (not just from chat routes), so without this the user would stay stranded
+    // on /agents or /settings after selecting a same-workspace session.
+    if (sessionWsId && existingWorkspaceIds.has(sessionWsId)) {
+      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: sessionWsId } })
+    }
   }
 }

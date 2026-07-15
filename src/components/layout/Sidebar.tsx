@@ -110,7 +110,7 @@ export function Sidebar() {
   })
 
   // Sessions + agents — used by the workspace accordion's expanded session list.
-  const { data: allSessions = [] } = useQuery({
+  const { data: allSessions = [], isError: sessionsError } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
     staleTime: 15_000,
@@ -423,7 +423,9 @@ export function Sidebar() {
                     >
                       <Plus size={11} /> New chat
                     </button>
-                    {workspaceSessions.length === 0 ? (
+                    {sessionsError ? (
+                      <p className="pl-8 pr-4 py-1 text-xs text-[var(--color-error)]">Could not load sessions</p>
+                    ) : workspaceSessions.length === 0 ? (
                       <p className="pl-8 pr-4 py-1 text-xs text-[var(--color-muted)] opacity-60">No sessions yet</p>
                     ) : (
                       visibleSessions.map((s) => {

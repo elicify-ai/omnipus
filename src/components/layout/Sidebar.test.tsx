@@ -76,21 +76,12 @@ vi.mock('@/store/workspacesStore', () => ({
   },
 }))
 
-// Mock useSessionStore + useChatStore (used by the workspace accordion's session list)
+// Mock useSessionStore (used by the workspace accordion's active-session highlight)
 vi.mock('@/store/session', () => ({
   useSessionStore: (selector?: (s: unknown) => unknown) => {
     const state = { activeSessionId: null, startNewSession: vi.fn() }
     return selector ? selector(state) : state
   },
-}))
-vi.mock('@/store/chat', () => ({
-  useChatStore: (selector?: (s: unknown) => unknown) => {
-    const state = { sessionsById: {} }
-    return selector ? selector(state) : state
-  },
-}))
-vi.mock('@/components/chat/SessionItem', () => ({
-  SessionItem: () => null,
 }))
 vi.mock('@/components/chat/useSelectSession', () => ({
   useSelectSession: () => vi.fn(),

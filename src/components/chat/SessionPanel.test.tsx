@@ -935,12 +935,11 @@ describe('SessionPanel — Q4 Bug 2: open-in-workspace', () => {
     })
   })
 
-  it('(b) opening a same-workspace session attaches in place without navigating', async () => {
-    // BDD: Given active workspace is ws-q4-a
-    //      And a session with workspace_id='ws-q4-a' exists
-    //      When the user clicks that session
-    //      Then attachToSession is called for it
-    //      And navigate is NOT called (same workspace)
+  it('(b) opening a same-workspace session attaches and navigates to the workspace chat route', async () => {
+    // Updated: useSelectSession now always navigates to /workspaces/$id/chat when
+    // the session has a known workspace — the sidebar/search-modal entry points are
+    // globally reachable (not just from chat routes), so navigation is needed to
+    // land the user on the chat screen.
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: 'ws-q4-a' })
     })
@@ -951,7 +950,7 @@ describe('SessionPanel — Q4 Bug 2: open-in-workspace', () => {
     fireEvent.click(sessionBtn)
 
     expect(attachToSessionSpy).toHaveBeenCalledWith('sess-same-ws', 'chat', 'Same Workspace Session', 'agent-chat-1')
-    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-q4-a' } })
   })
 
   it('(c) opening a session in a different existing workspace sets active workspace and navigates', async () => {
