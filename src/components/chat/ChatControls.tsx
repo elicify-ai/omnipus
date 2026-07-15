@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from '@tanstack/react-router'
-import { PencilSimpleLine, CaretLeft, Monitor, SpinnerGap } from '@phosphor-icons/react'
+import { PencilSimpleLine, Monitor, SpinnerGap } from '@phosphor-icons/react'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { createSession } from '@/lib/api'
@@ -129,24 +129,7 @@ export function ChatControls({ className }: ChatControlsProps) {
         <span>New Chat</span>
       </button>
 
-      {/* 2. Search — opens the cross-workspace session search modal (replaces the old Sessions panel,
-          which is now merged into the sidebar accordion). */}
-      <button
-        type="button"
-        onClick={() => useUiStore.getState().openSearchModal()}
-        aria-label="Search sessions"
-        className={cn(
-          'flex items-center justify-center shrink-0 px-2 h-8 gap-1 rounded-md',
-          'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
-          'transition-colors text-xs',
-          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
-        )}
-      >
-        <span className="hidden @2xl:inline">Sessions</span>
-        <CaretLeft size={13} className="rotate-180" />
-      </button>
-
-      {/* 3. Open browser — ADR-039 D-A1: user-initiated live browser session,
+      {/* Open browser — ADR-039 D-A1: user-initiated live browser session,
           independent of any agent tool call. */}
       <button
         type="button"
