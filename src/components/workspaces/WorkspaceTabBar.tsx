@@ -8,7 +8,7 @@ import {
   Graph,
   CalendarBlank,
   UsersThree,
-  Gear,
+  Folder,
   CaretDown,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -26,6 +26,8 @@ export interface WorkspaceTab {
   segment: 'chat' | 'board' | 'list' | 'graph' | 'calendar' | 'team' | 'settings'
   label: string
   Icon: Icon
+  /** Icon-only tab — the label is aria/tooltip only, never rendered as text. */
+  iconOnly?: boolean
 }
 
 export const WORKSPACE_TABS: WorkspaceTab[] = [
@@ -35,7 +37,9 @@ export const WORKSPACE_TABS: WorkspaceTab[] = [
   { segment: 'graph', label: 'Graph', Icon: Graph },
   { segment: 'calendar', label: 'Calendar', Icon: CalendarBlank },
   { segment: 'team', label: 'Team', Icon: UsersThree },
-  { segment: 'settings', label: 'Settings', Icon: Gear },
+  // Workspace settings — a workspace glyph (Folder), icon-only per operator
+  // direction (not a gear, no visible "Settings" text).
+  { segment: 'settings', label: 'Workspace settings', Icon: Folder, iconOnly: true },
 ]
 
 interface WorkspaceTabBarProps {
@@ -72,7 +76,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
         className="hidden @6xl:flex items-stretch gap-1 overflow-x-auto min-w-0 flex-1"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
-        {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
+        {WORKSPACE_TABS.map(({ segment, label, Icon, iconOnly }) => {
           const isActive = segment === activeSegment
           return (
             <Link
@@ -82,6 +86,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
               role="tab"
               aria-selected={isActive}
               aria-label={label}
+              title={iconOnly ? label : undefined}
               data-testid={`workspace-tab-${segment}`}
               className={cn(
                 // h-chrome-header (the literal 44px token, NOT h-11) makes the tab
@@ -99,7 +104,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
               )}
             >
               <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
-              <span>{label}</span>
+              {!iconOnly && <span>{label}</span>}
               {isActive && (
                 <motion.div
                   layoutId="workspace-tab-underline"

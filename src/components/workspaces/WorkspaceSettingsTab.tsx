@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, UsersThree, Lock, ArrowsClockwise } from '@phosphor-icons/react'
+import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, UsersThree, ArrowsClockwise } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -214,18 +214,6 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
                 <ArrowSquareOut size={16} />
               </a>
             )}
-          </div>
-        </div>
-
-        {/* Owner (read-only) */}
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ws-owner">Owner</Label>
-          <div
-            id="ws-owner"
-            className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-sm text-[var(--color-muted)]"
-          >
-            <Lock size={13} />
-            <span>{workspace.is_default ? 'System (default workspace)' : 'You'}</span>
           </div>
         </div>
 
