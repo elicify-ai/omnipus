@@ -123,7 +123,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
             <button
               type="button"
               data-testid="workspace-view-switcher"
-              aria-label={`Switch view, currently ${activeTab?.label ?? 'Chat'}`}
+              aria-label={`Switch view, currently ${activeTab?.label ?? (activeSegment === 'settings' ? 'Workspace settings' : 'Chat')}`}
               className={cn(
                 'flex items-center gap-1.5 px-3 h-11 text-sm font-headline whitespace-nowrap rounded-md',
                 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors',
@@ -132,7 +132,7 @@ export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
               )}
             >
               {activeTab && <activeTab.Icon size={16} weight="fill" className="text-[var(--color-accent)]" />}
-              <span className="text-[var(--color-accent)]">{activeTab?.label ?? 'Chat'}</span>
+              <span className="text-[var(--color-accent)]">{activeTab?.label ?? (activeSegment === 'settings' ? 'Settings' : 'Chat')}</span>
               <CaretDown size={13} className="opacity-60" />
             </button>
           </DropdownMenuTrigger>
@@ -182,6 +182,11 @@ export function resolveActiveSegment(
   if (!pathname.startsWith(base)) return 'chat'
   const rest = pathname.slice(base.length).replace(/^\//, '')
   const segment = rest.split('/')[0]
+  // 'settings' is a real segment but deliberately NOT in WORKSPACE_TABS (it's
+  // reached via the workspace-name button, not a tab). It must still resolve —
+  // otherwise /settings falls through to 'chat', wrongly marking the Chat tab
+  // active and rendering the chat-only header controls on the settings page.
+  if (segment === 'settings') return 'settings'
   const match = WORKSPACE_TABS.find((t) => t.segment === segment)
   return match?.segment ?? 'chat'
 }
