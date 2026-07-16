@@ -439,7 +439,7 @@ export function GatewaySection() {
 
       {/* Remote Access */}
       <section>
-        <button
+        <button tabIndex={0}
           className="flex items-center gap-2 w-full text-left py-1"
           onClick={() => setRemoteAccessOpen((v) => !v)}
           type="button"

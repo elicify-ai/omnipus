@@ -178,7 +178,7 @@ function AgentsLibraryView({
         <div className="flex items-center gap-2">
           <Popover open={filterMenuOpen} onOpenChange={setFilterMenuOpen}>
             <PopoverTrigger asChild>
-              <button
+              <button tabIndex={0}
                 type="button"
                 data-testid="workspace-filter-trigger"
                 className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
@@ -205,7 +205,7 @@ function AgentsLibraryView({
             </PopoverTrigger>
             <PopoverContent align="start" sideOffset={4} className="w-56 p-1">
               <div role="group" aria-label="Filter by workspace">
-                <button
+                <button tabIndex={0}
                   type="button"
                   data-testid="workspace-filter-all"
                   onClick={() => {
@@ -224,7 +224,7 @@ function AgentsLibraryView({
                   All agents
                 </button>
                 {workspaces.map((ws) => (
-                  <button
+                  <button tabIndex={0}
                     key={ws.id}
                     type="button"
                     data-testid={`workspace-filter-${ws.id}`}
@@ -249,7 +249,7 @@ function AgentsLibraryView({
             </PopoverContent>
           </Popover>
           {workspaceFilter !== 'all' && (
-            <button
+            <button tabIndex={0}
               type="button"
               data-testid="workspace-filter-clear"
               onClick={() => setWorkspaceFilter('all')}
@@ -369,7 +369,7 @@ function AgentsLibraryView({
                       {CLI_ORDER.map((cli) => {
                         const available = cliAvailable[cli]
                         return (
-                          <button
+                          <button tabIndex={0}
                             key={cli}
                             type="button"
                             disabled={!available}

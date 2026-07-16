@@ -110,7 +110,7 @@ function SearchableSelect({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
+        <button tabIndex={0}
           type="button"
           disabled={disabled}
           aria-expanded={open}

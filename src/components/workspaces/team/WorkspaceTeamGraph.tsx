@@ -28,6 +28,7 @@ import { IconRenderer } from '@/components/shared/IconRenderer'
 import { cn } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import { AgentDelegatePicker } from './AgentDelegatePicker'
+import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import {
   validateConnection,
   rejectionMessageForFailedConnection,
@@ -164,7 +165,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
               deleted — dangling edge
             </span>
           </div>
-          <button
+          <button tabIndex={0}
             type="button"
             aria-label={`Remove ${model.id} from team`}
             title="Remove from team"
@@ -250,7 +251,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
           />
         )}
         {data.onOpenAgent && (
-          <button
+          <button tabIndex={0}
             type="button"
             data-node-action="edit"
             aria-label={`Edit ${model.name}`}
@@ -265,7 +266,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
           </button>
         )}
         {!model.isDefault && (
-          <button
+          <button tabIndex={0}
             type="button"
             data-node-action="remove"
             aria-label={`Remove ${model.name} from team`}
@@ -533,6 +534,12 @@ function WorkspaceTeamGraphInner({
   const [flowNodes, setFlowNodes] = useState<AgentFlowNode[]>(modelNodes)
   const draggedPositions = useRef<Record<string, { x: number; y: number }>>({})
 
+  // React Flow renders the <Controls> zoom/fit buttons itself — no JSX site
+  // here can carry the repo's explicit-tabIndex convention, so stamp them
+  // post-render (WebKit Tab reachability; see useLibraryTabIndex).
+  const canvasDomRef = useRef<HTMLDivElement>(null)
+  useLibraryTabIndex(canvasDomRef)
+
   useEffect(() => {
     setFlowNodes(
       modelNodes.map((n) => {
@@ -581,6 +588,7 @@ function WorkspaceTeamGraphInner({
 
   return (
     <div
+      ref={canvasDomRef}
       data-testid="team-graph-canvas"
       className="h-full w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]"
     >

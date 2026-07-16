@@ -29,7 +29,7 @@ export function InheritToggle({ label, inherit, onChange, testId }: InheritToggl
           {inherit ? 'Inherited from caller' : 'Overridden'}
         </span>
       </span>
-      <input
+      <input tabIndex={0}
         type="checkbox"
         role="switch"
         checked={inherit}

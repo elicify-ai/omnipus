@@ -63,7 +63,7 @@ function WebFetchBlock({
       )}
     >
       {/* Header */}
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={() => !isRunning && content && setExpanded((e) => !e)}
         className={cn(

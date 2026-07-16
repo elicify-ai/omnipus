@@ -148,7 +148,7 @@ function LoginScreen() {
                 autoComplete="current-password"
                 className="pl-9 pr-9"
               />
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
                 // Padded 44x44 mobile tap target without enlarging the 14px icon.

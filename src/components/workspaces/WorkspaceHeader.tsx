@@ -95,7 +95,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
             <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)] flex-1 truncate">
               {workspace.name}
             </h1>
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => {
                 setNameDraft(workspace.name)
@@ -128,7 +128,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
             // Unparseable URL — fall through to plain text.
           }
           return isSafeUrl ? (
-            <a
+            <a tabIndex={0}
               href={workspace.repository}
               target="_blank"
               rel="noopener noreferrer"

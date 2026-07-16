@@ -76,7 +76,7 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
       )}
     >
       {/* Header row */}
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={() => toolCall.status !== 'running' && setExpanded((e) => !e)}
         className={cn(

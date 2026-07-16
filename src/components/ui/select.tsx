@@ -13,6 +13,9 @@ const SelectTrigger = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <SelectPrimitive.Trigger
     ref={ref}
+    // WebKit tabbability (repo convention): Radix renders the trigger button,
+    // so the explicit tabIndex stamp lives here; {...props} may override.
+    tabIndex={0}
     className={cn(
       'flex h-9 w-full items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-sm text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]  disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
       className

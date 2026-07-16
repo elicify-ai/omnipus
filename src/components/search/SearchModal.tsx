@@ -56,7 +56,7 @@ interface WsGroup {
 
 function WorkspaceHeader({ name, isCollapsed, onToggle, panelId }: { name: string; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       onClick={onToggle}
       className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
@@ -74,7 +74,7 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId }: { name: strin
 
 function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: Agent | undefined; name: string; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       onClick={onToggle}
       className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
@@ -157,8 +157,8 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
             if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setVal(session.title || '') }
           }}
           className="h-7 flex-1 text-sm" />
-        <button onClick={commit} className="shrink-0 rounded p-1.5 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></button>
-        <button onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></button>
+        <button tabIndex={0} onClick={commit} className="shrink-0 rounded p-1.5 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></button>
+        <button tabIndex={0} onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></button>
       </div>
     )
   }
@@ -168,7 +168,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
     return (
       <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)] mx-2 text-sm">
         <span className="flex-1 truncate text-[var(--color-secondary)]">Delete "{session.title || 'Untitled session'}"?</span>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => { setConfirmDelete(false); onDelete() }}
           disabled={deleting}
@@ -176,7 +176,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
         >
           Delete
         </button>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => setConfirmDelete(false)}
           className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
@@ -193,7 +193,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
       // Keyboard highlight = what Enter selects; follows ArrowUp/Down.
       isHighlighted && 'bg-[var(--color-surface-2)]',
     )}>
-      <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
+      <button tabIndex={0} type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
         <div className={cn('truncate text-sm font-medium flex items-center gap-1.5', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
           <span className="truncate">{session.title || 'Untitled session'}</span>
           {isHighlighted && (
@@ -213,10 +213,10 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
         </div>
       </button>
       {/* Hover-revealed on pointer devices; always visible on touch ([@media(hover:none)]). */}
-      <button ref={renameButtonRef} type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
+      <button tabIndex={0} ref={renameButtonRef} type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
         className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
         aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></button>
-      <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
+      <button tabIndex={0} type="button" onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
         className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
         aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : 'Delete'}><Trash size={13} /></button>
     </div>
@@ -398,7 +398,7 @@ export function SearchModal() {
             {wsFilter && (
               <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-normal text-[var(--color-secondary)]">
                 {workspaces.find((w) => w.id === wsFilter)?.name ?? 'Filtered'}
-                <button type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
+                <button tabIndex={0} type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
                   <X size={10} />
                 </button>
               </span>
@@ -423,7 +423,7 @@ export function SearchModal() {
                 }
               }}
               className="pl-9" aria-label="Search sessions" />
-            <button type="button" onClick={() => setShowDateFilter((v) => !v)}
+            <button tabIndex={0} type="button" onClick={() => setShowDateFilter((v) => !v)}
               className={cn('absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded transition-colors',
                 showDateFilter ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]')}
               title="Date range filter" aria-label="Toggle date range filter" aria-pressed={showDateFilter}>
@@ -436,7 +436,7 @@ export function SearchModal() {
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="max-w-[180px]" aria-label="From date" />
               <span className="text-xs text-[var(--color-muted)]">to</span>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="max-w-[180px]" aria-label="To date" />
-              {(fromDate || toDate) && <button type="button" onClick={() => { setFromDate(''); setToDate('') }} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:underline">Clear</button>}
+              {(fromDate || toDate) && <button tabIndex={0} type="button" onClick={() => { setFromDate(''); setToDate('') }} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:underline">Clear</button>}
             </div>
           )}
         </DialogHeader>
@@ -454,7 +454,7 @@ export function SearchModal() {
             <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
               <p>No sessions found{wsFilter ? ' in this workspace' : ''}{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
               {(wsFilter || debouncedSearch || fromDate || toDate) && (
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); useUiStore.setState({ searchModalWorkspaceFilter: null }) }}
                   className="mt-2 text-xs text-[var(--color-accent)] hover:underline"

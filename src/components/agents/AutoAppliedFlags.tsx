@@ -76,7 +76,7 @@ export function AutoAppliedFlags({ cli, testId, onStatusChange }: AutoAppliedFla
       >
         <p className="text-[11px] text-[var(--color-muted)] leading-snug">
           Couldn't load the auto-applied flags — they still apply when this agent runs.{' '}
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={retry}
             data-testid={testId ? `${testId}-retry` : undefined}

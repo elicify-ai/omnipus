@@ -107,7 +107,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
         web_serve tool returned a malformed result — cannot render preview.
       </p>
       <details className="mt-1">
-        <summary className="cursor-pointer text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors">
+        <summary tabIndex={0} className="cursor-pointer text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors">
           Show raw result
         </summary>
         <pre className="mt-1.5 p-2 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-mono text-[10px] overflow-auto max-h-40 whitespace-pre-wrap break-all">

@@ -63,7 +63,7 @@ export function EdgeModeEditor({
         <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
           Delegation modes
         </span>
-        <button
+        <button tabIndex={0}
           type="button"
           aria-label="Close edge editor"
           className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
@@ -77,7 +77,7 @@ export function EdgeModeEditor({
           const on = model.modes.includes(m)
           const isLastOn = on && model.modes.length === 1
           return (
-            <button
+            <button tabIndex={0}
               key={m}
               type="button"
               data-testid={`team-edge-mode-${m}`}
@@ -109,7 +109,7 @@ export function EdgeModeEditor({
       <div className="mt-2 flex items-center gap-1.5">
         <Stack size={12} weight="bold" className="text-[var(--color-muted)]" />
         <span className="text-[10px] text-[var(--color-muted)]">depth</span>
-        <input
+        <input tabIndex={0}
           type="number"
           min={0}
           inputMode="numeric"
@@ -156,7 +156,7 @@ export interface EdgeLabelChipProps {
 /** The collapsed edge label: mode chips (+ depth) that opens the editor. */
 export function EdgeLabelChip({ model, defaultDepth, onClick }: EdgeLabelChipProps) {
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       aria-label={`Edit delegation ${model.from} to ${model.to}`}
       onClick={onClick}

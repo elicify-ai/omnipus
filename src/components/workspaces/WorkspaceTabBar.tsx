@@ -119,7 +119,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
         {/* First tablist item: the workspace name → settings. Inside the
             tablist (not a stray sibling button) so it IS part of the menu
             component — same styling, same underline, same tab semantics. */}
-        <button
+        <button tabIndex={0}
           type="button"
           role="tab"
           onClick={() =>
@@ -192,7 +192,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
       <div className="flex @6xl:hidden items-center px-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
+            <button tabIndex={0}
               type="button"
               data-testid="workspace-view-switcher"
               aria-label={`Switch view, currently ${SEGMENT_LABELS[activeSegment]}`}

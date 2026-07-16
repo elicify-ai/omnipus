@@ -132,7 +132,7 @@ export function ExecAllowlistSection(): React.ReactElement {
                 >
                   {pattern}
                 </Badge>
-                <button
+                <button tabIndex={0}
                   type="button"
                   aria-label={`Remove pattern ${pattern}`}
                   onClick={() => handleRemove(pattern)}

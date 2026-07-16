@@ -59,7 +59,7 @@ export function AgentDelegatePicker({
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <button
+        <button tabIndex={0}
           ref={triggerRef}
           type="button"
           data-node-action="delegate"

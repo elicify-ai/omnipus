@@ -142,7 +142,7 @@ function PasswordField({
         autoComplete="new-password"
         aria-describedby="mailbox-password-help"
       />
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={() => setVisible((v) => !v)}
         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"

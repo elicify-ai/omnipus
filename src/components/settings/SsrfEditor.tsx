@@ -50,7 +50,7 @@ export function SsrfEditor({
 
       <div className="flex flex-wrap gap-2">
         {SSRF_PRESETS.map((preset, idx) => (
-          <button
+          <button tabIndex={0}
             key={preset.label}
             type="button"
             onClick={() => onPresetClick(idx)}
@@ -67,7 +67,7 @@ export function SsrfEditor({
         ))}
       </div>
 
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={onAdvancedToggle}
         className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
@@ -88,7 +88,7 @@ export function SsrfEditor({
                 <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
                   {entry}
                 </span>
-                <button
+                <button tabIndex={0}
                   type="button"
                   aria-label={`Delete SSRF entry ${entry}`}
                   className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"

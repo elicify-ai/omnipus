@@ -28,7 +28,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
 
   return (
     <div className="relative group/card">
-      <button
+      <button tabIndex={0}
         type="button"
         data-testid={`agent-card-${agent.id}`}
         onClick={handleOpen}
@@ -117,7 +117,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
           Persistent (no group-hover gating — touch users would never see it) and sized for a
           44×44 tap target per WCAG 2.5.8 (token: --spacing-tap-target-min). */}
       {!agent.default && onSetDefault && (
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onSetDefault}
           className="absolute bottom-3 right-4 flex items-center justify-center gap-1 min-h-tap-target-min min-w-tap-target-min px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"

@@ -126,7 +126,7 @@ function PasswordField({
         autoComplete="off"
         aria-describedby={field.helpText ? `help-${field.key}` : undefined}
       />
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={() => setVisible((v) => !v)}
         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
@@ -148,7 +148,7 @@ function HelperLink({ field }: { field: ChannelField }) {
       {field.helpText}
       {field.helpText && field.helpLink && ' '}
       {field.helpLink && (
-        <a
+        <a tabIndex={0}
           href={field.helpLink.url}
           target="_blank"
           rel="noopener noreferrer"
@@ -754,7 +754,7 @@ export function ChannelConfigPanel({
               className="flex flex-col items-start gap-2 px-4 py-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-medium"
             >
               <span>Couldn&apos;t load {channelName} configuration. Check your connection and try again.</span>
-              <button
+              <button tabIndex={0}
                 type="button"
                 className="underline hover:no-underline text-amber-400"
                 onClick={() => refetchConfig()}
@@ -781,7 +781,7 @@ export function ChannelConfigPanel({
                           : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border)]/80'
                       }`}
                     >
-                      <input
+                      <input tabIndex={0}
                         type="radio"
                         name="gchat-auth-method"
                         value={opt.value}
@@ -925,7 +925,7 @@ export function ChannelConfigPanel({
                           className="text-xs text-[var(--color-error)]"
                         >
                           Couldn&apos;t load workspace members — try again.{' '}
-                          <button
+                          <button tabIndex={0}
                             type="button"
                             className="underline hover:no-underline"
                             onClick={() =>

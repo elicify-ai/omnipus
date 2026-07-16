@@ -113,7 +113,7 @@ function FeaturedSkillSuggestions({ onSelect }: { onSelect: (query: string) => v
       </div>
       <div className="grid grid-cols-2 gap-2">
         {FEATURED_SUGGESTIONS.map((s) => (
-          <button
+          <button tabIndex={0}
             key={s.query}
             type="button"
             data-testid={`featured-suggestion-${s.query.replace(/\s+/g, '-')}`}
@@ -492,7 +492,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                 <UploadSimple size={14} />
                 {isInstalling ? 'Installing…' : 'Install from file'}
               </Button>
-              <input
+              <input tabIndex={0}
                 ref={fileInputRef}
                 type="file"
                 accept=".zip,.json,.md"

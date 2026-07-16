@@ -380,7 +380,7 @@ function IssueCard({
           </div>
           {/* US-B4: action link links directly to the in-place fix */}
           {issue.action_link && (
-            <a
+            <a tabIndex={0}
               href={issue.action_link}
               onClick={(e) => e.stopPropagation()}
               data-testid={`issue-action-link-${issue.id}`}

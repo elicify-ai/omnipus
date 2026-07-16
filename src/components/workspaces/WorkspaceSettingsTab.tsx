@@ -202,7 +202,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               className="bg-[var(--color-surface-2)] flex-1"
             />
             {repository.trim() && /^https?:\/\//.test(repository.trim()) && (
-              <a
+              <a tabIndex={0}
                 href={repository.trim()}
                 target="_blank"
                 rel="noopener noreferrer"

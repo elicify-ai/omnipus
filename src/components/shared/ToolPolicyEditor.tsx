@@ -283,7 +283,7 @@ function CategoryToolRow({
           // Hash link (no full reload) to Settings → Security where the global
           // policy is managed. Plain anchor (not router Link) so the editor
           // renders without a RouterProvider in any context/test.
-          <a
+          <a tabIndex={0}
             href="/#/settings"
             title={lockTitle}
             data-testid={`global-override-${tool.name}`}
@@ -361,7 +361,7 @@ function CategorySection({
       className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
     >
       {/* Trigger — always visible; pill is IN the trigger row */}
-      <button
+      <button tabIndex={0}
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
@@ -462,7 +462,7 @@ function McpServerSection({
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
       {/* Header row: toggle + server name + bulk controls */}
       <div className="flex items-center justify-between px-3 py-2">
-        <button
+        <button tabIndex={0}
           type="button"
           aria-expanded={open}
           onClick={() => setOpen((o) => !o)}
@@ -485,7 +485,7 @@ function McpServerSection({
             {ALL_POLICIES.map((p) => {
               const isActive = currentWildcard === p
               return (
-                <button
+                <button tabIndex={0}
                   key={p}
                   type="button"
                   disabled={disabled}
@@ -610,7 +610,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
         <p className="text-xs font-medium text-[var(--color-muted)]">Role preset</p>
         <div className="flex gap-2 flex-wrap">
           {(Object.entries(POLICY_PRESETS) as [RolePreset, typeof POLICY_PRESETS[RolePreset]][]).map(([role, preset]) => (
-            <button
+            <button tabIndex={0}
               key={role}
               type="button"
               disabled={disabled}

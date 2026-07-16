@@ -46,7 +46,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       data-status={item.status}
       className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-xs overflow-hidden"
     >
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={() => canExpand && setExpanded((e) => !e)}
         aria-expanded={canExpand ? expanded : undefined}

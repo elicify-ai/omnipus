@@ -226,7 +226,7 @@ function ChannelInstanceRow({
         )}
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onConfigure}
           className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
@@ -235,7 +235,7 @@ function ChannelInstanceRow({
           <Gear size={13} />
           Configure
         </button>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onToggle}
           className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors font-medium"
@@ -244,7 +244,7 @@ function ChannelInstanceRow({
         >
           {channel.enabled ? 'Disable' : 'Enable'}
         </button>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onDelete}
           className="flex items-center gap-0.5 text-xs text-[var(--color-muted)] hover:text-red-400 transition-colors"
@@ -290,7 +290,7 @@ function ChannelTypeGroup({
           <BrandIcon slug={channelSlug(baseType)} size={18} decorative />
           <h3 className="text-sm font-semibold text-[var(--color-secondary)]">{displayName}</h3>
         </div>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => onAddAnother(baseType)}
           data-testid={`channel-type-add-another-${baseType}`}
@@ -343,7 +343,7 @@ function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
         {types.map((channel) => {
           const baseType = deriveBaseType(channel)
           return (
-            <button
+            <button tabIndex={0}
               key={baseType}
               type="button"
               onClick={() => onConfigureType(channel)}
@@ -842,7 +842,7 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
         </p>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onConfigure}
           className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
@@ -1103,7 +1103,7 @@ export function ConnectorsScreen() {
                 <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                   Email
                 </h2>
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => setMailboxPanel({ open: true, target: null })}
                   data-testid="email-mailbox-add-btn"

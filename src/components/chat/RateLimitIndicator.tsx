@@ -85,7 +85,7 @@ export function RateLimitIndicator({
         )}
       </div>
 
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={onDismiss}
         className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-0.5"

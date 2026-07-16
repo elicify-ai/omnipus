@@ -1220,7 +1220,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 (live bug, 2026-07-03). */}
             {!isExternalAgent && (
             <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => setAdvancedOpen((o) => !o)}
                 className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
@@ -1275,7 +1275,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           {!isExternalAgent && (
             <section className="space-y-3">
               <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => setShellAdvancedOpen((o) => !o)}
                   className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
@@ -1394,7 +1394,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         {providerLabel}
                       </span>
                       <span className="relative inline-block">
-                        <select
+                        <select tabIndex={0}
                           data-testid={`fallback-provider-select-${entry.model}`}
                           aria-label={`Provider for fallback ${entry.model}`}
                           value={entry.provider}
@@ -1419,7 +1419,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         />
                       </span>
                       <span>{entry.model}</span>
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         data-testid={`fallback-chip-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
@@ -1429,7 +1429,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       >
                         <ArrowUp size={10} />
                       </button>
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         data-testid={`fallback-chip-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
@@ -1439,7 +1439,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       >
                         <ArrowDown size={10} />
                       </button>
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         data-testid={`fallback-chip-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
@@ -1553,7 +1553,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           key={skill.id}
                           className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-3)]'}`}
                         >
-                          <input
+                          <input tabIndex={0}
                             type="checkbox"
                             checked={granted}
                             disabled={isLocked}
@@ -2452,7 +2452,7 @@ function RangeField({ label, caption, value, min, max, step, onChange, format }:
         </div>
         <span className="text-xs font-mono text-[var(--color-secondary)]">{format(value)}</span>
       </div>
-      <input
+      <input tabIndex={0}
         type="range"
         data-testid={`range-field-${label.toLowerCase().replace(/\s+/g, '-')}`}
         min={min}
@@ -2529,7 +2529,7 @@ function EnvironmentOverridesEditor({
               className="text-xs h-8 font-mono flex-1"
               disabled={disabled}
             />
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => onChange(Object.fromEntries(entries.filter((_, i) => i !== idx)))}
               className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors disabled:opacity-50"
@@ -2542,7 +2542,7 @@ function EnvironmentOverridesEditor({
         ))
       )}
       {!disabled && (
-        <button
+        <button tabIndex={0}
           type="button"
           data-testid="profile-env-add"
           onClick={() => onChange({ ...value, '': '' })}

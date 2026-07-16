@@ -27,7 +27,7 @@ function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
           <DeviceMobile size={15} className="text-[var(--color-accent)] shrink-0" />
           <p className="text-sm font-semibold text-[var(--color-secondary)]">Pairing a device</p>
         </div>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onClose}
           className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
@@ -45,7 +45,7 @@ function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
       <p className="text-[11px] text-[var(--color-muted)]">
         Once approved, the device can connect to your gateway as a linked client — like Linked Devices on messaging apps.
       </p>
-      <a
+      <a tabIndex={0}
         href="https://omnipus.ai/docs/device-pairing"
         target="_blank"
         rel="noopener noreferrer"

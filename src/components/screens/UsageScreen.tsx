@@ -147,7 +147,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
               className="text-left py-2 pr-4 font-medium"
               aria-sort={sortKey === 'title' ? 'ascending' : 'none'}
             >
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => setSortKey('title')}
                 className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
@@ -160,7 +160,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
               className="text-right py-2 pl-4 font-medium"
               aria-sort={sortKey === 'tokens' ? 'descending' : 'none'}
             >
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => setSortKey('tokens')}
                 className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
@@ -300,7 +300,7 @@ export function UsageScreen() {
             aria-label="Select time period"
           >
             {PERIODS.map(({ value, label }) => (
-              <button
+              <button tabIndex={0}
                 key={value}
                 type="button"
                 onClick={() => setPeriod(value)}

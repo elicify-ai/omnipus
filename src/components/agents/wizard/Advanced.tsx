@@ -267,7 +267,7 @@ function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
     <div className="space-y-2">
       <p className="text-xs font-medium text-[var(--color-secondary)]">Rate limits</p>
       <label className="flex items-center gap-2 text-xs text-[var(--color-secondary)]">
-        <input
+        <input tabIndex={0}
           type="checkbox"
           checked={rateLimits.use_global_defaults ?? true}
           onChange={(e) =>
@@ -327,7 +327,7 @@ function RangeRow({ label, caption, value, min, max, step, onChange }: RangeRowP
         <label className="text-xs text-[var(--color-secondary)]">{label}</label>
         <span className="text-[11px] font-mono text-[var(--color-muted)]">{display}</span>
       </div>
-      <input
+      <input tabIndex={0}
         type="range"
         min={min}
         max={max}

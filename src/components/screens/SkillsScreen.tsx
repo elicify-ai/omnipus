@@ -228,7 +228,7 @@ export function SkillsScreen() {
                     </div>
                   </div>
                   {skill.source !== 'builtin' && (
-                    <button
+                    <button tabIndex={0}
                       type="button"
                       onClick={() => setConfirmDeleteSkill(skill.name)}
                       className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded shrink-0"
@@ -291,7 +291,7 @@ export function SkillsScreen() {
                           data-testid={`toggle-enabled-${server.id}`}
                         />
                         {/* Test button (G7) */}
-                        <button
+                        <button tabIndex={0}
                           type="button"
                           onClick={() => handleTestMcp(server.id)}
                           disabled={testingMcp === server.id}
@@ -305,7 +305,7 @@ export function SkillsScreen() {
                           }
                         </button>
                         {/* Edit button (G8) */}
-                        <button
+                        <button tabIndex={0}
                           type="button"
                           onClick={() => { setMcpEditTarget(server); setMcpModalOpen(true) }}
                           className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
@@ -314,7 +314,7 @@ export function SkillsScreen() {
                         >
                           <PencilSimple size={14} />
                         </button>
-                        <button
+                        <button tabIndex={0}
                           type="button"
                           onClick={() => setExpandedMcp(isExpanded ? null : server.id)}
                           className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
@@ -324,7 +324,7 @@ export function SkillsScreen() {
                         >
                           {isExpanded ? <CaretUp size={13} /> : <CaretDown size={13} />}
                         </button>
-                        <button
+                        <button tabIndex={0}
                           type="button"
                           onClick={() => setConfirmDeleteMcp(server.id)}
                           className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded"
@@ -511,7 +511,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
       <p className="text-xs text-[var(--color-muted)]">
         What your agents can do — grouped by capability area. Click a category to see the individual tools.
         Permissions are managed in{' '}
-        <a
+        <a tabIndex={0}
           href="/settings?tab=security"
           className="inline-flex items-center gap-0.5 text-[var(--color-accent)] hover:opacity-80 underline"
           data-testid="manage-permissions-link"
@@ -542,7 +542,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                 data-testid={`tool-category-${cat}`}
               >
                 {/* Category header row — clickable to expand/collapse */}
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => toggleCategory(cat)}
                   className="flex items-center gap-3 w-full px-4 py-3 text-left hover:bg-[var(--color-surface-2)] transition-colors"

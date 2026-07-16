@@ -97,7 +97,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
               onNewMilestone={() => setCreateMilestoneOpen(true)}
             />
           ) : !milestonesError ? (
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => setCreateMilestoneOpen(true)}
               className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
@@ -108,7 +108,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           ) : null}
         </div>
 
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => setCreateTaskOpen(true)}
           className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90 transition-colors flex-shrink-0"

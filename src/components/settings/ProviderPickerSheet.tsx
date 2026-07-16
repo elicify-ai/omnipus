@@ -104,7 +104,7 @@ export function ProviderPickerSheet({
                 </div>
                 <div className="space-y-1">
                   {group.entries.map((entry) => (
-                    <button
+                    <button tabIndex={0}
                       key={entry.id}
                       type="button"
                       onClick={() => onSelect(entry)}

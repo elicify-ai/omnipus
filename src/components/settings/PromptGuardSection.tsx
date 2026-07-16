@@ -118,7 +118,7 @@ export function PromptGuardSection(): React.ReactElement {
           {LEVELS.map((lvl) => {
             const isActive = selected === lvl.value
             return (
-              <button
+              <button tabIndex={0}
                 key={lvl.value}
                 type="button"
                 role="radio"

@@ -26,7 +26,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
       className="flex items-center gap-3 px-4 h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
     >
       {/* Hamburger — sidebar toggle (full chrome-row height for Fitts / AA) */}
-      <button
+      <button tabIndex={0}
         id="sidebar-hamburger"
         type="button"
         onClick={toggle}

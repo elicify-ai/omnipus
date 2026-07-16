@@ -389,7 +389,7 @@ export function WorkspaceTeamTab(_props: WorkspaceTeamTabProps) {
         <p className="text-sm text-[var(--color-error)]">
           Failed to load this workspace's delegation graph.
         </p>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => void refetchDelegation()}
           className="text-xs text-[var(--color-accent)] underline underline-offset-2"

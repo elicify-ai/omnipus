@@ -38,7 +38,7 @@ export function ActivityBar() {
 
   return (
     <>
-      <button
+      <button tabIndex={0}
         type="button"
         data-testid="activity-bar"
         onClick={() => setPanelOpen(true)}

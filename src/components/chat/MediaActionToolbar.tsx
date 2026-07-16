@@ -96,7 +96,7 @@ function ActionButton({ action, variant }: ActionButtonProps) {
     : 'text-[var(--color-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-1)] px-2'
 
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       aria-label={done && action.transientLabel ? action.transientLabel : action.label}
       title={done && action.transientLabel ? action.transientLabel : action.label}

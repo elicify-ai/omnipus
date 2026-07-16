@@ -77,7 +77,7 @@ export function AllowedPathsEditor({
                   restart required
                 </span>
               )}
-              <button
+              <button tabIndex={0}
                 type="button"
                 aria-label={`Delete path ${p}`}
                 className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"

@@ -21,7 +21,7 @@ export function PolicyBadge({ policy, onClick, active, disabled, title }: Policy
   const cfg = POLICY_CONFIGS[policy]
   const Icon = cfg.icon
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       onClick={onClick}
       disabled={disabled}
