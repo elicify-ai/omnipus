@@ -10,6 +10,20 @@ defaults:
     shell: bash
 
 jobs:
+  e2e-shard-check:
+    name: E2E shard plan check
+    # Fast, dependency-free drift guard that runs on EVERY PR (not just e2e-triggering
+    # ones): fails if any tests/e2e/*.spec.ts is unassigned in tests/e2e/shards.json (it
+    # would silently never run) or the plan references a deleted spec. Same check the
+    # e2e-plan job runs before building the matrix, but with no `needs:` so it gives
+    # immediate feedback and still covers PRs whose paths skip the heavy e2e chain.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Verify every e2e spec is assigned to exactly one shard
+        run: scripts/e2e-shards.sh check
+
   cli-verb-guard:
     name: CLI Removed-Verb Guard
     # US-11 AC4 (FR-013): fail if any removed CLI verb reappears in infra.

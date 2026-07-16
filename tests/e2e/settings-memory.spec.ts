@@ -150,6 +150,44 @@ async function openMemoryTab(
   return activePanel;
 }
 
+// ── Global-settings safety net ────────────────────────────────────────────────
+//
+// Both tests below mutate GLOBAL gateway memory settings (auto_recap_enabled,
+// idle_timeout_minutes, memory_retros_days, bootstrap_recap_*). Each test also restores
+// them inline, but an assertion that throws BEFORE that inline restore would leak the
+// mutated settings to sibling specs sharing this shard's gateway. These hooks snapshot
+// the settings before each test and restore them afterEach EVEN ON FAILURE, making the
+// restore exception-safe. Best-effort (errors swallowed) so the safety net can never
+// itself fail a test; the per-test inline restores remain as harmless redundancy.
+let memoryBaseline: MemorySettingsWire | null = null;
+
+test.beforeEach(async ({ page }) => {
+  const resp = await page.request.get(`${BASE_URL}/api/v1/settings/memory`, {
+    headers: await authHeaders(page),
+  });
+  memoryBaseline = resp.ok() ? ((await resp.json()) as MemorySettingsWire) : null;
+});
+
+test.afterEach(async ({ page }) => {
+  if (!memoryBaseline) return;
+  const b = memoryBaseline;
+  memoryBaseline = null;
+  const restorePayload: MemorySettingsWire = {
+    auto_recap_enabled: b.auto_recap_enabled ?? false,
+    idle_timeout_minutes: b.idle_timeout_minutes ?? 30,
+    bootstrap_recap_enabled: b.bootstrap_recap_enabled ?? false,
+    bootstrap_recap_max_per_minute: b.bootstrap_recap_max_per_minute ?? 5,
+    session_days: b.session_days ?? 90,
+    memory_retros_days: b.memory_retros_days ?? 180,
+  };
+  await page.request
+    .put(`${BASE_URL}/api/v1/settings/memory`, {
+      headers: await authHeaders(page),
+      data: JSON.stringify(restorePayload),
+    })
+    .catch(() => {});
+});
+
 // ── Test 1: settings persist across page reload ───────────────────────────────
 //
 // BDD:
