@@ -62,7 +62,7 @@ import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
 import { useSlashMenu } from '@/hooks/useSlashMenu'
@@ -1271,10 +1271,43 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     cancelIfStreaming: cancelState.cancelIfStreaming,
   })
 
-  // Top-level keydown orchestration — precedence matches the original
-  // composer exactly: cancel-Escape first (US-1.4/FR-23), then
-  // Enter-blocked-while-streaming, then slash-menu navigation.
+  // Top-level keydown orchestration.
+  //
+  // Fix 3 (precedence): menu-close now wins over stream-cancel. Previously
+  // cancel-Escape (below) ran BEFORE slashMenu.handleKeyDown, so pressing
+  // Escape with the "/" or "@" menu open mid-stream killed the generation
+  // AND left the menu open — the menu was unreachable-by-Escape the entire
+  // time a turn was streaming. When the menu is showing, Escape now closes
+  // ONLY the menu; a second Escape (menu now closed) falls through to the
+  // cancel branch exactly as before. Applies identically to "/" and "@"
+  // mode — `shouldShowSlash` already covers both.
+  //
+  // Correctness of the stopPropagation guard: useCancelState also owns a
+  // document-level Escape listener (`document.addEventListener('keydown',
+  // ...)`, no `capture: true` — see useCancelState.ts ~163) so a turn can be
+  // cancelled even when the input isn't focused. That listener is
+  // BUBBLE-phase on `document`. This app mounts via `createRoot(#root)`
+  // (src/main.tsx), and React 17+ (including the React 19 used here)
+  // delegates synthetic events at the ROOT CONTAINER (`#root`), not at
+  // `document` — `document` is a plain DOM ANCESTOR of that container, not
+  // where React's own listener lives. When a synthetic handler calls
+  // `e.stopPropagation()`, React synchronously calls the underlying native
+  // event's `stopPropagation()` too, which happens while the native event is
+  // still bubbling — at the `#root` container, on its way up to `document`.
+  // That halts the native bubble right there, so useCancelState's
+  // document-level listener never sees the keydown at all. No extra
+  // isMenuOpen plumbing into useCancelState is needed; `e.stopPropagation()`
+  // here is sufficient and provably correct for this app's actual mount
+  // topology (verified against src/main.tsx and useCancelState.ts, not
+  // assumed).
   function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape' && slashMenu.slashOpen && slashMenu.shouldShowSlash) {
+      slashMenu.handleKeyDown(e) // closes the menu (its own Escape branch)
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
     // US-1.4 / FR-23: Escape cancels a turn.
     // Only morph the button to "Stopping..." if the turn is actively streaming
     // (same logic as the /cancel command and the stop button click). Pressing
@@ -1308,6 +1341,21 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
       onDrop={attachDisabled ? undefined : fileUpload.onDrop}
     >
+      {/* a11y HIGH: "@" mention-selection announcement. Selecting an agent
+          via "@" silently empties the composer and silently changes where
+          the next message routes — zero non-visual feedback for a
+          screen-reader user. Mirrors the sr-only aria-live pattern in
+          ChatScreen (see the message-list's own `aria-live="polite"`
+          region near the top of the ChatScreen component) so a mention
+          selection reads the same way a new assistant response does.
+          Content-change-triggers-announcement: re-selecting the SAME agent
+          leaves the text unchanged, so it does not re-announce (see
+          useSlashMenu.ts's mentionAnnouncement doc comment) — acceptable,
+          nothing actually changed. */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="agent-mention-announcement">
+        {slashMenu.mentionAnnouncement && <span>Now chatting with {slashMenu.mentionAnnouncement}</span>}
+      </div>
+
       {fileUpload.isDragging && !attachDisabled && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--color-primary)]/80 border-2 border-dashed border-[var(--color-accent)] rounded-lg">
           <p className="text-[var(--color-accent)] font-medium">Drop files here</p>
@@ -1411,8 +1459,16 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               palette. Hidden during the "/skills" filter (D9 already hides
               the whole Commands section there, so an error row would be a
               non-sequitur). Muted styling matches SearchModal's own
-              query-error row (src/components/search/SearchModal.tsx). */}
-          {slashMenu.commandsError && !slashMenu.isSkillsFilter && (
+              query-error row (src/components/search/SearchModal.tsx).
+              Fix 1: also hidden in "@" mention mode — a commands-fetch
+              error has nothing to do with the agent-mention menu, and this
+              render gate must match useSlashMenu's own shouldShowSlash
+              fallback (useSlashMenu.ts), which already excludes
+              isMentionMode from the "keep the menu open on error" carve-out.
+              Without this clause the row leaked into the "@" menu whenever
+              the commands query happened to be erroring, even though the
+              "@" menu has nothing to do with commands. */}
+          {slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
             <div
               data-testid="slash-commands-error"
               className="px-3 py-2 text-xs text-[var(--color-error)] italic"
@@ -1448,6 +1504,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   // rows' shared markup exactly, so this testid is additive
                   // rather than a fork of the row.
                   data-testid={item.section === 'agents' ? 'agent-mention-item' : undefined}
+                  // Fix 11: semantic highlight marker — lets a test assert the
+                  // highlighted row without depending on the visual class
+                  // string below (which stays purely presentational; `undefined`
+                  // when not highlighted, so the attribute doesn't render at all
+                  // rather than serializing as `data-highlighted="false"`).
+                  data-highlighted={globalIndex === slashMenu.slashHighlight || undefined}
                   className={cn(
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
                     globalIndex === slashMenu.slashHighlight
@@ -1466,15 +1528,24 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   {/* Agent rows only — same avatar-dot markup as AgentPicker's
                       DropdownMenuItem rows (composer/AgentPicker.tsx) so the
                       mention menu and the picker dropdown read as the same
-                      "agent row" everywhere in the composer. */}
+                      "agent row" everywhere in the composer.
+                      Fix 9: aria-hidden — the initial/icon is decorative; the
+                      row BUTTON's accessible name should come from the label/
+                      description text, not this dot's text content. Initial is
+                      derived from `item.agentName` (astral-safe via
+                      `initialOf`), not `label.charAt(1)` — the old approach
+                      assumed `label` was always "@" + exactly one BMP
+                      character, which breaks for a name whose first character
+                      is outside the BMP (e.g. an emoji). */}
                   {item.section === 'agents' && (
                     <div
+                      aria-hidden="true"
                       className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
                       style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
                     >
                       {item.agentIcon
                         ? <IconRenderer icon={item.agentIcon} size={11} />
-                        : item.label.charAt(1).toUpperCase() /* label is "@Name" — second char is the initial */}
+                        : initialOf(item.agentName ?? '')}
                     </div>
                   )}
                   {/* Fixed-width label column so descriptions align across rows
@@ -1552,7 +1623,23 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // typed+Enter path with the palette selection path.
             if (slashMenu.interceptClientCommand()) {
               e.preventDefault()
+              return
             }
+            // Fix 4: resync the text mirror after a real send. assistant-ui's
+            // composerRuntime clears its own text on a successful submit
+            // WITHOUT firing the textarea's onChange (no synthetic change
+            // event is dispatched for the runtime-driven clear), so
+            // `slashMenu.inputValue` — which only updates via onInputChange —
+            // kept the just-sent text (e.g. "@mia hello everyone") even
+            // though the visible textarea was now empty. A subsequent
+            // ArrowDown in the (visually empty) textarea then read the STALE
+            // "@..." mirror, reopened the full agent-mention menu, and Enter
+            // silently switched the active agent with no text on screen to
+            // explain why. Only reached here when the send actually
+            // proceeded (neither the isStreaming guard nor
+            // interceptClientCommand() intercepted it above), so this can't
+            // clear the mirror out from under a blocked/intercepted send.
+            slashMenu.onInputChange('')
           }}
         >
           {/* Attach — leading the input, ChatGPT/Claude-style. Plus (add

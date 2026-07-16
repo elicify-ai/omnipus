@@ -15,6 +15,7 @@
 // stay in AgentPicker, which is the sole side-effect writer to the session
 // store on mount — a second writer here would race it.
 
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
@@ -47,10 +48,20 @@ export function useChatAgents(): UseChatAgentsResult {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const teamIds = activeWorkspace?.core_team
 
-  // Only ready-to-chat, non-worker agents, optionally scoped to workspace team.
-  const chatAgents = agents
-    .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a))
-    .filter((a) => !teamIds || teamIds.length === 0 || teamIds.includes(a.id))
+  // Fix 10: memoize the filter chain. This hook is shared (AgentPicker AND
+  // the "@" mention menu both call it), and consumers put `chatAgents` in
+  // effect dependency lists (AgentPicker's auto-select-first-agent effect
+  // below its own call site) — a plain re-filter on every render hands that
+  // effect a brand-new array identity each time even when the underlying
+  // agents/teamIds are unchanged, re-running the effect on every unrelated
+  // render of either consumer.
+  const chatAgents = useMemo(
+    () =>
+      agents
+        .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a))
+        .filter((a) => !teamIds || teamIds.length === 0 || teamIds.includes(a.id)),
+    [agents, teamIds],
+  )
 
   return { agents, chatAgents, isError, refetch }
 }

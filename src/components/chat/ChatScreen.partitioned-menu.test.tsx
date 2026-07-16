@@ -2,7 +2,7 @@
 // Tests that "/" opens a menu with Commands + Skills sections, section headers,
 // keyboard navigation crossing sections, and filtering.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
@@ -290,6 +290,62 @@ describe('Partitioned slash menu — filtering', () => {
     act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
 
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+  })
+})
+
+// Fix 3 (bugfixes3 review): Escape must close an open menu BEFORE it
+// cancels a streaming turn — previously cancel-Escape ran first, so Escape
+// with the menu open mid-stream killed the generation and left the menu
+// open. Captures the real `cancelStream` once so it can be restored after
+// the stub — `useChatStore` is a real (unmocked) singleton store shared
+// across this whole file, and a stray stub would otherwise leak into every
+// test that runs after this one.
+const realCancelStream = useChatStore.getState().cancelStream
+
+describe('Escape precedence — menu-close wins over stream-cancel (Fix 3)', () => {
+  afterEach(() => {
+    act(() => { useChatStore.setState({ cancelStream: realCancelStream }) })
+  })
+
+  it('menu open + streaming: first Escape closes the menu only (no cancel); second Escape cancels', async () => {
+    const cancelStream = vi.fn()
+    act(() => { useChatStore.setState({ isStreaming: true, cancelStream }) })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '/' } }) })
+    // Only available_while_streaming commands render while isStreaming is
+    // true (see useSlashMenu.ts's visibleCommandItems) — "/clear" is not
+    // one of them, "/cancel" is.
+    expect(screen.getByText('/cancel')).toBeInTheDocument()
+
+    // First Escape: menu closes, stream keeps running.
+    act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+    expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
+    expect(cancelStream).not.toHaveBeenCalled()
+
+    // Second Escape: menu is already closed, so this one falls through to
+    // the pre-existing cancel-Escape branch, which calls cancelStream (that
+    // branch is unchanged by Fix 3 and, since it doesn't stopPropagation,
+    // can also reach useCancelState's own document-level Escape listener —
+    // a pre-existing, unrelated double-dispatch quirk this test doesn't
+    // pin an exact count for; only that cancel actually fired).
+    act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+    expect(cancelStream).toHaveBeenCalled()
+  })
+
+  it('streaming with no menu open: Escape cancels immediately (the new branch does not swallow every Escape)', async () => {
+    const cancelStream = vi.fn()
+    act(() => { useChatStore.setState({ isStreaming: true, cancelStream }) })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    // Nothing typed — shouldShowSlash is false, so the menu-close guard's
+    // condition never matches and Escape falls straight through to cancel.
+    act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+    expect(cancelStream).toHaveBeenCalled()
   })
 })
 

@@ -21,3 +21,16 @@ const twMerge = extendTailwindMerge({
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
+
+// initialOf — shared avatar-initial computation (Fix 9, bugfixes3 review).
+// `name.charAt(0)` breaks two ways: (1) a name with leading whitespace
+// produces a blank/space initial instead of skipping to the first real
+// character, and (2) `charAt` reads a single UTF-16 code unit, so a name
+// whose first character is outside the Basic Multilingual Plane (e.g. an
+// emoji or astral-plane script) renders half a surrogate pair as garbage.
+// `Array.from(name.trim())` iterates by Unicode code point, so the first
+// element is always the whole first character. Falls back to '?' for an
+// empty/whitespace-only name so callers never render nothing.
+export function initialOf(name: string): string {
+  return Array.from(name.trim())[0]?.toUpperCase() ?? '?'
+}

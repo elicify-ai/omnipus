@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatAgents } from '@/hooks/useChatAgents'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 
 /**
  * AgentPicker — the workspace-team-scoped agent selector.
@@ -166,14 +166,22 @@ export function AgentPicker({
           title={activeAgent?.description || activeAgent?.name || 'Select agent'}
           aria-label={`Select agent (current: ${activeAgent?.name ?? 'none'})`}
         >
+          {/* Fix 9: aria-hidden — this is a decorative avatar dot (icon or a
+              single-letter initial), not label text. Without aria-hidden the
+              initial character gets folded into the trigger BUTTON's
+              accessible name (the initial is text-content inside the
+              button), polluting the name that `aria-label` below already
+              sets deliberately (screen readers concatenate accessible-name
+              sources). */}
           <div
+            aria-hidden="true"
             className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
             style={{ backgroundColor: activeAgent?.color ?? 'var(--color-surface-3)' }}
           >
             {activeAgent
               ? activeAgent.icon
                 ? <IconRenderer icon={activeAgent.icon} size={11} />
-                : activeAgent.name.charAt(0).toUpperCase()
+                : initialOf(activeAgent.name)
               : <Robot size={11} />}
           </div>
           <span className="truncate">
@@ -190,13 +198,17 @@ export function AgentPicker({
             className="flex items-center gap-2"
             title={agent.description || agent.name}
           >
+            {/* Fix 9: aria-hidden — same rationale as the trigger's dot
+                above; the menu item's own accessible name should read from
+                the agent name text next to it, not the decorative initial. */}
             <div
+              aria-hidden="true"
               className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
               style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
             >
               {agent.icon
                 ? <IconRenderer icon={agent.icon} size={11} />
-                : agent.name.charAt(0).toUpperCase()}
+                : initialOf(agent.name)}
             </div>
             <span className="truncate">{agent.name}</span>
             {agent.id === effectiveAgentId && (
