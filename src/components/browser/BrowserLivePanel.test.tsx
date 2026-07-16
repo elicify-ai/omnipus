@@ -1,11 +1,11 @@
-// BrowserLivePanel.test.tsx — ADR-039 UAT-fix delta coverage (reviewer
-// finding F6) PLUS ADR-040 D4 Pin/side-by-side coverage.
+// BrowserLivePanel.test.tsx — always-docked layout coverage (operator
+// direction 2026-07-16, amends ADR-040 D4: the unpinned Sheet overlay and
+// the pin toggle are retired; open = docked <aside>, fullscreen = pop-out).
 //
 // BrowserLiveView itself is mocked — its own behaviour (WS lifecycle,
 // control toggle, annotate mode, etc.) is already covered by
 // BrowserLiveView.*.test.tsx. This file exercises ONLY what BrowserLivePanel
-// itself is responsible for: how it wires the Sheet (unpinned) / docked
-// <aside> (pinned) and what it passes down.
+// itself is responsible for: the docked <aside> and what it passes down.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -21,26 +21,18 @@ vi.mock('./BrowserLiveView', () => ({
     onClose?: () => void
     onPopOut?: () => void
     canAnnotate?: boolean
-    isPinned?: boolean
-    onTogglePin?: () => void
   }) => {
     mockBrowserLiveViewProps(props)
     return (
       <div data-testid="mock-browser-live-view">
         <span data-testid="mock-can-annotate">{String(props.canAnnotate)}</span>
-        <span data-testid="mock-is-pinned">{String(props.isPinned)}</span>
-        {props.onTogglePin && (
-          <button type="button" onClick={props.onTogglePin}>
-            mock-toggle-pin
-          </button>
-        )}
         {props.onClose && (
-          <button type="button" onClick={props.onClose}>
+          <button type="button" tabIndex={0} onClick={props.onClose}>
             mock-close
           </button>
         )}
         {props.onPopOut && (
-          <button type="button" onClick={props.onPopOut}>
+          <button type="button" tabIndex={0} onClick={props.onPopOut}>
             mock-pop-out
           </button>
         )}
@@ -53,136 +45,47 @@ import { BrowserLivePanel } from './BrowserLivePanel'
 
 beforeEach(() => {
   mockBrowserLiveViewProps.mockClear()
-  useUiStore.setState({ browserPanel: null, browserPanelPinned: false, toasts: [] })
+  useUiStore.setState({ browserPanel: null, toasts: [] })
 })
 
-describe('BrowserLivePanel', () => {
-  it('renders nothing when browserPanel is closed (null), unpinned', () => {
+describe('BrowserLivePanel (always-docked)', () => {
+  it('renders nothing when browserPanel is closed (null)', () => {
     render(<BrowserLivePanel />)
     expect(screen.queryByTestId('mock-browser-live-view')).not.toBeInTheDocument()
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
   })
 
-  // ADR-040 D4: a pinned PREFERENCE with no open session must still render
-  // nothing — pin only takes effect once a panel is actually open.
-  it('renders nothing when browserPanel is closed (null), even if browserPanelPinned is true', () => {
-    useUiStore.setState({ browserPanelPinned: true })
+  it('renders BrowserLiveView inside a docked <aside> when opened — never a Sheet dialog', () => {
     render(<BrowserLivePanel />)
-    expect(screen.queryByTestId('mock-browser-live-view')).not.toBeInTheDocument()
+    act(() => {
+      useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
+    })
+
+    const docked = screen.getByTestId('browser-live-panel-docked')
+    expect(docked.tagName).toBe('ASIDE')
+    // The retired overlay mode must stay retired: no dialog role anywhere.
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
+    expect(screen.getByTestId('mock-browser-live-view')).toBeInTheDocument()
+    expect(screen.getByTestId('mock-can-annotate')).toHaveTextContent('true')
+    expect(mockBrowserLiveViewProps).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'sess-1', agentId: 'agent-1', canAnnotate: true }),
+    )
   })
 
-  describe('unpinned (default) — overlay Sheet', () => {
-    it('renders BrowserLiveView keyed to the open (session, agent) pair, with canAnnotate=true, isPinned=false', () => {
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
-      expect(screen.getByTestId('mock-browser-live-view')).toBeInTheDocument()
-      expect(screen.getByTestId('mock-can-annotate')).toHaveTextContent('true')
-      expect(screen.getByTestId('mock-is-pinned')).toHaveTextContent('false')
-      expect(mockBrowserLiveViewProps).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'sess-1', agentId: 'agent-1', canAnnotate: true, isPinned: false }),
-      )
+  it('never passes the retired pin props (isPinned / onTogglePin) to BrowserLiveView', () => {
+    render(<BrowserLivePanel />)
+    act(() => {
+      useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
     })
 
-    // UAT finding FE-3(b): Radix's default modal Dialog sets
-    // `body{pointer-events:none}` while open, which made the chat pane behind
-    // this panel LOOK usable but be 100% unclickable. The Sheet is rendered
-    // with modal={false} (SheetContent gets aria-modal={false} to match) so a
-    // screen reader / a11y tooling doesn't report this as blocking modal
-    // content.
-    it('renders the dialog as non-modal (aria-modal="false")', () => {
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-
-      expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'false')
-    })
-
-    // Radix's non-modal Dialog.Content still dismisses on ANY outside
-    // pointerdown/focus by default (see BrowserLivePanel.tsx's doc comment) —
-    // without onInteractOutside's preventDefault, the very first click on the
-    // chat composer behind the panel would immediately close it. Mirrors the
-    // established outside-interaction test pattern in alert-dialog.test.tsx.
-    it('does not close on an outside pointer interaction (onInteractOutside is prevented)', () => {
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-
-      fireEvent.pointerDown(document.body)
-      fireEvent.pointerUp(document.body)
-      fireEvent.click(document.body)
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-1', agentId: 'agent-1' })
-    })
-  })
-
-  describe('pinned — docked layout (ADR-040 D4)', () => {
-    it('renders BrowserLiveView inside a docked <aside>, not a Sheet dialog, with isPinned=true', () => {
-      useUiStore.setState({ browserPanelPinned: true })
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-      const docked = screen.getByTestId('browser-live-panel-docked')
-      expect(docked.tagName).toBe('ASIDE')
-      expect(screen.getByTestId('mock-browser-live-view')).toBeInTheDocument()
-      expect(screen.getByTestId('mock-is-pinned')).toHaveTextContent('true')
-      expect(mockBrowserLiveViewProps).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'sess-1', agentId: 'agent-1', canAnnotate: true, isPinned: true }),
-      )
-    })
-
-    it('passes onTogglePin, and clicking it flips browserPanelPinned in the store', () => {
-      useUiStore.setState({ browserPanelPinned: true })
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-
-      fireEvent.click(screen.getByRole('button', { name: 'mock-toggle-pin' }))
-      expect(useUiStore.getState().browserPanelPinned).toBe(false)
-    })
-
-    // Toggling pin OFF while a session is open switches this component from
-    // the docked <aside> back to the Sheet — a real remount of the (mocked)
-    // BrowserLiveView is an accepted ADR-040 D4 tradeoff (see
-    // BrowserLivePanel.tsx's module doc comment), but the (session, agent)
-    // pair and the panel's open-ness must both survive the flip.
-    it('toggling pin off (while open) switches to the Sheet, keeping the same (session, agent) open', () => {
-      useUiStore.setState({ browserPanelPinned: true })
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-      expect(screen.getByTestId('browser-live-panel-docked')).toBeInTheDocument()
-
-      act(() => {
-        useUiStore.getState().toggleBrowserPanelPinned()
-      })
-
-      expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-1', agentId: 'agent-1' })
-    })
+    const calledProps = mockBrowserLiveViewProps.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(calledProps).toBeDefined()
+    expect('isPinned' in calledProps).toBe(false)
+    expect('onTogglePin' in calledProps).toBe(false)
   })
 
   // ADR-040 D1/D2: the three-verb "Take control / Release control / Hand to
-  // agent" cluster is retired — `onHandToAgent` must no longer exist on the
-  // props passed to BrowserLiveView (it's removed from the prop interface
-  // entirely, not merely left unset).
+  // agent" cluster stays retired — `onHandToAgent` must not reappear.
   it('no longer passes onHandToAgent to BrowserLiveView (ADR-040 D1 removal)', () => {
     render(<BrowserLivePanel />)
     act(() => {
@@ -194,8 +97,8 @@ describe('BrowserLivePanel', () => {
     expect('onHandToAgent' in calledProps).toBe(false)
   })
 
-  describe('onPopOut', () => {
-    it('mirrors the sessionStorage auth token into localStorage and opens the hash-routed pop-out URL (unpinned)', () => {
+  describe('onPopOut (the fullscreen escape)', () => {
+    it('is always wired, mirrors the sessionStorage auth token into localStorage, and opens the hash-routed pop-out URL', () => {
       const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
       sessionStorage.setItem('omnipus_auth_token', 'tok-123')
       localStorage.removeItem('omnipus_auth_token')
@@ -218,39 +121,9 @@ describe('BrowserLivePanel', () => {
       sessionStorage.clear()
       localStorage.clear()
     })
-
-    it('wires onPopOut even when pinned (fullscreen is always available per operator direction)', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
-      useUiStore.setState({ browserPanelPinned: true })
-
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-
-      // onPopOut is always wired now (the Pop-out/fullscreen button is always
-      // available, even from the docked pinned layout).
-      const calledProps = mockBrowserLiveViewProps.mock.calls[0]?.[0] as Record<string, unknown>
-      expect(calledProps).toBeDefined()
-      expect('onPopOut' in calledProps).toBe(true)
-
-      openSpy.mockRestore()
-      localStorage.clear()
-    })
   })
 
-  it('closes via the panel close callback (onClose -> closeBrowserPanel), unpinned', () => {
-    render(<BrowserLivePanel />)
-    act(() => {
-      useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'mock-close' }))
-    expect(useUiStore.getState().browserPanel).toBeNull()
-  })
-
-  it('closes via the panel close callback (onClose -> closeBrowserPanel), pinned', () => {
-    useUiStore.setState({ browserPanelPinned: true })
+  it('closes via the panel close callback (onClose -> closeBrowserPanel)', () => {
     render(<BrowserLivePanel />)
     act(() => {
       useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
@@ -261,27 +134,18 @@ describe('BrowserLivePanel', () => {
     expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
   })
 
-  // UAT finding (leaked/duplicate close button): a live tester's DOM dump
-  // found TWO visible, clickable close controls stacked in the panel's
-  // top-right — the intended custom `aria-label="Close live browser panel"`
-  // button (rendered by BrowserLiveView's own header, wired to `onClose` ->
-  // this file's `mock-close` stand-in) AND Radix SheetContent's own
-  // unconditional built-in close (unlabeled, accessible name "Close" from
-  // its sr-only span). Only the Sheet (unpinned) branch renders a
-  // SheetContent at all — the pinned docked <aside> never had this bug.
-  it('does not render SheetContent\'s own built-in Radix close button (only the custom Close remains), unpinned', () => {
+  it('remounts BrowserLiveView (fresh key) when a second open targets a different (session, agent) pair', () => {
     render(<BrowserLivePanel />)
     act(() => {
       useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
     })
+    act(() => {
+      useUiStore.getState().openBrowserPanel('sess-2', 'agent-2')
+    })
 
-    // The custom close (this file's mock stand-in for BrowserLiveView's own
-    // `aria-label="Close live browser panel"` button) is present...
-    expect(screen.getByRole('button', { name: 'mock-close' })).toBeInTheDocument()
-    // ...but Radix's own default close (accessible name "Close", from
-    // SheetContent's unconditional `<DialogPrimitive.Close>` + sr-only span)
-    // must be suppressed via `showClose={false}` — not a second, redundant
-    // close control stacked on top of the custom one.
-    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
+    const lastProps = mockBrowserLiveViewProps.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(lastProps).toMatchObject({ sessionId: 'sess-2', agentId: 'agent-2' })
+    // Still exactly one docked panel — the key remount swaps content, not layout.
+    expect(screen.getAllByTestId('browser-live-panel-docked')).toHaveLength(1)
   })
 })
