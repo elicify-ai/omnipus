@@ -1,8 +1,20 @@
 # ADR-045: Orphaned Foreground Turn Timeout
 
-**Status:** Accepted
+**Status:** Accepted — **amended: DISABLED BY DEFAULT (see below)**
 **Date:** 2026-07-16
 **Deciders:** architect (+ backend-lead, qa-lead for implementation/review)
+
+> **Amendment (2026-07-16, operator decision) — watchdog OFF by default.**
+> The default grace was changed from 300s to **0 (disabled)**
+> (`DefaultOrphanedTurnGraceSeconds = 0`). Omnipus is built to run turns as
+> background work: closing a chat tab / dropping the watching WebSocket must
+> NOT cancel an in-progress turn — it keeps running to completion and the user
+> can reconnect later; **only an explicit user Stop cancels a turn.** The
+> auto-cancel-on-tab-close behaviour this ADR introduced contradicts that
+> model, so it now ships off. The mechanism is retained and can be re-enabled
+> per deployment with a positive `gateway.orphaned_turn_grace_seconds` /
+> `OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS`. Everything below describes the
+> original (now opt-in) design.
 
 **Implementation note (2026-07-16):** Initially implemented as a bespoke
 turn-scoped PHASE A/B/C escalation in commit
@@ -200,10 +212,10 @@ New `GatewayConfig` field `OrphanedTurnGraceSeconds *int`
 (`json:"orphaned_turn_grace_seconds,omitempty"
 env:"OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS"`), resolved via a new
 `ResolveInt(v *int, def int) int` helper (`pkg/config/resolve.go`, mirroring
-`ResolveBool`). Semantic default **300 seconds (5 minutes)** when unset —
-`[INFERRED]`, no BRD-specified number exists; the user/operator should
-confirm this is an acceptable production default. `0` or negative disables
-the watchdog entirely (matches the `TimeoutSeconds: 0`-disabled convention).
+`ResolveBool`). Default **0 = disabled** when unset (see the amendment at the
+top — originally 300s/5min, reversed by operator decision). `0` or negative
+disables the watchdog entirely (matches the `TimeoutSeconds: 0`-disabled
+convention); a positive value opts back in per deployment.
 Read live (not restart-gated, matching `GatewayPreviewEnabled`'s precedent,
 `pkg/config/keys.go:36-38`) since each WS teardown reads current config fresh.
 
@@ -234,8 +246,11 @@ call regardless of provider queuing.
   background-session-kill side effects for free, by construction.
 
 ### Negative
-- The 300s default is a judgment call, not derived from a requirement —
-  needs operator sign-off.
+- The default has been signed off by the operator as **0 = disabled** (see the
+  amendment at the top): Omnipus runs turns as background work, so an abandoned
+  tab must never cancel a running turn — only an explicit user Stop does. The
+  watchdog is retained as an opt-in (set a positive `orphaned_turn_grace_seconds`
+  per deployment) rather than removed, but it fires for nobody out of the box.
 - Multi-tab-on-one-session bookkeeping (checking "is any other connection
   still watching this session" before arming) adds a small amount of new
   state-scanning logic to the WS teardown path.
