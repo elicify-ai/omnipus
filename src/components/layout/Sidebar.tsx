@@ -680,7 +680,13 @@ export function Sidebar() {
             animate={{ x: 0 }}
             exit={{ x: '-100%' }}
             transition={{ type: 'tween', duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-            className="fixed left-0 top-0 z-40 flex h-full flex-col bg-[var(--color-surface-0)] border-r border-[var(--color-border)] shadow-2xl"
+            // `absolute`, NOT `fixed`: this aside renders inside the app shell,
+            // which follows the VISUAL viewport (--app-top) on iOS. A fixed
+            // aside anchors to the LAYOUT viewport instead — when iOS pans the
+            // visual viewport (keyboard/momentum) the shell+header follow but
+            // a fixed sidebar stays behind and appears to scroll off-screen.
+            // Absolute anchors it to the shell box, so they move as one.
+            className="absolute left-0 top-0 z-40 flex h-full flex-col bg-[var(--color-surface-0)] border-r border-[var(--color-border)] shadow-2xl"
             style={{
               width: 'var(--spacing-sidebar)',
               paddingTop: 'env(safe-area-inset-top)',
@@ -704,7 +710,7 @@ export function Sidebar() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-30"
+            className="absolute inset-0 z-30"
             onClick={close}
             aria-hidden="true"
           />
