@@ -22,7 +22,7 @@ import {
   Copy,
   Check,
   ListChecks,
-  Paperclip,
+  Plus,
   File,
   WifiSlash,
   ArrowClockwise,
@@ -1453,20 +1453,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 py-1"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
-        {/* Order per operator spec: agent → model → attach. */}
+        {/* Agent → model. Attach lives INSIDE the input card (leading the
+            textarea, ChatGPT/Claude-style) — it was visually lost up here. */}
         <AgentPicker disabled={agentRemoved} tabIndex={2} />
         <ModelPicker disabled={agentRemoved} tabIndex={3} />
-
-        {/* Attach — opens the file picker scoped to the adapter's accept list. */}
-        <ComposerPrimitive.AddAttachment
-          disabled={attachDisabled}
-          tabIndex={4}
-          className="shrink-0 h-7 w-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          aria-label="Attach file"
-          title="Attach file"
-        >
-          <Paperclip size={15} />
-        </ComposerPrimitive.AddAttachment>
         <span className="flex-1" />
         {/* Token counter — status; hidden below @2xl of the composer root's
             @container (~42rem). */}
@@ -1501,6 +1491,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             }
           }}
         >
+          {/* Attach — leading the input, ChatGPT/Claude-style. Plus (add
+              context: files, images, anything) instead of the email-era
+              paperclip. items-end row → mb-0.5 optically centers it against
+              the single-line textarea baseline. */}
+          <ComposerPrimitive.AddAttachment
+            disabled={attachDisabled}
+            tabIndex={4}
+            className="shrink-0 h-7 w-7 mb-0.5 rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            aria-label="Add files or context"
+            title="Add files or context"
+          >
+            <Plus size={16} />
+          </ComposerPrimitive.AddAttachment>
+
           {/* Ghost text wrapper — positioned overlay approach */}
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input

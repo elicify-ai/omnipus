@@ -227,12 +227,17 @@ describe('OmnipusComposer — composer layout contract (bare context row · card
     // document order BEFORE the card. These are the assertions that catch a
     // deleted, relocated-into-card, or reordered-below-card slot: every
     // other ChatScreen test file stubs the sub-components to null.
-    for (const id of ['add-attachment', 'agent-picker-stub', 'model-picker-stub', 'token-counter-stub']) {
+    for (const id of ['agent-picker-stub', 'model-picker-stub', 'token-counter-stub']) {
       const slot = screen.getByTestId(id)
       expect(slot).toBeInTheDocument()
       expect(withinCard.queryByTestId(id)).not.toBeInTheDocument()
       expect(card.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
     }
+
+    // The attach control moved INSIDE the card (leading the textarea,
+    // ChatGPT/Claude-style) per operator direction — it was visually lost
+    // in the bare context row.
+    expect(withinCard.getByTestId('add-attachment')).toBeInTheDocument()
 
     // The input surface itself lives INSIDE the card.
     expect(withinCard.getByTestId('composer-input')).toBeInTheDocument()
