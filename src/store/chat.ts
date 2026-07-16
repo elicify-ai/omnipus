@@ -325,6 +325,69 @@ function emptySessionState(): SessionChatState {
 }
 
 /**
+ * Client-only extension of {@link ToolCall} carrying its interleaving
+ * position within the owning message. `textOffset` is the character offset
+ * into the owning message's FINAL `content` string where this call started
+ * — SPA-internal (camelCase deliberately, NEVER crosses the wire;
+ * ChatMessage/store shapes are not-wire-format), used by renderers to
+ * interleave text segments and tool calls after finalize/replay.
+ *
+ * Undefined when no position could be determined (e.g. a reconnect edge
+ * where the tool_call_start snapshot was never recorded — see
+ * `stampToolCallOffset`). Renderers must fall back to the legacy
+ * bottom-grouped rendering for those calls only; an absent offset must
+ * never be defaulted to 0, which would misrepresent "position unknown" as
+ * "started at the very beginning of the message".
+ */
+export type PositionedToolCall = ToolCall & { textOffset?: number }
+
+/**
+ * Stamp a single baked tool-call entry with its `textOffset`, and return the
+ * new (never mutated in place) entry.
+ *
+ * Semantics: `textAtToolCallStart[id]` holds the owning message's `content`
+ * AT THE MOMENT this call started (see the `tool_call_start` handler, which
+ * writes it once per call id and never overwrites it thereafter). Message
+ * content is append-only from that point on — every later token/replay-merge
+ * write only ever concatenates onto the end, never rewrites an earlier
+ * range — so the snapshot's `.length` is already the correct split offset
+ * into whatever the content eventually finalizes to, no matter how much
+ * more text or how many more calls land after this one started.
+ *
+ * Preservation: a call can be baked more than once over its lifetime (the
+ * abandoned-bubble copy-bake in the 'token' handler followed by the
+ * turn-end bake at `done`; a WS-replay same-turn merge baking a call that
+ * was already copy-baked onto an earlier segment; etc). The snapshot table
+ * is stable across those re-bakes (written once, only cleared once
+ * everything referencing it has been stamped), so a fresh lookup normally
+ * reproduces the identical offset every time. `prevOffset` — the offset the
+ * call was already stamped with on a PRIOR bake, if any — is the fallback
+ * for the case where some path re-bakes a call after its snapshot entry has
+ * already been wiped: falling back to the earlier stamp is required, since
+ * silently computing `(undefined ?? '').length` would default to 0 and
+ * misrepresent "snapshot no longer available" as "started at position 0".
+ */
+function stampToolCallOffset(
+  id: string,
+  tc: ToolCall & { call_id: string },
+  textAtToolCallStart: Record<string, string>,
+  prevOffset: number | undefined,
+): PositionedToolCall {
+  const snapshot = textAtToolCallStart[id]
+  const textOffset = snapshot !== undefined ? snapshot.length : prevOffset
+  return {
+    id,
+    tool: tc.tool,
+    params: tc.params ?? {},
+    result: tc.result,
+    status: tc.status,
+    duration_ms: tc.duration_ms,
+    error: tc.error,
+    ...(textOffset !== undefined ? { textOffset } : {}),
+  }
+}
+
+/**
  * Bake pending tool calls onto their OWNING message (per ownerByCallId,
  * falling back to fallbackMsgId when a call has no recorded owner — legacy
  * calls started before this tracking existed, or whose owner message was
@@ -334,6 +397,12 @@ function emptySessionState(): SessionChatState {
  * the last message" would silently move a tool call onto a DIFFERENT
  * producer's bubble whenever that producer's segment happens to be the one
  * still open when the bake fires.
+ *
+ * Each baked entry is stamped with `textOffset` via `stampToolCallOffset`
+ * (see its doc comment for the exact offset semantics and the
+ * re-bake-preservation rule) using `textAtToolCallStart` for the snapshot
+ * lookup and any already-baked entry on the target message for the
+ * preservation fallback.
  *
  * Replaces each touched entry in `messagesById` with a NEW object (never
  * mutates an existing message object in place) — safe both as an Immer
@@ -354,6 +423,7 @@ function bakeToolCallsByOwner(
   toolCalls: Record<string, ToolCall & { call_id: string }>,
   ownerByCallId: Record<string, string>,
   fallbackMsgId: string | null,
+  textAtToolCallStart: Record<string, string>,
 ): void {
   const idsByOwner = new Map<string, string[]>()
   for (const id of toolCallOrder) {
@@ -376,12 +446,10 @@ function bakeToolCallsByOwner(
   for (const [ownerMsgId, ids] of idsByOwner) {
     const msg = messagesById[ownerMsgId]
     if (!msg || msg.role !== 'assistant') continue
-    const baked = ids.map((id) => {
-      const tc = toolCalls[id]
-      return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-    })
-    const existing = msg.tool_calls ?? []
-    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+    const existing = (msg.tool_calls ?? []) as PositionedToolCall[]
+    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
+    const baked = ids.map((id) => stampToolCallOffset(id, toolCalls[id], textAtToolCallStart, existingById.get(id)?.textOffset))
+    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
     for (const tc of baked) mergedById.set(tc.id, tc)
     messagesById[ownerMsgId] = { ...msg, tool_calls: Array.from(mergedById.values()) }
   }
@@ -1617,23 +1685,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
               (id) => !alreadySeen.has(id) && b.toolCalls[id],
             )
             if (liveIds.length > 0) {
-              const baked = liveIds.map((id) => {
-                const tc = b.toolCalls[id]
-                return {
-                  id,
-                  tool: tc.tool,
-                  params: tc.params,
-                  result: tc.result,
-                  status: tc.status,
-                  duration_ms: tc.duration_ms,
-                  error: tc.error,
-                }
-              })
+              const existingCalls = (prev.tool_calls ?? []) as PositionedToolCall[]
+              const existingById = new Map(existingCalls.map((tc) => [tc.id, tc]))
+              const baked = liveIds.map((id) =>
+                stampToolCallOffset(id, b.toolCalls[id], b.textAtToolCallStart, existingById.get(id)?.textOffset),
+              )
               // Dedupe the merged tool_calls list by id so a re-bake (after
               // an attach + replay, or any other path that revisits live
               // ids) cannot leave duplicate ids on the message.
-              const mergedById = new Map<string, NonNullable<typeof prev.tool_calls>[number]>()
-              for (const tc of (prev.tool_calls ?? [])) mergedById.set(tc.id, tc)
+              const mergedById = new Map<string, PositionedToolCall>(existingCalls.map((tc) => [tc.id, tc]))
               for (const tc of baked) mergedById.set(tc.id, tc)
               finalMsgs = [...msgs]
               // #3: prev is guaranteed assistant (prevAssistantIdx only set for
@@ -1939,7 +1999,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // `next` may still share by reference with `bucket` (when the
             // needsMsgFix branch above didn't already copy it).
             next.messagesById = { ...next.messagesById }
-            bakeToolCallsByOwner(next.messagesById, bucket.toolCallOrder, toolCalls, bucket.toolCallOwnerMessageId ?? {}, lastAssistantId)
+            bakeToolCallsByOwner(next.messagesById, bucket.toolCallOrder, toolCalls, bucket.toolCallOwnerMessageId ?? {}, lastAssistantId, bucket.textAtToolCallStart)
             next.toolCalls = {}
             next.toolCallOrder = []
             next.textAtToolCallStart = {}
@@ -2181,7 +2241,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     (id) => draft.toolCalls[id] && draft.toolCallOwnerMessageId?.[id] === abandonedMsgId,
                   )
                   if (ownedIds.length > 0) {
-                    bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, abandonedMsgId)
+                    bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, abandonedMsgId, draft.textAtToolCallStart)
                   }
                 }
                 if (!lastMsgId) {
@@ -2356,7 +2416,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // land on the bubble that actually issued it, not whichever
                 // bubble happens to be last when the turn ends.
                 if (draft.toolCallOrder.length > 0) {
-                  bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, lastMsgId)
+                  bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, lastMsgId, draft.textAtToolCallStart)
                   draft.toolCalls = {}
                   draft.toolCallOrder = []
                   draft.textAtToolCallStart = {}
@@ -2988,14 +3048,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // return. Without this, toolCallOrder accumulates across turns and ends
                   // up baked onto the wrong (later) assistant message.
                   if (draft.toolCallOrder.length > 0) {
+                    const existing = (draft.messagesById[lastMsgId].tool_calls ?? []) as PositionedToolCall[]
+                    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
                     const baked = draft.toolCallOrder
                       .filter((id) => draft.toolCalls[id])
-                      .map((id) => {
-                        const tc = draft.toolCalls[id]
-                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                      })
-                    const existing = draft.messagesById[lastMsgId].tool_calls ?? []
-                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                      .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
                     for (const tc of baked) mergedById.set(tc.id, tc)
                     draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
                     draft.toolCalls = {}
@@ -3023,14 +3081,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // all calls get attributed to the LAST assistant at `done`.
                   // Mirrors the non-coalesce bake path immediately below.
                   if (draft.toolCallOrder.length > 0) {
+                    const existing = (m.tool_calls ?? []) as PositionedToolCall[]
+                    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
                     const baked = draft.toolCallOrder
                       .filter((id) => draft.toolCalls[id])
-                      .map((id) => {
-                        const tc = draft.toolCalls[id]
-                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                      })
-                    const existing = m.tool_calls ?? []
-                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                      .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
                     for (const tc of baked) mergedById.set(tc.id, tc)
                     m.tool_calls = Array.from(mergedById.values())
                     draft.toolCalls = {}
@@ -3088,14 +3144,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     // split this content into separate bubbles in the first
                     // place.
                     if (draft.toolCallOrder.length > 0) {
+                      // Offsets are computed from `textAtToolCallStart` BEFORE
+                      // `candidate.content += '\n\n' + text` below appends the
+                      // next segment — each call's snapshot was captured back
+                      // when it started (mid-way through the content
+                      // accumulated so far), and since content only ever
+                      // grows at the end, that snapshot's `.length` is
+                      // already the correct split offset into whatever the
+                      // FINAL merged content becomes, including segments
+                      // appended after this bake (see stampToolCallOffset's
+                      // doc comment; pinned by
+                      // ChatStore_ReplaySequence_InterleavedTurn_TwoFrames'
+                      // exact-offset assertion in chat.test.ts).
+                      const existingCalls = (candidate.tool_calls ?? []) as PositionedToolCall[]
+                      const existingById = new Map(existingCalls.map((tc) => [tc.id, tc]))
                       const baked = draft.toolCallOrder
                         .filter((id) => draft.toolCalls[id])
-                        .map((id) => {
-                          const tc = draft.toolCalls[id]
-                          return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                        })
-                      const existingCalls = candidate.tool_calls ?? []
-                      const mergedById = new Map(existingCalls.map((tc) => [tc.id, tc]))
+                        .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                      const mergedById = new Map<string, PositionedToolCall>(existingCalls.map((tc) => [tc.id, tc]))
                       for (const tc of baked) mergedById.set(tc.id, tc)
                       candidate.tool_calls = Array.from(mergedById.values())
                       draft.toolCalls = {}
@@ -3134,15 +3200,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
                 // T1.10: Bake any live tool calls from the previous turn.
                 if (lastMsgId && draft.toolCallOrder.length > 0) {
+                  const lastMsg = draft.messagesById[lastMsgId]
+                  const existing = (lastMsg.tool_calls ?? []) as PositionedToolCall[]
+                  const existingById = new Map(existing.map((tc) => [tc.id, tc]))
                   const baked = draft.toolCallOrder
                     .filter((id) => draft.toolCalls[id])
-                    .map((id) => {
-                      const tc = draft.toolCalls[id]
-                      return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                    })
-                  const lastMsg = draft.messagesById[lastMsgId]
-                  const existing = lastMsg.tool_calls ?? []
-                  const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                    .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                  const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
                   for (const tc of baked) mergedById.set(tc.id, tc)
                   lastMsg.tool_calls = Array.from(mergedById.values())
                   draft.toolCalls = {}
