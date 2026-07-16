@@ -73,31 +73,48 @@ export function AppShell() {
     // always correct.
     if (!vv || !window.matchMedia('(pointer: coarse)').matches) return undefined
     let raf = 0
+    // FOCUS-BASED gate — the deterministic keyboard signal (see
+    // docs/internal/architecture/ios-scroll-stability.md, regression log).
+    // The iOS keyboard is up IFF an editable element has focus. Two failed
+    // alternatives, do not resurrect:
+    //  • height-math gate (innerHeight vs vv.height): never fired on iOS
+    //    (the two track each other) → header slid off under the keyboard.
+    //  • always-on tracking (no gate): a stale short vv.height could stick
+    //    after keyboard close (missed final resize) → whole shell shortened
+    //    (IMG_0616: sidebar + composer ending ~140px above the bottom).
+    // With the focus gate: keyboard down → vars REMOVED (CSS fallback
+    // 100dvh@0 — always full height); keyboard up → follow vv (header stays
+    // visible). body{position:fixed} keeps scroll gestures from panning vv.
+    const editableFocused = () => {
+      const el = document.activeElement as HTMLElement | null
+      if (!el) return false
+      return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
+    }
     const setAppMetrics = () => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
-        // Always-on tracking, paired with `body { position: fixed }` in
-        // globals.css — the pair is the stable design:
-        //  • body-fixed stops scroll gestures on non-scrollable chrome from
-        //    panning the visual viewport (the sidebar/header drift bug), so
-        //    following vv here can no longer be dragged around by scrolls.
-        //  • Following vv is REQUIRED for the on-screen keyboard: iOS pans
-        //    the visual viewport to reveal the focused input, and the shell
-        //    must follow (offsetTop) or the header slides off-screen.
-        // (An earlier "keyboard-only" gate compared window.innerHeight to
-        // vv.height — on iOS those track each other, the gate never fired,
-        // and the keyboard bug returned. Don't reintroduce a gate.)
-        document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
-        document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
+        if (editableFocused()) {
+          document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
+          document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
+        } else {
+          document.documentElement.style.removeProperty('--app-vh')
+          document.documentElement.style.removeProperty('--app-top')
+        }
       })
     }
     setAppMetrics()
     vv.addEventListener('resize', setAppMetrics)
     vv.addEventListener('scroll', setAppMetrics)
+    // focusin/focusout flip the gate the moment focus moves — by the time the
+    // rAF callback runs, document.activeElement reflects the new state.
+    document.addEventListener('focusin', setAppMetrics)
+    document.addEventListener('focusout', setAppMetrics)
     return () => {
       cancelAnimationFrame(raf)
       vv.removeEventListener('resize', setAppMetrics)
       vv.removeEventListener('scroll', setAppMetrics)
+      document.removeEventListener('focusin', setAppMetrics)
+      document.removeEventListener('focusout', setAppMetrics)
     }
   }, [])
 
