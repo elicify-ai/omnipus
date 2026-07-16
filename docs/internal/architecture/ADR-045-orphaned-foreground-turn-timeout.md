@@ -1,8 +1,17 @@
 # ADR-045: Orphaned Foreground Turn Timeout
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-16
 **Deciders:** architect (+ backend-lead, qa-lead for implementation/review)
+
+**Implementation note (2026-07-16):** Implemented as designed in commit
+`4677b6f75b14731d645ef1498759425cca8b6a4b` (`feat(agent,gateway): orphaned-foreground-turn
+watchdog (ADR-045) to bound leaked turns`) — `pkg/agent/orphan_watch.go` (Arm/Disarm/fire),
+`TurnCancelHook.RequestHardAbort` (`pkg/agent/turn.go`), gateway wiring in
+`pkg/gateway/websocket.go`, `GatewayConfig.OrphanedTurnGraceSeconds` (`pkg/config`), two new
+audit events, and the e2e harness `OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20` override
+(`.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`). Pending human merge-gate approval
+per CLAUDE.md.
 
 ## Context
 
