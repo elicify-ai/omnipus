@@ -257,12 +257,15 @@ EOF
   log "e2e[$name]: run specs${specs:+ ($specs)}"
   # Per-shard OMNIPUS_AUTH_FILE + OMNIPUS_SKIP_MANIFEST_PATH keep global-setup's session
   # cookie (tests/e2e/global-setup.ts) and global-teardown's manifest (global-teardown.ts)
-  # off the shared default paths. $pwargs (sharded only) adds --output + --reporter=list so
-  # concurrent shards don't collide on test-results/ and playwright-report/.
+  # off the shared default paths. The manifest is placed INSIDE the shard's own results dir
+  # so the derived soft-skips.json accumulator (skip-tracking.ts softSkipsPath, which lives
+  # next to the manifest) is per-shard too — otherwise concurrent shards, sharing one repo
+  # CWD, would race on test-results/soft-skips.json. $pwargs (sharded only) adds --output +
+  # --reporter=list so concurrent shards don't collide on test-results/ and playwright-report/.
   OMNIPUS_HOME="$home" \
   OMNIPUS_URL="http://localhost:$port" \
   OMNIPUS_AUTH_FILE="$authfile" \
-  OMNIPUS_SKIP_MANIFEST_PATH="/tmp/e2e-$name-skip-manifest.json" \
+  OMNIPUS_SKIP_MANIFEST_PATH="/tmp/e2e-$name-results/skip-manifest.json" \
   OPENROUTER_API_KEY="$key" \
   OPENROUTER_API_KEY_CI="$key" \
     npx playwright test $specs $pwargs

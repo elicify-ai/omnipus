@@ -36,7 +36,7 @@
     },
     {
       "group": "ui",
-      "key_slot": "a",
+      "key_slot": "c",
       "port": 6063,
       "specs": [
         "tests/e2e/accessibility.spec.ts",

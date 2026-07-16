@@ -311,18 +311,33 @@ function manifestPath(): string {
 }
 
 /**
+ * softSkipsPath — Resolve the path of the in-run soft-skip accumulator.
+ *
+ * It lives in the SAME directory as the manifest, so it follows
+ * `OMNIPUS_SKIP_MANIFEST_PATH`. This is what keeps concurrent e2e shards — which run
+ * `npx playwright test` from one shared repo CWD but with a per-shard
+ * OMNIPUS_SKIP_MANIFEST_PATH — from racing on a single `test-results/soft-skips.json`
+ * (a non-atomic read-modify-write that would otherwise drop or cross-attribute skips
+ * across shards). Defaults to `test-results/soft-skips.json` when the env var is unset,
+ * so single-gateway and one-VM-per-shard (GitHub Actions) runs are unaffected.
+ */
+function softSkipsPath(): string {
+  return path.join(path.dirname(manifestPath()), 'soft-skips.json');
+}
+
+/**
  * writeSkipManifest — Build and write the skip manifest from the in-process
  * soft-skips.json accumulated during the run.
  *
  * Called by global-teardown.ts at the end of every run.
  */
 export function writeSkipManifest(): SkipManifest {
-  // Read the in-run skip accumulator (soft-skips.json).
+  // Read the in-run skip accumulator (soft-skips.json), from the shard-scoped path.
   let rawSkips: SkipEntry[] = [];
-  const softSkipsPath = path.resolve('test-results', 'soft-skips.json');
-  if (fs.existsSync(softSkipsPath)) {
+  const softSkipsFile = softSkipsPath();
+  if (fs.existsSync(softSkipsFile)) {
     try {
-      const raw = fs.readFileSync(softSkipsPath, 'utf-8').trim();
+      const raw = fs.readFileSync(softSkipsFile, 'utf-8').trim();
       if (raw) rawSkips = JSON.parse(raw) as SkipEntry[];
     } catch {
       console.warn('[skip-tracking] Could not parse soft-skips.json; manifest will be empty');
@@ -412,13 +427,15 @@ export function softSkip(
     ...(entry ? { issue: entry.issue, until: entry.until } : {}),
   };
 
-  // Append to test-results/soft-skips.json (best-effort — non-fatal write failure).
+  // Append to the shard-scoped soft-skip accumulator (best-effort — non-fatal write
+  // failure). Path follows the manifest dir (OMNIPUS_SKIP_MANIFEST_PATH) so concurrent
+  // e2e shards, which share one repo CWD, don't race on a single soft-skips.json.
   try {
-    const dir = path.resolve('test-results');
+    const filePath = softSkipsPath();
+    const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const filePath = path.join(dir, 'soft-skips.json');
     let existing: SkipEntry[] = [];
     if (fs.existsSync(filePath)) {
       try {
