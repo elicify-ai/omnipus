@@ -30,7 +30,7 @@
 // hook reaching across to import it, keeping the two hooks independently
 // testable.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { ComposerRuntime } from '@assistant-ui/react'
@@ -174,7 +174,12 @@ const GHOST_TEXT_PLACEHOLDER = '<message>'
 // Deferred item 3: both capped sections (skills, agents) cap at this many
 // visible rows — kept as a single named constant so the render layer
 // (ChatScreen.tsx) and this hook's hidden-count math can't drift apart.
-const SECTION_CAP = 8
+// Exported (Cap-footer copy fix, gate 2 LOW): ChatScreen.tsx's footer-copy
+// derivation ("Showing 8 of N skills" in the /skills special-filter state)
+// also needs this exact number — importing it there keeps the two
+// permanently in lockstep instead of a second hardcoded `8` that could
+// silently drift from this one.
+export const SECTION_CAP = 8
 
 // Deferred item 4: prefix-then-substring matching, shared by all three
 // sections (commands/skills/agents) so "@assist" can find "Code Assistant"
@@ -420,7 +425,18 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Deferred item 4: prefix-then-substring ranking (still against id OR
   // name, same two fields as before — only the matching STRENGTH changed,
   // not which fields are checked).
-  const sortedSkills = [...skills].sort((a, b) => a.name.localeCompare(b.name))
+  // Perf (gate 5 LOW): memoized on `skills` identity, not recomputed on
+  // every composer render. This localeCompare sort previously ran
+  // unconditionally — including on renders where inputValue doesn't even
+  // start with "/" (e.g. every keystroke of a normal chat message) — for a
+  // result (`matchedSkills`) that the very next line discards unread
+  // whenever `menuFilter === null`. `skills` only gets a new array identity
+  // when the `['skills']` query actually refetches (staleTime 60s), so this
+  // now sorts once per minute-ish instead of once per keystroke.
+  const sortedSkills = useMemo(
+    () => [...skills].sort((a, b) => a.name.localeCompare(b.name)),
+    [skills],
+  )
   const matchedSkills: Skill[] = (() => {
     if (menuFilter === null) return []
     const lower = isSkillsFilter ? '' : menuFilter
@@ -467,7 +483,14 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Deferred item 3: sorted by name (localeCompare) BEFORE ranking/capping —
   // same rationale as skills above.
   const effectiveActiveAgentId = activeAgentId || chatAgents[0]?.id
-  const sortedAgents = [...chatAgents].sort((a, b) => a.name.localeCompare(b.name))
+  // Perf (gate 5 LOW): same fix as sortedSkills above — memoized on
+  // `chatAgents` identity so this sort runs once per agents-list change
+  // (react-query refetch / workspace-scope change), not once per composer
+  // keystroke.
+  const sortedAgents = useMemo(
+    () => [...chatAgents].sort((a, b) => a.name.localeCompare(b.name)),
+    [chatAgents],
+  )
   const matchedAgents: Agent[] = (() => {
     if (mentionFilter === null) return []
     return rankByFilter(sortedAgents, mentionFilter, (a, lf) => matchRank(a.name, lf))

@@ -6,7 +6,8 @@ import { cn } from '@/lib/utils'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
-import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, statusDot, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { isDelegationFailure, policyAxisLabel } from './tools/GenericToolCall'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -42,18 +43,34 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
   // return (Rules of Hooks).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const marshalErr = isMarshalErrorResult(toolCall.result)
+  // Ported from GenericToolCall.tsx (G17/BLOCKER 2): a denied delegation is
+  // an error-status result carrying the structured DelegationFailure
+  // sentinel as its `result`. Detected here too so the historical-list /
+  // SubagentBlock-step badge (this component) renders the SAME amber
+  // "Delegation denied · <axis>" chip GenericToolCall's live/replay path
+  // does, instead of a generic red "Failed".
+  const delegationFailure = isDelegationFailure(toolCall.result) ? toolCall.result : null
   if (
     !shouldRenderToolCall(
       toolCall.tool,
       toolCall.params,
       verboseChatEnabled,
-      toolCall.status === 'error' || marshalErr,
+      toolCall.status === 'error' || marshalErr || !!delegationFailure,
     )
   ) {
     return null
   }
 
-  const config = getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
+  const config: ToolBadgeStatusConfig = delegationFailure
+    ? {
+        // No equivalent status in getToolBadgeStatusConfig's 4-value domain
+        // (see toolStatusConfig.tsx's file header) — reuses the shared
+        // `statusDot` helper so its dot matches the other four exactly,
+        // mirroring GenericToolCall's own local delegationFailure branch.
+        indicator: statusDot('bg-[var(--color-warning)]'),
+        label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`,
+      }
+    : getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
   const isRunning = toolCall.status === 'running'
 
   return (
@@ -76,7 +93,7 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
           onClick={() => !isRunning && setExpanded((e) => !e)}
           disabled={isRunning}
           className={cn(
-            'flex min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
             !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             isRunning && 'cursor-default'
           )}
@@ -87,12 +104,16 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
             {humanizeToolName(toolCall.tool)}
           </span>
           <span className={cn('text-[var(--color-muted)]', config.textClass)}>{config.label}</span>
+          {/* Caret lives inside the toggle button (not a split-out sibling
+              control) — there is no other independently-clickable action on
+              this row to justify splitting the row, so the whole row stays
+              one click target (mirrors BashOutput.tsx). */}
+          {!isRunning && (
+            <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+            </span>
+          )}
         </button>
-        {!isRunning && (
-          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-          </span>
-        )}
       </div>
 
       {/* Expanded detail — indented quote-block: a thin left accent line

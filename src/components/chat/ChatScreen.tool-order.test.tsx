@@ -172,6 +172,26 @@ vi.mock('./tools/GenericToolCall', () => ({
   GenericToolCall: ({ toolName }: { toolName: string }) =>
     React.createElement('div', { 'data-testid': 'tool-call-badge', 'data-tool': toolName }, toolName),
 }))
+// F2 (test hardening, gate 6): the two SPECIALIZED replay branches
+// VirtualAssistantMessageRow routes to instead of GenericToolCall — mocked
+// down to the SAME stable contract (data-testid="tool-call-badge" +
+// data-tool) so the ordering assertions below don't care which branch
+// rendered the badge, only WHERE it landed relative to the text slices.
+// `isReplayBrowserToolName` is narrowed to the one tool name this file
+// actually drives ('browser.click') rather than reproducing BrowserTool.tsx's
+// full BROWSER_TOOL_SPECS table — that table is owned by a sibling agent
+// and restyled concurrently; this file only needs ONE real member of it to
+// prove the routing/ordering, not full coverage of all six tool names
+// (BrowserTool.tsx's own tests own that).
+vi.mock('./tools/BrowserTool', () => ({
+  isReplayBrowserToolName: (toolName: string) => toolName === 'browser.click',
+  BrowserToolReplayBlock: ({ toolName }: { toolName: string }) =>
+    React.createElement('div', { 'data-testid': 'tool-call-badge', 'data-tool': toolName }, toolName),
+}))
+vi.mock('./tools/WebServeUI', () => ({
+  WebServeBlock: ({ toolName }: { toolName: string }) =>
+    React.createElement('div', { 'data-testid': 'tool-call-badge', 'data-tool': toolName }, toolName),
+}))
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => React.createElement('div', {}),
 }))
@@ -455,6 +475,153 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
     expect(nodes[0].textContent).toBe('A')
     expect(nodes[1]).toHaveAttribute('data-tool', 'shell')
     expect(nodes[2].textContent).toContain('B')
+    expectBefore(nodes[0], nodes[1])
+    expectBefore(nodes[1], nodes[2])
+  })
+
+  // F2 (test hardening, gate 6): the two SPECIALIZED replay branches
+  // (BrowserToolReplayBlock, WebServeBlock) that VirtualAssistantMessageRow
+  // routes to INSTEAD of GenericToolCall for certain tool names — the
+  // interleaving fix (splitMessageParts) is applied to the SAME `parts`
+  // array regardless of which branch renders a given tool call, but that
+  // was never actually exercised by a live stream sequence before: the
+  // other tests in this file all use plain/unregistered tool names, which
+  // only ever hit the GenericToolCall branch.
+  it('interleaves a browser.click tool call (BrowserToolReplayBlock branch) between two streamed text segments', async () => {
+    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Let me click. ', session_id: SID }) })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_browser',
+        tool: 'browser.click',
+        params: { selector: '#submit' },
+        session_id: SID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_browser',
+        tool: 'browser.click',
+        result: { ok: true },
+        status: 'success',
+        session_id: SID,
+      })
+    })
+    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Clicked it.', session_id: SID }) })
+    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const nodes = orderedPartNodes(container)
+    expect(nodes).toHaveLength(3)
+    expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[0].textContent).toContain('Let me click.')
+    expect(nodes[1]).toHaveAttribute('data-testid', 'tool-call-badge')
+    expect(nodes[1]).toHaveAttribute('data-tool', 'browser.click')
+    expect(nodes[2]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[2].textContent).toContain('Clicked it.')
+    expectBefore(nodes[0], nodes[1])
+    expectBefore(nodes[1], nodes[2])
+  })
+
+  it('interleaves a web_serve tool call (WebServeBlock branch) between two streamed text segments', async () => {
+    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Starting the preview. ', session_id: SID }) })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_serve',
+        tool: 'web_serve',
+        params: { path: '/app', port: 5173 },
+        session_id: SID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_serve',
+        tool: 'web_serve',
+        result: { url: '/preview/agent/token/' },
+        status: 'success',
+        session_id: SID,
+      })
+    })
+    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'It is live now.', session_id: SID }) })
+    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const nodes = orderedPartNodes(container)
+    expect(nodes).toHaveLength(3)
+    expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[0].textContent).toContain('Starting the preview.')
+    expect(nodes[1]).toHaveAttribute('data-testid', 'tool-call-badge')
+    expect(nodes[1]).toHaveAttribute('data-tool', 'web_serve')
+    expect(nodes[2]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[2].textContent).toContain('It is live now.')
+    expectBefore(nodes[0], nodes[1])
+    expectBefore(nodes[1], nodes[2])
+  })
+})
+
+// F4 (test hardening, gate 6): REST cold-load ordering — a session opened
+// with the WebSocket unavailable (or the WS replay never firing) falls back
+// to ChatScreen.tsx's REST-history effect (~2165-2181 as of this writing):
+// `setMessages(validMessages)`, called with the REST-fetched history
+// role-filtered but otherwise passed through VERBATIM — no same-turn merge
+// (that coalescing lives in the WS `replay_message` reducer, tested above,
+// and never runs for a REST cold load).
+//
+// This file's `useQuery` mock (above) returns a static, key-blind
+// `{ data: [] }` for every query in the file, including `['messages',
+// sessionId]` — so mocking `fetchSessionMessages` could never actually
+// reach the real ChatScreen effect in THIS harness (the effect never sees
+// query data other than `[]`). Driving `useChatStore.getState().setMessages`
+// directly is the more honest route here: it is the EXACT store action the
+// effect calls, with the EXACT input shape (an already role-filtered
+// ChatMessage[]), so this pins the real "flat entries, no merge" ordering
+// semantics of the cold-load path without needing to fight this file's
+// existing query mock.
+describe('ChatScreen — REST cold-load ordering (F4)', () => {
+  it('a 3-entry REST-loaded turn (text A / tool-call-only entry / text B) renders in DOM order A → badge → B', async () => {
+    const now = new Date().toISOString()
+    act(() => {
+      useChatStore.getState().setMessages([
+        { id: 'rest-a', role: 'assistant', content: 'Restored answer part A.', timestamp: now, status: 'done' },
+        {
+          id: 'rest-tool',
+          role: 'assistant',
+          content: '',
+          timestamp: now,
+          status: 'done',
+          tool_calls: [{ id: 'tc_rest', tool: 'shell', params: { cmd: 'echo hi' }, status: 'success' } as PositionedToolCall],
+        },
+        { id: 'rest-b', role: 'assistant', content: 'Restored answer part B.', timestamp: now, status: 'done' },
+      ])
+    })
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const nodes = orderedPartNodes(container)
+    expect(nodes).toHaveLength(3)
+    expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[0].textContent).toContain('Restored answer part A.')
+    expect(nodes[1]).toHaveAttribute('data-testid', 'tool-call-badge')
+    expect(nodes[1]).toHaveAttribute('data-tool', 'shell')
+    expect(nodes[2]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[2].textContent).toContain('Restored answer part B.')
     expectBefore(nodes[0], nodes[1])
     expectBefore(nodes[1], nodes[2])
   })

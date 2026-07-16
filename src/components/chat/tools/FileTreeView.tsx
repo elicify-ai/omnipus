@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { Folder, File, ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
-import { statusDot } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 interface ListDirArgs {
   path?: string
@@ -43,16 +43,35 @@ function FileTreeBlock({
   args,
   result,
   isRunning,
+  isError,
+  isCancelled,
 }: {
   args: ListDirArgs
   result: unknown
   isRunning: boolean
+  isError?: boolean
+  isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
 
   const path = args.path ?? '.'
   const content = result != null ? String(result) : ''
   const entries = content ? parseTree(content) : []
+
+  // Always resolves to a real config — a completed listing with zero entries
+  // (no error, no cancellation) is still a real "0 entries" success, not a
+  // silently blank indicator (the old `content ? successDot : null` dropped
+  // the indicator entirely for that case).
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 12, cancelledVariant: 'muted' }
+  )
+  // On a real success, always show the entry count — including "0 entries"
+  // for an empty directory (previously silent: no text shown at all when
+  // content was falsy). Running/error/cancelled show the shared status label
+  // instead, matching BashOutput/WebFetchPreview.
+  const countOrStatusLabel =
+    isRunning || isError || isCancelled ? statusConfig.label : `${entries.length} entries`
 
   return (
     // Flat text-line design (ticket "Tool components in chat", P2): no card
@@ -71,18 +90,15 @@ function FileTreeBlock({
           !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
           isRunning && 'cursor-default'
         )}
-        aria-expanded={expanded}
+        aria-expanded={!isRunning ? expanded : undefined}
+        disabled={isRunning}
       >
-        {isRunning ? (
-          <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)] shrink-0" />
-        ) : content ? (
-          statusDot('bg-[var(--color-success)]')
-        ) : null}
+        {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{path}</span>
         <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
-          {content && <span>{entries.length} entries</span>}
+          <span className={cn(statusConfig.textClass)}>{countOrStatusLabel}</span>
           {!isRunning && (
-            <span className="ml-1">{expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}</span>
+            <span className="ml-1">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}
         </span>
       </button>
@@ -123,6 +139,8 @@ export const FileTreeViewUI = makeAssistantToolUI<ListDirArgs, unknown>({
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })
@@ -135,6 +153,8 @@ export const FileListAliasDotUI = makeAssistantToolUI<ListDirArgs, unknown>({
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })

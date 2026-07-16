@@ -1,6 +1,6 @@
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { ArrowsClockwise } from '@phosphor-icons/react'
-import { statusDot } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import { cn } from '@/lib/utils'
 
 interface WriteFileArgs {
   path?: string
@@ -33,31 +33,35 @@ function byteCount(s?: string): string {
 // Flat text-line design (ticket "Tool components in chat", P2): no card
 // frame — matches GenericToolCall.tsx/toolStatusConfig.tsx. This row is not
 // expandable (write/edit/append have no detail panel), so it's a single flat
-// line: status dot/spinner, op label, path, optional byte-count detail. The
-// decorative per-op icon (FloppyDisk/PencilSimple/Plus) is gone — the status
-// dot is the only leading indicator, same as the other rows.
+// line: status dot/spinner, op label, path, optional byte-count detail, and
+// a status label. The decorative per-op icon (FloppyDisk/PencilSimple/Plus)
+// is gone — the status dot is the only leading indicator, same as the other
+// rows. Status text (Running.../Done/Failed/Cancelled) is rendered via
+// getToolBadgeStatusConfig like BashOutput does — a dot color alone is not
+// enough to distinguish a failed write from a successful one for
+// colorblind users or screen readers (WCAG 1.4.1).
 function FileOpBlock({
   label,
   path,
   detail,
   isRunning,
   isError,
+  isCancelled,
 }: {
   label: string
   path: string
   detail?: string
   isRunning: boolean
   isError?: boolean
+  isCancelled?: boolean
 }) {
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 12, cancelledVariant: 'muted' }
+  )
   return (
     <div className="mt-2 flex items-center gap-2 py-1 text-xs font-mono">
-      {isRunning ? (
-        <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)] shrink-0" />
-      ) : isError ? (
-        statusDot('bg-[var(--color-error)]')
-      ) : (
-        statusDot('bg-[var(--color-success)]')
-      )}
+      {statusConfig.indicator}
       <span className="text-[var(--color-muted)] shrink-0">{label}</span>
       <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
         {basename(path)}
@@ -65,6 +69,9 @@ function FileOpBlock({
       {detail && !isRunning && (
         <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
       )}
+      <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+        {statusConfig.label}
+      </span>
     </div>
   )
 }
@@ -79,6 +86,7 @@ function makeWriteFileUI(toolName: string) {
         detail={byteCount(args?.content)}
         isRunning={status.type === 'running'}
         isError={status.type === 'incomplete'}
+        isCancelled={isCancelledStatus(status)}
       />
     ),
   })
@@ -97,6 +105,7 @@ export const EditFileConfirmUI = makeAssistantToolUI<EditFileArgs, unknown>({
       path={args?.path ?? '(unknown)'}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })
@@ -110,6 +119,7 @@ export const AppendFileConfirmUI = makeAssistantToolUI<AppendFileArgs, unknown>(
       detail={byteCount(args?.content)}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })

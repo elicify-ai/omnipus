@@ -251,6 +251,21 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
     expect(screen.getByTestId('type-icon')).toBeInTheDocument()
   })
 
+  it('running: renders the muted "Running..." status text (label is no longer computed and discarded)', () => {
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={true} hasResult={false} />)
+    expect(screen.getByText('Running...')).toBeInTheDocument()
+  })
+
+  it('not running, has result: renders the muted "Done" status text', () => {
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} hasResult={true} />)
+    expect(screen.getByText('Done')).toBeInTheDocument()
+  })
+
+  it('not running, no result: renders the muted "Failed" status text', () => {
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} hasResult={false} />)
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+  })
+
   it('the header has no card-frame classes — flat/transparent, no rounded-t-md/border/bg-surface-1', () => {
     render(
       <PreviewToolHeader
@@ -265,5 +280,22 @@ describe('PreviewToolHeader — flat text-line status dot', () => {
     expect(root.className).not.toContain('rounded-t-md')
     expect(root.className).not.toContain('border')
     expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('no descendant anywhere in the tree carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1)', () => {
+    render(
+      <PreviewToolHeader
+        icon={<Terminal size={13} />}
+        toolName="web_serve"
+        label="vite dev"
+        data-testid="webserve-tool-header"
+        isRunning={false}
+        hasResult={true}
+      />
+    )
+    const root = screen.getByTestId('webserve-tool-header')
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 })

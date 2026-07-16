@@ -4,7 +4,7 @@ import { CaretDown, CaretUp, Camera, Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 interface BrowserNavigateArgs {
   url?: string
@@ -54,11 +54,13 @@ export function BrowserNavigateBlock({
   result,
   isRunning,
   isError,
+  isCancelled,
 }: {
   args: BrowserNavigateArgs
   result: unknown
   isRunning: boolean
   isError?: boolean
+  isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -69,13 +71,17 @@ export function BrowserNavigateBlock({
   const pageTitle = parsed.title
   const hasDetail = !isRunning && hasResult
 
-  const statusConfig: ToolBadgeStatusConfig | null = isRunning
+  // Always resolves to a real config — a terminal state (running finished,
+  // no error/cancellation) with no result is still a real outcome (e.g. a
+  // navigate call that legitimately returned nothing) and must still show a
+  // status dot + label, not a silently blank indicator.
+  const statusConfig: ToolBadgeStatusConfig = isRunning
     ? getToolBadgeStatusConfig('running', { size: 12 })
+    : isCancelled
+    ? getToolBadgeStatusConfig('cancelled', { size: 12, cancelledVariant: 'muted' })
     : isError
     ? getToolBadgeStatusConfig('error', { size: 12 })
-    : hasResult
-    ? getToolBadgeStatusConfig('success', { size: 12 })
-    : null
+    : getToolBadgeStatusConfig('success', { size: 12 })
 
   // ADR-038: "Watch live" opens the app-root BrowserLivePanel overlay onto the
   // browser session driving this tool call. Imperative store reads (not hooks)
@@ -109,10 +115,10 @@ export function BrowserNavigateBlock({
             hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             !hasDetail && 'cursor-default'
           )}
-          aria-expanded={expanded}
+          aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}
         >
-          {statusConfig?.indicator}
+          {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">browser.navigate</span>
           <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
             {displayUrl(url)}
@@ -122,11 +128,9 @@ export function BrowserNavigateBlock({
               {pageTitle}
             </span>
           )}
-          {statusConfig && (
-            <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
-              {statusConfig.label}
-            </span>
-          )}
+          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+            {statusConfig.label}
+          </span>
           {screenshotData && <Camera size={11} className="text-[var(--color-muted)] shrink-0" />}
         </button>
 
@@ -155,7 +159,7 @@ export function BrowserNavigateBlock({
           bordered/backgrounded panel; each section keeps its own spacing
           via space-y-2 rather than individual borders/fills. */}
       {expanded && hasDetail && (
-        <div className="border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
           {/* Full URL breadcrumb */}
           <div>
             <span className="text-[10px] text-[var(--color-muted)] font-mono break-all">{url}</span>
@@ -199,6 +203,7 @@ export const BrowserNavigateUI = makeAssistantToolUI<BrowserNavigateArgs, unknow
       result={result}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })
@@ -212,6 +217,7 @@ export const BrowserNavigateUnderscoreUI = makeAssistantToolUI<BrowserNavigateAr
       result={result}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })

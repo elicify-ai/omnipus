@@ -217,7 +217,17 @@ describe('Slash menu — commands query error (LOW S8)', () => {
 
     expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
     expect(screen.getByTestId('slash-commands-error')).toBeInTheDocument()
-    expect(screen.getByText('Commands unavailable')).toBeInTheDocument()
+    // SR gap fix (gate 4 MODERATE, ChatScreen.tsx): the visible error row's
+    // text is now ALSO mirrored into a dedicated sr-only role="status"
+    // region (data-testid="slash-menu-status") outside the listbox, so a
+    // screen reader actually hears it — see that region's own comment in
+    // ChatScreen.tsx. That intentionally duplicates the string "Commands
+    // unavailable" in the DOM, so a plain `getByText` now matches two
+    // elements; scope each assertion to its own element instead.
+    expect(screen.getByTestId('slash-commands-error')).toHaveTextContent('Commands unavailable')
+    const status = screen.getByTestId('slash-menu-status')
+    expect(status).toHaveAttribute('role', 'status')
+    expect(status).toHaveTextContent('Commands unavailable')
 
     // The synthetic client-only /resume command comes from useSlashMenu
     // itself, not the errored backend list, so it still renders alongside

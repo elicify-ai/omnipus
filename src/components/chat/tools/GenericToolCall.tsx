@@ -22,7 +22,12 @@ import { fetchToolResult } from '@/lib/api'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
-import { getToolBadgeStatusConfig, statusDot, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import {
+  getToolBadgeStatusConfig,
+  statusDot,
+  isCancelledStatus,
+  type ToolBadgeStatusConfig,
+} from '@/lib/toolStatusConfig'
 
 interface GenericToolCallProps {
   toolName: string
@@ -73,7 +78,12 @@ function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
  * sentinel-type detector pattern above; matched against the generated
  * DelegationFailure contract (error: "delegation_denied").
  */
-function isDelegationFailure(value: unknown): value is DelegationFailure {
+// Exported so ToolCallBadge.tsx (the historical-list / SubagentBlock-step
+// renderer for the same delegation-denied outcome) can reuse the exact same
+// detection + label logic instead of re-deriving it — both callers must
+// render pixel-identical "Delegation denied · <axis>" chips for the same
+// sentinel shape.
+export function isDelegationFailure(value: unknown): value is DelegationFailure {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -82,7 +92,7 @@ function isDelegationFailure(value: unknown): value is DelegationFailure {
 }
 
 /** Human label for the policy axis that blocked the delegation. */
-function policyAxisLabel(policy: DelegationFailure['policy']): string {
+export function policyAxisLabel(policy: DelegationFailure['policy']): string {
   switch (policy) {
     case 'trust_set':
       return 'Trust set'
@@ -263,9 +273,7 @@ export function GenericToolCall({
 
   const isRunning = status.type === 'running'
   const isError = status.type === 'incomplete' || !!error
-  // AssistantUI's MessagePartStatus does not expose `reason` on the `incomplete` variant in its
-  // public types, so we narrow with `'reason' in status` before casting to access it safely.
-  const isCancelled = status.type === 'incomplete' && 'reason' in status && (status as { reason?: string }).reason === 'cancelled'
+  const isCancelled = isCancelledStatus(status)
 
   // G17: a delegation denial is an error-status result; surface it in the
   // COLLAPSED header ("Delegation denied · <axis>") instead of a generic
@@ -371,7 +379,7 @@ export function GenericToolCall({
             hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             !hasDetail && 'cursor-default'
           )}
-          aria-expanded={expanded}
+          aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}
         >
           {statusConfig.indicator}
