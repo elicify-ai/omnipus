@@ -338,11 +338,31 @@ run_e2e() {
   # Reap surviving gateways if the whole run is interrupted (exact pids only).
   trap '_e2e_reap_pidfiles' INT TERM
 
-  while IFS=$'\t' read -r group slot port specs; do
+  local soloflag src
+  while IFS=$'\t' read -r group slot port soloflag specs; do
     [ -n "$group" ] || continue
+    case "$slot" in b) key="$KEY_B" ;; c) key="$KEY_C" ;; *) key="$KEY_A" ;; esac
+    if [ "$soloflag" = "true" ]; then
+      # Solo shard: drain every in-flight shard, then run THIS one alone in the
+      # foreground so its timing-sensitive specs get the whole worker (no CPU
+      # contention from a co-tenant gateway+browser — the failure mode that
+      # flaked ui specs at MAX_PARALLEL=2 when they overlapped a CPU-heavy shard).
+      while [ "$running" -gt 0 ]; do _e2e_reap_one; done
+      log "e2e: launch shard $group (port $port, key slot $slot; SOLO)"
+      ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
+        > "/tmp/e2e-shard-$group.log" 2>&1
+      src=$?
+      NAMES+=("$group")
+      if [ "$src" -eq 0 ]; then
+        printf '\033[1;32me2e shard %s: PASS\033[0m\n' "$group"
+      else
+        printf '\033[1;31me2e shard %s: FAIL (exit %d)\033[0m\n' "$group" "$src"
+        FAILED+=("$group"); shard_rc=1
+      fi
+      continue
+    fi
     # Concurrency gate: block until a slot frees up.
     while [ "$running" -ge "$MAX_PARALLEL" ]; do _e2e_reap_one; done
-    case "$slot" in b) key="$KEY_B" ;; c) key="$KEY_C" ;; *) key="$KEY_A" ;; esac
     log "e2e: launch shard $group (port $port, key slot $slot; $((running + 1))/$MAX_PARALLEL in flight)"
     ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
       > "/tmp/e2e-shard-$group.log" 2>&1 &
