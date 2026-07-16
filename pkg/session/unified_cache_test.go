@@ -32,6 +32,12 @@
 //	  CacheLoadFailureCount, without failing store construction
 //	Scenario (MB-3 regression): Clone() deep-copies every reference-kind field UnifiedMeta has —
 //	  a reflection-driven guard that fails if a future field is added without also being cloned
+//	Scenario (out-of-band reconciliation regression): ListSessions lists a session directory
+//	  written directly to disk after construction, bypassing the store entirely, by lazily
+//	  self-healing it into metaCache — without any per-file disk read for sessions already cached
+//	Scenario (out-of-band reconciliation, MB-2-style): a malformed out-of-band session directory
+//	  is skipped gracefully (logged, not fatal) while a good out-of-band session next to it is
+//	  still listed
 //
 // Traces to: pkg/session/unified.go (metaCache, Clone, readMetaLocked,
 // writeMetaLocked, ListSessions, GetMeta, GetOrCreateScheduledSession,
@@ -820,4 +826,127 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 	clone.Stats.ByModel["model-a"] = cloneEntry
 	assert.Equal(t, 10, original.Stats.ByModel["model-a"].Total,
 		"mutating clone.Stats.ByModel must not affect original.Stats.ByModel")
+}
+
+// TestListSessions_ReconcilesOutOfBandSessionDir is the regression test for
+// the cache-only-blindness bug: ListSessions previously iterated ONLY
+// metaCache and never consulted disk, so a session directory written
+// DIRECTLY to disk (out-of-band, not through this UnifiedStore instance —
+// e.g. by another process, or a restore/migration step) never appeared in
+// ListSessions no matter how long the process ran afterward.
+//
+// BDD: Given one session created THROUGH the store (already in metaCache)
+// and one session written DIRECTLY to disk with a distinct ID and a newer
+// UpdatedAt, When ListSessions is called, Then both sessions are returned,
+// sorted UpdatedAt descending (out-of-band session first), AND the
+// out-of-band session is self-healed into metaCache as a side effect (same
+// mechanism readMetaLocked uses on any other cache-miss read).
+//
+// Traces to: pkg/session/unified.go ListSessions, readMetaLocked, metaCache.
+func TestListSessions_ReconcilesOutOfBandSessionDir(t *testing.T) {
+	store := newTestStore(t)
+
+	// Session 1: created THROUGH the store — lands in metaCache via the
+	// normal writeMetaLocked path.
+	cached, err := store.NewSession(SessionTypeChat, "", "agent-1")
+	require.NoError(t, err)
+
+	// Session 2: written DIRECTLY to disk, bypassing the store entirely.
+	// writeUnifiedMetaDirect is the same package-level helper migrateLegacy
+	// uses to write a session's meta.json before any UnifiedStore instance
+	// exists for it — an accurate stand-in for a genuinely out-of-band writer.
+	outOfBandID := "out-of-band-session"
+	outOfBandDir := filepath.Join(store.baseDir, outOfBandID)
+	require.NoError(t, os.MkdirAll(outOfBandDir, 0o700))
+	now := time.Now().UTC()
+	outOfBandMeta := &UnifiedMeta{
+		SessionMeta: SessionMeta{
+			ID:        outOfBandID,
+			Status:    StatusActive,
+			CreatedAt: now.Add(-time.Hour),
+			// Deliberately newer than the cached session so descending sort
+			// order proves this entry was actually merged in, not just
+			// coincidentally present.
+			UpdatedAt: now.Add(time.Hour),
+		},
+		Type: SessionTypeChat,
+	}
+	require.NoError(t, writeUnifiedMetaDirect(outOfBandDir, outOfBandMeta))
+
+	// Precondition: the out-of-band session must NOT already be cached — it
+	// was never written through this store instance.
+	store.mu.RLock()
+	_, alreadyCached := store.metaCache[outOfBandID]
+	store.mu.RUnlock()
+	require.False(t, alreadyCached,
+		"precondition: out-of-band session must not be pre-populated in the cache")
+
+	metas, err := store.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, metas, 2, "both the cached and the out-of-band session must be listed")
+
+	require.NotNil(t, findMeta(metas, cached.ID),
+		"session created through the store must still be listed")
+	require.NotNil(t, findMeta(metas, outOfBandID),
+		"session written directly to disk out-of-band must be listed")
+
+	assert.Equal(t, outOfBandID, metas[0].ID,
+		"out-of-band session (newer UpdatedAt) must sort first")
+	assert.Equal(t, cached.ID, metas[1].ID,
+		"session created through the store (older UpdatedAt) must sort second")
+
+	// The reconciliation pass must have self-healed the out-of-band session
+	// into metaCache (the same side effect readMetaLocked has on any other
+	// cache-miss read) so a repeat ListSessions call doesn't re-read it from
+	// disk.
+	store.mu.RLock()
+	_, nowCached := store.metaCache[outOfBandID]
+	store.mu.RUnlock()
+	assert.True(t, nowCached, "ListSessions must self-heal the out-of-band session into metaCache")
+}
+
+// TestListSessions_SkipsMalformedOutOfBandSessionDir verifies the
+// reconciliation pass degrades gracefully: an out-of-band session directory
+// whose meta.json is unparseable must be logged and skipped, not returned as
+// an error from ListSessions — and must not prevent a GOOD out-of-band
+// session directory next to it from being listed.
+//
+// BDD: Given one session created through the store, one out-of-band
+// directory with a valid meta.json, and one out-of-band directory with a
+// corrupt (unparseable) meta.json, When ListSessions is called, Then it
+// returns no error, lists the store-created and the good out-of-band
+// session, and silently excludes the corrupt one.
+//
+// Traces to: pkg/session/unified.go ListSessions, readMetaLocked.
+func TestListSessions_SkipsMalformedOutOfBandSessionDir(t *testing.T) {
+	store := newTestStore(t)
+
+	cached, err := store.NewSession(SessionTypeChat, "", "agent-1")
+	require.NoError(t, err)
+
+	goodID := "out-of-band-good"
+	goodDir := filepath.Join(store.baseDir, goodID)
+	require.NoError(t, os.MkdirAll(goodDir, 0o700))
+	require.NoError(t, writeUnifiedMetaDirect(goodDir, &UnifiedMeta{
+		SessionMeta: SessionMeta{
+			ID:        goodID,
+			Status:    StatusActive,
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		},
+		Type: SessionTypeChat,
+	}))
+
+	badID := "out-of-band-bad"
+	badDir := filepath.Join(store.baseDir, badID)
+	require.NoError(t, os.MkdirAll(badDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(badDir, "meta.json"), []byte(`{not valid json`), 0o600))
+
+	metas, err := store.ListSessions()
+	require.NoError(t, err, "ListSessions must not error on a malformed out-of-band session dir")
+	require.Len(t, metas, 2, "only the store-created and the good out-of-band session must be listed")
+
+	require.NotNil(t, findMeta(metas, cached.ID))
+	require.NotNil(t, findMeta(metas, goodID), "the good out-of-band session must still be listed")
+	assert.Nil(t, findMeta(metas, badID), "the malformed out-of-band session must be excluded, not crash the call")
 }
