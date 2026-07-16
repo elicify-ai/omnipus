@@ -84,8 +84,8 @@ test(
     // this badly in two ways: (1) it modeled each waitForTurnFullyDone call as a
     // flat "gap(10)" 10s placeholder instead of the helper's own documented
     // up-to-188s worst case, and (2) it only budgeted 2 gaps, omitting the THIRD
-    // waitForTurnFullyDone call entirely (after turn 3, ~L119, before the
-    // serialMsgs assertion). Three turns each legitimately hitting the 188s
+    // waitForTurnFullyDone call entirely (the third call, immediately before
+    // the `serialMsgs` assertion). Three turns each legitimately hitting the 188s
     // follow-up-call ceiling alone sums to 564s — already more than double the
     // old 260s margin, before even counting the toHaveCount ceilings.
     //

@@ -4880,11 +4880,13 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 //
 // /preview/ is the unified route for the web_serve tool. The legacy /serve/
 // and /dev/ back-compat handlers (for registrations produced before /preview/
-// landed, 2026-05-04) were removed once the safety window for any such
-// registration closed — registrations are short-lived (max 24h), so nothing
-// minted before the migration could still be valid.
+// landed, 2026-05-04) were retired from actually SERVING content once the
+// safety window for any such registration closed — registrations are
+// short-lived (max 24h), so nothing minted before the migration could still
+// be valid. "Retired" here means routing to HandlePreview was removed; it
+// does NOT mean the prefixes were dropped from the mux entirely — see below.
 //
-// Both legacy prefixes are still registered here, but ONLY to a dedicated
+// Both legacy prefixes remain registered here, but ONLY to a dedicated
 // 404 responder (handleLegacyPreviewRetired) — not to HandlePreview. Without
 // this, an unmatched /serve/... or /dev/... request falls through to the
 // "/" SPA catch-all (embed.go's newSPAHandler), which answers any unknown
@@ -4910,11 +4912,18 @@ const (
 	legacyDevPathPrefix   = "/dev/"
 )
 
-// handleLegacyPreviewRetired answers any request under the retired /serve/
-// or /dev/ preview prefixes with a genuine 404. It exists solely to keep
-// these paths off the "/" SPA catch-all — no legacy token minted before the
-// ADR-044 migration can still be valid (registrations are short-lived, max
-// 24h), so there is nothing to look up or proxy here.
+// handleLegacyPreviewRetired answers a GET/HEAD/OPTIONS request under the
+// retired /serve/ or /dev/ preview prefixes with a genuine 404. It exists
+// solely to keep these paths off the "/" SPA catch-all — no legacy token
+// minted before the ADR-044 migration can still be valid (registrations are
+// short-lived, max 24h), so there is nothing to look up or proxy here. A
+// state-changing method (POST/PUT/PATCH/DELETE) never actually reaches this
+// handler: /serve/ and /dev/ are deliberately NOT in the CSRF
+// exempt-prefixes set (middleware/csrf.go's defaultExemptPrefixes, which
+// lists only middleware.PreviewPathPrefix), so the CSRF middleware rejects
+// those methods with 403 first. Either outcome — this handler's 404 or the
+// CSRF middleware's 403 — keeps the retired prefixes off the 200 SPA shell,
+// which is the invariant that matters.
 func handleLegacyPreviewRetired(w http.ResponseWriter, _ *http.Request) {
 	jsonErr(w, http.StatusNotFound, "this preview path prefix has been retired; use /preview/")
 }

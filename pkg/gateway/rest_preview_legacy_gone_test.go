@@ -38,6 +38,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,10 +56,15 @@ const spaShellBody = "<html>SPA-INDEX-SHELL</html>"
 // newWiredLegacyPreviewRealMux builds a real *http.ServeMux populated by the
 // ACTUAL production registerPreviewEndpoints call, plus a stand-in "/"
 // catch-all (mirrors embed.go's newSPAHandler: 200 + shell body for any
-// unmatched path), then serves it from a real httptest.Server. This
-// reproduces the exact registration order and mux dispatch semantics
-// (longest matching subtree-prefix wins, pkg/channels/dynamic_mux.go) that
-// production uses.
+// unmatched path), then serves it from a real httptest.Server. This gives
+// equivalent longest-prefix dispatch semantics to what production uses
+// (dispatch by longest matching subtree prefix, the same rule
+// pkg/channels/dynamic_mux.go's dynamicServeMux applies) — but note this
+// helper wraps a plain stdlib *http.ServeMux, NOT the production
+// dynamicServeMux type itself. dynamicServeMux is never instantiated here,
+// so a bug specific to that struct's own implementation (as opposed to the
+// registration/dispatch-order behavior it's meant to provide) would not be
+// caught by this test.
 func newWiredLegacyPreviewRealMux(t *testing.T) (*restAPI, *httptest.Server) {
 	t.Helper()
 	api, _ := newPreviewRouteTestAPI(t)
@@ -79,40 +85,35 @@ func newWiredLegacyPreviewRealMux(t *testing.T) (*restAPI, *httptest.Server) {
 	return api, srv
 }
 
-// TestLegacyServePrefix_Returns404NotSPAShell is the direct regression test:
-// a GET to a /serve/<agent>/<token>/ path (the shape the SPA's legacy
-// transcript replay renders and HEAD-probes) must 404, never fall through to
-// the 200 SPA shell.
-func TestLegacyServePrefix_Returns404NotSPAShell(t *testing.T) {
+// TestLegacyPrefixes_Returns404NotSPAShell is the direct regression test: a
+// GET to a /serve/<agent>/<token>/ or /dev/<agent>/<token>/ path (the shape
+// the SPA's legacy transcript replay renders and HEAD-probes) must 404,
+// never fall through to the 200 SPA shell. Table-driven over both retired
+// prefixes, referencing the same legacyServePathPrefix/legacyDevPathPrefix
+// constants rest.go's registerPreviewEndpoints registers, so a prefix rename
+// fails here at the point of truth instead of silently going stale. Mirrors
+// the loop shape of TestLegacyPreviewPrefixes_HEADAlso404s below.
+func TestLegacyPrefixes_Returns404NotSPAShell(t *testing.T) {
 	_, srv := newWiredLegacyPreviewRealMux(t)
 
-	resp, err := http.Get(srv.URL + "/serve/agent/token/")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
+	for _, prefix := range []string{legacyServePathPrefix, legacyDevPathPrefix} {
+		path := prefix + "agent/token/"
+		t.Run(strings.Trim(prefix, "/"), func(t *testing.T) {
+			resp, err := http.Get(srv.URL + path)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
 
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
-		"GET /serve/agent/token/ must 404 — a retired legacy preview link must never resolve "+
-			"to the SPA catch-all's 200")
-	body := readBody(t, resp)
-	assert.NotContains(t, body, spaShellBody,
-		"body must NOT be the SPA shell — that would mean the request fell through to the '/' catch-all")
-}
-
-// TestLegacyDevPrefix_Returns404NotSPAShell mirrors the test above for the
-// /dev/ legacy prefix.
-func TestLegacyDevPrefix_Returns404NotSPAShell(t *testing.T) {
-	_, srv := newWiredLegacyPreviewRealMux(t)
-
-	resp, err := http.Get(srv.URL + "/dev/agent/token/")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
-		"GET /dev/agent/token/ must 404 — a retired legacy preview link must never resolve "+
-			"to the SPA catch-all's 200")
-	body := readBody(t, resp)
-	assert.NotContains(t, body, spaShellBody,
-		"body must NOT be the SPA shell — that would mean the request fell through to the '/' catch-all")
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+				"GET %s must 404 — a retired legacy preview link must never resolve "+
+					"to the SPA catch-all's 200", path)
+			body := readBody(t, resp)
+			assert.NotContains(t, body, spaShellBody,
+				"body must NOT be the SPA shell — that would mean the request fell through to the '/' catch-all")
+			assert.Contains(t, body, "retired",
+				"defense-in-depth: the 404 body should carry handleLegacyPreviewRetired's "+
+					"retired-prefix message, not just any 404")
+		})
+	}
 }
 
 // TestLegacyPreviewPrefixes_HEADAlso404s exercises the EXACT request method
