@@ -115,7 +115,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
       </button>
 
       {/* Test run — sits outside the card button to avoid nested-button HTML. */}
-      <WorkerTestRun agentId={agent.id} isExternalCli={isExternalCli} />
+      <WorkerTestRun agentId={agent.id} agentName={agent.name} isExternalCli={isExternalCli} />
     </div>
   )
 }
@@ -125,7 +125,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
 // EXTERNAL CLI runner (binary present + handshake + auth), so the button is enabled
 // only when the worker's executor is external-cli. A native worker has no external
 // runner to probe → the button is disabled with an explanatory tooltip.
-function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternalCli: boolean }) {
+function WorkerTestRun({ agentId, agentName, isExternalCli }: { agentId: string; agentName: string; isExternalCli: boolean }) {
   const { mutate, data, error, isPending, reset } = useMutation<RunnerTestResponse, Error>({
     mutationFn: () => testAgentRunner(agentId),
   })
@@ -138,7 +138,7 @@ function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternal
         data-testid={`worker-test-run-${agentId}`}
         title="Native runners have no external connection to test."
         className="absolute bottom-3 right-4 flex items-center gap-1 text-xs text-[var(--color-muted)]/50 cursor-not-allowed"
-        aria-label={`Test run for ${agentId} (unavailable for native runtime)`}
+        aria-label={`Test run for ${agentName} (unavailable for native runtime)`}
       >
         <Lightning size={12} />
         Test run
@@ -157,7 +157,7 @@ function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternal
           mutate()
         }}
         className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-60"
-        aria-label={`Test run for ${agentId}`}
+        aria-label={`Test run for ${agentName}`}
       >
         {isPending ? <Spinner size={12} className="animate-spin" /> : <Lightning size={12} />}
         {isPending ? 'Testing…' : 'Test run'}

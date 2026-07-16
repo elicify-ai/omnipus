@@ -46,9 +46,16 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       data-status={item.status}
       className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-xs overflow-hidden"
     >
+      {/* Mirrors GenericToolCall.tsx's `disabled={!hasDetail}` gate: a
+          non-expandable row (bash calls, 3p-agent rows, or a native row with
+          zero steps) has nothing to expand — disable it natively so it
+          drops out of the tab order and Enter/Space can't no-op on it,
+          rather than leaving a focusable dead button whose aria-expanded is
+          already (correctly) omitted below. */}
       <button tabIndex={0}
         type="button"
         onClick={() => canExpand && setExpanded((e) => !e)}
+        disabled={!canExpand}
         aria-expanded={canExpand ? expanded : undefined}
         className={cn(
           'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',

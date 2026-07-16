@@ -118,7 +118,10 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
               <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-24">
                 Agent
               </th>
-              <th className="px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-28">
+              <th
+                className="px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-28"
+                aria-sort={sortDir === 'desc' ? 'descending' : 'ascending'}
+              >
                 <button tabIndex={0}
                   type="button"
                   onClick={toggleSort}
@@ -172,16 +175,15 @@ function TaskRow({
   const agentName = task.agent_name ?? (task.agent_id ? (agents.find((a) => a.id === task.agent_id)?.name ?? task.agent_id) : null)
 
   return (
+    // The row is still mouse-clickable for whole-row convenience, but a
+    // focusable/labelled <tr> (the previous shape: tabIndex + onKeyDown +
+    // aria-label directly on the row) is a phantom control to AT — a row's
+    // implicit role is "row", not "button", so screen readers announced it
+    // as focused but gave no indication anything was pressable. The REAL
+    // keyboard/AT entry point is the button below, wrapping the Title cell —
+    // one tab stop per row, now genuinely announced as actionable.
     <tr
-      tabIndex={0}
       onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onClick()
-        }
-      }}
-      aria-label={`${task.title}, status ${statusLabel(task.status)}`}
       className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-2)]/40 cursor-pointer transition-colors"
     >
       <td className="px-4 py-2.5">
@@ -190,7 +192,26 @@ function TaskRow({
         </span>
       </td>
       <td className="px-2 py-2.5">
-        <span className="text-sm text-[var(--color-secondary)] line-clamp-1">{task.title}</span>
+        <button tabIndex={0}
+          type="button"
+          onClick={(e) => {
+            // The <tr> above ALSO has onClick={onClick} (mouse convenience,
+            // whole-row hit area) — without this, a click landing on the
+            // button would bubble and fire onClick twice.
+            e.stopPropagation()
+            onClick()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onClick()
+            }
+          }}
+          aria-label={`${task.title}, status ${statusLabel(task.status)}`}
+          className="block w-full text-left text-sm text-[var(--color-secondary)] line-clamp-1"
+        >
+          {task.title}
+        </button>
       </td>
       <td className="px-2 py-2.5">
         <span className="text-xs font-medium" style={{ color: statusColor(task.status) }}>

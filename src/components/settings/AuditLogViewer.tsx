@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ListBullets, Funnel, ArrowsClockwise, CaretDown, CaretRight } from '@phosphor-icons/react'
 import {
@@ -104,6 +104,8 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
                     !!entry.command ||
                     !!entry.policy_rule
 
+  const detailId = useId()
+
   const formattedTs = useMemo(() => {
     try {
       return new Date(entry.timestamp).toLocaleString()
@@ -114,20 +116,24 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
 
   return (
     <>
-      <TableRow
-        role={hasDetail ? 'button' : undefined}
-        tabIndex={hasDetail ? 0 : undefined}
-        aria-expanded={hasDetail ? expanded : undefined}
-        onClick={hasDetail ? () => setExpanded((v) => !v) : undefined}
-        onKeyDown={hasDetail ? (e) => e.key === 'Enter' && setExpanded((v) => !v) : undefined}
-        className={hasDetail ? 'cursor-pointer' : undefined}
-      >
+      <TableRow>
         <TableCell className="whitespace-nowrap text-xs font-mono text-[var(--color-muted)]">
           <div className="flex items-center gap-1.5">
-            {hasDetail && (
-              expanded
-                ? <CaretDown size={10} className="shrink-0 text-[var(--color-muted)]" />
-                : <CaretRight size={10} className="shrink-0 text-[var(--color-muted)]" />
+            {hasDetail ? (
+              <button tabIndex={0}
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                aria-expanded={expanded}
+                aria-controls={detailId}
+                aria-label={`${expanded ? 'Hide' : 'Show'} details for this ${entry.event} entry`}
+                className="shrink-0 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
+              >
+                {expanded
+                  ? <CaretDown size={10} />
+                  : <CaretRight size={10} />}
+              </button>
+            ) : (
+              <span className="w-[10px] shrink-0" aria-hidden="true" />
             )}
             {formattedTs}
           </div>
@@ -149,7 +155,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
         </TableCell>
       </TableRow>
       {expanded && hasDetail && (
-        <TableRow>
+        <TableRow id={detailId}>
           <TableCell colSpan={6} className="bg-[var(--color-surface-1)]/60 p-3">
             <div className="space-y-3 pl-4 border-l-2 border-[var(--color-border)]">
               {entry.command && (

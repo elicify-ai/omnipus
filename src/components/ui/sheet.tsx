@@ -133,8 +133,14 @@ const SheetHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
 )
 SheetHeader.displayName = 'SheetHeader'
 
+// DOM order = visual + tab order at every breakpoint: Cancel/secondary first
+// in markup, primary action last. On phone (<sm) this stacks Cancel above
+// Confirm (thumb-friendly, and matches Tab order — CSS must never reorder
+// what Tab order implies). At sm+ the row layout below is unaffected: the
+// row is `justify-end`, so the visual RIGHT-most (primary, last in DOM)
+// button still lands right-most, same as before this fix.
 const SheetFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2', className)} {...props} />
+  <div className={cn('flex flex-col sm:flex-row sm:justify-end sm:space-x-2', className)} {...props} />
 )
 SheetFooter.displayName = 'SheetFooter'
 

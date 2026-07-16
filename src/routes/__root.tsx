@@ -17,6 +17,7 @@ function NotFoundPage() {
       </div>
       <Link
         to="/"
+        tabIndex={0}
         className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-sm hover:bg-[var(--color-accent-hover)] transition-colors"
       >
         <House size={16} />

@@ -192,6 +192,43 @@ describe('buildTeamGraphModel', () => {
   })
 })
 
+// ── buildTeamGraphModel — node tab order (position-sorted, not fetch order) ──
+
+describe('buildTeamGraphModel — node tab order', () => {
+  it('sorts nodes by layout position (y, then x) for stable top-down tab order, independent of member/fetch order', () => {
+    // A hierarchy mia -> jim -> planner, but `members` is deliberately given
+    // in the OPPOSITE order — the node set (`[...nodeIds]`, built from
+    // `state.members` first) came out in that fetch order pre-fix, the
+    // reverse of the visual top-down layout (mia is the root, at the top).
+    const reversedState: TeamEditState = state({
+      members: ['planner', 'jim', 'mia'],
+      edges: [
+        { from: 'mia', to: 'jim', modes: ['direct'], depth: WS_DEFAULT_DEPTH },
+        { from: 'jim', to: 'planner', modes: ['task'], depth: WS_DEFAULT_DEPTH },
+      ],
+    })
+    const { nodes } = buildTeamGraphModel(reversedState, AGENTS)
+    expect(nodes.map((n) => n.id)).toEqual(['mia', 'jim', 'planner'])
+  })
+
+  it('holds the (y, then x) sort invariant generally, not just for this fixture', () => {
+    const s: TeamEditState = state({
+      members: ['planner', 'explorer', 'jim', 'mia'],
+      edges: [
+        { from: 'mia', to: 'jim', modes: ['direct'], depth: WS_DEFAULT_DEPTH },
+        { from: 'jim', to: 'planner', modes: ['task'], depth: WS_DEFAULT_DEPTH },
+        { from: 'jim', to: 'explorer', modes: ['task'], depth: WS_DEFAULT_DEPTH },
+      ],
+    })
+    const { nodes } = buildTeamGraphModel(s, AGENTS)
+    for (let i = 1; i < nodes.length; i++) {
+      const prev = nodes[i - 1].position
+      const cur = nodes[i].position
+      expect(prev.y < cur.y || (prev.y === cur.y && prev.x <= cur.x)).toBe(true)
+    }
+  })
+})
+
 // ── validateConnection ──────────────────────────────────────────────────────
 
 describe('validateConnection', () => {

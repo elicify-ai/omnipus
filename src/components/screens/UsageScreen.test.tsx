@@ -197,6 +197,38 @@ describe('UsageScreen', () => {
     expect(screen.queryByText('No tokens')).not.toBeInTheDocument()
   })
 
+  it('clicking the active sort header toggles direction instead of no-op-ing', async () => {
+    const user = userEvent.setup()
+    renderUsage()
+    await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+    await user.click(screen.getByTestId('tab-session'))
+    await waitFor(
+      () => expect(screen.getByTestId('sessions-table')).toBeInTheDocument(),
+      { timeout: 5000 },
+    )
+
+    const rowTitles = () =>
+      Array.from(screen.getByTestId('sessions-table').querySelectorAll('tbody tr')).map(
+        (tr) => tr.textContent,
+      )
+
+    // Default: tokens descending — First chat (12000) before Second chat (3000).
+    const tokensHeader = screen.getByRole('columnheader', { name: /tokens/i })
+    expect(tokensHeader).toHaveAttribute('aria-sort', 'descending')
+    expect(rowTitles()[0]).toContain('First chat')
+
+    // Clicking the already-active "Tokens" header must toggle direction (ascending),
+    // not no-op — Second chat (3000) should now come first.
+    await user.click(screen.getByRole('button', { name: /tokens/i }))
+    await waitFor(() => expect(tokensHeader).toHaveAttribute('aria-sort', 'ascending'))
+    expect(rowTitles()[0]).toContain('Second chat')
+
+    // Clicking again flips back to descending.
+    await user.click(screen.getByRole('button', { name: /tokens/i }))
+    await waitFor(() => expect(tokensHeader).toHaveAttribute('aria-sort', 'descending'))
+    expect(rowTitles()[0]).toContain('First chat')
+  })
+
   it('shows empty state when total tokens is 0', async () => {
     vi.mocked(fetchTokenStats).mockResolvedValue({
       agents: [],

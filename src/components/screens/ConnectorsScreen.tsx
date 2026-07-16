@@ -645,6 +645,7 @@ function CreateChannelSheet({
             <div
               className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2"
               data-testid="create-channel-server-error"
+              role="alert"
             >
               <Warning size={14} className="text-red-400 mt-0.5 shrink-0" />
               <p className="text-xs text-red-400">{serverError}</p>
@@ -746,6 +747,7 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
           <div
             className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2"
             data-testid="delete-instance-error"
+            role="alert"
           >
             <Warning size={14} className="text-red-400 mt-0.5 shrink-0" />
             <p className="text-xs text-red-400">{deleteError}</p>

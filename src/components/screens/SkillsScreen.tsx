@@ -60,19 +60,19 @@ export function SkillsScreen() {
   const [expandedMcp, setExpandedMcp] = useState<string | null>(null)
   const [testingMcp, setTestingMcp] = useState<string | null>(null)
 
-  const { data: rawSkills = [], isLoading: skillsLoading, isError: skillsError } = useQuery({
+  const { data: rawSkills = [], isLoading: skillsLoading, isError: skillsError, refetch: refetchSkills } = useQuery({
     queryKey: ['skills'],
     queryFn: fetchSkills,
   })
 
   const skills = rawSkills
 
-  const { data: mcpServers = [], isLoading: mcpLoading, isError: mcpError } = useQuery({
+  const { data: mcpServers = [], isLoading: mcpLoading, isError: mcpError, refetch: refetchMcpServers } = useQuery({
     queryKey: ['mcp-servers'],
     queryFn: fetchMcpServers,
   })
 
-  const { data: tools = [], isLoading: toolsLoading, isError: toolsError } = useQuery({
+  const { data: tools = [], isLoading: toolsLoading, isError: toolsError, refetch: refetchTools } = useQuery({
     queryKey: ['tools'],
     queryFn: fetchTools,
   })
@@ -164,7 +164,7 @@ export function SkillsScreen() {
         {/* Installed Skills */}
         <TabsContent value="skills">
           {skillsError ? (
-            <ErrorState message="Could not load skills." />
+            <ErrorState message="Could not load skills." onRetry={() => refetchSkills()} />
           ) : skillsLoading ? (
             <SkeletonList />
           ) : skills.length === 0 ? (
@@ -252,7 +252,7 @@ export function SkillsScreen() {
             </Button>
           </div>
           {mcpError ? (
-            <ErrorState message="Could not load MCP servers." />
+            <ErrorState message="Could not load MCP servers." onRetry={() => refetchMcpServers()} />
           ) : mcpLoading ? (
             <SkeletonList />
           ) : mcpServers.length === 0 ? (
@@ -319,7 +319,7 @@ export function SkillsScreen() {
                           onClick={() => setExpandedMcp(isExpanded ? null : server.id)}
                           className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
                           aria-expanded={isExpanded}
-                          aria-controls={`mcp-tools-${server.id}`}
+                          aria-controls={isExpanded ? `mcp-tools-${server.id}` : undefined}
                           aria-label={`${isExpanded ? 'Hide' : 'Show'} tools for ${server.name}`}
                         >
                           {isExpanded ? <CaretUp size={13} /> : <CaretDown size={13} />}
@@ -362,7 +362,7 @@ export function SkillsScreen() {
         {/* Built-in tools — read-only by-category overview (US-E2 / #338) */}
         <TabsContent value="builtins">
           {toolsError ? (
-            <ErrorState message="Could not load tools." />
+            <ErrorState message="Could not load tools." onRetry={() => refetchTools()} />
           ) : toolsLoading ? (
             <SkeletonList />
           ) : tools.length === 0 ? (
@@ -547,6 +547,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                   onClick={() => toggleCategory(cat)}
                   className="flex items-center gap-3 w-full px-4 py-3 text-left hover:bg-[var(--color-surface-2)] transition-colors"
                   aria-expanded={isExpanded}
+                  aria-controls={isExpanded ? `tool-category-tools-${cat}` : undefined}
                   data-testid={`tool-category-toggle-${cat}`}
                 >
                   <div className="flex-1 min-w-0">
@@ -570,6 +571,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                 {/* Expanded tool list */}
                 {isExpanded && (
                   <div
+                    id={`tool-category-tools-${cat}`}
                     className="px-4 pb-3 border-t border-[var(--color-border)] pt-2"
                     data-testid={`tool-category-tools-${cat}`}
                   >
@@ -579,6 +581,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                           key={tool.name}
                           className="font-mono text-[10px] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
                           title={tool.description ?? tool.name}
+                          aria-label={tool.description ? `${tool.name} — ${tool.description}` : tool.name}
                         >
                           {tool.name}
                         </span>

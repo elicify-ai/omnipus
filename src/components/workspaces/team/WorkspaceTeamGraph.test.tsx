@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { WorkspaceTeamGraph } from './WorkspaceTeamGraph'
 import {
   buildTeamGraphModel,
@@ -189,6 +190,49 @@ describe('WorkspaceTeamGraph — edges', () => {
 // it runs through the exact same `handleConnect` (validateConnection ->
 // onConnect / onRejectConnection) a canvas drag uses — no separate mutation
 // path for the keyboard route.
+// ── AgentNode keyboard guard (bubbling hijack regression) ────────────────────
+//
+// AgentNode's onClick already skips clicks landing on a Handle or an
+// action button (data-node-action="edit"/"remove"/"delegate") — those have
+// their own behaviour. onKeyDown lacked the same guard: Enter/Space on a
+// focused action button (e.g. Remove) bubbled up to the node's own
+// onKeyDown, which preventDefault()'d the event and called onOpenAgent
+// instead of running the action the user actually focused — making keyboard
+// Remove impossible.
+describe('WorkspaceTeamGraph — AgentNode keyboard guard (bubbling hijack regression)', () => {
+  it('Enter on the node Remove button removes the member, and does NOT open the agent', async () => {
+    const { props } = renderGraph()
+    // jim is not the default agent, so its Remove button is rendered.
+    // getByLabelText, not getByRole: React Flow's node wrapper renders with
+    // `visibility: hidden` in jsdom (nodes are never "measured" without a
+    // real layout engine — see the module's own ResizeObserver/geometry
+    // stubs above), which getByRole's default accessible-tree filtering
+    // excludes; getByLabelText does not filter on visibility.
+    //
+    // The Remove button is a native <button> with no onKeyDown of its own —
+    // it relies on the browser's native Enter-activation (firing a click),
+    // which user-event's keyboard() API faithfully simulates (including
+    // respecting preventDefault from an ancestor's bubbled handler) —
+    // fireEvent.keyDown alone does not.
+    const removeButton = screen.getByLabelText('Remove Jim from team')
+    const user = userEvent.setup()
+    removeButton.focus()
+    await user.keyboard('{Enter}')
+
+    expect(props.onRemoveMember).toHaveBeenCalledWith('jim')
+    expect(props.onOpenAgent).not.toHaveBeenCalled()
+  })
+
+  it('Enter on the node body itself still opens the agent (guard only blocks handle/action-button bubbles)', () => {
+    const { props } = renderGraph()
+    const node = screen.getByTestId('team-node-jim')
+    fireEvent.keyDown(node, { key: 'Enter' })
+
+    expect(props.onOpenAgent).toHaveBeenCalledWith('jim')
+    expect(props.onRemoveMember).not.toHaveBeenCalled()
+  })
+})
+
 describe('WorkspaceTeamGraph — delegate picker wiring', () => {
   it('a valid keyboard delegation reaches onConnect via the same handleConnect path as a drag', () => {
     const { props } = renderGraph()

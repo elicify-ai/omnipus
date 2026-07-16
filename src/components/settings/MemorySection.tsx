@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Brain, ArrowUp, ArrowDown, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -249,6 +249,90 @@ export function MemorySection(): React.ReactElement {
     setField('recap_fallback_models', next)
   }
 
+  // ── Focus management for the fallback list (up/down/remove) ────────────────
+  // Removing a row unmounts its buttons; moving a row to a list boundary
+  // disables the button that was just clicked (idx===0 disables "up",
+  // idx===length-1 disables "down"). Either case drops focus to <body> unless
+  // we explicitly move it to a still-focusable control after the state
+  // update commits. `pendingFallbackFocusRef` records what the user just did
+  // (before the mutation), and the effect below — keyed on the resulting
+  // list — resolves it once refs reflect the new render.
+  type FallbackControlType = 'up' | 'down' | 'remove'
+  const fallbackControlRefs = useRef<Map<string, Partial<Record<FallbackControlType, HTMLButtonElement | null>>>>(new Map())
+  const fallbackAddContainerRef = useRef<HTMLDivElement | null>(null)
+  const pendingFallbackFocusRef = useRef<{ type: FallbackControlType; index: number; direction?: -1 | 1 } | null>(null)
+
+  function setFallbackControlRef(model: string, type: FallbackControlType, el: HTMLButtonElement | null) {
+    const entry = fallbackControlRefs.current.get(model) ?? {}
+    entry[type] = el
+    fallbackControlRefs.current.set(model, entry)
+  }
+
+  function focusFallbackAddTrigger() {
+    const trigger = fallbackAddContainerRef.current?.querySelector<HTMLElement>(
+      '[data-testid="recap-fallback-add-trigger"]',
+    )
+    trigger?.focus()
+  }
+
+  function focusFallbackRowControl(model: string, preferred: FallbackControlType[]): boolean {
+    const entry = fallbackControlRefs.current.get(model)
+    if (!entry) return false
+    for (const type of preferred) {
+      const btn = entry[type]
+      if (btn && !btn.disabled) {
+        btn.focus()
+        return true
+      }
+    }
+    return false
+  }
+
+  useEffect(() => {
+    const pending = pendingFallbackFocusRef.current
+    if (!pending) return
+    pendingFallbackFocusRef.current = null
+    const { type, index, direction } = pending
+    const models = form.recap_fallback_models
+
+    if (type === 'remove') {
+      if (models.length === 0) {
+        focusFallbackAddTrigger()
+        return
+      }
+      const targetIdx = Math.min(index, models.length - 1)
+      const targetModel = models[targetIdx].model
+      if (!focusFallbackRowControl(targetModel, ['remove', 'up', 'down'])) {
+        focusFallbackAddTrigger()
+      }
+      return
+    }
+
+    // Reorder (up/down): the row count is unchanged — focus the control at
+    // its NEW position, preferring the same control type the user just used.
+    const newIdx = index + (direction ?? 0)
+    if (newIdx < 0 || newIdx >= models.length) return
+    const targetModel = models[newIdx].model
+    const preferredOrder: FallbackControlType[] = type === 'up' ? ['up', 'down', 'remove'] : ['down', 'up', 'remove']
+    focusFallbackRowControl(targetModel, preferredOrder)
+  }, [form.recap_fallback_models])
+
+  function handleMoveFallback(modelSlug: string, direction: -1 | 1) {
+    const idx = form.recap_fallback_models.findIndex((f) => f.model === modelSlug)
+    if (idx >= 0) {
+      pendingFallbackFocusRef.current = { type: direction === -1 ? 'up' : 'down', index: idx, direction }
+    }
+    moveFallback(modelSlug, direction)
+  }
+
+  function handleRemoveFallback(modelSlug: string) {
+    const idx = form.recap_fallback_models.findIndex((f) => f.model === modelSlug)
+    if (idx >= 0) {
+      pendingFallbackFocusRef.current = { type: 'remove', index: idx }
+    }
+    removeFallback(modelSlug)
+  }
+
   if (isLoading) return <Skeleton />
 
   if (isError) {
@@ -405,30 +489,33 @@ export function MemorySection(): React.ReactElement {
                         </span>
                       )}
                       <button tabIndex={0}
+                        ref={(el) => setFallbackControlRef(entry.model, 'up', el)}
                         type="button"
                         data-testid={`recap-fallback-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
-                        onClick={() => moveFallback(entry.model, -1)}
+                        onClick={() => handleMoveFallback(entry.model, -1)}
                         className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
                       >
                         <ArrowUp size={12} />
                       </button>
                       <button tabIndex={0}
+                        ref={(el) => setFallbackControlRef(entry.model, 'down', el)}
                         type="button"
                         data-testid={`recap-fallback-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === form.recap_fallback_models.length - 1}
-                        onClick={() => moveFallback(entry.model, 1)}
+                        onClick={() => handleMoveFallback(entry.model, 1)}
                         className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
                       >
                         <ArrowDown size={12} />
                       </button>
                       <button tabIndex={0}
+                        ref={(el) => setFallbackControlRef(entry.model, 'remove', el)}
                         type="button"
                         data-testid={`recap-fallback-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
-                        onClick={() => removeFallback(entry.model)}
+                        onClick={() => handleRemoveFallback(entry.model)}
                         className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
                       >
                         <X size={12} />
@@ -439,7 +526,7 @@ export function MemorySection(): React.ReactElement {
               </div>
             )}
 
-            <div data-testid="recap-fallback-add">
+            <div data-testid="recap-fallback-add" ref={fallbackAddContainerRef}>
               <ModelSelector
                 models={availableModels}
                 value=""

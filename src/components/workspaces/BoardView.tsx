@@ -215,7 +215,14 @@ export function BoardView({
         </div>
         <DragOverlay dropAnimation={null}>
           {activeTask ? (
-            <div className="opacity-90 rotate-2 cursor-grabbing">
+            // A purely VISUAL clone that follows the cursor while dragging —
+            // the "real" draggable card stays in place underneath (dimmed via
+            // opacity-40 in DraggableTaskCard). TaskCard always renders its
+            // own role="button" tabIndex={0} root, so without aria-hidden this
+            // clone was a second, phantom focusable "button" for the same
+            // task, reachable by Tab and announced to AT with no real
+            // purpose (its onClick is a no-op below).
+            <div aria-hidden="true" className="opacity-90 rotate-2 cursor-grabbing">
               <TaskCard
                 task={activeTask}
                 milestones={milestones}
@@ -270,6 +277,7 @@ function BoardColumn({
   return (
     <div
       ref={setNodeRef}
+      role="group"
       className={cn(
         'flex flex-col min-w-[180px] flex-1 bg-[var(--color-surface-1)] rounded-xl border border-[var(--color-border)] max-h-full transition-colors',
         isOver && canAccept && 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]/40',
@@ -291,7 +299,7 @@ function BoardColumn({
           type="button"
           onClick={onNewTask}
           aria-label={`New ${config.label} task`}
-          className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+          className="inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
         >
           <Plus size={12} />
         </button>

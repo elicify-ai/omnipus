@@ -513,9 +513,20 @@ export function CreateTaskSlideOver({
                       key={t.id}
                       type="button"
                       onClick={() => toggleDep(t.id)}
+                      aria-pressed={checked}
                       className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-[var(--color-surface-2)] transition-colors"
                     >
-                      <Checkbox checked={checked} className="pointer-events-none" />
+                      {/* The row button carries the checked state via
+                          aria-pressed — this Checkbox is a decorative visual
+                          echo, not a second control (button-in-button was a
+                          nested-interactive violation with a duplicate,
+                          no-op tab stop). */}
+                      <Checkbox
+                        checked={checked}
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        className="pointer-events-none"
+                      />
                       <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
                     </button>
                   )

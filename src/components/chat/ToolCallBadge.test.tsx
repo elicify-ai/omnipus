@@ -169,10 +169,29 @@ describe('ToolCallBadge — cannot click when running', () => {
   it('clicking the header while running does not expand (running is not expandable)', () => {
     // Traces to: wave5a-wire-ui-spec.md — AC1: spinner shown; detail not accessible while running
     render(<ToolCallBadge toolCall={makeToolCall({ status: 'running' })} />)
-    const btn = document.querySelector('button[aria-expanded]') as HTMLButtonElement
+    const btn = document.querySelector('button') as HTMLButtonElement
     fireEvent.click(btn)
     // Still no expanded content
     expect(screen.queryByText(/Parameters/i)).toBeNull()
+  })
+
+  // Inert-focusable fix: while running there's nothing to expand, so the
+  // header button must be genuinely disabled (dropped from the tab order,
+  // Enter/Space can't no-op on it) rather than a focusable button that just
+  // silently ignores activation — mirrors GenericToolCall.tsx's
+  // `disabled={!hasDetail}` gate.
+  it('disables the header button and omits aria-expanded while running', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ status: 'running' })} />)
+    const btn = document.querySelector('button') as HTMLButtonElement
+    expect(btn).toBeDisabled()
+    expect(btn).not.toHaveAttribute('aria-expanded')
+  })
+
+  it('re-enables the header button and restores aria-expanded once the call finishes', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ status: 'success', duration_ms: 100 })} />)
+    const btn = document.querySelector('button') as HTMLButtonElement
+    expect(btn).not.toBeDisabled()
+    expect(btn).toHaveAttribute('aria-expanded', 'false')
   })
 })
 

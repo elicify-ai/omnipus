@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { forwardRef, useEffect, useRef, useState } from 'react'
 import { Stack, Trash, X } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -54,6 +54,15 @@ export function EdgeModeEditor({
     setDepthDraft(String(model.depth ?? defaultDepth))
   }, [model.depth, defaultDepth])
 
+  // Opening the editor (the chip <-> editor swap in WorkspaceTeamGraph's
+  // DelegationEdge) moves focus INTO it — onto the first mode chip, the
+  // primary control a user opened this editor to reach. Closing restores
+  // focus to the chip (see WorkspaceTeamGraph.tsx's DelegationEdge).
+  const firstModeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    firstModeRef.current?.focus()
+  }, [])
+
   return (
     <div
       data-testid={`team-edge-editor-${model.from}-${model.to}`}
@@ -66,22 +75,22 @@ export function EdgeModeEditor({
         <button tabIndex={0}
           type="button"
           aria-label="Close edge editor"
-          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+          className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
           onClick={onClose}
         >
           <X size={12} weight="bold" />
         </button>
       </div>
       <div className="flex flex-wrap gap-1">
-        {ALL_MODES.map((m) => {
+        {ALL_MODES.map((m, i) => {
           const on = model.modes.includes(m)
           const isLastOn = on && model.modes.length === 1
           return (
             <button tabIndex={0}
               key={m}
+              ref={i === 0 ? firstModeRef : undefined}
               type="button"
               data-testid={`team-edge-mode-${m}`}
-              disabled={isLastOn}
               aria-pressed={on}
               aria-disabled={isLastOn}
               aria-label={MODE_LABEL[m]}
@@ -92,7 +101,15 @@ export function EdgeModeEditor({
                     ? `Disable ${MODE_LABEL[m]}`
                     : `Enable ${MODE_LABEL[m]}`
               }
-              onClick={() => onToggleMode(model.from, model.to, m)}
+              onClick={() => {
+                // aria-disabled (not the native `disabled` attribute) — a
+                // truly `disabled` button drops out of the tab order
+                // entirely, making its explanatory title/tooltip ("at least
+                // one mode is required") unreachable for keyboard users. It
+                // stays focusable; the click itself is a no-op instead.
+                if (isLastOn) return
+                onToggleMode(model.from, model.to, m)
+              }}
               className={cn(
                 'rounded border px-1.5 py-0.5 font-mono text-[10px] lowercase transition-opacity',
                 on
@@ -115,6 +132,7 @@ export function EdgeModeEditor({
           inputMode="numeric"
           data-testid="team-edge-depth"
           value={depthDraft}
+          aria-label="Delegation depth — maximum hops for this edge"
           title="Max delegation hops for this edge. Edges you haven't changed keep tracking the workspace/global default automatically."
           onChange={(e) => {
             const v = e.target.value
@@ -153,14 +171,23 @@ export interface EdgeLabelChipProps {
   onClick: () => void
 }
 
-/** The collapsed edge label: mode chips (+ depth) that opens the editor. */
-export function EdgeLabelChip({ model, defaultDepth, onClick }: EdgeLabelChipProps) {
+/**
+ * The collapsed edge label: mode chips (+ depth) that opens the editor.
+ * Forwards its ref so WorkspaceTeamGraph's DelegationEdge can refocus this
+ * exact chip when the inline editor it opens is closed (focus would
+ * otherwise drop to <body> once the editor's own DOM node unmounts).
+ */
+export const EdgeLabelChip = forwardRef<HTMLButtonElement, EdgeLabelChipProps>(function EdgeLabelChip(
+  { model, defaultDepth, onClick },
+  ref,
+) {
   return (
     <button tabIndex={0}
+      ref={ref}
       type="button"
       aria-label={`Edit delegation ${model.from} to ${model.to}`}
       onClick={onClick}
-      className="flex cursor-pointer items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-1.5 py-0.5 shadow-sm hover:border-[var(--color-accent)]/50"
+      className="flex cursor-pointer items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-1.5 py-0.5 shadow-sm hover:border-[var(--color-accent)]/50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
     >
       {model.modes.length === 0 ? (
         <span className="text-[9px] italic text-[var(--color-muted)]">all modes</span>
@@ -186,4 +213,4 @@ export function EdgeLabelChip({ model, defaultDepth, onClick }: EdgeLabelChipPro
       </span>
     </button>
   )
-}
+})

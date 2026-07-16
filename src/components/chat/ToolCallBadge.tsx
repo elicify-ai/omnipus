@@ -75,16 +75,24 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
         config.border
       )}
     >
-      {/* Header row */}
+      {/* Header row. Mirrors GenericToolCall.tsx's `disabled={!hasDetail}`
+          gate: while running, there is nothing to expand — a focusable
+          button whose Enter/Space no-ops while still announcing
+          aria-expanded is an inert-focusable trap for keyboard/AT users.
+          Disabling natively removes it from the tab order and drops
+          aria-expanded entirely (rather than leaving it stuck at `false`,
+          which would falsely announce "collapsible, currently collapsed"
+          for a row that can never actually expand yet). */}
       <button tabIndex={0}
         type="button"
         onClick={() => toolCall.status !== 'running' && setExpanded((e) => !e)}
+        disabled={toolCall.status === 'running'}
         className={cn(
           'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',
           toolCall.status !== 'running' && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
           toolCall.status === 'running' && 'cursor-default'
         )}
-        aria-expanded={expanded}
+        aria-expanded={toolCall.status !== 'running' ? expanded : undefined}
       >
         <Icon size={13} className="text-[var(--color-muted)] shrink-0" />
         <span className="text-[var(--color-secondary)] font-medium">
@@ -119,7 +127,16 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
           {toolCall.result !== undefined && (
             <div>
               <div className="text-[var(--color-muted)] mb-1">Result</div>
-              <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+              {/* Keyboard-scrollable: WebKit doesn't put a plain scrollable
+                  <pre> in the Tab order by default, so a keyboard-only user
+                  can't reach/scroll it at all. tabIndex + role="region" +
+                  label make it a reachable, scrollable landmark. */}
+              <pre
+                tabIndex={0}
+                role="region"
+                aria-label="Tool output"
+                className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+              >
                 {typeof toolCall.result === 'string'
                   ? toolCall.result
                   : JSON.stringify(toolCall.result, null, 2)}

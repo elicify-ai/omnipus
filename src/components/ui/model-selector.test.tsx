@@ -83,6 +83,33 @@ describe('ModelSelector — text-input mode', () => {
 })
 
 // =====================================================================
+// WebKit tabbability — trigger must be reachable via Tab even when the
+// `tabIndex` prop is omitted (regression: every historical call site
+// omitted it, and `tabIndex={undefined}` on a native <button> omits the
+// attribute entirely, making it unreachable via Tab on Safari/WebKit —
+// this soft-locked the required Model field on agent-creation Step 1).
+// =====================================================================
+
+describe('ModelSelector — WebKit tabbability', () => {
+  // Query by data-testid rather than role="combobox": cmdk's CommandInput
+  // (rendered inside the always-mounted PopoverContent stub above) ALSO
+  // carries role="combobox", so getByRole would match two elements.
+  it('trigger carries tabindex="0" by default when tabIndex prop is omitted', () => {
+    render(
+      <ModelSelector models={FLAT_MODELS} value="" onChange={vi.fn()} triggerTestId="model-trigger" />,
+    )
+    expect(screen.getByTestId('model-trigger')).toHaveAttribute('tabindex', '0')
+  })
+
+  it('caller-supplied tabIndex still overrides the default', () => {
+    render(
+      <ModelSelector models={FLAT_MODELS} value="" onChange={vi.fn()} tabIndex={-1} triggerTestId="model-trigger" />,
+    )
+    expect(screen.getByTestId('model-trigger')).toHaveAttribute('tabindex', '-1')
+  })
+})
+
+// =====================================================================
 // Search by model name (flat list)
 // =====================================================================
 

@@ -509,11 +509,17 @@ export function CreateAgentWizard({
           )}
         </div>
 
-        {/* Footer. flex-col-reverse on phone (primary CTA on top), sm+ side-by-side. */}
-        <SheetFooter className="px-4 sm:px-8 py-4 border-t border-[var(--color-border)] flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
+        {/* Footer. SheetFooter's own base classes already give phone-first
+            `flex-col` (DOM order = visual order: Cancel → Back → Next/Create
+            top-to-bottom, matching Tab order) and sm+ side-by-side — do NOT
+            re-add `flex-col-reverse` here, it would fight the primitive and
+            visually reorder the buttons away from Tab order again (FW-4 fix,
+            2026-07-16: this exact override had reintroduced the reversal
+            the shared primitive was fixed to remove). */}
+        <SheetFooter className="px-4 sm:px-8 py-4 border-t border-[var(--color-border)]">
           {missingLabels.length > 0 && (
             <p
-              role="alert"
+              role="status"
               data-testid="wizard-advance-hint"
               className="text-xs text-[var(--color-muted)] self-center sm:mr-auto sm:order-first"
             >

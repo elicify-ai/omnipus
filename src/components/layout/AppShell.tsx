@@ -13,8 +13,10 @@ import { queryClient } from '@/lib/queryClient'
 import { fetchTasks, fetchAgents, fetchAppState, fetchNotifications } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 import { useNotificationsStore } from '@/store/notifications'
+import { useUiStore } from '@/store/ui'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 
 // US-4: Application shell — sidebar + main content area
 export function AppShell() {
@@ -32,6 +34,13 @@ export function AppShell() {
   // off" falsy value as a genuinely successful fetch that reports it off.
   // See the app-state-fetch-error-banner below for the fetch-failure case.
   const devModeBypass = appState?.dev_mode_bypass === true
+
+  // Live browser panel open state — used below to inert the chat region when
+  // it's collapsed to zero width by the panel's docked takeover on phones.
+  const browserPanel = useUiStore((s) => s.browserPanel)
+  // Tailwind's `sm:` breakpoint (640px) can gate CSS, but not a non-CSS HTML
+  // attribute like `inert` — that needs an actual JS media-query signal.
+  const isPhoneViewport = useMediaQuery('(max-width: 639px)')
 
   // #264: seed the notification center from REST on mount; the `notification`
   // WS frame keeps it live thereafter (see chatStore.handleFrame).
@@ -151,13 +160,26 @@ export function AppShell() {
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 
-      {/* Main content area — shrinks when sidebar is pinned; each screen owns its own top bar */}
-      <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
+      {/* Main content area — shrinks when sidebar is pinned; each screen owns its own top bar.
+          `inert` when the docked BrowserLivePanel takeover has collapsed this
+          region to zero width on a phone viewport (<640px): the flex layout
+          still keeps its controls in the DOM (and thus in the Tab order) even
+          though they're visually gone, so without this the invisible chat
+          controls would still catch focus/Tab stops. `sm:` can't gate a
+          non-CSS attribute, hence the matchMedia-backed useMediaQuery above. */}
+      <div
+        data-testid="app-main-content"
+        className="flex flex-1 flex-col min-w-0 overflow-hidden"
+        inert={Boolean(browserPanel) && isPhoneViewport}
+      >
         {/* OmnipusRuntimeProvider: AssistantUI context + WebSocket connection for entire app */}
         <OmnipusRuntimeProvider>
           {/* Global connection error banner — visible on every screen */}
           {connectionError && (
-            <div className="flex items-center justify-between gap-2 px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-xs text-[var(--color-error)] shrink-0">
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-2 px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-xs text-[var(--color-error)] shrink-0"
+            >
               <span>{connectionError}</span>
               <button tabIndex={0}
                 type="button"
@@ -173,6 +195,7 @@ export function AppShell() {
           {devModeBypass && (
             <div
               data-testid="dev-mode-banner"
+              role="alert"
               className="flex items-center gap-2 px-4 py-2 bg-[var(--color-error)] text-white text-xs font-medium shrink-0"
             >
               <span>Development mode active — authentication bypass enabled</span>

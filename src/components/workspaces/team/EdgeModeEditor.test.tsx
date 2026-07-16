@@ -56,10 +56,19 @@ describe('EdgeModeEditor — modes', () => {
     expect(onToggleMode).toHaveBeenCalledWith('mia', 'jim', 'task')
   })
 
-  it('disables the last remaining mode (no empty-modes / "all allowed" trap)', () => {
-    renderEditor(edge({ modes: ['direct'] }))
+  it('marks the last remaining mode aria-disabled and makes its click a no-op (no empty-modes / "all allowed" trap)', () => {
+    // Regression: this chip used to be NATIVELY `disabled`, which drops an
+    // element out of the tab order entirely — its explanatory tooltip ("at
+    // least one mode is required") became keyboard-unreachable. It must stay
+    // focusable (aria-disabled, not disabled) while remaining functionally
+    // inert.
+    const { onToggleMode } = renderEditor(edge({ modes: ['direct'] }))
     const last = screen.getByTestId('team-edge-mode-direct')
-    expect(last).toBeDisabled()
+    expect(last).not.toBeDisabled()
+    expect(last).toHaveAttribute('aria-disabled', 'true')
+
+    fireEvent.click(last)
+    expect(onToggleMode).not.toHaveBeenCalled()
   })
 
   it('renders the human-readable MODE_LABEL, not the raw enum value', () => {
@@ -73,7 +82,19 @@ describe('EdgeModeEditor — modes', () => {
   })
 })
 
+describe('EdgeModeEditor — focus management', () => {
+  it('autofocuses the first mode chip on mount (opening the editor moves focus in)', () => {
+    renderEditor(edge({ modes: ['direct'] }))
+    expect(document.activeElement).toBe(screen.getByTestId('team-edge-mode-direct'))
+  })
+})
+
 describe('EdgeModeEditor — depth', () => {
+  it('has an aria-label (not title-only — a title attribute alone is an unreliable accessible name)', () => {
+    renderEditor(edge())
+    expect(screen.getByTestId('team-edge-depth')).toHaveAccessibleName(/depth/i)
+  })
+
   it('shows the current depth and reports a new positive cap', () => {
     const { onSetDepth } = renderEditor(edge({ depth: 2 }))
     const input = screen.getByTestId('team-edge-depth') as HTMLInputElement

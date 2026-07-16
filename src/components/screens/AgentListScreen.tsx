@@ -61,6 +61,7 @@ function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
         </div>
         <Link
           to="/workspaces"
+          tabIndex={0}
           className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
         >
           <GitFork size={14} weight="bold" /> Go to Workspaces
@@ -79,6 +80,7 @@ function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
           key={ws.id}
           to="/workspaces/$workspaceId/team"
           params={{ workspaceId: ws.id }}
+          tabIndex={0}
           data-testid={`workspace-team-row-${ws.id}`}
           className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3 transition-colors hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)]"
         >
@@ -212,7 +214,8 @@ function AgentsLibraryView({
                     setWorkspaceFilter('all')
                     setFilterMenuOpen(false)
                   }}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-2)] focus:outline-none"
+                  aria-current={workspaceFilter === 'all' ? 'true' : undefined}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
                   style={{
                     color:
                       workspaceFilter === 'all'
@@ -232,7 +235,8 @@ function AgentsLibraryView({
                       setWorkspaceFilter(ws.id)
                       setFilterMenuOpen(false)
                     }}
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-2)] focus:outline-none"
+                    aria-current={workspaceFilter === ws.id ? 'true' : undefined}
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
                     style={{
                       color:
                         workspaceFilter === ws.id

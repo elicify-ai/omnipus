@@ -1170,6 +1170,7 @@ function ComposerAttachmentChip() {
       className={cn('group', imageUrl && 'w-16 h-16')}
       removeButton={
         <AttachmentPrimitive.Remove
+          tabIndex={0}
           className="absolute -top-1.5 -right-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
           aria-label={`Remove ${attachment.name}`}
         >
@@ -1617,7 +1618,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           </div>
 
           {isStreaming || cancelState.stopLabel === 'stopping' ? (
-            <button tabIndex={0}
+            // tabIndex={6}: this button replaces Send in the exact same ring
+            // slot mid-stream (see the composer tab-ring map in
+            // ChatControls.tsx) — it must keep Send's slot, not default to 0,
+            // or the ring silently drops a stop the whole time a turn is
+            // streaming.
+            <button tabIndex={6}
               type="button"
               data-testid="stop-btn"
               onClick={() => {

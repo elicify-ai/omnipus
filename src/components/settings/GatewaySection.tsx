@@ -268,9 +268,10 @@ export function GatewaySection() {
         {/* Port */}
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">Port</p>
+            <label htmlFor="gateway-port" className="text-sm text-[var(--color-secondary)]">Port</label>
           </div>
           <Input
+            id="gateway-port"
             type="number"
             min="1024"
             max="65535"

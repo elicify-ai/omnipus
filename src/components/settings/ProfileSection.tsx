@@ -301,7 +301,7 @@ export function ProfileSection() {
             </div>
 
             {passwordError && (
-              <p className="text-xs text-[var(--color-error)]">{passwordError}</p>
+              <p className="text-xs text-[var(--color-error)]" role="alert">{passwordError}</p>
             )}
 
             <Button
@@ -320,7 +320,7 @@ export function ProfileSection() {
       {/* Workspace Context (USER.md) */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+          <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider" id="workspace-context-heading">
             Workspace Context
           </h3>
           {!userContextError && (
@@ -328,7 +328,7 @@ export function ProfileSection() {
           )}
         </div>
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
-          <p className="text-xs text-[var(--color-muted)]">
+          <p className="text-xs text-[var(--color-muted)]" id="workspace-context-desc">
             Shared context available to all agents — your role, preferences, and workspace information.
           </p>
           {userContextError ? (
@@ -346,6 +346,9 @@ export function ProfileSection() {
             </div>
           ) : (
             <Textarea
+              id="workspace-context-content"
+              aria-labelledby="workspace-context-heading"
+              aria-describedby="workspace-context-desc"
               value={userContent}
               onChange={(e) => setUserContent(e.target.value)}
               placeholder={"# About Me\n\nDescribe your role, expertise, and preferences..."}

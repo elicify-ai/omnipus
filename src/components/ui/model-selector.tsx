@@ -41,7 +41,16 @@ interface ModelSelectorProps {
    * all current call sites.
    */
   triggerTestId?: string
-  /** Explicit tab-order position forwarded to the trigger element. */
+  /**
+   * Explicit tab-order position forwarded to the trigger element. Defaults
+   * to 0 (not undefined) — the trigger renders a native `<button>`, and
+   * `tabIndex={undefined}` omits the attribute entirely, making the button
+   * unreachable via Tab on WebKit (Safari's default Tab policy visits only
+   * form fields and elements with an explicit tabindex attribute). Every
+   * call site historically relied on this being optional and omitted it,
+   * which soft-locked keyboard users on Safari at any required Model field
+   * (e.g. agent-creation wizard Step 1). Callers may still override.
+   */
   tabIndex?: number
   /** Prefix for each item's data-testid. The full id is `${itemTestIdPrefix}${model}`. */
   itemTestIdPrefix?: string
@@ -117,7 +126,7 @@ interface ModelSelectorProps {
   onOpenChange?: (open: boolean) => void
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen

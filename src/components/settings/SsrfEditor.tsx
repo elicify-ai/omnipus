@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef } from 'react'
 import { CaretDown, CaretUp, Trash, Plus } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,6 +43,32 @@ export function SsrfEditor({
   onAddSsrfEntry,
   ssrfAddError,
 }: SsrfEditorProps) {
+  const addErrorId = useId()
+  const deleteButtonRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const newEntryInputRef = useRef<HTMLInputElement | null>(null)
+  // Index the delete button was clicked at — consumed by the effect below to
+  // land focus on the control that now occupies that slot (or the "add"
+  // input when the list becomes empty), instead of letting focus fall
+  // through to <body> when the deleted row's button unmounts.
+  const pendingDeleteFocusRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (pendingDeleteFocusRef.current === null) return
+    const idx = pendingDeleteFocusRef.current
+    pendingDeleteFocusRef.current = null
+    if (list.length === 0) {
+      newEntryInputRef.current?.focus()
+    } else {
+      const nextIdx = Math.min(idx, list.length - 1)
+      deleteButtonRefs.current[nextIdx]?.focus()
+    }
+  }, [list])
+
+  function handleDeleteAdvanced(idx: number) {
+    pendingDeleteFocusRef.current = idx
+    onDeleteAdvanced(idx)
+  }
+
   return (
     <div className="space-y-2 border-t border-[var(--color-border)] pt-3">
       <p className="text-xs font-semibold text-[var(--color-secondary)]">
@@ -82,35 +109,43 @@ export function SsrfEditor({
           {list.length === 0 && (
             <p className="text-xs text-[var(--color-muted)] italic">Empty — all internal traffic blocked.</p>
           )}
-          {list.map((entry, i) => (
-            <div key={i} className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1">
-                <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
-                  {entry}
-                </span>
-                <button tabIndex={0}
-                  type="button"
-                  aria-label={`Delete SSRF entry ${entry}`}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
-                  onClick={() => onDeleteAdvanced(i)}
-                >
-                  <Trash size={12} />
-                </button>
+          {list.map((entry, i) => {
+            const entryErrorId = advancedErrors[i] ? `ssrf-entry-error-${i}` : undefined
+            return (
+              <div key={i} className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1">
+                  <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
+                    {entry}
+                  </span>
+                  <button tabIndex={0}
+                    ref={(el) => { deleteButtonRefs.current[i] = el }}
+                    type="button"
+                    aria-label={`Delete SSRF entry ${entry}`}
+                    aria-describedby={entryErrorId}
+                    className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
+                    onClick={() => handleDeleteAdvanced(i)}
+                  >
+                    <Trash size={12} />
+                  </button>
+                </div>
+                {entryErrorId && (
+                  <p id={entryErrorId} className="text-[10px] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
+                )}
               </div>
-              {advancedErrors[i] && (
-                <p className="text-[10px] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
-              )}
-            </div>
-          ))}
+            )
+          })}
 
           <div className="space-y-1 pt-1">
             <div className="flex items-center gap-2">
               <Input
+                ref={newEntryInputRef}
                 value={newSsrfEntry}
                 onChange={(e) => onNewSsrfEntryChange(e.target.value)}
                 placeholder="10.0.0.0/8 or internal.corp"
                 className="h-7 text-xs font-mono flex-1"
                 aria-label="New SSRF allow entry"
+                aria-invalid={ssrfAddError ? true : undefined}
+                aria-describedby={ssrfAddError ? addErrorId : undefined}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { e.preventDefault(); onAddSsrfEntry() }
                 }}
@@ -128,7 +163,7 @@ export function SsrfEditor({
               </Button>
             </div>
             {ssrfAddError && (
-              <p className="text-[10px] text-[var(--color-error)]">{ssrfAddError}</p>
+              <p id={addErrorId} className="text-[10px] text-[var(--color-error)]">{ssrfAddError}</p>
             )}
           </div>
         </div>

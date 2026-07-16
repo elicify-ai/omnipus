@@ -234,6 +234,11 @@ export function BrowserLiveView({
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
+  // WCAG 2.1.2 fix — Escape-releases-the-wheel focus target: handleKeyDown's
+  // Escape branch moves focus here once driving ends, so the user lands
+  // somewhere useful instead of on a container that just stopped capturing
+  // keys (see releaseWheel below).
+  const addressBarRef = useRef<HTMLInputElement | null>(null)
   const frameRef = useRef<BrowserScreencastFrame | null>(null)
   const controllingRef = useRef(false)
   // ── ADR-040 D2 implicit control model ───────────────────────────────────
@@ -1158,10 +1163,7 @@ export function BrowserLiveView({
     }
   }, [takeWheelIfNeeded])
 
-  const handleTabClose = useCallback((index: number, e: React.MouseEvent) => {
-    // Stop the click from bubbling to the tab chip's own onClick (which
-    // would also fire a redundant 'switch' for the tab being closed).
-    e.stopPropagation()
+  const handleTabClose = useCallback((index: number) => {
     takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('close', index)
     if (!sent) {
@@ -1370,6 +1372,29 @@ export function BrowserLiveView({
       })
   }, [pendingAnnotation, annotateComment, resetSelection, sessionId, agentId])
 
+  // ── WCAG 2.1.2 "No Keyboard Trap" fix — the ONE additional way (besides a
+  // mouse click elsewhere, entering annotate mode, or the agent starting a
+  // new turn) driving ends: pressing Escape while you-driving (handleKeyDown
+  // below). Mirrors the auto-release effect's and handleToggleAnnotate's own
+  // `sendControl('release')` call + failed-send recovery (toast + force the
+  // local status back to 'released' so the UI never claims control is still
+  // held when the server never actually heard it) — this is the SAME release
+  // path those already use, just triggered by a keyboard exit instead of a
+  // state transition. Also moves focus to the address bar so focus lands
+  // somewhere useful instead of a container that's about to stop capturing
+  // keys at all.
+  const releaseWheel = useCallback(() => {
+    const released = wsRef.current?.sendControl('release')
+    if (!released) {
+      setStatusState('released')
+      useUiStore.getState().addToast({
+        message: 'Could not confirm releasing control — try again if needed.',
+        variant: 'error',
+      })
+    }
+    addressBarRef.current?.focus()
+  }, [])
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     // ADR-040 D2: watch-only never dispatches page input, keyboard included —
     // canDispatchInput's driveMode gives agent-working (and annotating) top
@@ -1377,14 +1402,26 @@ export function BrowserLiveView({
     // "async release gap" this used to only defend against for agent-working
     // specifically.
     if (!canDispatchInput(false)) return
-    // Escape is deliberately NOT forwarded and NOT preventDefault()'d: Radix's
-    // Dialog/Sheet listens for it via a capture-phase document listener
-    // (fires before this bubble-phase handler ever runs — no event-handler
-    // trick on this element can outrun it), so when hosted in the Sheet
-    // overlay, Escape always closes the panel first regardless. Treating
-    // Escape as "exit local control" rather than fighting that is also the
-    // conventional behaviour for remote-control/remote-desktop widgets.
-    if (e.key === 'Escape') return
+    // WCAG 2.1.2 "No Keyboard Trap" — Escape is the advertised, always
+    // available way to stop driving (see the hand-back hint below, which now
+    // advertises it too). This panel used to be hosted in a Radix Sheet,
+    // where Escape closing the dialog first gave an INCIDENTAL — if
+    // undiscoverable and unadvertised — way out, via a capture-phase
+    // document listener that fired before this bubble-phase handler ever
+    // ran. The Sheet was retired 2026-07-16 for an always-docked panel (no
+    // dialog, no capture-phase Escape listener anywhere above this element
+    // anymore), so that incidental escape hatch stopped existing while
+    // Escape here stayed a local no-op: every OTHER key is forwarded/
+    // preventDefault()'d while driving, so a keyboard-only user who tabbed
+    // into the frame had NO way to leave it at all. Escape now actively
+    // releases the wheel and returns focus to the address bar — a real,
+    // advertised exit that satisfies 2.1.2 on its own, independent of
+    // whatever container happens to host this component.
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      releaseWheel()
+      return
+    }
     e.preventDefault()
     const modifiers = computeModifiers(e)
     if (isPrintableKey(e)) {
@@ -1396,10 +1433,13 @@ export function BrowserLiveView({
       // the event but don't delete/submit/move/select. See ADR-039.
       wsRef.current?.sendInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers })
     }
-  }, [canDispatchInput])
+  }, [canDispatchInput, releaseWheel])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!canDispatchInput(false)) return
+    // Escape's release already happened on keydown above — nothing left to
+    // forward for its key_up half (and driveMode may still read stale
+    // 'you-driving' for the brief async gap before the release ack lands).
     if (e.key === 'Escape') return
     e.preventDefault()
     // 'text' input is a one-shot insert (no matching key_up — mirrors
@@ -1456,19 +1496,21 @@ export function BrowserLiveView({
 
   return (
     <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
-      {/* Header. pr-14 (not just px-4) reserves room past the row's own buttons:
-          when hosted in the Sheet overlay (BrowserLivePanel), Radix's Content
-          renders in the same top-right corner this row's own buttons occupy
-          — without this reserved gap the rightmost header button here would
-          sit directly under it. UAT finding (duplicate close button):
-          BrowserLivePanel.tsx now passes `showClose={false}` to that
-          SheetContent specifically because THIS row already renders its own
-          labeled Close (`aria-label="Close live browser panel"`, further
-          down) — Radix's own unconditional built-in close button (absolute
-          right-2 top-2, h-11 w-11) would otherwise render a second,
-          unlabeled close stacked on top of it. The pr-14 gap is kept
-          regardless (harmless, and other Sheet-hosted content elsewhere in
-          the app still relies on the default). */}
+      {/* Header. pr-14 (not just px-4) reserves room past the row's own buttons.
+          Historical note (now stale, kept for context): this used to also
+          clear Radix's own built-in Sheet close button, which rendered in
+          the same top-right corner when this panel was hosted inside a
+          Radix Sheet overlay — and BrowserLivePanel.tsx passed
+          `showClose={false}` to that SheetContent specifically because THIS
+          row already renders its own labeled Close (`aria-label="Close live
+          browser panel"`, further down), avoiding a second, unlabeled close
+          stacked on top of it. The Sheet was retired 2026-07-16 (operator
+          direction, amends ADR-040 D4) — the panel is now ALWAYS a plain
+          docked `<aside>` (BrowserLivePanel.tsx), so there is no Radix
+          Content/Sheet anywhere in this tree and nothing else occupies that
+          corner. The pr-14 gap itself is kept regardless — harmless, and
+          still leaves clean room for this row's own Pop-out/Close
+          buttons. */}
       <div
         className="flex shrink-0 items-center gap-2 overflow-x-auto h-chrome-header min-h-chrome-header pl-4 pr-14"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
@@ -1582,13 +1624,17 @@ export function BrowserLiveView({
           small, muted line — shown ONLY while the user actually holds the
           wheel (`visualState === 'you-driving'`, which now also covers the
           UAT-A8 optimistic pendingTake window right after Take-over) — right
-          under the header where the "You're driving" chip already lives. */}
+          under the header where the "You're driving" chip already lives.
+          WCAG 2.1.2: also advertises the Escape exit (releaseWheel, wired in
+          handleKeyDown above) — a keyboard-only escape hatch that isn't
+          advertised somewhere on screen doesn't satisfy "No Keyboard Trap"
+          even once it technically works. */}
       {visualState === 'you-driving' && (
         <p
           data-testid="browser-live-handback-hint"
           className="shrink-0 px-4 pb-1.5 text-[11px] text-[var(--color-muted)]"
         >
-          Send a message to hand back to {resolvedAgentName ?? 'the agent'}
+          Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
         </p>
       )}
 
@@ -1600,11 +1646,27 @@ export function BrowserLiveView({
           `tabState.tabs.length > 0` check is just defense in depth against
           an ill-formed frame). Sits below the always-visible omnibox and
           above the screencast frame, matching the ADR-040 header/omnibox
-          stack. */}
+          stack.
+
+          A11y fix: this used to be `role="tablist"` > `role="tab"` (with a
+          nested Close button inside each "tab") — the real ARIA tab pattern
+          promises arrow-key roving-tabindex + aria-controls linking each tab
+          to a tabpanel, none of which is wired here, AND `role="tab"` is
+          children-presentational per the ARIA spec, so the nested Close
+          button's own role/name got stripped for assistive tech (it read as
+          inert text, not an activatable button). Mirrors the exact fix
+          already applied to CalendarToolbar.tsx's view switcher (same a11y
+          audit): `role="group"` + `aria-pressed` per button correctly
+          describes a set of independently-tabbable toggle buttons instead of
+          promising a pattern that isn't implemented. Close is now a SIBLING
+          button, not nested, so it keeps its own accessible name. Disconnected
+          state uses native `disabled` (not aria-disabled + tabIndex=0 "inert"
+          stops) so a disconnected chip is genuinely removed from the tab
+          order and keyboard-inert, not just visually/ARIA-flagged. */}
       {tabState && tabState.tabs.length > 0 && (
         <div
-          role="tablist"
-          aria-label="Open tabs"
+          role="group"
+          aria-label="Browser tabs"
           data-testid="browser-tab-strip"
           className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1.5"
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
@@ -1615,32 +1677,8 @@ export function BrowserLiveView({
             return (
               <div
                 key={tab.index}
-                role="tab"
-                aria-selected={active}
-                aria-disabled={!connected}
-                tabIndex={0}
-                data-testid={`browser-tab-${tab.index}`}
-                onClick={() => {
-                  // Reviewer finding F2: the ✕/＋ buttons below already gate
-                  // on `disabled={!connected}` (a native disabled button
-                  // never fires onClick at all), but this <div role="tab">
-                  // has no native disabled state — without this guard,
-                  // clicking a tab while the WS is reconnecting silently
-                  // no-op'd (sendTabAction returning false, discarded).
-                  if (!connected) return
-                  handleTabSwitch(tab.index)
-                }}
-                onKeyDown={(e) => {
-                  if (!connected) return
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    handleTabSwitch(tab.index)
-                  }
-                }}
-                title={tab.title || tab.url || 'New tab'}
                 className={cn(
-                  'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 px-2.5 py-1 text-xs transition-colors',
-                  connected ? 'cursor-pointer' : 'cursor-not-allowed',
+                  'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 py-1 pl-2.5 pr-1 text-xs transition-colors',
                   // Active tab: Forge-Gold underline + full opacity + a
                   // heavier label weight — colour is never the only signal
                   // (WCAG). Inactive: dimmed, transparent underline.
@@ -1649,11 +1687,25 @@ export function BrowserLiveView({
                     : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
                 )}
               >
-                <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
-                <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
                 <button tabIndex={0}
                   type="button"
-                  onClick={(e) => handleTabClose(tab.index, e)}
+                  aria-pressed={active}
+                  disabled={!connected}
+                  onClick={() => handleTabSwitch(tab.index)}
+                  title={tab.title || tab.url || 'New tab'}
+                  data-testid={`browser-tab-${tab.index}`}
+                  className={cn(
+                    'flex min-w-0 flex-1 items-center gap-1.5',
+                    connected ? 'cursor-pointer' : 'cursor-not-allowed',
+                    'disabled:cursor-not-allowed',
+                  )}
+                >
+                  <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
+                  <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
+                </button>
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => handleTabClose(tab.index)}
                   disabled={!connected}
                   aria-label={`Close tab: ${label}`}
                   title="Close tab"
@@ -1711,6 +1763,7 @@ export function BrowserLiveView({
           <ArrowsClockwise size={15} />
         </button>
         <Input
+          ref={addressBarRef}
           type="text"
           value={urlInput}
           onChange={(e) => setUrlInput(e.target.value)}
@@ -1844,9 +1897,19 @@ export function BrowserLiveView({
                   value={annotateComment}
                   onChange={(e) => setAnnotateComment(e.target.value)}
                   onKeyDown={(e) => {
-                    // Cancel the pending annotation on Escape rather than
-                    // letting it bubble to Radix's Sheet (which would close
-                    // the whole panel and discard the drafted comment).
+                    // Cancel the pending annotation on Escape. Historical
+                    // note (now stale): this used to also matter for
+                    // outrunning Radix's Sheet, which listened for Escape
+                    // via a capture-phase document listener that would
+                    // otherwise close the whole panel and discard the
+                    // drafted comment first. The Sheet was retired
+                    // 2026-07-16 (panel is now always a plain docked
+                    // `<aside>` — no Sheet, no capture-phase listener
+                    // anywhere above this element), so that race no longer
+                    // exists; Escape here is just the ordinary "cancel this
+                    // popover" affordance. stopPropagation is kept as
+                    // defense in depth against any future wrapping
+                    // dialog/modal reintroducing the same race.
                     if (e.key === 'Escape') {
                       e.stopPropagation()
                       handleCancelAnnotation()

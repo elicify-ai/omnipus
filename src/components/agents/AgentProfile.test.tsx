@@ -1411,6 +1411,79 @@ describe('AgentProfile — Runtime tab (spec §6.4)', () => {
   })
 })
 
+// FW-4 fix: rows keyed by `${k}-${idx}` (the KEY text itself, embedded in the
+// React key) remounted the row on every keystroke in the KEY field — dropping
+// focus mid-word — and renaming a key to match an existing one silently
+// MERGED the two rows (Object.fromEntries on a colliding key just keeps the
+// last write). Rows are now keyed by a synthetic id that never changes.
+describe('AgentProfile — Environment overrides editor (focus-loss / duplicate-key fix)', () => {
+  it('typing multiple characters into a KEY field keeps DOM focus on the same node', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      id: 'external-worker',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code', env_overrides: { FOO: 'bar' } },
+    })
+    renderProfile('external-worker')
+    await screen.findByText('External Worker')
+    switchTab('tab-runtime')
+
+    const keyInput = (await screen.findByDisplayValue('FOO')) as HTMLInputElement
+    keyInput.focus()
+    expect(document.activeElement).toBe(keyInput)
+
+    for (const next of ['F', 'FO', 'FOO', 'FOOX', 'FOOXY']) {
+      fireEvent.change(keyInput, { target: { value: next } })
+      // The SAME DOM node must stay focused after every keystroke — the old
+      // bug keyed each row by its live KEY text, so a rename remounted the
+      // row (a fresh React key) and bounced focus back to <body>.
+      expect(document.activeElement).toBe(keyInput)
+    }
+    expect(keyInput).toHaveValue('FOOXY')
+  })
+
+  it('flags a duplicate key inline on blur and does not silently merge the two rows', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      id: 'external-worker',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code', env_overrides: { FOO: 'bar', BAZ: 'qux' } },
+    })
+    renderProfile('external-worker')
+    await screen.findByText('External Worker')
+    switchTab('tab-runtime')
+
+    expect(screen.getByTestId('profile-env-row-0')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-env-row-1')).toBeInTheDocument()
+
+    const bazKeyInput = screen.getByDisplayValue('BAZ') as HTMLInputElement
+    fireEvent.change(bazKeyInput, { target: { value: 'FOO' } })
+    fireEvent.blur(bazKeyInput)
+
+    // Inline duplicate error shown...
+    expect(await screen.findByTestId('profile-env-duplicate-1')).toHaveTextContent(/duplicate key/i)
+    // ...and BOTH rows are still present — no merge into one.
+    expect(screen.getByTestId('profile-env-row-0')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-env-row-1')).toBeInTheDocument()
+    // Row 0's original FOO=bar entry is untouched by row 1's blocked rename.
+    expect(screen.getByDisplayValue('bar')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('qux')).toBeInTheDocument()
+
+    // The blocked rename must never reach the autosave payload — give the
+    // debounce (500ms) a beat and confirm no PUT ever collapsed the pair
+    // down to a single key.
+    await new Promise((r) => setTimeout(r, 800))
+    for (const call of vi.mocked(updateAgent).mock.calls) {
+      const body = call[1] as { executor?: { env_overrides?: Record<string, string> } }
+      if (body.executor?.env_overrides) {
+        expect(Object.keys(body.executor.env_overrides)).toHaveLength(2)
+      }
+    }
+  })
+})
+
 // ── 409 Conflict UI ────────────────────────────────────────────────────────────
 
 describe('AgentProfile — 409 conflict handling', () => {

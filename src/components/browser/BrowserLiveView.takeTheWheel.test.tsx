@@ -815,6 +815,85 @@ describe('BrowserLiveView — A8 optimistic driving chip (UAT polish)', () => {
   })
 })
 
+// CRITICAL (WCAG 2.1.2 "No Keyboard Trap") — while you-driving, every key
+// except Escape is forwarded to the remote page. Pre-fix, Escape was a local
+// no-op (justified by a stale comment about a Radix Sheet capture listener
+// that no longer exists — the panel is now always a plain docked <aside>),
+// so a keyboard-only user who tabbed into the frame had NO way out at all.
+// These tests fail against the pre-fix code (Escape returning early with no
+// sendControl('release') call and no focus move) and pass now that Escape
+// actively releases the wheel.
+describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard Trap, CRITICAL)', () => {
+  function driveIt(container: HTMLElement) {
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    return container
+  }
+
+  it('pressing Escape while you-driving releases control via the same sendControl("release") path other exits use, instead of forwarding Escape to the remote page', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = driveIt(stubFrameRect())
+    mockSendInput.mockClear()
+    mockSendControl.mockClear()
+
+    fireEvent.keyDown(container, { key: 'Escape' })
+
+    // Escape must NOT be forwarded as remote keyboard input (no key_down/text)...
+    expect(mockSendInput).not.toHaveBeenCalled()
+    // ...and MUST release the wheel — a genuine exit, not a local no-op.
+    expect(mockSendControl).toHaveBeenCalledWith('release')
+  })
+
+  it('moves focus to the address bar after Escape releases the wheel', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = driveIt(stubFrameRect())
+
+    fireEvent.keyDown(container, { key: 'Escape' })
+
+    expect(screen.getByLabelText('Address bar')).toHaveFocus()
+  })
+
+  it('surfaces a toast and forces the local status back to released if the Escape release send fails', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = driveIt(stubFrameRect())
+    mockSendControl.mockReturnValueOnce(false)
+
+    fireEvent.keyDown(container, { key: 'Escape' })
+
+    expect(
+      useUiStore.getState().toasts.some((t) => /could not confirm releasing control/i.test(t.message)),
+    ).toBe(true)
+    expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
+  })
+
+  it('still forwards every OTHER key while you-driving — Escape is the one exception, not a reason to stop forwarding input', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = driveIt(stubFrameRect())
+    mockSendInput.mockClear()
+
+    fireEvent.keyDown(container, { key: 'Tab' })
+
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'key_down', key: 'Tab' }))
+    expect(mockSendControl).not.toHaveBeenCalledWith('release')
+  })
+
+  it('Escape keyup does not forward a key_up either', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = driveIt(stubFrameRect())
+    mockSendInput.mockClear()
+
+    fireEvent.keyUp(container, { key: 'Escape' })
+
+    expect(mockSendInput).not.toHaveBeenCalled()
+  })
+})
+
 describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () => {
   it('shows a hand-back hint using the resolved agent name only while you-driving', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
@@ -829,6 +908,20 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
     expect(screen.getByTestId('browser-live-handback-hint')).toHaveTextContent(
       'Send a message to hand back to the agent',
     )
+  })
+
+  // WCAG 2.1.2: the Escape exit must be ADVERTISED somewhere on screen, not
+  // just functional — this is the advertisement half of the CRITICAL fix
+  // covered above.
+  it('advertises the Escape exit alongside the hand-back hint', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    expect(screen.getByTestId('browser-live-handback-hint')).toHaveTextContent(/press Esc to stop driving/i)
   })
 
   it('does not render the hand-back hint while the agent is working', () => {

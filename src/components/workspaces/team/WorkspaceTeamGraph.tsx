@@ -202,6 +202,14 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
       onKeyDown={
         data.onOpenAgent
           ? (e) => {
+              // Mirror the onClick guard above: Enter/Space on a nested
+              // Handle or action button (Delegate…/Edit/Remove) bubbles up
+              // to this node's own onKeyDown — without this guard,
+              // preventDefault() below cancels the nested control's native
+              // activation and opens the agent's edit panel instead of
+              // running the action the user actually focused (e.g. Remove).
+              const t = e.target as HTMLElement
+              if (t.closest('[data-handleid]') || t.closest('[data-node-action]')) return
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
                 data.onOpenAgent?.(id)
@@ -350,6 +358,24 @@ function DelegationEdge({
   const model = data?.model
   const selected = data?.selected ?? false
 
+  // Focus management for the chip <-> inline editor swap. Opening the editor
+  // moves focus INTO it (EdgeModeEditor's own autofocus on its first mode
+  // chip, see EdgeModeEditor.tsx). When it CLOSES, React Flow unmounts the
+  // editor and mounts the chip in its place — the editor's focused DOM node
+  // is simply gone, so without this the browser silently drops focus to
+  // <body>. Restore it to the chip that (re)opens the editor, mirroring the
+  // AgentDelegatePicker onCloseAutoFocus pattern used elsewhere in this file
+  // (its dropdown's default focus-restore is suppressed in favour of
+  // explicitly refocusing the trigger).
+  const chipRef = useRef<HTMLButtonElement>(null)
+  const wasSelectedRef = useRef(selected)
+  useEffect(() => {
+    if (wasSelectedRef.current && !selected) {
+      chipRef.current?.focus()
+    }
+    wasSelectedRef.current = selected
+  }, [selected])
+
   if (!model || !data) {
     return <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} />
   }
@@ -390,6 +416,7 @@ function DelegationEdge({
             />
           ) : (
             <EdgeLabelChip
+              ref={chipRef}
               model={model}
               defaultDepth={data.defaultDepth}
               onClick={() => data.onSelect(id)}

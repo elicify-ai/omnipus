@@ -73,7 +73,7 @@ export function WhatsAppPairingBody({
       <>
         {/* QR must sit on a light background to scan reliably in dark mode. */}
         <div data-testid="whatsapp-qr" className="rounded-md bg-white p-3">
-          <QRCodeSVG value={pairing.qr} size={184} level="L" />
+          <QRCodeSVG value={pairing.qr} size={184} level="L" title="WhatsApp pairing QR code" />
         </div>
         <p className="text-xs text-[var(--color-secondary)] text-center">
           Open <span className="font-medium">WhatsApp</span> on your phone, go to{' '}
@@ -97,7 +97,7 @@ export function WhatsAppPairingBody({
         <RetryableState
           icon={Clock}
           iconProps={{ className: 'text-[var(--color-muted)]' }}
-          message="QR expired — tap to get a fresh one."
+          message="QR expired — select to get a fresh one."
           onRetry={onRetry}
         />
       )
@@ -106,7 +106,7 @@ export function WhatsAppPairingBody({
         <RetryableState
           icon={Warning}
           iconProps={{ weight: 'fill', className: 'text-[var(--color-error)]' }}
-          message="Pairing failed — tap to retry."
+          message="Pairing failed — select to retry."
           onRetry={onRetry}
         />
       )

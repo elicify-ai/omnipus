@@ -19,6 +19,10 @@ interface ScreenHeaderProps {
  */
 export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   const toggle = useSidebarStore((s) => s.toggle)
+  // Reflects the overlay drawer's real open state on the toggle button —
+  // without it, a screen reader user has no way to know whether activating
+  // the hamburger will open or close the sidebar.
+  const isOpen = useSidebarStore((s) => s.isOpen)
 
   return (
     <header
@@ -31,6 +35,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
         type="button"
         onClick={toggle}
         aria-label="Toggle navigation sidebar"
+        aria-expanded={isOpen}
         className="flex items-center justify-center h-chrome-header min-h-chrome-header w-10 -ml-2 rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
       >
         <List size={20} />

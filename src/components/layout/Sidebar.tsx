@@ -51,6 +51,11 @@ const LIBRARY_ITEMS = [
 
 const PROJECT_COLLAPSE_THRESHOLD = 5
 
+// Focus-trap query selector for the overlay sidebar (Task 1, FW-3). Kept
+// module-level — it's static and reused on every open/keydown.
+const SIDEBAR_FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
 // US-5: Sidebar — overlay default, pin option, Framer Motion, Zustand
 export function Sidebar() {
   const { isOpen, isPinned, close, toggle, togglePin } = useSidebarStore()
@@ -239,6 +244,51 @@ export function Sidebar() {
     wasOverlayOpenRef.current = overlayOpen
   }, [isOpen, effectivelyPinned])
 
+  // Focus management for the overlay sidebar (Task 1, FW-3). The drawer
+  // declares aria-modal="true" but is DOM-EARLIER than the main content —
+  // without this effect, opening it via the hamburger left focus behind on
+  // the hamburger itself, so Tab walked straight into the background content
+  // the drawer had just covered. Fix: on open, move focus to the drawer's
+  // first focusable control; while open, trap Tab/Shift+Tab inside the
+  // drawer (wrap at both edges). Escape-to-close (handleKeydown above) and
+  // restore-to-hamburger (the effect above) already cover the rest of the
+  // WAI-ARIA modal dialog pattern.
+  //
+  // Queries the DOM by id rather than a ref: framer-motion's real
+  // `motion.aside` forwards refs fine, but the test double used across this
+  // file's specs is a plain function component that does not — id lookup
+  // works identically against both.
+  useEffect(() => {
+    const overlayOpen = isOpen && !effectivelyPinned
+    if (!overlayOpen) return undefined
+    const panel = document.getElementById('sidebar-overlay-panel')
+    if (!panel) return undefined
+
+    const getFocusable = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>(SIDEBAR_FOCUSABLE_SELECTOR))
+
+    // Move focus into the drawer — its first focusable control.
+    getFocusable()[0]?.focus()
+
+    function handleTrapKeydown(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return
+      const items = getFocusable()
+      if (items.length === 0) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+
+    panel.addEventListener('keydown', handleTrapKeydown)
+    return () => panel.removeEventListener('keydown', handleTrapKeydown)
+  }, [isOpen, effectivelyPinned])
+
   // Sidebar content shared between pinned and overlay modes
   const sidebarContent = (
     <nav className="flex h-full flex-col" aria-label="Main navigation">
@@ -402,6 +452,7 @@ export function Sidebar() {
                       navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                       if (!effectivelyPinned) close()
                     }}
+                    aria-current={isActive ? 'page' : undefined}
                     className="flex items-center gap-2 flex-1 min-w-0 text-left"
                   >
                     {/* One icon for every workspace (the Inbox Tray glyph); the
@@ -454,6 +505,7 @@ export function Sidebar() {
                             key={s.id}
                             type="button"
                             onClick={() => selectSession(s)}
+                            aria-current={sActive ? 'page' : undefined}
                             className={cn(
                               'flex items-center gap-1.5 w-full pl-3 pr-4 py-1.5 text-[13px] transition-colors text-left',
                               sActive
@@ -555,6 +607,7 @@ export function Sidebar() {
             <Link
               key={to}
               to={to}
+              tabIndex={0}
               aria-label={label}
               aria-current={isActive ? 'page' : undefined}
               onClick={() => {
@@ -666,8 +719,11 @@ export function Sidebar() {
             paddingBottom: 'env(safe-area-inset-bottom)',
             paddingLeft: 'env(safe-area-inset-left)',
           }}
-          aria-label="Main navigation"
         >
+          {/* No aria-label here — the <nav aria-label="Main navigation"> inside
+              sidebarContent already names the navigation landmark; labeling
+              both this wrapping aside and the nav duplicated the landmark
+              name in the accessibility tree. */}
           {sidebarContent}
         </aside>
       )}
@@ -693,6 +749,7 @@ export function Sidebar() {
               paddingBottom: 'env(safe-area-inset-bottom)',
               paddingLeft: 'env(safe-area-inset-left)',
             }}
+            id="sidebar-overlay-panel"
             role="dialog"
             aria-modal="true"
             aria-label="Main navigation"

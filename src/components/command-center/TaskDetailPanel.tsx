@@ -32,6 +32,16 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { canDropTransition } from '@/components/workspaces/BoardView'
@@ -113,6 +123,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(task?.workspace_id ?? '')
   const [newTodo, setNewTodo] = useState('')
   // Inline field errors — surfaced instead of silently discarding invalid input.
@@ -150,6 +161,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setStatusError('')
     setSaveStatus('idle')
     setSaveError(undefined)
+    setConfirmDelete(false)
   }, [task?.id, task?.prompt, task?.workspace_id])
 
   // Resync ONLY the due/trigger-at drafts when the task's due date or
@@ -312,6 +324,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       addToast({ message: 'Task deleted.', variant: 'success' })
+      setConfirmDelete(false)
       onClose()
     },
     onError: (err: unknown) =>
@@ -526,7 +539,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <button tabIndex={0}
               type="button"
               onClick={() => setEditingPrompt(true)}
-              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
               aria-label="Edit prompt"
             >
               <PencilSimple size={12} />
@@ -715,9 +728,19 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                   key={t.id}
                   type="button"
                   onClick={() => handleToggleDep(t.id)}
+                  aria-pressed={checked}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-[var(--color-surface-1)] transition-colors"
                 >
-                  <Checkbox checked={checked} className="pointer-events-none" />
+                  {/* The row button carries the checked state via aria-pressed
+                      — this Checkbox is a decorative visual echo, not a
+                      second control (button-in-button was a nested-interactive
+                      violation with a duplicate, no-op tab stop). */}
+                  <Checkbox
+                    checked={checked}
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    className="pointer-events-none"
+                  />
                   <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
                 </button>
               )
@@ -738,7 +761,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                     type="button"
                     onClick={() => handleToggleDep(id)}
                     aria-label={`Remove dependency ${dep?.title ?? id}`}
-                    className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                    className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                   >
                     <X size={9} />
                   </button>
@@ -776,6 +799,10 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                 type="button"
                 onClick={() => handleToggleTodo(idx)}
                 aria-label={`Toggle ${todo.text}`}
+                role="checkbox"
+                aria-checked={
+                  todo.status === 'completed' ? true : todo.status === 'in_progress' ? 'mixed' : false
+                }
                 className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
               >
                 {todo.status === 'completed' ? (
@@ -952,19 +979,41 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <MetaRow label="Completed" value={formatDate(task.completed_at)} />
       </div>
 
-      {/* Delete button (danger zone) */}
+      {/* Delete button (danger zone) — confirmed via AlertDialog (was firing
+          with zero confirmation, a one-click irreversible data-loss trap). */}
       <div className="pt-2 border-t border-[var(--color-border)]">
         <Button
           variant="ghost"
           size="sm"
           className="w-full gap-2 text-xs h-8 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]"
-          onClick={() => doDelete()}
+          onClick={() => setConfirmDelete(true)}
           disabled={isDeleting}
         >
           <Trash size={13} />
           {isDeleting ? 'Deleting…' : 'Delete task'}
         </Button>
       </div>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes “{task.title}”. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => doDelete()}
+              disabled={isDeleting}
+              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+            >
+              {isDeleting ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -109,8 +109,10 @@ export function ChatControls({ className }: ChatControlsProps) {
         // point back here): skip-link=1 (AppShell.tsx) → chat input=2
         // (ChatScreen.tsx) → agent=3 (composer/AgentPicker.tsx) → model=4
         // (composer/ModelPicker.tsx) → attach=5 (ChatScreen.tsx) → send=6
-        // (ChatScreen.tsx) → browser=7 (this button), then natural DOM order
-        // (the header tab menu). Deliberate positive tabIndex on this closed
+        // (ChatScreen.tsx; the Stop button that replaces Send mid-stream
+        // shares this SAME slot 6, not its own — see ChatScreen.tsx's Stop
+        // button) → browser=7 (this button), then natural DOM order (the
+        // header tab menu). Deliberate positive tabIndex on this closed
         // 7-control set per operator direction.
         tabIndex={7}
         aria-label="Open browser"
