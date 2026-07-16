@@ -6,7 +6,7 @@
 
 **Implementation note (2026-07-16):** Initially implemented as a bespoke
 turn-scoped PHASE A/B/C escalation in commit
-`4677b6f75b14731d645ef1498759425cca8b6a4b` (`feat(agent,gateway): orphaned-foreground-turn
+`03f4558f0d6d35a12e13ea57607451a354a7cff0` (`feat(agent,gateway): orphaned-foreground-turn
 watchdog (ADR-045) to bound leaked turns`). A 7-reviewer gate on that
 implementation found 8 real bugs, including three sev-9 correctness/safety
 issues (MA-1, MA-3, MA-6 below) — the root cause of most was that the
@@ -16,7 +16,7 @@ dropping side effects (approval auto-deny, background-session kill,
 session-status-interrupted) that every other cancel surface gets.
 
 **Redesign (2026-07-16, same day, before merge):** commit
-`06bb26998c58a2315573fe497e3bba3639521674` (`fix(agent,gateway): redesign
+`cba4c562` (`fix(agent,gateway): redesign
 orphan watchdog to reap via RequestCancel (gate round-1)`) replaces the bespoke escalation
 entirely with a single grace timer that hands the abandoned session to
 `AgentLoop.RequestCancel` — the SAME cancellation path every other cancel
