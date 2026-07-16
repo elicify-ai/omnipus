@@ -279,28 +279,36 @@ export function GenericToolCall({
   // COLLAPSED header ("Delegation denied · <axis>") instead of a generic
   // "Failed" so the user sees the policy block without expanding. The full
   // reason stays in the expanded DelegationFailureDisplay. Computed here
-  // (rather than after the gate below) because the gate needs it too — a
-  // delegation denial is an error outcome even when `status` alone doesn't
-  // say so.
+  // (rather than after the gate below) because the gate below also consults
+  // it — though (revised 2026-07-16) it is only actually HONORED there for
+  // load_tool; see the gate comment below and toolVisibility.ts's doc
+  // comment for the per-tool-class rule.
   const delegationFailure = isDelegationFailure(result) ? result : null
 
   // Marshal-error sentinel: the backend emits `{_marshal_error: "..."}` when
   // JSON-marshaling a tool result fails during replay-frame construction —
   // this can happen even when the tool call itself succeeded, so neither
   // `status` nor `error` reflects it. Computed here (before the gate below,
-  // alongside delegationFailure) because the gate needs it too: a
-  // load_tool/background bash/delegate call whose args match the "hide by
-  // default" shape must still surface if its result silently failed to
-  // marshal, exactly like a policy-denied delegation must.
+  // alongside delegationFailure) because the gate needs it too — but only
+  // for load_tool: shouldRenderToolCall's outcome override is per-tool-class
+  // (see that function's doc comment, toolVisibility.ts), so a load_tool
+  // call whose args match the "hide by default" shape still surfaces on a
+  // marshal failure, while a delegate/background-bash call does NOT get
+  // that exception (the failure is left to the calling agent's own response
+  // text; the raw result stays inspectable in the ActivityPanel).
   const marshalErr = isMarshalErrorResult(result) ? result : null
 
   // Client-side render gate (verbose-chat off by default): hides noisy
   // background infra calls (load_tool, background delegate/bash dispatch,
-  // status polls) unless the user has opted into verbose chat. An
-  // error/denial/marshal-failure outcome always overrides the hide decision —
-  // a policy-denied delegation or a marshal-error result must never disappear
-  // just because its default args look like ordinary background dispatch.
-  // Must sit after every hook above and before the JSX return (Rules of Hooks).
+  // status polls) unless the user has opted into verbose chat. The
+  // isError/delegationFailure/marshalErr outcome signal passed below is only
+  // honored by shouldRenderToolCall's load_tool case (toolVisibility.ts doc
+  // comment) — a load_tool call still forces visible on error/denial/
+  // marshal-failure, but delegate and background-bash do NOT get that
+  // exception: that failure is left to the calling agent's own response
+  // text, with the raw result staying inspectable in the ActivityPanel
+  // slide-out. Must sit after every hook above and before the JSX return
+  // (Rules of Hooks).
   if (
     !shouldRenderToolCall(
       toolName,

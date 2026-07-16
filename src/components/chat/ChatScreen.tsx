@@ -61,7 +61,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderSubagentSpan } from '@/lib/toolVisibility'
+import { shouldRenderSubagentSpan, shouldRenderToolCall } from '@/lib/toolVisibility'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
@@ -383,9 +383,74 @@ function InlineMedia() {
   )
 }
 
+/**
+ * Returns true when the result is the structured delegation-denied sentinel
+ * (mirrors GenericToolCall.tsx's/ToolCallBadge.tsx's detector of the same
+ * name — duplicated locally rather than imported, same as ToolCallBadge.tsx
+ * already does for isMarshalErrorResult below, so ChatScreen.tsx's import of
+ * GenericToolCall.tsx stays limited to the component itself; many sibling
+ * ChatScreen.*.test.tsx files fully replace that module with a bare-bones
+ * `{ GenericToolCall: ... }` stub via vi.mock, and importing anything else
+ * from it here would silently break every one of those mocks).
+ */
+function isDelegationFailureResult(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['error'] === 'delegation_denied'
+  )
+}
+
+/** Returns true when the result is the marshal-error sentinel from replay.go. Mirrors GenericToolCall.tsx's/ToolCallBadge.tsx's detector of the same name — see isDelegationFailureResult's comment for why this is a local duplicate, not an import. */
+function isMarshalErrorSentinel(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
+  )
+}
+
+/**
+ * Mirrors the per-tool-call visibility gate GenericToolCall/BashOutput/
+ * ToolCallBadge each apply at render time (Fix 3, 2026-07-16). Used ONLY to
+ * decide whether a message has any VISIBLE content, so the ghost-bubble
+ * empty-placeholder / bare-Copy-bar logic below doesn't unmask a bubble
+ * whose only content is a hidden delegation or background-bash dispatch
+ * (the D-fix UAT defect resurfacing once the thread started hiding
+ * delegation/background-bash by default — toolVisibility.ts). Reuses the
+ * same sentinel-detection semantics and the shouldRenderToolCall classifier
+ * those components call directly — not re-derived logic, just a local copy
+ * of the two small detector predicates (see their own comments for why).
+ *
+ * `errorFlag` is the outcome signal each call site already carries under a
+ * different name (a baked ToolCall's `.error` string, or a live/streaming
+ * ToolCallMessagePart's `.isError` boolean) — see the two call sites below.
+ * This is a close approximation, not a byte-for-byte replay of every
+ * renderer's exact gate: e.g. BashOutputBlock's own live `isError` source is
+ * AssistantUI's per-part MessagePartStatus, which isn't available at the
+ * message.content-array level this runs at — the live ToolCallMessagePart's
+ * own `isError` field is the closest available proxy. Every tool this
+ * project's registered live tool UIs render OTHER than through
+ * GenericToolCall (Fallback)/BashOutputUI never self-hides regardless of
+ * tool name (only load_tool/delegate/bash are ever hidden — see
+ * shouldRenderToolCall's switch), so calling shouldRenderToolCall uniformly
+ * for every tool name here is accurate for those surfaces too, without
+ * needing to special-case them.
+ */
+function wouldToolCallBeVisible(
+  tool: string,
+  params: Record<string, unknown> | undefined,
+  result: unknown,
+  errorFlag: boolean,
+  verboseChatEnabled: boolean,
+): boolean {
+  const isError = errorFlag || isDelegationFailureResult(result) || isMarshalErrorSentinel(result)
+  return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
+}
+
 // Renders subagent spans attached to the current message (FR-H-008).
 // useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
-function SubagentSpansRenderer() {
+export function SubagentSpansRenderer() {
   const message = useMessage()
   const messages = useChatStore((s) => s.messages)
   // Fix 2 (user-approved 2026-07-16): delegation cards are hidden from the
@@ -682,7 +747,6 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Build tool-call parts from the message's stored tool_calls list.
   // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
   const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
-  const storeToolCallIds = positionedToolCalls.map((tc) => tc.id)
 
   // Perf (gate 5 MEDIUM): memoized on the message's OWN content/tool_calls
   // fields (not the derived `positionedToolCalls`, which gets a brand-new
@@ -714,21 +778,26 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // component. Without this guard, a message with isStreaming:true and empty
   // content would show the same "avatar + Copy, nothing to copy" broken bubble
   // as the live path (see AssistantMessage's showEmptyPlaceholder).
+  //
+  // Fix 3 (2026-07-16): emptiness is judged on VISIBLE content only — a
+  // message whose only content is a hidden delegation/background-bash
+  // dispatch (default thread policy, toolVisibility.ts) must not render an
+  // empty bubble with a bare Copy action bar (the D-fix UAT defect
+  // resurfacing once the thread started hiding those by default).
+  // visibleToolCalls/visibleSpans are also what's actually rendered below —
+  // hoisted here so both the emptiness check and the render loop share one
+  // computation instead of drifting into two different notions of "visible".
   const hasContent = !!message.content?.trim().length
-  const hasToolCalls = storeToolCallIds.length > 0
+  const visibleToolCalls = positionedToolCalls.filter((tc) =>
+    wouldToolCallBeVisible(tc.tool, tc.params, tc.result, !!tc.error, verboseChatEnabled),
+  )
+  const hasVisibleToolCalls = visibleToolCalls.length > 0
   const hasMedia = mediaItems.length > 0
-  // Unfiltered — matches hasToolCalls above (also unfiltered: individual
-  // GenericToolCall/ToolCallBadge rows self-hide at render time via
-  // shouldRenderToolCall, same as SubagentBlock rows self-hide below via
-  // visibleSpans). This flag only answers "does the message have span data
-  // at all", not "is a span card currently showing".
-  const hasSpans = (message.spans ?? []).length > 0
-  const showEmptyPlaceholder = !!message.isStreaming && !hasContent && !hasToolCalls && !hasMedia && !hasSpans
   // Fix 2 (user-approved 2026-07-16): the actual render list, filtered
-  // through the thread gate (shouldRenderSubagentSpan) — separate from
-  // hasSpans above so the empty-placeholder check keeps its existing,
-  // pre-Fix-2 "has span data" semantics.
+  // through the thread gate (shouldRenderSubagentSpan).
   const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
+  const showEmptyPlaceholder =
+    !!message.isStreaming && !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
 
   return (
     <div
@@ -1118,6 +1187,9 @@ function AssistantMessage() {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const message = useMessage()
   const messages = useChatStore((s) => s.messages)
+  // Fix 3 (2026-07-16): needed to judge tool-call/span emptiness on VISIBLE
+  // content only — see the showEmptyPlaceholder computation below.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   // Prefer the per-message agentId (set during transcript replay) over the
   // session-level activeAgentId. This makes multi-agent transcripts show the
@@ -1143,10 +1215,27 @@ function AssistantMessage() {
   const hasVisibleText = message.content?.some(
     (part) => part.type === 'text' && part.text.trim().length > 0,
   )
-  const hasToolCall = message.content?.some((part) => part.type === 'tool-call')
+  // Fix 3 (2026-07-16): VISIBLE tool calls only — mirrors the historical
+  // path's wouldToolCallBeVisible check (same function, same rationale: a
+  // hidden delegation/background-bash dispatch must not count as "content"
+  // for the ghost-bubble guard below). part.isError is the closest
+  // available proxy for this surface's outcome signal — see
+  // wouldToolCallBeVisible's own doc comment for why.
+  const hasVisibleToolCall = message.content?.some(
+    (part) =>
+      part.type === 'tool-call' &&
+      wouldToolCallBeVisible(
+        part.toolName,
+        part.args as Record<string, unknown> | undefined,
+        part.result,
+        !!part.isError,
+        verboseChatEnabled,
+      ),
+  )
   const hasMedia = !!storeMsg?.media?.length
-  const hasSpans = !!storeMsg?.spans?.length
-  const showEmptyPlaceholder = isRunning && !hasVisibleText && !hasToolCall && !hasMedia && !hasSpans
+  const visibleSpans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
+  const showEmptyPlaceholder =
+    isRunning && !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
 
   return (
     <MessagePrimitive.Root

@@ -382,3 +382,79 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
     expect(badge).not.toBeNull()
   })
 })
+
+// ── Fix 3 (2026-07-16): ghost bubble — a turn whose only content is a
+// hidden delegation must not render "avatar + empty body + Copy" (the D-fix
+// UAT defect resurfacing once delegation started hiding by default). Both
+// tests render via the PlainMessageList fallback (ResizeObserver forced
+// undefined, per this file's header) so VirtualAssistantMessageRow handles
+// a still-in-progress (isStreaming:true) message, exactly the D-fix
+// scenario this fix wave's finding cites. `tool_call_start` for a top-level
+// call auto-creates a fresh streaming assistant placeholder when there is
+// no trailing assistant message (chat.ts) — no prior `token` frame needed to
+// seed one.
+
+const THINKING_TEXT_RE = /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/
+
+describe('ChatScreen — Fix 3: ghost bubble when the only content is a hidden delegation', () => {
+  it('a delegate call that has already FINISHED, on an otherwise-empty still-streaming message, shows the thinking placeholder and no bare Copy bar', async () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_ghost_finished',
+        tool: 'delegate',
+        params: { action: 'run', async: true, target_agent_id: 'ray', task: 'do X' },
+        session_id: SID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_ghost_finished',
+        tool: 'delegate',
+        result: { ok: true },
+        status: 'success',
+        session_id: SID,
+      })
+    })
+    // No 'done' frame — the turn (and its owning message) is still in
+    // progress; the delegate call itself is the only thing that's finished.
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    // No hidden delegation row leaked through.
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
+    // The placeholder (thinking indicator) shows instead of a bare bubble.
+    expect(container.textContent).toMatch(THINKING_TEXT_RE)
+    // No bare Copy action bar for a message with nothing visible to copy.
+    expect(container.querySelector('[aria-label="Copy message"]')).toBeNull()
+  })
+
+  it('a delegate call that is STILL RUNNING, on an otherwise-empty streaming message rendered via the PlainMessageList fallback, shows the thinking placeholder', async () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_ghost_running',
+        tool: 'delegate',
+        params: { action: 'run', async: true, target_agent_id: 'ray', task: 'do Y' },
+        session_id: SID,
+      })
+    })
+    // No tool_call_result yet — the delegate dispatch is still running, and
+    // no 'done' frame — the message stays isStreaming:true throughout.
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
+    expect(container.textContent).toMatch(THINKING_TEXT_RE)
+    expect(container.querySelector('[aria-label="Copy message"]')).toBeNull()
+  })
+})

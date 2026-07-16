@@ -55,8 +55,12 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   // shouldRenderToolCallInPanel instead — an inverted, outcome-blind policy
   // that shows everything except load_tool, since the panel is the
   // designated transparency surface for exactly what the thread hides,
-  // failures included. Must sit after every hook above and before the JSX
-  // return (Rules of Hooks).
+  // failures included. That transparency is scoped to steps belonging to a
+  // span that made it into the panel at all (running or retained in
+  // recentlyFinished) — a top-level delegation denied outright (no span ever
+  // opens) never reaches this component via 'panel' either; see
+  // toolVisibility.ts's shouldRenderToolCall doc comment for that gap. Must
+  // sit after every hook above and before the JSX return (Rules of Hooks).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const marshalErr = isMarshalErrorResult(toolCall.result)
   // Ported from GenericToolCall.tsx (G17/BLOCKER 2): a denied delegation is
@@ -147,7 +151,11 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           </div>
           <div>
             <div className="text-[var(--color-muted)] mb-1">Parameters</div>
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all">
+            {/* Fix 7 (2026-07-16): capped like the Result pane below — params
+                are now retained post-completion (see chat.ts's params-survive
+                -merge fix), so an uncapped write_file/edit content param can
+                render arbitrarily tall. */}
+            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {JSON.stringify(toolCall.params, null, 2)}
             </pre>
           </div>

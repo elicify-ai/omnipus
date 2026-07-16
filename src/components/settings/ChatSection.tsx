@@ -38,6 +38,8 @@ export function ChatSection(): React.ReactElement {
             <p className="text-xs text-[var(--color-muted)] mt-0.5">
               Show every tool call in the transcript, including background dispatches,
               status polls, and internal tool-loading calls that are hidden by default.
+              This is also the only way to see delegation cards and their step-level
+              detail inline in the thread, rather than in the Activity panel alone.
             </p>
           </div>
           <Switch

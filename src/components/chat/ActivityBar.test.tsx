@@ -1,7 +1,11 @@
 // ActivityBar — persistent activity strip tests.
 //
 // Covers: idle (0 running), 1 running, N running (span + bash), the count
-// text, and clicking the bar opens the ActivityPanel slide-out.
+// text, clicking the bar opens the ActivityPanel slide-out, and (Fix 1,
+// 2026-07-16) the revised mount matrix: an open panel survives running→0,
+// a retained failure keeps the pill mounted in its failed-state variant,
+// a purely-successful idle history still unmounts, and the spinner only
+// ever appears while something is running.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -52,6 +56,19 @@ function runningSpan(overrides: Partial<SubagentSpan> = {}): SubagentSpan {
     taskLabel: 'digging into logs',
     steps: [],
     status: 'running',
+    ...overrides,
+  } as SubagentSpan
+}
+
+/** A terminal (non-running) span — status defaults to 'error' since most Fix-1 tests need a failure. */
+function finishedSpan(overrides: Partial<SubagentSpan> = {}): SubagentSpan {
+  return {
+    spanId: 's1',
+    parentCallId: 'c1',
+    taskLabel: 'digging into logs',
+    steps: [],
+    status: 'error',
+    durationMs: 1200,
     ...overrides,
   } as SubagentSpan
 }
@@ -223,12 +240,155 @@ describe('ActivityBar — opens the panel on click', () => {
     expect(screen.getByText('digging into logs')).toBeInTheDocument()
   })
 
-  // Deliberate, accepted tradeoff (see ActivityBar.tsx's header comment): the
-  // bar is a pure "something is happening right now" glance, not a
-  // permanent history browser — at rest there's nothing to click, by design.
-  it('has no clickable entry point at rest — the panel is only reachable while something is running', () => {
+  // Deliberate, accepted tradeoff (see ActivityBar.tsx's header comment): a
+  // FRESH mount with no running/finished activity at all has nothing to
+  // click, by design — this is distinct from Fix 1's later matrix (a panel
+  // that WAS opened, or a failure that WAS retained, keeps the pill
+  // mounted); this test only covers the true "nothing has ever happened"
+  // starting state.
+  it('has no clickable entry point at rest — nothing has ever run or finished', () => {
     renderBar()
     expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
     expect(screen.queryByText('Running now')).not.toBeInTheDocument()
+  })
+})
+
+// ── Fix 1 (2026-07-16): revised mount matrix ────────────────────────────────
+// The bar previously unmounted unconditionally the instant runningCount hit
+// 0 (`if (runningCount === 0) return null`), which killed an OPEN panel
+// mid-inspection and made a retained failure unreachable at idle — the
+// panel is now the designated failure-transparency surface for delegation/
+// background-bash outcomes hidden from the thread by default
+// (toolVisibility.ts). This block pins the corrected matrix.
+
+describe('ActivityBar — Fix 1: an open panel survives running -> 0', () => {
+  it('keeps the panel mounted (and open) after the last running item finishes while the panel is open', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([runningSpan({ agentId: 'ray' })])],
+      })
+    })
+    renderBar()
+    await waitFor(() => {
+      expect(screen.getByText('1 running')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId('activity-bar'))
+    await waitFor(() => {
+      expect(screen.getByText('Running now')).toBeInTheDocument()
+    })
+
+    // The running item finishes (successfully) — runningCount drops to 0.
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            finishedSpan({ agentId: 'ray', status: 'success' }),
+          ]),
+        ],
+      })
+    })
+
+    // The panel (and its "Recently finished" section) must still be visible
+    // — the whole component must NOT have unmounted out from under it.
+    await waitFor(() => {
+      expect(screen.getByText('Recently finished')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('activity-bar')).toBeInTheDocument()
+  })
+})
+
+describe('ActivityBar — Fix 1: a retained failure keeps the pill mounted at idle', () => {
+  it('shows a red "1 failed" pill (no spinner) when idle with an error item in recentlyFinished', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error' })])],
+      })
+    })
+    renderBar()
+
+    const bar = await screen.findByTestId('activity-bar')
+    expect(screen.getByText('1 failed')).toBeInTheDocument()
+    // No spinner while idle — spinner is reserved for runningCount > 0.
+    expect(bar.querySelector('.animate-spin')).toBeNull()
+    // Failed-state variant uses the error-toned dot, not the muted/idle one.
+    const dot = bar.querySelector('[class*="rounded-full"]')
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('also stays mounted for an interrupted or timeout item (not just error)', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'interrupted' })])],
+      })
+    })
+    renderBar()
+    expect(await screen.findByText('1 failed')).toBeInTheDocument()
+  })
+
+  it('does NOT count a cancelled item as a failure (cancelled is a deliberate stop, not a failure)', () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'cancelled' })])],
+      })
+    })
+    renderBar()
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+  })
+
+  it('opening the panel from the failed-state pill still reveals the failed row', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', taskLabel: 'broken task' })])],
+      })
+    })
+    renderBar()
+    const bar = await screen.findByTestId('activity-bar')
+    fireEvent.click(bar)
+    await waitFor(() => {
+      expect(screen.getByText('broken task')).toBeInTheDocument()
+    })
+  })
+})
+
+describe('ActivityBar — Fix 1: a purely-successful idle history still unmounts', () => {
+  it('renders nothing when recentlyFinished contains only success items and nothing is running', () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'success' })])],
+      })
+    })
+    renderBar()
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+  })
+})
+
+describe('ActivityBar — Fix 1: the spinner only ever shows while running', () => {
+  it('does not render .animate-spin when idle-but-mounted via a retained failure', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'timeout' })])],
+      })
+    })
+    renderBar()
+    const bar = await screen.findByTestId('activity-bar')
+    expect(bar.querySelector('.animate-spin')).toBeNull()
+  })
+
+  it('renders .animate-spin once something is running again, even with a failure also retained', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            finishedSpan({ spanId: 's_failed', parentCallId: 'c_failed', agentId: 'ray', status: 'error' }),
+            runningSpan({ spanId: 's_running', parentCallId: 'c_running', agentId: 'ray' }),
+          ]),
+        ],
+      })
+    })
+    renderBar()
+    const bar = await screen.findByTestId('activity-bar')
+    expect(bar.querySelector('.animate-spin')).not.toBeNull()
+    expect(screen.getByText('1 running')).toBeInTheDocument()
   })
 })

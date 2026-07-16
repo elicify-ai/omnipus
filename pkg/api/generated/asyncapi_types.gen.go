@@ -139,7 +139,7 @@ type CancelStageFrame struct {
 	Type      string `json:"type"`
 }
 
-// DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator and renders a distinct delegation-failure block — it does NOT rely on the LLM to narrate the denial. The frame's top-level `error` field carries the same `reason`.
+// DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the calling agent's own narration of the denial, not a dedicated SPA-rendered block. The frame's top-level `error` field carries the same `reason`.
 type DelegationFailure struct {
 	// Fixed discriminator the SPA matches on.
 	Error string `json:"error"`

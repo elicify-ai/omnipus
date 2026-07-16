@@ -30,6 +30,8 @@ function makeAgentItem(overrides: Partial<AgentActivityItem> = {}): AgentActivit
     status: overrides.status ?? 'running',
     durationMs: overrides.durationMs,
     steps: overrides.steps ?? [],
+    finalResult: overrides.finalResult,
+    interruptReason: overrides.interruptReason,
   }
 }
 
@@ -131,6 +133,140 @@ describe('ActivityPanel — expandable native row', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { expanded: true }))
     expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+  })
+})
+
+// ── Fix 2 (2026-07-16): panel carries the final result / interrupt reason ──
+// SubagentBlock's thread card (now hidden from the thread by default) was
+// the only surface showing span.finalResult and a human-readable interrupt
+// reason. useRunningActivity.ts now carries both onto AgentActivityItem so
+// the panel — the durable default-visible surface for this detail — can
+// render them too.
+
+describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
+  it('an expanded finished item shows its final result in a labeled block', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({
+            status: 'success',
+            taskLabel: 'summarize logs',
+            finalResult: 'Found 3 errors in the last hour.',
+          }),
+        ]}
+      />,
+    )
+    const toggle = screen.getByRole('button', { expanded: false })
+    expect(toggle).not.toBeDisabled()
+    fireEvent.click(toggle)
+    expect(screen.getByText('Final result')).toBeInTheDocument()
+    expect(screen.getByText('Found 3 errors in the last hour.')).toBeInTheDocument()
+  })
+
+  it('a finished item with zero steps but a final result is still expandable', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({ status: 'success', steps: [], finalResult: 'done quickly' }),
+        ]}
+      />,
+    )
+    const toggle = screen.getByRole('button', { expanded: false })
+    expect(toggle).not.toBeDisabled()
+    fireEvent.click(toggle)
+    expect(screen.getByText('done quickly')).toBeInTheDocument()
+  })
+
+  it('an expanded interrupted item appends the human-readable reason to the status text', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({
+            status: 'interrupted',
+            taskLabel: 'long task',
+            steps: [],
+            finalResult: 'partial output',
+            interruptReason: 'parent_timeout',
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByText('interrupted')).toBeInTheDocument()
+    expect(screen.getByText('(parent timed out)')).toBeInTheDocument()
+  })
+
+  // (item 8g, 2026-07-16 fix wave): expansion-with-steps was only ever
+  // exercised for RUNNING items (see "ActivityPanel — expandable native
+  // row" above) — this pins the same behavior for a FINISHED
+  // (recentlyFinished) item, whose steps are just as reachable.
+  it('an expanded finished item shows its (non-load_tool) steps', () => {
+    const visibleStep = {
+      kind: 'tool' as const,
+      tool: { id: 'fin1', call_id: 'fin1', tool: 'fs.list', params: { path: '/tmp' }, status: 'success' as const, result: 'a.txt' },
+    }
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[makeAgentItem({ status: 'success', taskLabel: 'listed files', steps: [visibleStep] })]}
+      />,
+    )
+    const toggle = screen.getByRole('button', { expanded: false })
+    expect(toggle).not.toBeDisabled()
+    fireEvent.click(toggle)
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveAttribute('data-tool', 'fs.list')
+  })
+
+  it('an expanded finished item HIDES a load_tool step by default (non-verbose) but shows other steps', () => {
+    const loadToolStep = {
+      kind: 'tool' as const,
+      tool: { id: 'fin2', call_id: 'fin2', tool: 'load_tool', params: { name: 'web_search' }, status: 'success' as const, result: 'ok' },
+    }
+    const visibleStep = {
+      kind: 'tool' as const,
+      tool: { id: 'fin3', call_id: 'fin3', tool: 'fs.list', params: {}, status: 'success' as const, result: 'a.txt' },
+    }
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[makeAgentItem({ status: 'success', steps: [loadToolStep, visibleStep] })]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badges = screen.getAllByTestId('tool-call-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveAttribute('data-tool', 'fs.list')
+  })
+
+  it('does not render a "Final result" block when the finished item has none', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({
+            status: 'success',
+            steps: [{ kind: 'tool', tool: { id: 's1', call_id: 's1', tool: 'fs.list', params: {}, status: 'success', result: 'a.txt' } }],
+          }),
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    expect(screen.queryByText('Final result')).not.toBeInTheDocument()
   })
 })
 

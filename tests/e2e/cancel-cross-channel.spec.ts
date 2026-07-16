@@ -433,13 +433,27 @@ async function assertCancelCascadesToSubagent(
   )
   await input.press('Enter')
 
-  // Wait for the subagent collapsed block to appear — confirms delegation fired
+  // Wait for the Activity Bar pill to appear — confirms delegation fired
   // (and that the SPA has minted the session on disk).
-  // The block renders as soon as the child span exists (status "working"), so it
-  // marks the START of the descendant's run, not its end. 150s headroom matches
-  // the sibling delegation tests; the empirical CI tail is single-digit seconds.
-  const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]')
-  await expect(collapsedBlock).toBeVisible({ timeout: 150_000 })
+  //
+  // Switched from [data-testid="subagent-collapsed"] (2026-07-16): that
+  // testid is the chat-thread SubagentBlock card, which commit 8e1bf1b9 made
+  // verbose-only (shouldRenderSubagentSpan gates on verboseChatEnabled,
+  // default false — src/store/chatPreferences.ts). This test's "delegation
+  // started" gate has nothing to do with thread display policy — it only
+  // needs to know a subagent span exists and is running — so
+  // [data-testid="activity-bar"] (ActivityBar.tsx) is the better, POLICY-
+  // INDEPENDENT signal: useRunningActivity() (src/hooks/useRunningActivity.ts)
+  // reads every message's spans unconditionally (no shouldRenderSubagentSpan
+  // filter anywhere in that hook or in ActivityBar.tsx) and the pill mounts
+  // the instant runningCount > 0. It renders as soon as the child span
+  // exists with status "running" — same underlying data source and same
+  // "start of the descendant's run" timing the old collapsed-block wait
+  // relied on, just without the verbose-chat dependency. 150s headroom
+  // matches the sibling delegation tests; the empirical CI tail is
+  // single-digit seconds.
+  const activityBar = page.locator('[data-testid="activity-bar"]')
+  await expect(activityBar).toBeVisible({ timeout: 150_000 })
 
   // Click Stop while the subagent is running.
   const stopBtn = page.locator('[data-testid="stop-btn"]')
