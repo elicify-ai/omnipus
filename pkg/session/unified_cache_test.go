@@ -23,17 +23,29 @@
 //	Scenario: RetentionSweep evicts a swept session from the cache (companion-fix regression)
 //	Scenario: GetOrCreateScheduledSession's second call serves from cache
 //	Scenario (concurrency, -race): list-while-writing, NewChannelSession-while-listing, delete-while-listing
+//	Scenario (concurrency, -race): SetMeta/SwitchAgent (RMW) interleaved with ListSessions/GetMeta
+//	Scenario (MB-1 regression): a FAILED SetMeta must not corrupt the cache — GetMeta/ListSessions
+//	  keep returning the OLD (disk-matching) value, never the attempted-but-unpersisted one
+//	Scenario: loadMetaCacheLocked (boot-time cache seed) happy path — a fresh store over N
+//	  pre-existing valid sessions lists all N
+//	Scenario (MB-2 regression): loadMetaCacheLocked excludes a corrupt session and counts it via
+//	  CacheLoadFailureCount, without failing store construction
+//	Scenario (MB-3 regression): Clone() deep-copies every reference-kind field UnifiedMeta has —
+//	  a reflection-driven guard that fails if a future field is added without also being cloned
 //
 // Traces to: pkg/session/unified.go (metaCache, Clone, readMetaLocked,
 // writeMetaLocked, ListSessions, GetMeta, GetOrCreateScheduledSession,
-// DeleteSession, ClearAll) and pkg/session/retention_sweep.go (companion fix).
+// DeleteSession, ClearAll, loadMetaCacheLocked, CacheLoadFailureCount) and
+// pkg/session/retention_sweep.go (companion fix).
 
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -437,4 +449,368 @@ func TestConcurrentDeleteWhileListing(t *testing.T) {
 	metas, err := store.ListSessions()
 	require.NoError(t, err)
 	assert.Empty(t, metas, "all sessions must be deleted by the end of the concurrent run")
+}
+
+// TestConcurrentSetMetaSwitchAgentWhileReading is the -race test-gap fix
+// (pr-test sev3): the existing concurrency trio above covers
+// NewSession/NewChannelSession/DeleteSession racing ListSessions, but none of
+// them exercise the specific read-modify-write pattern readMetaLocked's doc
+// comment calls out — SetMeta/SwitchAgent mutate the value readMetaLocked
+// returns and then call writeMetaLocked. This interleaves SetMeta and
+// SwitchAgent (both RMW callers) with ListSessions and GetMeta (both readers)
+// across many sessions; run with -race to catch any metaCache/us.mu misuse
+// on this path specifically.
+//
+// Traces to: pkg/session/unified.go readMetaLocked, SetMeta, SwitchAgent,
+// ListSessions, GetMeta.
+func TestConcurrentSetMetaSwitchAgentWhileReading(t *testing.T) {
+	store := newTestStore(t)
+	const n = 10
+	const iterations = 50
+
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+		require.NoError(t, err)
+		ids[i] = meta.ID
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			id := ids[i%n]
+			title := fmt.Sprintf("title-%d", i)
+			if err := store.SetMeta(id, MetaPatch{Title: &title}); err != nil {
+				t.Errorf("SetMeta failed: %v", err)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		agents := []string{"agent-1", "agent-2"}
+		for i := 0; i < iterations; i++ {
+			id := ids[i%n]
+			newAgent := agents[i%2]
+			if err := store.SwitchAgent(id, newAgent); err != nil && !errors.Is(err, ErrAlreadyActive) {
+				t.Errorf("SwitchAgent failed: %v", err)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			metas, err := store.ListSessions()
+			if err != nil {
+				t.Errorf("ListSessions failed: %v", err)
+				continue
+			}
+			// Touch every returned meta's fields so -race has something to
+			// flag if a read ever aliased a value an RMW writer was
+			// concurrently mutating in place.
+			for _, m := range metas {
+				_ = m.Title
+				_ = m.ActiveAgentID
+				_ = len(m.AgentIDs)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			id := ids[i%n]
+			m, err := store.GetMeta(id)
+			if err != nil {
+				t.Errorf("GetMeta failed: %v", err)
+				continue
+			}
+			_ = m.Title
+			_ = m.ActiveAgentID
+		}
+	}()
+
+	wg.Wait()
+}
+
+// TestSetMeta_WriteFailureDoesNotCorruptCache is the MB-1 regression guard.
+//
+// Root cause under test: readMetaLocked previously returned the LIVE cache
+// entry pointer on a hit, so SetMeta/SwitchAgent/AppendTranscript mutated the
+// cached object IN PLACE before calling writeMetaLocked. If writeMetaLocked's
+// disk write then failed, it returned early WITHOUT re-storing a clone — but
+// the in-place mutation had already corrupted the cached object, so
+// GetMeta/ListSessions went on reporting the unpersisted, attempted value
+// while meta.json on disk still held the old one.
+//
+// This test injects a deterministic writeMetaLocked failure via the
+// writeFileAtomicFn package-level test seam rather than a chmod-based trick:
+// CI runs as root, which bypasses permission enforcement via
+// CAP_DAC_OVERRIDE (see removeAllFn's doc comment for the identical
+// rationale), so a chmod'd read-only directory would provide zero coverage
+// of this behavior in CI.
+//
+// BDD: Given a session with a persisted title, When SetMeta is called with a
+// new title AND the disk write fails, Then SetMeta returns the injected
+// error AND both GetMeta and ListSessions still return the OLD title
+// (matching what is still on disk) — never the attempted-but-unpersisted
+// new title.
+//
+// Traces to: pkg/session/unified.go readMetaLocked, writeMetaLocked, SetMeta.
+func TestSetMeta_WriteFailureDoesNotCorruptCache(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	const originalTitle = "Original Title"
+	newTitle := originalTitle
+	require.NoError(t, store.SetMeta(sessionID, MetaPatch{Title: &newTitle}))
+
+	// Inject a deterministic write failure for the duration of this test.
+	injectedErr := errors.New("injected write failure")
+	origWriteFileAtomicFn := writeFileAtomicFn
+	t.Cleanup(func() { writeFileAtomicFn = origWriteFileAtomicFn })
+	writeFileAtomicFn = func(path string, data []byte, perm os.FileMode) error {
+		return injectedErr
+	}
+
+	attemptedTitle := "Attempted-But-Unpersisted Title"
+	err = store.SetMeta(sessionID, MetaPatch{Title: &attemptedTitle})
+	require.Error(t, err, "SetMeta must propagate the injected write failure")
+	assert.ErrorIs(t, err, injectedErr)
+
+	// Restore the real write function before reading back — GetMeta/
+	// ListSessions never write, but this keeps the test seam's blast radius
+	// minimal and matches the removeAllFn precedent's t.Cleanup discipline.
+	writeFileAtomicFn = origWriteFileAtomicFn
+
+	got, err := store.GetMeta(sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, originalTitle, got.Title,
+		"GetMeta must still return the OLD value after a FAILED SetMeta — cache must not diverge from disk")
+
+	metas, err := store.ListSessions()
+	require.NoError(t, err)
+	found := findMeta(metas, sessionID)
+	require.NotNil(t, found)
+	assert.Equal(t, originalTitle, found.Title,
+		"ListSessions must still return the OLD value after a FAILED SetMeta — cache must not diverge from disk")
+
+	// Confirm disk itself matches — the cache and disk must agree, not just
+	// both happen to be wrong in the same way.
+	diskMeta, err := readUnifiedMeta(filepath.Join(store.baseDir, sessionID))
+	require.NoError(t, err)
+	assert.Equal(t, originalTitle, diskMeta.Title, "disk meta.json must be unchanged by the failed write")
+}
+
+// TestNewUnifiedStore_LoadMetaCache_HappyPath is the restart-path happy-path
+// test gap (pr-test sev7): loadMetaCacheLocked (the boot-time cache seed) had
+// zero coverage before this fix round. Constructs a store, creates N
+// sessions, discards that store instance (simulating a prior process run),
+// then constructs a FRESH UnifiedStore over the SAME baseDir and asserts
+// ListSessions returns all N — proving the boot-time cache seed actually
+// works, not just the live-instance mutation paths the rest of this file
+// covers.
+//
+// Traces to: pkg/session/unified.go loadMetaCacheLocked.
+func TestNewUnifiedStore_LoadMetaCache_HappyPath(t *testing.T) {
+	baseDir := t.TempDir()
+
+	first, err := NewUnifiedStore(baseDir)
+	require.NoError(t, err)
+
+	const n = 4
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		meta, err := first.NewSession(SessionTypeChat, "", "agent-1")
+		require.NoError(t, err)
+		ids[i] = meta.ID
+	}
+
+	// Fresh store instance over the same baseDir — exercises
+	// loadMetaCacheLocked's boot-time scan, not any live-instance mutation.
+	second, err := NewUnifiedStore(baseDir)
+	require.NoError(t, err)
+
+	metas, err := second.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, metas, n, "a fresh store must seed metaCache with every pre-existing session")
+	for _, id := range ids {
+		assert.NotNil(t, findMeta(metas, id), "session %s must be present after the boot-time cache seed", id)
+	}
+	assert.Zero(t, second.CacheLoadFailureCount(), "no sessions were corrupt — failure count must be 0")
+}
+
+// TestNewUnifiedStore_LoadMetaCache_CorruptSessionExcludedAndCounted is the
+// MB-2 regression guard: a session whose meta.json is unreadable/unparseable
+// at construction time must be excluded from metaCache (and therefore from
+// ListSessions/GetMeta) without failing store construction, AND the failure
+// must be counted via CacheLoadFailureCount so the condition is
+// assertable/observable rather than a silent, permanent gap.
+//
+// BDD: Given one session directory with a valid meta.json and one with a
+// corrupt (unparseable) meta.json, When a fresh UnifiedStore is constructed
+// over that baseDir, Then ListSessions returns only the good session,
+// GetMeta fails for the bad one, and CacheLoadFailureCount()==1.
+//
+// Traces to: pkg/session/unified.go loadMetaCacheLocked, CacheLoadFailureCount.
+func TestNewUnifiedStore_LoadMetaCache_CorruptSessionExcludedAndCounted(t *testing.T) {
+	baseDir := t.TempDir()
+
+	goodDir := filepath.Join(baseDir, "good-session")
+	require.NoError(t, os.MkdirAll(goodDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(goodDir, "meta.json"),
+		[]byte(`{"id":"good-session","status":"active"}`),
+		0o600,
+	))
+
+	badDir := filepath.Join(baseDir, "bad-session")
+	require.NoError(t, os.MkdirAll(badDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(badDir, "meta.json"),
+		[]byte(`{not valid json`),
+		0o600,
+	))
+
+	store, err := NewUnifiedStore(baseDir)
+	require.NoError(t, err, "NewUnifiedStore must succeed despite one corrupt session dir")
+
+	metas, err := store.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, metas, 1, "only the good session must be present in the cache")
+	assert.Equal(t, "good-session", metas[0].ID)
+
+	assert.Equal(t, 1, store.CacheLoadFailureCount(),
+		"the corrupt session must be counted as a cache-load failure")
+
+	_, err = store.GetMeta("bad-session")
+	assert.Error(t, err, "the corrupt session must not be servable via GetMeta either")
+}
+
+// TestClone_GuardsEveryReferenceField is the MB-3 regression guard: Clone()
+// is a hand-maintained enumeration of UnifiedMeta's current reference fields
+// (Partitions, AgentIDs, CompactionSummaries, Stats.ByModel) with nothing
+// forcing a FUTURE slice/map/pointer field added to
+// UnifiedMeta/SessionMeta/SessionStats to also be cloned there — a silent
+// aliasing bug otherwise.
+//
+// This test walks UnifiedMeta's fields (including the embedded
+// SessionMeta/SessionStats) via reflection and requires every slice/map/
+// pointer/chan/func/interface-kind field it finds to be in the explicit
+// "known" allowlist below — hand-verified to be exercised by a mutate-clone-
+// mutate-assert check further down. Adding a new reference field to
+// UnifiedMeta/SessionMeta/SessionStats without also adding it to Clone() AND
+// to this test's known/exercised list makes this test FAIL via the
+// t.Fatalf below, so it can never silently go uncovered.
+//
+// Traces to: pkg/session/unified.go Clone.
+func TestClone_GuardsEveryReferenceField(t *testing.T) {
+	original := &UnifiedMeta{
+		SessionMeta: SessionMeta{
+			ID:         "meta-1",
+			Partitions: []string{"p1", "p2"},
+			AgentIDs:   []string{"agent-a", "agent-b"},
+			CompactionSummaries: map[string]string{
+				"agent-a": "summary-a",
+			},
+			Stats: SessionStats{
+				ByModel: map[string]ModelTokens{
+					"model-a": {Total: 10},
+				},
+			},
+		},
+		Type: SessionTypeChat,
+	}
+
+	type refField struct {
+		path string
+		kind reflect.Kind
+	}
+	var refFields []refField
+	var walk func(rt reflect.Type, prefix string)
+	walk = func(rt reflect.Type, prefix string) {
+		for i := 0; i < rt.NumField(); i++ {
+			f := rt.Field(i)
+			switch f.Type.Kind() {
+			case reflect.Struct:
+				switch {
+				case f.Anonymous && f.Type == reflect.TypeOf(SessionMeta{}):
+					// UnifiedMeta embeds SessionMeta anonymously — its fields
+					// are PROMOTED, so recurse WITHOUT adding "SessionMeta."
+					// to the path (matches how Partitions/AgentIDs/etc. are
+					// actually addressed: original.Partitions, not
+					// original.SessionMeta.Partitions).
+					walk(f.Type, prefix)
+				case f.Type == reflect.TypeOf(SessionStats{}):
+					// SessionMeta.Stats is a named (non-anonymous) nested
+					// struct field, so it DOES contribute its own name
+					// ("Stats.") to the path.
+					walk(f.Type, prefix+f.Name+".")
+				default:
+					// Any other nested struct (e.g. time.Time) is treated as
+					// scalar-like for this test's purposes.
+				}
+			case reflect.Slice, reflect.Map, reflect.Ptr, reflect.Chan, reflect.Func, reflect.Interface:
+				refFields = append(refFields, refField{path: prefix + f.Name, kind: f.Type.Kind()})
+			}
+		}
+	}
+	walk(reflect.TypeOf(UnifiedMeta{}), "")
+
+	known := map[string]bool{
+		"Partitions":          true,
+		"AgentIDs":            true,
+		"CompactionSummaries": true,
+		"Stats.ByModel":       true,
+	}
+	for _, rf := range refFields {
+		if !known[rf.path] {
+			t.Fatalf(
+				"Clone-guard test does not know how to exercise new reference field %q (kind %v) — "+
+					"add it to Clone() AND to this test's known/exercised-field list",
+				rf.path, rf.kind,
+			)
+		}
+	}
+	for path := range known {
+		found := false
+		for _, rf := range refFields {
+			if rf.path == path {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "known-field %q listed in this test no longer exists on UnifiedMeta — update the test", path)
+	}
+
+	clone := original.Clone()
+
+	clone.Partitions[0] = "MUTATED"
+	assert.Equal(t, "p1", original.Partitions[0],
+		"mutating clone.Partitions must not affect original.Partitions")
+	clone.Partitions = append(clone.Partitions, "p3")
+	assert.Len(t, original.Partitions, 2,
+		"appending to clone.Partitions must not affect original.Partitions length")
+
+	clone.AgentIDs[0] = "MUTATED"
+	assert.Equal(t, "agent-a", original.AgentIDs[0],
+		"mutating clone.AgentIDs must not affect original.AgentIDs")
+
+	clone.CompactionSummaries["agent-a"] = "MUTATED"
+	assert.Equal(t, "summary-a", original.CompactionSummaries["agent-a"],
+		"mutating clone.CompactionSummaries must not affect original.CompactionSummaries")
+	clone.CompactionSummaries["agent-new"] = "added-only-to-clone"
+	_, foundInOriginal := original.CompactionSummaries["agent-new"]
+	assert.False(t, foundInOriginal,
+		"adding a key to clone.CompactionSummaries must not affect original.CompactionSummaries")
+
+	cloneEntry := clone.Stats.ByModel["model-a"]
+	cloneEntry.Total = 999
+	clone.Stats.ByModel["model-a"] = cloneEntry
+	assert.Equal(t, 10, original.Stats.ByModel["model-a"].Total,
+		"mutating clone.Stats.ByModel must not affect original.Stats.ByModel")
 }

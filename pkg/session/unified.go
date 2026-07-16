@@ -120,11 +120,35 @@ type UnifiedStore struct {
 	// It is the sole data source for ListSessions/GetOrCreateScheduledSession's
 	// existence check and GetMeta's fast path — removing the O(N) os.ReadDir +
 	// per-session os.ReadFile+json.Unmarshal that ListSessions previously did
-	// under the single store-wide lock on every call. Populated once at
-	// construction (loadMetaCacheLocked) and kept current by writeMetaLocked
-	// (every mutation path funnels through it), with explicit eviction on
-	// DeleteSession, ClearAll, and RetentionSweep's empty-dir removal.
+	// under the single store-wide lock on every call. Populated via three
+	// paths: once at construction (loadMetaCacheLocked); on every successful
+	// mutation via writeMetaLocked (every mutation path funnels through it);
+	// and via readMetaLocked self-healing the cache on a cache-miss disk read
+	// (SetMeta, SwitchAgent, AppendTranscript, GetOrCreateScheduledSession, and
+	// GetMeta's cache-miss path all reach the cache this way). Explicit
+	// eviction on DeleteSession, ClearAll, and RetentionSweep's empty-dir
+	// removal.
 	metaCache map[string]*UnifiedMeta
+
+	// cacheLoadFailures counts sessions whose meta.json failed to read/parse
+	// at construction time (loadMetaCacheLocked), even after one retry
+	// (MB-2). Such a session is excluded from metaCache — and therefore from
+	// ListSessions — for this UnifiedStore's entire process lifetime; a
+	// transient blip that would have cleared up moments later does NOT
+	// self-correct without a restart. This counter makes that accepted
+	// limitation assertable/observable instead of a silent gap. See
+	// CacheLoadFailureCount.
+	cacheLoadFailures int
+}
+
+// CacheLoadFailureCount returns the number of sessions that failed to load
+// into metaCache at construction time (after one retry) — see
+// loadMetaCacheLocked's doc comment for the accepted limitation this
+// signals. Safe to call concurrently with any other UnifiedStore method.
+func (us *UnifiedStore) CacheLoadFailureCount() int {
+	us.mu.RLock()
+	defer us.mu.RUnlock()
+	return us.cacheLoadFailures
 }
 
 // BaseDir returns the root directory of this store.
@@ -141,6 +165,15 @@ func (us *UnifiedStore) BaseDir() string {
 // to ClearAll's one call site — not a general refactor of the package's other
 // os.RemoveAll/os.ReadDir calls.
 var removeAllFn = os.RemoveAll
+
+// writeFileAtomicFn is a package-level test seam for writeMetaLocked's disk
+// write step. It defaults to fileutil.WriteFileAtomic; tests override it to
+// force a deterministic write failure (the MB-1 cache/disk-divergence
+// regression guard) without depending on OS permission enforcement — same
+// rationale as removeAllFn above (root bypasses chmod-based failure
+// injection via CAP_DAC_OVERRIDE in CI). Scoped narrowly to writeMetaLocked's
+// one call site.
+var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // validateSessionID rejects IDs that could escape the base directory.
 func validateSessionID(id string) error {
@@ -206,9 +239,21 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 // writeMetaLocked, no lock is held or required here: us has not yet escaped
 // the constructor, so no other goroutine can reach it concurrently.
 //
-// An unreadable session directory is logged at Warn and skipped — matching
-// ListSessions' pre-cache behavior — rather than aborting store construction
-// (and therefore gateway boot) over one bad session directory.
+// A session whose meta.json fails to read/parse is retried ONCE (MB-2) —
+// this alone absorbs a transient boot-time blip, e.g. a concurrent writer
+// mid-rename — before being treated as genuinely unreadable. If it still
+// fails after the retry, this is logged at Error, not Warn: unlike the
+// pre-cache behavior, where ListSessions re-scanned disk on every call so a
+// transient failure would self-correct on the very next call, a session
+// excluded here is excluded from ListSessions for this UnifiedStore's ENTIRE
+// PROCESS LIFETIME — only a restart re-runs this scan and gives it another
+// chance. That permanent-until-restart exclusion is also counted in
+// cacheLoadFailures (see CacheLoadFailureCount) so it is assertable/
+// observable rather than a silent gap. This is an accepted, minimal
+// mitigation, not a full fix — a periodic reconciler that keeps retrying in
+// the background would close the gap completely but is out of scope for
+// this fix round; store construction (and therefore gateway boot) is still
+// never aborted over one bad session directory.
 func (us *UnifiedStore) loadMetaCacheLocked() {
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
@@ -221,9 +266,18 @@ func (us *UnifiedStore) loadMetaCacheLocked() {
 		if !entry.IsDir() || entry.Name() == ".context" {
 			continue
 		}
-		meta, err := readUnifiedMeta(filepath.Join(us.baseDir, entry.Name()))
+		sessionDir := filepath.Join(us.baseDir, entry.Name())
+		meta, err := readUnifiedMeta(sessionDir)
 		if err != nil {
-			slog.Warn("unified_store: load meta cache: skipping unreadable session", "dir", entry.Name(), "error", err)
+			// One retry: absorbs a transient boot-time blip before we give up.
+			meta, err = readUnifiedMeta(sessionDir)
+		}
+		if err != nil {
+			us.cacheLoadFailures++
+			slog.Error(
+				"unified_store: load meta cache: session unreadable after retry — excluded until restart",
+				"dir", entry.Name(), "error", err,
+			)
 			continue
 		}
 		us.metaCache[entry.Name()] = meta
@@ -437,11 +491,12 @@ func (us *UnifiedStore) GetOrCreateScheduledSession(id, ownerAgentID string) (*U
 	defer us.mu.Unlock()
 
 	if meta, err := us.readMetaLocked(id); err == nil {
-		// Cache-first existence check: return an independent clone, never the
-		// live cache entry — this is a public API returning to an external
-		// caller, unlike SetMeta/SwitchAgent which mutate the live entry
-		// in-place and then replace it via writeMetaLocked before releasing
-		// us.mu.
+		// Cache-first existence check. readMetaLocked already returns an
+		// independent clone (both cache-hit and cache-miss paths — see its
+		// doc comment), so this second Clone() call is redundant but
+		// harmless; kept as a defensive belt-and-braces guarantee that a
+		// future readMetaLocked change can never leak a live cache pointer to
+		// this external-facing existence check.
 		return meta.Clone(), nil
 	}
 	return us.createSessionLocked(id, SessionTypeScheduled, "scheduled", ownerAgentID)
@@ -540,35 +595,48 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 	return us.writeMetaLocked(sessionID, meta)
 }
 
-// readMetaLocked returns sessionID's metadata without acquiring the mutex.
-// Caller must hold us.mu (the full write lock — see below).
+// readMetaLocked returns an INDEPENDENT CLONE of sessionID's metadata,
+// never the live cache entry pointer, on both the cache-hit and cache-miss
+// paths. Caller must hold us.mu (the full write lock — see below).
 //
-// Cache-first: on a hit, returns the LIVE cache entry pointer, not a clone.
-// This is intentional and safe ONLY because every caller of readMetaLocked
-// (SetMeta, SwitchAgent, AppendTranscript, GetOrCreateScheduledSession,
-// GetMeta's cache-miss path) holds us.mu.Lock() — the full exclusive lock,
-// never just RLock — across the entire read-modify-write: they mutate the
-// returned pointer in place and then call writeMetaLocked, which clones the
-// mutated value into a FRESH map entry before the lock is released. No RLock
-// holder can observe the entry mid-mutation because RWMutex.Lock excludes
-// all readers for the call's whole duration. Callers that return this value
-// to code outside us.mu (GetMeta, GetOrCreateScheduledSession) MUST call
-// .Clone() themselves before returning — readMetaLocked does not, so an
-// internal read-modify-write caller isn't forced to pay for a redundant
-// clone on every mutation.
+// MB-1 fix (cache/disk divergence on write failure): an earlier version of
+// this method returned the LIVE cache entry pointer on a hit, reasoning that
+// every read-modify-write caller (SetMeta, SwitchAgent, AppendTranscript,
+// GetOrCreateScheduledSession, GetMeta's cache-miss path) holds us.mu.Lock()
+// — the full exclusive lock — across its entire mutate-then-write, so no
+// RLock holder could observe the entry mid-mutation. That reasoning covered
+// the SUCCESS path but not FAILURE: those callers mutate the returned value
+// in place and then call writeMetaLocked; if the disk write failed,
+// writeMetaLocked returned early WITHOUT re-storing a clone — but the
+// in-place mutation had already corrupted the shared cached object, so
+// GetMeta/ListSessions would go on reporting the unpersisted, attempted
+// value while meta.json on disk still held the old one. Cloning on every
+// read (not just every write) closes this: every RMW caller now mutates its
+// own private clone, so a failed writeMetaLocked leaves the cache entry
+// completely untouched — it still reflects whatever was last durably
+// persisted (the prior cache value on a hit, or the freshly disk-read value
+// on a miss).
 //
-// On a cache miss, reads meta.json from disk and populates the cache with
-// the freshly-unmarshaled (necessarily unaliased) object directly.
+// Callers that hand this value to code outside us.mu (GetMeta's cache-miss
+// path, GetOrCreateScheduledSession) may return it directly — it is already
+// an independent clone — though both currently call .Clone() on it again
+// before returning; that second clone is redundant but harmless (kept as
+// defensive belt-and-braces so a future readMetaLocked change can never leak
+// a live cache pointer to those external-facing call sites).
+//
+// On a cache miss, reads meta.json from disk, populates the cache with the
+// freshly-unmarshaled (necessarily unaliased) object, and returns a clone of
+// it.
 func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 	if meta, ok := us.metaCache[sessionID]; ok {
-		return meta, nil
+		return meta.Clone(), nil
 	}
 	meta, err := readUnifiedMeta(filepath.Join(us.baseDir, sessionID))
 	if err != nil {
 		return nil, err
 	}
 	us.metaCache[sessionID] = meta
-	return meta, nil
+	return meta.Clone(), nil
 }
 
 // writeMetaLocked atomically writes meta.json for sessionID, acquiring an OS
@@ -588,7 +656,7 @@ func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) err
 	}
 	metaPath := filepath.Join(us.baseDir, sessionID, "meta.json")
 	if err := fileutil.WithFlock(metaPath, func() error {
-		return fileutil.WriteFileAtomic(metaPath, data, 0o600)
+		return writeFileAtomicFn(metaPath, data, 0o600)
 	}); err != nil {
 		return err
 	}
