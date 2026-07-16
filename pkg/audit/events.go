@@ -141,8 +141,11 @@ const (
 	// user/channel canceller. Emitted immediately BEFORE the RequestCancel
 	// call, so the audit trail always records WHY a cancel was triggered even
 	// if RequestCancel itself no-ops (turn already finished) or errors.
-	// Distinct from — and always followed by — RequestCancel's OWN
-	// EventTurnCancelAttempt/EventTurnCancelled events, which carry the full
+	// Distinct from — and normally followed by — RequestCancel's OWN
+	// EventTurnCancelAttempt (always) and EventTurnCancelled (unless the root
+	// turn finishes naturally in the narrow gap before RequestCancel claims it,
+	// in which case the reap is a logged no-op — see reapOrphanForegroundTurn),
+	// which carry the full
 	// graceful->hard->detached escalation, approval auto-deny,
 	// background-session kill, and transcript writes uniformly with every
 	// other cancel surface. There is no separate turn.orphan_hard_aborted

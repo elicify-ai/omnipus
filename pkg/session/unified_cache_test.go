@@ -707,6 +707,13 @@ func TestNewUnifiedStore_LoadMetaCache_CorruptSessionExcludedAndCounted(t *testi
 // to this test's known/exercised list makes this test FAIL via the
 // t.Fatalf below, so it can never silently go uncovered.
 //
+// Scope caveat: the walker recurses only into the nested structs present today
+// (the embedded SessionMeta and the named SessionStats). A new field whose type
+// is some OTHER nested struct holding its own slices/maps would be treated as
+// scalar-like and NOT descended into — so this guard covers any new DIRECT
+// slice/map/pointer field, not an arbitrarily-nested one. If a new nested
+// struct type is added, extend the recursion below to match.
+//
 // Traces to: pkg/session/unified.go Clone.
 func TestClone_GuardsEveryReferenceField(t *testing.T) {
 	original := &UnifiedMeta{
