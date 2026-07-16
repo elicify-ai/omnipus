@@ -77,7 +77,7 @@ export function CalendarToolbar({
     'flex items-center justify-center shrink-0',
     'h-8 w-8 rounded-md text-[var(--color-muted)]',
     'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50',
+    'focus-visible:outline-none',
     'transition-colors',
     touchTarget,
     // On coarse pointer, ensure square-ish target width too
@@ -137,7 +137,7 @@ export function CalendarToolbar({
             'h-8 px-2.5 rounded-md',
             'text-xs font-medium text-[var(--color-muted)]',
             'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50',
+            'focus-visible:outline-none',
             'transition-colors',
             touchTarget,
             'pointer-coarse:px-3',
@@ -201,7 +201,7 @@ export function CalendarToolbar({
                 onClick={() => handleViewChange(view)}
                 className={cn(
                   'flex items-center gap-1 px-2.5 h-7 rounded text-xs font-medium whitespace-nowrap',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50',
+                  'focus-visible:outline-none',
                   'transition-colors',
                   touchTarget,
                   'pointer-coarse:h-9 pointer-coarse:px-3',

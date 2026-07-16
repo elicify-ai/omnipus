@@ -206,7 +206,7 @@ function Abi4Banner({
       <button
         type="button"
         onClick={onDismiss}
-        className="shrink-0 text-[10px] text-yellow-400 underline hover:text-yellow-300 focus:outline-none focus:ring-1 focus:ring-yellow-400 rounded"
+        className="shrink-0 text-[10px] text-yellow-400 underline hover:text-yellow-300 focus:outline-none focus:ring-yellow-400 rounded"
       >
         Dismiss for session
       </button>

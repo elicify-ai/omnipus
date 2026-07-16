@@ -55,7 +55,7 @@ export function SsrfEditor({
             type="button"
             onClick={() => onPresetClick(idx)}
             className={[
-              'rounded border px-3 py-1 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] cursor-pointer',
+              'rounded border px-3 py-1 text-xs transition-colors focus:outline-none cursor-pointer',
               activePreset === idx
                 ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                 : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50',
@@ -91,7 +91,7 @@ export function SsrfEditor({
                 <button
                   type="button"
                   aria-label={`Delete SSRF entry ${entry}`}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
+                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
                   onClick={() => onDeleteAdvanced(i)}
                 >
                   <Trash size={12} />

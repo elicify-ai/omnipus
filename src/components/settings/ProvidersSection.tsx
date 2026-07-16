@@ -251,7 +251,7 @@ function EndpointFormatToggle({
   onChange: (v: EndpointFormat) => void
 }) {
   const optionClass = (active: boolean) =>
-    'flex-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+    'flex-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none ' +
     (active
       ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
       : 'border-[var(--color-border)] text-[var(--color-secondary)] hover:border-[var(--color-muted)]')

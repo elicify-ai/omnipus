@@ -458,7 +458,7 @@ export function CreateAgentWizard({
               ref={errorRef}
               tabIndex={-1}
               data-testid="wizard-submit-error"
-              className="rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)] focus:outline-none focus:ring-2 focus:ring-[var(--color-error)]"
+              className="rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)] focus:outline-none"
             >
               <FormError id="wizard-submit-error-text" error={submitError} className="mt-0" />
             </div>

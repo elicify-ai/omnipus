@@ -62,7 +62,7 @@ export function TaskCard({
       className={cn(
         'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer',
         'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
-        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]',
+        'focus-visible:outline-none',
         hasRollup && 'border-[var(--color-accent)]/30',
       )}
     >

@@ -32,13 +32,13 @@ function FocusLab() {
       {/* Mirror the central rule so "forced" examples render identically to
           real focus without needing JS focus juggling. */}
       <style>{`
-        .focus-lab-force { outline: 2px solid var(--color-accent) !important; outline-offset: 2px; }
+        .focus-lab-force { outline: 1px solid var(--color-accent) !important; outline-offset: 2px; }
       `}</style>
       <div className="max-w-3xl mx-auto px-6 py-8 flex flex-col gap-8">
         <div>
           <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)]">Focus Lab</h1>
           <p className="text-sm text-[var(--color-muted)] mt-1">
-            Central ring: 2px solid Forge Gold, 2px offset (WCAG 2.4.13). Left = rest, right = focus (forced).
+            Central ring: 1px solid Forge Gold, 2px offset, no shadow. Left = rest, right = focus (forced).
             Tab through the left column to verify REAL focus matches the forced column.
           </p>
         </div>

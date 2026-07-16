@@ -80,7 +80,7 @@ export function AllowedPathsEditor({
               <button
                 type="button"
                 aria-label={`Delete path ${p}`}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
+                className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
                 onClick={() => onDelete(i)}
               >
                 <Trash size={12} />

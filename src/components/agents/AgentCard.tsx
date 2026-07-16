@@ -35,7 +35,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         className={cn(
           'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-primary)]'
+          'focus-visible:outline-none'
         )}
         aria-label={`View agent ${agent.name}`}
       >
