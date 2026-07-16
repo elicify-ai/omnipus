@@ -1505,6 +1505,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input
               data-testid="chat-input"
+              data-no-focus-ring
               // Explicit tab order 1: chat input first, then agent(2) →
               // model(3) → attach(4) → browser(5), then natural DOM order
               // (the header tab menu). Deliberate positive tabIndex on this
