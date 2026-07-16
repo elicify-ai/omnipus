@@ -165,7 +165,7 @@ export function BrowserToolBlock({
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
         >
           <Broadcast size={13} />
           <span>Watch live</span>

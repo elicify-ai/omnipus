@@ -104,7 +104,7 @@ function WebFetchBlock({
             rel="noopener noreferrer"
             aria-label="Open fetched URL"
             title="Open in new tab"
-            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
           >
             <ArrowSquareOut size={12} />
           </a>
