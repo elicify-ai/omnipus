@@ -86,7 +86,7 @@ function getStoredAuthToken(): string | null {
 async function authHeaders(page: import('@playwright/test').Page): Promise<Record<string, string>> {
   const token = getStoredAuthToken();
   const cookies = await page.context().cookies();
-  const csrf = cookies.find((c) => c.name === '__Host-csrf')?.value ?? null;
+  const csrf = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')?.value ?? null;
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
