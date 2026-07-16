@@ -1169,7 +1169,7 @@ function ModelKeyStep({
                 key={company}
                 type="button"
                 onClick={() => onSelectCompany(company)}
-                className="px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 text-left focus-visible:outline-none focus-visible:ring-2 flex items-center justify-between gap-1"
+                className="px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 text-left focus-visible:outline-none flex items-center justify-between gap-1"
                 aria-pressed={isSelected}
                 style={
                   isSelected
@@ -1243,7 +1243,7 @@ function ModelKeyStep({
                       key={plan}
                       type="button"
                       onClick={() => onSelectPlan(plan)}
-                      className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2"
+                      className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150 focus-visible:outline-none"
                       aria-pressed={selectedPlan === plan}
                       style={
                         selectedPlan === plan
@@ -1296,7 +1296,7 @@ function ModelKeyStep({
                         key={region}
                         type="button"
                         onClick={() => onSelectRegion(region)}
-                        className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2"
+                        className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150 focus-visible:outline-none"
                         aria-pressed={selectedRegion === region}
                         style={
                           selectedRegion === region

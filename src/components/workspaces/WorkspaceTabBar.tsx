@@ -96,7 +96,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           data-testid="workspace-name-button"
           className={cn(
             'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-sm font-headline whitespace-nowrap outline-none transition-colors',
-            'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
+            ' rounded-t-sm',
             settingsActive
               ? 'text-[var(--color-accent)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -134,7 +134,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 // the parent header uses items-center, so height:100% resolves to
                 // auto (no-op) and the underline would float mid-header.
                 'group relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header text-sm font-headline whitespace-nowrap outline-none transition-colors',
-                'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
+                ' rounded-t-sm',
                 isActive
                   ? 'text-[var(--color-accent)]'
                   : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -165,7 +165,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               className={cn(
                 'flex items-center gap-1.5 px-3 h-11 text-sm font-headline whitespace-nowrap rounded-md',
                 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors',
-                'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 outline-none',
+                ' outline-none',
                 'pointer-coarse:min-h-[44px]',
               )}
             >

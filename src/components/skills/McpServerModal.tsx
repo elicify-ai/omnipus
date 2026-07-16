@@ -617,7 +617,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                       onChange={(e) => setEnv(e.target.value)}
                       placeholder={"API_KEY=abc123\nDEBUG=true"}
                       rows={3}
-                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-mono text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] resize-none"
+                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-mono text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none resize-none"
                     />
                   </div>
 

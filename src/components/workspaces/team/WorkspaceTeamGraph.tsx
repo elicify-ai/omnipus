@@ -166,7 +166,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
       className={cn(
         'group relative w-[220px] cursor-grab rounded-xl border bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm transition-colors active:cursor-grabbing',
         'border-[var(--color-border)] hover:border-[var(--color-accent)]/50',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-primary)]',
+        'focus-visible:outline-none',
         isTarget && 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/70',
       )}
       title={`Click to edit ${model.name} (applies everywhere). Drag the gold dot onto another agent to delegate. Drag the body to reposition.`}

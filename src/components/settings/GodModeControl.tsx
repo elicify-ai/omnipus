@@ -195,7 +195,7 @@ export function GodModeControl() {
             onClick={requestToggle}
             className={[
               'relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/60',
+              'focus-visible:outline-none',
               'disabled:opacity-40 disabled:cursor-not-allowed',
               enabled ? 'bg-[var(--color-error)]' : 'bg-[var(--color-surface-3)]',
             ].join(' ')}

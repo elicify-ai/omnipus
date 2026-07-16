@@ -68,10 +68,10 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
         className={[
           'w-full rounded-md border bg-[var(--color-surface-1)] px-3 py-2 text-xs font-mono',
           'text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]',
-          'resize-y focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]',
+          'resize-y focus:outline-none',
           'transition-colors',
           hasErrors
-            ? 'border-[var(--color-error)]/60 focus:ring-[var(--color-error)]'
+            ? 'border-[var(--color-error)]/60'
             : 'border-[var(--color-border)]',
         ].join(' ')}
         spellCheck={false}

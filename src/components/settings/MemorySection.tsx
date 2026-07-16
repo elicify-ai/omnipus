@@ -51,7 +51,7 @@ function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps
         aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={[
-          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 focus:ring-offset-[var(--color-primary)]',
+          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none',
           checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]',
         ].join(' ')}
         aria-label={label}
@@ -105,7 +105,7 @@ function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onC
             const v = parseFloat(e.target.value)
             onChange(isNaN(v) ? min : v)
           }}
-          className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm text-[var(--color-secondary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+          className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm text-[var(--color-secondary)] focus:outline-none"
         />
         {unit && <span className="text-xs text-[var(--color-muted)]">{unit}</span>}
       </div>
@@ -410,7 +410,7 @@ export function MemorySection(): React.ReactElement {
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
                         onClick={() => moveFallback(entry.model, -1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
+                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
                       >
                         <ArrowUp size={12} />
                       </button>
@@ -420,7 +420,7 @@ export function MemorySection(): React.ReactElement {
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === form.recap_fallback_models.length - 1}
                         onClick={() => moveFallback(entry.model, 1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
+                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
                       >
                         <ArrowDown size={12} />
                       </button>
@@ -429,7 +429,7 @@ export function MemorySection(): React.ReactElement {
                         data-testid={`recap-fallback-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
                         onClick={() => removeFallback(entry.model)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] rounded"
+                        className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
                       >
                         <X size={12} />
                       </button>

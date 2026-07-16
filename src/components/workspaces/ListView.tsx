@@ -182,7 +182,7 @@ function TaskRow({
           onClick()
         }
       }}
-      className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-2)]/40 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
+      className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-2)]/40 cursor-pointer transition-colors focus-visible:outline-none"
     >
       <td className="px-4 py-2.5">
         <span className={cn('rounded border px-1.5 py-0.5 text-[10px] font-bold', badge.className)}>
