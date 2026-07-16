@@ -483,6 +483,7 @@ export const BrowserChunkEnvelope = z
     seq: z.number().int().min(0),
     ts: z.number().int().min(0),
     key: z.boolean(),
+    kind: z.number().int().min(0).max(1),
     len: z.number().int().min(0),
     payload: z.string(),
   })

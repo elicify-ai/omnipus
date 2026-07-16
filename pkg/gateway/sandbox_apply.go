@@ -44,7 +44,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
-	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
 // ExitSandboxConfig is the Sprint-J-specific exit code for Apply/Install
@@ -380,12 +379,9 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 				bindPorts = append(bindPorts, uint16(p))
 			}
 		}
-		// Symmetric with the ConnectPortRules append below: the managed
-		// Chromium needs to bind the DevTools HTTP server on browser.DebugPort
-		// before the gateway can dial it. Without this allow-rule, Chrome
-		// hits `bind() failed: Permission denied` from Landlock and aborts
-		// every browser.* tool call under sandbox=enforce on ABI ≥ 4.
-		bindPorts = append(bindPorts, uint16(browser.DebugPort))
+		// CRIT-001 (ADR-044 §6.0.3): the managed Chromium's CDP now rides an
+		// inherited pipe (--remote-debugging-pipe), not a TCP port, so there is
+		// no DevTools bind port to allow-list here.
 	}
 	policy := sandbox.DefaultPolicy(opts.HomePath, allowedPaths, warnFn, bindPorts)
 
@@ -407,16 +403,9 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 			}
 			policy.ConnectPortRules = append(policy.ConnectPortRules, extra...)
 		}
-		// v0.1 fix for "browser.navigate: dial tcp 127.0.0.1:<random>:
-		// connect: permission denied". The managed Chromium binds its
-		// DevTools WebSocket to browser.DebugPort (a fixed loopback port);
-		// without allow-listing it here, the gateway's chromedp client
-		// can't dial Chrome and every browser.* tool call fails with
-		// EACCES. Always added — the cost is one extra port on a loopback-
-		// only allow-list, and gating it on "browser tool enabled" would
-		// add config plumbing without a real security benefit (the SSRF
-		// checker still validates every navigation URL at the app layer).
-		policy.ConnectPortRules = append(policy.ConnectPortRules, sandbox.NetPortRule{Port: uint16(browser.DebugPort)})
+		// CRIT-001 (ADR-044 §6.0.3): CDP is over an inherited pipe now, not a
+		// TCP port, so the gateway no longer dials a DevTools port — the connect
+		// allow-list entry for browser.DebugPort is removed.
 	}
 	result.Policy = policy
 

@@ -140,14 +140,32 @@ func initFrameBytes(streamID, token, videoCodec string) []byte {
 	return b
 }
 
-func chunkBytes(seq uint32, ts uint64, key byte, payload []byte) []byte {
+// chunkBytes builds an 18-byte-header browser_ingest_chunk message: seq(u32)
+// | ts(u64) | key(u8) | kind(u8) | len(u32) | payload. video chunks pass
+// kind=chunkKindVideo (with key=chunkVideoKey/chunkVideoDelta); audio chunks
+// pass kind=chunkKindAudio (key is ignored by the decoder for audio but is
+// conventionally 0/chunkVideoDelta at the call site — see chunkAudioBytes).
+func chunkBytes(seq uint32, ts uint64, key byte, kind byte, payload []byte) []byte {
 	buf := make([]byte, ingestChunkHeaderLen+len(payload))
 	binary.BigEndian.PutUint32(buf[0:4], seq)
 	binary.BigEndian.PutUint64(buf[4:12], ts)
 	buf[12] = key
-	binary.BigEndian.PutUint32(buf[13:17], uint32(len(payload)))
+	buf[13] = kind
+	binary.BigEndian.PutUint32(buf[14:18], uint32(len(payload)))
 	copy(buf[ingestChunkHeaderLen:], payload)
 	return buf
+}
+
+// chunkVideoBytes is chunkBytes with kind fixed to chunkKindVideo — the
+// common case for tests that only exercise the video path.
+func chunkVideoBytes(seq uint32, ts uint64, key byte, payload []byte) []byte {
+	return chunkBytes(seq, ts, key, chunkKindVideo, payload)
+}
+
+// chunkAudioBytes is chunkBytes with kind fixed to chunkKindAudio and
+// key fixed to chunkVideoDelta (0) — audio chunks are never keyframes.
+func chunkAudioBytes(seq uint32, ts uint64, payload []byte) []byte {
+	return chunkBytes(seq, ts, chunkVideoDelta, chunkKindAudio, payload)
 }
 
 func serveAsync(h *CaptureIngestHandler, c *fakeConn) <-chan struct{} {
@@ -290,7 +308,7 @@ func TestIngest_RejectsUnauthenticated(t *testing.T) {
 		h.MintIngestToken("streamA") // stream exists, but we present a wrong token
 		c := newFakeConn()
 		c.feedText(initFrameBytes("streamA", "totally-wrong-token", "vp8"))
-		c.feedBinary(chunkBytes(0, 0, chunkVideoKey, []byte("keyframe"))) // must never be relayed
+		c.feedBinary(chunkVideoBytes(0, 0, chunkVideoKey, []byte("keyframe"))) // must never be relayed
 		c.closeIncoming()
 		waitDone(t, serveAsync(h, c))
 
@@ -307,7 +325,7 @@ func TestIngest_RejectsUnauthenticated(t *testing.T) {
 		relay := &spyRelay{}
 		h, read := newAuditIngest(t, IngestDeps{Relay: relay})
 		c := newFakeConn()
-		c.feedBinary(chunkBytes(0, 0, chunkVideoKey, []byte("data"))) // binary before init
+		c.feedBinary(chunkVideoBytes(0, 0, chunkVideoKey, []byte("data"))) // binary before init
 		c.closeIncoming()
 		waitDone(t, serveAsync(h, c))
 
@@ -386,10 +404,10 @@ func TestIngest_OversizeKeyframe_RejectedNotFragmented(t *testing.T) {
 
 	c := newFakeConn()
 	c.feedText(initFrameBytes("streamA", tok, "vp8"))
-	c.feedBinary(chunkBytes(0, 0, chunkVideoKey, under))
-	c.feedBinary(chunkBytes(1, 33, chunkVideoKey, atBound))
-	c.feedBinary(chunkBytes(2, 66, chunkVideoKey, over))
-	c.feedBinary(chunkBytes(3, 99, chunkVideoDelta, []byte{})) // empty payload → rejected (DS-2)
+	c.feedBinary(chunkVideoBytes(0, 0, chunkVideoKey, under))
+	c.feedBinary(chunkVideoBytes(1, 33, chunkVideoKey, atBound))
+	c.feedBinary(chunkVideoBytes(2, 66, chunkVideoKey, over))
+	c.feedBinary(chunkVideoBytes(3, 99, chunkVideoDelta, []byte{})) // empty payload → rejected (DS-2)
 	c.closeIncoming()
 	waitDone(t, serveAsync(h, c))
 
@@ -572,9 +590,9 @@ func TestIngest_RelaysValidChunks(t *testing.T) {
 
 	c := newFakeConn()
 	c.feedText(initB)
-	c.feedBinary(chunkBytes(0, 0, chunkVideoKey, []byte("KEYFRAME")))
-	c.feedBinary(chunkBytes(1, 33, chunkVideoDelta, []byte("delta")))
-	c.feedBinary(chunkBytes(2, 66, chunkAudio, []byte("opusframe")))
+	c.feedBinary(chunkVideoBytes(0, 0, chunkVideoKey, []byte("KEYFRAME")))
+	c.feedBinary(chunkVideoBytes(1, 33, chunkVideoDelta, []byte("delta")))
+	c.feedBinary(chunkAudioBytes(2, 66, []byte("opusframe")))
 	c.closeIncoming()
 	waitDone(t, serveAsync(h, c))
 
@@ -608,7 +626,7 @@ func TestIngest_MaxSeqTsBoundary(t *testing.T) {
 
 	c := newFakeConn()
 	c.feedText(initFrameBytes("streamA", tok, "vp8"))
-	c.feedBinary(chunkBytes(4294967295, 18446744073709551615, chunkVideoDelta, make([]byte, 65535)))
+	c.feedBinary(chunkVideoBytes(4294967295, 18446744073709551615, chunkVideoDelta, make([]byte, 65535)))
 	c.closeIncoming()
 	waitDone(t, serveAsync(h, c))
 
@@ -630,14 +648,14 @@ func TestIngest_MalformedChunk_NotRelayed(t *testing.T) {
 
 	// declared len says 100 but only 4 payload bytes present → len mismatch.
 	bad := make([]byte, ingestChunkHeaderLen+4)
-	binary.BigEndian.PutUint32(bad[13:17], 100)
-	tooShort := []byte{1, 2, 3} // shorter than the 17-byte header
+	binary.BigEndian.PutUint32(bad[14:18], 100)
+	tooShort := []byte{1, 2, 3} // shorter than the 18-byte header
 
 	c := newFakeConn()
 	c.feedText(initFrameBytes("streamA", tok, "vp8"))
 	c.feedBinary(bad)
 	c.feedBinary(tooShort)
-	c.feedBinary(chunkBytes(9, 9, chunkVideoKey, []byte("valid"))) // this one should still relay
+	c.feedBinary(chunkVideoBytes(9, 9, chunkVideoKey, []byte("valid"))) // this one should still relay
 	c.closeIncoming()
 	waitDone(t, serveAsync(h, c))
 
@@ -694,21 +712,31 @@ func TestFeedFrame_WritesFrameFeedEnvelope(t *testing.T) {
 
 func TestChunkEnvelope_RoundTrip(t *testing.T) {
 	payload := []byte("hello-encoded-chunk")
-	msg := chunkBytes(42, 9999, chunkVideoKey, payload)
-	seq, ts, keyByte, got, err := decodeChunkEnvelope(msg)
+	msg := chunkVideoBytes(42, 9999, chunkVideoKey, payload)
+	seq, ts, keyByte, kindByte, got, err := decodeChunkEnvelope(msg)
 	if err != nil {
 		t.Fatalf("decode failed: %v", err)
 	}
-	if seq != 42 || ts != 9999 || keyByte != chunkVideoKey || string(got) != string(payload) {
-		t.Fatalf("round-trip mismatch: seq=%d ts=%d key=%d payload=%q", seq, ts, keyByte, got)
+	if seq != 42 || ts != 9999 || keyByte != chunkVideoKey || kindByte != chunkKindVideo || string(got) != string(payload) {
+		t.Fatalf("round-trip mismatch: seq=%d ts=%d key=%d kind=%d payload=%q", seq, ts, keyByte, kindByte, got)
 	}
 
-	if _, _, _, _, err := decodeChunkEnvelope([]byte{1, 2}); err != errEnvelopeTooShort {
+	audioPayload := []byte("opus-bytes")
+	audioMsg := chunkAudioBytes(7, 55, audioPayload)
+	_, _, akeyByte, akindByte, agot, aerr := decodeChunkEnvelope(audioMsg)
+	if aerr != nil {
+		t.Fatalf("audio decode failed: %v", aerr)
+	}
+	if akeyByte != chunkVideoDelta || akindByte != chunkKindAudio || string(agot) != string(audioPayload) {
+		t.Fatalf("audio round-trip mismatch: key=%d kind=%d payload=%q", akeyByte, akindByte, agot)
+	}
+
+	if _, _, _, _, _, err := decodeChunkEnvelope([]byte{1, 2}); err != errEnvelopeTooShort {
 		t.Fatalf("expected errEnvelopeTooShort, got %v", err)
 	}
 	mism := make([]byte, ingestChunkHeaderLen+2)
-	binary.BigEndian.PutUint32(mism[13:17], 999)
-	if _, _, _, _, err := decodeChunkEnvelope(mism); err != errEnvelopeLenMismatch {
+	binary.BigEndian.PutUint32(mism[14:18], 999)
+	if _, _, _, _, _, err := decodeChunkEnvelope(mism); err != errEnvelopeLenMismatch {
 		t.Fatalf("expected errEnvelopeLenMismatch, got %v", err)
 	}
 }
@@ -762,7 +790,7 @@ func TestMintIngestToken_RemintInvalidatesOldToken(t *testing.T) {
 	// New token accepted.
 	cNew := newFakeConn()
 	cNew.feedText(initFrameBytes("streamA", newTok, "vp8"))
-	cNew.feedBinary(chunkBytes(0, 0, chunkVideoKey, []byte("frame")))
+	cNew.feedBinary(chunkVideoBytes(0, 0, chunkVideoKey, []byte("frame")))
 	cNew.closeIncoming()
 	waitDone(t, serveAsync(h, cNew))
 

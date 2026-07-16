@@ -72,9 +72,9 @@ const captureIngestPath = "/api/v1/browser/capture-ingest"
 const defaultIngestMaxMessageBytes = 2 * 1024 * 1024
 
 // ingestChunkHeaderLen is the fixed BigEndian header of an upstream
-// browser_ingest_chunk: seq(u32) + ts(u64) + key(u8) + len(u32) = 17 bytes,
-// followed by exactly `len` payload bytes.
-const ingestChunkHeaderLen = 17
+// browser_ingest_chunk: seq(u32) + ts(u64) + key(u8) + kind(u8) + len(u32) =
+// 18 bytes, followed by exactly `len` payload bytes.
+const ingestChunkHeaderLen = 18
 
 // ingestFrameFeedHeaderLen is the fixed BigEndian header of a downstream
 // browser_frame_feed: seq(u32) + ts(u64) + len(u32) = 16 bytes, followed by
@@ -97,21 +97,22 @@ const ingestInitDeadline = 15 * time.Second
 // encoder, so the connection is closed and orchestration (W2-M) re-mints.
 const ingestReadDeadline = 120 * time.Second
 
-// Chunk discriminator byte values carried in the envelope's key(u8) field.
-// Values 0/1 are the video keyframe flag (DS-2); value 2 marks an audio chunk
-// so a single ingest connection can multiplex video + Opus audio over the fixed
-// envelope without adding a wire field (M-4 keeps the envelope fixed).
-//
-// [INFERRED] The spec's binary envelope (seq,ts,key,len,payload) has no explicit
-// video/audio discriminator; DS-2 only exercises key ∈ {0,1} (video). This
-// widens the meaning of the existing u8 to also carry audio (value 2), which is
-// backward-compatible with DS-2. If component D/G settle on a different audio
-// discriminator this is a one-line change in classifyChunk — flagged at
-// integration.
+// Wire values of the envelope's kind(u8) field
+// (contracts/components/schemas/BrowserChunkEnvelope.yaml): 0 = video, 1 =
+// audio. A single ingest connection multiplexes both video and Opus audio
+// chunks over browser_ingest_chunk, so this explicit discriminator byte
+// (independent of the key(u8) keyframe flag) is what routes each chunk to
+// the video or audio relay path — see decodeChunkEnvelope / chunkKindLabel.
+const (
+	chunkKindVideo byte = 0
+	chunkKindAudio byte = 1
+)
+
+// Video keyframe flag values carried in the envelope's key(u8) field
+// (DS-2). Meaningless for an audio chunk, which is always non-key.
 const (
 	chunkVideoDelta byte = 0
 	chunkVideoKey   byte = 1
-	chunkAudio      byte = 2
 )
 
 // Audit event names for the ingest lifecycle (FR-024). These follow the
@@ -143,7 +144,7 @@ const (
 )
 
 var (
-	errEnvelopeTooShort    = errors.New("ingest envelope shorter than 17-byte header")
+	errEnvelopeTooShort    = errors.New("ingest envelope shorter than 18-byte header")
 	errEnvelopeLenMismatch = errors.New("ingest envelope declared len != actual payload len")
 )
 
@@ -570,7 +571,7 @@ func (h *CaptureIngestHandler) writePump(conn ingestConn, sendCh chan []byte, do
 // relayed); an oversize chunk is rejected + signals encoder step-down (never
 // fragmented/reassembled).
 func (h *CaptureIngestHandler) handleChunk(streamID string, s *ingestStream, msg []byte) {
-	seq, ts, keyByte, payload, err := decodeChunkEnvelope(msg)
+	seq, ts, keyByte, kindByte, payload, err := decodeChunkEnvelope(msg)
 	if err != nil {
 		// Malformed framing — never relay a partial/garbled chunk (FR-014).
 		// Not an auth rejection; slog only (avoids per-frame audit spam from a
@@ -602,7 +603,7 @@ func (h *CaptureIngestHandler) handleChunk(streamID string, s *ingestStream, msg
 		return
 	}
 
-	kind, codec, key := classifyChunk(keyByte, s)
+	kind, codec, key := classifyChunkKind(kindByte, keyByte, s)
 	// Copy the payload off the read buffer — the relay's GOP cache retains
 	// chunks, so it must own an independent slice.
 	buf := make([]byte, len(payload))
@@ -617,21 +618,22 @@ func (h *CaptureIngestHandler) handleChunk(streamID string, s *ingestStream, msg
 	})
 }
 
-// classifyChunk maps the envelope's key(u8) discriminator + the connection's
-// init-declared codecs to (kind, codec, key). See the chunk* const block.
-func classifyChunk(keyByte byte, s *ingestStream) (kind, codec string, key bool) {
-	switch keyByte {
-	case chunkAudio:
+// classifyChunkKind maps the envelope's kind(u8) discriminator + key(u8)
+// keyframe flag + the connection's init-declared codecs to (kind, codec,
+// key). Any kind byte other than chunkKindAudio is treated as video (the
+// default, matching decodeChunkEnvelope's tolerance of an out-of-range
+// value rather than dropping the chunk outright). An audio chunk is never a
+// keyframe (Opus packets are never classified key/delta), regardless of
+// what the key(u8) byte carries.
+func classifyChunkKind(kindByte, keyByte byte, s *ingestStream) (kind, codec string, key bool) {
+	if kindByte == chunkKindAudio {
 		codec = s.audioCodec
 		if codec == "" {
 			codec = "opus"
 		}
 		return "audio", codec, false
-	case chunkVideoKey:
-		return "video", s.videoCodec, true
-	default: // chunkVideoDelta (0) and any unknown value → video delta
-		return "video", s.videoCodec, false
 	}
+	return "video", s.videoCodec, keyByte == chunkVideoKey
 }
 
 // audit emits one audit record (FR-024). No-op when audit is disabled (nil
@@ -672,22 +674,24 @@ func newIngestToken() string {
 }
 
 // decodeChunkEnvelope parses the fixed BigEndian upstream chunk envelope:
-// seq(u32) | ts(u64) | key(u8) | len(u32) | payload[len]. It returns an error
-// if the message is shorter than the header or the declared len does not equal
-// the actual payload length (framing corruption — never relayed).
-func decodeChunkEnvelope(msg []byte) (seq uint32, ts uint64, keyByte byte, payload []byte, err error) {
+// seq(u32) | ts(u64) | key(u8) | kind(u8) | len(u32) | payload[len]. It
+// returns an error if the message is shorter than the header or the declared
+// len does not equal the actual payload length (framing corruption — never
+// relayed).
+func decodeChunkEnvelope(msg []byte) (seq uint32, ts uint64, keyByte byte, kindByte byte, payload []byte, err error) {
 	if len(msg) < ingestChunkHeaderLen {
-		return 0, 0, 0, nil, errEnvelopeTooShort
+		return 0, 0, 0, 0, nil, errEnvelopeTooShort
 	}
 	seq = binary.BigEndian.Uint32(msg[0:4])
 	ts = binary.BigEndian.Uint64(msg[4:12])
 	keyByte = msg[12]
-	declaredLen := binary.BigEndian.Uint32(msg[13:17])
+	kindByte = msg[13]
+	declaredLen := binary.BigEndian.Uint32(msg[14:18])
 	payload = msg[ingestChunkHeaderLen:]
 	if uint32(len(payload)) != declaredLen {
-		return 0, 0, 0, nil, errEnvelopeLenMismatch
+		return 0, 0, 0, 0, nil, errEnvelopeLenMismatch
 	}
-	return seq, ts, keyByte, payload, nil
+	return seq, ts, keyByte, kindByte, payload, nil
 }
 
 // encodeFrameFeed builds a downstream browser_frame_feed binary message:

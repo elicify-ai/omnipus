@@ -128,12 +128,21 @@ func cmdlineOf(pid int) string {
 	return strings.ReplaceAll(string(data), "\x00", " ")
 }
 
-// countTopLevelChromeProcesses counts chrome-headless-shell processes whose
-// parent is NOT itself a chrome-headless-shell process (G8). One coordinator
-// launch = exactly ONE such top-level process (its renderer/GPU/zygote children
-// are all descendants, so they don't count). Two leaked coordinators would make
-// this 2. Linux-only; returns 0 elsewhere.
-func countTopLevelChromeProcesses() int {
+// countTopLevelChromeProcesses counts chrome-headless-shell processes belonging
+// to profileDir (their cmdline carries --user-data-dir=<profileDir>) whose parent
+// is NOT itself such a process (G8). One coordinator launch = exactly ONE such
+// top-level process (its renderer/GPU/zygote children don't carry --user-data-dir
+// and are descendants anyway, so they don't count). Two leaked coordinators would
+// make this 2.
+//
+// The --user-data-dir scoping (CRIT-001 hardening) makes the count HERMETIC: only
+// the shared Chrome launched for THIS test — over the CDP pipe, into this test's
+// unique temp profile dir — is counted. An UNRELATED omnipus gateway running on
+// the same host (a real dev-pod case: a live preview gateway's Chrome under a
+// different profile dir) is correctly excluded, while a genuine coordinator leak
+// (a second Chrome sharing this profile dir) is still caught. Linux-only; returns
+// 0 elsewhere.
+func countTopLevelChromeProcesses(profileDir string) int {
 	if runtime.GOOS != "linux" {
 		return 0
 	}
@@ -152,7 +161,8 @@ func countTopLevelChromeProcesses() int {
 			continue
 		}
 		cmd := cmdlineOf(pid)
-		isChrome := strings.Contains(cmd, "chrome-headless-shell") || strings.Contains(cmd, "headless_shell")
+		isChrome := (strings.Contains(cmd, "chrome-headless-shell") || strings.Contains(cmd, "headless_shell")) &&
+			strings.Contains(cmd, "--user-data-dir="+profileDir)
 		procs[pid] = procInfo{ppid: ppidOf(pid), isChrome: isChrome}
 	}
 	n := 0
@@ -271,10 +281,12 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 		t.Errorf("5-agent browsing RSS %d MB exceeds the 4 GB documented cap", rssMB)
 	}
 
-	// G8: assert exactly ONE top-level chrome-headless-shell process — the
-	// headline "one Chrome for N agents" acceptance. A second top-level
-	// process would mean a coordinator leak (two Chrome instances).
-	topLevel := countTopLevelChromeProcesses()
+	// G8: assert exactly ONE top-level chrome-headless-shell process for THIS
+	// test's profile dir — the headline "one Chrome for N agents" acceptance. A
+	// second such process would mean a coordinator leak (two Chrome instances).
+	// Scoped to cfg.ProfileDir so an unrelated omnipus gateway's Chrome on the
+	// same host (different profile dir) does not pollute the count (CRIT-001).
+	topLevel := countTopLevelChromeProcesses(cfg.ProfileDir)
 	t.Logf("top-level chrome-headless-shell processes: %d", topLevel)
 	if topLevel != 1 {
 		t.Errorf("expected exactly 1 top-level chrome-headless-shell process (one shared Chrome); got %d", topLevel)

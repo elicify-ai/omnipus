@@ -44,13 +44,11 @@ export {
   decodeFrameFeed,
   encodeChunkEnvelope,
   decodeChunkEnvelope,
-  tagIngestPayload,
-  untagIngestPayload,
   msFromMicros,
   microsFromMs,
   selectVideoCodec,
-  INGEST_PAYLOAD_KIND_VIDEO,
-  INGEST_PAYLOAD_KIND_AUDIO,
+  CHUNK_KIND_VIDEO,
+  CHUNK_KIND_AUDIO,
   VIDEO_CODEC_CANDIDATES,
 };
 `;
@@ -61,9 +59,9 @@ writeFileSync(tmpModulePath, moduleSource, 'utf8');
 
 const logic = await import(pathToFileURL(tmpModulePath).href);
 
-test('INGEST_PAYLOAD_KIND constants are 0 (video) and 1 (audio)', () => {
-  assert.equal(logic.INGEST_PAYLOAD_KIND_VIDEO, 0);
-  assert.equal(logic.INGEST_PAYLOAD_KIND_AUDIO, 1);
+test('CHUNK_KIND constants are 0 (video) and 1 (audio)', () => {
+  assert.equal(logic.CHUNK_KIND_VIDEO, 0);
+  assert.equal(logic.CHUNK_KIND_AUDIO, 1);
 });
 
 test('msFromMicros / microsFromMs convert between WebCodecs microseconds and the wire millisecond field', () => {
@@ -115,37 +113,53 @@ test('decodeFrameFeed rejects a len that overruns the buffer', () => {
 test('encodeChunkEnvelope / decodeChunkEnvelope round-trip: video keyframe (DS-2 row: 2MB-class keyframe), matches BrowserChunkEnvelope', () => {
   const payload = new Uint8Array(16); // small stand-in for a real keyframe payload
   payload.fill(0xab);
-  const buf = logic.encodeChunkEnvelope(0, 0, true, payload);
+  const buf = logic.encodeChunkEnvelope(0, 0, true, logic.CHUNK_KIND_VIDEO, payload);
 
   // Byte layout: [0:4) seq u32 BE, [4:12) ts u64 BE (ms), [12:13) key u8,
-  // [13:17) len u32 BE, [17:) payload — 17-byte header, matches
-  // contracts/components/schemas/BrowserChunkEnvelope.yaml exactly (no
-  // extra kind byte at the envelope level).
-  assert.equal(buf.byteLength, 17 + payload.byteLength);
+  // [13:14) kind u8, [14:18) len u32 BE, [18:) payload — 18-byte header,
+  // matches contracts/components/schemas/BrowserChunkEnvelope.yaml exactly.
+  assert.equal(buf.byteLength, 18 + payload.byteLength);
   const view = new DataView(buf);
   assert.equal(view.getUint32(0, false), 0);
   assert.equal(Number(view.getBigUint64(4, false)), 0);
   assert.equal(view.getUint8(12), 1);
-  assert.equal(view.getUint32(13, false), payload.byteLength);
+  assert.equal(view.getUint8(13), logic.CHUNK_KIND_VIDEO);
+  assert.equal(view.getUint32(14, false), payload.byteLength);
 
   const decoded = logic.decodeChunkEnvelope(buf);
   assert.equal(decoded.seq, 0);
   assert.equal(decoded.key, true);
+  assert.equal(decoded.kind, logic.CHUNK_KIND_VIDEO);
   assert.deepEqual(new Uint8Array(decoded.payload), payload);
 });
 
 test('encodeChunkEnvelope / decodeChunkEnvelope round-trip: delta chunk (DS-2 row: typical delta)', () => {
   const payload = new Uint8Array(32).fill(7);
-  const buf = logic.encodeChunkEnvelope(1, 33, false, payload);
+  const buf = logic.encodeChunkEnvelope(1, 33, false, logic.CHUNK_KIND_VIDEO, payload);
   const decoded = logic.decodeChunkEnvelope(buf);
   assert.equal(decoded.seq, 1);
   assert.equal(decoded.tsMillis, 33);
   assert.equal(decoded.key, false);
+  assert.equal(decoded.kind, logic.CHUNK_KIND_VIDEO);
+});
+
+test('encodeChunkEnvelope / decodeChunkEnvelope round-trip: audio chunk is never a keyframe and carries kind=1', () => {
+  const rawOpus = new Uint8Array([10, 20, 30]);
+  const buf = logic.encodeChunkEnvelope(7, 99, false, logic.CHUNK_KIND_AUDIO, rawOpus);
+
+  const decoded = logic.decodeChunkEnvelope(buf);
+  assert.equal(decoded.seq, 7);
+  assert.equal(decoded.tsMillis, 99);
+  assert.equal(decoded.key, false);
+  assert.equal(decoded.kind, logic.CHUNK_KIND_AUDIO);
+  // len covers only the real payload — no leading tag byte inside it.
+  assert.equal(decoded.len, rawOpus.byteLength);
+  assert.deepEqual(new Uint8Array(decoded.payload), rawOpus);
 });
 
 test('encodeChunkEnvelope / decodeChunkEnvelope round-trip: DS-2 max seq/ts row (4294967295 / u64 max)', () => {
   const payload = new Uint8Array(4).fill(9);
-  const buf = logic.encodeChunkEnvelope(4294967295, 18446744073709551615n, false, payload);
+  const buf = logic.encodeChunkEnvelope(4294967295, 18446744073709551615n, false, logic.CHUNK_KIND_VIDEO, payload);
   const decoded = logic.decodeChunkEnvelope(buf);
   assert.equal(decoded.seq, 4294967295);
   // 2^64-1 exceeds Number.MAX_SAFE_INTEGER, so getUint64BE returns a BigInt.
@@ -159,50 +173,8 @@ test('decodeChunkEnvelope rejects a truncated header', () => {
 test('decodeChunkEnvelope rejects a len that overruns the buffer', () => {
   const buf = new ArrayBuffer(20);
   const view = new DataView(buf);
-  view.setUint32(13, 999, false);
+  view.setUint32(14, 999, false);
   assert.throws(() => logic.decodeChunkEnvelope(buf), RangeError);
-});
-
-// ---- Ingest kind-tagging (video vs audio multiplexed over browser_ingest_chunk) --
-
-test('tagIngestPayload / untagIngestPayload round-trip: video', () => {
-  const raw = new Uint8Array([1, 2, 3, 4, 5]);
-  const tagged = logic.tagIngestPayload(logic.INGEST_PAYLOAD_KIND_VIDEO, raw);
-  assert.equal(tagged.byteLength, raw.byteLength + 1);
-  assert.equal(tagged[0], logic.INGEST_PAYLOAD_KIND_VIDEO);
-
-  const { kind, payload } = logic.untagIngestPayload(tagged);
-  assert.equal(kind, logic.INGEST_PAYLOAD_KIND_VIDEO);
-  assert.deepEqual(new Uint8Array(payload), raw);
-});
-
-test('tagIngestPayload / untagIngestPayload round-trip: audio', () => {
-  const raw = new Uint8Array([9, 8, 7]);
-  const tagged = logic.tagIngestPayload(logic.INGEST_PAYLOAD_KIND_AUDIO, raw);
-  const { kind, payload } = logic.untagIngestPayload(tagged);
-  assert.equal(kind, logic.INGEST_PAYLOAD_KIND_AUDIO);
-  assert.deepEqual(new Uint8Array(payload), raw);
-});
-
-test('untagIngestPayload rejects an empty (missing kind-tag) payload', () => {
-  assert.throws(() => logic.untagIngestPayload(new Uint8Array(0)), RangeError);
-});
-
-test('full upstream round-trip: encode a tagged audio payload inside a BrowserChunkEnvelope, then decode both layers', () => {
-  const rawOpus = new Uint8Array([10, 20, 30]);
-  const tagged = logic.tagIngestPayload(logic.INGEST_PAYLOAD_KIND_AUDIO, rawOpus);
-  const envelope = logic.encodeChunkEnvelope(7, 99, false, tagged);
-
-  const decodedEnvelope = logic.decodeChunkEnvelope(envelope);
-  assert.equal(decodedEnvelope.seq, 7);
-  assert.equal(decodedEnvelope.tsMillis, 99);
-  assert.equal(decodedEnvelope.key, false);
-  // len covers the 1-byte kind tag + the real payload.
-  assert.equal(decodedEnvelope.len, rawOpus.byteLength + 1);
-
-  const { kind, payload } = logic.untagIngestPayload(decodedEnvelope.payload);
-  assert.equal(kind, logic.INGEST_PAYLOAD_KIND_AUDIO);
-  assert.deepEqual(new Uint8Array(payload), rawOpus);
 });
 
 // ---- Codec selection ------------------------------------------------------

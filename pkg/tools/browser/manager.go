@@ -7,7 +7,6 @@ package browser
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -26,74 +25,18 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
-// DebugPort is the fixed loopback TCP port the managed Chromium binds its
-// DevTools WebSocket to. Pinning this lets the gateway's Landlock
-// NET_CONNECT_TCP allow-list include it (see pkg/gateway/sandbox_apply.go).
-// Without a fixed port, chromedp defaults to remote-debugging-port=0,
-// Chrome picks a random ephemeral port, and the gateway's connect-to-
-// chromedp dial returns EACCES.
+// DebugPort was the fixed loopback TCP port the managed Chromium bound its
+// DevTools WebSocket to. CRIT-001 (live-browser-video-streaming / ADR-044
+// §6.0.3) eliminated the TCP CDP surface entirely: managed Chrome now speaks CDP
+// over an inherited fd 3/4 pipe (--remote-debugging-pipe via pkg/tools/browser/
+// cdppipe), with NO TCP port, NO /json HTTP endpoint, and NO ws:// URL.
 //
-// Exposed as a package constant (not a config knob) so the sandbox layer
-// and the browser layer agree without a circular import. Operators who
-// need a different port today can recompile; a config knob is a v0.3
-// follow-up if a real conflict surfaces.
+// The constant is RETAINED only for the gateway's sandbox layer
+// (pkg/gateway/sandbox_apply.go), whose Landlock 9223 bind/connect rules are
+// removed in the same wave by the gateway owner; it is no longer used by any
+// browser launch or preflight path. Do not add new references — there is no port
+// to bind or dial anymore.
 const DebugPort = 9223
-
-// browserDebugPort is the string form passed to chromedp.Flag (which takes
-// the flag value as a string). Kept private so callers use DebugPort.
-const browserDebugPort = "9223"
-
-// checkDebugPortAvailable is a best-effort preflight: it attempts to bind
-// port on loopback and immediately releases it, returning a clear,
-// diagnosable error if the bind fails. Exists because chromedp's own
-// failure mode when the fixed CDP debug port (DebugPort) is already held by
-// something else is an opaque, slow "websocket url timeout reached" deep
-// inside the CDP handshake — it never names the port or says it's in use.
-// The motivating live incident: an orphaned Chrome process left over from an
-// unrelated prior run was squatting DebugPort, and every subsequent launch
-// timed out with no indication of the real cause.
-//
-// Deliberately NOT a reason to make DebugPort configurable or random —
-// pkg/gateway/sandbox_apply.go's kernel-enforced bind-port allow-list
-// depends on it being fixed and known at sandbox-policy-build time (see
-// DebugPort's doc comment). This function only makes the failure
-// diagnosable when the fixed port is unexpectedly unavailable.
-//
-// TOCTOU CAVEAT: this is a check-then-act race by construction — the
-// listener opened here is closed immediately, and nothing prevents some
-// other process from binding the port in the (typically sub-millisecond)
-// window between this check and chromedp's own real bind moments later.
-// This function is a diagnostics aid for the common case (a long-lived
-// squatter already holding the port when we start), not a guarantee; a
-// failure that slips past this check still surfaces as chromedp's own
-// (less clear, but not silent) launch error.
-func checkDebugPortAvailable(port uint16) error {
-	// Deliberately IPv4-only (127.0.0.1), not [::1]/"localhost": the managed-
-	// mode allocator never sets --remote-debugging-address, so Chrome binds
-	// 127.0.0.1 by default and chromedp dials ws://127.0.0.1:<port>. A process
-	// squatting ONLY the v6 loopback ([::1]) therefore cannot conflict with
-	// our launch — probing v6 here would solve a non-problem and risks a false
-	// positive on a legitimate v6-only listener. Matching the actual bind
-	// family keeps this preflight truthful.
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf(
-			"browser: CDP debug port %d is already in use by another process — "+
-				"close it or stop the other instance (%w)", port, err)
-	}
-	// The bind itself is the whole check — it already succeeded. A failure
-	// to close the (immediately-discarded) probe listener does not mean the
-	// port is unavailable, so it is logged, not treated as this function's
-	// result.
-	if closeErr := ln.Close(); closeErr != nil {
-		logger.WarnCF("browser", "debug port preflight: failed to close probe listener", map[string]any{
-			"port":  port,
-			"error": closeErr.Error(),
-		})
-	}
-	return nil
-}
 
 // BrowserConfig holds browser automation configuration.
 // Mapped from config.json: tools.browser.*
@@ -282,11 +225,19 @@ type BrowserManager struct {
 	// every browser_* call on a dead host).
 	execPath execPathCaches
 
+	// managedPipeLaunch, when non-nil, overrides the real cdppipe launch in the
+	// no-coordinator managed-mode branch of ensureStarted (test seam, mirrors
+	// createTabFn). Defaults to launchManagedPipe (exec_resolver.go) — the CDP
+	// pipe launcher (CRIT-001, no TCP port). Tests inject a fake so the
+	// no-coordinator path never spawns real Chrome.
+	managedPipeLaunch func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error)
+
 	// coordinator (ADR-043) is the gateway-scoped shared-Chrome owner. nil in
 	// remote-CDP-override mode (cfg.CDPURL set) and in tests that exercise the
 	// legacy one-manager-one-Chrome path. When non-nil, ensureStarted's managed-
-	// mode branch asks the coordinator to launch+provide the shared Chrome
-	// instead of building its own ExecAllocator, and bootstrapBrowserCtx
+	// mode branch asks the coordinator for the shared Chrome + drives it through
+	// chromedp CHILD contexts of the coordinator's rootCtx (one CDP pipe,
+	// multiplexed) instead of building its own allocator, and bootstrapBrowserCtx
 	// re-adopts the coordinator-owned browserCtxID non-owningly.
 	//
 	// CRIT-003 (load-bearing): when coordinator != nil, NO manager path ever
@@ -458,20 +409,21 @@ func (m *BrowserManager) ValidateURL(ctx context.Context, rawURL string) error {
 // recreating the exact "single global mutex held across a blocking external
 // call" shape Session()'s doc comment describes as the ADR-038 postmortem
 // bug, just with exec(1) standing in for CDP. So: m.mu is released for the
-// resolveExecPath call only, then re-acquired before continuing. A
-// concurrent caller that raced in during that window (another
-// Session()/createFirstTab()/OpenTab() call, still seeing m.started ==
-// false) and ALSO ran ensureStarted's managed-mode setup to completion is
-// detected by re-checking m.started immediately after re-acquiring the
-// lock — this goroutine's own (fully valid, just redundant) exec-path
-// resolution is then discarded in favor of whichever goroutine's
-// chromedp.NewExecAllocator call and m.allocCtx/m.started assignment
-// happened to win, mirroring the discard-the-loser pattern
-// createFirstTab/OpenTab already use for a redundant tab. This never
-// double-launches a subprocess: chromedp.NewExecAllocator only builds an
-// allocator config, it does not spawn Chromium — that happens later and
-// lazily, in bootstrapBrowserCtx's chromedp.Run, which only ever reads the
-// WINNING m.allocCtx field, never a discarded local variable.
+// resolveExecPath call AND (in the no-coordinator managed fallback) the blocking
+// cdppipe launch, then re-acquired before continuing. A concurrent caller that
+// raced in during that window (another Session()/createFirstTab()/OpenTab()
+// call, still seeing m.started == false) and ALSO ran ensureStarted's
+// managed-mode setup to completion is detected by re-checking m.started after
+// re-acquiring the lock — this goroutine's own (fully valid, just redundant)
+// resolution/launch is then discarded (its redundant Chrome is torn down via
+// res.cancel) in favor of whichever goroutine won, mirroring the
+// discard-the-loser pattern createFirstTab/OpenTab already use for a redundant
+// tab. CRIT-001: cdppipe launches Chrome EAGERLY here (unlike the pre-pipe
+// chromedp.NewExecAllocator, which only built config and launched lazily in
+// bootstrapBrowserCtx) — so the loser's discard now includes reaping a real
+// (redundant) Chrome, not merely dropping an allocator config. bootstrapBrowserCtx
+// then only ever creates CHILD contexts of the WINNING m.allocCtx (the pipe root),
+// never a discarded local.
 func (m *BrowserManager) ensureStarted() error {
 	if m.started {
 		return nil
@@ -491,12 +443,15 @@ func (m *BrowserManager) ensureStarted() error {
 	}
 
 	// ADR-043 shared-Chrome mode: when a coordinator is wired (the normal
-	// gateway case), ask it to launch+provide the ONE shared Chrome instead of
-	// building a per-manager ExecAllocator. The coordinator owns the Chrome
-	// process + this agent's browser context; the manager builds only a remote-
-	// allocator connection against the coordinator's cdpURL and re-adopts the
-	// coordinator-owned browserCtxID non-owningly (CRIT-003: WithNewBrowserContext
-	// is NEVER called on a manager path — only the coordinator does that).
+	// gateway case), ask it to launch+provide the ONE shared Chrome. The
+	// coordinator owns the Chrome process + this agent's browser context;
+	// Register returns the coordinator's SHARED root chromedp context (rootCtx)
+	// and the agent's browserCtxID. CRIT-001: the manager drives the shared Chrome
+	// through chromedp CHILD contexts of rootCtx (one CDP pipe, multiplexed) — NOT
+	// a RemoteAllocator(ws://) connection (the pipe has no ws URL and is private to
+	// the launcher). bootstrapBrowserCtx re-adopts browserCtxID non-owningly
+	// (CRIT-003: WithNewBrowserContext is NEVER called on a manager path — only the
+	// coordinator does that).
 	//
 	// Register blocks on the (possibly cold) Chrome launch, so m.mu is released
 	// around it — same ADR-038 no-lock-across-blocking-call discipline as the
@@ -505,22 +460,27 @@ func (m *BrowserManager) ensureStarted() error {
 	if m.coordinator != nil {
 		agentID := m.agentID
 		m.mu.Unlock()
-		cdpURL, browserCtxID, regErr := m.coordinator.Register(context.Background(), agentID, m)
+		rootCtx, browserCtxID, regErr := m.coordinator.Register(context.Background(), agentID, m)
 		m.mu.Lock()
 		if regErr != nil {
 			return fmt.Errorf("browser: shared Chrome unavailable: %w", regErr)
 		}
 		if m.started {
 			// A concurrent ensureStarted won while m.mu was released. Discard
-			// our redundant resolution; the winner already set m.allocCtx.
+			// our redundant registration; the winner already set m.allocCtx.
 			return nil
 		}
-		allocCtx, cancel := chromedp.NewRemoteAllocator(context.Background(), cdpURL)
-		m.allocCtx = allocCtx
-		m.allocCancel = cancel
+		// m.allocCtx is the coordinator's rootCtx: bootstrapBrowserCtx creates the
+		// agent's tab contexts as CHILDREN of it. m.allocCancel is nil in
+		// coordinator mode — the coordinator owns rootCtx's lifetime, so the
+		// manager MUST NEVER cancel it (canceling rootCtx would kill the shared
+		// Chrome and every other agent's context — CRIT-002). Shutdown/Release
+		// cancel only this manager's own per-session child contexts.
+		m.allocCtx = rootCtx
+		m.allocCancel = nil
 		m.browserCtxID = browserCtxID
 		m.started = true
-		logger.InfoCF("browser", "Browser connected to shared Chrome (coordinator mode)", map[string]any{
+		logger.InfoCF("browser", "Browser connected to shared Chrome (coordinator mode, CDP over pipe)", map[string]any{
 			"agent_id":       agentID,
 			"browser_ctx_id": string(browserCtxID),
 		})
@@ -573,35 +533,51 @@ func (m *BrowserManager) ensureStarted() error {
 		return nil
 	}
 
-	// Build the ExecAllocator options via the shared helper (managedExecAllocatorOpts,
-	// exec_resolver.go) — identical to the coordinator's launch path, so the two
-	// never diverge. See that helper for the per-flag rationale (fixed CDP port,
-	// sandbox disable, stealth flags, XDG/HOME jail, etc.).
-	opts := managedExecAllocatorOpts(execPath, m.cfg)
+	// Render the managed Chrome command line via the shared helper
+	// (managedExecAllocatorOpts, exec_resolver.go) — identical to the
+	// coordinator's launch path, so the two never diverge. The no-coordinator
+	// fallback is always headless-shell (video capture is a coordinator-only,
+	// orchestrated path). See that helper for the per-flag rationale.
+	cmdline := managedExecAllocatorOpts(m.cfg, managedLaunchParams{})
 
-	// Preflight the fixed CDP debug port before committing to a launch.
-	// Without this, a port already held by something else (observed live: an
-	// orphaned Chrome process left over from an unrelated prior run) makes
-	// chromedp's launch fail with an opaque "websocket url timeout reached"
-	// deep inside the CDP handshake — nothing names the real cause. This
-	// runs exactly once per manager (ensureStarted's managed-mode branch is
-	// itself latched by m.started, checked above after the resolveExecPath
-	// re-lock), guaranteed to happen before this manager has ever launched
-	// its own Chrome — so, unlike a check placed at every bootstrapBrowserCtx
-	// call (which runs once per NEW browsing context, not just once per
-	// manager), it can never mistake a healthy earlier launch of OUR OWN
-	// Chrome for "something else is squatting the port."
-	if err := checkDebugPortAvailable(DebugPort); err != nil {
-		return err
+	// Launch over the CDP pipe (CRIT-001 — no TCP port; there is no debug port to
+	// preflight anymore). The launcher is a seam so tests never spawn real Chrome.
+	// Unlike the pre-pipe chromedp.NewExecAllocator (which only built config and
+	// launched lazily in bootstrapBrowserCtx), cdppipe launches Chrome NOW — so
+	// release m.mu across the blocking launch, same discipline as resolveExecPath.
+	launch := m.managedPipeLaunch
+	if launch == nil {
+		launch = launchManagedPipe
 	}
-
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	m.allocCtx = allocCtx
-	m.allocCancel = cancel
+	profileDir := m.cfg.ProfileDir
+	m.mu.Unlock()
+	res, lErr := launch(context.Background(), execPath, pipeLaunchConfig{
+		args:        cmdline.Args,
+		env:         cmdline.Env,
+		userDataDir: profileDir,
+	})
+	m.mu.Lock()
+	if lErr != nil {
+		return fmt.Errorf("browser: failed to launch chromium over the CDP pipe: %w", lErr)
+	}
+	if m.started {
+		// A concurrent ensureStarted won while m.mu was released for the launch.
+		// Tear down our now-redundant Chrome (with m.mu NOT held — cancel blocks
+		// on cdppipe teardown/reap) instead of overwriting the winner's allocator.
+		m.mu.Unlock()
+		res.cancel()
+		m.mu.Lock()
+		return nil
+	}
+	// m.allocCtx is the pipe root context (Browser already bound): bootstrapBrowserCtx
+	// creates tab contexts as CHILDREN of it. m.allocCancel is cdppipe's teardown —
+	// canceling it closes the pipe and kills THIS manager's own Chrome (the
+	// one-manager-one-Chrome fallback semantics; the coordinator path sets it nil).
+	m.allocCtx = res.rootCtx
+	m.allocCancel = res.cancel
 	m.started = true
 
-	logger.InfoCF("browser", "Browser allocator ready (managed mode)", map[string]any{
-		"headless":    m.cfg.Headless,
+	logger.InfoCF("browser", "Browser launched over CDP pipe (managed mode, no TCP port)", map[string]any{
 		"profile_dir": m.cfg.ProfileDir,
 		"exec_path":   execPath,
 	})
@@ -897,24 +873,28 @@ func (m *BrowserManager) registerFreshSessionLocked(
 
 // bootstrapBrowserCtx creates the ONE-TIME browser-owning chromedp context
 // for a brand-new browsing context: chromedp.NewContext(allocCtx) followed by
-// a forcing chromedp.Run (no actions) so the browser actually launches
-// (managed mode) or attaches (remote CDP mode). This is the ONLY context in
-// this manager that may be created directly off allocCtx/m.allocCtx for a
-// tab-bearing purpose — every subsequent tab in the resulting browsing
+// a forcing chromedp.Run (no actions) so the browser attaches. This is the ONLY
+// context in this manager that may be created directly off allocCtx/m.allocCtx
+// for a tab-bearing purpose — every subsequent tab in the resulting browsing
 // context must be a CHILD of the returned context (chromedp.NewContext(
-// browserCtx, ...)), never straight off the allocator again.
+// browserCtx, ...)), never straight off allocCtx again.
 //
 // Why: chromedp binds a *Browser to the FIRST context created from an
-// allocator (chromedp.NewContext's "c.first = c.Browser == nil" — the
-// allocator context's own stored chromedp.Context always has Browser == nil,
-// forever), NOT to the allocator context itself. A second
-// chromedp.NewContext(allocCtx, ...) + Run therefore tries to launch a SECOND
-// browser process rather than attaching to the first one — and since the
-// managed-mode ExecAllocator pins a FIXED debug port (browserDebugPort,
-// already held by the first browser), that second launch fails outright.
-// This was exactly the live-UAT-caught ADR-041 adoption bug: adoptTarget and
-// OpenTab each independently called chromedp.NewContext(m.allocCtx, ...) for
-// the 2nd+ tab of an already-running session.
+// allocator that has none (chromedp.NewContext's "c.first = c.Browser == nil").
+// The mode determines whether allocCtx already carries a Browser:
+//   - remote CDP mode (cfg.CDPURL): allocCtx is a RemoteAllocator context with
+//     Browser==nil, so this first NewContext+Run ATTACHES to the external Chrome.
+//   - coordinator / no-coordinator managed mode (CRIT-001): allocCtx is a pipe
+//     root context that ALREADY has the shared *Browser bound (the coordinator's
+//     rootCtx, or the no-coordinator fallback's eager cdppipe launch), so
+//     c.first=false and this NewContext+Run creates a CHILD context multiplexed
+//     over the one CDP pipe — it does NOT spawn a second browser.
+//
+// A second chromedp.NewContext(allocCtx, ...) + Run for a 2nd+ tab of an
+// already-running session was the live-UAT-caught ADR-041 adoption bug (in the
+// pre-pipe world it tried to launch a SECOND Chrome on the fixed debug port and
+// failed); routing every subsequent tab through se.browserCtx (a child of this
+// returned context) is the fix, and it remains correct over the pipe.
 //
 // Must be called with NO BrowserManager lock held — this issues a real,
 // blocking chromedp.Run call, subject to the same "no lock across CDP"
@@ -934,13 +914,14 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 	var opts []chromedp.ContextOption
 	if m.browserCtxID != "" {
 		// ADR-043 (CRIT-003): re-adopt the coordinator-owned browser context
-		// non-owningly. Safe here because chromedp forces c.first=false for a
-		// RemoteAllocator context (the shared-Chrome + cdp_url paths); it would
-		// panic on a first/root ExecAllocator context, but the manager's
-		// browserCtxID is only set in coordinator/cdp_url mode, never the
-		// no-coordinator managed-mode fallback. Non-owning = no auto-dispose on
-		// cancel, so Shutdown/Release detach tabs + close the WS connection
-		// WITHOUT disposing the browser context or killing Chrome (CRIT-002/C1).
+		// non-owningly. Safe here because c.first is false — in coordinator mode
+		// allocCtx is the coordinator's rootCtx (Browser already bound, so a child
+		// is never first), and WithExistingBrowserContext is only set in
+		// coordinator mode (m.browserCtxID is empty in the no-coordinator managed
+		// fallback and in cdp_url mode). Non-owning = no auto-dispose on cancel, so
+		// Shutdown/Release detach this manager's tabs WITHOUT disposing the browser
+		// context or killing the shared Chrome (CRIT-002/C1) — the manager NEVER
+		// cancels rootCtx itself (m.allocCancel is nil in coordinator mode).
 		opts = append(opts, chromedp.WithExistingBrowserContext(m.browserCtxID))
 	}
 	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
@@ -1914,14 +1895,16 @@ func (m *BrowserManager) Preprovision(ctx context.Context) (string, error) {
 }
 
 // Shutdown drops this manager's connection + all its sessions. In ADR-043
-// shared-Chrome mode (coordinator wired), m.allocCancel is the REMOTE
-// allocator's cancel — canceling it closes the manager's WS connection and
-// detaches its tabs, but kills NEITHER the Chrome process NOR disposes the
-// agent's browser context (CRIT-002/C1: the coordinator owns both). In the
-// no-coordinator managed-mode fallback (tests), m.allocCancel is the
-// ExecAllocator's cancel and DOES kill this manager's own Chrome — preserved
-// for the one-manager-one-Chrome test path. Either way the bookkeeping
-// (sessions, started, allocCancel) is reset cleanly and idempotently.
+// shared-Chrome mode (coordinator wired, CRIT-001), m.allocCancel is NIL — the
+// coordinator owns the shared rootCtx's lifetime, so the manager MUST NOT cancel
+// it (that would kill the shared Chrome + every other agent's context). Tearing
+// down each session's own child context (se.browserCancel, a non-owning child of
+// rootCtx) detaches this manager's tabs but kills NEITHER the Chrome process NOR
+// disposes the agent's browser context (CRIT-002/C1: the coordinator owns both).
+// In the no-coordinator managed-mode fallback (tests) and remote-CDP mode,
+// m.allocCancel is cdppipe's / the RemoteAllocator's cancel and DOES tear down
+// this manager's own connection (killing the fallback's own Chrome). Either way
+// the bookkeeping (sessions, started, allocCancel) is reset idempotently.
 func (m *BrowserManager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

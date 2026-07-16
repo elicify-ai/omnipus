@@ -330,15 +330,16 @@ func TestViewerAttach_Unauthorized_RejectedBeforeGOPReplay(t *testing.T) {
 	}
 }
 
-// EncodeChunk must match the BrowserChunkEnvelope contract exactly: a
-// 17-byte big-endian header (seq:u32, ts:u64, key:u8, len:u32) followed by
-// the raw payload, with no fragment field.
+// EncodeChunk must match the BrowserChunkEnvelope contract exactly: an
+// 18-byte big-endian header (seq:u32, ts:u64, key:u8, kind:u8, len:u32)
+// followed by the raw payload, with no fragment field and no extra tag byte
+// inside the payload.
 func TestEncodeChunk_MatchesBrowserChunkEnvelopeLayout(t *testing.T) {
 	c := EncodedChunk{Seq: 42, TS: 1234567890, Key: true, Codec: "vp8", Kind: "video", Payload: []byte("hello")}
 	buf := EncodeChunk(c)
 
-	if len(buf) != 17+len(c.Payload) {
-		t.Fatalf("expected 17-byte header + payload, got %d bytes", len(buf))
+	if len(buf) != 18+len(c.Payload) {
+		t.Fatalf("expected 18-byte header + payload, got %d bytes", len(buf))
 	}
 	if seq := uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3]); seq != 42 {
 		t.Fatalf("seq: want 42, got %d", seq)
@@ -346,12 +347,36 @@ func TestEncodeChunk_MatchesBrowserChunkEnvelopeLayout(t *testing.T) {
 	if buf[12] != 1 {
 		t.Fatalf("key byte: want 1 (keyframe), got %d", buf[12])
 	}
-	l := uint32(buf[13])<<24 | uint32(buf[14])<<16 | uint32(buf[15])<<8 | uint32(buf[16])
+	if buf[13] != 0 {
+		t.Fatalf("kind byte: want 0 (video), got %d", buf[13])
+	}
+	l := uint32(buf[14])<<24 | uint32(buf[15])<<16 | uint32(buf[16])<<8 | uint32(buf[17])
 	if l != uint32(len(c.Payload)) {
 		t.Fatalf("len: want %d, got %d", len(c.Payload), l)
 	}
-	if string(buf[17:]) != "hello" {
-		t.Fatalf("payload: want %q, got %q", "hello", buf[17:])
+	if string(buf[18:]) != "hello" {
+		t.Fatalf("payload: want %q, got %q", "hello", buf[18:])
+	}
+}
+
+// EncodeChunk must set the kind byte to 1 for an audio chunk, and audio
+// chunks must never carry the key=1 keyframe flag (Opus packets are never
+// classified key/delta — BrowserChunkEnvelope.yaml).
+func TestEncodeChunk_AudioKindByte(t *testing.T) {
+	c := EncodedChunk{Seq: 7, TS: 99, Key: false, Codec: "opus", Kind: "audio", Payload: []byte("opusframe")}
+	buf := EncodeChunk(c)
+
+	if len(buf) != 18+len(c.Payload) {
+		t.Fatalf("expected 18-byte header + payload, got %d bytes", len(buf))
+	}
+	if buf[12] != 0 {
+		t.Fatalf("key byte: want 0 (audio is never a keyframe), got %d", buf[12])
+	}
+	if buf[13] != 1 {
+		t.Fatalf("kind byte: want 1 (audio), got %d", buf[13])
+	}
+	if string(buf[18:]) != "opusframe" {
+		t.Fatalf("payload: want %q, got %q", "opusframe", buf[18:])
 	}
 }
 

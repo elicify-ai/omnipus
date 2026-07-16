@@ -2571,17 +2571,22 @@ components:
         browser_ingest_chunk (FR-002, FR-011, FR-012, FR-017). Documents the
         logical field layout of the fixed compact envelope carried by each
         binary WebSocket message: a header of seq (u32), ts (u64), key (u8,
-        boolean keyframe flag), len (u32), followed by exactly `len` trailing
-        payload bytes. Deliberately no fragment field (M-4): a chunk is always
-        sent whole in one binary WS message. An ingest-leg chunk exceeding the
-        endpoint's configured max-message bound (>= 2 MB default, FR-014) MUST
-        be rejected outright rather than fragmented; a zero-length payload
-        MUST also be rejected.
+        boolean keyframe flag), kind (u8, 0=video/1=audio discriminator), len
+        (u32), followed by exactly `len` trailing payload bytes. `kind` lets a
+        single connection (in particular browser_ingest_chunk, which
+        multiplexes video and audio over one ingest connection) distinguish
+        the two without inspecting the payload; `payload` is always the raw
+        codec bytes with no additional leading tag. Deliberately no fragment
+        field (M-4): a chunk is always sent whole in one binary WS message. An
+        ingest-leg chunk exceeding the endpoint's configured max-message bound
+        (>= 2 MB default, FR-014) MUST be rejected outright rather than
+        fragmented; a zero-length payload MUST also be rejected.
       type: object
       required:
         - seq
         - ts
         - key
+        - kind
         - len
         - payload
       additionalProperties: false
@@ -2604,9 +2609,19 @@ components:
           type: boolean
           description: >-
             True when this chunk is a keyframe (encoded as a single byte, u8,
-            on the wire: 1=keyframe, 0=delta). A newly attached viewer's GOP
-            replay always starts from the most recent key=true chunk (FR-003,
-            FR-015).
+            on the wire: 1=keyframe, 0=delta). Video only — always false/0 for
+            an audio chunk. A newly attached viewer's GOP replay always starts
+            from the most recent key=true chunk (FR-003, FR-015).
+        kind:
+          type: integer
+          minimum: 0
+          maximum: 1
+          description: >-
+            Video/audio discriminator for this chunk (u8 wire width): 0 =
+            video, 1 = audio. Lets browser_ingest_chunk multiplex both kinds
+            over one connection, and lets every consumer of this shared
+            envelope route a chunk without depending on which named message
+            type carried it.
         len:
           type: integer
           minimum: 0

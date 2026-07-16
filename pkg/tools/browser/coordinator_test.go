@@ -9,10 +9,17 @@ package browser
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
@@ -82,11 +89,11 @@ func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
 	mgrB := newTestManager(t, cfg)
 	mgrB.AttachSharedChrome(coord, "agent-b")
 
-	urlA, ctxA, err := coord.Register(context.Background(), "agent-a", mgrA)
+	rootA, ctxA, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register A: %v", err)
 	}
-	urlB, ctxB, err := coord.Register(context.Background(), "agent-b", mgrB)
+	rootB, ctxB, err := coord.Register(context.Background(), "agent-b", mgrB)
 	if err != nil {
 		t.Fatalf("Register B: %v", err)
 	}
@@ -94,8 +101,11 @@ func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
 	if pid == 0 {
 		t.Fatal("expected a live Chrome pid after Register")
 	}
-	if urlA != urlB {
-		t.Fatalf("both agents should dial the SAME shared Chrome URL; got A=%q B=%q", urlA, urlB)
+	// CRIT-001: both agents drive the SAME shared root chromedp context (their
+	// tab contexts are children of it, multiplexed over one CDP pipe) — there is
+	// no per-agent ws:// URL anymore.
+	if rootA == nil || rootB == nil || rootA != rootB {
+		t.Fatalf("both agents should share the SAME coordinator root context; got A=%v B=%v", rootA, rootB)
 	}
 	if ctxA == "" || ctxB == "" || ctxA == ctxB {
 		t.Fatalf("expected two distinct non-empty browser context ids; got A=%q B=%q", ctxA, ctxB)
@@ -190,5 +200,183 @@ func TestCoordinator_OwnershipMarker_RoundTrip(t *testing.T) {
 	}
 	if pidAlive(999999) {
 		t.Fatal("pid 999999 should not be alive — foreign-marker detection relies on pidAlive")
+	}
+}
+
+// fakePipeLaunch returns a coordinator pipeLauncher stand-in that never spawns
+// real Chrome: it hands back a cancelable root context and a *exec.Cmd whose
+// Process.Pid is the test process's own (guaranteed-alive) pid, so the ownership
+// marker records a LIVE owner and PID() reports it. browser is nil, so the
+// coordinator's crash detector is not armed.
+func fakePipeLaunch() func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error) {
+	return func(_ context.Context, _ string, _ pipeLaunchConfig) (*pipeLaunchResult, error) {
+		rootCtx, cancel := context.WithCancel(context.Background())
+		return &pipeLaunchResult{
+			rootCtx: rootCtx,
+			cancel:  cancel,
+			cmd:     &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}},
+			browser: nil,
+		}, nil
+	}
+}
+
+// TestCoordinator_LockfileSingleLaunch proves the CRIT-001 single-launch
+// guarantee is enforced by the O_EXCL/flock lockfile (NOT the removed port
+// bind), and that ownership is proven WITHOUT a port via the marker: two
+// coordinators sharing one profile dir contend on the same lockfile — exactly
+// one wins, and the second detects the live owner (via its marker pid) and is
+// rejected. Hermetic: a fake launcher, no real Chrome.
+func TestCoordinator_LockfileSingleLaunch(t *testing.T) {
+	home := t.TempDir()
+	// A dummy executable so execPath.resolve() short-circuits (no download); the
+	// fake launcher ignores it — it never spawns Chrome.
+	execPath := filepath.Join(home, "fake-chrome")
+	writeExecutable(t, execPath, "#!/bin/sh\nexit 0\n")
+	cfg := BrowserConfig{
+		Enabled:     true,
+		Headless:    true,
+		PageTimeout: 30_000_000_000,
+		MaxTabs:     5,
+		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
+		ExecPath:    execPath,
+	}
+
+	coord1 := NewBrowserCoordinator(home, cfg, 30)
+	coord1.pipeLauncher = fakePipeLaunch()
+	coord2 := NewBrowserCoordinator(home, cfg, 30)
+	coord2.pipeLauncher = fakePipeLaunch()
+
+	// coord1 wins the lock and "launches".
+	if err := coord1.ensureLaunched(context.Background()); err != nil {
+		t.Fatalf("coord1 ensureLaunched should succeed (first to take the lock): %v", err)
+	}
+	if coord1.PID() != os.Getpid() {
+		t.Fatalf("coord1 should report the launched pid; got %d, want %d", coord1.PID(), os.Getpid())
+	}
+
+	// coord2 MUST be rejected — the lock is held by coord1, and coord1's marker
+	// names a live pid (ownership proven without a port). No second Chrome.
+	err := coord2.ensureLaunched(context.Background())
+	if err == nil {
+		t.Fatal("coord2 ensureLaunched must FAIL — coord1 holds the single-launch lock")
+	}
+	if !strings.Contains(err.Error(), "lock") {
+		t.Fatalf("coord2 error should explain the held launch lock; got %v", err)
+	}
+	if coord2.PID() != 0 {
+		t.Fatalf("coord2 must NOT have launched a second Chrome; got pid %d", coord2.PID())
+	}
+
+	// Releasing coord1's lock (Shutdown) lets coord2 launch.
+	coord1.Shutdown()
+	if coord1.PID() != 0 {
+		t.Fatalf("coord1.PID() should be 0 after Shutdown; got %d", coord1.PID())
+	}
+	if err := coord2.ensureLaunched(context.Background()); err != nil {
+		t.Fatalf("coord2 should launch after coord1 releases the lock: %v", err)
+	}
+	if coord2.PID() != os.Getpid() {
+		t.Fatalf("coord2 should now report the launched pid; got %d", coord2.PID())
+	}
+	t.Cleanup(func() { coord2.Shutdown() })
+}
+
+// TestManager_NoCoordinator_ManagedPipeLaunch exercises the MIGRATED
+// no-coordinator managed-mode fallback with a REAL Chrome: ensureStarted launches
+// Chrome over the CDP pipe (CRIT-001, no TCP port), bootstrapBrowserCtx creates a
+// tab context as a plain child of the pipe root (no WithExistingBrowserContext,
+// since m.browserCtxID is empty here), a real navigation succeeds, and Shutdown
+// tears down this manager's own Chrome via m.allocCancel (cdppipe's cancel).
+func TestManager_NoCoordinator_ManagedPipeLaunch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs a real Chrome")
+	}
+	cfg, _ := newCoordinatorTestConfig(t) // cfg.ExecPath = the managed test binary
+	mgr := newTestManager(t, cfg)         // NO AttachSharedChrome → no-coordinator managed pipe path
+	t.Cleanup(mgr.Shutdown)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html><body><h1>NO-COORD-PIPE-MARKER</h1></body></html>"))
+	}))
+	t.Cleanup(srv.Close)
+
+	tabCtx, err := mgr.Session(defaultSessionID)
+	if err != nil {
+		t.Fatalf("Session (no-coordinator managed pipe launch): %v", err)
+	}
+	navCtx, cancel := context.WithTimeout(tabCtx, 30*time.Second)
+	defer cancel()
+	var body string
+	if err := chromedp.Run(navCtx,
+		chromedp.Navigate(srv.URL),
+		chromedp.WaitVisible("h1", chromedp.ByQuery),
+		chromedp.Text("body", &body, chromedp.ByQuery),
+	); err != nil {
+		t.Fatalf("navigate/read over the no-coordinator managed pipe: %v", err)
+	}
+	if !strings.Contains(body, "NO-COORD-PIPE-MARKER") {
+		t.Fatalf("expected the served marker; got %q", body)
+	}
+}
+
+// TestManagedExecOpts_HeadfulPipeForVideoCapable proves the MAJ-001 launch-args
+// contract: video-capable launches are HEADFUL (no --headless, a --window-size,
+// DISPLAY in env) and non-video-capable launches preserve the headless-shell
+// path — and NEITHER carries a --remote-debugging-port (CDP is over the pipe).
+func TestManagedExecOpts_HeadfulPipeForVideoCapable(t *testing.T) {
+	cfg := BrowserConfig{ProfileDir: filepath.Join(t.TempDir(), "profile")}
+
+	hasFlag := func(args []string, want string) bool {
+		for _, a := range args {
+			if a == want {
+				return true
+			}
+		}
+		return false
+	}
+	hasPrefix := func(args []string, prefix string) bool {
+		for _, a := range args {
+			if strings.HasPrefix(a, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	envHas := func(env []string, want string) bool {
+		for _, e := range env {
+			if e == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Video-capable: headful + DISPLAY + no port.
+	video := managedExecAllocatorOpts(cfg, managedLaunchParams{VideoCapable: true, Display: ":99"})
+	if hasFlag(video.Args, "--headless") {
+		t.Errorf("video-capable launch must be HEADFUL (no --headless); got %v", video.Args)
+	}
+	if !hasFlag(video.Args, "--window-size=1280,720") {
+		t.Errorf("video-capable launch must set --window-size=1280,720; got %v", video.Args)
+	}
+	if !envHas(video.Env, "DISPLAY=:99") {
+		t.Errorf("video-capable launch must set DISPLAY in env; got %v", video.Env)
+	}
+	if hasPrefix(video.Args, "--remote-debugging-port") {
+		t.Errorf("video-capable launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v", video.Args)
+	}
+
+	// Non-video-capable: headless-shell preserved, no DISPLAY, no port.
+	headless := managedExecAllocatorOpts(cfg, managedLaunchParams{})
+	if !hasFlag(headless.Args, "--headless") {
+		t.Errorf("non-video-capable launch must preserve the headless-shell path (--headless); got %v", headless.Args)
+	}
+	if hasPrefix(headless.Args, "--remote-debugging-port") {
+		t.Errorf("non-video-capable launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v", headless.Args)
+	}
+	for _, e := range headless.Env {
+		if strings.HasPrefix(e, "DISPLAY=") {
+			t.Errorf("non-video-capable launch must NOT set DISPLAY; got %v", headless.Env)
+		}
 	}
 }

@@ -2,7 +2,10 @@ package browser
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // integrity check only (matches the GCS-published Content-MD5), not a security signature — see verifyGoogHashMD5.
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +23,18 @@ import (
 const (
 	cftManifestURL = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
 	cftChannel     = "Stable"
-	cftDownloadID  = "chrome-headless-shell"
+
+	// cftDownloadID is the CfT manifest key + zip/binary basename for the
+	// chrome-headless-shell build (F-08's fallback build). Kept as the
+	// original single constant — other packages' tests (execpath_test.go,
+	// coordinator_test.go) reference it directly to seed on-disk fixtures at
+	// the pre-F-08 layout, so its name/value must not change even though
+	// EnsureChromium is now build-aware.
+	cftDownloadID = "chrome-headless-shell"
+
+	// cftFullChromeDownloadID is the CfT manifest key for the full "chrome"
+	// build — FR-009's video-capable default.
+	cftFullChromeDownloadID = "chrome"
 )
 
 // globalManifestURLForTesting overrides cftManifestURL when set. Tests use
@@ -41,11 +55,57 @@ type cftManifestDownloadRef struct {
 
 var installMu sync.Mutex
 
-// EnsureChromium ensures a managed chrome-headless-shell binary is present
-// under installRoot, downloading the latest stable Chrome for Testing build
-// when it is missing. Returns the absolute path to the executable.
+// chromiumBuild is one of the two Chrome-for-Testing build flavors this
+// installer manages (F-08 dual-download): the full "chrome" build (FR-009's
+// video-capable default) and the "chrome-headless-shell" fallback. Each
+// carries its own manifest download key and its own on-disk layout via
+// binaryPath (the executable's location relative to the build's extraction
+// subdir).
+type chromiumBuild struct {
+	downloadID string
+	binaryPath func() string
+}
+
+// headlessShellBuild describes the chrome-headless-shell CfT build.
+func headlessShellBuild() chromiumBuild {
+	return chromiumBuild{downloadID: cftDownloadID, binaryPath: headlessShellBinaryName}
+}
+
+// fullChromeBuild describes the full "chrome" CfT build (FR-009 default for
+// Linux video-capable installs).
+func fullChromeBuild() chromiumBuild {
+	return chromiumBuild{downloadID: cftFullChromeDownloadID, binaryPath: fullChromeBinaryRelPath}
+}
+
+// subdir returns the extraction subdirectory name for b on platform — mirrors
+// the CfT zip's own top-level folder naming (<downloadID>-<platform>), which
+// holds uniformly for both builds (e.g. "chrome-linux64", "chrome-headless-
+// shell-linux64").
+func (b chromiumBuild) subdir(platform string) string {
+	return b.downloadID + "-" + platform
+}
+
+// binaryFullPath resolves b's executable absolute path under versionDir for
+// platform, honoring b's own on-disk layout.
+func (b chromiumBuild) binaryFullPath(versionDir, platform string) string {
+	return filepath.Join(versionDir, b.subdir(platform), b.binaryPath())
+}
+
+// EnsureChromium ensures a managed Chromium binary is present under
+// installRoot, downloading the appropriate Chrome for Testing build when
+// neither flavor is already installed. Returns the absolute path to the
+// executable.
 //
-// Layout: <installRoot>/<version>/chrome-headless-shell-<platform>/chrome-headless-shell
+// F-08 dual-download: two CfT builds are supported — the full "chrome" build
+// (FR-009's default for Linux video-capable installs) and the
+// "chrome-headless-shell" fallback — each with its own manifest download key,
+// on-disk extraction layout, binary-name resolver, and integrity
+// verification (verifyGoogHashMD5). EnsureChromium detects EITHER binary
+// already installed and never re-downloads in that case, preferring the full
+// build when both are cached (it is a strict superset of headless-shell's
+// browsing capability — DS-5 "both cached -> prefer full").
+//
+// Layout: <installRoot>/<version>/<downloadID>-<platform>/<binary-per-build-layout>
 //
 // Concurrent calls are serialized; the second caller observes the freshly
 // extracted binary and returns immediately.
@@ -58,17 +118,20 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 		return "", err
 	}
 
-	// If any prior install already left a usable binary, prefer it without
-	// hitting the network. We pick the most recent version directory.
+	// If any prior install already left a usable binary of either build,
+	// prefer it without hitting the network (F-08 detect-either).
 	if path := findInstalledBinary(installRoot, platform); path != "" {
 		return path, nil
 	}
+
+	build := selectDownloadBuild()
 
 	logger.InfoCF("browser", "Chromium not installed — downloading from chrome-for-testing",
 		map[string]any{
 			"install_root": installRoot,
 			"platform":     platform,
 			"channel":      cftChannel,
+			"build":        build.downloadID,
 		})
 
 	manifest, err := fetchCFTManifest(ctx)
@@ -80,20 +143,40 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("browser: chrome-for-testing manifest missing %q channel", cftChannel)
 	}
-	downloads, ok := channel.Downloads[cftDownloadID]
+
+	downloads, ok := channel.Downloads[build.downloadID]
+	if !ok && build.downloadID != cftDownloadID {
+		// The preferred build has no manifest entry at all (unexpected on a
+		// standard CfT feed) — fall back to chrome-headless-shell rather than
+		// failing a fresh install outright (F-08 fallback semantics).
+		logger.WarnCF(
+			"browser",
+			"preferred chromium build missing from manifest — falling back to chrome-headless-shell",
+			map[string]any{"preferred_build": build.downloadID},
+		)
+		build = headlessShellBuild()
+		downloads, ok = channel.Downloads[build.downloadID]
+	}
 	if !ok {
-		return "", fmt.Errorf("browser: chrome-for-testing manifest missing %q downloads", cftDownloadID)
+		return "", fmt.Errorf("browser: chrome-for-testing manifest missing %q downloads", build.downloadID)
 	}
 
-	var zipURL string
-	for _, d := range downloads {
-		if d.Platform == platform {
-			zipURL = d.URL
-			break
+	zipURL := zipURLForPlatform(downloads, platform)
+	if zipURL == "" && build.downloadID != cftDownloadID {
+		// Same fallback rationale as above, for a platform-shaped miss (e.g. a
+		// feed that only ships "chrome" for a subset of platforms).
+		logger.WarnCF(
+			"browser",
+			"preferred chromium build has no build for this platform — falling back to chrome-headless-shell",
+			map[string]any{"preferred_build": build.downloadID, "platform": platform},
+		)
+		build = headlessShellBuild()
+		if hsDownloads, hsOK := channel.Downloads[build.downloadID]; hsOK {
+			zipURL = zipURLForPlatform(hsDownloads, platform)
 		}
 	}
 	if zipURL == "" {
-		return "", fmt.Errorf("browser: chrome-for-testing has no %s build for platform %s", cftDownloadID, platform)
+		return "", fmt.Errorf("browser: chrome-for-testing has no %s build for platform %s", build.downloadID, platform)
 	}
 
 	versionDir := filepath.Join(installRoot, channel.Version)
@@ -101,7 +184,7 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 		return "", fmt.Errorf("browser: create install dir: %w", mkdirErr)
 	}
 
-	zipPath := filepath.Join(versionDir, cftDownloadID+"-"+platform+".zip")
+	zipPath := filepath.Join(versionDir, build.downloadID+"-"+platform+".zip")
 	if dlErr := downloadFile(ctx, zipURL, zipPath); dlErr != nil {
 		_ = os.Remove(zipPath)
 		return "", fmt.Errorf("browser: download %s: %w", zipURL, dlErr)
@@ -112,7 +195,7 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 	}
 	_ = os.Remove(zipPath)
 
-	binaryPath := filepath.Join(versionDir, cftDownloadID+"-"+platform, headlessShellBinaryName())
+	binaryPath := build.binaryFullPath(versionDir, platform)
 	info, err := os.Stat(binaryPath)
 	if err != nil {
 		return "", fmt.Errorf("browser: extracted archive missing %s: %w", binaryPath, err)
@@ -126,19 +209,68 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 	logger.InfoCF("browser", "Chromium install complete",
 		map[string]any{
 			"version": channel.Version,
+			"build":   build.downloadID,
 			"binary":  binaryPath,
 		})
 
 	return binaryPath, nil
 }
 
+// zipURLForPlatform returns the download URL among downloads matching
+// platform, or "" if none matches.
+func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) string {
+	for _, d := range downloads {
+		if d.Platform == platform {
+			return d.URL
+		}
+	}
+	return ""
+}
+
+// selectDownloadBuild decides which CfT build a fresh EnsureChromium download
+// (nothing of either flavor cached yet) should fetch — FR-009/F-08: the full
+// "chrome" build is the default once this host is actually positioned to run
+// it as a video-capable install (Linux + Xvfb reachable); every other host
+// (macOS/Windows self-host, Linux without Xvfb, or before the Xvfb sidecar /
+// Gate-0 rollout is live) keeps downloading chrome-headless-shell, preserving
+// pre-F-08 behavior byte for byte.
+//
+// This is deliberately NOT gated behind a separate config flag: FR-009's
+// "flipped only after Gate 0" requirement is realized structurally — the
+// video-capable precondition (Xvfb reachable) does not hold on a host until
+// the Gate-0-gated Xvfb sidecar is actually wired into that host's boot
+// sequence, so this function keeps returning the pre-existing
+// chrome-headless-shell default until that day, with no additional wiring
+// required in this file. Once Xvfb is live, the default flips automatically.
+func selectDownloadBuild() chromiumBuild {
+	if runtime.GOOS == "linux" && XvfbAvailableProbe() {
+		return fullChromeBuild()
+	}
+	return headlessShellBuild()
+}
+
+// findInstalledBinary scans installRoot's version directories for an
+// already-extracted, executable Chromium binary and returns its path, or ""
+// if none exists. Detect-either (F-08/FR-009): checks BOTH the full "chrome"
+// build and the chrome-headless-shell fallback at each version dir,
+// preferring the full build when both are present (DS-5 "both cached ->
+// prefer full") since it is a strict superset of headless-shell's browsing
+// capability.
 func findInstalledBinary(installRoot, platform string) string {
+	if path := findInstalledBuild(installRoot, platform, fullChromeBuild()); path != "" {
+		return path
+	}
+	return findInstalledBuild(installRoot, platform, headlessShellBuild())
+}
+
+// findInstalledBuild scans installRoot's version directories for an
+// already-extracted, executable binary of the given build and returns the
+// most-recently-modified match, or "" if none exists.
+func findInstalledBuild(installRoot, platform string, build chromiumBuild) string {
 	entries, err := os.ReadDir(installRoot)
 	if err != nil {
 		return ""
 	}
-	binaryName := headlessShellBinaryName()
-	subdir := cftDownloadID + "-" + platform
 	// Walk version directories newest-first by ModTime so we pick the most
 	// recently installed build when multiple coexist.
 	type cand struct {
@@ -150,9 +282,9 @@ func findInstalledBinary(installRoot, platform string) string {
 		if !e.IsDir() {
 			continue
 		}
-		bin := filepath.Join(installRoot, e.Name(), subdir, binaryName)
-		info, err := os.Stat(bin)
-		if err != nil || info.Mode()&0o111 == 0 {
+		bin := build.binaryFullPath(filepath.Join(installRoot, e.Name()), platform)
+		info, statErr := os.Stat(bin)
+		if statErr != nil || info.Mode()&0o111 == 0 {
 			continue
 		}
 		cands = append(cands, cand{path: bin, mod: info.ModTime()})
@@ -191,11 +323,32 @@ func cftPlatform() (string, error) {
 	}
 }
 
+// headlessShellBinaryName returns the chrome-headless-shell executable's
+// filename for the current GOOS. Referenced directly by other packages' test
+// fixtures (execpath_test.go, coordinator_test.go) — keep this exact name and
+// signature.
 func headlessShellBinaryName() string {
 	if runtime.GOOS == "windows" {
 		return "chrome-headless-shell.exe"
 	}
 	return "chrome-headless-shell"
+}
+
+// fullChromeBinaryRelPath returns the full "chrome" CfT build's executable
+// path, relative to its extraction subdir (F-08's own on-disk layout per
+// build): a flat binary on linux/windows, but a macOS .app bundle on darwin
+// (chrome-mac-{x64,arm64}/Google Chrome for Testing.app/Contents/MacOS/Google
+// Chrome for Testing — the real CfT "chrome" macOS layout, distinct from
+// chrome-headless-shell's flat binary).
+func fullChromeBinaryRelPath() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "chrome.exe"
+	case "darwin":
+		return filepath.Join("Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")
+	default:
+		return "chrome"
+	}
 }
 
 func fetchCFTManifest(ctx context.Context) (*cftManifest, error) {
@@ -223,6 +376,12 @@ func fetchCFTManifest(ctx context.Context) (*cftManifest, error) {
 	return &m, nil
 }
 
+// downloadFile fetches url to dest atomically (temp file + rename), verifying
+// the downloaded content's integrity (verifyGoogHashMD5) before the rename —
+// i.e. before it becomes visible to extractZip / the runtime (FR-009, Test
+// 15, DS-5 "bad hash -> reject download"). On any failure, including a failed
+// integrity check, the partial/rejected temp file is removed and dest is
+// never created.
 func downloadFile(ctx context.Context, url, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -243,7 +402,9 @@ func downloadFile(ctx context.Context, url, dest string) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+
+	hasher := md5.New() //nolint:gosec // see the import comment: integrity check, not a security signature.
+	if _, err := io.Copy(io.MultiWriter(tmp, hasher), resp.Body); err != nil {
 		tmp.Close()
 		_ = os.Remove(tmpPath)
 		return err
@@ -252,7 +413,65 @@ func downloadFile(ctx context.Context, url, dest string) error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
+
+	if err := verifyGoogHashMD5(resp.Header, hasher.Sum(nil)); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("integrity check failed: %w", err)
+	}
+	if len(resp.Header.Values("X-Goog-Hash")) == 0 {
+		logger.WarnCF("browser", "download response carried no X-Goog-Hash checksum — proceeding unverified",
+			map[string]any{"url": url})
+	}
+
 	return os.Rename(tmpPath, dest)
+}
+
+// verifyGoogHashMD5 verifies a just-downloaded archive's MD5 digest (got)
+// against the MD5 checksum the server published for that response via the
+// GCS-standard X-Goog-Hash header. This is the only integrity signal
+// Chrome-for-Testing's storage backend (storage.googleapis.com) publishes
+// today — the CfT manifest itself carries no checksum or signature field at
+// all (verified against the live manifest: each download entry is only
+// {platform, url}), so this is the strongest per-build integrity check
+// available without inventing an out-of-band source. It guards against
+// truncated, corrupted, or in-transit-tampered downloads reaching disk as a
+// trusted runtime; it is not a substitute for a supply-chain-trusted,
+// out-of-band signature, which upstream does not provide.
+//
+// A response that carries an X-Goog-Hash header whose declared and actual
+// digests disagree (or whose md5 value is malformed) is always rejected
+// (Test 15 / DS-5 "bad hash -> reject download"). A response with NO
+// X-Goog-Hash header at all (e.g. a non-GCS mirror, or a caller-supplied test
+// double that doesn't set one) is not rejected — DS-5 only specifies a
+// reject-on-*bad*-hash row, not reject-on-absent-hash — but downloadFile logs
+// a WARN in that case so an operator-visible signal exists for a feed that
+// unexpectedly stops publishing checksums.
+func verifyGoogHashMD5(header http.Header, got []byte) error {
+	raw := header.Get("X-Goog-Hash")
+	if raw == "" {
+		return nil
+	}
+	var want []byte
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		v, ok := strings.CutPrefix(part, "md5=")
+		if !ok {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return fmt.Errorf("malformed X-Goog-Hash md5 value %q: %w", v, err)
+		}
+		want = decoded
+		break
+	}
+	if want == nil {
+		return fmt.Errorf("X-Goog-Hash header present but carries no md5 checksum: %q", raw)
+	}
+	if !bytes.Equal(want, got) {
+		return fmt.Errorf("checksum mismatch: server declared md5 %x, downloaded content hashes to %x", want, got)
+	}
+	return nil
 }
 
 func extractZip(zipPath, destDir string) error {

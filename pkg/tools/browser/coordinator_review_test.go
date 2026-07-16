@@ -1,19 +1,22 @@
 package browser
 
 // coordinator_review_test.go — tests added by the 7-reviewer pass on ADR-043
-// (G1/G3/G4/G5). They guard the four correctness fixes the reviewers
-// surfaced: CRIT-002/C1 reload re-adoption with cookie survival (G1), CRIT-001
-// crash recovery into fresh contexts (G3), the I-1/W3/C1 tab-budget reservation
-// (G4), and the M2 preflight foreign-port rejection (G5). G1/G3 launch a real
-// Chrome via the coordinator and skip on short/no-Chrome runs; G4 is a pure
-// unit test over the coordinator's in-memory budget; G5 occupies the fixed CDP
-// port (no Chrome launched).
+// (G1/G3/G4). They guard the correctness fixes the reviewers surfaced: CRIT-002/
+// C1 reload re-adoption with cookie survival (G1), CRIT-001 crash recovery into
+// fresh contexts (G3), and the I-1/W3/C1 tab-budget reservation (G4). G1/G3
+// launch a real Chrome via the coordinator and skip on short/no-Chrome runs; G4
+// is a pure unit test over the coordinator's in-memory budget.
+//
+// The former G5 (M2 preflight foreign-PORT rejection) was RETIRED with CRIT-001:
+// there is no CDP port anymore (CDP is over the pipe), so the "foreign Chrome
+// squatting our port" case is gone. The single-launch guarantee is now enforced
+// by the O_EXCL/flock lockfile and proven by TestCoordinator_LockfileSingleLaunch
+// (coordinator_test.go).
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -254,49 +257,6 @@ func TestCoordinator_TabBudgetDenial(t *testing.T) {
 	}
 }
 
-// G5 / M2: preflightPort rejects a FOREIGN holder on the fixed CDP debug port —
-// the coordinator must never silently drive an unrelated Chrome. Two sub-cases:
-// (a) port held by a plain net.Listen with NO marker → foreign reject;
-// (b) port held + a marker with a DEAD omnipus pid → still rejected (the dead
-// pid can't be holding the port, so the holder is foreign). No Chrome launches.
-func TestCoordinator_Preflight_ForeignReject(t *testing.T) {
-	home := t.TempDir()
-	cfg := BrowserConfig{
-		Enabled:     true,
-		Headless:    true,
-		PageTimeout: 30 * time.Second,
-		MaxTabs:     5,
-		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
-	}
-	coord := NewBrowserCoordinator(home, cfg, 30)
-
-	// Sub-case (a): foreign holder, no marker.
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", DebugPort))
-	if err != nil {
-		t.Skipf("DebugPort %d not available on this host — cannot run preflight test: %v", DebugPort, err)
-	}
-	t.Cleanup(func() { ln.Close() })
-
-	if err := coord.ensureLaunched(context.Background()); err == nil {
-		t.Fatal("(a) ensureLaunched should FAIL when DebugPort is held by a foreign process")
-	} else if !strings.Contains(err.Error(), "non-omnipus") && !strings.Contains(err.Error(), "already in use") {
-		t.Fatalf("(a) ensureLaunched error should mention non-omnipus/foreign; got %v", err)
-	}
-	if coord.PID() != 0 {
-		t.Fatalf("(a) no Chrome should have launched on a foreign-held port; got pid %d", coord.PID())
-	}
-
-	// Sub-case (b): write a marker claiming a DEAD omnipus pid, port still held
-	// by the foreign listener. The dead pid can't hold the port → foreign.
-	if err := coord.writeOwnershipMarker(999999, "Chrome-for-Testing"); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-	if err := coord.ensureLaunched(context.Background()); err == nil {
-		t.Fatal("(b) ensureLaunched should FAIL with a dead-pid marker + foreign-held port")
-	} else if !strings.Contains(err.Error(), "non-omnipus") && !strings.Contains(err.Error(), "already in use") {
-		t.Fatalf("(b) ensureLaunched error should mention non-omnipus/foreign; got %v", err)
-	}
-	if coord.PID() != 0 {
-		t.Fatalf("(b) no Chrome should have launched; got pid %d", coord.PID())
-	}
-}
+// (Former G5 / M2 preflight foreign-PORT rejection retired — see file header.
+// The single-launch guarantee is now the O_EXCL/flock lockfile, exercised by
+// TestCoordinator_LockfileSingleLaunch in coordinator_test.go.)

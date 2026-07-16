@@ -510,22 +510,30 @@ func chunkApproxSize(c EncodedChunk) int {
 }
 
 // relayChunkEnvelopeHeaderBytes is the fixed header size EncodeChunk writes
-// before the payload: seq (u32) + ts (u64) + key (u8) + len (u32) = 17 bytes.
-// Matches contracts/components/schemas/BrowserChunkEnvelope.yaml exactly —
-// the SAME layout the encoder page (component G) and the viewer WS write
-// path (component F) both use; there is no fragment field (M-4).
-const relayChunkEnvelopeHeaderBytes = 4 + 8 + 1 + 4
+// before the payload: seq (u32) + ts (u64) + key (u8) + kind (u8) + len (u32)
+// = 18 bytes. Matches contracts/components/schemas/BrowserChunkEnvelope.yaml
+// exactly — the SAME layout the encoder page (component G) and the viewer WS
+// write path (component F) both use; there is no fragment field (M-4).
+const relayChunkEnvelopeHeaderBytes = 4 + 8 + 1 + 1 + 4
+
+// chunkKindAudioByte / chunkKindVideoByte are the wire values of the
+// envelope's kind(u8) field (BrowserChunkEnvelope.yaml: 0=video, 1=audio).
+const (
+	chunkKindVideoByte byte = 0
+	chunkKindAudioByte byte = 1
+)
 
 // EncodeChunk serializes c into the wire envelope carried by the viewer WS's
 // binary browser_video_chunk/browser_audio_chunk frames (and the ingest
 // endpoint's browser_ingest_chunk, same envelope — FR-002/011/012/017,
-// DS-2): a 17-byte big-endian header — seq:u32, ts:u64, key:u8, len:u32 —
-// followed by exactly len raw payload bytes, with NO fragment field (chunks
-// are always sent whole in one binary WS message — M-4). Exported (not
-// package-private) because the viewer send path lives in pkg/gateway
-// (component F/E), a different package, and must produce byte-for-byte the
-// same envelope this relay computes cache-eviction/recovery decisions
-// against.
+// DS-2): an 18-byte big-endian header — seq:u32, ts:u64, key:u8, kind:u8,
+// len:u32 — followed by exactly len raw payload bytes, with NO fragment
+// field (chunks are always sent whole in one binary WS message — M-4). The
+// kind byte is derived from c.Kind ("audio" -> 1, anything else, including
+// the zero value, -> 0/video). Exported (not package-private) because the
+// viewer send path lives in pkg/gateway (component F/E), a different
+// package, and must produce byte-for-byte the same envelope this relay
+// computes cache-eviction/recovery decisions against.
 func EncodeChunk(c EncodedChunk) []byte {
 	buf := make([]byte, relayChunkEnvelopeHeaderBytes+len(c.Payload))
 	binary.BigEndian.PutUint32(buf[0:4], c.Seq)
@@ -535,7 +543,12 @@ func EncodeChunk(c EncodedChunk) []byte {
 	} else {
 		buf[12] = 0
 	}
-	binary.BigEndian.PutUint32(buf[13:17], uint32(len(c.Payload))) //nolint:gosec // payload length is bound-checked well below 2^32 by the ingest endpoint's max-message-bytes gate (FR-014)
-	copy(buf[17:], c.Payload)
+	if c.Kind == "audio" {
+		buf[13] = chunkKindAudioByte
+	} else {
+		buf[13] = chunkKindVideoByte
+	}
+	binary.BigEndian.PutUint32(buf[14:18], uint32(len(c.Payload))) //nolint:gosec // payload length is bound-checked well below 2^32 by the ingest endpoint's max-message-bytes gate (FR-014)
+	copy(buf[18:], c.Payload)
 	return buf
 }

@@ -13,8 +13,7 @@ package browser
 // then asserts the final state is a single consistent allocator.
 
 import (
-	"fmt"
-	"net"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -54,16 +53,10 @@ func TestEnsureStarted_Concurrent_LosersDiscard(t *testing.T) {
 		t.Skip("posix shell-script probe double")
 	}
 
-	// Preflight the fixed DebugPort — the winner's ensureStarted runs
-	// checkDebugPortAvailable(DebugPort) and needs it free; if something else
-	// on this host already holds 9223 the winner fails (started stays false)
-	// and the test cannot exercise the discard path deterministically. Skip
-	// rather than flake.
-	preflight, perr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", DebugPort))
-	if perr != nil {
-		t.Skipf("DebugPort %d not available on this host — cannot run concurrency test: %v", DebugPort, perr)
-	}
-	require.NoError(t, preflight.Close())
+	// CRIT-001: there is no CDP port to preflight anymore (CDP is over the pipe).
+	// The managed launch is stubbed with a fake pipe launcher below so the
+	// concurrency test never spawns real Chrome — it exercises ONLY ensureStarted's
+	// resolveExecPath unlock/relock + discard-the-loser discipline.
 
 	// Slow fake probe: sleep 0.3s to widen ensureStarted's m.mu-release window
 	// so concurrent callers genuinely overlap, then record itself by appending
@@ -80,6 +73,13 @@ func TestEnsureStarted_Concurrent_LosersDiscard(t *testing.T) {
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
 	m := &BrowserManager{cfg: cfg}
+	// Fake pipe launcher: no real Chrome. Runs AFTER resolveExecPath (so the fake
+	// google-chrome probe above still records probeCount), and sets the winner's
+	// m.allocCtx/m.allocCancel from a plain cancelable context.
+	m.managedPipeLaunch = func(_ context.Context, _ string, _ pipeLaunchConfig) (*pipeLaunchResult, error) {
+		rootCtx, cancel := context.WithCancel(context.Background())
+		return &pipeLaunchResult{rootCtx: rootCtx, cancel: cancel}, nil
+	}
 
 	const N = 8
 	var (

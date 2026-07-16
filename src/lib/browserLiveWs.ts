@@ -180,7 +180,7 @@ const STREAM_BRINGUP_TIMEOUT_MS = 20_000
 const VIDEO_CODEC_CANDIDATES = ['avc1.4D4028', 'vp8'] as const
 const AUDIO_CODEC_CANDIDATES = ['opus'] as const
 
-// Binary envelope: kind(u8) + seq(u32) + ts(u64) + key(u8) + len(u32), BigEndian throughout (DS-2).
+// Binary envelope: seq(u32) + ts(u64) + key(u8) + kind(u8) + len(u32), BigEndian throughout (DS-2).
 const CHUNK_KIND_VIDEO = 0
 const CHUNK_KIND_AUDIO = 1
 const ENVELOPE_HEADER_BYTES = 1 + 4 + 8 + 1 + 4
@@ -215,11 +215,11 @@ export interface DecodedChunkEnvelope { // not-wire-format: local parsed shape o
 export function decodeChunkEnvelope(buffer: ArrayBuffer): DecodedChunkEnvelope | null {
   if (buffer.byteLength < ENVELOPE_HEADER_BYTES) return null
   const view = new DataView(buffer)
-  const kindByte = view.getUint8(0)
+  const seq = view.getUint32(0, false)
+  const ts = view.getBigUint64(4, false)
+  const key = view.getUint8(12) !== 0
+  const kindByte = view.getUint8(13)
   if (kindByte !== CHUNK_KIND_VIDEO && kindByte !== CHUNK_KIND_AUDIO) return null
-  const seq = view.getUint32(1, false)
-  const ts = view.getBigUint64(5, false)
-  const key = view.getUint8(13) !== 0
   const len = view.getUint32(14, false)
   const payloadOffset = ENVELOPE_HEADER_BYTES
   if (len !== buffer.byteLength - payloadOffset) return null

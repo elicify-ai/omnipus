@@ -103,31 +103,15 @@
  *                           converted to MILLISECONDS
  *   [12:13)  key      u8    1 = keyframe (video only; always 0 for audio —
  *                           Opus packets here are never classified key/delta)
- *   [13:17)  len      u32   payload length in bytes (see kind-tag note below)
- *   [17:17+len)        payload  see "Ingest kind-tagging" note immediately
- *                               below — NOT raw codec bytes by themselves
- *   total message length = 17 + len
- *
- * ---- Ingest kind-tagging (video vs audio) — COORDINATION NOTE -------------
- * BrowserChunkEnvelope/BrowserIngestChunkFrame, as landed, carry NO
- * discriminator between a video chunk and an audio chunk — the same message
- * type (`browser_ingest_chunk`) multiplexes both over the one ingest
- * connection (BrowserIngestInitFrame's `has_audio`/`audio_codec` describe
- * what a SINGLE connection will carry). Since this page cannot add a field
- * to the landed envelope schema (out of this component's file scope —
- * contracts/asyncapi.yaml belongs to the W0 wave), it instead prefixes the
- * envelope's opaque `payload` bytes with ONE tag byte it owns the meaning
- * of: `payload = [kind:u8][...real encoded bytes]`, kind 0 = video, 1 =
- * audio (INGEST_PAYLOAD_KIND_VIDEO / INGEST_PAYLOAD_KIND_AUDIO below). `len`
- * covers the tag byte too (len = 1 + real-payload-length). The real H.264/
- * VP8/Opus bytes are payload[1:].
- * REPORT TO THE INGEST-ENDPOINT IMPLEMENTER: strip payload[0] as the
- * kind tag before treating payload[1:] as codec bytes; route kind=0 to the
- * video relay path, kind=1 to the audio relay path. This is flagged as a
- * coordination item, not assumed silently — consider a follow-up contract
- * revision adding a real `kind` field to BrowserChunkEnvelope so this
- * tagging can move from "inside the opaque payload" to a proper schema
- * field.
+ *   [13:14)  kind     u8    0 = video, 1 = audio (CHUNK_KIND_VIDEO /
+ *                           CHUNK_KIND_AUDIO below) — the video/audio
+ *                           discriminator for a single ingest connection
+ *                           multiplexing both (contracts/components/schemas/
+ *                           BrowserChunkEnvelope.yaml)
+ *   [14:18)  len      u32   payload length in bytes
+ *   [18:18+len)        payload  the raw H.264/VP8/Opus encoded bytes — no
+ *                               additional leading tag byte
+ *   total message length = 18 + len
  * ==========================================================================
  */
 
@@ -141,8 +125,11 @@
 // or anything outside this block) and must not be reformatted in a way that
 // breaks the marker-delimited extraction.
 
-const INGEST_PAYLOAD_KIND_VIDEO = 0;
-const INGEST_PAYLOAD_KIND_AUDIO = 1;
+// Wire values of the BrowserChunkEnvelope kind(u8) field
+// (contracts/components/schemas/BrowserChunkEnvelope.yaml): 0 = video,
+// 1 = audio.
+const CHUNK_KIND_VIDEO = 0;
+const CHUNK_KIND_AUDIO = 1;
 
 /** Convert a WebCodecs microsecond timestamp to the wire's millisecond field. */
 function msFromMicros(us) {
@@ -193,24 +180,26 @@ function decodeFrameFeed(buf) {
 }
 
 /**
- * Encode one `BrowserChunkEnvelope` (seq u32, ts u64 ms, key u8, len u32,
- * payload) — the exact wire shape shared by browser_ingest_chunk /
+ * Encode one `BrowserChunkEnvelope` (seq u32, ts u64 ms, key u8, kind u8,
+ * len u32, payload) — the exact wire shape shared by browser_ingest_chunk /
  * browser_video_chunk / browser_audio_chunk.
  * @param {number} seq
  * @param {number} tsMillis wire timestamp, milliseconds
  * @param {boolean} key true for a video keyframe; false for audio and video deltas
- * @param {ArrayBuffer|Uint8Array} payload
+ * @param {number} kind CHUNK_KIND_VIDEO | CHUNK_KIND_AUDIO
+ * @param {ArrayBuffer|Uint8Array} payload the raw encoded (H.264/VP8/Opus) bytes
  * @returns {ArrayBuffer}
  */
-function encodeChunkEnvelope(seq, tsMillis, key, payload) {
+function encodeChunkEnvelope(seq, tsMillis, key, kind, payload) {
   const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
-  const buf = new ArrayBuffer(17 + bytes.byteLength);
+  const buf = new ArrayBuffer(18 + bytes.byteLength);
   const view = new DataView(buf);
   view.setUint32(0, seq >>> 0, false);
   setUint64BE(view, 4, tsMillis);
   view.setUint8(12, key ? 1 : 0);
-  view.setUint32(13, bytes.byteLength >>> 0, false);
-  new Uint8Array(buf, 17).set(bytes);
+  view.setUint8(13, kind & 0xff);
+  view.setUint32(14, bytes.byteLength >>> 0, false);
+  new Uint8Array(buf, 18).set(bytes);
   return buf;
 }
 
@@ -219,47 +208,20 @@ function encodeChunkEnvelope(seq, tsMillis, key, payload) {
  * @param {ArrayBuffer} buf
  */
 function decodeChunkEnvelope(buf) {
-  if (buf.byteLength < 17) {
-    throw new RangeError('BrowserChunkEnvelope shorter than 17-byte header');
+  if (buf.byteLength < 18) {
+    throw new RangeError('BrowserChunkEnvelope shorter than 18-byte header');
   }
   const view = new DataView(buf);
   const seq = view.getUint32(0, false);
   const tsMillis = getUint64BE(view, 4);
   const key = view.getUint8(12) !== 0;
-  const len = view.getUint32(13, false);
-  if (17 + len > buf.byteLength) {
+  const kind = view.getUint8(13);
+  const len = view.getUint32(14, false);
+  if (18 + len > buf.byteLength) {
     throw new RangeError('BrowserChunkEnvelope len exceeds message bounds');
   }
-  const payload = buf.slice(17, 17 + len);
-  return { seq, tsMillis, key, len, payload };
-}
-
-/**
- * Prefix a real encoded payload with the 1-byte ingest kind tag (see the
- * "Ingest kind-tagging" note above the testable-logic block).
- * @param {number} kind INGEST_PAYLOAD_KIND_VIDEO | INGEST_PAYLOAD_KIND_AUDIO
- * @param {ArrayBuffer|Uint8Array} payload real encoded (H.264/VP8/Opus) bytes
- * @returns {Uint8Array}
- */
-function tagIngestPayload(kind, payload) {
-  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
-  const tagged = new Uint8Array(1 + bytes.byteLength);
-  tagged[0] = kind & 0xff;
-  tagged.set(bytes, 1);
-  return tagged;
-}
-
-/**
- * Split a tagged ingest payload back into its kind and the real bytes.
- * @param {ArrayBuffer|Uint8Array} tagged
- * @returns {{kind: number, payload: Uint8Array}}
- */
-function untagIngestPayload(tagged) {
-  const bytes = tagged instanceof Uint8Array ? tagged : new Uint8Array(tagged);
-  if (bytes.byteLength < 1) {
-    throw new RangeError('ingest payload missing the leading kind-tag byte');
-  }
-  return { kind: bytes[0], payload: bytes.subarray(1) };
+  const payload = buf.slice(18, 18 + len);
+  return { seq, tsMillis, key, kind, len, payload };
 }
 
 /** Write a non-negative integer/BigInt as an unsigned 64-bit big-endian field. */
@@ -452,12 +414,12 @@ async function main() {
         try {
           const raw = new Uint8Array(chunk.byteLength);
           chunk.copyTo(raw);
-          const tagged = tagIngestPayload(INGEST_PAYLOAD_KIND_VIDEO, raw);
           const envelope = encodeChunkEnvelope(
             chunkSeq++,
             msFromMicros(chunk.timestamp),
             chunk.type === 'key',
-            tagged,
+            CHUNK_KIND_VIDEO,
+            raw,
           );
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(envelope);
@@ -536,8 +498,7 @@ async function main() {
         try {
           const raw = new Uint8Array(chunk.byteLength);
           chunk.copyTo(raw);
-          const tagged = tagIngestPayload(INGEST_PAYLOAD_KIND_AUDIO, raw);
-          const envelope = encodeChunkEnvelope(chunkSeq++, msFromMicros(chunk.timestamp), false, tagged);
+          const envelope = encodeChunkEnvelope(chunkSeq++, msFromMicros(chunk.timestamp), false, CHUNK_KIND_AUDIO, raw);
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(envelope);
           }

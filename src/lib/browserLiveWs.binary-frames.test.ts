@@ -105,15 +105,15 @@ function makeCallbacks(overrides: Partial<BrowserLiveWsCallbacks> = {}): Browser
   }
 }
 
-// ── Envelope builder — BigEndian kind(u8)+seq(u32)+ts(u64)+key(u8)+len(u32)+payload ──
+// ── Envelope builder — BigEndian seq(u32)+ts(u64)+key(u8)+kind(u8)+len(u32)+payload ──
 
 function buildEnvelope(opts: { kind: 0 | 1; seq: number; ts: bigint; key: boolean; payload: Uint8Array }): ArrayBuffer {
   const buf = new ArrayBuffer(18 + opts.payload.length)
   const view = new DataView(buf)
-  view.setUint8(0, opts.kind)
-  view.setUint32(1, opts.seq, false)
-  view.setBigUint64(5, opts.ts, false)
-  view.setUint8(13, opts.key ? 1 : 0)
+  view.setUint32(0, opts.seq, false)
+  view.setBigUint64(4, opts.ts, false)
+  view.setUint8(12, opts.key ? 1 : 0)
+  view.setUint8(13, opts.kind)
   view.setUint32(14, opts.payload.length, false)
   new Uint8Array(buf).set(opts.payload, 18)
   return buf
@@ -297,7 +297,7 @@ describe('decodeChunkEnvelope', () => {
 
   it('rejects an unrecognized kind byte', () => {
     const buf = buildEnvelope({ kind: 0, seq: 1, ts: 1n, key: false, payload: new Uint8Array(1) })
-    new DataView(buf).setUint8(0, 2) // neither CHUNK_KIND_VIDEO(0) nor CHUNK_KIND_AUDIO(1)
+    new DataView(buf).setUint8(13, 2) // neither CHUNK_KIND_VIDEO(0) nor CHUNK_KIND_AUDIO(1)
     expect(decodeChunkEnvelope(buf)).toBeNull()
   })
 

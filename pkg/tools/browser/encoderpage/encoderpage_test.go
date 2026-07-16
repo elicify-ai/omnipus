@@ -38,8 +38,8 @@ func TestEncoderPage_EmbedNonEmpty(t *testing.T) {
 		"isConfigSupported", // codec negotiation
 		"latencyMode",
 		"realtime",
-		"INGEST_PAYLOAD_KIND_VIDEO", // ingest kind-tagging (video vs audio mux)
-		"INGEST_PAYLOAD_KIND_AUDIO",
+		"CHUNK_KIND_VIDEO", // BrowserChunkEnvelope kind(u8) discriminator (video vs audio mux)
+		"CHUNK_KIND_AUDIO",
 		"OMNIPUS_TESTABLE_LOGIC_START",
 		"OMNIPUS_TESTABLE_LOGIC_END",
 	}

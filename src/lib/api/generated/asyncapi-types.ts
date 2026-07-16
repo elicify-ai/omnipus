@@ -437,6 +437,7 @@ export interface BrowserChunkEnvelope {
   seq: number;
   ts: number;
   key: boolean;
+  kind: number;
   len: number;
   payload: string;
 }
