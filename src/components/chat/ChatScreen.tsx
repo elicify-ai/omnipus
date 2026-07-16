@@ -1470,7 +1470,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           background. */}
       <div
         data-testid="composer-card"
-        className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden"
+        // focus-within gold border: the textarea opts out of the central ring
+        // (data-no-focus-ring) BECAUSE this card is its focus surface — this
+        // class is the promised replacement (WCAG 2.4.7). Border swap, not an
+        // outline: the card's overflow-hidden would clip an inset outline.
+        className="rounded-2xl border border-[var(--color-border)] focus-within:border-[var(--color-accent)] bg-[var(--color-surface-2)] overflow-hidden transition-colors"
       >
         {/* Input row — single ComposerPrimitive.Root, items-end: textarea and
             send/stop share one flex container + one bottom baseline. */}

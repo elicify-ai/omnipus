@@ -5,12 +5,14 @@ import { Input } from './input'
 // test_input_focus_ring
 // Traces to: wave0-brand-design-spec.md Scenario: Input shows Forge Gold focus ring (US-2 AC4, FR-004)
 describe('Input — Forge Gold focus ring', () => {
-  it('renders with Forge Gold focus ring class', () => {
+  it('carries NO per-component focus ring (the central :focus-visible rule in globals.css owns it)', () => {
     const { container } = render(<Input />)
     const input = container.querySelector('input')
     expect(input).not.toBeNull()
-    // Input uses focus-visible:ring-[var(--color-accent)] = Forge Gold
-    expect(input!.className).toContain('var(--color-accent)')
+    // Centralized focus system: components must NOT declare their own
+    // focus-visible ring/border — the global 2px gold outline applies.
+    expect(input!.className).not.toContain('focus-visible:ring')
+    expect(input!.className).not.toContain('focus-visible:border')
   })
 
   it('renders with dark background CSS variable', () => {
