@@ -1,5 +1,5 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for the E2E shard plan. Consumed by BOTH .github/workflows/pr.yml (scripts/e2e-shards.sh matrix -> strategy.matrix via fromJSON) and deploy/ci-worker/runci.sh (scripts/e2e-shards.sh list). Every tests/e2e/*.spec.ts MUST be assigned to exactly one shard -- scripts/e2e-shards.sh check enforces this and FAILS CI on drift (an unassigned spec would silently never run; a dead reference would error). key_slot selects the OpenRouter key: a=primary (OPENROUTER_API_KEY / secrets.OPENROUTER_API_KEY_CI, always present), b/c=optional extra keys that fall back to a when unset, so concurrent LLM shards never share one rate-limit window. port is used ONLY by runci.sh (all shards share one worker machine, so they need distinct ports); each GitHub Actions shard runs on its own runner and always uses 6060. To add a spec: drop it in tests/e2e/ and add its path to exactly one shard here -- nothing else to touch.",
+  "_comment": "SINGLE SOURCE OF TRUTH for the E2E shard plan. Consumed by BOTH .github/workflows/pr.yml (scripts/e2e-shards.sh matrix -> strategy.matrix via fromJSON) and deploy/ci-worker/runci.sh (scripts/e2e-shards.sh list). Every tests/e2e/*.spec.ts MUST be assigned to exactly one shard -- scripts/e2e-shards.sh check enforces this and FAILS CI on drift (an unassigned spec would silently never run; a dead reference would error). key_slot selects the OpenRouter key: a=primary (OPENROUTER_API_KEY / secrets.OPENROUTER_API_KEY_CI, always present), b/c=optional extra keys that fall back to a when unset, so concurrent LLM shards never share one rate-limit window. port is used ONLY by runci.sh (all shards share one worker machine, so they need distinct ports); each GitHub Actions shard runs on its own runner and always uses 6060. solo=true (optional, runci.sh-only, default false) makes runci.sh drain all in-flight shards and run this one ALONE in the foreground -- for timing-sensitive specs (WS-idle, live-vs-replay DOM fidelity, real-recap latency) that flake under any CPU contention on the shared worker; on GitHub Actions each shard already has its own runner so solo is a no-op there. To add a spec: drop it in tests/e2e/ and add its path to exactly one shard here -- nothing else to touch.",
   "shards": [
     {
       "group": "llm-chat",
@@ -44,18 +44,26 @@
         "tests/e2e/auth.spec.ts",
         "tests/e2e/burst-resilience.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
-        "tests/e2e/idle-no-reconnect.spec.ts",
-        "tests/e2e/multi-turn-render.spec.ts",
-        "tests/e2e/replay-fidelity.spec.ts",
-        "tests/e2e/retention.spec.ts",
         "tests/e2e/security-tools.spec.ts",
         "tests/e2e/sidebar.spec.ts",
         "tests/e2e/skills.spec.ts",
         "tests/e2e/ws-reconnect.spec.ts",
         "tests/e2e/xss.spec.ts",
-        "tests/e2e/settings-memory.spec.ts",
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/create-agent.spec.ts"
+      ]
+    },
+    {
+      "group": "ui-heavy",
+      "key_slot": "c",
+      "port": 6065,
+      "solo": true,
+      "specs": [
+        "tests/e2e/idle-no-reconnect.spec.ts",
+        "tests/e2e/multi-turn-render.spec.ts",
+        "tests/e2e/replay-fidelity.spec.ts",
+        "tests/e2e/retention.spec.ts",
+        "tests/e2e/settings-memory.spec.ts"
       ]
     },
     {

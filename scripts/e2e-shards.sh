@@ -17,7 +17,10 @@
 #           referencing a deleted spec. `matrix` and `list` run it implicitly.
 #   matrix  Emit the GitHub Actions strategy matrix: {"include":[{group,key_slot,specs}]}
 #           where specs is the space-joined spec list for that shard.
-#   list    Emit "group<TAB>key_slot<TAB>port<TAB>space-joined-specs", one row per shard.
+#   list    Emit "group<TAB>key_slot<TAB>port<TAB>solo<TAB>space-joined-specs", one row
+#           per shard. solo is "true"/"false" (default false) — runci.sh runs a solo
+#           shard alone (drains in-flight shards first). matrix omits solo (GitHub shards
+#           are already isolated on their own runners).
 #
 set -euo pipefail
 
@@ -79,7 +82,7 @@ matrix() {
 
 list() {
   check
-  jq -r '.shards[] | [.group, .key_slot, (.port | tostring), (.specs | join(" "))] | @tsv' "$PLAN"
+  jq -r '.shards[] | [.group, .key_slot, (.port | tostring), ((.solo // false) | tostring), (.specs | join(" "))] | @tsv' "$PLAN"
 }
 
 case "$CMD" in
