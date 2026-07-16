@@ -1,4 +1,3 @@
-import React from 'react'
 import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
 import {
@@ -8,6 +7,7 @@ import {
   Graph,
   CalendarBlank,
   UsersThree,
+  Tray,
   CaretDown,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -43,6 +43,8 @@ export const WORKSPACE_TABS: WorkspaceTab[] = [
 
 interface WorkspaceTabBarProps {
   workspaceId: string
+  /** Workspace display name — rendered as the FIRST tablist item (→ settings). */
+  workspaceName: string
 }
 
 /**
@@ -60,21 +62,57 @@ interface WorkspaceTabBarProps {
  * row owns the background (no border — flat shell alignment); this component
  * only renders the tab list.
  */
-export function WorkspaceTabBar({ workspaceId }: WorkspaceTabBarProps) {
+export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const activeSegment = resolveActiveSegment(location.pathname, workspaceId)
   const activeTab = WORKSPACE_TABS.find((t) => t.segment === activeSegment)
+  const settingsActive = activeSegment === 'settings'
 
   return (
     <div className="flex-shrink-0 flex items-stretch">
-      {/* ── Full 7-tab strip: shown when container ≥ 1152px (72rem) ─────── */}
+      {/* ── Full tab strip: shown when container ≥ 1152px (72rem).
+          NO overflow-x-auto: a scrollable tablist let mouse-wheel/touch
+          gestures scroll the menu itself up/down (overflow containers clip +
+          scroll BOTH axes) — chrome must never move. The strip's content is
+          bounded (7 items, name truncated) so overflow can't occur. ─────── */}
       <div
         role="tablist"
         aria-label="Workspace views"
-        className="hidden @6xl:flex items-stretch gap-1 overflow-x-auto min-w-0 flex-1"
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+        className="hidden @6xl:flex items-stretch gap-1 min-w-0 flex-1"
       >
+        {/* First tablist item: the workspace name → settings. Inside the
+            tablist (not a stray sibling button) so it IS part of the menu
+            component — same styling, same underline, same tab semantics. */}
+        <button
+          type="button"
+          role="tab"
+          onClick={() =>
+            navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
+          }
+          title="Workspace settings"
+          aria-label={`${workspaceName} — workspace settings`}
+          aria-selected={settingsActive}
+          data-testid="workspace-name-button"
+          className={cn(
+            'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-sm font-headline whitespace-nowrap outline-none transition-colors',
+            'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
+            settingsActive
+              ? 'text-[var(--color-accent)]'
+              : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+          )}
+        >
+          <Tray size={16} weight={settingsActive ? 'fill' : 'regular'} className="flex-shrink-0" />
+          <span className="truncate">{workspaceName}</span>
+          {settingsActive && (
+            <motion.div
+              layoutId="workspace-tab-underline"
+              className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
+              transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+            />
+          )}
+        </button>
+
         {WORKSPACE_TABS.map(({ segment, label, Icon, iconOnly }) => {
           const isActive = segment === activeSegment
           return (

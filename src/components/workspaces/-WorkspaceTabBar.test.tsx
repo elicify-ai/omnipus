@@ -70,7 +70,7 @@ import { WorkspaceTabBar, WORKSPACE_TABS, resolveActiveSegment } from './Workspa
 describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
   it('renders all six workspace tab links in the full strip with correct test ids and hrefs', () => {
     mockPathname = '/workspaces/ws-1/chat'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
     // All 7 tabs present — each segment appears at least once (full strip + sr-only strip).
     for (const tab of WORKSPACE_TABS) {
@@ -85,7 +85,7 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
 
   it('marks the tab matching the current route as selected', () => {
     mockPathname = '/workspaces/ws-1/board'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
     // aria-selected=true on board tabs, false on chat tabs (may be multiple from sr-only strip)
     const boardTabs = screen.getAllByTestId('workspace-tab-board')
@@ -100,7 +100,7 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
 
   it('full strip has the expected container-query classes (hidden @6xl:flex)', () => {
     mockPathname = '/workspaces/ws-1/chat'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     // The tablist div should have the responsive classes
     const tablist = screen.getByRole('tablist', { name: 'Workspace views' })
     expect(tablist.className).toContain('hidden')
@@ -122,28 +122,28 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
 describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
   it('renders the view-switcher trigger button', () => {
     mockPathname = '/workspaces/ws-1/chat'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const switcher = screen.getByTestId('workspace-view-switcher')
     expect(switcher).toBeInTheDocument()
   })
 
   it('view-switcher shows the active view label', () => {
     mockPathname = '/workspaces/ws-1/board'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const switcher = screen.getByTestId('workspace-view-switcher')
     expect(switcher.textContent).toContain('Board')
   })
 
   it('view-switcher aria-label references the active view', () => {
     mockPathname = '/workspaces/ws-1/calendar'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const switcher = screen.getByTestId('workspace-view-switcher')
     expect(switcher.getAttribute('aria-label')).toContain('Calendar')
   })
 
   it('view-switcher is wrapped in a div with the container-query responsive classes (flex @6xl:hidden)', () => {
     mockPathname = '/workspaces/ws-1/chat'
-    const { container } = render(<WorkspaceTabBar workspaceId="ws-1" />)
+    const { container } = render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     // Walk up from the trigger to find any ancestor div with @6xl:hidden
     // (the Radix mock inserts an extra wrapper div between the trigger and our wrapper)
     const switcher = screen.getByTestId('workspace-view-switcher')
@@ -161,7 +161,7 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
 
   it('view-switcher menu renders all 7 view options', () => {
     mockPathname = '/workspaces/ws-1/chat'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     // The DropdownMenuContent stub renders with data-testid="view-switcher-menu"
     const menu = screen.getByTestId('view-switcher-menu')
     expect(menu).toBeInTheDocument()
@@ -175,7 +175,7 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
 describe('WorkspaceTabBar — tab test ids', () => {
   it('exposes each workspace-tab-<segment> test id exactly once (unique for e2e)', () => {
     mockPathname = '/workspaces/ws-1/chat'
-    render(<WorkspaceTabBar workspaceId="ws-1" />)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     // Exactly one element per segment (the full strip). No duplicate test ids,
     // so Playwright getByTestId('workspace-tab-board') stays unambiguous.
     for (const tab of WORKSPACE_TABS) {
