@@ -75,7 +75,7 @@ function getStoredAuthToken(): string | null {
 
 async function getCsrfToken(page: Page): Promise<string | null> {
   const cookies = await page.context().cookies()
-  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf')
+  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
   return csrfCookie?.value ?? null
 }
 
