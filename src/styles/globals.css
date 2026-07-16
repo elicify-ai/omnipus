@@ -137,9 +137,17 @@ html {
    composite widgets that show focus elsewhere (e.g. the chat textarea,
    where the card is the surface). */
 :focus-visible:not([data-no-focus-ring]) {
-  outline: 1px solid var(--color-accent) !important;
-  outline-offset: 0;
-  box-shadow: none !important; /* neutralise any leftover ring utilities */
+  /* 2px + 2px offset per WCAG 2.4.13 Focus Appearance (≥2px perimeter) and
+     to separate the ring from gold-filled elements (primary button). The
+     explicit outline-color guards against currentColor leaking through on
+     elements with competing outline utilities. */
+  outline: 2px solid var(--color-accent) !important;
+  outline-color: var(--color-accent) !important;
+  outline-offset: 2px;
+  /* Neutralise ONLY Tailwind ring utilities (scoped — box-shadow:none was
+     too broad and stripped intended shadows like the active tab's). */
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
 }
 /* Opt-out for composite widgets whose focus is shown by a parent surface
    (e.g. the chat textarea inside the composer card). */
