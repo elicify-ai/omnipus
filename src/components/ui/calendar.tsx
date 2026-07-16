@@ -19,7 +19,7 @@ const DAY_BASE =
   'inline-flex h-9 w-9 items-center justify-center rounded-md p-0 text-sm font-normal font-inter ' +
   'text-[var(--color-secondary)] transition-colors ' +
   'hover:bg-[var(--color-surface-2)] ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+  ' ' +
   'disabled:pointer-events-none disabled:opacity-40 aria-disabled:pointer-events-none aria-disabled:opacity-40 ' +
   'group-data-[today=true]:font-semibold group-data-[today=true]:text-[var(--color-accent)] ' +
   'group-data-[outside=true]:text-[var(--color-muted)] group-data-[outside=true]:opacity-50 ' +
@@ -32,7 +32,7 @@ const NAV_BUTTON =
   'inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] ' +
   'bg-transparent p-0 text-[var(--color-secondary)] opacity-80 transition-colors ' +
   'hover:opacity-100 hover:bg-[var(--color-surface-2)] ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+  ' ' +
   'aria-disabled:pointer-events-none aria-disabled:opacity-30'
 
 function Calendar({ className, classNames, showOutsideDays = true, ...props }: CalendarProps) {

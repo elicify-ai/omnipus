@@ -20,6 +20,7 @@ import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
+import { Route as AppFocusLabRouteImport } from './routes/_app/focus-lab'
 import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
 import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
@@ -91,6 +92,11 @@ const AppProfileRoute = AppProfileRouteImport.update({
 const AppPoliciesRoute = AppPoliciesRouteImport.update({
   id: '/policies',
   path: '/policies',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppFocusLabRoute = AppFocusLabRouteImport.update({
+  id: '/focus-lab',
+  path: '/focus-lab',
   getParentRoute: () => AppRoute,
 } as any)
 const AppConnectorsRoute = AppConnectorsRouteImport.update({
@@ -203,6 +209,7 @@ export interface FileRoutesByFullPath {
   '/browser-live': typeof AppBrowserLiveRoute
   '/command-center': typeof AppCommandCenterRoute
   '/connectors': typeof AppConnectorsRoute
+  '/focus-lab': typeof AppFocusLabRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -231,6 +238,7 @@ export interface FileRoutesByTo {
   '/browser-live': typeof AppBrowserLiveRoute
   '/command-center': typeof AppCommandCenterRoute
   '/connectors': typeof AppConnectorsRoute
+  '/focus-lab': typeof AppFocusLabRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -262,6 +270,7 @@ export interface FileRoutesById {
   '/_app/browser-live': typeof AppBrowserLiveRoute
   '/_app/command-center': typeof AppCommandCenterRoute
   '/_app/connectors': typeof AppConnectorsRoute
+  '/_app/focus-lab': typeof AppFocusLabRoute
   '/_app/policies': typeof AppPoliciesRoute
   '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
@@ -295,6 +304,7 @@ export interface FileRouteTypes {
     | '/browser-live'
     | '/command-center'
     | '/connectors'
+    | '/focus-lab'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -323,6 +333,7 @@ export interface FileRouteTypes {
     | '/browser-live'
     | '/command-center'
     | '/connectors'
+    | '/focus-lab'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -353,6 +364,7 @@ export interface FileRouteTypes {
     | '/_app/browser-live'
     | '/_app/command-center'
     | '/_app/connectors'
+    | '/_app/focus-lab'
     | '/_app/policies'
     | '/_app/profile'
     | '/_app/settings'
@@ -459,6 +471,13 @@ declare module '@tanstack/react-router' {
       path: '/policies'
       fullPath: '/policies'
       preLoaderRoute: typeof AppPoliciesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/focus-lab': {
+      id: '/_app/focus-lab'
+      path: '/focus-lab'
+      fullPath: '/focus-lab'
+      preLoaderRoute: typeof AppFocusLabRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/connectors': {
@@ -640,6 +659,7 @@ interface AppRouteChildren {
   AppBrowserLiveRoute: typeof AppBrowserLiveRoute
   AppCommandCenterRoute: typeof AppCommandCenterRoute
   AppConnectorsRoute: typeof AppConnectorsRoute
+  AppFocusLabRoute: typeof AppFocusLabRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
   AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -658,6 +678,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppBrowserLiveRoute: AppBrowserLiveRoute,
   AppCommandCenterRoute: AppCommandCenterRoute,
   AppConnectorsRoute: AppConnectorsRoute,
+  AppFocusLabRoute: AppFocusLabRoute,
   AppPoliciesRoute: AppPoliciesRoute,
   AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,

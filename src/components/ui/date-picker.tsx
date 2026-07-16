@@ -21,7 +21,7 @@ export const DATE_TRIGGER_CLASSNAME = cn(
   // variant sets ring-offset-2 (an offset gap meant for buttons sitting on a flat
   // background), which tailwind-merge does not strip; without the override this
   // trigger's focus ring floats off the border instead of matching <Input> pixel-for-pixel.
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-0 focus-visible:border-[var(--color-accent)]',
+  ' focus-visible:border-[var(--color-accent)]',
   'disabled:cursor-not-allowed disabled:opacity-50',
 )
 
