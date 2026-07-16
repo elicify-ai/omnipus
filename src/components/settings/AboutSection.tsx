@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Copy, GithubLogo, ArrowSquareOut } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { Wordmark } from '@/components/shared/Wordmark'
 import { fetchAboutInfo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import omnipusLogo from '@/assets/logo/omnipus-logo.svg'
@@ -53,7 +54,7 @@ export function AboutSection() {
           className="w-16 h-16 select-none"
         />
         <div className="text-center">
-          <h1 className="font-headline font-bold text-xl lowercase text-[var(--color-secondary)]">omnipus<span className="text-[var(--color-accent)]">.ai</span></h1>
+          <h1><Wordmark className="text-xl" /></h1>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">The Sovereign Deep — Agentic Core</p>
         </div>
       </div>

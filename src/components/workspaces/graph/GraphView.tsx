@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -55,24 +55,41 @@ interface GraphViewProps {
 function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphViewProps) {
   const layout = useMemo(() => buildTaskGraph(tasks, agents), [tasks, agents])
 
+  // `onTaskClick` is commonly passed as a fresh inline arrow function by the
+  // parent (e.g. WorkspaceGraphTab's `onTaskClick={(task) => setSelectedTaskId(task.id)}`)
+  // — a new identity every render. Route it through a ref + a permanently-stable
+  // wrapper so nothing downstream (the per-node `onOpen` below, or the re-seed
+  // effect that consumes it) ever depends on that identity. Without this, a
+  // node click → parent re-render → new handler → `nodesWithOpen` recomputed →
+  // re-seed effect fires → every user-dragged node position snaps back to the
+  // dagre layout.
+  const onTaskClickRef = useRef(onTaskClick)
+  onTaskClickRef.current = onTaskClick
+  const stableOnOpen = useCallback((task: Task) => onTaskClickRef.current(task), [])
+
   // React Flow wraps every node in its OWN focusable element
   // (`.react-flow__node`, role="group" tabIndex=0, with a built-in
   // Enter/Space handler that only toggles selection — it never calls
   // onNodeClick). Making TaskNode's own root focusable too would nest a
   // second tab stop inside that wrapper (WCAG 4.1.2, the same bug fixed on
   // the Board). Instead: mark every node `focusable: false` so React Flow's
-  // wrapper drops out of the tab order, and hand each node an `onOpen`
-  // callback via `data` so TaskNode itself — now the sole tab stop — can
-  // open the task on Enter/Space, calling the exact same `onTaskClick` the
-  // mouse path (`handleNodeClick` below) already calls.
+  // wrapper drops out of the tab order, and hand each node the stable
+  // `onOpen` callback above via `data` so TaskNode itself — now the sole tab
+  // stop — can open the task on Enter/Space, calling the exact same
+  // `onTaskClick` the mouse path (`handleNodeClick` below) already calls.
+  //
+  // Deliberately depends on `layout.nodes` (and the *stable* `stableOnOpen`,
+  // never the raw `onTaskClick` prop) so this — and the re-seed effect below,
+  // which is the only thing that consumes it — only recomputes when the
+  // actual graph data changes, not on every parent re-render.
   const nodesWithOpen = useMemo<TaskGraphNode[]>(
     () =>
       layout.nodes.map((n) => ({
         ...n,
         focusable: false,
-        data: { ...n.data, onOpen: onTaskClick },
+        data: { ...n.data, onOpen: stableOnOpen },
       })),
-    [layout.nodes, onTaskClick],
+    [layout.nodes, stableOnOpen],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<TaskGraphNode>(nodesWithOpen)
@@ -80,7 +97,10 @@ function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphVie
 
   // Re-seed React Flow state whenever the computed layout changes (task added /
   // status changed / agent resolved). React Flow owns interactive positions
-  // after mount, so we reset from the fresh dagre layout on data change.
+  // after mount, so we reset from the fresh dagre layout on data change. Both
+  // deps here are identity-stable across a parent re-render that only passes
+  // a new `onTaskClick` closure — see `stableOnOpen` above — so this never
+  // fires just because the parent re-rendered.
   useEffect(() => {
     setNodes(nodesWithOpen)
     setEdges(layout.edges)

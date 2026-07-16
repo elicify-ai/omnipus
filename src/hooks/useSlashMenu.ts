@@ -78,10 +78,11 @@ export interface UseSlashMenuResult {
   handleKeyDown: (e: ReactKeyboardEvent) => void
   /**
    * Send-path interception: if the composer's current text is exactly a
-   * client-delivery slash command (e.g. "/clear"), runs it locally and
-   * returns true — caller must preventDefault() so the message never
-   * reaches the backend. Makes typing "/clear"+Enter behave identically to
-   * selecting it from the palette.
+   * client-delivery slash command (e.g. "/new", or its legacy alias
+   * "/clear"), runs it locally and returns true — caller must
+   * preventDefault() so the message never reaches the backend. Makes typing
+   * "/new"+Enter (or "/clear"+Enter) behave identically to selecting it
+   * from the palette.
    */
   interceptClientCommand: () => boolean
 }
@@ -204,9 +205,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
   // runClientCommand — shared handler for client-delivery slash commands.
   // Called both from palette selection (executeSlashCommand) and from the
-  // send-path interception so that typing "/clear"+Enter converges with
-  // selecting /clear from the palette — both run client-side, never
-  // reaching the backend.
+  // send-path interception so that typing "/new"+Enter (or its legacy
+  // alias "/clear"+Enter) converges with selecting /new from the palette —
+  // both run client-side, never reaching the backend.
   //
   // Returns true when the command was handled (caller must NOT send the
   // text), false when the name is not a known client command (caller
@@ -286,7 +287,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   }
 
   // executeSlashCommand — called when the user selects a palette entry.
-  // `label` is the full label string from the SlashCommand (e.g. "/clear").
+  // `label` is the full label string from the SlashCommand (e.g. "/new").
   // FR-009: dispatch by `delivery`:
   //   - 'client' → run the local handler via runClientCommand; do NOT send.
   //   - 'agent'  → insert the label as text into the composer so the user
@@ -296,7 +297,10 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     closeSlash()
 
     // Look up the full command definition by label to get the name + delivery.
-    const def = allCommands.find((c) => c.label === label)
+    // Aliases (e.g. "clear" for "/new") never appear as separate palette
+    // entries, but match here too so a caller resolving a typed alias label
+    // still finds the real definition.
+    const def = allCommands.find((c) => c.label === label || c.aliases?.includes(label.slice(1)))
 
     if (!def) {
       // Unknown label (shouldn't happen with API-driven palette, but be safe).
@@ -337,9 +341,10 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
   // Send-path interception: before AssistantUI's onNew fires, check if the
   // trimmed input is exactly a client-delivery slash command (e.g.
-  // "/clear"). If it is, run it locally and prevent the message from
-  // reaching the backend. This makes typing "/clear"+Enter behave
-  // identically to palette selection.
+  // "/new", or its legacy alias "/clear"). If it is, run it locally and
+  // prevent the message from reaching the backend. This makes typing
+  // "/new"+Enter (or "/clear"+Enter) behave identically to palette
+  // selection.
   //
   // Deliberately NOT wrapped in useCallback: it (transitively, via
   // runClientCommand) closes over appendMessage/startNewSession/
@@ -355,7 +360,10 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const currentText = composerRuntime.getState().text ?? inputValue
     const trimmed = currentText.trim()
     if (!trimmed.startsWith('/')) return false
-    const def = allCommands.find((c) => c.delivery === 'client' && c.label === trimmed)
+    const typedName = trimmed.slice(1)
+    const def = allCommands.find(
+      (c) => c.delivery === 'client' && (c.label === trimmed || c.aliases?.includes(typedName)),
+    )
     if (!def) return false
     composerRuntime.setText('')
     setInputValue('')

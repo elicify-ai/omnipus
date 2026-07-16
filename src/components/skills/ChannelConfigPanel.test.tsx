@@ -2061,3 +2061,175 @@ describe('ChannelConfigPanel — unbind flow (Finding #2 / W1-6)', () => {
     expect(screen.queryByTestId('routing-agent-required-hint')).not.toBeInTheDocument()
   })
 })
+
+// ── CRITICAL fix regression: always-mounted panel leaking form state across
+// channels (three reviewers flagged this independently). ConnectorsScreen
+// keeps ChannelConfigPanel mounted across the close animation instead of
+// unmounting it, so nothing tears the form down for free — the panel's own
+// close-effect must reset every piece of transient state itself. These tests
+// render the SAME component instance across a close/reopen cycle via
+// `rerender` (the worst case: no parent `key` remount to bail us out), so
+// they exercise the panel's own defenses directly. ──────────────────────────
+
+describe('ChannelConfigPanel — cross-channel form-state leak fix (CRITICAL)', () => {
+  let client: QueryClient
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchAgents).mockResolvedValue([])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; clear: () => void }) => unknown) =>
+        selector({ byChannel: {}, clear: vi.fn() })) as never,
+    )
+    client = makeQueryClient()
+  })
+
+  function renderPanelControlled(channelId: string, channelName: string, open: boolean) {
+    return render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel
+          channelId={channelId}
+          channelName={channelName}
+          open={open}
+          onOpenChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('(a) a dirty, unsaved edit in channel A does not leak into channel B after close + reopen', async () => {
+    // Telegram and Discord both have a 'token' field labeled "Bot Token" —
+    // the exact generic-key collision the bug report describes.
+    vi.mocked(fetchChannelConfig).mockImplementation((id: string) =>
+      Promise.resolve(id === 'telegram' ? { token: '' } : { token: 'discord-stored-token' }),
+    )
+
+    const { rerender } = renderPanelControlled('telegram', 'Telegram', true)
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Bot Token/)).toBeInTheDocument()
+    })
+
+    // Type a secret and leave it unsaved (dirty).
+    fireEvent.change(screen.getByLabelText(/^Bot Token/), {
+      target: { value: 'telegram-typed-secret' },
+    })
+    expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('telegram-typed-secret')
+
+    // Close without saving.
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel
+          channelId="telegram"
+          channelName="Telegram"
+          open={false}
+          onOpenChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    // Reopen for a DIFFERENT channel — must show Discord's hydrated config,
+    // never Telegram's leftover value, and Save must never be able to submit
+    // Telegram's secret under Discord's identity.
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel
+          channelId="discord"
+          channelName="Discord"
+          open={true}
+          onOpenChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('discord-stored-token')
+    })
+    expect(screen.getByLabelText(/^Bot Token/)).not.toHaveValue('telegram-typed-secret')
+  })
+
+  it('(b) Google Chat auth-method selection does not leak across channel instances after close + reopen', async () => {
+    // google-chat.sales is configured for service-account auth; google-chat.support
+    // has no service-account fields (webhook-only) — ADR-029 namespaced instances
+    // share the 'google-chat' base type and its authGroup picker.
+    vi.mocked(fetchChannelConfig).mockImplementation((id: string) =>
+      Promise.resolve(
+        id === 'google-chat.sales'
+          ? { service_account_json: '{"type":"service_account"}' }
+          : { webhook_url: '' },
+      ),
+    )
+
+    const { rerender } = renderPanelControlled('google-chat.sales', 'Google Chat', true)
+    await waitFor(() => {
+      const radio = screen.getByLabelText('Service account') as HTMLInputElement
+      expect(radio.checked).toBe(true)
+    })
+
+    // Mark the panel dirty (edit an unrelated field) without touching the
+    // auth-method picker, then close without saving.
+    fireEvent.change(screen.getByLabelText('Space'), { target: { value: 'spaces/leaky' } })
+
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel
+          channelId="google-chat.sales"
+          channelName="Google Chat"
+          open={false}
+          onOpenChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    // Reopen for a different instance whose stored config has no
+    // service-account fields — must present as Webhook, not stuck on the
+    // previous instance's Service account selection.
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel
+          channelId="google-chat.support"
+          channelName="Google Chat"
+          open={true}
+          onOpenChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      // Scoped to role="radio" — once the Webhook group is selected, the
+      // webhook_url field ALSO renders with the label text "Webhook URL",
+      // so a plain getByLabelText would be ambiguous.
+      const webhookRadio = screen.getByRole('radio', { name: 'Webhook URL' }) as HTMLInputElement
+      expect(webhookRadio.checked).toBe(true)
+    })
+    expect(screen.queryByLabelText('Service Account JSON')).not.toBeInTheDocument()
+  })
+
+  it('(c) a failed channel-config fetch renders an inline error state, not an empty/stale form', async () => {
+    vi.mocked(fetchChannelConfig).mockRejectedValue(new Error('network down'))
+
+    renderPanelControlled('telegram', 'Telegram', true)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-config-fetch-error')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('channel-config-fetch-error')).toHaveAttribute('role', 'alert')
+    // The form must not silently render empty/stale in place of the error.
+    expect(screen.queryByLabelText('Bot Token')).not.toBeInTheDocument()
+
+    // Retry re-issues the fetch.
+    const callsBefore = vi.mocked(fetchChannelConfig).mock.calls.length
+    vi.mocked(fetchChannelConfig).mockResolvedValue({ token: '' })
+    fireEvent.click(screen.getByText('Retry'))
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchChannelConfig).mock.calls.length).toBeGreaterThan(callsBefore)
+    })
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Bot Token/)).toBeInTheDocument()
+    })
+  })
+})

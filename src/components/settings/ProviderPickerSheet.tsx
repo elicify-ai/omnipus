@@ -108,7 +108,7 @@ export function ProviderPickerSheet({
                       key={entry.id}
                       type="button"
                       onClick={() => onSelect(entry)}
-                      className="w-full flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-left transition-colors hover:border-[var(--color-accent)] focus-visible:outline-none"
+                      className="w-full flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-left transition-colors hover:border-[var(--color-accent)]"
                       data-testid={`picker-entry-${entry.id}`}
                     >
                       <span className="min-w-0">

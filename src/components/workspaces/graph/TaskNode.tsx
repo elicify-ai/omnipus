@@ -3,23 +3,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { motion } from 'framer-motion'
 import { getIconComponent } from '@/lib/agentIcons'
 import { cn } from '@/lib/utils'
-import type { Task } from '@/lib/api'
-import {
-  PRIORITY_LABELS,
-  statusVisual,
-  type TaskGraphNode,
-  type TaskNodeData,
-} from './taskGraph'
-
-/**
- * `TaskNodeData` (from taskGraph.ts) plus the `onOpen` callback GraphView
- * injects per-node at render time (see GraphView.tsx) — not part of the
- * shared graph-building module since it's purely a keyboard/mouse-activation
- * wire-up local to this view.
- */
-interface TaskNodeDataWithOpen extends TaskNodeData {
-  onOpen?: (task: Task) => void
-}
+import { PRIORITY_LABELS, statusVisual, type TaskGraphNode } from './taskGraph'
 
 // Priority pill colours — mirrors TaskCard's P1..P5 ladder (red→muted).
 const PRIORITY_CLASS: Record<number, string> = {
@@ -42,7 +26,7 @@ const PRIORITY_CLASS: Record<number, string> = {
  * A coloured left rail keys the node to its lifecycle status at a glance.
  */
 function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
-  const { task, agentName, agentColor, agentIcon, onOpen } = data as TaskNodeDataWithOpen
+  const { task, agentName, agentColor, agentIcon, onOpen } = data
   const visual = statusVisual(task.status)
   const priority = task.priority ?? 3
   const AgentIcon = getIconComponent(agentIcon)

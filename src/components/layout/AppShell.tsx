@@ -54,10 +54,11 @@ export function AppShell() {
   }, [])
 
   // Pin the shell to the actual VISUAL viewport via window.visualViewport, not
-  // CSS viewport units. Two iOS Safari behaviors make units insufficient:
-  //  • At initial load iOS reports 100dvh as the LARGE viewport (until the first
-  //    scroll), so an h-dvh shell is ~toolbar-height too tall → a load-time
-  //    overscroll. `vv.height` is the exact visible height instead.
+  // CSS viewport units, but ONLY while an editable is focused (the keyboard-up
+  // case — see the focus gate below). At load / with no editable focused, the
+  // vars are removed and the shell is plain 100dvh; load-time stability there
+  // comes from `body{position:fixed}` in globals.css (which also stops iOS
+  // from reporting the LARGE 100dvh pre-first-scroll), not from this hook.
   //  • Focusing the chat input shows the keyboard and iOS scrolls the VISUAL
   //    viewport (not the document — that's locked) to reveal the input, so
   //    `vv.offsetTop` becomes > 0 and a shell anchored to the layout-viewport
@@ -65,7 +66,8 @@ export function AppShell() {
   //    into the shell's `top` so the shell follows the visible viewport and the
   //    header stays put.
   // Published as `--app-vh` / `--app-top`; the shell consumes them below and
-  // falls back to (100dvh, 0) where visualViewport is unavailable / pre-hydrate.
+  // falls back to (100dvh, 0) whenever no editable is focused (including
+  // visualViewport-unavailable / pre-hydrate).
   useEffect(() => {
     const vv = window.visualViewport
     // Only track visualViewport on touch devices (iOS Safari needs it for the
@@ -131,9 +133,16 @@ export function AppShell() {
       style={{ top: 'var(--app-top, 0px)', height: 'var(--app-vh, 100dvh)' }}
     >
       {/* Skip-to-content link — first focusable element in the shell, visually
-          hidden until it receives keyboard focus (WCAG 2.4.1 Bypass Blocks). */}
+          hidden until it receives keyboard focus (WCAG 2.4.1 Bypass Blocks).
+          tabIndex={1}: the composer's positive tab ring (see the map in
+          ChatControls.tsx) starts at 2, so this link is guaranteed to be the
+          FIRST stop document-wide regardless of DOM position — without an
+          explicit positive index here, the chat screen's positive-tabIndex
+          controls would win the first Tab and the skip link would never be
+          reachable (WCAG 2.4.1 functionally dead). */}
       <a
         href="#main-content"
+        tabIndex={1}
         className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-3 focus:py-2 focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-sm"
       >
         Skip to content
@@ -201,7 +210,7 @@ export function AppShell() {
       <MediaLightbox />
 
       {/* Cross-workspace session search — store-driven single instance opened
-          from the sidebar search icon and the /search slash command (step 6). */}
+          from the sidebar search icon and the /resume slash command (step 6). */}
       <SearchModal />
 
       {/* Global toast notifications */}

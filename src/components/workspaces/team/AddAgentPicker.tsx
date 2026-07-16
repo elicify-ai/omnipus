@@ -97,7 +97,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                 }}
                 className={cn(
                   'flex w-full items-center gap-2.5 px-2.5 py-2 text-left transition-colors',
-                  'hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)] focus-visible:outline-none',
+                  'hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)]',
                 )}
               >
                 <div

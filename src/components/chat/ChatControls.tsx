@@ -103,8 +103,14 @@ export function ChatControls({ className }: ChatControlsProps) {
         type="button"
         onClick={() => void handleOpenBrowser()}
         disabled={creatingBrowserSession}
-        // Composer tab ring position 6 (input=1 agent=2 model=3 attach=4 send=5).
-        tabIndex={6}
+        // Composer tab ring — full map (single source of truth; other spots
+        // point back here): skip-link=1 (AppShell.tsx) → chat input=2
+        // (ChatScreen.tsx) → agent=3 (composer/AgentPicker.tsx) → model=4
+        // (composer/ModelPicker.tsx) → attach=5 (ChatScreen.tsx) → send=6
+        // (ChatScreen.tsx) → browser=7 (this button), then natural DOM order
+        // (the header tab menu). Deliberate positive tabIndex on this closed
+        // 7-control set per operator direction.
+        tabIndex={7}
         aria-label="Open browser"
         aria-busy={creatingBrowserSession}
         title="Open a live browser session"

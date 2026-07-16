@@ -132,6 +132,23 @@ describe('ModelPicker — renders the model selector', () => {
     })
     expect(screen.getByTestId('composer-model-selector')).toBeInTheDocument()
   })
+
+  // Composer tab ring, position 4 — the value itself is ChatScreen's
+  // contract (see src/components/chat/ChatScreen.tab-ring.test.tsx), but the
+  // plumbing that the `tabIndex` prop actually reaches the interactive
+  // trigger element (not just an ignored prop) is this component's own
+  // contract to keep.
+  it('forwards the tabIndex prop onto the ModelSelector trigger', async () => {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <ModelPicker tabIndex={4} />
+      </QueryClientProvider>,
+    )
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('composer-model-selector').getAttribute('role')).toBe('combobox')
+    })
+    expect(screen.getByTestId('composer-model-selector')).toHaveAttribute('tabindex', '4')
+  })
 })
 
 // ── nextModel / setNextModel store contract ─────────────────────────────────────

@@ -120,7 +120,6 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 
 // Mock child components that would need their own deep deps
-vi.mock('./SessionPanel', () => ({ SessionPanel: () => null }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))

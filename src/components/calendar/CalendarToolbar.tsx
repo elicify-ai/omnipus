@@ -78,7 +78,21 @@ export function CalendarToolbar({
   // at all, so browsing to e.g. a future month and creating a task doesn't
   // silently default to real-world "today".
   const handleNewTask = () => {
-    onNewTask(getApi()?.getDate?.())
+    const api = getApi()
+    if (!api) {
+      // `calendarRef` isn't wired to a mounted FullCalendar instance — this
+      // should never happen in the live app (the ref is set by CalendarScreen
+      // before the toolbar can render), so a silent fallback here would mask
+      // a real wiring regression. `getDate` itself is NOT optional-called
+      // below: `CalendarApi` guarantees it, so an optional call could only
+      // ever mask a broken test mock, never a real runtime gap.
+      console.warn(
+        '[CalendarToolbar] getApi() returned undefined (calendarRef not wired) — New task will open without a pre-filled date.',
+      )
+      onNewTask(undefined)
+      return
+    }
+    onNewTask(api.getDate())
   }
 
   // ── Shared touch-target class (WCAG 2.5.8 / I-4) ────────────────────────
@@ -89,7 +103,6 @@ export function CalendarToolbar({
     'flex items-center justify-center shrink-0',
     'h-8 w-8 rounded-md text-[var(--color-muted)]',
     'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-    'focus-visible:outline-none',
     'transition-colors',
     touchTarget,
     // On coarse pointer, ensure square-ish target width too
@@ -149,7 +162,6 @@ export function CalendarToolbar({
             'h-8 px-2.5 rounded-md',
             'text-xs font-medium text-[var(--color-muted)]',
             'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-            'focus-visible:outline-none',
             'transition-colors',
             touchTarget,
             'pointer-coarse:px-3',

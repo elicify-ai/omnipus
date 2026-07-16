@@ -541,6 +541,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           value={String(task.priority ?? 3)}
           onValueChange={(val) => doUpdate({ priority: parseInt(val, 10) })}
           triggerClassName="h-8 text-xs"
+          ariaLabel="Priority"
           items={[1, 2, 3, 4, 5].map((p) => ({
             value: String(p),
             label: PRIORITY_CONFIG[p]?.label ?? `P${p}`,
@@ -575,6 +576,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             value={task.status}
             onValueChange={(val) => handleStatusChange(val as Task['status'])}
             triggerClassName="h-8 text-xs"
+            ariaLabel="Status"
             // Done is terminal and blocked is backend-derived — exclude both as
             // selectable targets (mirrors canDropTransition's "can't enter
             // blocked / can't leave done"). The current status stays selectable.
@@ -610,6 +612,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           }}
           placeholder="No milestone"
           triggerClassName="h-8 text-xs"
+          ariaLabel="Milestone"
           items={[
             { value: '__none__', label: 'No milestone', className: 'text-xs' },
             ...milestones.map((m) => ({ value: m.id, label: m.name, className: 'text-xs' })),
@@ -624,6 +627,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           onValueChange={(val) => doUpdate({ agent_id: val === '__none__' ? '' : val })}
           placeholder="Unassigned"
           triggerClassName="h-8 text-xs"
+          ariaLabel="Agent"
           items={[
             { value: '__none__', label: 'Unassigned', className: 'text-xs' },
             ...buildTaskAssigneeItems(agents),
@@ -637,6 +641,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           value={triggerKind}
           onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
           triggerClassName="h-8 text-xs"
+          ariaLabel="Trigger"
           items={[
             { value: 'manual', label: 'None (manual)', className: 'text-xs' },
             { value: 'once', label: 'Once (at a time)', className: 'text-xs' },

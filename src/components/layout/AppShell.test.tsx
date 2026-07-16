@@ -19,7 +19,7 @@ import React from 'react'
 // CLARIFY: no BDD Given/When/Then exists for this banner in any wave spec —
 // tests below are written directly against the implemented behavior.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AppState, NotificationList } from '@/lib/api/generated/openapi-types'
@@ -121,5 +121,158 @@ describe('AppShell — app-state fetch-error banner', () => {
     renderShell()
 
     expect(screen.queryByTestId('app-state-fetch-error-banner')).not.toBeInTheDocument()
+  })
+})
+
+// ── Skip-to-content link (WCAG 2.4.1 Bypass Blocks) ─────────────────────────
+//
+// The skip link must be document-wide the FIRST Tab stop (tabIndex={1}) so
+// the chat screen's own positive-tabIndex composer ring (which starts at 2,
+// see the map in src/components/chat/ChatControls.tsx) can never shadow it —
+// a link with no explicit tabIndex would otherwise lose the race to those
+// positive-tabIndex composer controls and become functionally unreachable by
+// keyboard on the chat screen. See src/components/layout/AppShell.tsx L133-142.
+describe('AppShell — skip link', () => {
+  it('is the shell\'s first element child, targets #main-content, and carries tabIndex=1', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+
+    const link = await waitFor(() => screen.getByRole('link', { name: /skip to content/i }))
+    expect(link).toHaveAttribute('href', '#main-content')
+    expect(link.tabIndex).toBe(1)
+
+    // First focusable element in the shell — Sidebar is mocked to null in
+    // this file, so the skip link is literally the shell's first child.
+    const shell = document.querySelector('[data-app-shell]')
+    expect(shell?.firstElementChild).toBe(link)
+  })
+
+  it('the #main-content target exists and is itself unreachable by Tab (tabIndex=-1, programmatic-focus-only)', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+
+    await waitFor(() => {
+      expect(api.fetchAppState).toHaveBeenCalled()
+    })
+    const main = document.getElementById('main-content')
+    expect(main).not.toBeNull()
+    expect(main?.tagName).toBe('MAIN')
+    expect(main?.tabIndex).toBe(-1)
+  })
+})
+
+// ── visualViewport focus-gated tracking (regression guard) ──────────────────
+//
+// This hook (AppShell.tsx L69-121) has been rewritten three times chasing
+// iOS keyboard/scroll regressions — see
+// docs/internal/architecture/ios-scroll-stability.md. The current, canonical
+// mechanism (commit dec7713b) is a FOCUS gate: --app-vh/--app-top are
+// published only while an editable element has focus, and removed the
+// instant focus leaves. The two prior variants (height-math gate,
+// always-on/ungated tracking) are both documented "do not resurrect" — this
+// test exists so a well-meaning refactor of the hook can't silently
+// reintroduce either failure mode.
+describe('AppShell — visualViewport focus-gated tracking', () => {
+  const originalMatchMedia = window.matchMedia
+  const originalVisualViewport = (window as unknown as { visualViewport?: unknown }).visualViewport
+
+  function stubVisualViewport() {
+    const listeners: Record<string, Array<() => void>> = { resize: [], scroll: [] }
+    const vv = {
+      height: 480,
+      offsetTop: 130,
+      addEventListener: vi.fn((type: string, cb: () => void) => {
+        listeners[type] = listeners[type] ?? []
+        listeners[type].push(cb)
+      }),
+      removeEventListener: vi.fn((type: string, cb: () => void) => {
+        listeners[type] = (listeners[type] ?? []).filter((l) => l !== cb)
+      }),
+    }
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      writable: true,
+      value: vv,
+    })
+    return vv
+  }
+
+  function stubCoarsePointerMatchMedia() {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        // Only the '(pointer: coarse)' query AppShell actually checks needs
+        // to resolve true here — everything else defaults false.
+        matches: query === '(pointer: coarse)',
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    })
+  }
+
+  beforeEach(() => {
+    stubVisualViewport()
+    stubCoarsePointerMatchMedia()
+    // Make requestAnimationFrame synchronous so the effect's rAF-batched
+    // metric writes are observable immediately after dispatching focus
+    // events, without depending on jsdom's own (unreliable) rAF timing.
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: originalMatchMedia })
+    if (originalVisualViewport === undefined) {
+      delete (window as unknown as { visualViewport?: unknown }).visualViewport
+    } else {
+      Object.defineProperty(window, 'visualViewport', { configurable: true, writable: true, value: originalVisualViewport })
+    }
+    document.documentElement.style.removeProperty('--app-vh')
+    document.documentElement.style.removeProperty('--app-top')
+  })
+
+  it('sets --app-vh/--app-top from visualViewport on focusin of an editable, and removes them on focusout', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+    await waitFor(() => {
+      expect(api.fetchAppState).toHaveBeenCalled()
+    })
+
+    // No editable focused yet (mount-time state) — vars must be absent, the
+    // shell falls back to plain 100dvh@0.
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('')
+
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    document.dispatchEvent(new Event('focusin', { bubbles: true }))
+
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('480px')
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('130px')
+
+    input.blur()
+    document.dispatchEvent(new Event('focusout', { bubbles: true }))
+
+    expect(document.documentElement.style.getPropertyValue('--app-vh')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('')
+
+    document.body.removeChild(input)
   })
 })

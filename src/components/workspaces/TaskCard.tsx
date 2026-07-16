@@ -15,6 +15,18 @@ export const PRIORITY_BADGE: Record<number, { label: string; className: string }
   5: { label: 'P5', className: 'bg-[var(--color-muted)]/20 text-[var(--color-muted)] border-[var(--color-muted)]/30' },
 }
 
+/**
+ * dnd-kit drag wiring for a single card — all three fields come from one
+ * `useDraggable` call, so they are all-or-nothing in practice; grouping them
+ * into one optional prop (rather than three independently-optional props)
+ * makes that invariant explicit at the type level instead of by convention.
+ */
+export interface TaskCardDrag {
+  attributes: DraggableAttributes
+  listeners: DraggableSyntheticListeners
+  activatorRef: (element: HTMLElement | null) => void
+}
+
 interface TaskCardProps {
   task: Task
   milestones?: Milestone[]
@@ -37,9 +49,7 @@ interface TaskCardProps {
    * each card a single tab stop (WCAG 4.1.2) instead of nesting a second
    * focusable/role="button" element around it.
    */
-  dragAttributes?: DraggableAttributes
-  dragListeners?: DraggableSyntheticListeners
-  dragActivatorRef?: (element: HTMLElement | null) => void
+  drag?: TaskCardDrag
 }
 
 export function TaskCard({
@@ -49,9 +59,7 @@ export function TaskCard({
   altitude = 'top-level',
   onClick,
   onChildClick,
-  dragAttributes,
-  dragListeners,
-  dragActivatorRef,
+  drag,
 }: TaskCardProps) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
@@ -61,7 +69,7 @@ export function TaskCard({
   const rollup = task.rollup ?? []
   const hasRollup = rollup.length > 0
   const showChildren = altitude === 'show-all'
-  const isDraggable = Boolean(dragAttributes)
+  const isDraggable = Boolean(drag)
 
   // dnd-kit hands back its pointer/keyboard activators typed as bare
   // `Function`s (DraggableSyntheticListeners = Record<string, Function>);
@@ -69,30 +77,34 @@ export function TaskCard({
   // composed with this card's own onKeyDown below. The KeyboardSensor's
   // onKeyDown activator lifts the card on Space — it must keep firing
   // alongside (not instead of) TaskCard's own Enter-to-open handling.
-  const dragKeyDown = dragListeners?.onKeyDown as
+  const dragKeyDown = drag?.listeners?.onKeyDown as
     | ((event: React.KeyboardEvent<HTMLDivElement>) => void)
     | undefined
-  const dragPointerDown = dragListeners?.onPointerDown as
+  const dragPointerDown = drag?.listeners?.onPointerDown as
     | ((event: React.PointerEvent<HTMLDivElement>) => void)
     | undefined
 
   return (
     <div
-      ref={dragActivatorRef}
+      ref={drag?.activatorRef}
       role="button"
       tabIndex={0}
-      aria-disabled={dragAttributes?.['aria-disabled']}
-      aria-pressed={dragAttributes?.['aria-pressed']}
-      aria-roledescription={dragAttributes?.['aria-roledescription']}
-      aria-describedby={dragAttributes?.['aria-describedby']}
+      aria-disabled={drag?.attributes['aria-disabled']}
+      aria-pressed={drag?.attributes['aria-pressed']}
+      aria-roledescription={drag?.attributes['aria-roledescription']}
+      aria-describedby={drag?.attributes['aria-describedby']}
       aria-label={isDraggable ? `${task.title} — Enter to open, Space to move` : undefined}
       onClick={onClick}
       onPointerDown={dragPointerDown}
       onKeyDown={(e) => {
         dragKeyDown?.(e)
-        // Space is reserved for dnd-kit's keyboard-drag lift (see BoardView's
-        // KeyboardSensor `keyboardCodes` override) — only Enter opens the task.
-        if (e.key === 'Enter') {
+        // Space is reserved for dnd-kit's keyboard-drag lift when the card IS
+        // draggable (see BoardView's KeyboardSensor `keyboardCodes` override)
+        // — Enter opens the task there. When there's no drag context at all
+        // (e.g. ExecutionView's read-only cards), Space has no other job, so
+        // a role="button" that ignores it would break WCAG 4.1.2 — let it
+        // open the task too.
+        if (e.key === 'Enter' || (!isDraggable && e.key === ' ')) {
           e.preventDefault()
           onClick()
         }
@@ -100,7 +112,6 @@ export function TaskCard({
       className={cn(
         'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer',
         'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
-        'focus-visible:outline-none',
         hasRollup && 'border-[var(--color-accent)]/30',
       )}
     >

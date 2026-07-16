@@ -149,6 +149,11 @@ func TestRegistry_AliasResolution(t *testing.T) {
 	pairs := []struct{ canonical, alias string }{
 		{"tasks", "subagents"},
 		{"config", "reload"},
+		// /clear -> /new (renamed); "clear" survives as a hidden back-compat
+		// alias for CLI/channel muscle memory (pkg/commands/cmd_clear.go).
+		// Regression coverage: if the Aliases line is ever dropped from
+		// clearCommand(), Lookup("clear") stops resolving and this fails.
+		{"new", "clear"},
 	}
 	for _, p := range pairs {
 		canonDef, okCanon := reg.Lookup(p.canonical)
@@ -203,7 +208,7 @@ func TestCancelHasNoAliasesInBuiltins(t *testing.T) {
 func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 	defs := BuiltinDefinitions()
 
-	// Web surface: clear, help, model, cancel, agents, skills = 6 commands.
+	// Web surface: new, help, model, cancel, agents, skills = 6 commands.
 	webHelp := formatHelpMessage(defs, SurfaceWeb)
 	for _, name := range []string{"new", "help", "model", "cancel", "agents", "skills"} {
 		if !containsWord(webHelp, "/"+name) {
@@ -343,7 +348,7 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		)
 	}
 
-	// Web surface: clear, help, model, cancel, agents, skills = 6 (D7/D9 added agents+skills)
+	// Web surface: new, help, model, cancel, agents, skills = 6 (D7/D9 added agents+skills)
 	webCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceWeb) {

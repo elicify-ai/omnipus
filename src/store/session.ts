@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { AgentKind, Session } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
 import { logDiagnostic } from '@/lib/telemetry'
 
 // syncChatForeground is imported lazily to avoid the chat ↔ session circular init.
@@ -179,6 +180,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     } else {
       console.warn('[session] attachToSession: no connection — attach_session not sent')
       logDiagnostic('sessionAttachToSessionNoConnection', { sessionId, type })
+      // The click otherwise looks like it "succeeded" (activeSessionId updates,
+      // the UI navigates) but the transcript replay never happens because the
+      // attach_session frame was never sent — surface that to the user rather
+      // than failing silently. Reattach happens automatically once the
+      // connection is restored (WsLifecycle.onConnected → reattachActiveSession).
+      useUiStore.getState().addToast({
+        message: 'Not connected — this session will finish loading once your connection is restored.',
+        variant: 'warning',
+      })
       set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,

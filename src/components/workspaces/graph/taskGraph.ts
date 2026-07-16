@@ -70,6 +70,14 @@ export interface TaskNodeData extends Record<string, unknown> {
   agentColor?: string
   /** Resolved agent Phosphor icon name. */
   agentIcon?: string
+  /**
+   * Keyboard/mouse-activation callback GraphView injects per-node at render
+   * time (see GraphView.tsx) — `buildTaskGraph` itself never sets this, only
+   * the live view does. Typed directly on `TaskNodeData` (rather than a
+   * separate `TaskNodeDataWithOpen` cast in TaskNode.tsx) so a dropped
+   * injection is a type-visible gap, not a silent runtime one.
+   */
+  onOpen?: (task: Task) => void
 }
 
 export type TaskGraphNode = Node<TaskNodeData, 'task'>

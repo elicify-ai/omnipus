@@ -40,7 +40,6 @@ beforeEach(() => {
   act(() => {
     useUiStore.setState({
       createAgentModalOpen: false,
-      sessionPanelOpen: false,
       toasts: [],
     })
   })
@@ -109,6 +108,52 @@ describe('CreateAgentWizard — stepper a11y (spec §9.3, WAI-ARIA APG)', () => 
     const active = stepper.querySelector('[aria-current="step"]')
     expect(active).not.toBeNull()
     expect(active).toHaveTextContent(/Step 1: Identity/i)
+  })
+})
+
+describe('CreateAgentWizard — step-change focus + announce (a11y audit 2026-07-16)', () => {
+  // goToStep (CreateAgentWizard.tsx ~:262-269) focuses stepPanelRef on every
+  // Next/Back so keyboard/screen-reader users land on the new step's content
+  // instead of staying on a Next button that just moved in the DOM order.
+  it('moves focus to the step panel wrapper after clicking Next', async () => {
+    renderWizard()
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'X' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+
+    // The step panel wrapper's own aria-label tracks the current step, so it
+    // doubles as a stable way to locate it post-navigation.
+    const stepPanel = await screen.findByLabelText('Step 2 of 3: Personality')
+    expect(document.activeElement).toBe(stepPanel)
+  })
+
+  // The `data-testid="wizard-step-announcement"` live region (~:464-470) must
+  // stay mounted unconditionally (not gated behind e.g. `step > 1`) — a
+  // conditionally-mounted live region can miss the very first announcement a
+  // screen reader would otherwise pick up, since AT needs the node present
+  // in the DOM before it updates to start observing it.
+  it('the live region is always mounted with aria-live BEFORE any navigation', () => {
+    renderWizard()
+    const liveRegion = screen.getByTestId('wizard-step-announcement')
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite')
+    expect(liveRegion).toHaveTextContent('Step 1 of 3: Identity')
+  })
+
+  it('the live region text updates to "Step 2 of N" after clicking Next', async () => {
+    renderWizard()
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'X' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'm' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-step-announcement')).toHaveTextContent(
+        'Step 2 of 3: Personality',
+      ),
+    )
   })
 })
 

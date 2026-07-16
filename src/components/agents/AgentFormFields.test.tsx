@@ -105,18 +105,22 @@ describe('AvatarColorPicker', () => {
 })
 
 describe('IconPicker', () => {
-  it('renders the trigger button with the current value as its visible label', () => {
-    // SmartSelect renders the chosen item's label as the trigger's
-    // visible text. The trigger is a Radix popover trigger button with
-    // aria-haspopup="listbox". We target it via the visible label rather
-    // than a testid because the IconPicker → SmartSelect pass-through
-    // does not currently attach a data-testid attribute to the trigger.
+  it('exposes a field-named accessible name, with the current value as visible text', () => {
+    // SmartSelect requires `ariaLabel` (7-reviewer finding: the trigger's
+    // accessible name must identify the FIELD, e.g. "Icon", not float with
+    // whatever value happens to be selected — a value-only name is
+    // useless to a screen-reader user who can't tell which field they're
+    // on). IconPicker passes ariaLabel="Icon", so the button's accessible
+    // name is "Icon" while its visible text content remains the chosen
+    // item's label ("Robot") for sighted users. The trigger is a Radix
+    // popover trigger button with aria-haspopup="listbox".
     const onChange = vi.fn()
     render(<IconPicker value="Robot" onChange={onChange} />)
-    const trigger = screen.getByRole('button', { name: /Robot/ })
+    const trigger = screen.getByRole('button', { name: 'Icon' })
     expect(trigger).toBeInTheDocument()
-    // Selected label must be visible to the user (sighted + screen-reader
-    // via the trigger's text content).
+    // Selected label must still be visible to the user (sighted) via the
+    // trigger's text content, even though it no longer drives the
+    // accessible name.
     expect(within(trigger).getByText('Robot')).toBeInTheDocument()
   })
 
@@ -129,7 +133,7 @@ describe('IconPicker', () => {
     // >= 1 (the popover's CommandItem).
     const onChange = vi.fn()
     render(<IconPicker value="Robot" onChange={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name: /Robot/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Icon' }))
     for (const { name } of ICON_OPTIONS) {
       // cmdk renders each CommandItem with the item label as text content.
       // With 10 items (>= SmartSelect's SEARCHABLE_THRESHOLD of 5), the
@@ -144,7 +148,7 @@ describe('IconPicker', () => {
     // the wire-shape IconName back to the parent.
     const onChange = vi.fn()
     render(<IconPicker value="Robot" onChange={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name: /Robot/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Icon' }))
     // Pick a non-default option to prove the change is observed.
     const target = 'Lightbulb'
     fireEvent.click(await screen.findByText(target))

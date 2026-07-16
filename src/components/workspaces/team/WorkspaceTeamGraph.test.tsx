@@ -9,13 +9,48 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { WorkspaceTeamGraph } from './WorkspaceTeamGraph'
 import {
   buildTeamGraphModel,
   type TeamEditState,
 } from './teamGraphModel'
 import type { Agent } from '@/lib/api'
+
+// AgentDelegatePicker itself is unit-tested (candidate filtering, selection,
+// empty state) in AgentDelegatePicker.test.tsx against explicit props. Here
+// we only need to prove WORKSPACETEAMGRAPH → AgentNode → AgentDelegatePicker
+// wiring: that the canvas-global state (nodes/editState/workerIds/onDelegate)
+// reaches the picker via TeamGraphCanvasContext and that invoking `onDelegate`
+// runs through the SAME `handleConnect` path a canvas drag uses. A minimal
+// stub avoids fighting Radix's portal-based DropdownMenu inside a jsdom
+// ReactFlow canvas (which needs its own heavy geometry stubbing already).
+vi.mock('./AgentDelegatePicker', () => ({
+  AgentDelegatePicker: ({
+    source,
+    nodes,
+    onDelegate,
+  }: {
+    source: { id: string }
+    nodes: { id: string }[]
+    onDelegate: (from: string, to: string) => void
+  }) => {
+    // Mirror the real picker's own exclusion of the source from the target
+    // list, so this stub also proves `nodes` (canvas-global) reached the
+    // component via context rather than being empty/stale.
+    const target = nodes.find((n) => n.id !== source.id)
+    return (
+      <button
+        type="button"
+        data-testid={`mock-delegate-${source.id}`}
+        disabled={!target}
+        onClick={() => target && onDelegate(source.id, target.id)}
+      >
+        Delegate
+      </button>
+    )
+  },
+}))
 
 beforeAll(() => {
   class ResizeObserverStub {
@@ -141,5 +176,36 @@ describe('WorkspaceTeamGraph — edges', () => {
     renderGraph({ nodes: [], edges: [] })
     expect(screen.getByTestId('team-graph-canvas')).toBeInTheDocument()
     expect(screen.queryByTestId('team-node-mia')).toBeNull()
+  })
+})
+
+// ── Delegate picker wiring (context refactor regression) ────────────────────
+//
+// TeamGraphCanvasContext now carries `allNodes`/`editState`/`workerIds`/
+// `onDelegate` from WorkspaceTeamGraphInner down to AgentNode ->
+// AgentDelegatePicker, replacing the old per-node `data` copies. This proves
+// the plumbing survived the refactor: the mocked picker only receives
+// `nodes`/`onDelegate` via context (see the module mock above), and invoking
+// it runs through the exact same `handleConnect` (validateConnection ->
+// onConnect / onRejectConnection) a canvas drag uses — no separate mutation
+// path for the keyboard route.
+describe('WorkspaceTeamGraph — delegate picker wiring', () => {
+  it('a valid keyboard delegation reaches onConnect via the same handleConnect path as a drag', () => {
+    const { props } = renderGraph()
+    // planner (a worker) has no outgoing edge yet in STATE, so the mock
+    // picker's first-other-node target ('mia') is a valid new connection.
+    fireEvent.click(screen.getByTestId('mock-delegate-planner'))
+    expect(props.onConnect).toHaveBeenCalledWith('planner', 'mia')
+    expect(props.onRejectConnection).not.toHaveBeenCalled()
+  })
+
+  it('an invalid keyboard delegation is rejected through the same validateConnection path (no edge added)', () => {
+    const { props } = renderGraph()
+    // mia -> jim already exists in STATE; the mock picker's first-other-node
+    // target for mia is jim, so this exercises the rejection branch of
+    // handleConnect instead of a bypassed/duplicated mutation.
+    fireEvent.click(screen.getByTestId('mock-delegate-mia'))
+    expect(props.onConnect).not.toHaveBeenCalled()
+    expect(props.onRejectConnection).toHaveBeenCalledWith('That delegation edge already exists.')
   })
 })

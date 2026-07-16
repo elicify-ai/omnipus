@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useSessionStore, registerChatResetForReplay } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useConnectionStore } from './connection'
+import { useUiStore } from './ui'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -425,5 +426,39 @@ describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regres
 
     expect(resetSpy).toHaveBeenCalledWith('sess-ok')
     expect(useSessionStore.getState().activeSessionId).toBe('sess-ok')
+  })
+})
+
+describe('attachToSession — WS-down user feedback (fix 6)', () => {
+  beforeEach(() => {
+    resetAll()
+    useUiStore.setState({ toasts: [] })
+  })
+
+  it('shows a user-visible toast when there is no WS connection (previously console.warn only)', () => {
+    // No connection set up — attachToSession takes the offline branch.
+    useSessionStore.getState().attachToSession('sess-offline-toast', 'chat', 'Title', 'agent-1')
+
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].message.toLowerCase()).toMatch(/not connected|connection/)
+    expect(toasts[0].variant).toBe('warning')
+  })
+
+  it('does NOT show a toast when the WS is connected and the attach succeeds', () => {
+    const okConnection = { send: vi.fn().mockReturnValue(true), close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: okConnection as never, isConnected: true })
+
+    useSessionStore.getState().attachToSession('sess-online', 'chat', 'Title', 'agent-1')
+
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+  })
+
+  it('still records activeSessionId (offline path is otherwise unchanged) alongside the new toast', () => {
+    useSessionStore.getState().attachToSession('sess-offline-toast-2', 'task', 'Task Title', 'agent-2')
+
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-offline-toast-2')
+    expect(useSessionStore.getState().attachedSessionType).toBe('task')
+    expect(useUiStore.getState().toasts).toHaveLength(1)
   })
 })

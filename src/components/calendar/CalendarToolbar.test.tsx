@@ -240,6 +240,33 @@ describe('CalendarToolbar — New task button (spec §9 #19, FR-012)', () => {
     expect(spies.next).not.toHaveBeenCalled()
     expect(spies.today).not.toHaveBeenCalled()
   })
+
+  it('falls back to onNewTask(undefined) AND warns once when calendarRef is not wired (getApi() undefined)', () => {
+    // A silent fallback here would mask a real ref-wiring regression — the
+    // fallback must be observable via console.warn, not swallowed.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const onNewTask = vi.fn()
+    const unwiredRef: CalendarApiRef = { current: null }
+
+    render(
+      <CalendarToolbar
+        calendarRef={unwiredRef}
+        currentView="dayGridMonth"
+        title="June 2026"
+        onViewChange={vi.fn()}
+        onNewTask={onNewTask}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('calendar-new-task'))
+
+    expect(onNewTask).toHaveBeenCalledOnce()
+    expect(onNewTask).toHaveBeenCalledWith(undefined)
+    expect(warnSpy).toHaveBeenCalledOnce()
+    expect(warnSpy.mock.calls[0][0]).toMatch(/calendarRef not wired/i)
+
+    warnSpy.mockRestore()
+  })
 })
 
 describe('CalendarToolbar — title and view rendering', () => {

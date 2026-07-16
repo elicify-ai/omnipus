@@ -14,7 +14,7 @@ import { useSlashMenu } from './useSlashMenu'
 import { useUiStore } from '@/store/ui'
 
 const mockCommands = [
-  { name: 'clear', label: '/clear', description: 'Start a new conversation', delivery: 'client', available_while_streaming: false },
+  { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client', available_while_streaming: false, aliases: ['clear'] },
   { name: 'help', label: '/help', description: 'Show available commands', delivery: 'client', available_while_streaming: false },
   { name: 'model', label: '/model', description: 'Change the chat model', delivery: 'client', available_while_streaming: false },
   { name: 'agents', label: '/agents', description: 'Open agent selector', delivery: 'client', available_while_streaming: false },
@@ -103,7 +103,7 @@ describe('useSlashMenu — gating', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.shouldShowSlash).toBe(true)
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/resume', '/clear', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'web-research', 'code-review',
+      '/resume', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'web-research', 'code-review',
     ])
   })
 })
@@ -131,8 +131,8 @@ describe('useSlashMenu — D9 "/skills" filter', () => {
 describe('useSlashMenu — prefix filtering', () => {
   it('filters commands and skills by the text after "/"', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/cl'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/clear'])
+    act(() => result.current.onInputChange('/ne'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/new'])
   })
 
   it('shows no items for an unmatched prefix (Issue 3 — menu just disappears)', () => {
@@ -140,6 +140,15 @@ describe('useSlashMenu — prefix filtering', () => {
     act(() => result.current.onInputChange('/zzz'))
     expect(result.current.slashItems).toHaveLength(0)
     expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('does not surface the "clear" alias as its own palette entry — prefix filtering matches canonical names only', () => {
+    // /new's hidden alias is "clear" (pkg/commands/cmd_clear.go). The
+    // palette list must never grow a separate "/clear" entry — only the
+    // canonical "/new" label is filterable/visible.
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/cl'))
+    expect(result.current.slashItems).toHaveLength(0)
   })
 })
 
@@ -181,11 +190,11 @@ describe('useSlashMenu — keyboard navigation', () => {
 })
 
 describe('useSlashMenu — client command dispatch', () => {
-  it('/clear calls startNewSession', () => {
+  it('/new calls startNewSession', () => {
     const startNewSession = vi.fn()
     const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
     act(() => result.current.onInputChange('/'))
-    const item = result.current.slashItems.find((i) => i.key === '/clear')!
+    const item = result.current.slashItems.find((i) => i.key === '/new')!
     act(() => item.onSelect())
     expect(startNewSession).toHaveBeenCalledTimes(1)
   })
@@ -199,7 +208,7 @@ describe('useSlashMenu — client command dispatch', () => {
     expect(appendMessage).toHaveBeenCalledTimes(1)
     const msg = appendMessage.mock.calls[0][0]
     expect(msg.role).toBe('system')
-    expect(msg.content).toContain('/clear')
+    expect(msg.content).toContain('/new')
   })
 
   it('/model opens the model selector via the ui store', () => {
@@ -253,7 +262,7 @@ describe('useSlashMenu — client command dispatch', () => {
   it('typing "/skills" + Enter (send-path interception) dispatches the same client command', () => {
     // Traces to: pkg/commands/surface_test.go clientCmds — confirms typing
     // "/skills"+Enter converges with palette selection, per interceptClientCommand's
-    // own doc comment ("makes typing '/clear'+Enter behave identically to palette selection").
+    // own doc comment ("makes typing '/new'+Enter behave identically to palette selection").
     const composerRuntime = makeComposerRuntime('/skills')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
@@ -316,7 +325,22 @@ describe('useSlashMenu — skill selection and ghost text', () => {
 })
 
 describe('useSlashMenu — interceptClientCommand (send-path)', () => {
-  it('intercepts an exact client-delivery command and runs it locally', () => {
+  it('intercepts an exact client-delivery command (canonical "/new") and runs it locally', () => {
+    const composerRuntime = makeComposerRuntime('/new')
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(composerRuntime.setText).toHaveBeenCalledWith('')
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('intercepts the legacy "/clear" alias and runs the same client command as "/new"', () => {
+    // Backend renamed /clear -> /new with Aliases: ["clear"] (pkg/commands/cmd_clear.go).
+    // Typing the old alias must still resolve — not fall through to the LLM as chat text.
     const composerRuntime = makeComposerRuntime('/clear')
     const startNewSession = vi.fn()
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
@@ -392,7 +416,7 @@ describe('useSlashMenu — onInputBlur (delayed close)', () => {
     act(() => result.current.onInputBlur())
     // Item's mousedown handler fires mid-delay (e.g. 50ms in) and wins the race.
     act(() => { vi.advanceTimersByTime(50) })
-    const item = result.current.slashItems.find((i) => i.key === '/clear')!
+    const item = result.current.slashItems.find((i) => i.key === '/new')!
     act(() => item.onSelect())
 
     expect(startNewSession).toHaveBeenCalledTimes(1)
@@ -412,7 +436,7 @@ describe('useSlashMenu — onHoverItem', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.slashHighlight).toBe(0)
 
-    // Index 4 in the unified list is "/agents" (resume, clear, help, model, agents, ...).
+    // Index 4 in the unified list is "/agents" (resume, new, help, model, agents, ...).
     act(() => result.current.onHoverItem(4))
     expect(result.current.slashHighlight).toBe(4)
     expect(result.current.slashItems[4].key).toBe('/agents')

@@ -279,7 +279,7 @@ function ChromeBar({
         onClick={handleReload}
         aria-label={reloadLabel}
         title={reloadLabel}
-        className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+        className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
       >
         <ArrowsClockwise size={13} />
       </button>
@@ -290,7 +290,7 @@ function ChromeBar({
         onClick={handleOpen}
         aria-label="Open preview in new tab"
         title="Open in new tab"
-        className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+        className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
       >
         <ArrowSquareOut size={13} />
       </button>
@@ -301,7 +301,7 @@ function ChromeBar({
         onClick={handleCopy}
         aria-label="Copy preview link"
         title="Copy link"
-        className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+        className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
       >
         <Copy size={13} />
       </button>

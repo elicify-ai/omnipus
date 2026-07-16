@@ -156,7 +156,6 @@ vi.mock('./historical-markdown', () => ({
 }))
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
-vi.mock('./SessionPanel', () => ({ SessionPanel: () => null }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({

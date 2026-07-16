@@ -19,9 +19,17 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { BoardView, canDropTransition } from './BoardView'
+import { BoardView, canDropTransition, buildBoardAnnouncements } from './BoardView'
 import type { Task, Milestone } from '@/lib/api'
 import { STATUS_ORDER } from '@/lib/statusColors'
+import type {
+  Active,
+  Over,
+  DragStartEvent,
+  DragOverEvent,
+  DragEndEvent,
+  DragCancelEvent,
+} from '@dnd-kit/core'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -150,6 +158,92 @@ describe('BoardView — DnD wiring', () => {
 })
 
 // ── Move decision behaviour (the guard drives onTaskMove vs onMoveRejected) ─────
+
+// ── Drag announcement message text (screen-reader live region) ─────────────────
+//
+// dnd-kit's DragStartEvent/DragOverEvent/DragEndEvent/DragCancelEvent carry a
+// few fields buildBoardAnnouncements never reads (activatorEvent, collisions,
+// delta) — these helpers fill them with inert placeholders purely to satisfy
+// the type, so each test can focus on the one field that actually drives the
+// message (`active.id` / `over?.id`).
+
+const activatorEvent = new Event('pointerdown')
+
+function makeActive(id: string): Active {
+  return { id, data: { current: undefined }, rect: { current: { initial: null, translated: null } } } as unknown as Active
+}
+
+function makeOver(id: string): Over {
+  return { id, rect: {}, disabled: false, data: { current: undefined } } as unknown as Over
+}
+
+function makeStartEvent(id: string): DragStartEvent {
+  return { active: makeActive(id), activatorEvent }
+}
+
+function makeOverEvent(activeId: string, overId: string | null): DragOverEvent {
+  return {
+    active: makeActive(activeId),
+    activatorEvent,
+    collisions: null,
+    delta: { x: 0, y: 0 },
+    over: overId ? makeOver(overId) : null,
+  }
+}
+
+function makeEndEvent(activeId: string, overId: string | null): DragEndEvent {
+  return makeOverEvent(activeId, overId)
+}
+
+function makeCancelEvent(activeId: string): DragCancelEvent {
+  return makeOverEvent(activeId, null)
+}
+
+describe('buildBoardAnnouncements — screen-reader message text', () => {
+  const rootTasks: Task[] = [baseTask({ id: 'task-1', title: 'Draggable task' })]
+
+  it('onDragStart announces the task title being picked up', () => {
+    const announcements = buildBoardAnnouncements(rootTasks)
+    const msg = announcements.onDragStart?.(makeStartEvent('task-1'))
+    expect(msg).toBe('Picked up task "Draggable task".')
+  })
+
+  it('onDragStart falls back to "the task" for an unknown id', () => {
+    const announcements = buildBoardAnnouncements(rootTasks)
+    const msg = announcements.onDragStart?.(makeStartEvent('missing'))
+    expect(msg).toBe('Picked up task "the task".')
+  })
+
+  it('onDragOver announces the column the card is currently over', () => {
+    const announcements = buildBoardAnnouncements(rootTasks)
+    const msg = announcements.onDragOver?.(makeOverEvent('task-1', 'in_progress'))
+    expect(msg).toBe('Task "Draggable task" is over the In Progress column.')
+  })
+
+  it('onDragOver returns undefined when not over any droppable', () => {
+    const announcements = buildBoardAnnouncements(rootTasks)
+    const msg = announcements.onDragOver?.(makeOverEvent('task-1', null))
+    expect(msg).toBeUndefined()
+  })
+
+  it('onDragEnd announces the destination column on a successful drop', () => {
+    const announcements = buildBoardAnnouncements(rootTasks)
+    const msg = announcements.onDragEnd?.(makeEndEvent('task-1', 'done'))
+    expect(msg).toBe('Task "Draggable task" was moved to the Done column.')
+  })
+
+  it('onDragEnd announces a plain "was dropped" when not released over a column', () => {
+    const announcements = buildBoardAnnouncements(rootTasks)
+    const msg = announcements.onDragEnd?.(makeEndEvent('task-1', null))
+    expect(msg).toBe('Task "Draggable task" was dropped.')
+  })
+
+  it('onDragCancel announces the cancellation', () => {
+    const announcements = buildBoardAnnouncements(rootTasks)
+    const msg = announcements.onDragCancel?.(makeCancelEvent('task-1'))
+    expect(msg).toBe('Moving task "Draggable task" was cancelled.')
+  })
+})
 
 describe('BoardView — move decision', () => {
   it('a legal target status maps to onTaskMove, an illegal one to onMoveRejected', () => {

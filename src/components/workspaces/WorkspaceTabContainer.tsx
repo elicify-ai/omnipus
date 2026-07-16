@@ -137,7 +137,8 @@ function WorkspaceTabContainerView({
         {/* Top bar — semantic <header> (banner landmark) for accessible
             landmark navigation, reachable via both getByRole('banner') and a
             `header` CSS selector. @container enables container-query variants
-            on children (used by ChatControls' Sessions/Open-browser labels).
+            on children (used by ChatControls' "Open browser" label and by
+            WorkspaceTabBar's own full-strip/dropdown breakpoint).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
             broke the flat 44px shell alignment. */}

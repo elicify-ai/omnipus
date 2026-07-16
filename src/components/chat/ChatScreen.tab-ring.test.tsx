@@ -1,13 +1,42 @@
-// /agents client command — opens the agent selector via the ui store flag.
-
+/**
+ * ChatScreen.tab-ring.test.tsx — composer tab-order structural guard.
+ *
+ * The composer carries a DELIBERATE, operator-mandated positive tabIndex
+ * ring so Tab visits the controls in a fixed order regardless of DOM
+ * position. The single source of truth for the full ring is the comment in
+ * ChatControls.tsx (see also src/components/layout/AppShell.tsx for the
+ * skip-link=1 end of the chain, covered separately in AppShell.test.tsx, and
+ * ChatControls.test.tsx for browser=7). This file locks down the
+ * OmnipusComposer-owned segment of the ring:
+ *
+ *   skip-link=1 (AppShell.tsx, see AppShell.test.tsx)
+ *   → chat input=2 (this file)
+ *   → agent=3 (this file, via the tabIndex prop ChatScreen passes to AgentPicker)
+ *   → model=4 (this file, via the tabIndex prop ChatScreen passes to ModelPicker)
+ *   → attach=5 (this file)
+ *   → send=6 (this file)
+ *   → browser=7 (ChatControls.tsx, see ChatControls.test.tsx)
+ *
+ * A well-meaning cleanup (renumbering, dropping a tabIndex, or reordering
+ * controls) should fail one of these class/attribute-level assertions rather
+ * than silently drift the ring — the accepted regression-guard style in this
+ * repo for structural/positional contracts (see AgentPicker.test.tsx,
+ * Sidebar.m5.test.tsx for precedent).
+ *
+ * AgentPicker/ModelPicker are stubbed here (not their real implementations —
+ * their own internal behavior is covered by composer/AgentPicker.test.tsx and
+ * composer/ModelPicker.test.tsx) to a thin pass-through that echoes the
+ * `tabIndex` prop it was called with, so this test asserts the CONTRACT
+ * ("ChatScreen passes tabIndex=3/4 to these components") without dragging in
+ * their agents/workspaces query plumbing.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import { useUiStore } from '@/store/ui'
 
 class ResizeObserverStub {
   observe() {}
@@ -21,8 +50,9 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {}
 }
 
-import { OmnipusComposer } from './ChatScreen'
-
+// ── @assistant-ui/react — same shape as ChatScreen.test.tsx's mock, EXCEPT
+// Input/AddAttachment/Send additionally forward `tabIndex` onto the rendered
+// DOM node, which is exactly the prop this test needs to observe. ──────────
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -41,30 +71,31 @@ vi.mock('@assistant-ui/react', () => {
     ComposerPrimitive: {
       Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
         React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
+      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur, tabIndex }: {
         disabled?: boolean; placeholder?: string; className?: string;
         onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
         onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
+        onBlur?: () => void; tabIndex?: number;
       }) =>
         React.createElement('textarea', {
           disabled, placeholder, className,
-          onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
+          onChange, onKeyDown, onBlur, tabIndex,
+          'data-testid': 'chat-input',
         }),
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
+      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick, tabIndex }: {
         disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string;
+        'data-testid'?: string; 'aria-label'?: string; onClick?: () => void; tabIndex?: number;
       }) =>
         React.createElement('button', {
           type: 'button', disabled, className,
+          onClick, tabIndex,
           'data-testid': testId ?? 'chat-send',
           'aria-label': ariaLabel,
         }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel, tabIndex }: {
+        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string; tabIndex?: number;
       }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
+        React.createElement('button', { type: 'button', disabled, className, tabIndex, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
@@ -99,27 +130,15 @@ vi.mock('@assistant-ui/react', () => {
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
-  const mockCommands = [
-    { name: 'clear',   label: '/clear',   description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
-    { name: 'help',    label: '/help',    description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
-    { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
-    { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
-    { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
-  ]
-  const mockSkills = [
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  ]
   return {
     ...actual,
     useQuery: (opts: { queryKey: unknown[] }) => {
       const key = opts?.queryKey
       if (Array.isArray(key) && key[0] === 'commands' && key[1] === 'web') {
-        return { data: mockCommands, isError: false, refetch: vi.fn() }
+        return { data: [], isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') {
-        return { data: mockSkills, isError: false, refetch: vi.fn() }
+        return { data: [], isError: false, refetch: vi.fn() }
       }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -139,23 +158,34 @@ vi.mock('@/lib/api', () => ({
   fetchSessionMessages: vi.fn().mockResolvedValue([]),
   fetchCommands: vi.fn().mockResolvedValue([]),
   fetchSkills: vi.fn().mockResolvedValue([]),
-  fetchProviders: vi.fn().mockResolvedValue([]),
   uploadFiles: vi.fn(),
+  fetchProviders: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
+vi.mock('./SessionPanel', () => ({ SessionPanel: () => null }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-// Composer Redesign (variant A1): this file tests the /agents SLASH COMMAND
-// dispatch (setting agentSelectorOpen via the command interceptor), not the
-// picker's own UI, so its sub-components are stubbed to null — avoids mocking
-// the workspaces/providers query plumbing they own.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
-vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
+
+// AgentPicker/ModelPicker: thin pass-throughs that echo the `tabIndex` prop
+// ChatScreen calls them with, onto a testid'd node — this is the structural
+// contract under test, not the pickers' own internal behavior (covered
+// elsewhere, see the file header comment).
+vi.mock('./composer/AgentPicker', () => ({
+  AgentPicker: ({ tabIndex }: { tabIndex?: number }) =>
+    React.createElement('div', { 'data-testid': 'agent-picker-mock', tabIndex }),
+}))
+vi.mock('./composer/ModelPicker', () => ({
+  ModelPicker: ({ tabIndex }: { tabIndex?: number }) =>
+    React.createElement('div', { 'data-testid': 'model-picker-mock', tabIndex }),
+}))
+
+// Static import: vi.mock() calls are hoisted before this import.
+import { OmnipusComposer } from './ChatScreen'
 
 function resetStores() {
   act(() => {
@@ -173,73 +203,50 @@ function resetStores() {
       connectionError: null,
     })
     useSessionStore.setState({
-      activeSessionId: 'sess_agents_cmd_test',
+      activeSessionId: 'sess_tab_ring_test',
       activeAgentId: 'general-assistant',
       activeAgentType: null,
     })
-    useUiStore.setState({ agentSelectorOpen: false })
   })
 }
 
 beforeEach(resetStores)
 
-describe('/agents command — opens agent selector', () => {
-  it('/agents appears in the slash menu', async () => {
+describe('OmnipusComposer — composer tab ring (post-renumber structural guard)', () => {
+  it('chat input carries tabIndex=2', () => {
     render(<OmnipusComposer />)
-    const input = screen.getByTestId('composer-input')
-
-    act(() => { fireEvent.change(input, { target: { value: '/agents' } }) })
-    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
-
-    expect(screen.getByText('/agents')).toBeInTheDocument()
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('tabindex', '2')
   })
 
-  it('selecting /agents from menu sets agentSelectorOpen to true', async () => {
+  it('AgentPicker is invoked with tabIndex=3', () => {
     render(<OmnipusComposer />)
-    const input = screen.getByTestId('composer-input')
-
-    act(() => { fireEvent.change(input, { target: { value: '/agents' } }) })
-    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
-
-    expect(useUiStore.getState().agentSelectorOpen).toBe(false)
-
-    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
-
-    expect(useUiStore.getState().agentSelectorOpen).toBe(true)
+    expect(screen.getByTestId('agent-picker-mock')).toHaveAttribute('tabindex', '3')
   })
 
-  it('typing "/agents" + Enter via send-path interception sets agentSelectorOpen to true', async () => {
-    const mockSetText = vi.fn()
-    const { useComposerRuntime } = await import('@assistant-ui/react')
-    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-      getState: () => ({ text: '/agents' }),
-      setText: mockSetText,
-      addAttachment: vi.fn(),
-    })
-
+  it('ModelPicker is invoked with tabIndex=4', () => {
     render(<OmnipusComposer />)
-    const input = screen.getByTestId('composer-input')
-    const form = screen.getByTestId('composer-form')
-
-    act(() => { fireEvent.change(input, { target: { value: '/agents' } }) })
-
-    // Trigger form submit (send-path interception)
-    act(() => { fireEvent.submit(form) })
-
-    expect(useUiStore.getState().agentSelectorOpen).toBe(true)
-    // Messages must not have changed (no text sent to backend)
-    expect(useChatStore.getState().messages).toHaveLength(0)
+    expect(screen.getByTestId('model-picker-mock')).toHaveAttribute('tabindex', '4')
   })
 
-  it('/agents is not shown while streaming (not available_while_streaming)', async () => {
-    act(() => { useChatStore.setState({ isStreaming: true }) })
-
+  it('the attach (+) button carries tabIndex=5', () => {
     render(<OmnipusComposer />)
-    const input = screen.getByTestId('composer-input')
+    expect(screen.getByTestId('add-attachment')).toHaveAttribute('tabindex', '5')
+  })
 
-    act(() => { fireEvent.change(input, { target: { value: '/' } }) })
-    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+  it('the send button carries tabIndex=6', () => {
+    render(<OmnipusComposer />)
+    expect(screen.getByTestId('chat-send')).toHaveAttribute('tabindex', '6')
+  })
 
-    expect(screen.queryByText('/agents')).not.toBeInTheDocument()
+  it('the ring is strictly ordered 2 < 3 < 4 < 5 < 6 across the five composer controls', () => {
+    render(<OmnipusComposer />)
+    const order = [
+      Number(screen.getByTestId('chat-input').getAttribute('tabindex')),
+      Number(screen.getByTestId('agent-picker-mock').getAttribute('tabindex')),
+      Number(screen.getByTestId('model-picker-mock').getAttribute('tabindex')),
+      Number(screen.getByTestId('add-attachment').getAttribute('tabindex')),
+      Number(screen.getByTestId('chat-send').getAttribute('tabindex')),
+    ]
+    expect(order).toEqual([2, 3, 4, 5, 6])
   })
 })

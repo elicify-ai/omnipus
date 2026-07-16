@@ -74,7 +74,6 @@ beforeEach(() => {
       activeAgentId: 'mia',
       activeSessionId: 'sess_1',
     })
-    useUiStore.setState({ sessionPanelOpen: false })
   })
 })
 
@@ -133,6 +132,17 @@ describe('ChatControls — Open browser launcher', () => {
     renderControls()
     const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
     expect(btn).toBeInTheDocument()
+  })
+
+  // Composer tab ring, position 7 (last stop of the closed ring: skip-link=1
+  // → chat input=2 → agent=3 → model=4 → attach=5 → send=6 → browser=7, see
+  // the full map comment above this button in ChatControls.tsx). A
+  // well-meaning renumber that drops or shifts this value should fail here
+  // rather than silently break the operator-mandated tab order.
+  it('carries the composer tab ring position 7 (last stop)', async () => {
+    renderControls()
+    const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
+    expect(btn).toHaveAttribute('tabindex', '7')
   })
 
   it('opens the browser panel with the active session/agent when clicked (session already exists)', async () => {

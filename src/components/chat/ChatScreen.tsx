@@ -31,7 +31,6 @@ import {
 } from '@phosphor-icons/react'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { IconRenderer } from '@/components/shared/IconRenderer'
-import { SessionPanel } from './SessionPanel'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { WebServeBlock } from './tools/WebServeUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
@@ -1217,12 +1216,17 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // (1) on arrival at the chat page (mount), (2) when the search modal
   // closes, and (3) when the slash menu closes — the user should never have
   // to click back into the input after any of these.
+  // Ref-based (not a `[data-testid="chat-input"]` querySelector): the testid
+  // stays on the element for tests, but a testid rename would otherwise kill
+  // this whole focus-discipline feature silently (no type error, no runtime
+  // error — just a `null` element and a focus() that quietly no-ops). The
+  // ref is threaded straight to the ComposerPrimitive.Input textarea below.
+  const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const focusChatInput = useCallback(() => {
     // rAF: run after Radix's own focus-restore (Dialog returns focus to its
     // trigger on close) so ours wins.
     requestAnimationFrame(() => {
-      const el = document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]')
-      el?.focus()
+      chatInputRef.current?.focus()
     })
   }, [])
   useEffect(() => {
@@ -1455,8 +1459,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       >
         {/* Agent → model. Attach lives INSIDE the input card (leading the
             textarea, ChatGPT/Claude-style) — it was visually lost up here. */}
-        <AgentPicker disabled={agentRemoved} tabIndex={2} />
-        <ModelPicker disabled={agentRemoved} tabIndex={3} />
+        <AgentPicker disabled={agentRemoved} tabIndex={3} />
+        <ModelPicker disabled={agentRemoved} tabIndex={4} />
         <span className="flex-1" />
         {/* Token counter — status; hidden below @2xl of the composer root's
             @container (~42rem). */}
@@ -1487,7 +1491,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               return
             }
             // Send-path interception: if the typed text is exactly a client-delivery
-            // slash command (e.g. "/clear", "/help", "/model", "/cancel"), handle it
+            // slash command (e.g. "/new", "/help", "/model", "/cancel"), handle it
             // locally and prevent it from reaching the backend. This converges the
             // typed+Enter path with the palette selection path.
             if (slashMenu.interceptClientCommand()) {
@@ -1501,7 +1505,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               the single-line textarea baseline. */}
           <ComposerPrimitive.AddAttachment
             disabled={attachDisabled}
-            tabIndex={4}
+            tabIndex={5}
             className="shrink-0 h-7 w-7 mb-1.5 rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             aria-label="Add files or context"
             title="Add files or context"
@@ -1512,13 +1516,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           {/* Ghost text wrapper — positioned overlay approach */}
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input
+              ref={chatInputRef}
               data-testid="chat-input"
               data-no-focus-ring
-              // Explicit tab order 1: chat input first, then agent(2) →
-              // model(3) → attach(4) → browser(5), then natural DOM order
-              // (the header tab menu). Deliberate positive tabIndex on this
-              // closed 5-control set per operator direction.
-              tabIndex={1}
+              // Composer tab ring — see the full map in ChatControls.tsx.
+              tabIndex={2}
               placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
               // FR-3a: the slash menu must be reachable mid-stream, which means the
               // textarea has to accept keystrokes during streaming. Submission is
@@ -1623,7 +1625,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             <ComposerPrimitive.Send
               disabled={!inputEnabled || isReplaying}
               data-testid="chat-send"
-              tabIndex={5}
+              tabIndex={6}
               className={cn(
                 'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying
@@ -1647,9 +1649,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </ComposerPrimitive.Root>
 
         {/* Pending attachments — native AssistantUI composer attachments. Shows a
-            chip for each attached file (via paperclip, drag-drop, or paste); the
-            AttachmentAdapter (src/lib/attachment-adapter.ts) uploads them on send
-            and threads the media:// ref into our transport via onNew. */}
+            chip for each attached file (via the attach (+) button, drag-drop, or
+            paste); the AttachmentAdapter (src/lib/attachment-adapter.ts) uploads
+            them on send and threads the media:// ref into our transport via onNew. */}
         <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
         </div>
@@ -1910,9 +1912,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           </div>
         </ThreadPrimitive.Root>
       )}
-
-      {/* Session slide-over panel */}
-      <SessionPanel />
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
-import { fetchWorkspaces } from '@/lib/api'
+import { fetchWorkspaces, fetchSessions } from '@/lib/api'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
 // Return matches: true so canPin=true and the pin toggle button renders in tests.
@@ -68,23 +68,39 @@ vi.mock('@/lib/api', () => ({
   },
 }))
 
-// Mock useWorkspacesStore used by Sidebar
-vi.mock('@/store/workspacesStore', () => ({
-  useWorkspacesStore: (selector?: (s: unknown) => unknown) => {
-    const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
-    return selector ? selector(state) : state
-  },
+// Capturable spies for the workspace/session store actions + the selectSession
+// handler. Declared via vi.hoisted so the vi.mock factories below (which run
+// before module-level const declarations) can close over stable references —
+// a plain `const` referenced directly in the mock body would be re-created
+// fresh on every hook call, making it impossible for a test to assert on
+// calls made from inside a later user interaction (e.g. a click handler
+// captured at render time).
+const { mockSetActiveWorkspaceId, mockStartNewSession, mockSelectSession } = vi.hoisted(() => ({
+  mockSetActiveWorkspaceId: vi.fn(),
+  mockStartNewSession: vi.fn(),
+  mockSelectSession: vi.fn(),
 }))
 
-// Mock useSessionStore (used by the workspace accordion's active-session highlight)
-vi.mock('@/store/session', () => ({
-  useSessionStore: (selector?: (s: unknown) => unknown) => {
-    const state = { activeSessionId: null, startNewSession: vi.fn() }
-    return selector ? selector(state) : state
-  },
-}))
+// Mock useWorkspacesStore used by Sidebar
+vi.mock('@/store/workspacesStore', () => {
+  const state = { activeWorkspaceId: null as string | null, setActiveWorkspaceId: mockSetActiveWorkspaceId }
+  return {
+    useWorkspacesStore: (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state),
+  }
+})
+
+// Mock useSessionStore (used by the workspace accordion's active-session highlight
+// and the "New chat" row's direct `useSessionStore.getState().startNewSession()`
+// call — the mock must expose a `.getState()` static, mirroring the real
+// zustand hook shape, or that call throws).
+vi.mock('@/store/session', () => {
+  const state = { activeSessionId: null as string | null, startNewSession: mockStartNewSession }
+  const useSessionStore = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state)
+  useSessionStore.getState = () => state
+  return { useSessionStore }
+})
 vi.mock('@/components/chat/useSelectSession', () => ({
-  useSelectSession: () => vi.fn(),
+  useSelectSession: () => mockSelectSession,
 }))
 
 // Mock useAuthStore used by Sidebar (handleLogout + username hook)
@@ -164,6 +180,10 @@ beforeEach(() => {
   })
   // Reset fetchWorkspaces to the default empty-list response before each test.
   vi.mocked(fetchWorkspaces).mockResolvedValue([])
+  vi.mocked(fetchSessions).mockResolvedValue([])
+  mockSetActiveWorkspaceId.mockReset()
+  mockStartNewSession.mockReset()
+  mockSelectSession.mockReset()
 })
 
 // test_sidebar_overlay_rendering
@@ -374,6 +394,122 @@ describe('Sidebar — username popup: Notifications', () => {
     await openUserMenu()
     const notifItem = screen.getByText('Notifications')
     expect(() => act(() => { fireEvent.click(notifItem) })).not.toThrow()
+  })
+})
+
+// ── Workspace session accordion ────────────────────────────────────────────
+//
+// Previously zero coverage: fetchSessions was mocked to [] and useSelectSession
+// was a bare `() => vi.fn()` in every existing test, so the accordion's session
+// rows, "New chat" row, and "More…" entry never actually rendered or fired.
+
+const accordionWorkspace = {
+  id: 'ws-accordion-1',
+  name: 'Accordion Workspace',
+  is_default: false,
+  status: 'active' as const,
+  pinned: false,
+  pin_order: 0,
+  task_count: 0,
+  created_at: '2026-04-01T00:00:00Z',
+  updated_at: '2026-04-01T00:00:00Z',
+}
+
+const accordionSession = {
+  id: 'sess-accordion-1',
+  agent_id: 'agent-1',
+  active_agent_id: 'agent-1',
+  title: 'Accordion Session One',
+  type: 'chat' as const,
+  workspace_id: accordionWorkspace.id,
+  channel: 'webchat',
+  created_at: '2026-04-01T00:00:00Z',
+  updated_at: '2026-04-01T02:00:00Z',
+  message_count: 1,
+}
+
+// Locates the expanded accordion body (the sibling div rendered right after
+// the workspace's header row) from its "Expand … sessions" toggle button.
+function getAccordionBody(workspaceName: string): HTMLElement {
+  // The toggle's aria-label flips between "Expand …" and "Collapse …" once
+  // expanded, so match either.
+  const toggleButton = screen.getByLabelText(new RegExp(`(Expand|Collapse) ${workspaceName} sessions`))
+  const headerRow = toggleButton.closest('div')
+  const body = headerRow?.nextElementSibling
+  if (!body) throw new Error('accordion body not found — workspace group is not expanded')
+  return body as HTMLElement
+}
+
+async function renderAndExpandAccordion() {
+  vi.mocked(fetchWorkspaces).mockResolvedValue([accordionWorkspace] as never)
+  act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+  render(<Sidebar />, { wrapper: makeWrapper() })
+
+  const expandButton = await screen.findByLabelText('Expand Accordion Workspace sessions')
+  act(() => { fireEvent.click(expandButton) })
+  return expandButton
+}
+
+describe('Sidebar — workspace session accordion', () => {
+  it('renders the workspace sessions once the workspace is expanded', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
+    await renderAndExpandAccordion()
+
+    expect(await screen.findByText('Accordion Session One')).toBeTruthy()
+  })
+
+  it('does not render sessions before the workspace is expanded', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
+    vi.mocked(fetchWorkspaces).mockResolvedValue([accordionWorkspace] as never)
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    await screen.findByText('Accordion Workspace')
+    expect(screen.queryByText('Accordion Session One')).toBeNull()
+  })
+
+  it('renders the "More…" entry LAST in the accordion body, after the New-chat row and every session row', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
+    await renderAndExpandAccordion()
+    await screen.findByText('Accordion Session One')
+
+    const body = getAccordionBody('Accordion Workspace')
+    const buttons = Array.from(body.querySelectorAll('button'))
+    expect(buttons.length).toBeGreaterThanOrEqual(3) // New chat, the session row, More…
+
+    const last = buttons[buttons.length - 1]
+    expect(last.textContent).toBe('More…')
+
+    // Every other button (New chat + session rows) must precede it.
+    for (const btn of buttons.slice(0, -1)) {
+      expect(btn.textContent).not.toBe('More…')
+    }
+  })
+
+  it('the New-chat row exists and triggers startNewSession + workspace activation on click', async () => {
+    const expandButton = await renderAndExpandAccordion()
+    void expandButton
+
+    const newChatButton = await screen.findByText('New chat')
+    act(() => { fireEvent.click(newChatButton) })
+
+    expect(mockSetActiveWorkspaceId).toHaveBeenCalledWith(accordionWorkspace.id)
+    expect(mockStartNewSession).toHaveBeenCalledTimes(1)
+    // Overlay (unpinned) sidebar closes after the action.
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  it('clicking a session row calls the select-session handler with that session', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
+    await renderAndExpandAccordion()
+
+    const sessionRow = await screen.findByText('Accordion Session One')
+    act(() => { fireEvent.click(sessionRow) })
+
+    expect(mockSelectSession).toHaveBeenCalledTimes(1)
+    expect(mockSelectSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: accordionSession.id, title: accordionSession.title }),
+    )
   })
 })
 

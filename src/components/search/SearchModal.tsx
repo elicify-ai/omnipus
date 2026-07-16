@@ -4,7 +4,7 @@
 // tokens), inline rename (edit icon), delete icon.
 // Driven by useUiStore.searchModalOpen.
 
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
@@ -18,10 +18,12 @@ import {
   MagnifyingGlass, Calendar, PencilSimple, Trash, Check, X,
   CaretRight, CaretDown, Folder,
 } from '@phosphor-icons/react'
-import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession, workspacesQueryKeys } from '@/lib/api'
+import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession, workspacesQueryKeys, getErrorMessage } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
+import { formatRelative } from '@/lib/formatRelative'
 import type { Session, Workspace, Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { cn } from '@/lib/utils'
@@ -35,19 +37,6 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
     return () => clearTimeout(h)
   }, [value, delayMs])
   return debounced
-}
-
-function formatRelative(dateStr: string): string {
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return ''
-  const mins = Math.floor((Date.now() - d.getTime()) / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 7) return `${days}d ago`
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 // ── types ────────────────────────────────────────────────────────────────────
@@ -110,8 +99,12 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
 
 // ── session row with metadata + edit/delete ──────────────────────────────────
 
-function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDelete, deleting }: {
-  session: Session; isActive: boolean; isHighlighted?: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
+function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDelete, deleting, onEditingChange }: {
+  session: Session; isActive: boolean; isHighlighted: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
+  /** Notifies the parent modal whenever this row enters/leaves inline-rename
+   *  mode — used to suppress the Dialog's own Escape-to-close while a rename
+   *  is in progress (see the DialogContent onEscapeKeyDown wiring below). */
+  onEditingChange?: (editing: boolean) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -121,12 +114,23 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
     if (t && t !== session.title) onRename(t)
     setEditing(false)
   }
+  useEffect(() => { onEditingChange?.(editing) }, [editing, onEditingChange])
 
   if (editing) {
     return (
       <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)] mx-2">
         <Input autoFocus value={val} onChange={(e) => setVal(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } if (e.key === 'Escape') { setEditing(false); setVal(session.title || '') } }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit() }
+            // Escape cancels the rename. Note this alone can't stop the Dialog
+            // from also closing: Radix's DismissableLayer listens for Escape
+            // on `document` in the CAPTURE phase, which fires before this
+            // (bubble-phase) handler ever runs — preventDefault() here is too
+            // late to affect that decision. The Dialog is kept open instead
+            // via DialogContent's onEscapeKeyDown below, informed by
+            // onEditingChange.
+            if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setVal(session.title || '') }
+          }}
           className="h-7 flex-1 text-sm" />
         <button onClick={commit} className="shrink-0 rounded p-1.5 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></button>
         <button onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></button>
@@ -199,6 +203,13 @@ export function SearchModal() {
   const wsFilter = useUiStore((s) => s.searchModalWorkspaceFilter)
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const setActiveSession = useSessionStore((s) => s.setActiveSession)
+  // Tracks whether any SessionRow is currently in inline-rename mode, so the
+  // Dialog's own Escape-to-close can be suppressed in favour of just
+  // cancelling the rename (see SessionRow's onEditingChange + the
+  // DialogContent onEscapeKeyDown below).
+  const anyRowEditingRef = useRef(false)
 
   const [searchText, setSearchText] = useState('')
   const [showDateFilter, setShowDateFilter] = useState(false)
@@ -222,20 +233,27 @@ export function SearchModal() {
   }, [open])
 
   const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), enabled: open })
-  const { data: workspaces = [], isLoading: wLoading } = useQuery({ queryKey: workspacesQueryKeys.list({ status: 'active' }), queryFn: () => fetchWorkspaces({ status: 'active' }), enabled: open })
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, enabled: open })
+  const { data: workspaces = [], isLoading: wLoading, isError: workspacesError } = useQuery({ queryKey: workspacesQueryKeys.list({ status: 'active' }), queryFn: () => fetchWorkspaces({ status: 'active' }), enabled: open })
+  const { data: agents = [], isError: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, enabled: open })
 
   const selectSession = useSelectSession({ agents, workspaces, onClose: close })
 
   const renameMut = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => renameSession(id, title),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sessions'] }),
-    onError: (e) => addToast({ message: e instanceof Error ? e.message : 'Rename failed', variant: 'error' }),
+    onError: (e) => addToast({ message: getErrorMessage(e, 'Rename failed'), variant: 'error' }),
   })
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteSession(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sessions'] }),
-    onError: (e) => addToast({ message: e instanceof Error ? e.message : 'Delete failed', variant: 'error' }),
+    onSuccess: (_data, deletedId) => {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      // Mirror the old SessionPanel behaviour: deleting the currently-attached
+      // session must not leave chat pointed at a now-dead session id.
+      if (activeSessionId === deletedId) {
+        setActiveSession(null, null, null)
+      }
+    },
+    onError: (e) => addToast({ message: getErrorMessage(e, 'Delete failed'), variant: 'error' }),
   })
 
   // Heartbeat sessions pinned at top, then recent-first
@@ -329,7 +347,9 @@ export function SearchModal() {
           than the visible viewport and its top clips off-screen when the
           result list grows (e.g. clearing the workspace filter). dvh tracks
           the actual visible height. */}
-      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl">
+      <DialogContent
+        onEscapeKeyDown={(e) => { if (anyRowEditingRef.current) e.preventDefault() }}
+        className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl">
         {/* Header with search input + date toggle */}
         <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0 border-b border-[var(--color-border)]">
           <DialogTitle className="flex items-center gap-2 text-base mb-2">
@@ -383,7 +403,10 @@ export function SearchModal() {
 
         {/* Results — collapsible workspace → agent → sessions */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2">
-          {sessionsError ? (
+          {sessionsError || workspacesError ? (
+            // Do not fall through to the grouped list on a workspaces-fetch
+            // failure — that would silently bucket everything under "Unfiled"
+            // and present a transient outage as if no session had a workspace.
             <div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>
           ) : loading ? (
             <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">Loading sessions...</div>
@@ -412,7 +435,9 @@ export function SearchModal() {
                       {group.agentGroups.map((ag) => {
                         const agentKey = `${wsKey}::${ag.agentId}`
                         const agentCollapsed = collapsedAgent.has(agentKey)
-                        const agentName = ag.agent?.name ?? (ag.agentId === 'unknown' ? 'Unknown' : '[removed]')
+                        // agentsError means we genuinely don't know whether this id still
+                        // exists — never claim "[removed]" (an outage isn't a deletion).
+                        const agentName = ag.agent?.name ?? (agentsError || ag.agentId === 'unknown' ? 'Unknown' : '[removed]')
                         return (
                           <div key={agentKey}>
                             {group.agentGroups.length > 1 && (
@@ -421,10 +446,11 @@ export function SearchModal() {
                             {!agentCollapsed && (
                               <div id={`agent-panel-${agentKey}`} role="region" className={cn('space-y-0.5', group.agentGroups.length > 1 && 'pl-3')}>
                                 {ag.sessions.map((s) => (
-                                  <SessionRow key={s.id} session={s} isActive={false} isHighlighted={s.id === highlighted?.id} onSelect={() => selectSession(s)}
+                                  <SessionRow key={s.id} session={s} isActive={s.id === activeSessionId} isHighlighted={s.id === highlighted?.id} onSelect={() => selectSession(s)}
                                     onRename={(t) => renameMut.mutate({ id: s.id, title: t })}
                                     onDelete={() => deleteMut.mutate(s.id)}
-                                    deleting={deleteMut.isPending && deleteMut.variables === s.id} />
+                                    deleting={deleteMut.isPending && deleteMut.variables === s.id}
+                                    onEditingChange={(editing) => { anyRowEditingRef.current = editing }} />
                                 ))}
                               </div>
                             )}

@@ -33,8 +33,11 @@ interface SmartSelectProps {
   triggerClassName?: string
   items: SmartSelectItem[]
   /** Accessible name for the trigger, forwarded to both the plain Radix
-   *  trigger and the searchable cmdk trigger. */
-  ariaLabel?: string
+   *  trigger and the searchable cmdk trigger. Required — without it, the
+   *  trigger's accessible name falls back to its current VALUE rather than
+   *  identifying the field, which fails for screen-reader users. Name the
+   *  field (e.g. "Default agent", "Priority", "Log level"). */
+  ariaLabel: string
 }
 
 const SEARCHABLE_THRESHOLD = 5

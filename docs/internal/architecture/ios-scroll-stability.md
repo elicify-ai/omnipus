@@ -1,7 +1,7 @@
 # iOS/iPad Scroll Stability — the four-part recipe (do not deviate)
 
 **Status:** proven stable, operator-confirmed 2026-07-16.
-**Commits:** `117553b8` (body lock), `0ebd1d2b` (always-on vv tracking), `75e300d2` (absolute overlays), plus earlier `overscroll-contain` passes.
+**Commits:** `117553b8` (body lock), `0ebd1d2b` (always-on vv tracking — **superseded, do not resurrect**, see below), `dec7713b` (focus-gated vv tracking — the canonical mechanism for part 2), `75e300d2` (absolute overlays), plus earlier `overscroll-contain` passes.
 **Owner files:** `src/styles/globals.css`, `src/components/layout/AppShell.tsx`, `src/components/layout/Sidebar.tsx`.
 
 This bug family (sidebar/header drifting off-screen on iPad, page gaps after
@@ -87,10 +87,10 @@ never chains the gesture upward. Belt-and-suspenders with part 1.
 | Symptom | Missing part | Fixed by |
 |---|---|---|
 | Sidebar scroll pulls whole page up, gap at bottom | 1, 4 | body-fixed + overscroll-contain |
-| Header slides off-screen when keyboard opens | 2 | always-on vv tracking |
+| Header slides off-screen when keyboard opens | 2 | always-on vv tracking (`0ebd1d2b`) — **superseded**, see next row |
 | Header stable but overlay sidebar scrolls away | 3 | absolute-in-shell overlays |
 | Pinned sidebar cut off at bottom on desktop | 2's desktop skip | `(pointer: coarse)` gate |
-| Shell permanently shortened after keyboard close (stale vv.height) | 2's focus gate | focus-gated tracking |
+| Shell permanently shortened after keyboard close (stale vv.height) | 2's always-on tracking | focus-gated tracking (`dec7713b`) — current, canonical mechanism |
 | Search modal taller than visible area on iPad | (adjacent) | `dvh` not `vh` for modal max-height |
 
 ## When adding new UI

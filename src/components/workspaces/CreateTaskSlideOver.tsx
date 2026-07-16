@@ -418,6 +418,7 @@ export function CreateTaskSlideOver({
               onValueChange={(v) => setForm((s) => ({ ...s, agentId: v }))}
               placeholder="Unassigned"
               triggerClassName="h-9 text-sm"
+              ariaLabel="Agent"
               items={[
                 { value: '__none__', label: 'Unassigned', className: 'text-xs' },
                 ...buildTaskAssigneeItems(agents),

@@ -36,7 +36,7 @@ function validateResult(overrides: Partial<CliValidateResponse> = {}): CliValida
 
 beforeEach(() => {
   act(() => {
-    useUiStore.setState({ createAgentModalOpen: false, sessionPanelOpen: false, toasts: [] })
+    useUiStore.setState({ createAgentModalOpen: false, toasts: [] })
   })
   vi.mocked(fetchCliDetect).mockReset()
   vi.mocked(fetchCliValidate).mockReset()
