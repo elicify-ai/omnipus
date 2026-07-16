@@ -177,10 +177,17 @@ func (al *AgentLoop) ArmOrphanForegroundTurnWatch(
 	}
 
 	if store := al.ResolveSessionStore(sessionID); store != nil {
-		if meta, err := store.GetMeta(sessionID); err == nil && meta != nil {
-			if meta.Type != "" && meta.Type != session.SessionTypeChat {
-				return // MA-2: never watch a non-chat (task/scheduled/...) session
-			}
+		meta, err := store.GetMeta(sessionID)
+		switch {
+		case err != nil:
+			// MA-2 fail-open: we could not confirm the session type, so we default
+			// to watchable rather than skip a genuine abandoned chat turn. Log it so
+			// a wrongly-armed non-chat session (task/scheduled) is traceable to THIS
+			// decision point, not confused with the unrelated boot-time cache error.
+			slog.Warn("agent: orphan watch: could not resolve session type, defaulting to watchable",
+				"session_id", sessionID, "error", err)
+		case meta != nil && meta.Type != "" && meta.Type != session.SessionTypeChat:
+			return // MA-2: never watch a non-chat (task/scheduled/...) session
 		}
 	}
 

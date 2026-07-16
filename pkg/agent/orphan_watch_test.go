@@ -248,6 +248,14 @@ func TestOrphanWatch_RootAlreadyClearedFromActiveTurnStates_CriticalDelegateNeve
 	rootTS.Finish(false)
 	al.activeTurnStates.Delete(sessionID)
 
+	// Condition-1 isolation (white-box): with the root cleared, the root-only
+	// resolver MUST return nil rather than fall back to the delegate. Asserted
+	// directly so a regression that reintroduces an "any-match" fallback is
+	// caught HERE, not silently absorbed by condition-2 (hasLiveCriticalDelegate),
+	// which would independently block the reap in this exact scenario.
+	assert.Nil(t, al.getActiveRootTurnStateForSession(sessionID),
+		"MA-1 condition-1: root-only resolver must not fall back to a non-root delegate")
+
 	time.Sleep(1500 * time.Millisecond) // past the 1s grace, with margin
 
 	assert.False(t, reapCalled.Load(),

@@ -9,7 +9,10 @@ turn-scoped PHASE A/B/C escalation in commit
 `03f4558f0d6d35a12e13ea57607451a354a7cff0` (`feat(agent,gateway): orphaned-foreground-turn
 watchdog (ADR-045) to bound leaked turns`). A 7-reviewer gate on that
 implementation found 8 real bugs, including three sev-9 correctness/safety
-issues (MA-1, MA-3, MA-6 below) — the root cause of most was that the
+issues (MA-1, elaborated below; MA-3 = a mid-flight escalation that could not
+be disarmed on reconnect, and MA-6 = an unsynchronised `ow.timer` write race —
+both now covered by regression tests in `pkg/agent/orphan_watch_test.go`) — the
+root cause of most was that the
 bespoke design REIMPLEMENTED cancellation instead of reusing the existing,
 battle-tested `RequestCancel` state machine (`pkg/agent/cancel.go`), silently
 dropping side effects (approval auto-deny, background-session kill,
