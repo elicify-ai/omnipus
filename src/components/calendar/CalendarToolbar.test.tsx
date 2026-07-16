@@ -10,7 +10,8 @@
  *   - clicking calendar-prev calls getApi().prev()
  *   - clicking calendar-next calls getApi().next()
  *   - clicking calendar-today calls getApi().today()
- *   - clicking calendar-new-task calls onNewTask()
+ *   - clicking calendar-new-task calls onNewTask(getApi().getDate()) — the
+ *     WCAG 2.1.1 keyboard-equivalent prefill (dateClick is pointer-only)
  *
  * Traces to: workspace-calendar-fullcalendar-spec.md §9 #19 / FR-006 / US-2/AS-1,2
  */
@@ -32,14 +33,16 @@ function makeFakeCalendarRef() {
   const prev = vi.fn()
   const next = vi.fn()
   const today = vi.fn()
+  const currentDate = new Date('2026-08-15T00:00:00')
+  const getDate = vi.fn(() => currentDate)
 
-  const getApi = vi.fn(() => ({ changeView, prev, next, today }))
+  const getApi = vi.fn(() => ({ changeView, prev, next, today, getDate }))
 
   const calendarRef: CalendarApiRef = {
     current: { getApi } as unknown as FullCalendar,
   }
 
-  return { calendarRef, spies: { getApi, changeView, prev, next, today } }
+  return { calendarRef, currentDate, spies: { getApi, changeView, prev, next, today, getDate } }
 }
 
 function renderToolbar(
@@ -50,7 +53,7 @@ function renderToolbar(
     onNewTask: () => void
   }> = {},
 ) {
-  const { calendarRef, spies } = makeFakeCalendarRef()
+  const { calendarRef, spies, currentDate } = makeFakeCalendarRef()
 
   const defaults = {
     currentView: 'dayGridMonth' as const,
@@ -71,7 +74,7 @@ function renderToolbar(
     />,
   )
 
-  return { spies, props, calendarRef, rerender }
+  return { spies, props, calendarRef, currentDate, rerender }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -209,18 +212,21 @@ describe('CalendarToolbar — navigation: prev / next / today (spec §9 #19, FR-
 })
 
 describe('CalendarToolbar — New task button (spec §9 #19, FR-012)', () => {
-  it('clicking calendar-new-task calls onNewTask()', () => {
+  it('clicking calendar-new-task calls onNewTask(currentDate)', () => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #19 / FR-012
-    // BDD: Given the toolbar renders, When the New task button is clicked,
-    // Then onNewTask() is called.
-
-    const { props } = renderToolbar()
+    // WCAG 2.1.1: dateClick/select on the grid are pointer-only, so this
+    // button is the keyboard-equivalent path — it must pre-fill with the
+    // calendar's CURRENTLY VIEWED date (getApi().getDate()), not call
+    // onNewTask() with no date.
+    const { props, spies, currentDate } = renderToolbar()
 
     const newTaskBtn = screen.getByTestId('calendar-new-task')
     expect(newTaskBtn).toBeInTheDocument()
     fireEvent.click(newTaskBtn)
 
+    expect(spies.getDate).toHaveBeenCalledOnce()
     expect(props.onNewTask).toHaveBeenCalledOnce()
+    expect(props.onNewTask).toHaveBeenCalledWith(currentDate)
   })
 
   it('clicking New task does NOT call changeView or any nav API method', () => {
@@ -246,18 +252,36 @@ describe('CalendarToolbar — title and view rendering', () => {
     expect(screen.getByText('July 2026')).toBeInTheDocument()
   })
 
-  it('marks the current active view tab as aria-selected=true', () => {
+  it('marks the current active view button as aria-pressed=true', () => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #19 / FR-006
-    // BDD: The active view button must have aria-selected=true.
-
+    // A11y audit fix (option b): the view switcher is a `role="group"` of
+    // independently-tabbable TOGGLE buttons, not an ARIA tablist (no arrow-key
+    // roving tabindex / aria-controls is implemented) — so activeness is
+    // conveyed via `aria-pressed`, not the tab-pattern's `aria-selected`.
     renderToolbar({ currentView: 'timeGridWeek' })
 
     const weekBtn = screen.getByTestId('calendar-view-timeGridWeek')
-    expect(weekBtn).toHaveAttribute('aria-selected', 'true')
+    expect(weekBtn).toHaveAttribute('aria-pressed', 'true')
 
-    // Other view buttons must NOT be marked selected
+    // Other view buttons must NOT be marked pressed
     const monthBtn = screen.getByTestId('calendar-view-dayGridMonth')
-    expect(monthBtn).toHaveAttribute('aria-selected', 'false')
+    expect(monthBtn).toHaveAttribute('aria-pressed', 'false')
+
+    // Neither button carries the ARIA TAB pattern's roles/attributes — that
+    // pattern was removed because arrow-key navigation and aria-controls were
+    // never implemented for it.
+    expect(weekBtn).not.toHaveAttribute('role', 'tab')
+    expect(weekBtn).not.toHaveAttribute('aria-selected')
+  })
+
+  it('the view switcher container is role="group", not role="tablist"', () => {
+    // A11y audit fix (option b): asserts the tab pattern was fully removed,
+    // not just the per-button role="tab"/aria-selected attributes.
+    renderToolbar()
+
+    const group = screen.getByRole('group', { name: 'Calendar view' })
+    expect(group).toBeInTheDocument()
+    expect(screen.queryByRole('tablist', { name: 'Calendar view' })).toBeNull()
   })
 
   it('all four view tab testids are present in the toolbar', () => {

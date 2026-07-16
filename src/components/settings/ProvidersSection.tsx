@@ -261,11 +261,10 @@ function EndpointFormatToggle({
       <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
         Endpoint format
       </label>
-      <div className="flex gap-1.5" role="radiogroup" aria-label="Endpoint format">
+      <div className="flex gap-1.5" role="group" aria-label="Endpoint format">
         <button
           type="button"
-          role="radio"
-          aria-checked={value === 'openai'}
+          aria-pressed={value === 'openai'}
           onClick={() => onChange('openai')}
           data-testid={`endpoint-format-openai-${entry.id}`}
           className={optionClass(value === 'openai')}
@@ -274,8 +273,7 @@ function EndpointFormatToggle({
         </button>
         <button
           type="button"
-          role="radio"
-          aria-checked={value === 'anthropic'}
+          aria-pressed={value === 'anthropic'}
           onClick={() => onChange('anthropic')}
           data-testid={`endpoint-format-anthropic-${entry.id}`}
           className={optionClass(value === 'anthropic')}

@@ -27,6 +27,7 @@ import { Star, Lightning, Trash, Warning, PencilSimple, X } from '@phosphor-icon
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { cn } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
+import { AgentDelegatePicker } from './AgentDelegatePicker'
 import {
   validateConnection,
   rejectionMessageForFailedConnection,
@@ -42,6 +43,15 @@ interface AgentNodeData extends Record<string, unknown> {
   model: TeamNodeModel
   onOpenAgent?: (agentId: string) => void
   onRemoveMember?: (agentId: string) => void
+  /** Every node on the canvas + the live edit state — threaded down so the
+   *  keyboard "Delegate…" picker (WCAG 2.1.1) can list valid targets using
+   *  the SAME `validateConnection` predicate the drag gesture uses. */
+  allNodes: TeamNodeModel[]
+  editState: TeamEditState
+  workerIds: ReadonlySet<string>
+  /** Create a from→to edge — the identical handler wired to the canvas's
+   *  `onConnect`, so a keyboard-created edge shares one mutation path. */
+  onDelegate: (from: string, to: string) => void
 }
 interface DelegationEdgeData extends Record<string, unknown> {
   model: TeamEdgeModel
@@ -192,8 +202,19 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         />
       )}
 
-      {/* Hover actions (edit / remove). pointer-events isolated via data-node-action. */}
+      {/* Hover actions (delegate / edit / remove). pointer-events isolated via data-node-action. */}
       <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+        {/* Keyboard equivalent of the drag-to-delegate gesture (WCAG 2.1.1 /
+            2.5.7 — creating an edge is otherwise drag-only). */}
+        {canBeSource && (
+          <AgentDelegatePicker
+            source={model}
+            nodes={data.allNodes}
+            editState={data.editState}
+            workerIds={data.workerIds}
+            onDelegate={data.onDelegate}
+          />
+        )}
         {data.onOpenAgent && (
           <button
             type="button"
@@ -389,16 +410,79 @@ function WorkspaceTeamGraphInner({
     }
   }, [edges, selectedEdgeId])
 
+  const isValidConnection: IsValidConnection<DelegationFlowEdge> = useCallback(
+    (conn) => {
+      if (!conn.source || !conn.target) return false
+      return validateConnection(conn.source, conn.target, editState, workerIds) === null
+    },
+    [editState, workerIds],
+  )
+
+  const handleConnect = useCallback(
+    (conn: Connection) => {
+      // `conn.source` is the node the drag STARTED on (the delegator),
+      // `conn.target` is where it was DROPPED (the delegate). source → target.
+      if (!conn.source || !conn.target) return
+      const reason = validateConnection(conn.source, conn.target, editState, workerIds)
+      if (reason !== null) {
+        onRejectConnection(REJECTION_MESSAGE[reason] ?? 'Connection not allowed.')
+        return
+      }
+      onConnect(conn.source, conn.target)
+    },
+    [editState, workerIds, onConnect, onRejectConnection],
+  )
+
+  // Bug fix (live-UAT): React Flow only calls `onConnect` when
+  // `isValidConnection` passed — a REJECTED drag (self-edge, duplicate,
+  // non-member) never reaches `handleConnect` above at all, so a self-edge
+  // drop (e.g. jim → jim) produced no edge and zero feedback, and the drop
+  // fell through to the node's own click handler (opening its profile panel)
+  // with no explanation. `onConnectEnd` is the one connect-lifecycle event
+  // React Flow fires unconditionally, valid or not, so it's the only place a
+  // rejected attempt can be observed and surfaced.
+  const handleConnectEnd = useCallback<OnConnectEnd>(
+    (_event, connectionState) => {
+      const message = rejectionMessageForFailedConnection(
+        connectionState.fromNode?.id,
+        connectionState.toNode?.id,
+        connectionState.isValid,
+        editState,
+        workerIds,
+      )
+      if (message) onRejectConnection(message)
+    },
+    [editState, workerIds, onRejectConnection],
+  )
+
+  // Keyboard "Delegate…" picker (WCAG 2.1.1) → the SAME validated mutation
+  // path as a canvas drag: adapts (from, to) into the `Connection` shape
+  // `handleConnect` expects (handle ids are irrelevant here — this node has
+  // exactly one source Handle and the target Handle fills the whole node).
+  const handleDelegate = useCallback(
+    (from: string, to: string) =>
+      handleConnect({ source: from, target: to, sourceHandle: null, targetHandle: null }),
+    [handleConnect],
+  )
+
   const modelNodes = useMemo<AgentFlowNode[]>(
     () =>
       nodes.map((model) => ({
         id: model.id,
         type: 'agent' as const,
         position: model.position,
-        data: { model, onOpenAgent, onRemoveMember },
+        data: {
+          model,
+          onOpenAgent,
+          onRemoveMember,
+          allNodes: nodes,
+          editState,
+          workerIds,
+          onDelegate: handleDelegate,
+        },
         connectable: true,
       })),
-    [nodes, onOpenAgent, onRemoveMember],
+    [nodes, onOpenAgent, onRemoveMember, editState, workerIds, handleDelegate],
   )
 
   // Controlled node state so positions can be DRAGGED while dagre still provides
@@ -452,51 +536,6 @@ function WorkspaceTeamGraphInner({
     [edges, selectedEdgeId, defaultDepth, onToggleMode, onSetDepth, onDeleteEdge, handleSelectEdge],
   )
 
-  const isValidConnection: IsValidConnection<DelegationFlowEdge> = useCallback(
-    (conn) => {
-      if (!conn.source || !conn.target) return false
-      return validateConnection(conn.source, conn.target, editState, workerIds) === null
-    },
-    [editState, workerIds],
-  )
-
-  const handleConnect = useCallback(
-    (conn: Connection) => {
-      // `conn.source` is the node the drag STARTED on (the delegator),
-      // `conn.target` is where it was DROPPED (the delegate). source → target.
-      if (!conn.source || !conn.target) return
-      const reason = validateConnection(conn.source, conn.target, editState, workerIds)
-      if (reason !== null) {
-        onRejectConnection(REJECTION_MESSAGE[reason] ?? 'Connection not allowed.')
-        return
-      }
-      onConnect(conn.source, conn.target)
-    },
-    [editState, workerIds, onConnect, onRejectConnection],
-  )
-
-  // Bug fix (live-UAT): React Flow only calls `onConnect` when
-  // `isValidConnection` passed — a REJECTED drag (self-edge, duplicate,
-  // non-member) never reaches `handleConnect` above at all, so a self-edge
-  // drop (e.g. jim → jim) produced no edge and zero feedback, and the drop
-  // fell through to the node's own click handler (opening its profile panel)
-  // with no explanation. `onConnectEnd` is the one connect-lifecycle event
-  // React Flow fires unconditionally, valid or not, so it's the only place a
-  // rejected attempt can be observed and surfaced.
-  const handleConnectEnd = useCallback<OnConnectEnd>(
-    (_event, connectionState) => {
-      const message = rejectionMessageForFailedConnection(
-        connectionState.fromNode?.id,
-        connectionState.toNode?.id,
-        connectionState.isValid,
-        editState,
-        workerIds,
-      )
-      if (message) onRejectConnection(message)
-    },
-    [editState, workerIds, onRejectConnection],
-  )
-
   return (
     <div
       data-testid="team-graph-canvas"
@@ -515,6 +554,13 @@ function WorkspaceTeamGraphInner({
         onPaneClick={() => setSelectedEdgeId(null)}
         nodesDraggable
         nodesConnectable
+        // Audit fix 5c: React Flow's own `.react-flow__node` wrapper gets a
+        // SECOND tabIndex=0 (redundant tab stop) whenever `nodesFocusable` is
+        // true (the default). AgentNode already sets its own tabIndex/role on
+        // the inner content div when it's clickable (`data.onOpenAgent`), so
+        // that inner element stays reachable with this off — this just removes
+        // the duplicate outer stop, without touching drag/connect/select.
+        nodesFocusable={false}
         elementsSelectable
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}

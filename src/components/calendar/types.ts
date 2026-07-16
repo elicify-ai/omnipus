@@ -127,8 +127,14 @@ export interface CalendarToolbarProps {
   /** Period label (e.g. "June 2026") supplied by the host from onDatesSet. */
   title: string
   onViewChange: (view: CalendarViewName) => void
-  /** Open the create slide-over with no date prefill (today). */
-  onNewTask: () => void
+  /**
+   * Open the create slide-over. `date`, when supplied, is the calendar's
+   * CURRENTLY VIEWED date (from `calendarApi.getDate()`) — the WCAG 2.1.1
+   * keyboard-equivalent of the pointer-only dateClick/select prefill, so
+   * creating a task while browsing a future/past period defaults to that
+   * period instead of real-world "today". Omitted/undefined → no prefill.
+   */
+  onNewTask: (date?: Date) => void
 }
 
 /** The milestone a MilestoneDatePopover edits (null = closed). */

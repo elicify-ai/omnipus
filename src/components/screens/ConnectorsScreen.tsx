@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gear, Envelope, Plus, Trash, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
@@ -281,7 +281,7 @@ function ChannelTypeGroup({
     <div data-testid={`channel-type-group-${baseType}`}>
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
-          <BrandIcon slug={channelSlug(baseType)} size={18} label={displayName} />
+          <BrandIcon slug={channelSlug(baseType)} size={18} decorative />
           <h3 className="text-sm font-semibold text-[var(--color-secondary)]">{displayName}</h3>
         </div>
         <button
@@ -344,7 +344,7 @@ function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
               data-testid={`channel-roster-connect-${baseType}`}
               className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left"
             >
-              <BrandIcon slug={channelSlug(baseType)} size={22} label={channel.name} />
+              <BrandIcon slug={channelSlug(baseType)} size={22} decorative />
               <span className="flex-1 min-w-0 font-medium text-sm text-[var(--color-secondary)] truncate">
                 {channel.name}
               </span>
@@ -858,6 +858,17 @@ export function ConnectorsScreen() {
   const queryClient = useQueryClient()
 
   const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string; nativeAvailable?: boolean; enabled?: boolean } | null>(null)
+  // Retains the last non-null configuringChannel so ChannelConfigPanel can stay
+  // ALWAYS mounted (mirrors EmailMailboxPanel/CreateChannelSheet below) — its props
+  // must survive the close animation instead of unmounting immediately when
+  // configuringChannel is cleared to null. Written in an effect (not during
+  // render) per React's rules-of-refs; the effect from the last non-null render
+  // always commits before configuringChannel can transition back to null.
+  const lastConfiguringChannelRef = useRef<{ id: string; name: string; nativeAvailable?: boolean; enabled?: boolean } | null>(null)
+  useEffect(() => {
+    if (configuringChannel) lastConfiguringChannelRef.current = configuringChannel
+  }, [configuringChannel])
+  const configuringChannelProps = configuringChannel ?? lastConfiguringChannelRef.current
   const [mailboxPanel, setMailboxPanel] = useState<{ open: boolean; target: Mailbox | null }>({ open: false, target: null })
 
   // Create-channel Sheet state (US-10)
@@ -1191,19 +1202,19 @@ export function ConnectorsScreen() {
           </>
         )}
 
-        {/* Channel config slide-over */}
-        {configuringChannel && (
-          <ChannelConfigPanel
-            channelId={configuringChannel.id}
-            channelName={configuringChannel.name}
-            nativeAvailable={configuringChannel.nativeAvailable}
-            enabled={configuringChannel.enabled}
-            open={true}
-            onOpenChange={(open) => {
-              if (!open) setConfiguringChannel(null)
-            }}
-          />
-        )}
+        {/* Channel config slide-over — always mounted (mirrors EmailMailboxPanel
+            and CreateChannelSheet below) so its props survive the close
+            animation instead of unmounting immediately. */}
+        <ChannelConfigPanel
+          channelId={configuringChannelProps?.id ?? ''}
+          channelName={configuringChannelProps?.name ?? ''}
+          nativeAvailable={configuringChannelProps?.nativeAvailable}
+          enabled={configuringChannelProps?.enabled}
+          open={configuringChannel !== null}
+          onOpenChange={(open) => {
+            if (!open) setConfiguringChannel(null)
+          }}
+        />
 
         {/* Email mailbox account config slide-over */}
         <EmailMailboxPanel

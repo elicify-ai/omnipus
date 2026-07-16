@@ -502,7 +502,7 @@ describe('ProvidersSection — FIX-5 endpoint-format toggle', () => {
     expect(screen.getByTestId('endpoint-format-openai-z-ai')).toBeInTheDocument()
     expect(screen.getByTestId('endpoint-format-anthropic-z-ai')).toBeInTheDocument()
     // OpenAI-compatible is the default selection.
-    expect(screen.getByTestId('endpoint-format-openai-z-ai')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('endpoint-format-openai-z-ai')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByText(/same account and api key/i)).toBeInTheDocument()
   })
 
@@ -530,7 +530,7 @@ describe('ProvidersSection — FIX-5 endpoint-format toggle', () => {
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
 
     fireEvent.click(screen.getByTestId('endpoint-format-anthropic-z-ai'))
-    expect(screen.getByTestId('endpoint-format-anthropic-z-ai')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('endpoint-format-anthropic-z-ai')).toHaveAttribute('aria-pressed', 'true')
 
     fireEvent.change(screen.getByTestId('api-key-input-z-ai'), { target: { value: 'sk-zai-secret' } })
     fireEvent.click(screen.getByTestId('save-provider-z-ai'))

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ChartBar, ChatCircle } from '@phosphor-icons/react'
+import { ChartBar, ChatCircle, CaretUp, CaretDown } from '@phosphor-icons/react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod } from '@/lib/api'
@@ -143,21 +143,29 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
       <table className="w-full text-xs" data-testid="sessions-table">
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-muted)]">
-            <th className="text-left py-2 pr-4 font-medium">
+            <th
+              className="text-left py-2 pr-4 font-medium"
+              aria-sort={sortKey === 'title' ? 'ascending' : 'none'}
+            >
               <button
                 type="button"
                 onClick={() => setSortKey('title')}
-                className={`hover:text-[var(--color-secondary)] transition-colors${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
+                className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
               >
                 Session
+                {sortKey === 'title' && <CaretUp size={10} weight="bold" aria-hidden="true" />}
               </button>
             </th>
-            <th className="text-right py-2 pl-4 font-medium">
+            <th
+              className="text-right py-2 pl-4 font-medium"
+              aria-sort={sortKey === 'tokens' ? 'descending' : 'none'}
+            >
               <button
                 type="button"
                 onClick={() => setSortKey('tokens')}
-                className={`hover:text-[var(--color-secondary)] transition-colors${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
+                className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
               >
+                {sortKey === 'tokens' && <CaretDown size={10} weight="bold" aria-hidden="true" />}
                 Tokens
               </button>
             </th>

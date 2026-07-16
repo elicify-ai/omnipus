@@ -1,13 +1,25 @@
-import { memo } from 'react'
+import { memo, useCallback } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { motion } from 'framer-motion'
 import { getIconComponent } from '@/lib/agentIcons'
 import { cn } from '@/lib/utils'
+import type { Task } from '@/lib/api'
 import {
   PRIORITY_LABELS,
   statusVisual,
   type TaskGraphNode,
+  type TaskNodeData,
 } from './taskGraph'
+
+/**
+ * `TaskNodeData` (from taskGraph.ts) plus the `onOpen` callback GraphView
+ * injects per-node at render time (see GraphView.tsx) — not part of the
+ * shared graph-building module since it's purely a keyboard/mouse-activation
+ * wire-up local to this view.
+ */
+interface TaskNodeDataWithOpen extends TaskNodeData {
+  onOpen?: (task: Task) => void
+}
 
 // Priority pill colours — mirrors TaskCard's P1..P5 ladder (red→muted).
 const PRIORITY_CLASS: Record<number, string> = {
@@ -30,12 +42,22 @@ const PRIORITY_CLASS: Record<number, string> = {
  * A coloured left rail keys the node to its lifecycle status at a glance.
  */
 function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
-  const { task, agentName, agentColor, agentIcon } = data
+  const { task, agentName, agentColor, agentIcon, onOpen } = data as TaskNodeDataWithOpen
   const visual = statusVisual(task.status)
   const priority = task.priority ?? 3
   const AgentIcon = getIconComponent(agentIcon)
   const hasAgent = Boolean(agentName)
   const avatarColor = agentColor ?? 'var(--color-muted)'
+
+  // GraphView marks every node `focusable: false` so React Flow's own node
+  // wrapper (role="group", tabIndex=0 by default) drops out of the tab
+  // order — this element is the sole tab stop per card (WCAG 4.1.2). Mouse
+  // clicks still flow through React Flow's onNodeClick; Enter/Space here
+  // call the identical onTaskClick via the `onOpen` callback GraphView wires
+  // into `data` (WCAG 2.1.1 — the click action now has a keyboard equivalent).
+  const handleOpen = useCallback(() => {
+    onOpen?.(task)
+  }, [onOpen, task])
 
   return (
     <motion.div
@@ -43,9 +65,19 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
       animate={{ opacity: 1, scale: 1 }}
       whileHover={{ y: -2, scale: 1.015 }}
       transition={{ type: 'spring', stiffness: 380, damping: 26 }}
+      role="button"
+      tabIndex={0}
+      aria-label={`${task.title}, ${visual.label}`}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          handleOpen()
+        }
+      }}
       className={cn(
         'group relative w-[248px] overflow-hidden rounded-xl border bg-[var(--color-surface-1)]',
         'shadow-[0_2px_8px_rgba(0,0,0,0.35)] transition-colors',
+        'focus-visible:border-[var(--color-accent)]',
         selected
           ? 'border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent),0_4px_20px_rgba(212,175,55,0.25)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/80',

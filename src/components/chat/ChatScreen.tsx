@@ -1623,6 +1623,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             <ComposerPrimitive.Send
               disabled={!inputEnabled || isReplaying}
               data-testid="chat-send"
+              tabIndex={5}
               className={cn(
                 'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying

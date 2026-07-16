@@ -89,7 +89,6 @@ function ActionButton({ action, variant }: ActionButtonProps) {
     'rounded-md',
     'transition-colors',
     'disabled:opacity-50 disabled:cursor-not-allowed',
-    'focus-visible:outline-none',
   ].join(' ')
 
   const variantClasses = isOverlay

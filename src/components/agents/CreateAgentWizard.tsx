@@ -234,6 +234,11 @@ export function CreateAgentWizard({
   const [submitting, setSubmitting] = React.useState(false)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
   const errorRef = useRef<HTMLDivElement | null>(null)
+  // Step-change focus management (a11y audit 2026-07-16): the step content
+  // wrapper is a programmatic focus target so keyboard/screen-reader users
+  // land on the new step's content instead of staying wherever the Next/Back
+  // button was, which is otherwise removed from the DOM order context.
+  const stepPanelRef = useRef<HTMLDivElement | null>(null)
 
   // useFocusRestore captures the trigger element on open so the +Add
   // button that opened the wizard regains focus on close. The Sheet's
@@ -251,11 +256,14 @@ export function CreateAgentWizard({
   )
 
   // Navigate between steps; clears any stale submit error so the user
-  // doesn't stare at a banner from a prior attempt while editing.
+  // doesn't stare at a banner from a prior attempt while editing, and moves
+  // focus to the step panel so keyboard/screen-reader users land on the new
+  // step's content (the aria-live region below announces which step).
   const goToStep = React.useCallback(
     (next: 1 | 2 | 3) => {
       setStep(next)
       setSubmitError(null)
+      stepPanelRef.current?.focus()
     },
     [],
   )
@@ -450,7 +458,21 @@ export function CreateAgentWizard({
           </ol>
         </div>
 
+        {/* Visually-hidden live region — announces the step change to
+            screen-reader users on every goToStep call (Next/Back). Always
+            mounted (not conditional) so assistive tech keeps listening. */}
         <div
+          aria-live="polite"
+          className="sr-only"
+          data-testid="wizard-step-announcement"
+        >
+          {`Step ${step} of ${totalSteps}: ${stepNames[step - 1]}`}
+        </div>
+
+        <div
+          ref={stepPanelRef}
+          tabIndex={-1}
+          aria-label={`Step ${step} of ${totalSteps}: ${stepNames[step - 1]}`}
           className="flex-1 overflow-auto px-4 sm:px-8 py-6 space-y-4"
         >
           {submitError && (

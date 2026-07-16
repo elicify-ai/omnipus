@@ -173,7 +173,6 @@ function TaskRow({
 
   return (
     <tr
-      role="button"
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => {
@@ -182,6 +181,7 @@ function TaskRow({
           onClick()
         }
       }}
+      aria-label={`${task.title}, status ${statusLabel(task.status)}`}
       className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-2)]/40 cursor-pointer transition-colors focus-visible:outline-none"
     >
       <td className="px-4 py-2.5">

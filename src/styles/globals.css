@@ -135,7 +135,13 @@ html {
    attach button, grey Tailwind default on the model selector, fat ring-2+
    offset on buttons were all symptoms). Components may opt out ONLY for
    composite widgets that show focus elsewhere (e.g. the chat textarea,
-   where the card is the surface). */
+   where the card is the surface).
+   SANCTIONED SECONDARY CUE (a11y audit 2026-07-16): large card surfaces
+   (agent cards, task cards, ...) MAY additionally swap their own
+   border-color to accent on focus-visible (focus-visible:border-accent) —
+   a 1px hairline 2px outside a bordered card in a dense grid is
+   imperceptible; the border swap makes focus trackable without adding a
+   second ring. Never add ring/outline utilities. */
 :focus-visible:not([data-no-focus-ring]) {
   /* Operator-specified: 1px hairline ring, NO shadow of any kind. The 2px
      offset stays — it inserts a dark gap that keeps the ring visible against

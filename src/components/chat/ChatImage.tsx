@@ -88,7 +88,14 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
         onClick={enlarge}
         role="button"
         tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && enlarge()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            enlarge()
+          } else if (e.key === ' ') {
+            e.preventDefault()
+            enlarge()
+          }
+        }}
         aria-label={alt ? `View: ${alt}` : 'View image'}
         className="max-w-full rounded-md cursor-zoom-in border border-[var(--color-border)] hover:border-[var(--color-accent)]/50 transition-colors block"
       />

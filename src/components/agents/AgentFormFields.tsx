@@ -261,7 +261,7 @@ export function AvatarColorPicker({
             type="button"
             data-testid={`${testIdPrefix}-${name}`}
             onClick={() => onChange(color)}
-            className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none"
+            className="w-7 h-7 rounded-full transition-transform hover:scale-110"
             style={{
               backgroundColor: color,
               boxShadow: isSelected ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,

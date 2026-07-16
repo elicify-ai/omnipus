@@ -88,6 +88,7 @@ function Pill({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={cn(
         'flex-shrink-0 rounded-full px-3 py-1 text-xs font-medium transition-colors',
         active

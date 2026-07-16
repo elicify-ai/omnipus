@@ -203,9 +203,9 @@ describe('Chat screen — empty state', () => {
     ChatScreen = mod.ChatScreen as unknown as () => JSX.Element
   }, 60_000)
 
-  it('renders "Welcome to Omnipus" heading', () => {
+  it('renders "Welcome to omnipus.ai" heading (gold .ai split into its own span)', () => {
     render(<ChatScreen />, { wrapper })
-    expect(screen.getByText('Welcome to Omnipus')).toBeTruthy()
+    expect(screen.getByText(/Welcome to omnipus/)).toBeTruthy()
   })
 
   it('renders prompt to select an agent (no active agent in empty state)', () => {
@@ -215,9 +215,9 @@ describe('Chat screen — empty state', () => {
     expect(screen.getByText(/Select an agent/i)).toBeTruthy()
   })
 
-  it('renders mascot image with alt text', () => {
+  it('renders the brand mark image with alt text', () => {
     render(<ChatScreen />, { wrapper })
-    const img = screen.queryByRole('img', { name: /omnipus mascot/i })
+    const img = screen.queryByRole('img', { name: /omnipus\.ai mark/i })
     expect(img).not.toBeNull()
   })
 })

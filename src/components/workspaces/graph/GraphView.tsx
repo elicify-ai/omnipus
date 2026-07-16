@@ -55,16 +55,36 @@ interface GraphViewProps {
 function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphViewProps) {
   const layout = useMemo(() => buildTaskGraph(tasks, agents), [tasks, agents])
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<TaskGraphNode>(layout.nodes)
+  // React Flow wraps every node in its OWN focusable element
+  // (`.react-flow__node`, role="group" tabIndex=0, with a built-in
+  // Enter/Space handler that only toggles selection — it never calls
+  // onNodeClick). Making TaskNode's own root focusable too would nest a
+  // second tab stop inside that wrapper (WCAG 4.1.2, the same bug fixed on
+  // the Board). Instead: mark every node `focusable: false` so React Flow's
+  // wrapper drops out of the tab order, and hand each node an `onOpen`
+  // callback via `data` so TaskNode itself — now the sole tab stop — can
+  // open the task on Enter/Space, calling the exact same `onTaskClick` the
+  // mouse path (`handleNodeClick` below) already calls.
+  const nodesWithOpen = useMemo<TaskGraphNode[]>(
+    () =>
+      layout.nodes.map((n) => ({
+        ...n,
+        focusable: false,
+        data: { ...n.data, onOpen: onTaskClick },
+      })),
+    [layout.nodes, onTaskClick],
+  )
+
+  const [nodes, setNodes, onNodesChange] = useNodesState<TaskGraphNode>(nodesWithOpen)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(layout.edges)
 
   // Re-seed React Flow state whenever the computed layout changes (task added /
   // status changed / agent resolved). React Flow owns interactive positions
   // after mount, so we reset from the fresh dagre layout on data change.
   useEffect(() => {
-    setNodes(layout.nodes)
+    setNodes(nodesWithOpen)
     setEdges(layout.edges)
-  }, [layout, setNodes, setEdges])
+  }, [nodesWithOpen, layout.edges, setNodes, setEdges])
 
   // Reflect external selection (the open slide-over) onto the nodes.
   useEffect(() => {

@@ -31,8 +31,14 @@ import {
 
 import '@/styles/fullcalendar-theme.css'
 
-import type { FullCalendarViewProps, StatusIconKey, CalendarViewName } from './types'
+import type {
+  FullCalendarViewProps,
+  StatusIconKey,
+  CalendarViewName,
+  CalendarEventExtProps,
+} from './types'
 import { CHIP_TEXT_COLOR } from './types'
+import { statusLabel } from '@/lib/statusColors'
 
 // ---------------------------------------------------------------------------
 // Icon map: StatusIconKey → Phosphor component (WCAG 1.4.1 non-colour cue)
@@ -55,14 +61,39 @@ const ICON_MAP: Record<StatusIconKey, IconComponent> = {
 // ---------------------------------------------------------------------------
 
 function EventChip({ arg }: { arg: EventContentArg }) {
-  const icon = arg.event.extendedProps.icon as StatusIconKey | undefined
+  const ext = arg.event.extendedProps as CalendarEventExtProps
+  const icon = ext.icon as StatusIconKey | undefined
   const Icon = (icon && ICON_MAP[icon]) || Circle
   const bg = arg.event.backgroundColor || 'transparent'
   const isAllDay = arg.event.allDay
+  const timeText = !isAllDay ? arg.timeText : undefined
+
+  // A11y choice (audit fix, option b — do NOT add tabIndex/role="button" here):
+  // FullCalendar's own event harness (the `<a>` wrapping this eventContent,
+  // built by @fullcalendar/core's getSegAnchorAttrs/EventContainer) already
+  // sets tabIndex=0 and an Enter/Space keydown handler that fires `eventClick`
+  // whenever an eventClick prop is registered (it is — see below). Verified by
+  // reading @fullcalendar/core's internal-common.js: TableBlockEvent/
+  // TableListItemEvent → StandardEvent/EventContainer both receive
+  // `elAttrs: getSegAnchorAttrs(seg, context)`, and createAriaKeyboardAttrs
+  // returns `{ tabIndex: 0, onKeyDown }`. So the chip is ALREADY a real
+  // keyboard-operable focus stop with a working Enter/Space activation —
+  // adding our own tabIndex/role="button" on this inner div would nest a
+  // second interactive element inside FC's `<a>` and create a double tab
+  // stop. What's actually missing is the ACCESSIBLE NAME: the icon that
+  // conveys status is `aria-hidden`, so a screen reader announces only the
+  // visible text (time + title) with no status. An `aria-label` on this root
+  // (which has no name of its own) is picked up as the "name from content"
+  // for FC's wrapping `<a>` per the accname spec, so it becomes what gets
+  // announced on focus — title + status + time, meaningfully, with zero
+  // duplicate stops.
+  const statusText = ext.kind === 'milestone' ? 'Milestone' : statusLabel(ext.status)
+  const chipLabel = [arg.event.title, statusText, timeText].filter(Boolean).join(', ')
 
   return (
     <div
       className="fc-sovereign-chip"
+      aria-label={chipLabel}
       style={{
         backgroundColor: bg,
         color: CHIP_TEXT_COLOR,
@@ -77,7 +108,7 @@ function EventChip({ arg }: { arg: EventContentArg }) {
       }}
     >
       <Icon size={12} weight="fill" color={CHIP_TEXT_COLOR} aria-hidden="true" />
-      {!isAllDay && arg.timeText && (
+      {timeText && (
         <span
           style={{
             fontSize: '0.65rem',
@@ -86,7 +117,7 @@ function EventChip({ arg }: { arg: EventContentArg }) {
             color: CHIP_TEXT_COLOR,
           }}
         >
-          {arg.timeText}
+          {timeText}
         </span>
       )}
       <span
