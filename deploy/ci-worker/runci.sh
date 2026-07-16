@@ -5,6 +5,9 @@
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
 #   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus via
 #   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus`.
+#   Optional for faster sharded e2e: OPENROUTER_API_KEY_B / OPENROUTER_API_KEY_C give the
+#   concurrent LLM shards their own rate-limit windows; unset ⇒ they fall back to the primary
+#   key (the run still works, just at single-key parallelism). See run_e2e below.
 set -uo pipefail
 
 REF="${1:-HEAD}"
@@ -117,83 +120,97 @@ run_typecheck(){ npm run typecheck; }
 run_vitest()   { npx vitest run --maxWorkers=4; }  # cap workers: 8 oversubscribe shared vCPUs → perf-test timeouts
 run_contracts(){ make verify-contracts; }
 
-# End-to-end (Playwright) gate. Mirrors the GitHub Actions `pr.yml` matrix but in a single gate:
-# builds the SPA + the gateway binary, prepares a fresh OMNIPUS_HOME with the canonical e2e
-# config, seeds the OpenRouter credential, starts the gateway, polls /health, completes
-# onboarding via the public API, and runs the full Playwright matrix. Cleans up the gateway
-# on EXIT (success or failure) via a trap.
+# ── End-to-end (Playwright) gate — sharded ────────────────────────────────────
 #
-# Pre-conditions (set as Fly secrets on the worker):
-#   - GIT_REMOTE          (required for all gates)
-#   - OPENROUTER_API_KEY  (required for e2e — preflight checks and fails fast)
+# Builds the SPA + gateway binary once, then fans the Playwright suite out across the
+# shards defined in tests/e2e/shards.json — the SAME plan .github/workflows/pr.yml uses
+# (both go through scripts/e2e-shards.sh), so the two CI surfaces can never drift apart.
+# Each shard runs against its OWN isolated gateway: own port, own OMNIPUS_HOME, own
+# encrypted credential store, own auth + skip-manifest files. That per-gateway isolation
+# is what lets the shards run CONCURRENTLY even though playwright.config.ts pins workers=1
+# (which exists to protect a SINGLE gateway's shared config/credentials from concurrent
+# writes — a per-gateway constraint, not a global one). This replaces the old single
+# sequential run (~3 h with real-LLM latency) with ~one-slowest-shard wall-clock.
 #
-# Wall-clock: ~20–30 min for the full 40-spec matrix on a performance-8x/16GB machine.
-# The 5 GitHub Actions shards (llm-chat, llm-agents, llm-light, ui, stubs) collapse into
-# a single sequential run here — for shard-by-shard execution use the GitHub Actions
-# workflow on a PR.
-run_e2e() {
-  : "${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
-  # OMNIPUS_HOME MUST be exported before any omnipus-binary call, otherwise the binary
-  # falls back to the default home (~/.omnipus → /root/.omnipus on this worker) and our
-  # seeded /tmp/omnipus-e2e config is ignored — gateway would come up on the default port
-  # 5000 instead of our seeded 6060, and health-check polling would never see /health.
-  export OMNIPUS_HOME=/tmp/omnipus-e2e
-  local E2E_LOG=/tmp/omnipus-e2e.log
-  local GATEWAY_PID=
+# Per-shard OpenRouter keys (runner-agnostic — identical on this Fly worker via Fly
+# secrets or on a GitHub-hosted / external self-hosted runner via Actions secrets):
+#   OPENROUTER_API_KEY    (slot a, REQUIRED — the primary key)
+#   OPENROUTER_API_KEY_B  (slot b, OPTIONAL → falls back to slot a when unset)
+#   OPENROUTER_API_KEY_C  (slot c, OPTIONAL → falls back to slot a when unset)
+# Pinning each concurrent LLM shard to its own key keeps them off one shared rate-limit
+# window (the 429 contention that used to force a single serial run). A worker that sets
+# only the one key still runs — every shard just resolves to slot a.
+#
+# Env knobs:
+#   E2E_SPECS      space-separated spec subset → runs the OLD single-gateway path (fast
+#                  targeted re-verify; keeps the HTML report). Non-empty ⇒ no sharding.
+#   E2E_SHARDED=0  force the single-gateway path for the full matrix (debugging).
+#
+# Pre-conditions (Fly secrets on the worker): GIT_REMOTE, OPENROUTER_API_KEY.
 
-  # Trap cleans up the gateway on ANY exit path (success, failure, signal). Inlined
-  # (NOT a nested function) because nested functions have their own scope and cannot
-  # see the parent's `local GATEWAY_PID` — `set -u` then fires on the unset reference.
-  # The trap body runs in the function's own scope, so the local is visible here.
-  trap '[ -n "$GATEWAY_PID" ] && kill "$GATEWAY_PID" 2>/dev/null; wait "$GATEWAY_PID" 2>/dev/null; return $?' RETURN
-
-  # 1. Build SPA + sync into the embed target (the //go:embed in pkg/gateway/embed.go
-  #    requires pkg/gateway/spa/ to be non-empty).
+# Build the SPA, embed it, build the gateway binary to /tmp/omnipus-ci (the path
+# tests/e2e/setup.ts hardcodes as DEFAULT_OMNIPUS_BINARY for self-managed-gateway specs),
+# and install the matching Chromium. Shared by every shard — run exactly once.
+_e2e_build() {
+  # SPA + embed sync (the //go:embed in pkg/gateway/embed.go needs pkg/gateway/spa/ non-empty).
   log "e2e: build SPA + sync to embed"
   npm run build >/dev/null || return 1
   rm -rf pkg/gateway/spa
   cp -r dist/spa pkg/gateway/spa
   [ -n "$(ls -A pkg/gateway/spa/assets 2>/dev/null)" ] || { echo "SPA sync produced empty assets/" >&2; return 1; }
 
-  # 2. Build the gateway binary with the embedded SPA. CGO=0 matches the runtime build
-  #    path so the test binary doesn't pick up CGO-only deps that the production binary
-  #    would lack.
-  #    Binary path: build to /tmp/omnipus-ci (NOT /tmp/omnipus-e2e-bin) because
-  #    tests/e2e/setup.ts:24 hardcodes DEFAULT_OMNIPUS_BINARY = '/tmp/omnipus-ci' in
-  #    its startGateway helper, and several specs (hot-reload, user-crud, handoff,
-  #    subagent) call startGateway() and abort with "Gateway binary not found at
-  #    /tmp/omnipus-ci" if it's not there. Building to that path is the canonical
-  #    GitHub Actions build path (see .github/workflows/pr.yml "Build gateway binary"
-  #    step) and matches the test infrastructure's expectation.
+  # CGO=0 matches the runtime build path. /tmp/omnipus-ci is hardcoded by tests/e2e/setup.ts.
   log "e2e: build gateway binary"
-  local E2E_BIN=/tmp/omnipus-ci
-  CGO_ENABLED=0 go build -tags "$TAGS" -o "$E2E_BIN" ./cmd/omnipus/ || return 1
+  CGO_ENABLED=0 go build -tags "$TAGS" -o /tmp/omnipus-ci ./cmd/omnipus/ || return 1
 
-  # 3. Fresh OMNIPUS_HOME every run.
-  log "e2e: prepare OMNIPUS_HOME"
-  rm -rf "$OMNIPUS_HOME"
-  mkdir -p "$OMNIPUS_HOME"
+  # Force the chromium revision the installed @playwright/test expects (the caret range in
+  # package.json may resolve past the image-baked revision). Cached after the first run;
+  # shared by all shards via the image-level $PLAYWRIGHT_BROWSERS_PATH.
+  log "e2e: install matching chromium"
+  npx playwright install chromium || return 1
+}
 
-  # 4. Seed the canonical e2e config.json. The dev_mode_bypass flag unblocks
-  #    onboarding endpoints that require bearer auth before an admin exists.
-  #    The model_name MUST match the provider entry's model_name (alias) so
-  #    the onboarding handler updates the existing entry instead of overwriting
-  #    agent defaults with a non-aliased model path. See .github/workflows/pr.yml
-  #    "Seed gateway config" for the same rationale.
-  cat > "$OMNIPUS_HOME/config.json" <<'EOF'
+# Reap any still-running shard gateways by EXACT pid from their pidfiles. Never
+# pkill-by-pattern — a pattern can match this very shell (see deploy/ci-worker/CLAUDE.md).
+_e2e_reap_pidfiles() {
+  local f pid
+  for f in /tmp/e2e-shard-*.gwpid; do
+    [ -e "$f" ] || continue
+    pid="$(cat "$f" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    rm -f "$f"
+  done
+}
+
+# Boot one isolated gateway and run one shard's specs against it.
+#   $1 name  $2 port  $3 key  $4 space-separated specs ("" = full matrix)
+#   $5 extra `playwright test` args ("" keeps config defaults; sharded runs pass
+#      --output + --reporter=list so concurrent shards stay off shared report paths)
+# Cleans up its own gateway on any return path via a RETURN trap, and drops a pidfile so
+# a hard-killed run can still be reaped by _e2e_reap_pidfiles.
+_e2e_run_shard() {
+  local name="$1" port="$2" key="$3" specs="$4" pwargs="$5"
+  local home="/tmp/omnipus-e2e-$name"
+  local logf="/tmp/omnipus-e2e-$name.gw.log"
+  local pidfile="/tmp/e2e-shard-$name.gwpid"
+  local authfile="/tmp/e2e-$name-auth.json"
+  local GATEWAY_PID=
+
+  # Inlined (not a nested fn) so it can see the local GATEWAY_PID under `set -u`.
+  trap 'if [ -n "$GATEWAY_PID" ]; then kill "$GATEWAY_PID" 2>/dev/null; wait "$GATEWAY_PID" 2>/dev/null; fi; rm -f "$pidfile"' RETURN
+
+  rm -rf "$home"; mkdir -p "$home"
+
+  # Canonical e2e config with THIS shard's port. Each shard has its own credentials.json
+  # under $home, so the shared api_key_ref name ("OPENROUTER_API_KEY") resolves to this
+  # shard's key value (seeded next). See pr.yml "Seed gateway config" for the rationale
+  # behind dev_mode_bypass / audit_log / the model_name alias.
+  cat > "$home/config.json" <<EOF
 {
   "version": 1,
-  "gateway": {
-    "port": 6060,
-    "dev_mode_bypass": true
-  },
-  "sandbox": {
-    "audit_log": true,
-    "tool_policies": { "spawn": "allow" }
-  },
-  "agents": {
-    "defaults": { "model_name": "openrouter-glm", "auto_recap_enabled": true }
-  },
+  "gateway": { "port": $port, "dev_mode_bypass": true },
+  "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } },
+  "agents": { "defaults": { "model_name": "openrouter-glm", "auto_recap_enabled": true } },
   "providers": [
     {
       "model_name": "openrouter-glm",
@@ -205,90 +222,115 @@ run_e2e() {
 }
 EOF
 
-  # 5. Seed the OpenRouter credential in the encrypted store. credentials.json is
-  #    AES-256-GCM with an Argon2id-derived key from $OMNIPUS_HOME/master.key (auto-
-  #    generated on first boot if absent). The credential name MUST match the
-  #    provider's api_key_ref in config.json.
-  log "e2e: seed OpenRouter credential"
-  "$E2E_BIN" credentials set OPENROUTER_API_KEY "$OPENROUTER_API_KEY" >/dev/null || return 1
+  OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set OPENROUTER_API_KEY "$key" >/dev/null || return 1
 
-  # 6. Start gateway in background, capture PID for cleanup. --allow-empty permits
-  #    boot without a fully-configured provider (defensive; the e2e flow configures
-  #    one above).
-  #
-  #    OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): mirrors the
-  #    same override in .github/workflows/pr.yml's "Start gateway" step — a
-  #    short grace here reaps a genuinely leaked (finished-tab) live turn
-  #    quickly, without touching an open-tab turn or a transcript-seeded
-  #    replay test. Production default (300s) is untouched.
-  log "e2e: start gateway"
-  OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 "$E2E_BIN" start --allow-empty > "$E2E_LOG" 2>&1 &
+  # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): reap a genuinely leaked
+  # (finished-tab) live turn quickly without touching open-tab / transcript-seeded turns.
+  OMNIPUS_HOME="$home" OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
+    /tmp/omnipus-ci start --allow-empty > "$logf" 2>&1 &
   GATEWAY_PID=$!
+  echo "$GATEWAY_PID" > "$pidfile"
   sleep 0.5
   if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
-    echo "Gateway process died immediately. Panic log:" >&2
-    cat "$OMNIPUS_HOME/logs/gateway_panic.log" 2>/dev/null || true
-    cat "$E2E_LOG" >&2
+    echo "[$name] gateway died immediately. Panic log:" >&2
+    cat "$home/logs/gateway_panic.log" 2>/dev/null || true
+    cat "$logf" >&2
     return 1
   fi
 
-  # 7. Poll /health (up to 60s — generous CI safety net, not a budget).
-  log "e2e: wait for gateway /health"
+  local ready=
   for i in $(seq 1 60); do
-    if curl -sf http://localhost:6060/health >/dev/null 2>&1; then
-      echo "Gateway ready after ${i}s"
-      break
-    fi
-    if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
-      echo "Gateway died during startup wait. Log:" >&2
-      cat "$E2E_LOG" >&2
-      return 1
-    fi
+    if curl -sf "http://localhost:$port/health" >/dev/null 2>&1; then ready=1; echo "[$name] gateway ready after ${i}s"; break; fi
+    if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then echo "[$name] gateway died during startup. Log:" >&2; cat "$logf" >&2; return 1; fi
     sleep 1
   done
-  if ! curl -sf http://localhost:6060/health >/dev/null 2>&1; then
-    echo "Gateway did not become ready within 60s" >&2
-    cat "$E2E_LOG" >&2
-    return 1
+  [ -n "$ready" ] || { echo "[$name] gateway not ready within 60s" >&2; cat "$logf" >&2; return 1; }
+
+  # Onboarding must pass the REAL key — the handler appends a second provider entry the
+  # agent's model lookup then picks; a placeholder would 401 every LLM call.
+  jq -n --arg key "$key" \
+    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+    | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
+        -H 'Content-Type: application/json' -d @- >/dev/null \
+    || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }
+
+  log "e2e[$name]: run specs${specs:+ ($specs)}"
+  # Per-shard OMNIPUS_AUTH_FILE + OMNIPUS_SKIP_MANIFEST_PATH keep global-setup's session
+  # cookie (tests/e2e/global-setup.ts) and global-teardown's manifest (global-teardown.ts)
+  # off the shared default paths. $pwargs (sharded only) adds --output + --reporter=list so
+  # concurrent shards don't collide on test-results/ and playwright-report/.
+  OMNIPUS_HOME="$home" \
+  OMNIPUS_URL="http://localhost:$port" \
+  OMNIPUS_AUTH_FILE="$authfile" \
+  OMNIPUS_SKIP_MANIFEST_PATH="/tmp/e2e-$name-skip-manifest.json" \
+  OPENROUTER_API_KEY="$key" \
+  OPENROUTER_API_KEY_CI="$key" \
+    npx playwright test $specs $pwargs
+}
+
+run_e2e() {
+  local KEY_A KEY_B KEY_C
+  KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
+  KEY_B="${OPENROUTER_API_KEY_B:-$KEY_A}"
+  KEY_C="${OPENROUTER_API_KEY_C:-$KEY_A}"
+
+  _e2e_build || return 1
+
+  # Targeted / opt-out path: the OLD single-gateway flow (keeps the HTML report; no
+  # artifact-path isolation needed since only one gateway runs).
+  if [ -n "${E2E_SPECS:-}" ] || [ "${E2E_SHARDED:-1}" = 0 ]; then
+    log "e2e: single-gateway run${E2E_SPECS:+ (targeted: $E2E_SPECS)}"
+    _e2e_run_shard single 6060 "$KEY_A" "${E2E_SPECS:-}" ""
+    return $?
   fi
 
-  # 8. Complete onboarding via API. Must pass the REAL OpenRouter key — the handler
-  #    appends a second provider entry (api_key_ref="openrouter_API_KEY", mixed case)
-  #    and the agent's model lookup picks this newer entry. A placeholder would 401
-  #    on every LLM call.
-  log "e2e: complete onboarding"
-  jq -n --arg key "$OPENROUTER_API_KEY" \
-    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
-    | curl -sf -X POST http://localhost:6060/api/v1/onboarding/complete \
-        -H 'Content-Type: application/json' -d @- >/dev/null \
-    || { echo "Onboarding API failed" >&2; cat "$E2E_LOG" >&2; return 1; }
+  # Full sharded run — one isolated gateway per shard, all concurrent. `check` fails fast
+  # if any spec on disk is unassigned (would never run) or the plan is stale.
+  scripts/e2e-shards.sh check || return 1
+  # Old runs may have left a soft-skips accumulator at the shared (cwd-relative) path
+  # test-results/soft-skips.json; clear it so a stale entry can't taint a shard's teardown.
+  rm -f test-results/soft-skips.json 2>/dev/null || true
 
-  # 9. Install the chromium revision that the *actually-installed* @playwright/test expects.
-  #    The repo's package.json declares "^1.49.0" (caret), so `npm ci` may pick up the
-  #    latest 1.x.x release (e.g. 1.60.0), which targets a different chromium revision
-  #    than the one baked into the image (1.49.0's chromium-1148). Re-running `npx
-  #    playwright install chromium` here forces the matching revision into
-  #    $PLAYWRIGHT_BROWSERS_PATH before the matrix runs, so the image and the test
-  #    always agree. Cost: ~500 MB download on the first run, then cached in the image.
-  log "e2e: install matching chromium"
-  npx playwright install chromium || return 1
+  local -a NAMES=() PIDS=() FAILED=()
+  local group slot port specs key
+  while IFS=$'\t' read -r group slot port specs; do
+    [ -n "$group" ] || continue
+    case "$slot" in b) key="$KEY_B" ;; c) key="$KEY_C" ;; *) key="$KEY_A" ;; esac
+    log "e2e: launch shard $group (port $port, key slot $slot)"
+    ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
+      > "/tmp/e2e-shard-$group.log" 2>&1 &
+    NAMES+=("$group"); PIDS+=($!)
+  done < <(scripts/e2e-shards.sh list 2>/dev/null)
 
-  # 10. Run the full Playwright matrix. The repo's playwright.config.ts already pins
-  #     workers=1 (single gateway, shared credentials — concurrent writes are unsafe
-  #     per CLAUDE.md concurrency model) and retries=3 in CI. We don't override.
-  #     Both OPENROUTER_API_KEY (alias for the gateway's api_key_ref) and
-  #     OPENROUTER_API_KEY_CI (required by tests/e2e/global-setup.ts preflight check
-  #     — see .github/workflows/pr.yml env block) are exported with the same value.
-  # E2E_SPECS (optional, space-separated spec paths) runs a targeted subset
-  # instead of the full matrix — used to re-verify just the previously-failing
-  # specs without paying the full ~30-min wall-clock. Empty = full matrix.
-  log "e2e: run Playwright matrix${E2E_SPECS:+ (targeted: $E2E_SPECS)}"
-  OMNIPUS_URL=http://localhost:6060 \
-  OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
-  OPENROUTER_API_KEY_CI="$OPENROUTER_API_KEY" \
-    npx playwright test ${E2E_SPECS:-}
+  [ "${#NAMES[@]}" -gt 0 ] || { echo "e2e: no shards launched (empty shard plan?)" >&2; return 1; }
 
-  # 10. Cleanup runs via the trap.
+  # Reap surviving gateways if the whole run is interrupted (exact pids only).
+  trap '_e2e_reap_pidfiles' INT TERM
+
+  local i erc shard_rc=0
+  for i in "${!NAMES[@]}"; do
+    if wait "${PIDS[$i]}"; then
+      printf '\033[1;32me2e shard %s: PASS\033[0m\n' "${NAMES[$i]}"
+    else
+      erc=$?
+      printf '\033[1;31me2e shard %s: FAIL (exit %d)\033[0m\n' "${NAMES[$i]}" "$erc"
+      FAILED+=("${NAMES[$i]}")
+      shard_rc=1
+    fi
+  done
+  trap - INT TERM
+
+  # Surface each failing shard's full output (redirected per-shard so concurrent shards
+  # never interleave in the console).
+  if [ "$shard_rc" -ne 0 ]; then
+    local n
+    for n in "${FAILED[@]}"; do
+      log "e2e: FAILED shard '$n' — output"
+      cat "/tmp/e2e-shard-$n.log" 2>/dev/null || echo "(no log for $n)"
+    done
+    echo "e2e: FAILED shards: ${FAILED[*]}" >&2
+  fi
+  return "$shard_rc"
 }
 
 case "$GATE" in
