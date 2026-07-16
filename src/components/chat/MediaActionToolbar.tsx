@@ -142,8 +142,14 @@ export function MediaActionToolbar({
     : 'flex items-center gap-1'
 
   return (
+    // role="group" (not "toolbar"): the ARIA toolbar pattern promises
+    // roving-tabindex arrow-key navigation between its buttons, which isn't
+    // implemented here — every action button keeps its own tabIndex={0} Tab
+    // stop per repo convention instead. "group" honestly describes a set of
+    // independently-tabbable buttons, matching the same a11y-audit fix
+    // already applied to CalendarToolbar.tsx's view switcher.
     <div
-      role="toolbar"
+      role="group"
       aria-label="Media actions"
       className={`${containerClasses} ${className}`}
     >

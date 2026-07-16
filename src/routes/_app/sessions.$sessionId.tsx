@@ -21,6 +21,7 @@ function SessionNotFound() {
       </p>
       <Link
         to="/"
+        tabIndex={0}
         className="text-xs text-[var(--color-accent)] underline underline-offset-2"
       >
         Back to Chat

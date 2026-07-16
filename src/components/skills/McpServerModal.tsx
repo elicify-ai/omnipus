@@ -411,6 +411,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   onChange={(e) => setName(e.target.value)}
                   placeholder="my-mcp-server"
                   className="text-sm"
+                  autoFocus
                 />
               )}
             </div>

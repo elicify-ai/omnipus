@@ -12,9 +12,24 @@ describe('AutoSaveIndicator', () => {
     vi.useRealTimers()
   })
 
-  it('renders null when status is idle', () => {
+  it('keeps a mounted, empty live region when status is idle (so later status changes announce reliably)', () => {
     const { container } = render(<AutoSaveIndicator status="idle" />)
-    expect(container.firstChild).toBeNull()
+    expect(container.firstChild).not.toBeNull()
+    expect(container.firstChild).toHaveAttribute('aria-live', 'polite')
+    expect(container.textContent).toBe('')
+  })
+
+  it('marks the saving/saved states as a polite live region', () => {
+    const { container: savingContainer } = render(<AutoSaveIndicator status="saving" />)
+    expect(savingContainer.firstChild).toHaveAttribute('aria-live', 'polite')
+
+    const { container: savedContainer } = render(<AutoSaveIndicator status="saved" />)
+    expect(savedContainer.firstChild).toHaveAttribute('aria-live', 'polite')
+  })
+
+  it('marks the error state as an alert region instead of aria-live=polite', () => {
+    const { container } = render(<AutoSaveIndicator status="error" error="Network failed" />)
+    expect(container.firstChild).toHaveAttribute('role', 'alert')
   })
 
   it('renders "Saved just now" when lastSavedAt is within 5s', () => {

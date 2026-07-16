@@ -818,7 +818,13 @@ function NameStep({
 
         {/* Error feedback */}
         {error && (
-          <div data-testid="onboarding-error" className="flex items-start gap-2 text-sm" style={{ color: 'var(--color-error)' }}>
+          <div
+            data-testid="onboarding-error"
+            role="alert"
+            aria-live="assertive"
+            className="flex items-start gap-2 text-sm"
+            style={{ color: 'var(--color-error)' }}
+          >
             <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>
@@ -992,7 +998,13 @@ function PasswordStep({
 
         {/* Error feedback */}
         {error && (
-          <div data-testid="onboarding-error" className="flex items-start gap-2 text-sm" style={{ color: 'var(--color-error)' }}>
+          <div
+            data-testid="onboarding-error"
+            role="alert"
+            aria-live="assertive"
+            className="flex items-start gap-2 text-sm"
+            style={{ color: 'var(--color-error)' }}
+          >
             <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>

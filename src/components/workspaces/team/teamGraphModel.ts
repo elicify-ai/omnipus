@@ -311,7 +311,13 @@ export function buildTeamGraphModel(
   }))
 
   const positions = layoutTeamGraph(baseNodes, edges)
-  const nodes = baseNodes.map((n) => ({ ...n, position: positions[n.id] ?? n.position }))
+  const nodes = baseNodes
+    .map((n) => ({ ...n, position: positions[n.id] ?? n.position }))
+    // Tab order must follow the VISUAL (top-down) layout, not the member/edge
+    // fetch order — otherwise Tab jumps around the canvas unpredictably. Sort
+    // by y (rank / depth from the roots) then x (position within a rank),
+    // matching reading order for a top-down graph.
+    .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
   return { nodes, edges, defaultDepth: state.defaultDepth }
 }
 

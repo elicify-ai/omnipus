@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
-// Mock the sidebar store so we can verify toggle is called
+// Mock the sidebar store so we can verify toggle is called and control isOpen
+// (aria-expanded reflects it — see the aria-expanded describe block below).
 const mockToggle = vi.fn()
+let mockIsOpen = false
 vi.mock('@/store/sidebar', () => ({
-  useSidebarStore: vi.fn((selector: (s: { toggle: () => void }) => unknown) =>
-    selector({ toggle: mockToggle })
+  useSidebarStore: vi.fn((selector: (s: { toggle: () => void; isOpen: boolean }) => unknown) =>
+    selector({ toggle: mockToggle, isOpen: mockIsOpen })
   ),
 }))
 
@@ -14,6 +16,7 @@ import { ScreenHeader } from './ScreenHeader'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockIsOpen = false
 })
 
 describe('ScreenHeader', () => {
@@ -55,5 +58,25 @@ describe('ScreenHeader', () => {
     expect(screen.getByText('Connectors')).toBeTruthy()
     rerender(<ScreenHeader title="Profile" />)
     expect(screen.getByText('Profile')).toBeTruthy()
+  })
+})
+
+// BDD: Given the sidebar store's isOpen state, When ScreenHeader renders its
+// hamburger, Then aria-expanded reflects it — screen reader users otherwise
+// have no way to know whether activating the button opens or closes the
+// drawer. Traces to: src/components/layout/ScreenHeader.tsx hamburger button.
+describe('ScreenHeader — hamburger aria-expanded', () => {
+  it('is "false" when the sidebar is closed', () => {
+    mockIsOpen = false
+    render(<ScreenHeader title="Agents" />)
+    const btn = screen.getByRole('button', { name: /toggle navigation sidebar/i })
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('is "true" when the sidebar is open — differentiation from the closed state', () => {
+    mockIsOpen = true
+    render(<ScreenHeader title="Agents" />)
+    const btn = screen.getByRole('button', { name: /toggle navigation sidebar/i })
+    expect(btn.getAttribute('aria-expanded')).toBe('true')
   })
 })

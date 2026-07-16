@@ -154,27 +154,33 @@ export function buildTaskGraph(
   dagre.layout(g)
 
   // ── Project dagre output into React Flow nodes ──────────────────────────────
-  const nodes: TaskGraphNode[] = visible.map((task) => {
-    const pos = g.node(task.id)
-    const agent = task.agent_id ? agentById.get(task.agent_id) : undefined
-    return {
-      id: task.id,
-      type: 'task',
-      // dagre centres nodes; React Flow positions by top-left corner.
-      position: {
-        x: (pos?.x ?? 0) - NODE_WIDTH / 2,
-        y: (pos?.y ?? 0) - NODE_HEIGHT / 2,
-      },
-      data: {
-        task,
-        agentName: task.agent_name ?? agent?.name ?? task.agent_id,
-        agentColor: agent?.color,
-        agentIcon: agent?.icon,
-      },
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-    }
-  })
+  const nodes: TaskGraphNode[] = visible
+    .map((task): TaskGraphNode => {
+      const pos = g.node(task.id)
+      const agent = task.agent_id ? agentById.get(task.agent_id) : undefined
+      return {
+        id: task.id,
+        type: 'task',
+        // dagre centres nodes; React Flow positions by top-left corner.
+        position: {
+          x: (pos?.x ?? 0) - NODE_WIDTH / 2,
+          y: (pos?.y ?? 0) - NODE_HEIGHT / 2,
+        },
+        data: {
+          task,
+          agentName: task.agent_name ?? agent?.name ?? task.agent_id,
+          agentColor: agent?.color,
+          agentIcon: agent?.icon,
+        },
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+      }
+    })
+    // Tab order must follow the VISUAL (LR) layout, not `tasks`' fetch order —
+    // otherwise Tab jumps around the canvas unpredictably. Sort by x (rank /
+    // dependency depth) then y (position within a rank), matching reading
+    // order for a left-to-right DAG.
+    .sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y)
 
   // ── Style edges by the *blocked* (target) task's status ────────────────────
   const taskById = new Map(visible.map((t) => [t.id, t]))

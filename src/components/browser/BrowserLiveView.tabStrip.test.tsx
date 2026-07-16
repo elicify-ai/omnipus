@@ -86,7 +86,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
     expect(screen.getByTestId('browser-tab-0')).toHaveTextContent('Only tab')
   })
 
-  it('highlights the active tab (aria-selected) and not the inactive ones', () => {
+  it('highlights the active tab (aria-pressed) and not the inactive ones', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     emitTabs(1, [
@@ -94,8 +94,8 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
       { index: 1, title: 'Second', url: 'https://example.org' },
     ])
 
-    expect(screen.getByTestId('browser-tab-0')).toHaveAttribute('aria-selected', 'false')
-    expect(screen.getByTestId('browser-tab-1')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('browser-tab-0')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('browser-tab-1')).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('falls back to the URL hostname when title is absent', () => {
@@ -155,7 +155,7 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
       { index: 0, title: 'First', active: true },
       { index: 1, title: 'Second' },
     ])
-    expect(screen.getByTestId('browser-tab-0')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('browser-tab-0')).toHaveAttribute('aria-pressed', 'true')
 
     // Backend re-broadcasts after the switch actually lands — the active
     // tab flips even though nothing else in the component wrote it.
@@ -164,8 +164,8 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
       { index: 1, title: 'Second', active: true },
     ])
 
-    expect(screen.getByTestId('browser-tab-0')).toHaveAttribute('aria-selected', 'false')
-    expect(screen.getByTestId('browser-tab-1')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('browser-tab-0')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('browser-tab-1')).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('reflects a tab closing (fewer tabs in the next frame) and never shows zero tabs', () => {
@@ -175,16 +175,18 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
       { index: 0, title: 'First', active: true },
       { index: 1, title: 'Second' },
     ])
-    expect(screen.getAllByRole('tab')).toHaveLength(2)
+    // No more role="tab" (a11y fix — see the tab-strip's own doc comment):
+    // each tab chip is a plain button identified by its own testid.
+    expect(screen.getAllByTestId(/^browser-tab-\d+$/)).toHaveLength(2)
 
     // Closing tab 1 — backend activates the remaining neighbour.
     emitTabs(0, [{ index: 0, title: 'First', active: true }])
 
-    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(screen.getAllByTestId(/^browser-tab-\d+$/)).toHaveLength(1)
     expect(screen.getByTestId('browser-tab-strip')).toBeInTheDocument()
   })
 
-  it('disables tab-close and new-tab buttons while disconnected', () => {
+  it('disables the tab chip, tab-close, and new-tab buttons while disconnected', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
@@ -193,17 +195,21 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
       callbacksRef.current?.onDisconnected?.()
     })
 
+    expect(screen.getByTestId('browser-tab-0')).toBeDisabled()
     expect(screen.getByTestId('browser-tab-close-0')).toBeDisabled()
     expect(screen.getByTestId('browser-tab-new')).toBeDisabled()
   })
 
-  // Reviewer finding F2: the close ✕/new-tab ＋ buttons were already gated
-  // on `disabled={!connected}`, but the clickable tab chip itself had no
-  // such gate — clicking it while the WS was reconnecting silently no-op'd
-  // (sendTabAction returning false, discarded). The chip must now be
-  // non-interactive (aria-disabled, no pointer cursor, click/Enter/Space
-  // no-op) while disconnected.
-  it('marks the tab chip aria-disabled and non-clickable while disconnected', () => {
+  // Reviewer finding F2 (a11y follow-up): the close ✕/new-tab ＋ buttons
+  // were already gated on `disabled={!connected}`, but the clickable tab
+  // chip itself used to be a `<div role="tab" aria-disabled tabIndex={0}>`
+  // — focusable and "disabled" in name only, with a manual onKeyDown guard
+  // standing in for real disabled semantics (an inert-focusable trap for
+  // keyboard/AT users). The chip is now a genuine `<button disabled>`: a
+  // native disabled button is dropped from the tab order AND does not
+  // dispatch click at all (verified — see the sanity check this mirrors),
+  // so there's no separate Enter/Space path left to test.
+  it('disables the tab chip button (native disabled, not aria-disabled) and blocks clicks while disconnected', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     emitTabs(0, [
@@ -216,18 +222,15 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
     })
 
     const chip = screen.getByTestId('browser-tab-1')
-    expect(chip).toHaveAttribute('aria-disabled', 'true')
+    expect(chip).toBeDisabled()
     expect(chip.className).toContain('cursor-not-allowed')
     expect(chip.className).not.toContain('cursor-pointer')
 
     fireEvent.click(chip)
     expect(mockSendTabAction).not.toHaveBeenCalled()
-
-    fireEvent.keyDown(chip, { key: 'Enter' })
-    expect(mockSendTabAction).not.toHaveBeenCalled()
   })
 
-  it('leaves the tab chip clickable (not aria-disabled) once connected', () => {
+  it('leaves the tab chip enabled and clickable once connected', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     emitTabs(0, [
@@ -236,11 +239,40 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
     ])
 
     const chip = screen.getByTestId('browser-tab-1')
-    expect(chip).toHaveAttribute('aria-disabled', 'false')
+    expect(chip).not.toBeDisabled()
     expect(chip.className).toContain('cursor-pointer')
 
     fireEvent.click(chip)
     expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
+  })
+
+  it('the tab strip container is role="group" (not role="tablist") with an accessible label', () => {
+    // A11y audit fix, same precedent as CalendarToolbar.tsx's view switcher:
+    // no roving-tabindex/aria-controls is implemented, so the ARIA tab
+    // pattern must not be promised via role="tablist"/role="tab".
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
+
+    expect(screen.getByRole('group', { name: 'Browser tabs' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+  })
+
+  it('the Close button is a sibling of the tab chip, not nested inside it, and keeps its own accessible name', () => {
+    // A11y fix: role="tab" is children-presentational per the ARIA spec, so
+    // a Close button NESTED inside a role="tab" element had its own
+    // role/name stripped for assistive tech. Now that the chip is a plain
+    // sibling button, Close must be reachable as its own named button.
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
+
+    const chip = screen.getByTestId('browser-tab-0')
+    const closeBtn = screen.getByRole('button', { name: 'Close tab: Only tab' })
+    expect(closeBtn).toBeInTheDocument()
+    // Sibling, not descendant.
+    expect(chip.contains(closeBtn)).toBe(false)
+    expect(closeBtn.contains(chip)).toBe(false)
   })
 })
 

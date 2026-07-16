@@ -248,7 +248,10 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
 
   return (
     <div className="space-y-2 mt-1">
-      <div className="flex flex-col items-center gap-3 p-4 rounded-lg bg-[var(--color-surface-1)] border border-[var(--color-border)]">
+      <div
+        className="flex flex-col items-center gap-3 p-4 rounded-lg bg-[var(--color-surface-1)] border border-[var(--color-border)]"
+        aria-live="polite"
+      >
         <WhatsAppPairingBody pairing={effectivePairing} onRetry={handleRetry} />
       </div>
       <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">

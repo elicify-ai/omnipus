@@ -12,7 +12,7 @@
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args
 
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -207,6 +207,45 @@ export interface ExecutorInputsProps {
   lockedCli?: WizardCli
 }
 
+// ── Env override row helpers ────────────────────────────────────────────────
+// The wire shape (`executor_env_overrides`) is a flat `Record<string, string>`,
+// but keying editor rows off the KEY itself (`key={k}`) meant every keystroke
+// in the KEY field changed the row's React key — remounting the input and
+// dropping focus mid-word, and silently MERGING two rows the instant their
+// keys collided (no error, just one row vanishing). Rows below carry a
+// synthetic `id` that never changes for the row's lifetime; the KEY/VALUE
+// text is local editor state, serialized back to the record shape only when
+// it's safe to do so (see `commitIfValid`).
+interface EnvRow {
+  id: string
+  key: string
+  value: string
+}
+
+function recordToRows(record: Record<string, string>): EnvRow[] {
+  return Object.entries(record).map(([key, value], i) => ({ id: `env-init-${i}`, key, value }))
+}
+
+function rowsToRecord(rows: EnvRow[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const row of rows) out[row.key] = row.value
+  return out
+}
+
+/** Non-empty keys that appear on more than one row. Empty keys (freshly
+ *  "+ Add"-ed, not yet typed into) are excluded — they aren't a meaningful
+ *  collision to flag until the operator starts naming them. */
+function findDuplicateKeys(rows: EnvRow[]): Set<string> {
+  const seen = new Set<string>()
+  const dupes = new Set<string>()
+  for (const row of rows) {
+    if (row.key === '') continue
+    if (seen.has(row.key)) dupes.add(row.key)
+    seen.add(row.key)
+  }
+  return dupes
+}
+
 /**
  * The subagent_3p executor inputs — CLI chooser (when not locked),
  * cli_path, env_overrides (KEY=VALUE key/value editor), and cli_args.
@@ -214,7 +253,54 @@ export interface ExecutorInputsProps {
  * opens the disclosure after advancing past step 1.
  */
 export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsProps) {
-  const envOverrides = payload.executor_env_overrides ?? {}
+  // Stable-id row state (FW-4 focus-loss fix) — seeded ONCE from the payload
+  // at mount. `executor_env_overrides` is only ever written by this
+  // component's own commits (see `commitIfValid`), so there is no external
+  // writer to reconcile against after mount.
+  const [envRows, setEnvRows] = useState<EnvRow[]>(() => recordToRows(payload.executor_env_overrides ?? {}))
+  const envRowIdCounter = useRef(envRows.length)
+  const envDuplicateKeys = findDuplicateKeys(envRows)
+
+  /** Pushes `rows` to the payload UNLESS a duplicate key exists anywhere in
+   *  it — a real collision would silently overwrite one entry the instant
+   *  it's serialized to the `Record<string,string>` wire shape, so a
+   *  pending duplicate simply blocks the commit (leaving the last known-good
+   *  payload in place) instead of merging. */
+  function commitIfValid(rows: EnvRow[]) {
+    if (findDuplicateKeys(rows).size > 0) return
+    setField('executor_env_overrides', rowsToRecord(rows))
+  }
+
+  function addEnvRow() {
+    envRowIdCounter.current += 1
+    const next = [...envRows, { id: `env-${envRowIdCounter.current}`, key: '', value: '' }]
+    setEnvRows(next)
+    commitIfValid(next)
+  }
+
+  /** KEY edits are local-only while typing (no commit) — this is what stops
+   *  a transient duplicate from ever reaching the payload mid-rename. */
+  function updateEnvKeyDraft(id: string, newKey: string) {
+    setEnvRows(envRows.map((row) => (row.id === id ? { ...row, key: newKey } : row)))
+  }
+
+  /** Commits the row set on blur — the "rename" is only final once the
+   *  operator leaves the field, and only if it didn't produce a duplicate. */
+  function commitEnvKey() {
+    commitIfValid(envRows)
+  }
+
+  function updateEnvValue(id: string, value: string) {
+    const next = envRows.map((row) => (row.id === id ? { ...row, value } : row))
+    setEnvRows(next)
+    commitIfValid(next)
+  }
+
+  function removeEnvRow(id: string) {
+    const next = envRows.filter((row) => row.id !== id)
+    setEnvRows(next)
+    commitIfValid(next)
+  }
 
   // Live command-line preview (executor-command-preview) — built from the
   // flat wizard payload (no persisted agent id exists yet, hence the
@@ -275,29 +361,6 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
     setField('executor_cli_validation_reason', cliValidation.status.result.reason)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cliValidation.status])
-
-  function addEnvRow() {
-    setField('executor_env_overrides', { ...envOverrides, '': '' })
-  }
-
-  function updateEnvKey(oldKey: string, newKey: string) {
-    if (newKey === oldKey) return
-    const next: Record<string, string> = {}
-    for (const [k, v] of Object.entries(envOverrides)) {
-      next[k === oldKey ? newKey : k] = v
-    }
-    setField('executor_env_overrides', next)
-  }
-
-  function updateEnvValue(key: string, value: string) {
-    setField('executor_env_overrides', { ...envOverrides, [key]: value })
-  }
-
-  function removeEnvRow(key: string) {
-    const next = { ...envOverrides }
-    delete next[key]
-    setField('executor_env_overrides', next)
-  }
 
   return (
     <div className="space-y-4 pt-4 border-t border-[var(--color-border)]">
@@ -390,38 +453,55 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
             + Add env var
           </button>
         </div>
-        {Object.keys(envOverrides).length === 0 && (
+        {envRows.length === 0 && (
           <p className="text-[11px] text-[var(--color-muted)]">
             No env overrides. Add KEY=VALUE pairs passed to the CLI process.
           </p>
         )}
         <div className="space-y-1.5">
-          {Object.entries(envOverrides).map(([k, v]) => (
-            <div key={k} className="flex items-center gap-1.5">
-              <Input
-                value={k}
-                onChange={(e) => updateEnvKey(k, e.target.value)}
-                placeholder="KEY"
-                className="font-mono text-xs flex-1"
-                aria-label="Environment variable name"
-              />
-              <Input
-                value={v}
-                onChange={(e) => updateEnvValue(k, e.target.value)}
-                placeholder="VALUE"
-                className="font-mono text-xs flex-1"
-                aria-label="Environment variable value"
-              />
-              <button tabIndex={0}
-                type="button"
-                onClick={() => removeEnvRow(k)}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)] text-xs px-2"
-                aria-label={`Remove ${k || 'env var'}`}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+          {envRows.map((row) => {
+            const isDuplicate = row.key !== '' && envDuplicateKeys.has(row.key)
+            return (
+              <div key={row.id} className="space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    value={row.key}
+                    onChange={(e) => updateEnvKeyDraft(row.id, e.target.value)}
+                    onBlur={commitEnvKey}
+                    placeholder="KEY"
+                    className="font-mono text-xs flex-1"
+                    aria-label="Environment variable name"
+                    aria-invalid={isDuplicate || undefined}
+                    data-testid={`wizard-env-key-${row.id}`}
+                  />
+                  <Input
+                    value={row.value}
+                    onChange={(e) => updateEnvValue(row.id, e.target.value)}
+                    placeholder="VALUE"
+                    className="font-mono text-xs flex-1"
+                    aria-label="Environment variable value"
+                    data-testid={`wizard-env-value-${row.id}`}
+                  />
+                  <button tabIndex={0}
+                    type="button"
+                    onClick={() => removeEnvRow(row.id)}
+                    className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] text-xs px-2 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                    aria-label={`Remove ${row.key || 'env var'}`}
+                  >
+                    ×
+                  </button>
+                </div>
+                {isDuplicate && (
+                  <p
+                    className="text-[10px] text-[var(--color-error)]"
+                    data-testid={`wizard-env-duplicate-${row.id}`}
+                  >
+                    Duplicate key "{row.key}" — rename it before this change is saved.
+                  </p>
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
 

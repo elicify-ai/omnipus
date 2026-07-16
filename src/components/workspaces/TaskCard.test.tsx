@@ -12,11 +12,31 @@
  *     Space must open the task.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskCard, type TaskCardDrag } from './TaskCard'
 import type { Task } from '@/lib/api'
 import type { DraggableAttributes } from '@dnd-kit/core'
+
+// Only used by the "nested subtask bubbling" describe block below (altitude
+// 'show-all' mounts TaskChildren, which fetches via fetchSubtasks). Other
+// tests in this file never render children (default altitude 'top-level'),
+// so this mock is inert for them.
+const fetchSubtasksMock = vi.fn()
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchSubtasks: (id: string) => fetchSubtasksMock(id),
+    tasksQueryKeys: {
+      ...actual.tasksQueryKeys,
+      subtasks: (id: string) => ['tasks', id, 'subtasks'],
+    },
+  }
+})
 
 const baseTask = (overrides: Partial<Task> = {}): Task => ({
   id: 'task-1',
@@ -114,5 +134,95 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
     fireEvent.click(screen.getByRole('button'))
 
     expect(onClick).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── Bubbling hijack regression (altitude 'show-all' — nested TaskChildren) ──
+//
+// A subtask row (TaskChildren.tsx) is a native <button> with NO onKeyDown of
+// its own — it relies on the browser's native Enter-activation (which
+// user-event's `keyboard()` API faithfully simulates, including respecting
+// preventDefault). Before the fix, TaskCard's own onKeyDown had no
+// `e.target !== e.currentTarget` guard, so an Enter keydown that bubbled up
+// from the subtask button ALSO ran the card's handler, which
+// preventDefault()'d the event (cancelling the subtask's native activation)
+// and called the PARENT card's onClick instead.
+describe('TaskCard — keyboard event bubbling from nested subtask rows (altitude "show-all")', () => {
+  beforeEach(() => {
+    fetchSubtasksMock.mockReset()
+  })
+
+  function renderWithQuery(ui: React.ReactElement) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  }
+
+  it('Enter on a focused subtask opens the SUBTASK, not the parent card', async () => {
+    fetchSubtasksMock.mockResolvedValue([
+      baseTask({ id: 'child-1', title: 'Child task', parent_task_id: 'task-1' }),
+    ])
+    const onClick = vi.fn()
+    const onChildClick = vi.fn()
+    const user = userEvent.setup()
+    renderWithQuery(
+      <TaskCard task={baseTask()} altitude="show-all" onClick={onClick} onChildClick={onChildClick} />,
+    )
+
+    const subtaskButton = await screen.findByRole('button', { name: /Subtask: Child task/i })
+    subtaskButton.focus()
+    await user.keyboard('{Enter}')
+
+    expect(onChildClick).toHaveBeenCalledTimes(1)
+    expect(onChildClick).toHaveBeenCalledWith(expect.objectContaining({ id: 'child-1' }))
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('Enter on the card root itself still opens the card, even with subtasks rendered', async () => {
+    fetchSubtasksMock.mockResolvedValue([
+      baseTask({ id: 'child-1', title: 'Child task', parent_task_id: 'task-1' }),
+    ])
+    const onClick = vi.fn()
+    const { container } = renderWithQuery(
+      <TaskCard task={baseTask()} altitude="show-all" onClick={onClick} />,
+    )
+
+    await screen.findByRole('button', { name: /Subtask: Child task/i })
+    // The card root is the outermost role="button" in document order — the
+    // subtask row is nested inside it.
+    const card = container.querySelectorAll('[role="button"]')[0]
+    fireEvent.keyDown(card, { key: 'Enter' })
+
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('Space still lifts the card (draggable) when pressed on the card root, with subtasks rendered', async () => {
+    fetchSubtasksMock.mockResolvedValue([
+      baseTask({ id: 'child-1', title: 'Child task', parent_task_id: 'task-1' }),
+    ])
+    const drag = makeDrag()
+    const { container } = renderWithQuery(
+      <TaskCard task={baseTask()} altitude="show-all" onClick={vi.fn()} drag={drag} />,
+    )
+
+    await screen.findByRole('button', { name: /Subtask: Child task/i })
+    const card = container.querySelectorAll('[role="button"]')[0]
+    fireEvent.keyDown(card, { key: ' ' })
+
+    expect(drag.listeners.onKeyDown).toHaveBeenCalledTimes(1)
+  })
+
+  it('Space on a focused subtask does NOT reach the card drag-lift listener (guard blocks bubbled Space too)', async () => {
+    fetchSubtasksMock.mockResolvedValue([
+      baseTask({ id: 'child-1', title: 'Child task', parent_task_id: 'task-1' }),
+    ])
+    const drag = makeDrag()
+    renderWithQuery(
+      <TaskCard task={baseTask()} altitude="show-all" onClick={vi.fn()} drag={drag} />,
+    )
+
+    const subtaskButton = await screen.findByRole('button', { name: /Subtask: Child task/i })
+    fireEvent.keyDown(subtaskButton, { key: ' ' })
+
+    expect(drag.listeners.onKeyDown).not.toHaveBeenCalled()
   })
 })

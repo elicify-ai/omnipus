@@ -76,9 +76,16 @@ const AlertDialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDiv
 )
 AlertDialogHeader.displayName = 'AlertDialogHeader'
 
+// DOM order = visual + tab order at every breakpoint: Cancel first in
+// markup, Action (primary/destructive confirm) last. On phone (<sm) this
+// stacks Cancel above Action (thumb-friendly, and matches Tab order — CSS
+// must never reorder what Tab order implies). At sm+ the row layout below
+// is unaffected: the row is `justify-end`, so the visual RIGHT-most
+// (Action, last in DOM) button still lands right-most, same as before
+// this fix.
 const AlertDialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
-    className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0', className)}
+    className={cn('flex flex-col gap-2 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0', className)}
     {...props}
   />
 )

@@ -85,4 +85,19 @@ describe('AlertDialog', () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
   })
+
+  // Regression guard: `flex-col-reverse` on the footer inverts visual order vs
+  // DOM order below `sm`, so Cancel (first in DOM, first in Tab order) would
+  // render visually BELOW the primary Action button — the exact "CSS
+  // reordering breaks reading/tab order" pattern this project forbids. The
+  // footer must stack in DOM order (Cancel above Action) on phone widths and
+  // only becomes a `sm:flex-row` row at `sm+`.
+  it('footer stacks in DOM order (no *-reverse class)', () => {
+    render(<Harness open onOpenChange={() => {}} onAction={() => {}} />)
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' })
+    const footer = cancelButton.closest('div')
+    expect(footer).not.toBeNull()
+    expect(footer!.className).not.toMatch(/-reverse\b/)
+    expect(footer!.className).toMatch(/\bflex-col\b/)
+  })
 })

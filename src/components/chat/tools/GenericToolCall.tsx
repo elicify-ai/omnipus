@@ -405,7 +405,16 @@ export function GenericToolCall({
           {args !== undefined && (
             <div>
               <div className="text-[var(--color-muted)] mb-1 font-sans">Parameters</div>
-              <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+              {/* Keyboard-scrollable: WebKit doesn't put a plain scrollable
+                  <pre> in the Tab order by default, so a keyboard-only user
+                  can't reach/scroll it at all. tabIndex + role="region" +
+                  label make it a reachable, scrollable landmark. */}
+              <pre
+                tabIndex={0}
+                role="region"
+                aria-label="Tool output"
+                className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+              >
                 {safeJson(args)}
               </pre>
             </div>
@@ -439,7 +448,12 @@ export function GenericToolCall({
                       Truncated — showing first 10 KiB of {humanSize(truncated.original_size_bytes)}
                     </span>
                   </div>
-                  <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+                  <pre
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Tool output"
+                    className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                  >
                     {truncated.preview}
                   </pre>
                 </>
@@ -457,7 +471,12 @@ export function GenericToolCall({
 
               {/* Plain result: normal rendering */}
               {plainResult !== undefined && (
-                <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+                <pre
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Tool output"
+                  className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                >
                   {safeJson(plainResult)}
                 </pre>
               )}

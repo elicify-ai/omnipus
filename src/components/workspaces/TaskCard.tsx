@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { cn } from '@/lib/utils'
 import type { Task, Agent, Milestone } from '@/lib/api'
 import { CheckSquare } from '@phosphor-icons/react'
@@ -95,6 +96,20 @@ export function TaskCard({
     | ((event: React.PointerEvent<HTMLDivElement>) => void)
     | undefined
 
+  // "Enter to open, Space to move" used to be baked into aria-label, which
+  // REPLACED the accessible name entirely (name = title + key metadata comes
+  // from the card's own visible content — priority badge, title, checklist
+  // count, agent/milestone tags — when aria-label is absent) and duplicated
+  // dnd-kit's own drag instructions (`drag.attributes['aria-describedby']`,
+  // wired to BOARD_SCREEN_READER_INSTRUCTIONS in BoardView, which already
+  // explains the Space-to-lift gesture). Moving it into aria-describedby
+  // instead keeps the name = content, and combines with dnd-kit's own
+  // description id (rather than replacing it) so neither hint is lost.
+  const enterSpaceHintId = useId()
+  const describedBy = isDraggable
+    ? [drag?.attributes['aria-describedby'], enterSpaceHintId].filter(Boolean).join(' ')
+    : undefined
+
   return (
     <div
       ref={drag?.activatorRef}
@@ -103,11 +118,17 @@ export function TaskCard({
       aria-disabled={drag?.attributes['aria-disabled']}
       aria-pressed={drag?.attributes['aria-pressed']}
       aria-roledescription={drag?.attributes['aria-roledescription']}
-      aria-describedby={drag?.attributes['aria-describedby']}
-      aria-label={isDraggable ? `${task.title} — Enter to open, Space to move` : undefined}
+      aria-describedby={describedBy}
       onClick={onClick}
       onPointerDown={dragPointerDown}
       onKeyDown={(e) => {
+        // Ignore keydowns that bubbled up from a nested interactive control
+        // (a subtask row button in TaskChildren, or its error-state Retry
+        // button) — this card's own Enter/Space handling only applies when
+        // the CARD ITSELF is the event target, otherwise preventDefault()
+        // below cancels the nested control's own native Enter-activation and
+        // hijacks the keypress into opening THIS (parent) card instead.
+        if (e.target !== e.currentTarget) return
         dragKeyDown?.(e)
         // Space is reserved for dnd-kit's keyboard-drag lift when the card IS
         // draggable (see BoardView's KeyboardSensor `keyboardCodes` override)
@@ -126,6 +147,11 @@ export function TaskCard({
         hasRollup && 'border-[var(--color-accent)]/30',
       )}
     >
+      {isDraggable && (
+        <span id={enterSpaceHintId} className="sr-only">
+          Enter to open, Space to move.
+        </span>
+      )}
       {/* Top row: priority badge + title */}
       <div className="flex items-start gap-2">
         <span

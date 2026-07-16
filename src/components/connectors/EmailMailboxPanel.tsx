@@ -44,8 +44,19 @@ import {
   Info,
   Envelope,
   Trash,
+  Warning,
 } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -123,10 +134,14 @@ function PasswordField({
   value,
   onChange,
   hasStoredCredential,
+  ariaDescribedBy,
+  ariaInvalid,
 }: {
   value: string
   onChange: (val: string) => void
   hasStoredCredential: boolean
+  ariaDescribedBy?: string
+  ariaInvalid?: boolean
 }) {
   const [visible, setVisible] = useState(false)
   return (
@@ -140,7 +155,8 @@ function PasswordField({
         placeholder={hasStoredCredential ? '(stored — enter a new value to rotate)' : 'App password or IMAP password'}
         className="pr-9 font-mono text-xs"
         autoComplete="new-password"
-        aria-describedby="mailbox-password-help"
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid || undefined}
       />
       <button tabIndex={0}
         type="button"
@@ -152,6 +168,21 @@ function PasswordField({
       </button>
     </div>
   )
+}
+
+// FIELD_ROW_ERROR_ID / describedByFor: the validation-error association
+// triple shared with ChannelConfigPanel's ChannelFieldRow — (a) the error <p>
+// owns a stable id, (b) the control's aria-describedby points at it when an
+// error is present, else at the help paragraph when one renders (never
+// dangling), (c) aria-invalid on the control itself (wired at each call site,
+// since FieldRow only owns the label/help/error chrome, not the control).
+function fieldRowErrorId(id: string): string {
+  return `error-${id}`
+}
+
+function describedByFor(id: string, helpId: string | undefined, error: string | undefined): string | undefined {
+  if (error) return fieldRowErrorId(id)
+  return helpId
 }
 
 function FieldRow({
@@ -172,14 +203,14 @@ function FieldRow({
   helpText?: string
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1.5" id={`fieldrow-${id}`}>
       <Label htmlFor={id} className="text-xs font-medium text-[var(--color-secondary)]">
         {label}
         {required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
       </Label>
       {children}
       {error && (
-        <p className="text-[10px] text-[var(--color-error)]">{error}</p>
+        <p id={fieldRowErrorId(id)} role="alert" className="text-[10px] text-[var(--color-error)]">{error}</p>
       )}
       {!error && helpText && (
         <p id={helpId} className="text-[10px] text-[var(--color-muted)] leading-relaxed">
@@ -240,12 +271,45 @@ function validate(
   return errors
 }
 
+// Visual field order (top to bottom, after the Workspace/Owning-agent swap —
+// item 5) — used to focus the FIRST invalid field after a blocked Save so a
+// keyboard/screen-reader user lands directly on what needs fixing, in tab
+// order rather than validate()'s internal insertion order. Maps each
+// FieldErrors key to the FieldRow `id` used at its call site.
+const FIELD_ROW_ID: Record<keyof FieldErrors, string> = {
+  workspace_id: 'mailbox-workspace',
+  agent_id: 'mailbox-agent',
+  username: 'mailbox-username',
+  password: 'mailbox-password',
+  imap_host: 'mailbox-imap-host',
+  smtp_host: 'mailbox-smtp-host',
+}
+const FIELD_VISUAL_ORDER: (keyof FieldErrors)[] = [
+  'workspace_id',
+  'agent_id',
+  'username',
+  'password',
+  'imap_host',
+  'smtp_host',
+]
+
+function focusFirstInvalidField(errors: FieldErrors) {
+  const firstKey = FIELD_VISUAL_ORDER.find((k) => errors[k] !== undefined)
+  if (!firstKey) return
+  requestAnimationFrame(() => {
+    const container = document.getElementById(`fieldrow-${FIELD_ROW_ID[firstKey]}`)
+    container?.querySelector<HTMLElement>('input, button, textarea, select')?.focus()
+  })
+}
+
 export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] }: EmailMailboxPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const isDirtyRef = useRef(false)
   const [form, setForm] = useState<MailboxFormState>(EMPTY_FORM)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -298,6 +362,8 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
       isDirtyRef.current = false
       setFieldErrors({})
       setForm(EMPTY_FORM)
+      setShowDeleteConfirm(false)
+      setDeleteError(null)
     }
   }, [open])
 
@@ -319,6 +385,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
       const errors = validate(form, mailbox, mailboxes)
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors)
+        focusFirstInvalidField(errors)
         throw new Error('Please fill in all required fields')
       }
 
@@ -399,14 +466,18 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agent-mailboxes'] })
       queryClient.invalidateQueries({ queryKey: ['channels'] })
+      setDeleteError(null)
+      setShowDeleteConfirm(false)
       addToast({ message: 'Mailbox removed', variant: 'success' })
       onOpenChange(false)
     },
     onError: (err: unknown) => {
-      addToast({
-        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to remove mailbox',
-        variant: 'error',
-      })
+      // Keep the confirm dialog open and show the error inline — same pattern
+      // as ConnectorsScreen's channel-instance DeleteConfirmDialog — so a
+      // failed destructive delete never silently looks like it succeeded.
+      const message = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to remove mailbox'
+      setDeleteError(message)
+      addToast({ message, variant: 'error' })
     },
   })
 
@@ -496,27 +567,9 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
               Ownership
             </h3>
 
-            <FieldRow
-              id="mailbox-agent"
-              label="Owning agent"
-              required
-              error={fieldErrors.agent_id}
-              helpId="mailbox-agent-help"
-              helpText="The agent whose email identity this mailbox represents — only the selected workspace’s team members are listed (a mailbox’s unhandled mail becomes Board tasks in its workspace). Every (agent, workspace) pair can have its own mailbox."
-            >
-              {agentsError ? (
-                <p className="text-xs text-[var(--color-error)]">Could not load agents.</p>
-              ) : (
-                <SmartSelect
-                  value={form.agent_id || '__none__'}
-                  onValueChange={(v) => setField('agent_id', v === '__none__' ? '' : v)}
-                  placeholder={form.workspace_id ? '(select an agent)' : '(select a workspace first)'}
-                  ariaLabel="Owning agent"
-                  items={agentItems}
-                />
-              )}
-            </FieldRow>
-
+            {/* Workspace precedes Owning agent (item 5): the agent list is
+                gated on the chosen workspace (core_team membership), so tab
+                order must match task order — pick the workspace first. */}
             <FieldRow
               id="mailbox-workspace"
               label="Workspace"
@@ -534,6 +587,27 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                   placeholder="(select a workspace)"
                   ariaLabel="Workspace"
                   items={workspaceItems}
+                />
+              )}
+            </FieldRow>
+
+            <FieldRow
+              id="mailbox-agent"
+              label="Owning agent"
+              required
+              error={fieldErrors.agent_id}
+              helpId="mailbox-agent-help"
+              helpText="The agent whose email identity this mailbox represents — only the selected workspace’s team members are listed (a mailbox’s unhandled mail becomes Board tasks in its workspace). Every (agent, workspace) pair can have its own mailbox."
+            >
+              {agentsError ? (
+                <p className="text-xs text-[var(--color-error)]">Could not load agents.</p>
+              ) : (
+                <SmartSelect
+                  value={form.agent_id || '__none__'}
+                  onValueChange={(v) => setField('agent_id', v === '__none__' ? '' : v)}
+                  placeholder={form.workspace_id ? '(select an agent)' : '(select a workspace first)'}
+                  ariaLabel="Owning agent"
+                  items={agentItems}
                 />
               )}
             </FieldRow>
@@ -562,7 +636,8 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 placeholder="bot@example.com"
                 className="text-xs"
                 autoComplete="email"
-                aria-describedby="mailbox-username-help"
+                aria-describedby={describedByFor('mailbox-username', 'mailbox-username-help', fieldErrors.username)}
+                aria-invalid={fieldErrors.username ? true : undefined}
               />
             </FieldRow>
 
@@ -577,6 +652,8 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 value={form.password}
                 onChange={(v) => setField('password', v)}
                 hasStoredCredential={hasStoredCredential}
+                ariaDescribedBy={describedByFor('mailbox-password', 'mailbox-password-help', fieldErrors.password)}
+                ariaInvalid={Boolean(fieldErrors.password)}
               />
             </FieldRow>
 
@@ -596,7 +673,8 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 onChange={(e) => setField('imap_host', e.target.value)}
                 placeholder="imap.gmail.com"
                 className="text-xs"
-                aria-describedby="mailbox-imap-host-help"
+                aria-describedby={describedByFor('mailbox-imap-host', 'mailbox-imap-host-help', fieldErrors.imap_host)}
+                aria-invalid={fieldErrors.imap_host ? true : undefined}
               />
             </FieldRow>
 
@@ -616,7 +694,8 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 onChange={(e) => setField('smtp_host', e.target.value)}
                 placeholder="smtp.gmail.com"
                 className="text-xs"
-                aria-describedby="mailbox-smtp-host-help"
+                aria-describedby={describedByFor('mailbox-smtp-host', 'mailbox-smtp-host-help', fieldErrors.smtp_host)}
+                aria-invalid={fieldErrors.smtp_host ? true : undefined}
               />
             </FieldRow>
           </div>
@@ -675,17 +754,72 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 type="button"
                 variant="destructive"
                 className="w-full gap-1.5"
-                onClick={() => doDelete()}
+                onClick={() => setShowDeleteConfirm(true)}
                 disabled={deleting || saving}
                 data-testid="mailbox-delete-btn"
               >
                 <Trash size={13} />
-                {deleting ? 'Removing…' : 'Remove Mailbox'}
+                Remove Mailbox
               </Button>
             )}
           </div>
         </div>
       </SheetContent>
+
+      {/* Remove-mailbox confirmation — same AlertDialog pattern as
+          ConnectorsScreen's channel-instance Delete: Cancel first in DOM/tab
+          order (Radix focuses it by default), consequence text, inline error
+          on failure so the dialog stays open rather than silently succeeding. */}
+      <AlertDialog
+        open={showDeleteConfirm}
+        onOpenChange={(next) => {
+          if (!next) setDeleteError(null)
+          setShowDeleteConfirm(next)
+        }}
+      >
+        <AlertDialogContent data-testid="mailbox-delete-confirm-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-headline text-[var(--color-secondary)]">
+              Remove mailbox
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm text-[var(--color-muted)]">
+              This will permanently remove the mailbox for{' '}
+              <span className="font-mono text-xs font-semibold text-[var(--color-secondary)]">
+                {form.username || (mailbox?.username ?? 'this agent')}
+              </span>{' '}
+              including its stored IMAP/SMTP credentials. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {deleteError && (
+            <div
+              className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2"
+              data-testid="mailbox-delete-error"
+              role="alert"
+            >
+              <Warning size={14} className="text-red-400 mt-0.5 shrink-0" />
+              <p className="text-xs text-red-400">{deleteError}</p>
+            </div>
+          )}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={deleting}
+              data-testid="mailbox-delete-cancel-btn"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={() => doDelete()}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              data-testid="mailbox-delete-confirm-btn"
+            >
+              {deleting ? 'Removing…' : 'Remove'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sheet>
   )
 }

@@ -33,9 +33,27 @@ import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 
 // CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
 // (pkg/gateway/rest.go redactChannelConfig). GET responses carry it instead of
-// the real value; it must NEVER be submitted back — buildSubmitPayload strips
-// it so the stored credential is left untouched.
+// the real value. It must NEVER be hydrated into a visible form field (that
+// looks like a real, revealable secret — the eye-toggle would "reveal" the
+// literal word "[configured]" — and a naive edit, e.g. backspacing one
+// character, would submit "[configured" as a brand-new secret, destroying the
+// stored credential). The hydration effect below strips it to an empty string
+// and records the field in `hasStoredSecret` instead; buildSubmitPayload then
+// OMITS any still-empty redactable field so the stored credential survives
+// untouched. See EmailMailboxPanel's password field for the same write-only
+// pattern.
 const CONFIGURED_SENTINEL = '[configured]'
+
+// STORED_SECRET_PLACEHOLDER replaces a redactable field's normal placeholder
+// when a secret is already stored for it — the field itself always hydrates
+// empty (never the sentinel, never the real value).
+const STORED_SECRET_PLACEHOLDER = '(stored — enter a new value to replace)'
+
+// STORED_SECRET_HELP_NOTE is shown under a redactable field instead of (or
+// alongside) its catalog helpText when a secret is already stored, so the
+// "leave blank to keep it" behavior is discoverable, not just inferred from
+// the placeholder.
+const STORED_SECRET_HELP_NOTE = 'A value is already stored — leave blank to keep it.'
 
 interface ChannelConfigPanelProps {
   channelId: string
@@ -108,10 +126,16 @@ function PasswordField({
   field,
   value,
   onChange,
+  hasStoredSecret,
+  ariaDescribedBy,
+  ariaInvalid,
 }: {
   field: ChannelField
   value: string
   onChange: (val: string) => void
+  hasStoredSecret?: boolean
+  ariaDescribedBy?: string
+  ariaInvalid?: boolean
 }) {
   const [visible, setVisible] = useState(false)
   return (
@@ -121,10 +145,11 @@ function PasswordField({
         type={visible ? 'text' : 'password'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={field.placeholder}
+        placeholder={hasStoredSecret ? STORED_SECRET_PLACEHOLDER : field.placeholder}
         className="pr-9 font-mono text-xs"
         autoComplete="off"
-        aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid || undefined}
       />
       <button tabIndex={0}
         type="button"
@@ -141,10 +166,12 @@ function PasswordField({
 // HelperLink renders the helpText and optional helpLink for a channel field.
 // LOCAL component — single consumer (ChannelConfigPanel); see spec §2, M-11.
 // Rendered as a one-liner under the input.
-function HelperLink({ field }: { field: ChannelField }) {
-  if (!field.helpText && !field.helpLink) return null
+function HelperLink({ field, storedNote }: { field: ChannelField; storedNote?: string }) {
+  if (!field.helpText && !field.helpLink && !storedNote) return null
   return (
     <p id={`help-${field.key}`} className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+      {storedNote}
+      {storedNote && (field.helpText || field.helpLink) && ' '}
       {field.helpText}
       {field.helpText && field.helpLink && ' '}
       {field.helpLink && (
@@ -228,12 +255,25 @@ function ChannelFieldRow({
   getValue,
   setValue,
   error,
+  hasStoredSecret,
 }: {
   field: ChannelField
   getValue: (key: string) => unknown
   setValue: (key: string, value: unknown) => void
   error?: string
+  hasStoredSecret?: boolean
 }) {
+  // Validation-error association triple: (a) the error <p> owns a stable id,
+  // (b) the input's aria-describedby points at it when present, else at the
+  // help/stored-note paragraph when one renders, never dangling, (c)
+  // aria-invalid on the control itself.
+  const errorId = `error-${field.key}`
+  const isRedactable = field.type === 'password' || field.type === 'textarea'
+  const showStoredNote = isRedactable && hasStoredSecret === true
+  const hasHelp = Boolean(field.helpText || field.helpLink || showStoredNote)
+  const describedBy = error ? errorId : hasHelp ? `help-${field.key}` : undefined
+  const invalid = error ? true : undefined
+
   return (
     <div className="space-y-1.5">
       <Label
@@ -253,7 +293,8 @@ function ChannelFieldRow({
             id={`field-${field.key}`}
             checked={Boolean(getValue(field.key))}
             onCheckedChange={(checked) => setValue(field.key, checked)}
-            aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+            aria-describedby={describedBy}
+            aria-invalid={invalid}
             aria-labelledby={`field-label-${field.key}`}
           />
         </div>
@@ -262,15 +303,19 @@ function ChannelFieldRow({
           field={field}
           value={String(getValue(field.key) ?? '')}
           onChange={(val) => setValue(field.key, val)}
+          hasStoredSecret={showStoredNote}
+          ariaDescribedBy={describedBy}
+          ariaInvalid={invalid}
         />
       ) : field.type === 'textarea' ? (
         <Textarea
           id={`field-${field.key}`}
           value={String(getValue(field.key) ?? '')}
           onChange={(e) => setValue(field.key, e.target.value)}
-          placeholder={field.placeholder}
+          placeholder={showStoredNote ? STORED_SECRET_PLACEHOLDER : field.placeholder}
           className="font-mono text-xs resize-none h-20"
-          aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+          aria-describedby={describedBy}
+          aria-invalid={invalid}
         />
       ) : (
         <Input
@@ -287,14 +332,15 @@ function ChannelFieldRow({
           }
           placeholder={field.placeholder}
           className="text-xs"
-          aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+          aria-describedby={describedBy}
+          aria-invalid={invalid}
         />
       )}
 
       {error ? (
-        <p className="text-[10px] text-[var(--color-error)]">{error}</p>
+        <p id={errorId} role="alert" className="text-[10px] text-[var(--color-error)]">{error}</p>
       ) : (
-        <HelperLink field={field} />
+        <HelperLink field={field} storedNote={showStoredNote ? STORED_SECRET_HELP_NOTE : undefined} />
       )}
     </div>
   )
@@ -313,11 +359,18 @@ function ChannelFieldRow({
 // valid depending on the chosen auth method), but whichever group is
 // currently selected must be filled before Save. Treat the selected group's
 // field as required even without the flag.
+//
+// `hasStoredSecret` (keyed by field.key) marks redactable fields that already
+// have a credential stored server-side. Those fields always hydrate BLANK
+// (the sentinel never round-trips into form state — see CONFIGURED_SENTINEL),
+// so a blank value alone can no longer distinguish "never configured" from
+// "configured, just not retyped". A stored secret satisfies the requirement.
 function validateRequired(
   fields: ChannelField[],
   getValue: (key: string) => unknown,
   isGoogleChat: boolean,
   gChatAuthMethod: GChatAuthMethod,
+  hasStoredSecret: Record<string, boolean>,
 ): Record<string, string> {
   const errors: Record<string, string> = {}
   for (const f of fields) {
@@ -325,12 +378,26 @@ function validateRequired(
     if (isGoogleChat && f.authGroup && f.authGroup !== gChatAuthMethod) continue
     const isRequired = f.required || (isGoogleChat && f.authGroup === gChatAuthMethod)
     if (!isRequired) continue
+    if (hasStoredSecret[f.key]) continue
     const val = getValue(f.key)
     if (val === undefined || val === null || val === '') {
       errors[f.key] = `${f.label} is required`
     }
   }
   return errors
+}
+
+// focusFirstInvalidField moves keyboard/AT focus to the first field with a
+// validation error after a blocked Save — otherwise the error is set but
+// nothing tells a keyboard or screen-reader user where to go. `errors` keys
+// follow field-catalog order (validateRequired iterates `fields` in order),
+// which matches the panel's visual/tab order.
+function focusFirstInvalidField(errors: Record<string, string>) {
+  const firstKey = Object.keys(errors)[0]
+  if (!firstKey) return
+  requestAnimationFrame(() => {
+    document.getElementById(`field-${firstKey}`)?.focus()
+  })
 }
 
 export function ChannelConfigPanel({
@@ -350,6 +417,12 @@ export function ChannelConfigPanel({
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  // Which redactable (password/textarea) fields already have a secret stored
+  // server-side — derived from the hydration effect below, never from
+  // formValues (which never carries the sentinel). Drives the "(stored —
+  // enter a new value to replace)" placeholder/help note and satisfies
+  // required-field validation without requiring a retype.
+  const [hasStoredSecret, setHasStoredSecret] = useState<Record<string, boolean>>({})
   // Tracks whether Save & Enable was just clicked in this panel session. Needed because
   // the `enabled` prop comes from the parent's stale state after Save & Enable keeps the
   // dialog open — without this, the panel would keep showing the enable-prompt even after
@@ -471,6 +544,7 @@ export function ChannelConfigPanel({
       setSelectedAgentId('__none__')
       setFieldErrors({})
       setFormValues({})
+      setHasStoredSecret({})
       isDirtyRef.current = false
       setGChatAuthMethod('webhook')
     }
@@ -514,8 +588,30 @@ export function ChannelConfigPanel({
     // Enable for every instance bound at creation (live-UAT: WhatsApp QR never
     // appeared because the enable never happened).
     const { identity: _identity, workspace_id: _workspaceId, ...editable } = currentConfig as Record<string, unknown>
+
+    // SECURITY / UX: redactable (password/textarea) fields never hydrate the
+    // raw "[configured]" sentinel into the form (see CONFIGURED_SENTINEL) — a
+    // real input showing "[configured]" looks like a live secret, the
+    // eye-toggle would "reveal" the literal word, and a naive edit (e.g.
+    // backspacing one character) would submit "[configured" as a brand-new
+    // secret, destroying the stored credential. Hydrate these fields EMPTY
+    // instead, and record which ones already have a stored secret so the
+    // placeholder/help note and the required-field check can reflect it
+    // without ever putting the sentinel in form state.
+    const storedFlags: Record<string, boolean> = {}
+    for (const f of fields) {
+      if (f.type !== 'password' && f.type !== 'textarea') continue
+      if (editable[f.key] === CONFIGURED_SENTINEL) {
+        storedFlags[f.key] = true
+        editable[f.key] = ''
+      }
+    }
+    setHasStoredSecret(storedFlags)
     setFormValues(editable)
     // Detect pre-existing method on load: prefer service_account if any SA field is set.
+    // Reads the RAW currentConfig (not the stripped `editable`/formValues) —
+    // this detection only needs to know a secret WAS stored, which the sentinel
+    // still signals here even though it never reaches form state.
     if (isGoogleChat) {
       const cfg = currentConfig as Record<string, unknown>
       if (cfg['service_account_json'] || cfg['service_account_file']) {
@@ -524,13 +620,14 @@ export function ChannelConfigPanel({
         setGChatAuthMethod('webhook')
       }
     }
-  }, [open, currentConfig, isGoogleChat])
+  }, [open, currentConfig, isGoogleChat, fields])
 
   const { mutate: doSave, isPending: saving } = useMutation({
     mutationFn: () => {
-      const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod)
+      const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod, hasStoredSecret)
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors)
+        focusFirstInvalidField(errors)
         throw new Error('Please fill in the required fields')
       }
       return configureChannel(channelId, buildSubmitPayload())
@@ -551,9 +648,10 @@ export function ChannelConfigPanel({
 
   const { mutate: doSaveAndEnable, isPending: savingAndEnabling } = useMutation({
     mutationFn: async () => {
-      const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod)
+      const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod, hasStoredSecret)
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors)
+        focusFirstInvalidField(errors)
         throw new Error('Please fill in the required fields')
       }
       await configureChannel(channelId, buildSubmitPayload())
@@ -639,27 +737,27 @@ export function ChannelConfigPanel({
   // clear path fires: presence with empty string → clear the _ref and delete
   // the stored credential.
   function buildSubmitPayload(): Record<string, unknown> {
-    // SECURITY: strip untouched redacted secrets — but ONLY for fields the
-    // catalog marks 'password' or 'textarea', the sole kinds redactChannelConfig
-    // (rest.go) ever replaces with the sentinel. GET redacts every stored
-    // sensitive field to the literal "[configured]" and the form hydrates that
-    // placeholder verbatim — but configureChannel treats ANY non-empty value as
-    // a NEW secret, so echoing an untouched sentinel back would overwrite the
-    // real credential with the literal string "[configured]" (breaking the
-    // channel on next start). Omitting the field is the correct "keep the
-    // stored secret" signal: the backend merge leaves absent fields untouched
-    // (pinned by channel_secret_ref_test). A plain text/number/toggle field is
-    // never redacted server-side, so a user typing the literal "[configured]"
-    // into one of THOSE must NOT be silently dropped from the payload. A
-    // user-cleared secret field ('') still goes through and revokes the
-    // credential; a newly-typed secret is never equal to the sentinel and is
-    // stored normally.
+    // SECURITY / write-only pattern: password/textarea fields never hydrate
+    // with the real secret OR the "[configured]" sentinel (see the hydration
+    // effect above) — they always start empty, whether or not a secret is
+    // already stored. So an empty value on submit ALWAYS means "the user did
+    // not enter a new secret": omit the key so configureChannel's merge
+    // leaves whatever is (or isn't) stored untouched (pinned by
+    // channel_secret_ref_test). This mirrors EmailMailboxPanel's password
+    // field exactly — there is no way to actively revoke a single secret
+    // field by leaving it blank; the GChat auth-method switch below is a
+    // separate, deliberate action that explicitly sends '' to clear the
+    // DESELECTED group, not an accidental consequence of a blank submit. A
+    // plain text/number/toggle field is never redacted server-side, so it
+    // always travels as entered — including a legitimately empty string, and
+    // including a user who literally types the string "[configured]" into
+    // one of those.
     const redactableKeys = new Set(
       fields.filter((f) => f.type === 'password' || f.type === 'textarea').map((f) => f.key),
     )
     const payload: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(formValues)) {
-      if (value === CONFIGURED_SENTINEL && redactableKeys.has(key)) continue
+      if (redactableKeys.has(key) && (value === '' || value === undefined || value === null)) continue
       payload[key] = value
     }
 
@@ -771,6 +869,9 @@ export function ChannelConfigPanel({
                 <p className="text-xs font-medium text-[var(--color-secondary)]">
                   How do you want to connect?
                 </p>
+                <p className="text-[10px] text-amber-400 leading-relaxed">
+                  Switching connection method clears any values already entered for the other method.
+                </p>
                 <div className="flex flex-col gap-2" role="radiogroup" aria-label="Connection method">
                   {GCHAT_AUTH_OPTIONS.map((opt) => (
                     <label
@@ -789,10 +890,11 @@ export function ChannelConfigPanel({
                         onChange={() => handleGChatMethodSwitch(opt.value)}
                         className="mt-0.5 accent-[var(--color-accent)]"
                         aria-label={opt.label}
+                        aria-describedby={`gchat-auth-desc-${opt.value}`}
                       />
                       <div>
                         <p className="text-xs font-medium text-[var(--color-secondary)]">{opt.label}</p>
-                        <p className="text-[10px] text-[var(--color-muted)] mt-0.5">{opt.description}</p>
+                        <p id={`gchat-auth-desc-${opt.value}`} className="text-[10px] text-[var(--color-muted)] mt-0.5">{opt.description}</p>
                       </div>
                     </label>
                   ))}
@@ -808,6 +910,7 @@ export function ChannelConfigPanel({
                 getValue={getValue}
                 setValue={setValue}
                 error={fieldErrors[field.key]}
+                hasStoredSecret={hasStoredSecret[field.key]}
               />
             ))}
 
@@ -822,6 +925,7 @@ export function ChannelConfigPanel({
                       getValue={getValue}
                       setValue={setValue}
                       error={fieldErrors[field.key]}
+                      hasStoredSecret={hasStoredSecret[field.key]}
                     />
                   ))}
                 </div>

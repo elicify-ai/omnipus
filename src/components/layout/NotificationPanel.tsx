@@ -136,6 +136,9 @@ export function NotificationPanel() {
                             : 'font-medium text-[var(--color-secondary)]'
                         }`}
                       >
+                        {/* Unread state today is color/weight/dot-only — none
+                            of which reaches a screen reader. This text does. */}
+                        {!item.read && <span className="sr-only">Unread: </span>}
                         {item.title}
                       </span>
                       <span className="shrink-0 text-[10px] text-[var(--color-muted)]">

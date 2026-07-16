@@ -482,11 +482,12 @@ function ProviderConfigSheet({
 
           {/* API Key input */}
           <div>
-            <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+            <label htmlFor={`api-key-input-${draftKey}`} className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
               API Key
             </label>
             <div className="relative">
               <Input
+                id={`api-key-input-${draftKey}`}
                 type={showKey[draftKey] ? 'text' : 'password'}
                 value={apiKeys[draftKey] ?? ''}
                 onChange={(e) =>
@@ -530,7 +531,7 @@ function ProviderConfigSheet({
             }
             return (
               <div>
-                <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+                <label htmlFor={`add-model-input-${draftKey}`} className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
                   Models
                 </label>
                 <p className="text-xs text-[var(--color-muted)] mb-2">
@@ -562,6 +563,7 @@ function ProviderConfigSheet({
                 )}
                 <div className="flex gap-2">
                   <Input
+                    id={`add-model-input-${draftKey}`}
                     value={newModel[draftKey] ?? ''}
                     onChange={(e) =>
                       setNewModel((prev) => ({ ...prev, [draftKey]: e.target.value }))

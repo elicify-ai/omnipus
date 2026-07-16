@@ -65,9 +65,10 @@ describe('MediaActionToolbar — button rendering', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('renders toolbar role with aria-label', () => {
+  it('renders group role (not toolbar — no roving-tabindex is implemented) with aria-label', () => {
     render(<MediaActionToolbar actions={[makeAction()]} />)
-    expect(screen.getByRole('toolbar', { name: 'Media actions' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Media actions' })).toBeInTheDocument()
+    expect(screen.queryByRole('toolbar', { name: 'Media actions' })).toBeNull()
   })
 })
 
@@ -178,11 +179,11 @@ describe('MediaActionToolbar — error toast', () => {
 describe('MediaActionToolbar — variants', () => {
   it("renders without crashing in 'overlay' variant", () => {
     render(<MediaActionToolbar actions={[makeAction()]} variant="overlay" />)
-    expect(screen.getByRole('toolbar')).toBeInTheDocument()
+    expect(screen.getByRole('group')).toBeInTheDocument()
   })
 
   it("renders without crashing in 'bar' variant", () => {
     render(<MediaActionToolbar actions={[makeAction()]} variant="bar" />)
-    expect(screen.getByRole('toolbar')).toBeInTheDocument()
+    expect(screen.getByRole('group')).toBeInTheDocument()
   })
 })

@@ -43,7 +43,7 @@
  *  21. Blank required field blocks Save; configureChannel not called
  *  22. Blank required field blocks Save & Enable; configureChannel/enableChannel not called
  *  23. Editing a field with an error clears that field's inline error
- *  24. The "[configured]" sentinel counts as filled — Save proceeds
+ *  24. A stored secret (hasStoredSecret, never the sentinel) counts as filled — Save proceeds
  *  25. Google Chat: the selected auth-group's field is required even though
  *      neither gchat field carries required:true in the catalog; switching
  *      method switches which field is required
@@ -809,10 +809,14 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     )
   }
 
-  it('Save on an unrelated edit OMITS the untouched "[configured]" secret', async () => {
+  it('Save on an unrelated edit OMITS the untouched stored secret', async () => {
     renderWithConfig({ type: 'telegram', enabled: true, token: '[configured]' })
     await waitFor(() => {
-      expect((document.getElementById('field-token') as HTMLInputElement).value).toBe('[configured]')
+      const tokenField = document.getElementById('field-token') as HTMLInputElement
+      // The sentinel never round-trips into the input value (secret-overwrite
+      // fix) — the field hydrates BLANK with a "stored" placeholder instead.
+      expect(tokenField.value).toBe('')
+      expect(tokenField.placeholder).toMatch(/stored/i)
     })
 
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
@@ -843,16 +847,18 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     expect(payload['token']).toBe('new-bot-token-123')
   })
 
-  it('a deliberately cleared NON-required secret ("") still submits so the backend revokes it', async () => {
-    // Telegram's Bot Token is a REQUIRED field — Stage 1 client-side validation
-    // (added alongside the Test-button removal) now blocks Save on any blank
-    // required field, so a required secret can no longer be cleared-to-revoke
-    // via Save; that is a deliberate consequence of "prevent saving incomplete
-    // configs" and is flagged separately (required-secret revocation may need
-    // a dedicated affordance in a later stage). Use Feishu's non-required
-    // encrypt_key (advanced, password type) to exercise the underlying
-    // buildSubmitPayload sentinel-clear behavior, which is unaffected by
-    // required-ness.
+  it('a NON-required stored secret left blank (untouched) is OMITTED — never actively revoked by a blank submit', async () => {
+    // Pre-fix, a user who left a "[configured]"-hydrated field alone (or
+    // retyped-then-deleted back to blank) could accidentally submit an
+    // explicit '' and revoke a live credential. Post-fix, redactable fields
+    // NEVER hydrate a non-empty value (sentinel or real secret) — they always
+    // start blank, so a blank submission can only ever mean "keep whatever is
+    // stored", matching EmailMailboxPanel's write-only password pattern.
+    // There is no way to actively revoke a single secret field through this
+    // form (only the GChat auth-method-switch explicit clear is a deliberate,
+    // distinct action — see the dedicated GChat describe block). Use Feishu's
+    // non-required encrypt_key (advanced, password type) alongside the
+    // required app_secret to show both are treated identically.
     const config = {
       type: 'feishu',
       enabled: true,
@@ -878,20 +884,24 @@ describe('ChannelConfigPanel — [configured] sentinel never round-trips (secret
     // encrypt_key is an advanced field — expand the disclosure to reach it.
     fireEvent.click(screen.getByRole('button', { name: /Advanced/i }))
     await waitFor(() => {
-      expect(document.getElementById('field-encrypt_key')).not.toBeNull()
+      const encryptKeyField = document.getElementById('field-encrypt_key') as HTMLInputElement
+      // Hydrates BLANK with a "stored" placeholder — never the sentinel.
+      expect(encryptKeyField.value).toBe('')
+      expect(encryptKeyField.placeholder).toMatch(/stored/i)
     })
 
-    fireEvent.change(document.getElementById('field-encrypt_key')!, { target: { value: '' } })
+    // Left untouched (no fireEvent.change) — the realistic "did not retype
+    // the secret" scenario, since the field never showed anything to delete.
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
     await waitFor(() => {
       expect(vi.mocked(configureChannel)).toHaveBeenCalled()
     })
 
     const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
-    // Presence-with-empty-string is the backend's credential-clear signal.
-    expect(Object.prototype.hasOwnProperty.call(payload, 'encrypt_key')).toBe(true)
-    expect(payload['encrypt_key']).toBe('')
-    // The untouched app_secret sentinel is unrelated and must still be OMITTED.
+    // Both the required app_secret and the non-required encrypt_key are
+    // OMITTED — an untouched stored secret is kept, never cleared, whether
+    // or not the field is required.
+    expect(Object.prototype.hasOwnProperty.call(payload, 'encrypt_key')).toBe(false)
     expect(Object.prototype.hasOwnProperty.call(payload, 'app_secret')).toBe(false)
   })
 
@@ -1163,7 +1173,7 @@ describe('ChannelConfigPanel — client-side save validation', () => {
     })
   })
 
-  it('the "[configured]" sentinel counts as filled — Save proceeds without a validation error', async () => {
+  it('a stored secret (hasStoredSecret) counts as filled — Save proceeds without a validation error', async () => {
     // renderPanel() unconditionally seeds ['channel-config', id] with {} — use an
     // explicit client seed instead (matches the sentinel describe block's
     // renderWithConfig pattern above) so the pre-filled token value is stable.
@@ -1181,7 +1191,12 @@ describe('ChannelConfigPanel — client-side save validation', () => {
     )
 
     await waitFor(() => {
-      expect((document.getElementById('field-token') as HTMLInputElement).value).toBe('[configured]')
+      const tokenField = document.getElementById('field-token') as HTMLInputElement
+      // The sentinel never round-trips into the input value — the field
+      // hydrates BLANK with a "stored" placeholder, yet still satisfies the
+      // required-field check via hasStoredSecret.
+      expect(tokenField.value).toBe('')
+      expect(tokenField.placeholder).toMatch(/stored/i)
     })
 
     await act(async () => {
@@ -2279,15 +2294,20 @@ describe('ChannelConfigPanel — same-channel close→reopen rehydration (R2F-1 
     )
   }
 
-  it('Telegram: reopening the SAME channel re-shows the configured-token sentinel, not an empty field', async () => {
+  it('Telegram: reopening the SAME channel re-hydrates the stored-token state (blank field, stored placeholder), not a stuck/blocked form', async () => {
     // Literal same object reference on every call — simulates TanStack Query's
     // structural sharing returning the pre-close cached reference on reopen.
     const telegramConfig = { type: 'telegram', enabled: true, token: '[configured]' }
     vi.mocked(fetchChannelConfig).mockImplementation(() => Promise.resolve(telegramConfig))
+    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
 
     const { rerender } = renderPanelControlled('telegram', 'Telegram', true)
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('[configured]')
+      const tokenField = screen.getByLabelText(/^Bot Token/) as HTMLInputElement
+      // The sentinel never round-trips into the input value (secret-overwrite
+      // fix) — the field hydrates BLANK with a "stored" placeholder instead.
+      expect(tokenField.value).toBe('')
+      expect(tokenField.placeholder).toMatch(/stored/i)
     })
 
     // Close without editing anything.
@@ -2308,10 +2328,24 @@ describe('ChannelConfigPanel — same-channel close→reopen rehydration (R2F-1 
     // Pre-fix: the `!open` effect cleared formValues to {} on close, and the
     // hydration effect (keyed only on [currentConfig, isGoogleChat]) never
     // re-fired because currentConfig's reference never changed — token field
-    // stayed permanently empty, blocking Save with "Bot Token is required".
+    // (and hasStoredSecret) stayed permanently empty/lost, blocking Save with
+    // "Bot Token is required" even though a credential IS stored.
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('[configured]')
+      const tokenField = screen.getByLabelText(/^Bot Token/) as HTMLInputElement
+      expect(tokenField.value).toBe('')
+      expect(tokenField.placeholder).toMatch(/stored/i)
     })
+
+    // The stored-secret state must have been correctly re-detected on reopen:
+    // Save proceeds without the required-field error, and the untouched
+    // secret is OMITTED (kept), not overwritten with an empty/garbage value.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+    expect(screen.queryByText(/Bot Token is required/i)).not.toBeInTheDocument()
+    const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
+    expect(Object.prototype.hasOwnProperty.call(payload, 'token')).toBe(false)
   })
 
   it('Google Chat: reopening the SAME channel re-detects the stored service-account auth method', async () => {

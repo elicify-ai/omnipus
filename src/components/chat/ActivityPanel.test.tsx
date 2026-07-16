@@ -116,6 +116,9 @@ describe('ActivityPanel — expandable native row', () => {
     )
     expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
     const toggle = screen.getByRole('button', { expanded: false })
+    // A row that CAN expand must stay enabled (unlike the disabled gate on
+    // non-expandable bash/3p rows below).
+    expect(toggle).not.toBeDisabled()
     fireEvent.click(toggle)
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { expanded: true }))
@@ -139,11 +142,18 @@ describe('ActivityPanel — 3rd-party agent row', () => {
     // No expand affordance for 3p rows even when (hypothetically) steps exist client-side.
     const button = screen.getByText('audit files').closest('button')
     expect(button).not.toHaveAttribute('aria-expanded')
+    // Inert-focusable fix: a non-expandable row's header button must be
+    // genuinely disabled (dropped from the tab order, Enter/Space can't
+    // no-op on it), not just missing aria-expanded — mirrors
+    // GenericToolCall.tsx's `disabled={!hasDetail}` gate.
+    expect(button).toBeDisabled()
+    fireEvent.click(button as HTMLButtonElement)
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
   })
 })
 
 describe('ActivityPanel — bash row', () => {
-  it('renders a bash item without an expand affordance', () => {
+  it('renders a bash item without an expand affordance, and the header button is disabled', () => {
     render(
       <ActivityPanel
         open
@@ -155,6 +165,7 @@ describe('ActivityPanel — bash row', () => {
     expect(screen.getByText('npm run build')).toBeInTheDocument()
     const button = screen.getByText('npm run build').closest('button')
     expect(button).not.toHaveAttribute('aria-expanded')
+    expect(button).toBeDisabled()
   })
 })
 

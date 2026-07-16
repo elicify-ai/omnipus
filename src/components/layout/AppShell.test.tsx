@@ -57,6 +57,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 import * as api from '@/lib/api'
 import { AppShell } from './AppShell'
+import { useConnectionStore } from '@/store/connection'
+import { useUiStore } from '@/store/ui'
 
 const APP_STATE_OK: AppState = { onboarding_complete: true, dev_mode_bypass: false }
 const NOTIFICATIONS_EMPTY: NotificationList = { notifications: [], unread_count: 0 }
@@ -274,5 +276,120 @@ describe('AppShell — visualViewport focus-gated tracking', () => {
     expect(document.documentElement.style.getPropertyValue('--app-top')).toBe('')
 
     document.body.removeChild(input)
+  })
+})
+
+// ── Banner announcements (FW-3, item 2) ──────────────────────────────────────
+//
+// The connectionError and devModeBypass banners were visible but silent to
+// screen readers (no role="alert") — a sighted user sees the red bar
+// immediately; a screen reader user got nothing unless they happened to be
+// focused inside it. Both are security/connectivity-relevant and must
+// announce. Traces to: src/components/layout/AppShell.tsx L177-201.
+describe('AppShell — banner announcements', () => {
+  afterEach(() => {
+    useConnectionStore.setState({ connectionError: null })
+  })
+
+  it('connectionError banner carries role="alert"', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+    useConnectionStore.setState({ connectionError: 'Lost connection to gateway' })
+
+    renderShell()
+
+    const banner = await waitFor(() => screen.getByText('Lost connection to gateway'))
+    expect(banner.closest('[role="alert"]')).not.toBeNull()
+  })
+
+  it('devModeBypass banner carries role="alert"', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue({
+      onboarding_complete: true,
+      dev_mode_bypass: true,
+    })
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+
+    const banner = await waitFor(() => screen.getByTestId('dev-mode-banner'))
+    expect(banner).toHaveAttribute('role', 'alert')
+  })
+})
+
+// ── <sm docked-browser takeover inerts the collapsed chat region (FW-3, item 6) ──
+//
+// When BrowserLivePanel is docked open on a phone viewport (<640px), the flex
+// row gives it the width and the chat region collapses to zero — but its
+// controls stayed in the DOM (and thus the Tab order), so a keyboard user
+// could Tab into invisible stops. `inert` on the main-content wrapper closes
+// that gap; it's gated on BOTH conditions (panel open AND phone viewport) so
+// desktop's side-by-side split (panel open, chat still visible) stays fully
+// interactive. Traces to: src/components/layout/AppShell.tsx L160-173.
+describe('AppShell — <sm docked-browser takeover inerts collapsed chat controls', () => {
+  const originalMatchMedia = window.matchMedia
+
+  function stubMatchMedia(matchesPhoneQuery: boolean) {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: query === '(max-width: 639px)' ? matchesPhoneQuery : false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    })
+  }
+
+  afterEach(() => {
+    useUiStore.setState({ browserPanel: null })
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    })
+  })
+
+  it('is inert when the browser panel is open AND the viewport is a phone (<640px)', async () => {
+    stubMatchMedia(true)
+    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+
+    const main = await waitFor(() => screen.getByTestId('app-main-content'))
+    // jsdom's `.inert` IDL property is unreliable across versions — assert on
+    // the actual DOM attribute React writes, which is what a real browser's
+    // focus/Tab-order machinery keys off regardless.
+    expect(main.hasAttribute('inert')).toBe(true)
+  })
+
+  it('is NOT inert when the browser panel is open but the viewport is desktop-width', async () => {
+    stubMatchMedia(false)
+    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+
+    const main = await waitFor(() => screen.getByTestId('app-main-content'))
+    expect(main.hasAttribute('inert')).toBe(false)
+  })
+
+  it('is NOT inert on a phone viewport when the browser panel is closed — differentiation', async () => {
+    stubMatchMedia(true)
+    useUiStore.setState({ browserPanel: null })
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+
+    renderShell()
+
+    const main = await waitFor(() => screen.getByTestId('app-main-content'))
+    expect(main.hasAttribute('inert')).toBe(false)
   })
 })

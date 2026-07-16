@@ -22,10 +22,19 @@ export function EmptyState({ icon, message }: { icon: ReactNode; message: string
   )
 }
 
-export function ErrorState({ message }: { message: string }) {
+export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="flex justify-center py-8">
+    <div className="flex flex-col items-center justify-center gap-3 py-8">
       <p className="text-sm text-[var(--color-error)]">{message}</p>
+      {onRetry && (
+        <button tabIndex={0}
+          type="button"
+          onClick={onRetry}
+          className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors focus:outline-none"
+        >
+          Retry
+        </button>
+      )}
     </div>
   )
 }

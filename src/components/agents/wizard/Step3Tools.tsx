@@ -280,7 +280,7 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
             <button tabIndex={0}
               type="button"
               onClick={() => removeFallback(idx)}
-              className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-1"
+              className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
               aria-label={`Remove fallback ${idx + 1}`}
               data-testid={`wizard-fallback-remove-${idx}`}
             >

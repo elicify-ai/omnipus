@@ -410,10 +410,11 @@ export function SecuritySection() {
         {/* 3. Daily cost cap — shows spend progress */}
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-[var(--color-secondary)]">Daily spending limit</p>
+            <label htmlFor="daily-cost-cap" className="text-sm text-[var(--color-secondary)]">Daily spending limit</label>
             <div className="flex items-center gap-2">
               <span className="text-xs text-[var(--color-muted)]">$</span>
               <Input
+                id="daily-cost-cap"
                 type="number"
                 min="0"
                 step="0.5"
@@ -471,10 +472,11 @@ export function SecuritySection() {
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-[var(--color-secondary)]">Exec timeout (seconds)</p>
+                  <label htmlFor="exec-timeout-seconds" className="text-sm text-[var(--color-secondary)]">Exec timeout (seconds)</label>
                   <p className="text-xs text-[var(--color-muted)]">Max time for a single command, 0 = no limit</p>
                 </div>
                 <Input
+                  id="exec-timeout-seconds"
                   type="number"
                   min="0"
                   value={execTimeoutSecs}
@@ -488,10 +490,11 @@ export function SecuritySection() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-[var(--color-secondary)]">Background timeout (seconds)</p>
+                  <label htmlFor="max-background-seconds" className="text-sm text-[var(--color-secondary)]">Background timeout (seconds)</label>
                   <p className="text-xs text-[var(--color-muted)]">Max time for background processes, 0 = no limit</p>
                 </div>
                 <Input
+                  id="max-background-seconds"
                   type="number"
                   min="0"
                   value={maxBackgroundSecs}
@@ -511,6 +514,7 @@ export function SecuritySection() {
                 <Switch
                   checked={enableDenyPatterns}
                   onCheckedChange={(v) => { markDirty(); setEnableDenyPatterns(v) }}
+                  aria-label="Enable deny patterns"
                 />
               </div>
             </div>
@@ -564,10 +568,11 @@ export function SecuritySection() {
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-[var(--color-secondary)]">LLM calls / hour</p>
+                  <label htmlFor="agent-llm-calls-per-hour" className="text-sm text-[var(--color-secondary)]">LLM calls / hour</label>
                   <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
                 </div>
                 <Input
+                  id="agent-llm-calls-per-hour"
                   type="number"
                   min="0"
                   value={agentLlmCallsPerHour}
@@ -578,10 +583,11 @@ export function SecuritySection() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-[var(--color-secondary)]">Tool calls / minute</p>
+                  <label htmlFor="agent-tool-calls-per-minute" className="text-sm text-[var(--color-secondary)]">Tool calls / minute</label>
                   <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
                 </div>
                 <Input
+                  id="agent-tool-calls-per-minute"
                   type="number"
                   min="0"
                   value={agentToolCallsPerMin}
@@ -701,8 +707,9 @@ export function SecuritySection() {
               passphrase — it&apos;s required to unlock the vault next time.
             </p>
             <div className="space-y-1">
-              <p className="text-xs text-[var(--color-muted)]">New passphrase</p>
+              <label htmlFor="rotate-passphrase" className="text-xs text-[var(--color-muted)]">New passphrase</label>
               <Input
+                id="rotate-passphrase"
                 type="password"
                 value={rotatePassphrase}
                 onChange={(e) => setRotatePassphrase(e.target.value)}
@@ -735,8 +742,9 @@ export function SecuritySection() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-1">
-              <p className="text-xs text-[var(--color-muted)]">Key name</p>
+              <label htmlFor="cred-key" className="text-xs text-[var(--color-muted)]">Key name</label>
               <Input
+                id="cred-key"
                 value={credKey}
                 onChange={(e) => setCredKey(e.target.value)}
                 placeholder="e.g. OPENAI_API_KEY"
@@ -745,8 +753,9 @@ export function SecuritySection() {
               />
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-[var(--color-muted)]">Value</p>
+              <label htmlFor="cred-value" className="text-xs text-[var(--color-muted)]">Value</label>
               <Input
+                id="cred-value"
                 type="password"
                 value={credValue}
                 onChange={(e) => setCredValue(e.target.value)}

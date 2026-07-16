@@ -320,13 +320,61 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
     await waitFor(() => {
       expect(screen.getByTestId('mailbox-delete-btn')).toBeInTheDocument()
     })
+    // Remove Mailbox is a two-step destructive action (item 4): the button
+    // opens a confirmation dialog rather than deleting immediately.
     await act(async () => {
       fireEvent.click(screen.getByTestId('mailbox-delete-btn'))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-delete-confirm-dialog')).toBeInTheDocument()
+    })
+    expect(vi.mocked(deleteAgentMailbox)).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mailbox-delete-confirm-btn'))
     })
 
     await waitFor(() => {
       expect(vi.mocked(deleteAgentMailbox)).toHaveBeenCalledWith('mia', 'ws-1')
     })
+  })
+
+  it('Remove Mailbox: Cancel in the confirmation dialog does NOT call deleteAgentMailbox', async () => {
+    vi.mocked(fetchMailboxes).mockResolvedValue([
+      { agent_id: 'mia', enabled: true, configured: true, username: 'mia@example.com', workspace_id: 'ws-1' } as Mailbox,
+    ])
+    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'ws-1', name: 'My Workspace' } as never])
+    vi.mocked(deleteAgentMailbox).mockResolvedValue({ success: true } as never)
+
+    renderConnectorsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-configure-btn-mia-ws-1')).toBeInTheDocument()
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mailbox-configure-btn-mia-ws-1'))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-delete-btn')).toBeInTheDocument()
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mailbox-delete-btn'))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox-delete-confirm-dialog')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mailbox-delete-cancel-btn'))
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('mailbox-delete-confirm-dialog')).not.toBeInTheDocument()
+    })
+    expect(vi.mocked(deleteAgentMailbox)).not.toHaveBeenCalled()
+    // Canceling the confirm dialog must not close the whole mailbox panel.
+    expect(screen.getByTestId('mailbox-delete-btn')).toBeInTheDocument()
   })
 
   it('the same agent with mailboxes in two workspaces renders two distinct rows', async () => {
@@ -541,8 +589,10 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
       expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
     })
 
-    // Two comboboxes render in DOM order: owning agent, then workspace.
-    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    // Two comboboxes render in DOM order: workspace, then owning agent
+    // (item 5 — workspace precedes agent since the agent list is gated on
+    // the chosen workspace).
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
     fireEvent.click(workspaceTrigger)
     const option = await screen.findByRole('option', { name: 'Other Workspace' })
     fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
@@ -601,7 +651,7 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
       expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
     })
 
-    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
     fireEvent.click(workspaceTrigger)
     const option = await screen.findByRole('option', { name: 'Other Workspace' })
     fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
@@ -649,7 +699,7 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
       expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
     })
 
-    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
     fireEvent.click(workspaceTrigger)
     const option = await screen.findByRole('option', { name: 'Other Workspace' })
     fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
@@ -707,7 +757,7 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
       expect((screen.getByTestId('mailbox-username') as HTMLInputElement).value).toBe('mia@example.com')
     })
 
-    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
     fireEvent.click(workspaceTrigger)
     const option = await screen.findByRole('option', { name: 'Other Workspace' })
     fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
@@ -764,13 +814,13 @@ describe('EmailMailboxPanel — duplicate-pair guard', () => {
     // ADR-033 team scoping: agents are offered only after a workspace is
     // selected — pick the workspace FIRST, then the member agent that already
     // owns a mailbox there.
-    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
     fireEvent.click(workspaceTrigger)
     const wsOption = await screen.findByRole('option', { name: 'My Workspace' })
     fireEvent.pointerDown(wsOption, { pointerId: 1, button: 0 })
     fireEvent.click(wsOption)
 
-    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
+    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
     fireEvent.click(agentTrigger)
     const agentOption = await screen.findByRole('option', { name: 'Mia' })
     fireEvent.pointerDown(agentOption, { pointerId: 1, button: 0 })
@@ -958,13 +1008,13 @@ describe('EmailMailboxPanel — ADR-033 core_team scoping', () => {
     })
 
     // Select the workspace, then open the agent select: Mia offered, Ray not.
-    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
+    const workspaceTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
     fireEvent.click(workspaceTrigger)
     const wsOption = await screen.findByRole('option', { name: 'My Workspace' })
     fireEvent.pointerDown(wsOption, { pointerId: 1, button: 0 })
     fireEvent.click(wsOption)
 
-    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[0] as HTMLElement
+    const agentTrigger = document.body.querySelectorAll('[role="combobox"]')[1] as HTMLElement
     fireEvent.click(agentTrigger)
     await screen.findByRole('option', { name: 'Mia' })
     // The team filter applies once the workspace-detail query resolves (until

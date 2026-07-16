@@ -373,6 +373,7 @@ function NumberRow({ label, caption, value, min, step, onChange }: NumberRowProp
         }}
         placeholder="—"
         className="h-7 text-xs"
+        aria-label={label}
       />
       <p className="text-[10px] text-[var(--color-muted)]">{caption}</p>
     </div>

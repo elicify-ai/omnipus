@@ -89,7 +89,7 @@ function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) 
             {/* Name */}
             <div className="w-28 sm:w-36 shrink-0 truncate text-xs text-[var(--color-secondary)]" title={item.name}>
               {item.href ? (
-                <Link to={item.href} className="hover:text-[var(--color-accent)] transition-colors">
+                <Link to={item.href} tabIndex={0} className="hover:text-[var(--color-accent)] transition-colors">
                   {item.name}
                 </Link>
               ) : (
@@ -128,15 +128,34 @@ interface SessionRow {
 
 type SortKey = 'tokens' | 'title'
 
+type SortDir = 'asc' | 'desc'
+
 function SessionsTable({ rows }: { rows: SessionRow[] }) {
   const [sortKey, setSortKey] = useState<SortKey>('tokens')
-  const sorted = [...rows].sort((a, b) =>
-    sortKey === 'tokens' ? b.tokens - a.tokens : a.title.localeCompare(b.title),
-  )
+  // Defaults match the pre-existing (non-toggleable) behaviour: tokens
+  // descending (biggest first), title ascending (A→Z).
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setSortKey(key)
+    setSortDir(key === 'tokens' ? 'desc' : 'asc')
+  }
+
+  const sorted = [...rows].sort((a, b) => {
+    const ascending = sortKey === 'tokens' ? a.tokens - b.tokens : a.title.localeCompare(b.title)
+    return sortDir === 'asc' ? ascending : -ascending
+  })
 
   if (sorted.length === 0) {
     return <p className="text-sm text-[var(--color-muted)] py-4 text-center">No session data.</p>
   }
+
+  const titleSortIcon = sortKey === 'title' ? (sortDir === 'asc' ? <CaretUp size={10} weight="bold" aria-hidden="true" /> : <CaretDown size={10} weight="bold" aria-hidden="true" />) : null
+  const tokensSortIcon = sortKey === 'tokens' ? (sortDir === 'asc' ? <CaretUp size={10} weight="bold" aria-hidden="true" /> : <CaretDown size={10} weight="bold" aria-hidden="true" />) : null
 
   return (
     <div className="overflow-x-auto">
@@ -144,28 +163,30 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-muted)]">
             <th
+              scope="col"
               className="text-left py-2 pr-4 font-medium"
-              aria-sort={sortKey === 'title' ? 'ascending' : 'none'}
+              aria-sort={sortKey === 'title' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
             >
               <button tabIndex={0}
                 type="button"
-                onClick={() => setSortKey('title')}
+                onClick={() => handleSort('title')}
                 className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
               >
                 Session
-                {sortKey === 'title' && <CaretUp size={10} weight="bold" aria-hidden="true" />}
+                {titleSortIcon}
               </button>
             </th>
             <th
+              scope="col"
               className="text-right py-2 pl-4 font-medium"
-              aria-sort={sortKey === 'tokens' ? 'descending' : 'none'}
+              aria-sort={sortKey === 'tokens' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
             >
               <button tabIndex={0}
                 type="button"
-                onClick={() => setSortKey('tokens')}
+                onClick={() => handleSort('tokens')}
                 className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
               >
-                {sortKey === 'tokens' && <CaretDown size={10} weight="bold" aria-hidden="true" />}
+                {tokensSortIcon}
                 Tokens
               </button>
             </th>
@@ -178,6 +199,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
                 <Link
                   to="/sessions/$sessionId"
                   params={{ sessionId: row.id }}
+                  tabIndex={0}
                   className="hover:text-[var(--color-accent)] transition-colors"
                 >
                   {row.title || 'Untitled'}
@@ -288,7 +310,9 @@ export function UsageScreen() {
           <div className="flex items-center gap-3">
             <ChartBar size={22} weight="fill" className="text-[var(--color-accent)] shrink-0" />
             <div>
-              <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)]">Usage</h1>
+              {/* ScreenHeader above already renders "Usage" as the page's h2 —
+                  this is a decorative restatement, not a second heading. */}
+              <div className="font-headline text-xl font-bold text-[var(--color-secondary)]">Usage</div>
               <p className="text-xs text-[var(--color-muted)] mt-0.5">Token usage by agent, model, and session</p>
             </div>
           </div>
@@ -352,6 +376,7 @@ export function UsageScreen() {
             </div>
             <Link
               to="/"
+              tabIndex={0}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-primary)] text-sm font-medium hover:opacity-90 transition-opacity"
             >
               Start a chat

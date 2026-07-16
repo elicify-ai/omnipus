@@ -147,6 +147,38 @@ describe('buildTaskGraph — agent avatar resolution', () => {
   })
 })
 
+describe('buildTaskGraph — node tab order (position-sorted, not fetch order)', () => {
+  it('sorts nodes by layout position (x, then y) for stable LR tab order, independent of fetch order', () => {
+    // A dependency chain a -> b -> c, fed in REVERSED order — dagre still
+    // ranks 'a' leftmost (no blockers), 'c' rightmost (blocked by both 'b'
+    // and, transitively, 'a'), so the pre-fix node array (built via
+    // `visible.map`) came out in fetch order [c, b, a] — the opposite of the
+    // visual left-to-right layout.
+    const tasks = [
+      makeTask({ id: 'c', title: 'Charlie', blocked_by: ['b'] }),
+      makeTask({ id: 'b', title: 'Bravo', blocked_by: ['a'] }),
+      makeTask({ id: 'a', title: 'Alpha' }),
+    ]
+    const { nodes } = buildTaskGraph(tasks)
+    expect(nodes.map((n) => n.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('holds the (x, then y) sort invariant generally, not just for this fixture', () => {
+    const tasks = [
+      makeTask({ id: 'c', blocked_by: ['b'] }),
+      makeTask({ id: 'b', blocked_by: ['a'] }),
+      makeTask({ id: 'a' }),
+      makeTask({ id: 'd', blocked_by: ['a'] }),
+    ]
+    const { nodes } = buildTaskGraph(tasks)
+    for (let i = 1; i < nodes.length; i++) {
+      const prev = nodes[i - 1].position
+      const cur = nodes[i].position
+      expect(prev.x < cur.x || (prev.x === cur.x && prev.y <= cur.y)).toBe(true)
+    }
+  })
+})
+
 describe('buildTaskGraph — empty', () => {
   it('returns no nodes or edges for an empty task list', () => {
     const { nodes, edges } = buildTaskGraph([])

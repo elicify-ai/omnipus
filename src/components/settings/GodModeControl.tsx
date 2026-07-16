@@ -148,40 +148,48 @@ export function GodModeControl() {
               />
               <p className="text-sm font-semibold text-[var(--color-secondary)]">God-mode</p>
             </div>
-            <p className="text-xs text-[var(--color-muted)] leading-relaxed">
-              Removes <strong className="text-[var(--color-secondary)]">all permission prompts</strong> and
-              disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.
-              Audit logging, the prompt-guard, and rate limiting stay on.
-            </p>
-            <p className="flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
-              <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
-              Changing this requires re-typing your password.
-            </p>
-            {isError && (
-              <p
-                data-testid="god-mode-fetch-error-note"
-                className="text-[11px] text-[var(--color-error)]"
-              >
-                Could not fetch god-mode status — gateway may be offline. The state shown here may
-                be stale.
+            <div id="god-mode-consequence-copy">
+              <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+                Removes <strong className="text-[var(--color-secondary)]">all permission prompts</strong> and
+                disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.
+                Audit logging, the prompt-guard, and rate limiting stay on.
               </p>
-            )}
-            {knownUnsupported && (
-              <p
-                data-testid="god-mode-unavailable-note"
-                className="text-[11px] text-[var(--color-muted)] italic"
-              >
-                Not available in this build — god-mode support is compiled out.
+              <p className="flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+                <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
+                Changing this requires re-typing your password.
               </p>
-            )}
-            {supported && !available && !isLoading && (
-              <p
-                data-testid="god-mode-restart-note"
-                className="text-[11px] text-[var(--color-muted)] italic"
-              >
-                Authorized but not yet active — restart the gateway to activate god-mode.
-              </p>
-            )}
+            </div>
+            {/* Dynamic status notes — kept mounted (even when empty) and marked
+                aria-live so a note appearing/changing is announced reliably,
+                rather than depending on the element itself being inserted. At
+                most one of the three conditions below is ever true at once. */}
+            <div id="god-mode-status-note" aria-live="polite">
+              {isError && (
+                <p
+                  data-testid="god-mode-fetch-error-note"
+                  className="text-[11px] text-[var(--color-error)]"
+                >
+                  Could not fetch god-mode status — gateway may be offline. The state shown here may
+                  be stale.
+                </p>
+              )}
+              {knownUnsupported && (
+                <p
+                  data-testid="god-mode-unavailable-note"
+                  className="text-[11px] text-[var(--color-muted)] italic"
+                >
+                  Not available in this build — god-mode support is compiled out.
+                </p>
+              )}
+              {supported && !available && !isLoading && (
+                <p
+                  data-testid="god-mode-restart-note"
+                  className="text-[11px] text-[var(--color-muted)] italic"
+                >
+                  Authorized but not yet active — restart the gateway to activate god-mode.
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Switch — accessible role=switch, danger styling when ON. */}
@@ -190,6 +198,7 @@ export function GodModeControl() {
             role="switch"
             aria-checked={enabled}
             aria-label="God-mode"
+            aria-describedby="god-mode-consequence-copy god-mode-status-note"
             data-testid="god-mode-toggle"
             disabled={knownUnsupported || busy || isLoading}
             onClick={requestToggle}

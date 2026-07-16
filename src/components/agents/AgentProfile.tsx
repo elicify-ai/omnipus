@@ -242,8 +242,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     const cfg: WorkspaceMemberConfig | undefined =
       workspaceData.member_configs?.[agentId]
     const hb = cfg?.heartbeat
+    const interval = hb?.interval_minutes ?? 30
     setHbEnabled(hb?.enabled ?? false)
-    setHbIntervalMinutes(hb?.interval_minutes ?? 30)
+    setHbIntervalMinutes(interval)
+    setHbIntervalDraft(String(interval))
     setHbBody(hb?.body ?? '')
   }, [workspaceData, agentId])
 
@@ -330,6 +332,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
   const [hbEnabled, setHbEnabled] = useState(false)
   const [hbIntervalMinutes, setHbIntervalMinutes] = useState(30)
+  // Draft string for the interval input (mirrors `timeoutDraft`/
+  // `maxToolIterationsDraft` above) — a controlled number input backed
+  // directly by the committed number turned "clear the field to retype"
+  // into an immediate snap-to-5 on every keystroke (Number('') coerced via
+  // the old `raw === ''` branch), which fought the operator mid-edit: clear
+  // "10" meaning to type "15" and the field already reads "5" before the "1"
+  // even lands, producing "51" instead. The draft absorbs in-progress
+  // typing; only a valid (>= 5) value commits, and blur restores the last
+  // committed value into the draft.
+  const [hbIntervalDraft, setHbIntervalDraft] = useState('30')
   const [hbBody, setHbBody] = useState('')
   // Tracks whether the heartbeat form has been modified since last save.
   const hbDirtyRef = useRef(false)
@@ -765,6 +777,29 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     },
   )
 
+  // W6-B4 / G3 fix: the "Default agent" toggle used to fire its success
+  // toast (and invalidate ['agents']) the instant the Switch was flipped —
+  // BEFORE the debounced (500ms) autosave had actually persisted the flag.
+  // A slow network or a failed save left the toast lying: the operator saw
+  // "X is now the default agent" while the server still had the old value.
+  // This ref records the pending default-flag change; the effect below only
+  // fires the toast once `saveStatus` confirms it actually landed (and
+  // silently drops the pending flag on error — the AutoSaveIndicator already
+  // surfaces the failure, and a wrong-tense success toast would be worse).
+  const pendingDefaultToastRef = useRef<{ next: boolean; label: string } | null>(null)
+  useEffect(() => {
+    if (saveStatus === 'saved' && pendingDefaultToastRef.current) {
+      const { next, label } = pendingDefaultToastRef.current
+      pendingDefaultToastRef.current = null
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      addToast({
+        message: next ? `${label} is now the default agent` : `${label} is no longer the default agent`,
+        variant: 'success',
+      })
+    } else if (saveStatus === 'error') {
+      pendingDefaultToastRef.current = null
+    }
+  }, [saveStatus, queryClient, addToast])
 
   // Add a fallback from the <ModelSelector> dropdown. Pairs the picked
   // model with the provider that owns it (via modelToProvider). De-dupes
@@ -1056,13 +1091,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     onCheckedChange={(v) => {
                       markDirty()
                       setIsDefault(v)
-                      queryClient.invalidateQueries({ queryKey: ['agents'] })
-                      addToast({
-                        message: v
-                          ? `${name || agent.name} is now the default agent`
-                          : `${name || agent.name} is no longer the default agent`,
-                        variant: 'success',
-                      })
+                      // Toast is deferred to the autosave success path (see
+                      // `pendingDefaultToastRef` effect above) — this flag
+                      // has not persisted yet.
+                      pendingDefaultToastRef.current = { next: v, label: name || agent.name }
                     }}
                     aria-label={isDefault ? 'Unset as default agent' : 'Set as default agent'}
                   />
@@ -1224,6 +1256,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 type="button"
                 onClick={() => setAdvancedOpen((o) => !o)}
                 className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                aria-expanded={advancedOpen}
               >
                 <span>Sampling parameters</span>
                 {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
@@ -1425,7 +1458,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
                         onClick={() => moveFallback(entry.model, -1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
+                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowUp size={10} />
                       </button>
@@ -1435,7 +1468,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === fallbackModels.length - 1}
                         onClick={() => moveFallback(entry.model, 1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)]"
+                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowDown size={10} />
                       </button>
@@ -1444,7 +1477,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         data-testid={`fallback-chip-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
                         onClick={() => removeFallback(entry.model)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <X size={10} />
                       </button>
@@ -1625,8 +1658,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 className="space-y-1.5"
               >
                 <div className="flex items-center gap-3">
-                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
+                  <label htmlFor="profile-cli-path-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
                   <Input
+                    id="profile-cli-path-input"
                     value={executor?.cli_path ?? offeredCliPath ?? ''}
                     onChange={(e) => {
                       markDirty()
@@ -1681,8 +1715,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
               <div data-testid="profile-cli-args" className="space-y-1.5">
                 <div className="flex items-center gap-3">
-                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
+                  <label htmlFor="profile-cli-args-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
                   <Input
+                    id="profile-cli-args-input"
                     value={executor?.cli_args ?? ''}
                     onChange={(e) => {
                       markDirty()
@@ -1722,13 +1757,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <Switch
                     checked={useGlobalRateLimits}
                     onCheckedChange={(v) => { markDirty(); setUseGlobalRateLimits(v) }}
+                    aria-label={useGlobalRateLimits ? 'Stop using global rate-limit defaults' : 'Use global rate-limit defaults'}
                   />
                 </div>
                 {!useGlobalRateLimits && (
                   <div className="space-y-2">
                     <div className="flex items-center gap-3">
-                      <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">LLM calls / hour</label>
+                      <label htmlFor="profile-rate-limit-llm-calls" className="text-xs text-[var(--color-muted)] w-44 shrink-0">LLM calls / hour</label>
                       <Input
+                        id="profile-rate-limit-llm-calls"
                         type="number"
                         min={0}
                         value={maxLlmCallsPerHour}
@@ -1738,8 +1775,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       />
                     </div>
                     <div className="flex items-center gap-3">
-                      <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Tool calls / minute</label>
+                      <label htmlFor="profile-rate-limit-tool-calls" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Tool calls / minute</label>
                       <Input
+                        id="profile-rate-limit-tool-calls"
                         type="number"
                         min={0}
                         value={maxToolCallsPerMinute}
@@ -1749,8 +1787,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       />
                     </div>
                     <div className="flex items-center gap-3">
-                      <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Max cost / day ($)</label>
+                      <label htmlFor="profile-rate-limit-max-cost" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Max cost / day ($)</label>
                       <Input
+                        id="profile-rate-limit-max-cost"
                         type="number"
                         min={0}
                         step={0.01}
@@ -1773,13 +1812,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Execution</p>
               <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
                 <div className="flex items-center gap-3">
-                  <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                  <label htmlFor="agent-timeout-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
                     Turn timeout
                     <span className="block text-[10px] text-[var(--color-muted)]/70">
                       Max seconds per turn. 0 = no limit.
                     </span>
                   </label>
                   <Input
+                    id="agent-timeout-input"
                     type="number"
                     min={0}
                     data-testid="agent-timeout-input"
@@ -1806,7 +1846,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     this type. */}
                 {!isExternalAgent && (
                   <div className="flex items-center gap-3">
-                    <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                    <label htmlFor="agent-max-tool-calls-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
                       Max tool calls per turn
                       <span className="block text-[10px] text-[var(--color-muted)]/70">
                         Per single turn (one message, task, or heartbeat run) — the
@@ -1814,6 +1854,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       </span>
                     </label>
                     <Input
+                      id="agent-max-tool-calls-input"
                       type="number"
                       min={1}
                       data-testid="agent-max-tool-calls-input"
@@ -2021,15 +2062,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             data-testid="heartbeat-interval-input"
             type="number"
             min={5}
-            value={hbIntervalMinutes}
+            value={hbIntervalDraft}
             onChange={(e) => {
               const raw = e.target.value
-              if (raw === '') { markHbDirty(); setHbIntervalMinutes(5); return }
-              const n = Number(raw)
-              if (!Number.isFinite(n)) return
-              markHbDirty()
-              setHbIntervalMinutes(Math.max(5, Math.floor(n)))
+              setHbIntervalDraft(raw)
+              // Commit (and mark dirty) only a real, valid value; in-progress
+              // typing (empty, or an intermediate value below the 5-minute
+              // floor on its way to a larger number) never persists.
+              if (raw !== '' && Number.isInteger(Number(raw)) && Number(raw) >= 5) {
+                markHbDirty()
+                setHbIntervalMinutes(Number(raw))
+              }
             }}
+            onBlur={() => setHbIntervalDraft(String(hbIntervalMinutes))}
             className="text-xs h-8"
           />
         </div>
@@ -2059,10 +2104,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             placeholder="Periodic instruction prompt — e.g. 'Summarise overnight CI results and update the project board.'"
             className="text-sm resize-none"
             aria-required={hbEnabled}
+            aria-describedby={hbEnabled && hbBody.trim() === '' ? 'heartbeat-body-required-hint' : undefined}
             maxLength={16384}
           />
           {hbEnabled && hbBody.trim() === '' && (
             <p
+              id="heartbeat-body-required-hint"
               data-testid="heartbeat-body-required-hint"
               className="text-xs text-[var(--color-error)]"
             >
@@ -2483,6 +2530,43 @@ function ActivityRow({ event }: { event: ActivityEvent }) {
   )
 }
 
+// ── Env override row helpers (mirrors wizard/Step1Identity.tsx's ExecutorInputs
+// — see that file's comment for the full rationale) ─────────────────────────
+// Keying rows off the KEY text itself (`key={k}-${idx}`) meant every
+// keystroke in the KEY field changed the row's identity, remounting the
+// input mid-word and dropping focus — and renaming a key to match an
+// existing one silently MERGED the two rows into one (`Object.fromEntries`
+// on a colliding key just keeps the last write). Rows below carry a
+// synthetic `id` that's stable for the row's lifetime instead.
+interface EnvRow {
+  id: string
+  key: string
+  value: string
+}
+
+function envRecordToRows(record: Record<string, string>): EnvRow[] {
+  return Object.entries(record).map(([key, value], i) => ({ id: `profile-env-init-${i}`, key, value }))
+}
+
+function envRowsToRecord(rows: EnvRow[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const row of rows) out[row.key] = row.value
+  return out
+}
+
+/** Non-empty keys shared by more than one row. Empty keys (a freshly
+ *  "+ Add"-ed row not yet named) are excluded from the check. */
+function findEnvDuplicateKeys(rows: EnvRow[]): Set<string> {
+  const seen = new Set<string>()
+  const dupes = new Set<string>()
+  for (const row of rows) {
+    if (row.key === '') continue
+    if (seen.has(row.key)) dupes.add(row.key)
+    seen.add(row.key)
+  }
+  return dupes
+}
+
 // Wave 5 / spec §6.4: KEY=value editor for `ExecutorConfig.env_overrides`.
 // The wire shape is `Record<string, string>` (per ExecutorConfig.yaml).
 // Each row is two inputs (key, value) plus a remove button. New rows are
@@ -2497,55 +2581,122 @@ function EnvironmentOverridesEditor({
   onChange: (next: Record<string, string>) => void
   disabled?: boolean
 }) {
-  const entries = Object.entries(value)
+  const [rows, setRows] = useState<EnvRow[]>(() => envRecordToRows(value))
+  const rowIdCounter = useRef(rows.length)
+  // What WE last pushed via `onChange` — used to tell an external reset
+  // (agent switch, conflict-refresh discard) apart from the echo of our own
+  // commit (e.g. the autosave round-trip re-hydrating identical data with a
+  // new object reference). Only the former should resync local rows; the
+  // latter would otherwise remount every row and drop focus right after an
+  // autosave lands mid-typing.
+  const lastPushedRef = useRef<Record<string, string>>(value)
+
+  useEffect(() => {
+    if (JSON.stringify(value) === JSON.stringify(lastPushedRef.current)) return
+    lastPushedRef.current = value
+    setRows(envRecordToRows(value))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+
+  const duplicateKeys = findEnvDuplicateKeys(rows)
+
+  /** Pushes `rows` to the parent UNLESS a duplicate key exists — serializing
+   *  a duplicate to the `Record<string,string>` wire shape would silently
+   *  overwrite one entry, so a pending duplicate blocks the commit (leaving
+   *  the last known-good value in place) instead of merging. */
+  function commitIfValid(next: EnvRow[]) {
+    if (findEnvDuplicateKeys(next).size > 0) return
+    const record = envRowsToRecord(next)
+    lastPushedRef.current = record
+    onChange(record)
+  }
+
+  function addRow() {
+    rowIdCounter.current += 1
+    const next = [...rows, { id: `profile-env-${rowIdCounter.current}`, key: '', value: '' }]
+    setRows(next)
+    commitIfValid(next)
+  }
+
+  /** KEY edits stay local while typing — committed only on blur (see
+   *  `commitKey`), which is what stops a transient duplicate from ever
+   *  reaching the payload mid-rename. */
+  function updateKeyDraft(id: string, key: string) {
+    setRows(rows.map((row) => (row.id === id ? { ...row, key } : row)))
+  }
+
+  function commitKey() {
+    commitIfValid(rows)
+  }
+
+  function updateValue(id: string, val: string) {
+    const next = rows.map((row) => (row.id === id ? { ...row, value: val } : row))
+    setRows(next)
+    commitIfValid(next)
+  }
+
+  function removeRow(id: string) {
+    const next = rows.filter((row) => row.id !== id)
+    setRows(next)
+    commitIfValid(next)
+  }
+
   return (
     <div className="space-y-1.5">
-      {entries.length === 0 ? (
+      {rows.length === 0 ? (
         <p className="text-[11px] text-[var(--color-muted)] italic">No overrides configured.</p>
       ) : (
-        entries.map(([k, v], idx) => (
-          <div
-            key={`${k}-${idx}`}
-            className="flex items-center gap-2"
-            data-testid={`profile-env-row-${idx}`}
-          >
-            <Input
-              value={k}
-              onChange={(e) => {
-                const nextKey = e.target.value
-                onChange(Object.fromEntries(entries.map(([ek], i) => [i === idx ? nextKey : ek, v])))
-              }}
-              placeholder="KEY"
-              className="text-xs h-8 font-mono flex-1"
-              disabled={disabled}
-            />
-            <span className="text-[var(--color-muted)]">=</span>
-            <Input
-              value={v}
-              onChange={(e) => {
-                onChange({ ...value, [k]: e.target.value })
-              }}
-              placeholder="value"
-              className="text-xs h-8 font-mono flex-1"
-              disabled={disabled}
-            />
-            <button tabIndex={0}
-              type="button"
-              onClick={() => onChange(Object.fromEntries(entries.filter((_, i) => i !== idx)))}
-              className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors disabled:opacity-50"
-              aria-label={`Remove env override ${k}`}
-              disabled={disabled}
-            >
-              <X size={12} />
-            </button>
-          </div>
-        ))
+        rows.map((row, idx) => {
+          const isDuplicate = row.key !== '' && duplicateKeys.has(row.key)
+          return (
+            <div key={row.id} className="space-y-1" data-testid={`profile-env-row-${idx}`}>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={row.key}
+                  onChange={(e) => updateKeyDraft(row.id, e.target.value)}
+                  onBlur={commitKey}
+                  placeholder="KEY"
+                  className="text-xs h-8 font-mono flex-1"
+                  aria-label="Environment variable name"
+                  aria-invalid={isDuplicate || undefined}
+                  disabled={disabled}
+                />
+                <span className="text-[var(--color-muted)]">=</span>
+                <Input
+                  value={row.value}
+                  onChange={(e) => updateValue(row.id, e.target.value)}
+                  placeholder="value"
+                  className="text-xs h-8 font-mono flex-1"
+                  aria-label="Environment variable value"
+                  disabled={disabled}
+                />
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => removeRow(row.id)}
+                  className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors disabled:opacity-50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                  aria-label={`Remove env override ${row.key || 'entry'}`}
+                  disabled={disabled}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+              {isDuplicate && (
+                <p
+                  className="text-[10px] text-[var(--color-error)]"
+                  data-testid={`profile-env-duplicate-${idx}`}
+                >
+                  Duplicate key "{row.key}" — rename it before this change is saved.
+                </p>
+              )}
+            </div>
+          )
+        })
       )}
       {!disabled && (
         <button tabIndex={0}
           type="button"
           data-testid="profile-env-add"
-          onClick={() => onChange({ ...value, '': '' })}
+          onClick={addRow}
           className="text-[10px] text-[var(--color-accent)] hover:underline"
         >
           + Add override

@@ -69,45 +69,48 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
   if (children.length === 0) return null
 
   return (
-    <div
-      className="mt-2 space-y-1 pl-2 border-l-2 border-[var(--color-border)]"
-      role="list"
-      aria-label="Subtasks"
-    >
+    // A native <ul>/<li> pair gives the list/listitem semantics for free —
+    // putting `role="listitem"` directly ON the row <button> (the previous
+    // shape) REPLACES that button's own implicit role="button" with
+    // "listitem" instead of layering the two, so AT stopped announcing the
+    // row as pressable at all. Wrapping each row's button in its own <li>
+    // keeps exactly one tab stop per row (the button) while the <li> itself
+    // carries the listitem semantics.
+    <ul className="mt-2 list-none space-y-1 pl-2 border-l-2 border-[var(--color-border)]" aria-label="Subtasks">
       {children.map((child) => (
-        <button tabIndex={0}
-          key={child.id}
-          type="button"
-          role="listitem"
-          onClick={(e) => {
-            e.stopPropagation()
-            onChildClick(child)
-          }}
-          className={cn(
-            'w-full flex items-center gap-1.5 rounded px-1.5 py-1 text-left',
-            'text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-            'hover:bg-[var(--color-surface-2)] transition-colors',
-          )}
-          aria-label={`Subtask: ${child.title} — ${STATUS_LABEL[child.status]}`}
-        >
-          {/* Status dot */}
-          <span
-            className="flex-shrink-0 rounded-full"
-            style={{
-              width: 6,
-              height: 6,
-              backgroundColor: STATUS_DOT[child.status],
+        <li key={child.id}>
+          <button tabIndex={0}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onChildClick(child)
             }}
-          />
-          <span className="flex-1 truncate leading-tight">{child.title}</span>
-          <span
-            className="flex-shrink-0 text-[10px] font-medium"
-            style={{ color: STATUS_DOT[child.status] }}
+            className={cn(
+              'w-full flex items-center gap-1.5 rounded px-1.5 py-1 text-left',
+              'text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+              'hover:bg-[var(--color-surface-2)] transition-colors',
+            )}
+            aria-label={`Subtask: ${child.title} — ${STATUS_LABEL[child.status]}`}
           >
-            {STATUS_LABEL[child.status]}
-          </span>
-        </button>
+            {/* Status dot */}
+            <span
+              className="flex-shrink-0 rounded-full"
+              style={{
+                width: 6,
+                height: 6,
+                backgroundColor: STATUS_DOT[child.status],
+              }}
+            />
+            <span className="flex-1 truncate leading-tight">{child.title}</span>
+            <span
+              className="flex-shrink-0 text-[10px] font-medium"
+              style={{ color: STATUS_DOT[child.status] }}
+            >
+              {STATUS_LABEL[child.status]}
+            </span>
+          </button>
+        </li>
       ))}
-    </div>
+    </ul>
   )
 }

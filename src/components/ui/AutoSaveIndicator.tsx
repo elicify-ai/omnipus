@@ -22,16 +22,28 @@ function formatSavedAt(date: Date): string {
 
 /**
  * Subtle auto-save status indicator.
- * idle → hidden, saving → spinner, saved → checkmark + last saved time (fades), error → red warning.
+ * idle → visually empty, saving → spinner, saved → checkmark + last saved time (fades), error → red warning.
+ *
+ * The wrapping <span> stays mounted at ALL times (including idle) so that
+ * screen readers already have the live region registered before content
+ * appears in it — an element inserted fresh at the moment of the FIRST
+ * status change is not reliably announced by every assistive-tech / browser
+ * combination, whereas mutating the text content of an already-present live
+ * region is. `aria-live="polite"` covers saving/saved; the error state adds
+ * `role="alert"` (implicit assertive live region) instead, matching
+ * SaveStatus's (MemorySection) semantics so both indicators announce
+ * consistently.
  */
 export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }: AutoSaveIndicatorProps) {
-  if (status === 'idle') return null
+  const isError = status === 'error'
 
   return (
     <span
       className={`inline-flex items-center gap-1 text-[10px] transition-opacity duration-300 ${
-        status === 'saved' ? 'opacity-60' : 'opacity-100'
+        status === 'saved' ? 'opacity-60' : status === 'idle' ? 'opacity-0' : 'opacity-100'
       } ${className}`}
+      aria-live={isError ? undefined : 'polite'}
+      role={isError ? 'alert' : undefined}
     >
       {status === 'saving' && (
         <>
@@ -47,7 +59,7 @@ export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }
           </span>
         </>
       )}
-      {status === 'error' && (
+      {isError && (
         <>
           <Warning size={11} weight="bold" className="text-[var(--color-error)]" />
           <span className="text-[var(--color-error)]">{error || 'Save failed'}</span>
