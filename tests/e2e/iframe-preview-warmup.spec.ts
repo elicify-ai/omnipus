@@ -137,10 +137,15 @@ test(
     // Each probe fires every 2 s; 30 probes * 2 s = 60 s total. We advance by 62 s
     // to ensure the last interval tick fires and transitions to 'error'.
     //
-    // page.clock.tick() advances the mocked clock, triggering all pending setInterval
-    // callbacks synchronously. This is what makes the 60-probe cycle complete in
-    // < 1 real second in the test.
-    await page.clock.fastForward(62_000)
+    // page.clock.runFor() advances the mocked clock tick-by-tick, firing EVERY
+    // due setInterval callback in order (like real elapsed time, just fast) — this
+    // is what makes the 30-probe cycle complete in < 1 real second in the test.
+    // fastForward() is NOT equivalent here: per Playwright's Clock semantics it
+    // jumps the clock forward and fires at most the single most-recent due callback
+    // for a recurring timer (it's built for "skip past N calls you don't care about",
+    // not "run through all of them") — so probeCountRef would only ever reach 1,
+    // never maxProbes (30), and the component would never transition to 'error'.
+    await page.clock.runFor(62_000)
 
     // Step 3: After time has passed, the warmup should have timed out.
     // IframePreview.tsx: when probeCountRef.current >= maxProbes (30), stopPolling()

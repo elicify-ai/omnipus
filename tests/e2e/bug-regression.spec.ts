@@ -57,19 +57,63 @@ test.describe('Bug-1: No skip button in onboarding welcome step', () => {
     await expect(skipText).toHaveCount(0)
   })
 
-  test('(Bug-1-b) onboarding welcome step has a Get Started button', async ({ page }) => {
-    // BDD: Given the welcome step, Then "Get Started" IS present (the only progression path)
+  test('(Bug-1-b) onboarding first step has a Continue button (the only progression path)', async ({ page }) => {
+    // BDD: Given the onboarding wizard's first step (username entry)
+    //      Then a "Continue" button IS present — the only forward-progress control
     // This is the positive complement to Bug-1-a.
-    // Traces to: Bug-1 (only forward path is Get Started)
+    // Traces to: Bug-1 (only forward path is Continue — there is no skip)
+    //
+    // TEST BUG (fixed): the previous version gated its assertion behind
+    // `page.getByText('Welcome to Omnipus')`, assuming that was the onboarding
+    // welcome heading. It is not — that text belongs to ChatScreen's empty-state
+    // (WelcomeState(), src/components/chat/ChatScreen.tsx:1611-1633). The real
+    // onboarding wizard (src/routes/onboarding.tsx) has no "Welcome to Omnipus"
+    // heading and no "Get Started" button anywhere; its first step is `NameStep`
+    // ("What should I call you?" heading + a "Continue" button,
+    // onboarding.tsx:795-852).
+    //
+    // Root cause of the collision: this describe block's storageState override
+    // (line 32, `{ cookies: [], origins: [] }`) only clears the BROWSER's
+    // client-side state. Whether onboarding is complete is SERVER-side state
+    // (`GET /api/v1/state` -> `onboarding_complete`), set to `true` once for the
+    // whole worker/run by global-setup.ts's `onboardViaAPI()` call before any
+    // test runs. So `/onboarding`'s `beforeLoad` (onboarding.tsx:1748-1768) sees
+    // `onboarding_complete: true` regardless of the per-test storageState
+    // override and redirects to `/` — landing on the ChatScreen empty-state,
+    // which happens to share the word "Welcome" with what the old assertion
+    // was looking for, so it silently checked the wrong screen and then failed
+    // waiting for a "Get Started" button that exists nowhere in the app.
+    //
+    // Fix: mock `GET /api/v1/state` to report `onboarding_complete: false`
+    // (`onboarding_complete` is AppState's only required field —
+    // src/lib/api/generated/schemas.ts:1930-1937) so `beforeLoad` does not
+    // redirect, letting the test observe the REAL first step and its REAL
+    // forward control, scoped by heading so it cannot match ChatScreen's
+    // differently-worded empty-state heading ("Welcome to Omnipus").
+    await page.route('**/api/v1/state', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ onboarding_complete: false }),
+      })
+    })
 
     await page.goto('/onboarding')
     await page.waitForLoadState('networkidle')
 
-    // If the welcome step loads, Get Started must be there.
-    const welcomeHeading = page.getByText('Welcome to Omnipus')
-    if (await welcomeHeading.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await expect(page.getByRole('button', { name: /get started/i })).toBeVisible({ timeout: 5_000 })
-    }
+    // Proves we actually landed on the real onboarding wizard, not the
+    // ChatScreen empty-state (different heading text entirely).
+    await expect(
+      page.getByRole('heading', { name: 'What should I call you?' }),
+    ).toBeVisible({ timeout: 10_000 })
+
+    // The only forward-progress control on this step — no "Get Started"
+    // button exists anywhere in the real wizard.
+    await expect(
+      page.getByRole('button', { name: 'Continue' }),
+    ).toBeVisible({ timeout: 5_000 })
+
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 })
 

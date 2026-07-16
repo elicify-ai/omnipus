@@ -4883,8 +4883,40 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 // landed, 2026-05-04) were removed once the safety window for any such
 // registration closed — registrations are short-lived (max 24h), so nothing
 // minted before the migration could still be valid.
+//
+// Both legacy prefixes are still registered here, but ONLY to a dedicated
+// 404 responder (handleLegacyPreviewRetired) — not to HandlePreview. Without
+// this, an unmatched /serve/... or /dev/... request falls through to the
+// "/" SPA catch-all (embed.go's newSPAHandler), which answers any unknown
+// path with a 200 + index.html. The SPA's own link validator
+// (src/lib/preview-url.ts's PREVIEW_PATH_REGEX) still recognises /serve/ and
+// /dev/ paths for historical transcript replay, and its warmup probe
+// (IframePreview.tsx) does a same-origin HEAD fetch expecting a genuine
+// non-2xx/3xx status to detect a dead legacy link — a 200-index.html
+// response instead makes it falsely report the (nonexistent) dev server as
+// "ready". Registering these two prefixes on the dynamicServeMux
+// (pkg/channels/dynamic_mux.go) outranks the "/" catch-all for any path
+// under them, since it dispatches by longest matching subtree prefix.
 func (a *restAPI) registerPreviewEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler(middleware.PreviewPathPrefix, http.HandlerFunc(a.HandlePreview))
+	cm.RegisterHTTPHandler(legacyServePathPrefix, http.HandlerFunc(handleLegacyPreviewRetired))
+	cm.RegisterHTTPHandler(legacyDevPathPrefix, http.HandlerFunc(handleLegacyPreviewRetired))
+}
+
+// legacyServePathPrefix and legacyDevPathPrefix are the retired back-compat
+// preview prefixes (pre-ADR-044). See registerPreviewEndpoints' doc comment.
+const (
+	legacyServePathPrefix = "/serve/"
+	legacyDevPathPrefix   = "/dev/"
+)
+
+// handleLegacyPreviewRetired answers any request under the retired /serve/
+// or /dev/ preview prefixes with a genuine 404. It exists solely to keep
+// these paths off the "/" SPA catch-all — no legacy token minted before the
+// ADR-044 migration can still be valid (registrations are short-lived, max
+// 24h), so there is nothing to look up or proxy here.
+func handleLegacyPreviewRetired(w http.ResponseWriter, _ *http.Request) {
+	jsonErr(w, http.StatusNotFound, "this preview path prefix has been retired; use /preview/")
 }
 
 // rotateGatewayToken generates a new random bearer token, persists it to config, and returns it.

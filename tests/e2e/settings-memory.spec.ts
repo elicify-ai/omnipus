@@ -298,7 +298,7 @@ test('persists memory settings across reload', async ({ page }) => {
 //
 //   Given the operator turns Auto recap ON and saves
 //   When a WS session_close frame is sent for the same session
-//   Then last-session.md appears under agents/<id>/.omnipus/ within 30 s
+//   Then last-session.md appears under agents/<id>/.omnipus/ within 90 s
 //
 // Why this test exists (the "saved but ignored" gap):
 //   The component test (MemorySection.test.tsx) only verifies that clicking
@@ -312,10 +312,22 @@ test('persists memory settings across reload', async ({ page }) => {
 //   - The OFF case polls for 10 s and asserts ABSENT. False negatives
 //     (a recap that arrives after 10 s would be a very slow recap, not a
 //     gateway bug) are extremely unlikely in E2E environment timing.
-//   - The ON case allows 30 s for the recap file to appear. The LLM call
-//     is real (uses the OpenRouter key from global-setup). If the LLM is
-//     unavailable the recap falls back to a heuristic summary that still
-//     writes last-session.md, so the assertion is robust to LLM timeouts.
+//   - The ON case allows 90 s for the recap file to appear. This must
+//     comfortably exceed the recap pipeline's own self-bounded overall
+//     budget of 60 s (pkg/agent/session_end.go:252 `overallBudget`) — only
+//     after that budget is exhausted does CloseSession's runRecap fall back
+//     to a heuristic summary (session_end.go:515
+//     writeHeuristicFallbackRetroWithCount) that still writes last-session.md.
+//     A 30 s poll window raced that 60 s contract directly: any real recap
+//     call that was merely slow (not failed) — legitimate under load, since
+//     the pipeline is contractually allowed up to 60 s before ANY file
+//     (real or fallback) exists — produced a deterministic false failure.
+//     90 s gives ~30 s of margin past the pipeline's hard 60 s cap.
+//   - This test overrides the suite's default 90 s Playwright test-level
+//     timeout via test.setTimeout() below — a 90 s recap poll alone would
+//     otherwise butt up against that harness deadline with near-zero margin
+//     once setup/WS/teardown overhead is added, which would just relocate
+//     the same budget-mismatch bug rather than fix it.
 //   - The test retries up to 3× in CI (playwright.config.ts), absorbing
 //     the occasional OpenRouter cold-start delay.
 //
@@ -323,6 +335,15 @@ test('persists memory settings across reload', async ({ page }) => {
 //   pkg/agent/session_end.go CloseSession(), pkg/memrooms/rooms.go
 
 test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ page }) => {
+  // Generous timeout: Phase A absent-poll (10 s, fixed) + Phase B present-poll
+  // (90 s, must exceed the recap pipeline's 60 s overallBudget — see
+  // pkg/agent/session_end.go:252) + REST/WS setup and teardown overhead.
+  // Without this override, the suite's default 90 s Playwright test-level
+  // timeout (playwright.config.ts) could cut the test off mid-poll, which
+  // would just relocate the budget-mismatch bug this test was fixed for
+  // rather than actually fix it.
+  test.setTimeout(150_000);
+
   // ── Arrange: navigate and obtain a session ID + agent ID ─────────────────
   await page.goto('/');
   await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 });
@@ -535,13 +556,17 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
     { baseUrl: BASE_URL, sid: sessionId2, token: getStoredAuthToken() },
   );
 
-  // Poll for up to 30 s for last-session.md to appear.
+  // Poll for up to 90 s for last-session.md to appear.
   // The recap pipeline: CloseSession → runRecap goroutine → LLM call (or fallback)
-  // → WriteLastSession. With the fallback path (no LLM needed), this typically
-  // completes in < 2 s. With a real LLM call it can take up to ~20 s under load.
-  // 30 s matches the suite's expect timeout (playwright.config.ts) and gives
-  // adequate headroom for both paths.
-  const recapPresentDeadline = Date.now() + 30_000;
+  // → WriteLastSession. runRecap self-bounds at a 60 s overallBudget
+  // (pkg/agent/session_end.go:252) — on timeout or failure it deterministically
+  // writes a heuristic fallback summary (session_end.go:515) instead of hanging
+  // forever, so SOME file is guaranteed to exist by ~60 s. A real, slow-but-
+  // successful LLM call can legitimately take close to that full 60 s under
+  // load; polling only 30 s raced the pipeline's own contract and failed
+  // deterministically on any recap merely slower than 30 s, not just a failed
+  // one. 90 s gives ~30 s of margin past the pipeline's hard 60 s cap.
+  const recapPresentDeadline = Date.now() + 90_000;
   let recapAppearedWhileOn = false;
   while (Date.now() < recapPresentDeadline) {
     if (fs.existsSync(lastSessionPath)) {
@@ -554,7 +579,7 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
   expect(
     recapAppearedWhileOn,
     [
-      `last-session.md did NOT appear at ${lastSessionPath} within 30 s`,
+      `last-session.md did NOT appear at ${lastSessionPath} within 90 s`,
       'even though auto_recap_enabled=true was saved and a session_close frame was sent.',
       'This means either the agent loop is not reading the updated flag,',
       'the session_close WS frame was not delivered, or the recap pipeline failed.',
