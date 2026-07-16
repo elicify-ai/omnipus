@@ -55,7 +55,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage } from '@/store/chat'
+import type { ChatMessage, PositionedToolCall } from '@/store/chat'
+import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
@@ -640,7 +641,8 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
 
   // Build tool-call parts from the message's stored tool_calls list.
   // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
-  const storeToolCallIds = (message.tool_calls ?? []).map((tc) => tc.id)
+  const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
+  const storeToolCallIds = positionedToolCalls.map((tc) => tc.id)
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -712,15 +714,37 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
             </div>
           )}
 
-          {/* Text content — use react-markdown for static historical messages.
-              The live streaming message uses the full AssistantUI MarkdownText
-              (with Shiki highlighting, Mermaid, etc.) via ThreadPrimitive.Messages. */}
-          {message.content && <HistoricalMessageMarkdown content={message.content} />}
+          {/* Text + tool calls, INTERLEAVED via splitMessageParts (bug fix):
+              this used to render `message.content` as one whole
+              HistoricalMessageMarkdown block, then map ALL of
+              storeToolCallIds after it — so a finished/replayed message
+              always showed "all text, then all tool calls", collapsing
+              whatever interleaved order the assistant actually streamed in.
+              splitMessageParts (src/lib/messageParts.ts) uses each baked
+              call's `textOffset` (stamped by the store — see
+              PositionedToolCall in src/store/chat.ts) to rebuild that order:
+              text slices and tool calls now alternate in the same sequence
+              they happened live. Calls with no offset (legacy bakes /
+              reconnect edge — offset genuinely unknown) fall back to the
+              old "after all text" placement, exactly as before.
 
-          {/* Tool calls — rendered from stored tool_calls list */}
-          {storeToolCallIds.map((callId) => {
-            const tc = toolCalls[callId] ?? (message.tool_calls ?? []).find((t) => t.id === callId)
-            if (!tc) return null
+              Each text slice renders as its OWN HistoricalMessageMarkdown
+              block rather than one block for the whole message — markdown
+              is parsed per-slice, so a slice boundary that falls mid-
+              paragraph (because a tool call started there) breaks that
+              paragraph across two blocks. This is not a regression: a slice
+              boundary only ever falls where a tool call started, and the
+              LIVE renderer (omnipus-runtime.ts's pushHistoryParts /
+              buildContentParts) already treats that exact point as a
+              text-segment boundary — so the finished view now matches what
+              was on screen while it was still streaming, instead of
+              (incorrectly) rendering the paragraph as one unbroken block. */}
+          {splitMessageParts(message.content ?? '', positionedToolCalls).map((part, idx) => {
+            if (part.type === 'text') {
+              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
+            }
+            const callId = part.call.id
+            const tc = toolCalls[callId] ?? part.call
             // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
             // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
             // here too, so replayed sessions render the iframe (or the malformed
