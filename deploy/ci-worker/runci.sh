@@ -145,6 +145,10 @@ run_contracts(){ make verify-contracts; }
 #   E2E_SPECS      space-separated spec subset → runs the OLD single-gateway path (fast
 #                  targeted re-verify; keeps the HTML report). Non-empty ⇒ no sharding.
 #   E2E_SHARDED=0  force the single-gateway path for the full matrix (debugging).
+#   E2E_MAX_PARALLEL  max shards in flight at once (default 2). The 8-core worker
+#                  is oversubscribed by 5 concurrent gateways+browsers, which
+#                  starves CPU and flakes timing-sensitive specs; 2 keeps each
+#                  shard's headroom while staying well under the serial runtime.
 #
 # Pre-conditions (Fly secrets on the worker): GIT_REMOTE, OPENROUTER_API_KEY.
 
@@ -294,33 +298,61 @@ run_e2e() {
   # test-results/soft-skips.json; clear it so a stale entry can't taint a shard's teardown.
   rm -f test-results/soft-skips.json 2>/dev/null || true
 
-  local -a NAMES=() PIDS=() FAILED=()
+  # Bounded concurrency. Running all 5 shards at once (5 gateways + 5 chromium)
+  # oversubscribes the 8-core worker; the resulting CPU starvation makes
+  # timing-sensitive specs flake (proven: a single-gateway re-run passed 16/17
+  # specs that the 5-wide run failed). Cap the in-flight shards so each gets
+  # real CPU headroom. LLM shards are mostly I/O-bound (waiting on OpenRouter),
+  # so 2 concurrent keeps wall-clock well under the old serial run while giving
+  # the render-bound shards (ui, stubs) room. Override with E2E_MAX_PARALLEL.
+  local MAX_PARALLEL="${E2E_MAX_PARALLEL:-2}"
+  local -a NAMES=() FAILED=()
+  local -A PID2NAME=()
   local group slot port specs key
-  while IFS=$'\t' read -r group slot port specs; do
-    [ -n "$group" ] || continue
-    case "$slot" in b) key="$KEY_B" ;; c) key="$KEY_C" ;; *) key="$KEY_A" ;; esac
-    log "e2e: launch shard $group (port $port, key slot $slot)"
-    ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
-      > "/tmp/e2e-shard-$group.log" 2>&1 &
-    NAMES+=("$group"); PIDS+=($!)
-  done < <(scripts/e2e-shards.sh list 2>/dev/null)
+  local running=0 shard_rc=0
 
-  [ "${#NAMES[@]}" -gt 0 ] || { echo "e2e: no shards launched (empty shard plan?)" >&2; return 1; }
+  # Reap exactly one finished shard: wait for ANY tracked background shard,
+  # attribute its exit code to the right shard name via PID2NAME, record
+  # PASS/FAIL. `wait -n -p` (bash >= 5.1; worker is 5.2) reports WHICH job
+  # finished. Decrements `running`. Relies on bash dynamic scope to mutate
+  # run_e2e's locals (running/PID2NAME/FAILED/shard_rc).
+  _e2e_reap_one() {
+    local finished_pid='' code name
+    wait -n -p finished_pid "${!PID2NAME[@]}"; code=$?
+    if [ -z "$finished_pid" ]; then
+      # No tracked child was reaped (all already gone) — clear bookkeeping so
+      # the drain loop can't spin forever on a phantom count.
+      running=0; PID2NAME=(); return 0
+    fi
+    name="${PID2NAME[$finished_pid]:-?}"
+    unset 'PID2NAME[$finished_pid]'
+    running=$((running - 1))
+    if [ "$code" -eq 0 ]; then
+      printf '\033[1;32me2e shard %s: PASS\033[0m\n' "$name"
+    else
+      printf '\033[1;31me2e shard %s: FAIL (exit %d)\033[0m\n' "$name" "$code"
+      FAILED+=("$name"); shard_rc=1
+    fi
+  }
 
   # Reap surviving gateways if the whole run is interrupted (exact pids only).
   trap '_e2e_reap_pidfiles' INT TERM
 
-  local i erc shard_rc=0
-  for i in "${!NAMES[@]}"; do
-    if wait "${PIDS[$i]}"; then
-      printf '\033[1;32me2e shard %s: PASS\033[0m\n' "${NAMES[$i]}"
-    else
-      erc=$?
-      printf '\033[1;31me2e shard %s: FAIL (exit %d)\033[0m\n' "${NAMES[$i]}" "$erc"
-      FAILED+=("${NAMES[$i]}")
-      shard_rc=1
-    fi
-  done
+  while IFS=$'\t' read -r group slot port specs; do
+    [ -n "$group" ] || continue
+    # Concurrency gate: block until a slot frees up.
+    while [ "$running" -ge "$MAX_PARALLEL" ]; do _e2e_reap_one; done
+    case "$slot" in b) key="$KEY_B" ;; c) key="$KEY_C" ;; *) key="$KEY_A" ;; esac
+    log "e2e: launch shard $group (port $port, key slot $slot; $((running + 1))/$MAX_PARALLEL in flight)"
+    ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
+      > "/tmp/e2e-shard-$group.log" 2>&1 &
+    PID2NAME[$!]="$group"; NAMES+=("$group"); running=$((running + 1))
+  done < <(scripts/e2e-shards.sh list 2>/dev/null)
+
+  [ "${#NAMES[@]}" -gt 0 ] || { echo "e2e: no shards launched (empty shard plan?)" >&2; return 1; }
+
+  # Drain the remaining in-flight shards.
+  while [ "$running" -gt 0 ]; do _e2e_reap_one; done
   trap - INT TERM
 
   # Surface each failing shard's full output (redirected per-shard so concurrent shards
