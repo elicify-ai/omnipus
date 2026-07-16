@@ -149,6 +149,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
     fetchProviders: vi.fn().mockResolvedValue([]),
+    // Isolation hardening (gap 13, bugfixes3 QA hardening wave): the
+    // `importOriginal` spread above leaves the REAL fetchCommands/
+    // fetchSkills reachable — harmless today only because useSlashMenu's
+    // mocked useQuery never actually calls a queryFn AND `BASE_URL` (see
+    // src/lib/api.ts) resolves to '' in this test environment. If a caller
+    // ever invoked these directly (bypassing useQuery), or VITE_API_URL got
+    // set, they'd become real network callers. Explicit overrides close
+    // that gap regardless of how useQuery is (or isn't) mocked.
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
   }
 })
 

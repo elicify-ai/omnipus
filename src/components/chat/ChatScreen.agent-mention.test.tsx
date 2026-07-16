@@ -21,6 +21,7 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { makeAgent } from '@/test/factories'
 
 class ResizeObserverStub {
   observe() {}
@@ -135,11 +136,11 @@ const mockSkills = [
 // worker exclusion applies BEFORE the prefix filter, not as an accident of
 // the filter itself.
 const mockAgents = [
-  { id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' },
-  { id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' },
-  { id: 'ava', name: 'Ava', type: 'Main', status: 'active', description: 'Builder' },
-  { id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' },
-  { id: 'ray', name: 'Ray', type: 'Main', status: 'draft', description: 'Scout (draft)' },
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' }),
+  makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
+  makeAgent({ id: 'ava', name: 'Ava', type: 'Main', status: 'active', description: 'Builder' }),
+  makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),
+  makeAgent({ id: 'ray', name: 'Ray', type: 'Main', status: 'draft', description: 'Scout (draft)' }),
 ]
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
@@ -386,15 +387,17 @@ describe('"@" agent-mention menu — keyboard highlight', () => {
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
     const rowsBefore = screen.getAllByTestId('agent-mention-item')
     expect(rowsBefore).toHaveLength(3)
-    // Default highlight is index 0 (Mia).
-    expect(rowsBefore[0].className).toContain('bg-[var(--color-accent)]/10')
-    expect(rowsBefore[1].className).not.toContain('bg-[var(--color-accent)]/10')
+    // Default highlight is index 0 (Mia). data-highlighted (Fix 11) is the
+    // semantic marker — prefer it over the presentational Tailwind class
+    // string, which is free to change without this test needing an update.
+    expect(rowsBefore[0]).toHaveAttribute('data-highlighted', 'true')
+    expect(rowsBefore[1]).not.toHaveAttribute('data-highlighted')
 
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
     const rowsAfter = screen.getAllByTestId('agent-mention-item')
-    expect(rowsAfter[0].className).not.toContain('bg-[var(--color-accent)]/10')
-    expect(rowsAfter[1].className).toContain('bg-[var(--color-accent)]/10')
+    expect(rowsAfter[0]).not.toHaveAttribute('data-highlighted')
+    expect(rowsAfter[1]).toHaveAttribute('data-highlighted', 'true')
   })
 })
 
@@ -499,5 +502,42 @@ describe('"@" agent-mention menu — active-agent marker', () => {
     expect(jimRow!.textContent).toContain('active')
     expect(miaRow!.textContent).not.toContain('active')
     expect(avaRow!.textContent).not.toContain('active')
+  })
+})
+
+// Gap 7 (Fix 2, a11y HIGH): the sr-only aria-live announcement region must
+// actually contain the "Now chatting with {name}" text after a real
+// selection reaches the DOM, and must update (not just append/duplicate) on
+// a SECOND, different selection — proving the region tracks the latest
+// selection rather than a stale first value.
+describe('"@" agent-mention menu — sr announcement (Fix 2)', () => {
+  it('after selecting via "@", the announcement region reads "Now chatting with {name}"', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    // Before any selection, the region renders empty (no announcement yet).
+    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('')
+
+    act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
+    // Only "Mia" matches "@m" (Max/Ray excluded by scoping) — highlight
+    // defaults to index 0.
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' } ) })
+
+    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('Now chatting with Mia')
+  })
+
+  it('selecting a DIFFERENT agent next updates the announcement text (not stuck on the first selection)', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' } ) })
+    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('Now chatting with Mia')
+
+    // Second, different selection — "@j" matches only Jim.
+    act(() => { fireEvent.change(input, { target: { value: '@j' } }) })
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' } ) })
+
+    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('Now chatting with Jim')
   })
 })

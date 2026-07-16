@@ -10,9 +10,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type { ComposerRuntime } from '@assistant-ui/react'
+import type { Agent } from '@/lib/api'
 import { useSlashMenu } from './useSlashMenu'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { makeAgent } from '@/test/factories'
 
 const mockCommands = [
   { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client', available_while_streaming: false, aliases: ['clear'] },
@@ -27,14 +29,19 @@ const mockSkills = [
   { id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active', argument_hint: '<query>' },
   { id: 'code-review', name: 'Code Review', version: '1.0', description: 'Reviews code quality', verified: true, status: 'active' },
 ]
-// "@" mention menu source data — includes a worker (builder) to prove
+// "@" mention menu source data — includes a worker (id "max") to prove
 // useChatAgents' isWorker exclusion carries through to the mention menu,
-// mirroring AgentPicker.test.tsx's own worker-exclusion fixtures.
-const mockAgents = [
-  { id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' },
-  { id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' },
-  { id: 'max', name: 'Max', type: 'Main', status: 'active', description: 'Ops lead' },
-  { id: 'builder', name: 'Builder Worker', type: 'worker', status: 'active', description: 'Labour agent' },
+// mirroring AgentPicker.test.tsx's own worker-exclusion fixtures. The
+// worker's id/name/type ("max" / "Max Worker" / "Subagent") deliberately
+// matches ChatScreen.agent-mention.test.tsx's own "max" fixture exactly
+// (gap 12 — cross-file fixture alignment): a fixture id shared across test
+// files should mean the same thing everywhere, so "max" is a worker in both
+// files, never a chat-eligible agent in either.
+const mockAgents: Agent[] = [
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' }),
+  makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
+  makeAgent({ id: 'mars', name: 'Mars', type: 'Main', status: 'active', description: 'Ops lead' }),
+  makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),
 ]
 
 // Fix 7 (bugfixes3 review): mutable per-test override for the ['agents']
@@ -699,7 +706,7 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     act(() => result.current.onInputChange('@'))
     expect(result.current.isMentionMode).toBe(true)
     expect(result.current.shouldShowSlash).toBe(true)
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'jim', 'max'])
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'jim', 'mars'])
     expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
   })
 
@@ -708,13 +715,13 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     act(() => result.current.onInputChange('@'))
     expect(result.current.slashItems).toHaveLength(3)
     act(() => result.current.onInputChange('@m'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'max'])
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'mars'])
   })
 
   it('filtering is case-insensitive by NAME prefix — "@M" matches identically to "@m"', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@M'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'max'])
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'mars'])
   })
 
   // Fix 7 (bugfixes3 review): inverted from "matches by agent id prefix
@@ -727,7 +734,7 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
   it('matches by agent NAME prefix only — a divergent id does not leak a match', () => {
     mentionAgentsOverride = [
       ...mockAgents,
-      { id: 'ops-7', name: 'Marcus', type: 'core', status: 'active', description: 'Support' },
+      makeAgent({ id: 'ops-7', name: 'Marcus', type: 'core', status: 'active', description: 'Support' }),
     ]
     const { result } = renderHook(() => useSlashMenu(baseParams()))
 
@@ -825,7 +832,7 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     const composerRuntime = makeComposerRuntime()
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     act(() => result.current.onInputChange('@ma'))
-    const item = result.current.slashItems.find((i) => i.key === 'max')!
+    const item = result.current.slashItems.find((i) => i.key === 'mars')!
     act(() => item.onSelect())
     expect(useSessionStore.getState().activeAgentType).toBe('Main')
   })
@@ -837,7 +844,7 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@'))
     const flags = result.current.slashItems.map((i) => [i.key, i.isActiveAgent])
-    expect(flags).toEqual([['mia', false], ['jim', true], ['max', false]])
+    expect(flags).toEqual([['mia', false], ['jim', true], ['mars', false]])
   })
 
   it('agent rows carry color/icon/description through for the render layer', () => {
@@ -854,5 +861,200 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.isMentionMode).toBe(false)
     expect(result.current.slashItems.every((i) => i.section === 'commands' || i.section === 'skills')).toBe(true)
+  })
+
+  // Gap 1 (test-quality review): keep a handle on the keydown event object
+  // in the Enter-select path and assert preventDefault was called — guards
+  // the select+send double-fire (a textarea's native Enter-submits-a-form
+  // behavior must never fire alongside the menu's own selection).
+  it('Enter-select calls preventDefault on the keydown event (guards the select+send double-fire)', () => {
+    const composerRuntime = makeComposerRuntime('@m')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@m'))
+
+    const enterEvent = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(enterEvent))
+
+    expect(enterEvent.preventDefault).toHaveBeenCalledTimes(1)
+    // Prove the selection itself actually ran too — preventDefault firing
+    // in isolation (with no real selection) would be a hollow assertion.
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+  })
+
+  // Gap 2: highlight resets to 0 whenever the visible list narrows, so a
+  // stale out-of-range highlight index can never make Enter select nothing
+  // (a no-op) or the wrong row.
+  it('highlight resets to 0 when narrowing the filter shrinks the list (guards the out-of-range no-op)', () => {
+    const composerRuntime = makeComposerRuntime('@j')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@'))
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    // Highlight now sits on the third row ("mars") before narrowing.
+    expect(result.current.slashHighlight).toBe(2)
+    expect(result.current.slashItems[2].key).toBe('mars')
+
+    act(() => result.current.onInputChange('@j'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim'])
+    expect(result.current.slashHighlight).toBe(0)
+
+    // Enter on the reset highlight selects the one remaining match, "jim" —
+    // not a no-op and not the stale "mars" position.
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+  })
+
+  // Gap 3: pins the reopen-on-next-keystroke design — Escape only closes
+  // slashOpen, it does not clear inputValue, so the very next keystroke
+  // (which re-runs onInputChange's startsWith("@") check) reopens the menu.
+  it('Escape closes the menu, then typing the next character reopens it', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashOpen).toBe(true)
+
+    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+
+    act(() => result.current.onInputChange('@m'))
+    expect(result.current.slashOpen).toBe(true)
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'mars'])
+  })
+
+  // Gap 4: streaming interaction — the mention menu has NO
+  // available_while_streaming-style filtering (unlike the "/" commands
+  // section); this is intentional mid-stream parity with AgentPicker, which
+  // is never disabled while streaming either. Selecting an agent mid-stream
+  // still just switches the active agent — it never sends anything.
+  describe('streaming interaction', () => {
+    it('while streaming, "@" still lists every scoped agent — no filtering applied', () => {
+      const { result } = renderHook(() => useSlashMenu(baseParams({ isStreaming: true })))
+      act(() => result.current.onInputChange('@'))
+      expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'jim', 'mars'])
+      expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
+    })
+
+    it('while streaming, Enter-select still calls setActiveSession, and never touches appendMessage/startNewSession (no send)', () => {
+      const composerRuntime = makeComposerRuntime('@m')
+      const appendMessage = vi.fn()
+      const startNewSession = vi.fn()
+      const { result } = renderHook(() =>
+        useSlashMenu(baseParams({ isStreaming: true, composerRuntime, appendMessage, startNewSession })),
+      )
+      act(() => result.current.onInputChange('@m'))
+      act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+
+      expect(useSessionStore.getState().activeAgentId).toBe('mia')
+      expect(composerRuntime.setText).toHaveBeenLastCalledWith('')
+      // No message-producing side effect fired — selection is a pure
+      // agent-switch, not a send.
+      expect(appendMessage).not.toHaveBeenCalled()
+      expect(startNewSession).not.toHaveBeenCalled()
+    })
+  })
+
+  // Gap 5: the mention list caps at 8 rows (matches the skills section's own
+  // cap), and the cap is re-applied AFTER filtering — narrowing the query
+  // can surface a match that was pushed past the cap in the unfiltered
+  // (bare "@") view.
+  describe('mention-list cap (Fix 6)', () => {
+    it('10 scoped agents show exactly 8 rows for a bare "@"; narrowing re-includes a previously cap-hidden match', () => {
+      mentionAgentsOverride = [
+        makeAgent({ id: 'zed', name: 'Zed', type: 'Main', status: 'active' }),
+        ...Array.from({ length: 9 }, (_, i) =>
+          makeAgent({ id: `ag0${i + 1}`, name: `Agent0${i + 1}`, type: 'Main', status: 'active' })),
+      ]
+      const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+      act(() => result.current.onInputChange('@'))
+      expect(result.current.slashItems).toHaveLength(8)
+      const unfiltered = result.current.slashItems.map((i) => i.key)
+      // Array-order cap: "Zed" (index 0) plus Agent01..Agent07 fill the 8
+      // slots; Agent08/Agent09 (indices 8-9 of the 10-item source list) are
+      // cut off.
+      expect(unfiltered).not.toContain('ag08')
+      expect(unfiltered).not.toContain('ag09')
+
+      // Narrow to just the "Agent0X" agents (excludes "Zed" from the
+      // filtered set entirely) — filtering runs BEFORE the cap, so removing
+      // "Zed" shifts every Agent0X up one slot: "ag08" (hidden above) is now
+      // visible. "ag09" is still hidden — the filtered set is still 9 items
+      // capped at 8.
+      act(() => result.current.onInputChange('@agent'))
+      const narrowed = result.current.slashItems.map((i) => i.key)
+      expect(narrowed).toHaveLength(8)
+      expect(narrowed).toContain('ag08')
+      expect(narrowed).not.toContain('ag09')
+    })
+  })
+
+  // Gap 6 (Fix 4 regression): the composer's onSubmit resyncs the text
+  // mirror via `slashMenu.onInputChange('')` immediately after a real send
+  // — see useSlashMenu.ts's file header and ChatScreen.tsx's
+  // ComposerPrimitive.Root onSubmit doc comment. Before that fix, a stale
+  // "@..." mirror survived a send and a subsequent ArrowDown reopened the
+  // full agent menu with nothing visible in the (now-empty) textarea.
+  it('Fix 4 regression: after the submit path resyncs the mirror (onInputChange("")), ArrowDown does not reopen the stale "@" menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    // Simulate typing an "@"-prefixed message...
+    act(() => result.current.onInputChange('@x'))
+    expect(result.current.slashOpen).toBe(true)
+    // ...then simulate the composer's onSubmit resync that runs immediately
+    // after a successful send.
+    act(() => result.current.onInputChange(''))
+    expect(result.current.slashOpen).toBe(false)
+    expect(result.current.isMentionMode).toBe(false)
+
+    // The textarea is now visually empty. Before Fix 4 this ArrowDown would
+    // read the stale "@x" mirror and reopen the agent menu.
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+    expect(result.current.shouldShowSlash).toBe(false)
+    expect(result.current.slashItems).toHaveLength(0)
+  })
+
+  // Gap 8: backspacing away a narrowing filter must re-show every agent
+  // that was hidden by the filter, not just stop shrinking.
+  it('backspacing from a narrowed filter back to bare "@" re-shows the full agent list', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@mi'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia'])
+
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'jim', 'mars'])
+  })
+
+  // Gap 9: effectiveActiveAgentId's fallback chain — `activeAgentId ||
+  // chatAgents[0]?.id` — must mark exactly the right row (or none) in both
+  // directions of the fallback.
+  describe('effectiveActiveAgentId fallback', () => {
+    it('activeAgentId null: the FIRST chat agent row is marked active (fallback to chatAgents[0])', () => {
+      act(() => { useSessionStore.setState({ activeAgentId: null }) })
+      const { result } = renderHook(() => useSlashMenu(baseParams()))
+      act(() => result.current.onInputChange('@'))
+      const flags = result.current.slashItems.map((i) => [i.key, i.isActiveAgent])
+      expect(flags).toEqual([['mia', true], ['jim', false], ['mars', false]])
+    })
+
+    it('activeAgentId set to an id NOT present in chatAgents: no row is marked active', () => {
+      act(() => { useSessionStore.setState({ activeAgentId: 'nonexistent-agent' }) })
+      const { result } = renderHook(() => useSlashMenu(baseParams()))
+      act(() => result.current.onInputChange('@'))
+      const flags = result.current.slashItems.map((i) => [i.key, i.isActiveAgent])
+      expect(flags).toEqual([['mia', false], ['jim', false], ['mars', false]])
+    })
+  })
+
+  // Gap 10: interception is exclusively a "/" concern — an "@"-prefixed
+  // message (menu closed or not) must always fall through to the normal
+  // send path, never get swallowed as if it were a client command.
+  it('interceptClientCommand returns false for an "@"-prefixed message — never intercepted', () => {
+    const composerRuntime = makeComposerRuntime('@mia')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(false)
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
   })
 })
