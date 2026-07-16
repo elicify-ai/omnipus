@@ -395,12 +395,42 @@ test.afterAll(async ({ browser }) => {
 test(
   'recap_continuity: distinctive fact persists across sessions via last-session.md injection',
   async ({ page }) => {
-    // Generous timeout: two LLM round-trips + async recap + disk poll.
-    // Turn 1 (fact statement): ~90s.  Recap poll: up to 120s (pollLastSession's
-    //   budget, itself sized to clear the pipeline's own 60s overallBudget with
-    //   margin — pkg/agent/session_end.go:252).  Turn 2 (recall): ~90s.
-    // Total budget: 300s + margin = 360s.
-    test.setTimeout(360_000)
+    // Budget (WORST-CASE ceiling, not a "typical" duration — recomputed the same
+    // way chat.spec.ts (b) was fixed: the outer test.setTimeout is a hard
+    // governor, so it must sum every step's own worst-case timeout, INCLUDING
+    // both waitForTurnFullyDone legs. The previous comment below omitted them
+    // entirely and modeled the whole run as two flat ~90s LLM round-trips —
+    // that was the bug.
+    //
+    // Step-by-step worst-case:
+    //   Navigation + fact input (fill/press) ........................... ~20s
+    //   Turn 1 toHaveCount(1) ceiling ..................................... 90s
+    //   Turn 1 waitForTurnFullyDone: gapMs(8s) + follow-up-call
+    //     ceiling(180s, ~L109-117 above) — this turn's prompt ("Remember
+    //     for later: the launch codename is ...") is very likely to trigger
+    //     the memory-tool follow-up call, so this leg is a realistic risk,
+    //     not a theoretical worst case ................................... 188s
+    //   session_close_ack poll (sendSessionCloseFrame, ~L212) .............. 10s
+    //   pollLastSession (raised 60s -> 120s, see the helper's own doc
+    //     comment above, ~L228) ............................................ 120s
+    //   New-session setup (createSession + goto + input visibility +
+    //     toHaveCount(0) + settle wait) .................................. ~27s
+    //   Turn 2 toHaveCount(1) ceiling ..................................... 90s
+    //   Turn 2 waitForTurnFullyDone: gapMs(8s) + follow-up-call
+    //     ceiling(180s) ...................................................... 188s
+    //
+    // Worst-case total: 20 + 90 + 188 + 10 + 120 + 27 + 90 + 188 = 733s.
+    //
+    // The PREVIOUS budget ("300s + margin = 360s") undercounted this the same
+    // way chat.spec.ts's old budget did: it treated each LLM round-trip as a
+    // flat ~90s and never accounted for either waitForTurnFullyDone call's
+    // documented up-to-188s worst case, nor the raised 120s pollLastSession
+    // budget.
+    //
+    // New budget: 733s worst-case ceiling + ~167s margin (~23%) for CI
+    // scheduling/runner jitter beyond each step's own declared timeout = 900s
+    // (15 min), a round number with real headroom over the computed ceiling.
+    test.setTimeout(900_000)
 
     // BDD:
     //   Given auto_recap_enabled is true (set in beforeAll)

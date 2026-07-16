@@ -335,13 +335,9 @@ test('persists memory settings across reload', async ({ page }) => {
 //   pkg/agent/session_end.go CloseSession(), pkg/memrooms/rooms.go
 
 test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ page }) => {
-  // Generous timeout: Phase A absent-poll (10 s, fixed) + Phase B present-poll
-  // (90 s, must exceed the recap pipeline's 60 s overallBudget — see
-  // pkg/agent/session_end.go:252) + REST/WS setup and teardown overhead.
-  // Without this override, the suite's default 90 s Playwright test-level
-  // timeout (playwright.config.ts) could cut the test off mid-poll, which
-  // would just relocate the budget-mismatch bug this test was fixed for
-  // rather than actually fix it.
+  // 150s test-level override (Phase A 10s + Phase B 90s + REST/WS setup and
+  // teardown overhead) — see "Notes on flakiness budget" above for the full
+  // 60s-overallBudget rationale.
   test.setTimeout(150_000);
 
   // ── Arrange: navigate and obtain a session ID + agent ID ─────────────────
@@ -556,16 +552,8 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
     { baseUrl: BASE_URL, sid: sessionId2, token: getStoredAuthToken() },
   );
 
-  // Poll for up to 90 s for last-session.md to appear.
-  // The recap pipeline: CloseSession → runRecap goroutine → LLM call (or fallback)
-  // → WriteLastSession. runRecap self-bounds at a 60 s overallBudget
-  // (pkg/agent/session_end.go:252) — on timeout or failure it deterministically
-  // writes a heuristic fallback summary (session_end.go:515) instead of hanging
-  // forever, so SOME file is guaranteed to exist by ~60 s. A real, slow-but-
-  // successful LLM call can legitimately take close to that full 60 s under
-  // load; polling only 30 s raced the pipeline's own contract and failed
-  // deterministically on any recap merely slower than 30 s, not just a failed
-  // one. 90 s gives ~30 s of margin past the pipeline's hard 60 s cap.
+  // Poll for up to 90 s for last-session.md to appear — see "Notes on
+  // flakiness budget" above for the 60s-overallBudget rationale.
   const recapPresentDeadline = Date.now() + 90_000;
   let recapAppearedWhileOn = false;
   while (Date.now() < recapPresentDeadline) {
