@@ -456,7 +456,7 @@ func (a *restAPI) proxyDevRequest(
 // net/http's Response.Cookies() applies. It strips the attributes (everything
 // from the first ';'), then takes the substring before the first '=', trimmed
 // of surrounding whitespace. This parses more permissively than the stdlib on
-// purpose: it must recognise a reserved cookie by name even when its VALUE
+// purpose: it must recognize a reserved cookie by name even when its VALUE
 // contains a byte net/http would reject. Returns "" when the line has no '='.
 func cookieNameFromSetCookieLine(line string) string {
 	if i := strings.IndexByte(line, ';'); i >= 0 {

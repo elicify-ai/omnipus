@@ -149,7 +149,7 @@ const (
 	// graceful->hard->detached escalation, approval auto-deny,
 	// background-session kill, and transcript writes uniformly with every
 	// other cancel surface. There is no separate turn.orphan_hard_aborted
-	// event (retired 2026-07 redesign) — RequestCancel's own turn_cancelled
+	// event (retired 2026-07 redesign) — RequestCancel's own turn_canceled
 	// event (cancel_method: "hard") is the single source of truth for how a
 	// reaped orphan turn actually terminated.
 	EventTurnOrphanTimeout = "turn.orphan_timeout"

@@ -650,13 +650,16 @@ func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
 		assert.Contains(t, err.Error(), "SSRF")
 	})
 
-	t.Run("no gateway origin configured: localhost at the would-be gateway port is blocked (fail closed)", func(t *testing.T) {
-		checker := security.NewSSRFChecker(nil) // AllowGatewayOrigin never called
+	t.Run(
+		"no gateway origin configured: localhost at the would-be gateway port is blocked (fail closed)",
+		func(t *testing.T) {
+			checker := security.NewSSRFChecker(nil) // AllowGatewayOrigin never called
 
-		err := checker.CheckURL(ctx, "http://localhost:5000/x")
-		require.Error(t, err, "with no gateway origin configured, localhost must stay blocked by default")
-		assert.Contains(t, err.Error(), "SSRF")
-	})
+			err := checker.CheckURL(ctx, "http://localhost:5000/x")
+			require.Error(t, err, "with no gateway origin configured, localhost must stay blocked by default")
+			assert.Contains(t, err.Error(), "SSRF")
+		},
+	)
 
 	t.Run("public host still passes, independent of the gateway origin exception", func(t *testing.T) {
 		checker := security.NewSSRFChecker(nil)
@@ -684,16 +687,23 @@ func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
 		require.Error(t, err, "clearing the gateway origin must restore the fail-closed default")
 	})
 
-	t.Run("non-localhost configured gateway host: exact literal match passes, no loopback expansion", func(t *testing.T) {
-		checker := security.NewSSRFChecker(nil)
-		checker.AllowGatewayOrigin("gateway.internal.example", gwPort)
+	t.Run(
+		"non-localhost configured gateway host: exact literal match passes, no loopback expansion",
+		func(t *testing.T) {
+			checker := security.NewSSRFChecker(nil)
+			checker.AllowGatewayOrigin("gateway.internal.example", gwPort)
 
-		err := checker.CheckURL(ctx, "http://gateway.internal.example:5000/x")
-		assert.NoError(t, err, "an exact literal host:port match must pass without needing DNS resolution")
+			err := checker.CheckURL(ctx, "http://gateway.internal.example:5000/x")
+			assert.NoError(t, err, "an exact literal host:port match must pass without needing DNS resolution")
 
-		errLoopback := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
-		require.Error(t, errLoopback, "loopback expansion must NOT apply when the configured gateway host isn't 'localhost'")
-	})
+			errLoopback := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+			require.Error(
+				t,
+				errLoopback,
+				"loopback expansion must NOT apply when the configured gateway host isn't 'localhost'",
+			)
+		},
+	)
 }
 
 // TestCloneWithGatewayOrigin_DoesNotMutateSingleton is the regression for

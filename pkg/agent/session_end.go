@@ -548,7 +548,15 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 			}
 		}
 	}
-	al.writeHeuristicFallbackRetroWithCount(sessionID, trigger, fallbackReason, agentInst, turnCount, toolCallCount, buildCarryForward(userTurns, carryForwardMaxRunes))
+	al.writeHeuristicFallbackRetroWithCount(
+		sessionID,
+		trigger,
+		fallbackReason,
+		agentInst,
+		turnCount,
+		toolCallCount,
+		buildCarryForward(userTurns, carryForwardMaxRunes),
+	)
 }
 
 // writeHeuristicFallbackRetroWithCount is the preferred fallback writer when

@@ -490,7 +490,12 @@ func TestIssueCSRFCookie_MaxAge(t *testing.T) {
 
 		cookies := rec.Result().Cookies()
 		require.Len(t, cookies, 1)
-		assert.Equal(t, SessionCookieMaxAge, cookies[0].MaxAge, "MaxAge must be 86400 (24h), matching the session cookie")
+		assert.Equal(
+			t,
+			SessionCookieMaxAge,
+			cookies[0].MaxAge,
+			"MaxAge must be 86400 (24h), matching the session cookie",
+		)
 	})
 
 	t.Run("plain-HTTP fallback csrf", func(t *testing.T) {

@@ -149,7 +149,7 @@ func IsValidEventName(e EventName) bool {
 		EventTurnCancelStuck,
 		EventCancelAbusePattern,
 		// Orphan-foreground-turn watchdog events (ADR-045). The escalation
-		// itself is RequestCancel's own turn_cancelled event (cancel_method:
+		// itself is RequestCancel's own turn_canceled event (cancel_method:
 		// "hard") — there is no separate turn.orphan_hard_aborted event since
 		// the 2026-07 reap-via-RequestCancel redesign.
 		EventTurnOrphanTimeout,

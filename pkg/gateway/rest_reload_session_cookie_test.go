@@ -48,7 +48,9 @@ import (
 func TestSessionCookie_SurvivesManualReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
-	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"gateway":{"dev_mode_bypass":true}}`)
+	minimalCfg := []byte(
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"gateway":{"dev_mode_bypass":true}}`,
+	)
 	require.NoError(t, os.WriteFile(configPath, minimalCfg, 0o600))
 
 	cfg := &config.Config{

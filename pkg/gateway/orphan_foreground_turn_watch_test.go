@@ -26,6 +26,7 @@
 //   - last watcher disconnecting arms the watch
 //   - another connection still watching the same session suppresses arming
 //   - a reattach (handleAttachSession) disarms a pending watch
+
 package gateway
 
 import (
@@ -54,7 +55,10 @@ import (
 // newStreamingTestWSHandler in this package) — without it, PublishInbound
 // sends to the bus but nothing consumes it, and blockingCancelProvider.Chat
 // is never entered at all.
-func newOrphanForegroundTurnTestWSHandler(t *testing.T, graceSeconds int) (*WSHandler, *agent.AgentLoop, *blockingCancelProvider) {
+func newOrphanForegroundTurnTestWSHandler(
+	t *testing.T,
+	graceSeconds int,
+) (*WSHandler, *agent.AgentLoop, *blockingCancelProvider) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
@@ -142,7 +146,10 @@ func countChatIDsMappedToSessionForTest(h *WSHandler, sessionID string) int {
 // gateway's ServeHTTP teardown defer arms the orphan watchdog when the
 // closing connection was the ONLY one watching its session.
 func TestOrphanForegroundTurnWatch_LastConnectionTeardown_Arms(t *testing.T) {
-	handler, al, bp := newOrphanForegroundTurnTestWSHandler(t, 30) // long grace — this test only checks the ARMED state, never lets it fire
+	handler, al, bp := newOrphanForegroundTurnTestWSHandler(
+		t,
+		30,
+	) // long grace — this test only checks the ARMED state, never lets it fire
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	t.Cleanup(handler.Wait)
@@ -270,6 +277,11 @@ func TestOrphanForegroundTurnWatch_ChatMessageContinuation_Disarms(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, msgData))
 
-	require.Eventually(t, func() bool { return !al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
-		"sending a message with an existing session_id (handleChatMessage's continuation branch) must disarm the pending watchdog")
+	require.Eventually(
+		t,
+		func() bool { return !al.HasOrphanWatchArmed(sessionID) },
+		3*time.Second,
+		20*time.Millisecond,
+		"sending a message with an existing session_id (handleChatMessage's continuation branch) must disarm the pending watchdog",
+	)
 }

@@ -352,7 +352,11 @@ func TestNeutralizeReservedSetCookies_MalformedValueStillStripped(t *testing.T) 
 	for _, c := range resp.Cookies() {
 		preNames[c.Name] = true
 	}
-	require.False(t, preNames["omnipus-session"], "precondition: net/http Cookies() is blind to the malformed reserved omnipus-session line")
+	require.False(
+		t,
+		preNames["omnipus-session"],
+		"precondition: net/http Cookies() is blind to the malformed reserved omnipus-session line",
+	)
 	require.False(t, preNames["csrf"], "precondition: net/http Cookies() is blind to the malformed reserved csrf line")
 
 	neutralizeReservedSetCookies(resp)

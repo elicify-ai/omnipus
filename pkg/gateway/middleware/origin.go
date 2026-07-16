@@ -35,7 +35,7 @@
 // /preview/<agent>/<token>/ reverse-proxy path (ADR-044 / FR-012 / FR-023a):
 // /preview/ uses path-token-only authentication, and a state-changing request
 // originating from inside a previewed app (or a form POST proxied through it)
-// carries no Origin header the SPA's main origin would recognise — by
+// carries no Origin header the SPA's main origin would recognize — by
 // design, since the previewed app is not the SPA. Applying the Origin check
 // to /preview/ would block legitimate previewed-app POSTs with 403.
 // /preview/ is protected against foreign embeds by the CSP frame-ancestors
@@ -147,7 +147,7 @@ func originMatches(requestOrigin, expectedOrigin string) bool {
 // Preview URLs are tokenized (/preview/<agent>/<token>/…) so an exact-path
 // exemption can never match, and the path token IS the credential — a
 // previewed app must be able to submit state-changing requests through the
-// proxy without carrying an Origin header the SPA's main origin recognises
+// proxy without carrying an Origin header the SPA's main origin recognizes
 // (ADR-044 / FR-012).
 const PreviewPathPrefix = "/preview/"
 
