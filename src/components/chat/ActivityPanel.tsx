@@ -4,13 +4,16 @@
 // SearchModal + the sidebar accordion).
 //
 // Two sections — "Running now" / "Recently finished" — each hidden entirely
-// when empty. Status badges follow SubagentBlock.tsx's status→style mapping
-// via the shared getSpanStatusConfig helper (src/lib/toolStatusConfig.tsx) —
-// two things intentionally differ here vs SubagentBlock, expressed as options
-// rather than a separate reimplementation: this row doesn't use the `border`
-// field (icon size 12 + no per-status border), and the "running" label reads
-// "running" here vs "working" there, since a row can be a bash call as well
-// as an agent span.
+// when empty. Rows are flat text-lines (ticket "Tool components in chat",
+// P2 — delegate-card restyle): no bordered/filled card, no status pill — an
+// 8px status dot (or the spinning icon while running) + muted status text,
+// via the shared getSpanStatusDot helper (src/lib/toolStatusConfig.tsx).
+// Two things intentionally differ here vs SubagentBlock, expressed as
+// options rather than a separate reimplementation: icon size 12 (vs 13), and
+// the "running" label reads "running" here vs "working" there, since a row
+// can be a bash call as well as an agent span. Expanded native-agent rows
+// use the same indented border-l-2 accent line as SubagentBlock/ToolCallBadge
+// instead of the old bordered/backgrounded panel.
 
 import { useState } from 'react'
 import { CaretDown, CaretUp } from '@phosphor-icons/react'
@@ -21,7 +24,7 @@ import { ToolCallBadge } from './ToolCallBadge'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
-import { getSpanStatusConfig } from '@/lib/toolStatusConfig'
+import { getSpanStatusDot } from '@/lib/toolStatusConfig'
 
 export interface ActivityPanelProps {
   open: boolean
@@ -32,7 +35,7 @@ export interface ActivityPanelProps {
 
 function ActivityRow({ item }: { item: ActivityItem }) {
   const [expanded, setExpanded] = useState(false)
-  const config = getSpanStatusConfig(item.status, { size: 12, runningLabel: 'running' })
+  const config = getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
   const duration = formatDuration(item.durationMs)
   const label = item.kind === 'bash' ? item.command : item.taskLabel
   // Narrowed inline (not via a stored boolean) so `steps` stays typed without a cast.
@@ -44,7 +47,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
     <div
       data-testid="activity-row"
       data-status={item.status}
-      className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-xs overflow-hidden"
+      className="text-xs"
     >
       {/* Mirrors GenericToolCall.tsx's `disabled={!hasDetail}` gate: a
           non-expandable row (bash calls, 3p-agent rows, or a native row with
@@ -58,18 +61,16 @@ function ActivityRow({ item }: { item: ActivityItem }) {
         disabled={!canExpand}
         aria-expanded={canExpand ? expanded : undefined}
         className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',
-          canExpand ? 'hover:bg-[var(--color-surface-3)] cursor-pointer' : 'cursor-default',
+          'flex w-full items-center gap-2 py-1.5 text-left transition-colors',
+          canExpand ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : 'cursor-default',
         )}
       >
         <ActivityAvatar item={item} size="sm" />
         <span className="flex-1 min-w-0 truncate text-[var(--color-secondary)] font-medium font-mono">
           {label}
         </span>
-        <span className={cn('flex items-center gap-1 shrink-0 rounded px-1.5 py-0.5', config.pill)}>
-          {config.icon}
-          <span>{config.label}</span>
-        </span>
+        {config.indicator}
+        <span className={cn('text-[var(--color-muted)] shrink-0', config.textClass)}>{config.label}</span>
         {duration && <span className="text-[var(--color-muted)] shrink-0 tabular-nums">{duration}</span>}
         {canExpand && (
           <span className="text-[var(--color-muted)] shrink-0">
@@ -79,7 +80,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       </button>
 
       {canExpand && expanded && steps && (
-        <div className="border-t border-[var(--color-border)] px-3 py-2 space-y-1">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-1">
           {steps.map((step, idx) =>
             step.kind === 'tool' ? (
               <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} />
@@ -93,7 +94,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       )}
 
       {show3pNotice && (
-        <div className="border-t border-[var(--color-border)] px-3 py-1.5">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1">
           <p className="text-[10px] text-[var(--color-muted)] italic">No live step detail yet</p>
         </div>
       )}
@@ -122,7 +123,7 @@ export function ActivityPanel({ open, onOpenChange, running, recentlyFinished }:
               <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
                 Running now
               </h3>
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {running.map((item) => (
                   <ActivityRow key={item.key} item={item} />
                 ))}
@@ -135,7 +136,7 @@ export function ActivityPanel({ open, onOpenChange, running, recentlyFinished }:
               <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
                 Recently finished
               </h3>
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {recentlyFinished.map((item) => (
                   <ActivityRow key={item.key} item={item} />
                 ))}

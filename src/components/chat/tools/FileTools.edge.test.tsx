@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, fireEvent } from '@testing-library/react'
 import type { ToolCallStartFrame } from '@/lib/api/generated/asyncapi-types'
 
 type RenderFn = (props: { args: unknown; result: unknown; status: { type: string } }) => React.ReactNode
@@ -255,6 +255,140 @@ describe.each([
 )
 
 // ── ToolCallStartFrame params as args (using generated type) ──────────────────
+
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded cards were replaced by a flat text line whose
+// only status color comes from an 8px dot (running keeps the spinning icon in
+// the same slot) — see GenericToolCall.tsx/toolStatusConfig.tsx for the
+// reference language this mirrors. None of these blocks have a data-testid on
+// their root, so assertions use `container` queries.
+
+describe('FileReadBlock — flat text-line status dot', () => {
+  function renderRead(result: unknown, statusType: string) {
+    const renderFn = captured['read_file']
+    return render(renderFn({ args: { path: '/workspace/file.ts' }, result, status: { type: statusType } }) as React.ReactElement)
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = renderRead(null, 'running')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('success: indicator is an 8px success-colored dot', () => {
+    const { container } = renderRead('const x = 1\n', 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('the root has no card-frame classes — flat/transparent on the thread', () => {
+    const { container } = renderRead('const x = 1\n', 'complete')
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toMatch(/\bborder\b/)
+  })
+
+  it('expanded content panel uses a left accent line (dark code styling preserved)', () => {
+    const { container } = renderRead('const x = 1\n', 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    const panel = root.children[1] as HTMLElement
+    expect(panel.className).toContain('border-l-2')
+    expect(panel.className).not.toMatch(/\bborder-b\b/)
+    // The <pre> keeps its dark code-block background.
+    const pre = panel.querySelector('pre')
+    expect(pre?.className).toContain('bg-[#0d1117]')
+  })
+})
+
+describe('FileOpBlock (write/edit/append) — flat text-line status dot', () => {
+  function renderWrite(statusType: string) {
+    const renderFn = captured['write_file']
+    return render(
+      renderFn({ args: { path: '/file.txt', content: 'data' }, result: null, status: { type: statusType } }) as React.ReactElement
+    )
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = renderWrite('running')
+    const indicator = container.firstElementChild?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('success: indicator is an 8px success-colored dot', () => {
+    const { container } = renderWrite('complete')
+    const indicator = container.firstElementChild?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('error: indicator is an 8px error-colored dot', () => {
+    const { container } = renderWrite('incomplete')
+    const indicator = container.firstElementChild?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('the root has no card-frame classes and is not a toggle (write ops have no detail panel)', () => {
+    const { container } = renderWrite('complete')
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toMatch(/\bborder\b/)
+    expect(container.querySelector('button')).toBeNull()
+  })
+})
+
+describe('FileTreeBlock — flat text-line status dot', () => {
+  const treeResult = 'file1.txt\nfile2.txt\ndir1/\n'
+
+  function renderTree(result: unknown, statusType: string) {
+    const renderFn = captured['list_dir']
+    return render(renderFn({ args: { path: '.' }, result, status: { type: statusType } }) as React.ReactElement)
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = renderTree(null, 'running')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('success: indicator is an 8px success-colored dot', () => {
+    const { container } = renderTree(treeResult, 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('the root has no card-frame classes — flat/transparent on the thread', () => {
+    const { container } = renderTree(treeResult, 'complete')
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toMatch(/\bborder\b/)
+  })
+
+  it('expanded tree panel uses a left accent line, and entries keep their Folder/File icons + indentation', () => {
+    const { container } = renderTree(treeResult, 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    const panel = root.children[1] as HTMLElement
+    expect(panel.className).toContain('border-l-2')
+    // 3 entries parsed from treeResult — each keeps its own icon (svg) + name.
+    const rows = panel.querySelectorAll(':scope > div')
+    expect(rows.length).toBe(3)
+    rows.forEach((row) => {
+      expect(row.querySelector('svg')).toBeTruthy()
+      expect((row as HTMLElement).style.paddingLeft).toBeDefined()
+    })
+  })
+})
 
 describe.each([
   [

@@ -321,6 +321,45 @@ describe('WebServeUI — malformed result block (B1.3e)', () => {
   })
 })
 
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// WebServeUI itself consumes PreviewToolHeader (a sibling's file, left
+// untouched) for the normal header — the only frame WebServeUI.tsx owns is
+// the malformed-result block, which loses its rounded/bordered/backgrounded
+// error card in favor of a border-l-2 left accent (same language as
+// GenericToolCall.tsx's marshal-error/delegation-denied banners).
+
+describe('WebServeUI — malformed result block flat styling', () => {
+  it('uses a left accent line, not a rounded/bordered/backgrounded card', () => {
+    render(
+      <WebServeBlock
+        args={{}}
+        result={{ unexpected_field: 'some_value' }}
+        isRunning={false}
+        toolName="web_serve"
+      />
+    )
+    const block = screen.getByTestId('webserve-malformed-block')
+    expect(block.className).toContain('border-l-2')
+    expect(block.className).not.toContain('rounded-md')
+    expect(block.className).not.toContain('bg-[var(--color-error)]/5')
+  })
+
+  it('the raw-result <pre> has no rounded/backgrounded box', () => {
+    render(
+      <WebServeBlock
+        args={{}}
+        result={{ unexpected_field: 'some_value' }}
+        isRunning={false}
+        toolName="web_serve"
+      />
+    )
+    const pre = document.querySelector('pre')
+    expect(pre).toBeTruthy()
+    expect(pre?.className).not.toContain('rounded')
+    expect(pre?.className).not.toContain('bg-[var(--color-surface-2)]')
+  })
+})
+
 // ── Module exports ─────────────────────────────────────────────────────────────
 
 describe('WebServeUI — module exports', () => {

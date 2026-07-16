@@ -10,9 +10,6 @@ import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import {
   Globe,
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
   CaretDown,
   CaretUp,
   Camera,
@@ -26,6 +23,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 // ── Shared result parser ──────────────────────────────────────────────────────
 
@@ -83,9 +81,16 @@ interface BrowserToolBlockProps {
   summary: string
 }
 
+// Flat text-line redesign (ticket "Tool components in chat", P2): the
+// per-tool identity icon (CursorClick/Keyboard/Camera/…) is no longer
+// rendered here — it was purely decorative alongside `toolName`, which
+// already disambiguates the tool uniquely (e.g. "browser.click"). Status now
+// lives only in the leading dot/spinner. The `icon` prop stays part of
+// BrowserToolBlockProps/BrowserToolSpec (the registration factory and its
+// six call sites still pass it) so the public shape is unchanged; this
+// component simply no longer reads it.
 export function BrowserToolBlock({
   toolName,
-  icon: ToolIcon,
   args,
   result,
   status,
@@ -100,24 +105,13 @@ export function BrowserToolBlock({
 
   const parsed = parseResult(result, toolName)
 
-  function iconColorClass(): string {
-    if (isRunning) return 'text-[var(--color-accent)]'
-    if (isError) return 'text-[var(--color-error)]'
-    return 'text-[var(--color-secondary)]'
-  }
-
-  function renderStatusIcon(): React.ReactNode {
-    if (isRunning) {
-      return <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-    }
-    if (isError) {
-      return <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
-    }
-    if (hasResult) {
-      return <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-    }
-    return null
-  }
+  const statusConfig: ToolBadgeStatusConfig | null = isRunning
+    ? getToolBadgeStatusConfig('running', { size: 12 })
+    : isError
+    ? getToolBadgeStatusConfig('error', { size: 12 })
+    : hasResult
+    ? getToolBadgeStatusConfig('success', { size: 12 })
+    : null
 
   // ADR-038: "Watch live" opens the app-root BrowserLivePanel overlay onto the
   // browser session driving this tool call. Imperative store reads (not hooks)
@@ -141,34 +135,35 @@ export function BrowserToolBlock({
   }
 
   return (
-    <div
-      className={cn(
-        'mt-2 rounded-md border overflow-hidden text-xs',
-        isError && !isRunning
-          ? 'border-[var(--color-error)]/30'
-          : 'border-[var(--color-border)]'
-      )}
-    >
-      {/* Header — a row of composed controls (mirrors ChromeBar in IframePreview.tsx):
+    // Flat text-line design (ticket "Tool components in chat", P2): no
+    // border, no surface fill, no rounded frame, no overflow-hidden — the
+    // row is transparent on the thread.
+    <div className="mt-2 text-xs font-mono">
+      {/* Header — a row of composed controls (mirrors GenericToolCall.tsx):
           the expand/collapse toggle is its own button so "Watch live" can be a
           separate, independently clickable sibling rather than nested inside it. */}
-      <div className="flex w-full items-center gap-1 bg-[var(--color-surface-1)] transition-colors">
+      <div className="flex w-full items-center gap-2">
         <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
-            'flex flex-1 min-w-0 items-center gap-2 px-3 py-2 text-left',
-            hasDetail && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
+            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             !hasDetail && 'cursor-default'
           )}
           aria-expanded={expanded}
           disabled={!hasDetail}
         >
-          <ToolIcon size={13} weight="duotone" className={iconColorClass()} />
+          {statusConfig?.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{toolName}</span>
           <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
             {summary}
           </span>
+          {statusConfig && (
+            <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+              {statusConfig.label}
+            </span>
+          )}
         </button>
 
         {/* "Watch live" is shown on every browser tool-call row, not only while
@@ -180,28 +175,27 @@ export function BrowserToolBlock({
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-colors"
+          className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
         >
           <Broadcast size={13} />
           <span>Watch live</span>
         </button>
 
-        <span className="flex items-center gap-1 shrink-0 pr-3 py-2">
-          {renderStatusIcon()}
-          {hasDetail && (
-            <span className="ml-1 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
-            </span>
-          )}
-        </span>
+        {hasDetail && (
+          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+          </span>
+        )}
       </div>
 
-      {/* Detail panel */}
+      {/* Detail panel — indented left-accent block instead of the old
+          bordered/backgrounded panel; each section keeps its own spacing
+          via space-y-2 rather than individual borders/fills. */}
       {expanded && hasDetail && (
-        <div className="border-t border-[var(--color-border)]">
+        <div className="border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
           {/* Args row */}
           {Object.keys(args).length > 0 && (
-            <div className="px-3 py-2 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
+            <div>
               <p className="text-[10px] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Args</p>
               <pre className="text-[10px] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all">
                 {JSON.stringify(args, null, 2)}
@@ -211,17 +205,15 @@ export function BrowserToolBlock({
 
           {/* Screenshot indicator (image itself renders in the assistant reply bubble via the media frame). */}
           {parsed.screenshot && (
-            <div className="px-3 py-2 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
-              <div className="flex items-center gap-1.5">
-                <Camera size={11} className="text-[var(--color-muted)]" />
-                <span className="text-[10px] text-[var(--color-muted)]">Screenshot captured</span>
-              </div>
+            <div className="flex items-center gap-1.5">
+              <Camera size={11} className="text-[var(--color-muted)]" />
+              <span className="text-[10px] text-[var(--color-muted)]">Screenshot captured</span>
             </div>
           )}
 
           {/* Text output (browser.get_text) */}
           {parsed.text && !parsed.screenshot && (
-            <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
+            <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {String(parsed.text).slice(0, 4000)}
               {String(parsed.text).length > 4000 && (
                 <span className="text-[var(--color-muted)] italic">
@@ -233,7 +225,7 @@ export function BrowserToolBlock({
 
           {/* JS evaluate result (browser.evaluate) */}
           {parsed.result !== undefined && (
-            <div className="px-3 py-2 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
+            <div>
               <p className="text-[10px] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Result</p>
               <pre className="text-[10px] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-40 overflow-auto">
                 {JSON.stringify(parsed.result, null, 2)}
@@ -243,16 +235,12 @@ export function BrowserToolBlock({
 
           {/* Error */}
           {parsed.error && (
-            <div className="px-3 py-2 text-[var(--color-error)] text-[10px] bg-[var(--color-surface-1)]">
-              {parsed.error}
-            </div>
+            <div className="text-[var(--color-error)] text-[10px]">{parsed.error}</div>
           )}
 
           {/* Simple OK for click/type/wait when no rich payload */}
           {!parsed.screenshot && !parsed.text && parsed.result === undefined && !parsed.error && (
-            <div className="px-3 py-2 text-[10px] text-[var(--color-muted)] bg-[var(--color-surface-1)]">
-              {isError ? 'Failed' : 'OK'}
-            </div>
+            <div className="text-[10px] text-[var(--color-muted)]">{isError ? 'Failed' : 'OK'}</div>
           )}
         </div>
       )}

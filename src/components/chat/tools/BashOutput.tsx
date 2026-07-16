@@ -18,17 +18,11 @@
 
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  Terminal,
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
+import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 // ── Args shape ────────────────────────────────────────────────────────────────
 //
@@ -114,62 +108,56 @@ function BashOutputBlock({
   const label = actionLabel(action, isBackground)
   const output = result != null ? String(result) : ''
 
-  return (
-    <div
-      className={cn(
-        'mt-2 rounded-md border overflow-hidden font-mono text-xs',
-        isRunning
-          ? 'border-[var(--color-border)]'
-          : isError
-          ? 'border-[var(--color-error)]/30 bg-[var(--color-error)]/5'
-          : 'border-[var(--color-success)]/20',
-      )}
-    >
-      {/* Header */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
-        className="flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] hover:bg-[var(--color-surface-3)] transition-colors text-left cursor-pointer"
-        aria-expanded={expanded}
-      >
-        <Terminal
-          size={13}
-          weight="bold"
-          className={cn(
-            isRunning ? 'text-[var(--color-accent)]' :
-            isError ? 'text-[var(--color-error)]' :
-            'text-[var(--color-success)]',
-          )}
-        />
-        <span className="text-[var(--color-muted)] shrink-0">{label}</span>
-        <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0">{command}</span>
-        <span className="flex items-center gap-1 shrink-0">
-          {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-          ) : isError ? (
-            <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
-          ) : (
-            <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-          )}
-          <span className="text-[var(--color-muted)] ml-0.5">
-            {expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
-          </span>
-        </span>
-      </button>
+  // Flat text-line redesign (ticket "Tool components in chat", P2): no
+  // rounded-md/border/overflow-hidden card, no status-tinted border, no
+  // header background — the row is transparent on the thread and the only
+  // status color lives in the leading dot/spinner (shared with
+  // GenericToolCall/ToolCallBadge via getToolBadgeStatusConfig). The
+  // per-tool Terminal glyph is dropped as redundant with the `label` text
+  // ("bash" / "bash poll" / …) it used to sit beside.
+  const statusConfig = getToolBadgeStatusConfig(isRunning ? 'running' : isError ? 'error' : 'success', {
+    size: 12,
+  })
 
-      {/* Output panel */}
+  return (
+    <div className="mt-2 text-xs font-mono">
+      {/* Header row */}
+      <div className="flex w-full items-center gap-2">
+        <button tabIndex={0}
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          className="flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
+          aria-expanded={expanded}
+        >
+          {statusConfig.indicator}
+          <span className="text-[var(--color-muted)] shrink-0">{label}</span>
+          <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0">{command}</span>
+          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+            {statusConfig.label}
+          </span>
+        </button>
+        <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+          {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+        </span>
+      </div>
+
+      {/* Output panel — indented left-accent block; the dark terminal panel
+          keeps its own identity (bg-[#0d1117]) but is no longer wrapped in
+          an outer bordered frame. */}
       {expanded && (
-        <div className="bg-[#0d1117] border-t border-[var(--color-border)]">
-          {isRunning && !output ? (
-            <div className="px-3 py-2 text-[var(--color-muted)] italic flex items-center gap-2">
-              <ArrowsClockwise size={11} className="animate-spin" />
-              {isBackground ? 'Running in background...' : 'Executing...'}
-            </div>
-          ) : (
-            <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
-              {output || <span className="text-[var(--color-muted)] italic">(no output)</span>}
-            </pre>
-          )}
+        <div className="border-l-2 border-[var(--color-border)] pl-3 py-1">
+          <div className="bg-[#0d1117] rounded-sm">
+            {isRunning && !output ? (
+              <div className="px-3 py-2 text-[var(--color-muted)] italic flex items-center gap-2">
+                <ArrowsClockwise size={11} className="animate-spin" />
+                {isBackground ? 'Running in background...' : 'Executing...'}
+              </div>
+            ) : (
+              <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+                {output || <span className="text-[var(--color-muted)] italic">(no output)</span>}
+              </pre>
+            )}
+          </div>
         </div>
       )}
     </div>

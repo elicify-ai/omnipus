@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, fireEvent } from '@testing-library/react'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
 type RenderFn = (props: { args: unknown; result: unknown; status: { type: string } }) => React.ReactNode
@@ -214,6 +214,117 @@ describe.each([
 )
 
 // ── ToolCallResultFrame as result source (using generated type) ───────────────
+
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded cards were replaced by a flat text line whose
+// only status color comes from an 8px dot (running keeps the spinning icon in
+// the same slot) — see GenericToolCall.tsx/toolStatusConfig.tsx for the
+// reference language this mirrors. WebFetchBlock/WebSearchBlock have no
+// data-testid on their root, so these assertions use `container` queries.
+
+describe('WebFetchBlock — flat text-line status dot', () => {
+  function renderFetch(result: unknown, statusType: string, url = 'https://example.com') {
+    const renderFn = captured['web_fetch']
+    return render(renderFn({ args: { url }, result, status: { type: statusType } }) as React.ReactElement)
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = renderFetch(null, 'running')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('success: indicator is an 8px success-colored dot', () => {
+    const { container } = renderFetch('page content', 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('error: indicator is an 8px error-colored dot', () => {
+    const { container } = renderFetch(null, 'incomplete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('the root has no card-frame classes — flat/transparent on the thread', () => {
+    const { container } = renderFetch('page content', 'complete')
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toMatch(/\bborder\b/)
+  })
+
+  it('expanded content panel uses a left accent line, not a bordered/backgrounded card', () => {
+    const { container } = renderFetch('page content', 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    const panel = root.children[1] as HTMLElement
+    expect(panel.className).toContain('border-l-2')
+    expect(panel.className).not.toMatch(/\bborder-b\b/)
+  })
+
+  it('renders an "open in new tab" action link for a safe fetched URL', () => {
+    const { container } = renderFetch('page content', 'complete', 'https://example.com/docs')
+    const link = container.querySelector('a[href="https://example.com/docs"]')
+    expect(link).toBeTruthy()
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  it('omits the action link for an unsafe URL scheme (javascript:)', () => {
+    const { container } = renderFetch('page content', 'complete', 'javascript:alert(1)')
+    expect(container.querySelector('a')).toBeNull()
+  })
+
+  it('omits the action link for a non-parseable URL', () => {
+    const { container } = renderFetch('page content', 'complete', 'not-a-url')
+    expect(container.querySelector('a')).toBeNull()
+  })
+})
+
+describe('WebSearchBlock — flat text-line status dot', () => {
+  const structuredResult = '1. Example Site\n   https://example.com\n   Site description here.\n'
+
+  function renderSearch(result: unknown, statusType: string) {
+    const renderFn = captured['web_search']
+    return render(renderFn({ args: { query: 'test' }, result, status: { type: statusType } }) as React.ReactElement)
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = renderSearch(null, 'running')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('with results: indicator is an 8px success-colored dot', () => {
+    const { container } = renderSearch(structuredResult, 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('the root has no card-frame classes — flat/transparent on the thread', () => {
+    const { container } = renderSearch(structuredResult, 'complete')
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toMatch(/\bborder\b/)
+  })
+
+  it('expanded results panel uses a left accent line, not a bordered/backgrounded card (no divide-y dividers)', () => {
+    const { container } = renderSearch(structuredResult, 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    const panel = root.children[1] as HTMLElement
+    expect(panel.className).toContain('border-l-2')
+    expect(panel.className).not.toContain('divide-y')
+  })
+})
 
 describe.each([
   [

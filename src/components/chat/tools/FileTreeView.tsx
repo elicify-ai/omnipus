@@ -1,15 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  Folder,
-  FolderOpen,
-  File,
-  ArrowsClockwise,
-  CheckCircle,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { Folder, File, ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { statusDot } from '@/lib/toolStatusConfig'
 
 interface ListDirArgs {
   path?: string
@@ -62,41 +55,42 @@ function FileTreeBlock({
   const entries = content ? parseTree(content) : []
 
   return (
-    <div className="mt-2 rounded-md border border-[var(--color-border)] overflow-hidden text-xs">
+    // Flat text-line design (ticket "Tool components in chat", P2): no card
+    // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
+    // language. The header's Folder/FolderOpen toggle icon is gone (leading
+    // slot is the status dot/spinner only, like the other rows); each tree
+    // entry below keeps its own Folder/File icon and indentation — that's
+    // the file tree's identity, preserved per the flat-redesign spec.
+    <div className="mt-2 text-xs font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] transition-colors text-left',
-          !isRunning && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
+          'flex w-full items-center gap-2 py-1 transition-colors text-left',
+          !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
           isRunning && 'cursor-default'
         )}
         aria-expanded={expanded}
       >
-        {expanded
-          ? <FolderOpen size={13} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
-          : <Folder size={13} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
-        }
+        {isRunning ? (
+          <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)] shrink-0" />
+        ) : content ? (
+          statusDot('bg-[var(--color-success)]')
+        ) : null}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{path}</span>
         <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
-          {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-          ) : content ? (
-            <>
-              <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-              <span>{entries.length} entries</span>
-            </>
-          ) : null}
+          {content && <span>{entries.length} entries</span>}
           {!isRunning && (
             <span className="ml-1">{expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}</span>
           )}
         </span>
       </button>
 
-      {/* Tree panel */}
+      {/* Tree panel — left-accent block, no bordered card. Entries keep their
+          Folder/File icons and paddingLeft-based indentation unchanged. */}
       {expanded && !isRunning && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-1)] max-h-64 overflow-auto px-3 py-2 space-y-0.5">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-1 pl-3 space-y-0.5">
           {entries.length > 0 ? (
             entries.map((entry, i) => (
               <div

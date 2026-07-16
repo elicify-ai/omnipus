@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserToolBlock } from './BrowserTool'
 import { Globe } from '@phosphor-icons/react'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
@@ -288,4 +288,122 @@ it('null result with complete status renders without showing a <script> tag (XSS
   )
   // No injected <script> elements in the DOM
   expect(document.querySelectorAll('script')).toHaveLength(0)
+})
+
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded card (rounded-md border overflow-hidden +
+// status-tinted border + bg-surface-1 header) is gone — the row is now a
+// flat text line whose only status color comes from an 8px dot (running
+// keeps the spinning icon in the same slot). The per-tool identity icon
+// (CursorClick/Keyboard/…) passed via the `icon` prop is no longer rendered
+// — it was redundant with `toolName`, which already disambiguates uniquely.
+
+describe('BrowserToolBlock — flat text-line status dot', () => {
+  /** The toggle button is always the first <button> in the row (Watch Live
+   * is a separate sibling button) — its first child is the status indicator
+   * when one is rendered. */
+  function getIndicatorEl(container: HTMLElement) {
+    return container.querySelector('button')?.children[0] as HTMLElement | undefined
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        icon={Globe}
+        args={{}}
+        result={null}
+        status={{ type: 'running' }}
+        summary="#btn"
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('complete with a result: indicator is an 8px success-colored dot', () => {
+    const { container } = render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        icon={Globe}
+        args={{}}
+        result={{ ok: true }}
+        status={{ type: 'complete' }}
+        summary="#btn"
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('incomplete: indicator is an 8px error-colored dot', () => {
+    const { container } = render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        icon={Globe}
+        args={{}}
+        result={null}
+        status={{ type: 'incomplete' }}
+        summary="#btn"
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('the per-tool identity icon passed via `icon` is not rendered as an <svg> before the toolName text', () => {
+    // The CursorClick/Keyboard/etc. glyph the caller passes is redundant with
+    // the toolName text and was dropped — only the status dot/spinner (a
+    // <span> or <svg> from getToolBadgeStatusConfig) leads the row now.
+    render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        icon={Globe}
+        args={{}}
+        result={{ ok: true }}
+        status={{ type: 'complete' }}
+        summary="#btn"
+      />
+    )
+    // toolName text is still present — the row identifies the tool via text, not icon.
+    expect(screen.getByText('browser.click')).toBeInTheDocument()
+  })
+
+  it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
+    const { container } = render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        icon={Globe}
+        args={{}}
+        result={{ ok: true }}
+        status={{ type: 'complete' }}
+        summary="#btn"
+      />
+    )
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('border')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('expanded detail uses a left accent line, not a full bordered panel', () => {
+    render(
+      <BrowserToolBlock
+        toolName="browser.evaluate"
+        icon={Globe}
+        args={{ expression: 'document.title' }}
+        result={{ result: 'My Page' }}
+        status={{ type: 'complete' }}
+        summary="document.title"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /browser\.evaluate/ }))
+    const detail = screen.getByText('Result').parentElement?.parentElement
+    expect(detail?.className).toContain('border-l-2')
+    expect(detail?.className).not.toContain('border-t')
+  })
 })

@@ -102,7 +102,12 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
     rawJson = String(raw)
   }
   return (
-    <div data-testid="webserve-malformed-block" className="mt-2 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 px-3 py-2 text-xs space-y-1.5">
+    // Flat text-line design (ticket "Tool components in chat", P2): the old
+    // rounded/bordered/backgrounded error card is a border-l-2 left accent
+    // instead — matches GenericToolCall.tsx's marshal-error/delegation-denied
+    // banners. This is the only frame WebServeUI itself owns; PreviewToolHeader
+    // (used above by WebServeBlock) is a sibling's file — left untouched.
+    <div data-testid="webserve-malformed-block" className="mt-2 border-l-2 border-[var(--color-error)]/40 pl-2.5 py-1 text-xs space-y-1.5">
       <p className="text-[var(--color-error)]">
         web_serve tool returned a malformed result — cannot render preview.
       </p>
@@ -110,7 +115,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
         <summary tabIndex={0} className="cursor-pointer text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors">
           Show raw result
         </summary>
-        <pre className="mt-1.5 p-2 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-mono text-[10px] overflow-auto max-h-40 whitespace-pre-wrap break-all">
+        <pre className="mt-1.5 text-[var(--color-muted)] font-mono text-[10px] overflow-auto max-h-40 whitespace-pre-wrap break-all">
           {rawJson}
         </pre>
       </details>

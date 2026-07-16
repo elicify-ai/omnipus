@@ -249,3 +249,101 @@ describe('BrowserNavigateBlock — "Watch live" launcher', () => {
     )
   })
 })
+
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded card (rounded-md border overflow-hidden +
+// status-tinted border + bg-surface-1 header) is gone — the row is now a
+// flat text line whose only status color comes from an 8px dot (running
+// keeps the spinning icon in the same slot). The hardcoded Globe identity
+// icon is no longer rendered — it was redundant with the fixed
+// "browser.navigate" label.
+
+describe('BrowserNavigateBlock — flat text-line status dot', () => {
+  beforeEach(() => {
+    useUiStore.getState().closeBrowserPanel()
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
+  })
+
+  afterEach(() => {
+    useUiStore.getState().closeBrowserPanel()
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
+  })
+
+  /** The toggle button is always the first <button> in the row (Watch Live
+   * is a separate sibling button) — its first child is the status indicator
+   * when one is rendered. */
+  function getIndicatorEl(container: HTMLElement) {
+    return container.querySelector('button')?.children[0] as HTMLElement | undefined
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = render(
+      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={true} />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('completed with a result: indicator is an 8px success-colored dot', () => {
+    const { container } = render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example', url: 'https://example.com' }}
+        isRunning={false}
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('error: indicator is an 8px error-colored dot', () => {
+    const { container } = render(
+      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} isError />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
+    const { container } = render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example', url: 'https://example.com' }}
+        isRunning={false}
+      />
+    )
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('border')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('the row identifies the tool via the "browser.navigate" text, not a Globe icon', () => {
+    render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example', url: 'https://example.com' }}
+        isRunning={false}
+      />
+    )
+    expect(screen.getByText('browser.navigate')).toBeInTheDocument()
+  })
+
+  it('expanded detail uses a left accent line, not a full bordered panel', () => {
+    render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example', url: 'https://example.com', content: 'page text' }}
+        isRunning={false}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /browser\.navigate/ }))
+    const detail = screen.getByText('page text').parentElement
+    expect(detail?.className).toContain('border-l-2')
+    expect(detail?.className).not.toContain('border-t')
+  })
+})

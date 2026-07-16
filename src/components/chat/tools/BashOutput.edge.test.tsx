@@ -64,6 +64,145 @@ it('registers the canonical bash tool and all 5 legacy aliases', () => {
   expect(captured.bashRender).not.toBeNull()
 })
 
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded card (rounded-md border overflow-hidden +
+// status-tinted border + bg-surface-1 header) is gone — the row is now a
+// flat text line whose only status color comes from an 8px dot (running
+// keeps the spinning icon in the same slot). The dark terminal output panel
+// keeps its own identity (bg-[#0d1117]) but is no longer wrapped in a
+// bordered outer frame — it now sits behind a border-l-2 left accent line.
+
+describe('bash — flat text-line status dot', () => {
+  /** The toggle button is the first (and only) <button> in the row; its
+   * first child is always the status indicator (dot or spinner). */
+  function getIndicatorEl(container: HTMLElement) {
+    return container.querySelector('button')?.children[0] as HTMLElement | undefined
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'sleep 1' },
+        result: null,
+        status: { type: 'running' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('complete (success): indicator is an 8px success-colored dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('incomplete (error): indicator is an 8px error-colored dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'false' },
+        result: 'exit 1',
+        status: { type: 'incomplete' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('border')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('the output panel (expanded by default) uses a left accent line, not a full bordered frame', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    // BashOutputBlock defaults to expanded — no click needed.
+    const panel = container.querySelector('.border-l-2') as HTMLElement | null
+    expect(panel).toBeTruthy()
+    expect(panel?.className).not.toContain('border-t')
+  })
+
+  it('the dark terminal output panel keeps its own identity (bg-[#0d1117]) without an outer border', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const terminal = container.querySelector('[class*="0d1117"]') as HTMLElement | null
+    expect(terminal).toBeTruthy()
+    expect(terminal?.className).not.toContain('border')
+  })
+
+  it('running with no output: the inline "Executing..." spinner keeps animate-spin', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container, getByText } = render(
+      captured.bashRender({
+        args: { command: 'sleep 30' },
+        result: null,
+        status: { type: 'running' },
+      }) as React.ReactElement
+    )
+    expect(getByText('Executing...')).toBeInTheDocument()
+    const spinners = container.querySelectorAll('.animate-spin')
+    // One in the header status indicator, one in the "Executing..." row.
+    expect(spinners.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
 // ── bash (canonical) result edge cases ────────────────────────────────────────
 
 describe.each([

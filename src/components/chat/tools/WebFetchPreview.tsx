@@ -1,14 +1,9 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  Globe,
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { ArrowsClockwise, CaretDown, CaretUp, ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { statusDot } from '@/lib/toolStatusConfig'
+import { isSafeHref } from '@/lib/url-safe'
 
 interface WebFetchArgs {
   url?: string
@@ -50,65 +45,69 @@ function WebFetchBlock({
   const url = args.url ?? '(unknown URL)'
   const content = result != null ? String(result) : ''
   const { preview, truncated } = content ? truncateContent(content) : { preview: '', truncated: false }
+  // Only render the "open in new tab" action link for a real http(s)/mailto/tel
+  // URL — never for javascript:/data:/etc. Reuses the same allow-list IframePreview
+  // already applies to preview URLs (@/lib/url-safe), so both surfaces agree.
+  const linkable = isSafeHref(url)
 
   return (
-    <div
-      className={cn(
-        'mt-2 rounded-md border overflow-hidden text-xs',
-        isRunning
-          ? 'border-[var(--color-border)]'
-          : isError
-          ? 'border-[var(--color-error)]/30'
-          : 'border-[var(--color-border)]'
-      )}
-    >
-      {/* Header */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => !isRunning && content && setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] transition-colors text-left',
-          !isRunning && content && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
-          (isRunning || !content) && 'cursor-default'
-        )}
-        aria-expanded={expanded}
-      >
-        <Globe
-          size={13}
-          weight="duotone"
+    // Flat text-line design (ticket "Tool components in chat", P2): no card
+    // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
+    // language. The decorative Globe tool-type icon is gone; the leading slot
+    // is the status dot/spinner only. The "open fetched URL" action link is a
+    // separate sibling control (mirrors GenericToolCall's "Watch live"), not
+    // nested inside the toggle button, so it stays independently clickable.
+    <div className="mt-2 text-xs font-mono">
+      <div className="flex w-full items-center gap-2">
+        {/* Header */}
+        <button tabIndex={0}
+          type="button"
+          onClick={() => !isRunning && content && setExpanded((e) => !e)}
           className={cn(
-            isRunning ? 'text-[var(--color-accent)]' :
-            isError ? 'text-[var(--color-error)]' :
-            'text-[var(--color-secondary)]'
+            'flex min-w-0 flex-1 items-center gap-2 py-1 transition-colors text-left',
+            !isRunning && content && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
+            (isRunning || !content) && 'cursor-default'
           )}
-        />
-        <span className="text-[var(--color-muted)] shrink-0">web_fetch</span>
-        <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
-          {displayUrl(url)}
-        </span>
-        <span className="flex items-center gap-1 shrink-0">
+          aria-expanded={expanded}
+        >
           {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
+            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)] shrink-0" />
           ) : isError ? (
-            <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
+            statusDot('bg-[var(--color-error)]')
           ) : content ? (
-            <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
+            statusDot('bg-[var(--color-success)]')
           ) : null}
-          {!isRunning && content && (
-            <span className="ml-1 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
-            </span>
-          )}
-        </span>
-      </button>
+          <span className="text-[var(--color-muted)] shrink-0">web_fetch</span>
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+            {displayUrl(url)}
+          </span>
+        </button>
+        {linkable && (
+          <a tabIndex={0}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open fetched URL"
+            title="Open in new tab"
+            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          >
+            <ArrowSquareOut size={12} />
+          </a>
+        )}
+        {!isRunning && content && (
+          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+            {expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
+          </span>
+        )}
+      </div>
 
-      {/* Content panel */}
+      {/* Content panel — left-accent block, no bordered card. Fetched-page
+          preview keeps its identity (plain text preview), just without a
+          bordered/backgrounded breadcrumb row. */}
       {expanded && !isRunning && content && (
-        <div className="border-t border-[var(--color-border)]">
-          <div className="px-2 py-0.5 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
-            <span className="text-[10px] text-[var(--color-muted)] font-mono break-all">{url}</span>
-          </div>
-          <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto bg-[var(--color-surface-1)]">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
+          <div className="text-[10px] text-[var(--color-muted)] font-mono break-all mb-1">{url}</div>
+          <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
             {preview}
             {truncated && (
               <span className="text-[var(--color-muted)] italic">{'\n'}... (content truncated)</span>

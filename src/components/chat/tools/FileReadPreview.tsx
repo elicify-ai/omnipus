@@ -1,13 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  FileText,
-  ArrowsClockwise,
-  CheckCircle,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { statusDot } from '@/lib/toolStatusConfig'
 
 interface ReadFileArgs {
   path?: string
@@ -39,43 +34,43 @@ function FileReadBlock({
   const isTruncated = lineCount > 20
 
   return (
-    <div className="mt-2 rounded-md border border-[var(--color-border)] overflow-hidden text-xs">
+    // Flat text-line design (ticket "Tool components in chat", P2): no card
+    // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
+    // language. The decorative FileText tool-type icon is gone; the leading
+    // slot is the status dot/spinner only.
+    <div className="mt-2 text-xs font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] transition-colors text-left',
-          !isRunning && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
+          'flex w-full items-center gap-2 py-1 transition-colors text-left',
+          !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
           isRunning && 'cursor-default'
         )}
         aria-expanded={expanded}
         disabled={isRunning}
       >
-        <FileText size={13} className="text-[var(--color-accent)] shrink-0" weight="duotone" />
+        {isRunning ? (
+          <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)] shrink-0" />
+        ) : content ? (
+          statusDot('bg-[var(--color-success)]')
+        ) : null}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{name}</span>
         <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
-          {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-          ) : content ? (
-            <>
-              <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-              <span>{lineCount} lines</span>
-            </>
-          ) : null}
+          {content && <span>{lineCount} lines</span>}
           {!isRunning && (
             <span className="ml-1">{expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}</span>
           )}
         </span>
       </button>
 
-      {/* File content panel */}
+      {/* File content panel — left-accent block, no bordered card. The
+          content pane keeps its dark code-block styling (bg-[#0d1117]). */}
       {expanded && !isRunning && content && (
-        <div className="border-t border-[var(--color-border)]">
-          <div className="px-1 py-0.5 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
-            <span className="text-[10px] text-[var(--color-muted)] font-mono px-2">{path}</span>
-          </div>
-          <pre className="px-3 py-2 text-[10px] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[#0d1117]">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
+          <div className="text-[10px] text-[var(--color-muted)] font-mono break-all mb-1">{path}</div>
+          <pre className="p-2 text-[10px] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[#0d1117]">
             {preview}
             {isTruncated && (
               <span className="text-[var(--color-muted)] italic">
