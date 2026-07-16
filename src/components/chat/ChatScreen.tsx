@@ -1493,12 +1493,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         >
           {/* Attach — leading the input, ChatGPT/Claude-style. Plus (add
               context: files, images, anything) instead of the email-era
-              paperclip. items-end row → mb-0.5 optically centers it against
+              paperclip. items-end row → mb-1.5 = (40px single-line input − 28px)/2 centers it against
               the single-line textarea baseline. */}
           <ComposerPrimitive.AddAttachment
             disabled={attachDisabled}
             tabIndex={4}
-            className="shrink-0 h-7 w-7 mb-0.5 rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 h-7 w-7 mb-1.5 rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             aria-label="Add files or context"
             title="Add files or context"
           >
@@ -1590,10 +1590,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 cancelState.cancelUnconditional()
               }}
               className={cn(
-                'shrink-0 rounded-xl flex items-center justify-center transition-colors',
+                // h-9 + mb-0.5: same footprint as the send button it replaces
+                // mid-stream (keeps the row from jumping on morph).
+                'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
                 cancelState.stopLabel === 'stopping'
-                  ? 'px-3 h-11 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                  : 'w-11 h-11',
+                  ? 'px-3 h-9 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                  : 'w-9 h-9',
                 isStreaming
                   ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                   : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
@@ -1618,7 +1620,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               disabled={!inputEnabled || isReplaying}
               data-testid="chat-send"
               className={cn(
-                'shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-colors',
+                'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying
                   ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
                     // Muted accent while reconnecting — functional but visually signals
