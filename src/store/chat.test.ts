@@ -1187,6 +1187,64 @@ describe('ChatStore_GroupsFramesBySpan', () => {
     expect(spans[0].steps).toHaveLength(1)
     expect(spans[1].steps).toHaveLength(2)
   })
+
+  // Bug fix regression (root-caused at chat.ts's tool_call_result span-merge
+  // sites): the result-step object used to hardcode `params: {}`, and
+  // `{ ...existingStep.tool, ...step }` let that empty object clobber the
+  // REAL params recorded at tool_call_start — so a step's params silently
+  // reverted to {} the moment its result arrived. Downstream, ToolCallBadge's
+  // shouldRenderToolCall(tool, params, ...) misclassified e.g. a
+  // `bash {action:'poll'}` step as visible (params={} doesn't match the
+  // poll/read hide rule), leaking noisy background infra into
+  // SubagentBlock/ActivityPanel. Pins that the step's params survive the
+  // result merge unchanged.
+  it('a span step keeps its tool_call_start params after tool_call_result arrives (params must not be clobbered)', () => {
+    seedAssistant()
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span_params',
+        parent_call_id: 'c_params',
+        task_label: 'poll a background session',
+        session_id: TEST_SESSION_ID,
+      })
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 't_params',
+        tool: 'bash',
+        params: { action: 'poll' },
+        parent_call_id: 'c_params',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    let msgs = useChatStore.getState().messages
+    let span = msgs[msgs.length - 1].spans?.[0]
+    const stepBefore = span?.steps[0]
+    expect(stepBefore?.kind === 'tool' ? stepBefore.tool.params : undefined).toEqual({ action: 'poll' })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 't_params',
+        tool: 'bash',
+        result: 'still running',
+        status: 'success',
+        duration_ms: 50,
+        parent_call_id: 'c_params',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    msgs = useChatStore.getState().messages
+    span = msgs[msgs.length - 1].spans?.[0]
+    const stepAfter = span?.steps[0]
+    // The bug: this used to become {} after the result merge.
+    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.params : undefined).toEqual({ action: 'poll' })
+    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.status : undefined).toBe('success')
+    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.result : undefined).toBe('still running')
+  })
 })
 
 // TDD row 12: ChatStore_OrphanFrame_FallsBackFlat
