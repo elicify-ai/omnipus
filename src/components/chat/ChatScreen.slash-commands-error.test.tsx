@@ -91,6 +91,7 @@ vi.mock('@assistant-ui/react', () => {
       getState: () => ({ text: '' }),
       setText: vi.fn(),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -114,8 +115,17 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   const mockSkills = [
     { id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active' },
   ]
+  // K.3 (bugfixes3 sign-off): `makeAgent` (src/test/factories.ts), not a
+  // hand-rolled partial object literal — fills every schema-required Agent
+  // field (see that file's own header comment on why a partial fixture
+  // drifted from the real wire type). Imported here via `await import(...)`
+  // rather than a top-level `import` because this factory function is
+  // itself the body of a HOISTED `vi.mock(...)` call — referencing a
+  // top-level `import`ed binding from inside it would hit vitest's mock
+  // hoisting order; the dynamic import is hoisting-safe.
+  const { makeAgent } = await import('@/test/factories')
   const mockAgents = [
-    { id: 'mia', name: 'Mia', type: 'core', status: 'active', description: 'Assistant' },
+    makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', description: 'Assistant' }),
   ]
   return {
     ...actual,

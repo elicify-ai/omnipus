@@ -25,6 +25,24 @@ The v1 spec was BLOCKED by adversarial review with 4 CRITICAL findings, all veri
 
 ---
 
+## Amendment (2026-07-16, bugfixes3 fix round — layered dismissal)
+
+US-1/AC-4 (§3) and FR-3 (§11) state that Web Escape (input focused,
+`isStreaming=true`) cancels, with no carve-out for the "/" or "@" composer
+menu being open. That was accurate when written but went stale once the "@"
+agent-mention menu shipped (commit 103c5fd0) and its own Escape handling
+landed (bugfixes3 Fix 3): when the slash/mention menu is VISIBLE
+(`slashOpen && shouldShowSlash`, `src/hooks/useSlashMenu.ts`), the FIRST
+Escape now closes the menu only; a SECOND Escape (menu already closed) is
+what reaches the cancel trigger described below. Layered dismissal, not a
+new cancel trigger — aligns with `unified-slash-command-skill-menu-spec.md`'s
+own "Esc closes" behavior for that menu. Implemented in
+`ChatScreen.handleKeyDown` (`src/components/chat/ChatScreen.tsx` — menu-close
+wins over stream-cancel) and `useSlashMenu.ts`'s own Escape branch. Amendment
+notes at the two affected points below (§3 and §11) point back here.
+
+---
+
 ## 1. Context & Motivation
 
 ### Glossary
@@ -124,7 +142,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 1. **Given** a turn is actively streaming, **When** the user clicks the Stop button, **Then** the turn ends within 5 seconds (P95) and the partial assistant message displays with the `(interrupted)` suffix.
 2. **Given** a turn has spawned 2 sub-turns currently executing, **When** the user clicks Stop, **Then** the parent turn and both sub-turns stop within 5 seconds.
 3. **Given** the user has typed `/` mid-stream and the slash menu is showing (FR-3a allows this exception for `/cancel`), **When** they select `/cancel`, **Then** the same code path executes as Stop button.
-4. **Given** a turn is streaming, **When** the user presses Escape with focus in the chat input, **Then** the same code path executes as Stop button.
+4. **Given** a turn is streaming, **When** the user presses Escape with focus in the chat input, **Then** the same code path executes as Stop button. *(Amended 2026-07-16/bugfixes3 — see "Amendment" section above: this AC assumed no menu could be open; when the "/" or "@" menu is visible, the FIRST Escape closes the menu instead, and only a second Escape reaches this cancel path.)*
 
 ### US-2: Chat-channel user cancels via `/cancel` — P0
 
@@ -652,7 +670,7 @@ New regression assertion (per F-20):
 
 - **FR-1**: System MUST accept `/cancel` as a slash command on every Tier A channel (Telegram, Slack, Discord, Teams, Feishu, DingTalk, Google Chat).
 - **FR-2**: System MUST parse `/cancel` from inbound message text on every Tier B channel (Matrix, IRC, LINE, Weixin, WeCom, QQ, OneBot, WhatsApp, WhatsApp Native). Match is case-insensitive, whitespace-trimmed, requires whole-message equality.
-- **FR-3**: System MUST accept Web Stop button, Web `/cancel` slash menu (during streaming per FR-3a), Web Escape key (when input has focus and `isStreaming=true`), and CLI double-Escape (during inference) as cancel triggers — all routing to the same backend cancel API.
+- **FR-3**: System MUST accept Web Stop button, Web `/cancel` slash menu (during streaming per FR-3a), Web Escape key (when input has focus and `isStreaming=true`), and CLI double-Escape (during inference) as cancel triggers — all routing to the same backend cancel API. *(Amended 2026-07-16/bugfixes3 — see "Amendment" section above: the Web-Escape trigger has a menu-open carve-out this FR didn't originally state — when the "/" or "@" slash/mention menu is visible, the first Escape closes the menu; only a second Escape, with the menu now closed, reaches this cancel trigger.)*
 - **FR-3a**: System (SPA) MUST allow the slash menu to display during streaming when typed input matches at least one entry tagged `availableWhileStreaming: true`. In v0.1, only `/cancel` carries this tag. `shouldShowSlash` gating in `ChatScreen.tsx:456` MUST be relaxed accordingly.
 - **FR-4**: System MUST acknowledge a cancel request with a visible UI signal. Latency budget:
   - Web/CLI: ≤100ms (local React state morph / terminal redraw)

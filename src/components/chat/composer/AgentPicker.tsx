@@ -46,7 +46,19 @@ export function AgentPicker({
   /** Explicit tab-order position — composer tab ring, see the map in ChatControls.tsx. */
   tabIndex?: number
 }) {
-  const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
+  // Fix H (bugfixes3 sign-off): slice selector, not a whole-store
+  // destructure — `useSessionStore()` (no selector) re-rendered this
+  // component on ANY write to the session store, including ones it doesn't
+  // care about, the same anti-pattern Fix 5 removed from useSlashMenu.ts's
+  // "@" mention menu (src/hooks/useSlashMenu.ts). Only `activeAgentId`
+  // needs to be reactive here (it drives `effectiveAgentId`/`activeAgent`
+  // below, recomputed every render); `activeSessionId` and
+  // `setActiveSession` are read fresh via `.getState()` at write time
+  // instead — in `handleAgentSelect` below, and already inside the
+  // auto-select effect's own body (unchanged, see that effect's doc
+  // comment) — matching useSlashMenu.ts's selectMentionAgent, which
+  // documents the same "fresh-state-in-write-path" pattern.
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const agentSelectorOpen = useUiStore((s) => s.agentSelectorOpen)
   const setAgentSelectorOpen = useUiStore((s) => s.setAgentSelectorOpen)
 
@@ -103,15 +115,23 @@ export function AgentPicker({
         attachedSessionType,
         attachedTaskTitle,
         setAttachedContext,
+        // Fix H: read fresh here too (see the slice-selector comment above
+        // `activeAgentId`) — `activeSessionId`/`setActiveSession` are no
+        // longer captured as outer component-scope bindings, so this
+        // effect's ONLY remaining reason to depend on them is gone; the
+        // dependency array below drops both accordingly. Nothing else in
+        // this effect's logic changes — it already read `freshSession`
+        // (not the outer `activeSessionId`) before this fix.
+        setActiveSession: freshSetActiveSession,
       } = useSessionStore.getState()
       if (freshAgent) return
       const first = chatAgents[0]
-      setActiveSession(freshSession, first.id, first.type)
+      freshSetActiveSession(freshSession, first.id, first.type)
       if (attachedSessionType) {
         setAttachedContext(attachedSessionType, attachedTaskTitle)
       }
     }
-  }, [activeAgentId, activeSessionId, chatAgents, setActiveSession, disabled])
+  }, [activeAgentId, chatAgents, disabled])
 
   if (hasHardError) {
     return (
@@ -142,7 +162,12 @@ export function AgentPicker({
   const effectiveAgentId = activeAgentId || chatAgents[0]?.id
   const activeAgent = chatAgents.find((a) => a.id === effectiveAgentId)
 
+  // Fix H: activeSessionId/setActiveSession read fresh via `.getState()` at
+  // click time — this is the write path, so the freshest state wins,
+  // matching useSlashMenu.ts's selectMentionAgent (Fix 5's documented
+  // pattern) now that neither is a captured outer binding any more.
   const handleAgentSelect = (agentId: string) => {
+    const { activeSessionId, setActiveSession } = useSessionStore.getState()
     const selected = agents.find((a) => a.id === agentId)
     setActiveSession(activeSessionId, agentId, selected?.type ?? null)
   }
@@ -167,12 +192,18 @@ export function AgentPicker({
           aria-label={`Select agent (current: ${activeAgent?.name ?? 'none'})`}
         >
           {/* Fix 9: aria-hidden — this is a decorative avatar dot (icon or a
-              single-letter initial), not label text. Without aria-hidden the
-              initial character gets folded into the trigger BUTTON's
-              accessible name (the initial is text-content inside the
-              button), polluting the name that `aria-label` below already
-              sets deliberately (screen readers concatenate accessible-name
-              sources). */}
+              single-letter initial), not label text. J.3 correction
+              (bugfixes3 sign-off): the trigger BUTTON already carries an
+              explicit `aria-label` below, and an explicit aria-label wins
+              outright over descendant text content in the accessible-name
+              computation — so the initial was never actually "polluting"
+              the button's accessible NAME, even without aria-hidden. The
+              real benefit here is for screen readers' browse/reading mode:
+              without aria-hidden, a user arrowing through the page's raw
+              content would still land on and hear the bare initial
+              character as its own piece of text; aria-hidden removes it
+              from that traversal entirely, leaving only the meaningful
+              "Select agent (current: X)" label. */}
           <div
             aria-hidden="true"
             className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"

@@ -1271,6 +1271,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     cancelIfStreaming: cancelState.cancelIfStreaming,
   })
 
+  // Fix E (bugfixes3 sign-off): `shouldShowSlash` alone is not "the menu
+  // has content to render" — the LOW S8 commandsError carve-out
+  // (useSlashMenu.ts) deliberately keeps it true even when `slashItems` is
+  // empty, so the container below could mount with NEITHER a real item NOR
+  // the error row inside it (e.g. "/skills" + commandsError + zero skills:
+  // the error row hides itself via `!isSkillsFilter` failing, and there are
+  // no skill items either) — an empty bordered box with nothing in it.
+  // Gate on whatever will actually render: at least one item, OR the exact
+  // condition the error row's own JSX uses below (kept identical on
+  // purpose so the two can't drift apart).
+  const hasMenuContent =
+    slashMenu.slashItems.length > 0 ||
+    (slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode)
+
   // Top-level keydown orchestration.
   //
   // Fix 3 (precedence): menu-close now wins over stream-cancel. Previously
@@ -1284,7 +1298,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   //
   // Correctness of the stopPropagation guard: useCancelState also owns a
   // document-level Escape listener (`document.addEventListener('keydown',
-  // ...)`, no `capture: true` — see useCancelState.ts ~163) so a turn can be
+  // ...)`, no `capture: true` — see useCancelState's global-escape effect,
+  // src/hooks/useCancelState.ts) so a turn can be
   // cancelled even when the input isn't focused. That listener is
   // BUBBLE-phase on `document`. This app mounts via `createRoot(#root)`
   // (src/main.tsx), and React 17+ (including the React 19 used here)
@@ -1321,8 +1336,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       return
     }
 
-    // Block Enter submission while streaming — slash menu Enter still works below.
-    if (e.key === 'Enter' && isStreaming && !slashMenu.slashOpen) {
+    // Block Enter submission while streaming — slash/mention menu Enter
+    // still works below, but ONLY when the menu is actually VISIBLE. Fix F
+    // (bugfixes3 sign-off): gating on `slashOpen` alone was wrong —
+    // `slashOpen` can be true while the menu renders nothing at all (e.g.
+    // "/zzz" or "@zzz" typed — no match, `shouldShowSlash` is false), so a
+    // mid-stream Enter in that state slipped past this guard even though
+    // there was no menu to consume it. `ComposerPrimitive.Root`'s onSubmit
+    // (below, in the JSX) still preventDefaults while isStreaming
+    // regardless, so this was defense-in-depth, not the only guard — but
+    // the guard's own condition should actually say "block Enter unless the
+    // menu is genuinely showing and about to consume the Enter itself."
+    if (e.key === 'Enter' && isStreaming && !(slashMenu.slashOpen && slashMenu.shouldShowSlash)) {
       e.preventDefault()
       return
     }
@@ -1441,12 +1466,22 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Slash command + skills partitioned dropdown (FR-005).
+      {/* Slash command + skills + "@" agent-mention partitioned dropdown
+          (FR-005). One container/list renders three different sections
+          depending on the trigger: "/" opens Commands+Skills, "@" opens
+          Agents (see useSlashMenu.ts's isMentionMode) — the two triggers
+          are mutually exclusive by construction, so `slashItems` is always
+          either [commands, skills] or [agents], never a mix (J.4
+          correction, bugfixes3 sign-off — this comment previously only
+          mentioned the "/" side).
           F6: unified slashItems.map() — emits a section header on each section
           transition, making the `section` field load-bearing and removing the
           duplicate render blocks + the off-by-one `globalIndex` variable.
-          FR-014/R3: skill items show their argument_hint as muted help text. */}
-      {slashMenu.shouldShowSlash && slashMenu.slashOpen && (
+          FR-014/R3: skill items show their argument_hint as muted help text.
+          Fix E: also gated on `hasMenuContent` (declared above, alongside
+          `slashMenu`) — `shouldShowSlash` alone can be true with nothing to
+          actually render; see that constant's own comment. */}
+      {slashMenu.shouldShowSlash && slashMenu.slashOpen && hasMenuContent && (
         <div
           data-testid="slash-menu"
           // max-h + scroll: the menu opens UPWARD from the composer, so a tall
@@ -1765,11 +1800,26 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // Fix 3: when reconnecting (fast or slow), allow send — messages go to
             // the outbound queue and drain automatically on reconnect.
             //
-            // Native ComposerPrimitive.Send: calls composer.send() → onNew, which
-            // now carries text AND attachments. Send and Enter both go through
-            // composer.send(), so they are identical. Send auto-disables when the
-            // composer is empty (no text and no attachments) via the runtime's
-            // canSend, so no manual empty-check is needed here.
+            // Native ComposerPrimitive.Send (bugfixes3 sign-off — J correction):
+            // verified against node_modules/@assistant-ui/react/dist/utils/
+            // createActionButton.js + primitives/composer/ComposerSend.js — the
+            // Send button renders a plain `type="button"` whose onClick calls
+            // `composer.send()` DIRECTLY, NOT `form.requestSubmit()`. A mouse
+            // click on Send therefore NEVER fires this ComposerPrimitive.Root's
+            // onSubmit above — Send and Enter do NOT go through an identical code
+            // path. The isStreaming preventDefault guard, interceptClientCommand(),
+            // and the Fix-4 mirror resync all live in onSubmit and only run for a
+            // keyboard Enter submit. (Known, NOT fixed here: a typed client command
+            // like "/new" sent via a mouse click on this button skips
+            // interceptClientCommand and reaches the backend as literal chat text —
+            // filed as a follow-up issue, not this fix round's scope.) The
+            // text-mirror staleness this split caused is fixed separately and
+            // generally in useSlashMenu.ts (Fix A), which subscribes directly to
+            // composerRuntime so `inputValue` stays correct after ANY out-of-band
+            // clear — click-Send included, not just this one path. Send still
+            // auto-disables when the composer is empty (no text and no
+            // attachments) via the runtime's canSend, so no manual empty-check is
+            // needed here.
             <ComposerPrimitive.Send
               disabled={!inputEnabled || isReplaying}
               data-testid="chat-send"

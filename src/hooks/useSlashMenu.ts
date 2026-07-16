@@ -30,7 +30,7 @@
 // hook reaching across to import it, keeping the two hooks independently
 // testable.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { ComposerRuntime } from '@assistant-ui/react'
@@ -108,13 +108,21 @@ export interface UseSlashMenuResult {
   /**
    * Fix 2 (a11y HIGH): the just-selected agent's display name, set the
    * instant `selectMentionAgent` fires — null before any selection has
-   * happened this session. The composer silently empties and routing
-   * silently changes on a mention selection, which was zero non-visual
-   * feedback for a screen-reader user; the caller renders this in an
-   * sr-only `aria-live="polite"` element so the switch is announced.
-   * Re-selecting the SAME agent twice in a row leaves this string
-   * unchanged (no state transition), so the live region does not
-   * re-announce — acceptable per spec, since nothing actually changed.
+   * happened this session, AND reset to null whenever `activeAgentId`
+   * changes through a path OTHER than a mention selection (e.g. the
+   * AgentPicker dropdown) — see the Fix B reconciliation effect declared
+   * right after `activeAgentId` below. The composer silently empties and
+   * routing silently changes on a mention selection, which was zero
+   * non-visual feedback for a screen-reader user; the caller renders this
+   * in an sr-only `aria-live="polite"` element so the switch is announced.
+   * Re-selecting the SAME agent twice in a row with no external switch in
+   * between leaves this string unchanged (no state transition), so the
+   * live region does not re-announce — nothing actually changed. But once
+   * an external switch has cleared it back to null, re-selecting that SAME
+   * agent via "@" IS a real `null -> name` transition and DOES announce —
+   * the reconciliation effect exists specifically so that case isn't
+   * silently swallowed, and so a stale "Now chatting with X" string can't
+   * linger in the a11y tree describing a switch that already moved on.
    */
   mentionAnnouncement: string | null
   /** True when the ghost-text overlay should render (value is exactly `/<skillId> ` right after that skill was selected from the menu). */
@@ -127,7 +135,17 @@ export interface UseSlashMenuResult {
   onInputBlur: () => void
   /** Menu item onMouseEnter — moves the keyboard highlight to the hovered item. */
   onHoverItem: (index: number) => void
-  /** ArrowUp/ArrowDown/Enter-select/Escape-close — no-ops when the menu isn't showing. Cancel-Escape and Enter-blocked-while-streaming are handled by the caller BEFORE this, per the original composer's precedence. */
+  /**
+   * ArrowUp/ArrowDown/Enter-select/Escape-close — no-ops when the menu
+   * isn't showing. Enter-blocked-while-streaming is handled by the caller
+   * BEFORE this (ChatScreen.handleKeyDown's `isStreaming` guard). Escape is
+   * different (J.1 correction, bugfixes3 sign-off): when the menu is open,
+   * ChatScreen.handleKeyDown now routes Escape here FIRST — menu-close wins
+   * over stream-cancel — and only falls through to its own cancel-Escape
+   * branch on a SECOND Escape, once this hook's own Escape branch (below)
+   * has already closed the menu. See ChatScreen.handleKeyDown's Fix 3 doc
+   * comment for the full precedence rationale.
+   */
   handleKeyDown: (e: ReactKeyboardEvent) => void
   /**
    * Send-path interception: if the composer's current text is exactly a
@@ -154,9 +172,28 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // skill declares one.
   const [ghostSkillId, setGhostSkillId] = useState<string | null>(null)
   const [ghostArgumentHint, setGhostArgumentHint] = useState<string | null>(null)
+  // Fix A (bugfixes3 sign-off) — ref mirror of `ghostSkillId`, kept current
+  // every render (not inside an effect). The composerRuntime subscription
+  // effect below is registered once per `composerRuntime` identity, not
+  // once per render, so its callback can't close over a same-render
+  // `ghostSkillId` the way `onInputChange` (called directly from the
+  // textarea's onChange) safely can — it would go stale the moment
+  // `ghostSkillId` changed without the composer identity also changing.
+  // Reading through a ref sidesteps that without forcing a
+  // resubscribe/unsubscribe pair on every ghost-text change.
+  const ghostSkillIdRef = useRef(ghostSkillId)
+  ghostSkillIdRef.current = ghostSkillId
   // Fix 2: last-announced mention selection — see mentionAnnouncement's doc
   // comment on UseSlashMenuResult.
   const [mentionAnnouncement, setMentionAnnouncement] = useState<string | null>(null)
+  // Fix B (bugfixes3 sign-off) — the id of the agent THIS hook last
+  // announced via selectMentionAgent (set there, synchronously, alongside
+  // `setMentionAnnouncement`). The reconciliation effect below (watching
+  // `activeAgentId`) compares against this to tell "activeAgentId changed
+  // because of a mention selection" (ref already matches — leave the
+  // announcement alone) apart from "activeAgentId changed via some OTHER
+  // surface, e.g. AgentPicker" (ref is stale — clear the announcement).
+  const lastAnnouncedAgentIdRef = useRef<string | null>(null)
 
   // US-4 / FR-008: fetch the web-surface command list from the single
   // source of truth. On error the palette shows nothing crash-wise (per
@@ -214,6 +251,71 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // captured `activeSessionId` could be stale by the time the user actually
   // selects an agent.
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
+
+  // Fix A (bugfixes3 sign-off — resolves a reviewer split on whether the
+  // Send BUTTON's click path goes through ComposerPrimitive.Root's
+  // onSubmit): verified against node_modules/@assistant-ui/react/dist/
+  // utils/createActionButton.js + primitives/composer/ComposerSend.js —
+  // ComposerPrimitive.Send renders a plain `type="button"` whose onClick
+  // calls `composer.send()` DIRECTLY (via useComposerSend's callback), NOT
+  // `form.requestSubmit()`. A mouse click on Send therefore NEVER fires
+  // ComposerPrimitive.Root's onSubmit (ChatScreen.tsx) — the isStreaming
+  // guard, `interceptClientCommand()`, and the Fix-4 mirror resync that
+  // live there only ever ran on a keyboard Enter submit. AssistantUI's
+  // composerRuntime clears its own text on a successful send either way,
+  // WITHOUT dispatching a synthetic onChange for the textarea, so a
+  // click-Send left `inputValue` above holding the just-sent text with
+  // nothing downstream to correct it (a subsequent ArrowDown then read the
+  // stale mirror and reopened the full "@" menu over a visually-empty
+  // input).
+  //
+  // Rather than patch the click-Send path specifically, subscribe directly
+  // to the runtime so the mirror is self-healing against ANY out-of-band
+  // clear — not just this one — the instant the runtime's own text
+  // diverges from what this hook believes it is. Registered once per
+  // `composerRuntime` identity (assistant-ui hands back a stable runtime
+  // object for the lifetime of a composer), so the callback below cannot
+  // rely on this render's closures for anything that changes between
+  // renders: `ghostSkillIdRef` (kept fresh every render, above) stands in
+  // for `ghostSkillId`; everything else it touches is a useState setter,
+  // which React guarantees is referentially stable.
+  useEffect(() => {
+    return composerRuntime.subscribe(() => {
+      const runtimeText = composerRuntime.getState().text ?? ''
+      setInputValue((mirrored) => (mirrored === runtimeText ? mirrored : runtimeText))
+      const currentGhostSkillId = ghostSkillIdRef.current
+      if (currentGhostSkillId && runtimeText !== `/${currentGhostSkillId} `) {
+        setGhostSkillId(null)
+        setGhostArgumentHint(null)
+      }
+      if (runtimeText.startsWith('/') || runtimeText.startsWith('@')) {
+        setSlashOpen(true)
+      } else {
+        closeSlash()
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerRuntime])
+
+  // Fix B (bugfixes3 sign-off) — reconciliation for `mentionAnnouncement`.
+  // It was never cleared, so an agent switch made through a DIFFERENT
+  // surface (e.g. AgentPicker) left a STALE "Now chatting with X" string
+  // sitting in the a11y live region describing a switch that didn't happen
+  // through "@" — false state, not just a visual no-op. It also meant
+  // re-selecting the SAME agent via "@" a second time, after switching away
+  // and back through that other surface, silently no-op'd: mentionAnnouncement
+  // still held that agent's name from the FIRST selection, so the second
+  // `selectMentionAgent` call set the identical string again and React's
+  // setState bailed (no transition, no re-announce) even though the user
+  // just made a fresh selection worth announcing. Clearing on any
+  // externally-driven `activeAgentId` change fixes both: the stale text is
+  // removed, and the NEXT mention selection of that agent becomes a real
+  // `null -> name` transition that DOES announce.
+  useEffect(() => {
+    if (activeAgentId !== lastAnnouncedAgentIdRef.current) {
+      setMentionAnnouncement(null)
+    }
+  }, [activeAgentId])
 
   // FR-005: partitioned slash menu — Commands + Skills sections. Triggered
   // when input starts with "/" (no old skill-arg gate).
@@ -361,7 +463,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       const helpLines = allCommands
         .map((c) => `- \`${c.label}\` — ${c.description}`)
         .join('\n')
-      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
+      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Type **@** at the start of the input to switch agents\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
       appendMessage({
         id: generateId(),
         role: 'system',
@@ -501,7 +603,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     setInputValue('')
     closeSlash()
     // Fix 2: announce the switch for screen-reader users — see
-    // mentionAnnouncement's doc comment on UseSlashMenuResult.
+    // mentionAnnouncement's doc comment on UseSlashMenuResult. Fix B: track
+    // the id THIS selection announced so the reconciliation effect (right
+    // after `activeAgentId`, above) can tell this activeAgentId change
+    // apart from one driven by a different surface (e.g. AgentPicker).
+    lastAnnouncedAgentIdRef.current = agent.id
     setMentionAnnouncement(agent.name)
   }
 
@@ -575,6 +681,23 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   function handleKeyDown(e: ReactKeyboardEvent) {
     if (!shouldShowSlash) return
 
+    // Fix D (bugfixes3 sign-off): shouldShowSlash stays true even when
+    // slashItems is empty (the LOW S8 commandsError carve-out — see
+    // shouldShowSlash's own comment above), which happens for real in
+    // slash mode when the commands query has errored AND the typed prefix
+    // matches no skill either (e.g. "/nomatch" — the "Commands
+    // unavailable"-row-only menu). With zero items: ArrowUp/Down computed
+    // `% 0` (NaN highlight), and Enter called preventDefault() then
+    // no-op'd — the user could not send until Escape. There is nothing to
+    // navigate or select, so skip straight to the Escape branch below;
+    // Enter deliberately does NOT preventDefault here, so it falls through
+    // to the caller's normal submit path instead of silently swallowing
+    // the keystroke.
+    if (slashItems.length === 0) {
+      if (e.key === 'Escape') closeSlash()
+      return
+    }
+
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setSlashHighlight((h) => (h + 1) % slashItems.length)
@@ -583,13 +706,27 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       e.preventDefault()
       setSlashHighlight((h) => (h - 1 + slashItems.length) % slashItems.length)
       setSlashOpen(true)
-    } else if (e.key === 'Enter' && slashOpen && !e.shiftKey) {
+    } else if (e.key === 'Enter' && slashOpen && !e.shiftKey && !e.nativeEvent?.isComposing) {
       // Fix 8: Shift+Enter is universally "insert a newline" in this
       // composer (and everywhere else) — intercepting it to select from the
       // menu instead silently ate the newline and wiped/mutated multiline
       // drafts that happened to start with "/" or "@". Falls through to the
-      // textarea's native handling: the newline gets inserted, the menu
-      // stays open, and the list simply refilters on the next onChange.
+      // textarea's native handling: the newline gets inserted, and the
+      // menu's filter re-runs on the next onChange against text that now
+      // contains that embedded "\n" — since no command/skill/agent name
+      // ever contains a newline, that almost always matches nothing, so
+      // the menu typically CLOSES rather than staying open and refiltering
+      // (J.2 correction, bugfixes3 sign-off). That's fine: the user is
+      // mid-multiline-draft at that point, not browsing the palette.
+      //
+      // Fix C (bugfixes3 sign-off): also bail while an IME composition is
+      // in progress (`e.nativeEvent.isComposing`) — the Enter that COMMITS
+      // a CJK/Japanese/Korean composition must never be read as "select
+      // the highlighted row," or it silently selects an agent/command and
+      // wipes whatever the user was still composing. This matters more
+      // here than it might look: agent names (the "@" mention menu's
+      // whole content) are far likelier to be non-ASCII than command
+      // names, which are a fixed, ASCII, developer-authored list.
       e.preventDefault()
       slashItems[slashHighlight]?.onSelect()
     } else if (e.key === 'Escape') {
