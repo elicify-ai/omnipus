@@ -27,6 +27,7 @@
  */
 
 import { CaretLeft, CaretRight, CalendarBlank, Plus } from '@phosphor-icons/react'
+import type { CalendarApi } from '@fullcalendar/core'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -52,20 +53,36 @@ export function CalendarToolbar({
   // ── FC API helpers ────────────────────────────────────────────────────────
   const getApi = () => calendarRef.current?.getApi()
 
-  const handlePrev = () => {
-    getApi()?.prev()
+  // `calendarRef` not being wired to a mounted FullCalendar instance should
+  // NEVER happen in the live app — the ref is set by CalendarScreen before
+  // the toolbar can render. A silent `getApi()?.foo()` no-op there would mask
+  // a real wiring regression behind a dead button, indistinguishable from the
+  // button simply doing nothing on purpose. `withApi` is the one place that
+  // failure gets surfaced (console.warn, exactly once per click) — every
+  // action below routes through it instead of its own ad-hoc optional chain,
+  // so all five fail the identical, observable way. `onUnwired` lets a caller
+  // (New task) still do something useful (open with no pre-filled date)
+  // instead of a bare no-op; callers that truly have nothing else to do
+  // (prev/next/today/view-change) omit it.
+  const withApi = <T,>(label: string, fn: (api: CalendarApi) => T, onUnwired?: () => T) => {
+    return (): T | undefined => {
+      const api = getApi()
+      if (!api) {
+        console.warn(
+          `[CalendarToolbar] ${label}: getApi() returned undefined (calendarRef not wired).`,
+        )
+        return onUnwired?.()
+      }
+      return fn(api)
+    }
   }
 
-  const handleNext = () => {
-    getApi()?.next()
-  }
-
-  const handleToday = () => {
-    getApi()?.today()
-  }
+  const handlePrev = withApi('prev', (api) => api.prev())
+  const handleNext = withApi('next', (api) => api.next())
+  const handleToday = withApi('today', (api) => api.today())
 
   const handleViewChange = (view: CalendarViewName) => {
-    getApi()?.changeView(view)
+    withApi('changeView', (api) => api.changeView(view))()
     onViewChange(view)
   }
 
@@ -76,24 +93,15 @@ export function CalendarToolbar({
   // showing (`getApi().getDate()` — "today" when today is in view, otherwise
   // the reference day of the visible period) instead of opening with no date
   // at all, so browsing to e.g. a future month and creating a task doesn't
-  // silently default to real-world "today".
-  const handleNewTask = () => {
-    const api = getApi()
-    if (!api) {
-      // `calendarRef` isn't wired to a mounted FullCalendar instance — this
-      // should never happen in the live app (the ref is set by CalendarScreen
-      // before the toolbar can render), so a silent fallback here would mask
-      // a real wiring regression. `getDate` itself is NOT optional-called
-      // below: `CalendarApi` guarantees it, so an optional call could only
-      // ever mask a broken test mock, never a real runtime gap.
-      console.warn(
-        '[CalendarToolbar] getApi() returned undefined (calendarRef not wired) — New task will open without a pre-filled date.',
-      )
-      onNewTask(undefined)
-      return
-    }
-    onNewTask(api.getDate())
-  }
+  // silently default to real-world "today". `getDate` itself is NOT
+  // optional-called: `CalendarApi` guarantees it once `withApi` has already
+  // confirmed `api` is live, so an optional call there could only ever mask a
+  // broken test mock, never a real runtime gap.
+  const handleNewTask = withApi(
+    'newTask',
+    (api) => onNewTask(api.getDate()),
+    () => onNewTask(undefined),
+  )
 
   // ── Shared touch-target class (WCAG 2.5.8 / I-4) ────────────────────────
   const touchTarget = 'pointer-coarse:min-h-[44px]'
@@ -230,7 +238,6 @@ export function CalendarToolbar({
                 onClick={() => handleViewChange(view)}
                 className={cn(
                   'flex items-center gap-1 px-2.5 h-7 rounded text-xs font-medium whitespace-nowrap',
-                  'focus-visible:outline-none',
                   'transition-colors',
                   touchTarget,
                   'pointer-coarse:h-9 pointer-coarse:px-3',

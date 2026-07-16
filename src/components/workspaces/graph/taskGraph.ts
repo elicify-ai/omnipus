@@ -74,8 +74,13 @@ export interface TaskNodeData extends Record<string, unknown> {
    * Keyboard/mouse-activation callback GraphView injects per-node at render
    * time (see GraphView.tsx) — `buildTaskGraph` itself never sets this, only
    * the live view does. Typed directly on `TaskNodeData` (rather than a
-   * separate `TaskNodeDataWithOpen` cast in TaskNode.tsx) so a dropped
-   * injection is a type-visible gap, not a silent runtime one.
+   * separate `TaskNodeDataWithOpen` cast in TaskNode.tsx) so a RENAME or
+   * RETYPE of this field is compiler-caught everywhere it's read (no cast to
+   * silently paper over a mismatch). It does NOT catch a DROPPED injection —
+   * `onOpen` is optional, so GraphView simply omitting it from `data` at the
+   * call site still compiles cleanly; that gap is covered by tests
+   * (TaskNode's dev-mode warning when `data.onOpen` is absent, and
+   * GraphView.test.tsx's keyboard-operability assertions), not by the type.
    */
   onOpen?: (task: Task) => void
 }

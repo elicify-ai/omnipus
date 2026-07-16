@@ -1,5 +1,7 @@
 // ActivityPanel — slide-out detail view for the Activity Bar (Sheet-based,
-// mirrors SessionPanel.tsx's Sheet/SheetContent/SheetHeader/SheetTitle usage).
+// mirroring the Sheet/SheetContent/SheetHeader/SheetTitle usage pattern
+// SessionPanel.tsx once used — since-deleted; session-list UI now lives in
+// SearchModal + the sidebar accordion).
 //
 // Two sections — "Running now" / "Recently finished" — each hidden entirely
 // when empty. Status badges follow SubagentBlock.tsx's status→style mapping

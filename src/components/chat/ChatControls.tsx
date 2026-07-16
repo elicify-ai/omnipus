@@ -10,14 +10,16 @@ interface ChatControlsProps {
 }
 
 /**
- * ChatControls — workspace top-bar cluster: New Chat · Sessions · Open browser.
+ * ChatControls — workspace top-bar cluster; now solely the "Open browser"
+ * launcher (New Chat moved to the sidebar row + /new; Sessions superseded
+ * by the sidebar accordion + SearchModal).
  *
  * The Agent picker, Model selector, and Token counter used to live here but
  * moved into the composer's context row, above the card (src/components/chat/composer/
  * {AgentPicker,ModelPicker,TokenCounter}.tsx) so they sit next to the input
  * they scope, per the Composer Redesign (variant A1).
  *
- * Touch targets: pointer-coarse:min-h-[44px] on all interactive controls
+ * Touch target: pointer-coarse:min-h-[44px] on the Open browser button
  * (WCAG 2.5.8 / Fitts — 44px on coarse pointers).
  *
  * No-clip safety: cluster uses min-w-0; overflow-x-auto with hidden

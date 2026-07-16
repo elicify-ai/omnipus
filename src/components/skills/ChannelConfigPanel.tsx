@@ -452,13 +452,18 @@ export function ChannelConfigPanel({
   // Reset transient state when the dialog closes so next open starts fresh.
   // Must clear EVERYTHING the form can carry between channels, not just the
   // routing selects — this panel is always-mounted (ConnectorsScreen keeps it
-  // in the tree across the close animation, see ADR/finding on leaked form
-  // state), so nothing here is naturally torn down by unmount. Before this
-  // fix, formValues/isDirtyRef/gChatAuthMethod survived a close: typing a
-  // secret into channel A, closing without saving, then opening channel B
-  // showed A's values under B's generic field keys (token/api_key) and Save
-  // would submit A's secret to B, because the hydration effect below bails
-  // on `isDirtyRef.current` and never overwrote the stale values.
+  // in the tree across the close animation), so nothing here is naturally
+  // torn down by unmount. The cross-CHANNEL leak (typing a secret into A,
+  // closing without saving, opening B) is actually prevented one layer up —
+  // ConnectorsScreen remounts a fresh ChannelConfigPanel instance (via
+  // `key={configuringChannelProps?.id}`) whenever the configured channel
+  // identity changes, which tears this state down for free. This effect's
+  // real, non-redundant job is the SAME-CHANNEL close→reopen path (no
+  // remount, same key): without it, isDirtyRef/formValues/gChatAuthMethod
+  // would survive the close, and isDirtyRef.current staying true would make
+  // the hydration effect below bail forever on reopen — leaving the form
+  // stuck on stale/dirty values (or a stale auth-method selection) instead
+  // of re-showing the real stored config.
   useEffect(() => {
     if (!open) {
       setWasJustEnabled(false)
@@ -486,7 +491,20 @@ export function ChannelConfigPanel({
 
   // Populate form when config loads — skip if user has unsaved edits.
   // For google-chat, also detect which auth group is pre-configured.
+  //
+  // `open` is deliberately in the dependency list (and gated on first) even
+  // though the effect body never reads it: on a same-channel close→reopen
+  // (no remount — ConnectorsScreen's `key` only changes for a genuinely
+  // different channel) TanStack Query's structural sharing returns the SAME
+  // `currentConfig` object reference once the reopen's refetch resolves to
+  // an unchanged value, so `currentConfig` alone never changes identity and
+  // this effect would otherwise never re-fire — leaving the form permanently
+  // blank (Telegram: token shows empty instead of "[configured]"; Google
+  // Chat: gChatAuthMethod stays reset to 'webhook' and never re-detects a
+  // stored service-account config). Including `open` forces re-hydration on
+  // every reopen regardless of whether the underlying data object changed.
   useEffect(() => {
+    if (!open) return
     if (!currentConfig) return
     if (isDirtyRef.current) return
     // Strip server-managed keys before hydrating the form. The ADR-029 binding
@@ -506,7 +524,7 @@ export function ChannelConfigPanel({
         setGChatAuthMethod('webhook')
       }
     }
-  }, [currentConfig, isGoogleChat])
+  }, [open, currentConfig, isGoogleChat])
 
   const { mutate: doSave, isPending: saving } = useMutation({
     mutationFn: () => {

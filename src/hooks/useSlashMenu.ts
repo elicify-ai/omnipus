@@ -64,6 +64,18 @@ export interface UseSlashMenuResult {
   slashHighlight: number
   shouldShowSlash: boolean
   slashItems: SlashItem[]
+  /**
+   * True when `fetchCommands('web')` errored. The palette still renders
+   * (the synthetic client-only `/resume` entry and any skills survive), but
+   * every backend-served command is silently missing — the caller should
+   * surface a "Commands unavailable" row rather than letting the gap pass
+   * unnoticed. `shouldShowSlash` accounts for this: it stays true even when
+   * `slashItems` is otherwise empty, so the error row has somewhere to
+   * render.
+   */
+  commandsError: boolean
+  /** D9: true when the input is exactly "/skills" — Commands section (and its error row) are hidden while this filter is active. */
+  isSkillsFilter: boolean
   /** True when the ghost-text overlay should render (value is exactly `/<skillId> ` right after that skill was selected from the menu). */
   showGhostText: boolean
   /** The ghost text to display — the skill's argument_hint if it declared one, else the generic placeholder. */
@@ -103,9 +115,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   const [ghostArgumentHint, setGhostArgumentHint] = useState<string | null>(null)
 
   // US-4 / FR-008: fetch the web-surface command list from the single
-  // source of truth. On error the palette shows nothing — no crash (per
-  // integration boundary spec).
-  const { data: commands = [] } = useQuery<SlashCommand[]>({
+  // source of truth. On error the palette shows nothing crash-wise (per
+  // integration boundary spec) — `commandsError` lets the caller render a
+  // visible "Commands unavailable" row instead of a silent empty gap
+  // (LOW S8).
+  const { data: commands = [], isError: commandsError } = useQuery<SlashCommand[]>({
     queryKey: ['commands', 'web'],
     queryFn: () => fetchCommands('web'),
     staleTime: 60_000,
@@ -191,7 +205,13 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
   // Unified list for keyboard nav — commands first, then skills
   const slashItems: SlashItem[] = [...visibleCommandItems, ...visibleSkillMenuItems]
-  const shouldShowSlash = slashItems.length > 0 && !isReplaying && inputEnabled
+  // LOW S8: keep the menu open on a commands-query error even when it would
+  // otherwise have zero items (e.g. no skills match either) — the caller's
+  // "Commands unavailable" row needs somewhere to render. `menuFilter !==
+  // null` reuses the same gate (starts with "/", not replaying, enabled) so
+  // this never opens the menu for reasons unrelated to a "/" being typed.
+  const shouldShowSlash =
+    (slashItems.length > 0 || (commandsError && menuFilter !== null)) && !isReplaying && inputEnabled
 
   // Reset highlight to 0 when the visible list changes (length or content)
   // so the cursor never points out-of-bounds as the filter narrows.
@@ -299,8 +319,14 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // Look up the full command definition by label to get the name + delivery.
     // Aliases (e.g. "clear" for "/new") never appear as separate palette
     // entries, but match here too so a caller resolving a typed alias label
-    // still finds the real definition.
-    const def = allCommands.find((c) => c.label === label || c.aliases?.includes(label.slice(1)))
+    // still finds the real definition. LOW S7/C3: lowercase both sides —
+    // commands are ASCII, so a caller-resolved label of a different case
+    // (e.g. from a typed "/NEW") must still match the canonical entry.
+    const labelLower = label.toLowerCase()
+    const aliasLower = label.slice(1).toLowerCase()
+    const def = allCommands.find(
+      (c) => c.label.toLowerCase() === labelLower || c.aliases?.some((a) => a.toLowerCase() === aliasLower),
+    )
 
     if (!def) {
       // Unknown label (shouldn't happen with API-driven palette, but be safe).
@@ -361,8 +387,13 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const trimmed = currentText.trim()
     if (!trimmed.startsWith('/')) return false
     const typedName = trimmed.slice(1)
+    // LOW S7/C3: lowercase both sides — commands are ASCII, so "/Clear" or
+    // "/NEW" + Enter must intercept identically to the canonical-case form
+    // instead of silently falling through to the LLM as chat text.
+    const trimmedLower = trimmed.toLowerCase()
+    const typedNameLower = typedName.toLowerCase()
     const def = allCommands.find(
-      (c) => c.delivery === 'client' && (c.label === trimmed || c.aliases?.includes(typedName)),
+      (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
     )
     if (!def) return false
     composerRuntime.setText('')
@@ -424,6 +455,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     slashHighlight,
     shouldShowSlash,
     slashItems,
+    commandsError,
+    isSkillsFilter,
     showGhostText,
     ghostText,
     onInputChange,

@@ -117,4 +117,35 @@ describe('ChatImage', () => {
       filename: 'x.png',
     })
   })
+
+  it('pressing Enter on the focused image also opens the lightbox', () => {
+    const { container } = render(<ChatImage src="/api/v1/uploads/s/x" alt="shot" filename="x.png" />)
+    expect(useUiStore.getState().mediaLightbox).toBeNull()
+
+    fireEvent.keyDown(container.querySelector('img')!, { key: 'Enter' })
+
+    expect(useUiStore.getState().mediaLightbox).toEqual({
+      kind: 'image',
+      src: '/api/v1/uploads/s/x',
+      alt: 'shot',
+      filename: 'x.png',
+    })
+  })
+
+  it('pressing Space calls preventDefault (blocks the page-scroll default), unlike Enter which has no default to block', () => {
+    const { container } = render(<ChatImage src="/api/v1/uploads/s/x" alt="shot" filename="x.png" />)
+    const img = container.querySelector('img')!
+
+    // fireEvent's return value is the DOM-standard `dispatchEvent` result:
+    // false when the event was canceled (preventDefault called) on a
+    // cancelable event. This proves ChatImage.tsx's Space branch actually
+    // calls e.preventDefault() (see ChatImage.tsx:91-99), not just that
+    // enlarge() ran.
+    const spaceResult = fireEvent.keyDown(img, { key: ' ' })
+    expect(spaceResult).toBe(false)
+
+    // Enter's branch has no e.preventDefault() call — nothing to cancel.
+    const enterResult = fireEvent.keyDown(img, { key: 'Enter' })
+    expect(enterResult).toBe(true)
+  })
 })

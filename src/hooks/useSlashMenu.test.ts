@@ -27,6 +27,13 @@ const mockSkills = [
   { id: 'code-review', name: 'Code Review', version: '1.0', description: 'Reviews code quality', verified: true, status: 'active' },
 ]
 
+// LOW S8: mutable flag so individual tests can simulate fetchCommands('web')
+// erroring — read lazily inside useQuery's closure (only touched when a test
+// actually invokes the hook), so the module-load-order TDZ concern that
+// applies to top-level `const` reads inside a hoisted vi.mock factory
+// doesn't apply here either.
+let commandsQueryIsError = false
+
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
@@ -34,7 +41,11 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     useQuery: (opts: { queryKey: unknown[]; enabled?: boolean }) => {
       if (opts.enabled === false) return { data: [], isError: false, refetch: vi.fn() }
       const key = opts.queryKey
-      if (Array.isArray(key) && key[0] === 'commands') return { data: mockCommands, isError: false, refetch: vi.fn() }
+      if (Array.isArray(key) && key[0] === 'commands') {
+        return commandsQueryIsError
+          ? { data: undefined, isError: true, refetch: vi.fn() }
+          : { data: mockCommands, isError: false, refetch: vi.fn() }
+      }
       if (Array.isArray(key) && key[0] === 'skills') return { data: mockSkills, isError: false, refetch: vi.fn() }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -69,6 +80,7 @@ function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {})
 
 beforeEach(() => {
   act(() => { useUiStore.setState({ modelSelectorOpen: false, agentSelectorOpen: false }) })
+  commandsQueryIsError = false
 })
 
 afterEach(() => {
@@ -353,6 +365,35 @@ describe('useSlashMenu — interceptClientCommand (send-path)', () => {
     expect(startNewSession).toHaveBeenCalledTimes(1)
   })
 
+  // LOW S7/C3: "/Clear" or "/NEW" + Enter was silently sent to the LLM as
+  // chat text — the palette filter itself is case-insensitive (menuFilter
+  // lowercases), but interceptClientCommand's label/alias comparison wasn't.
+  it('intercepts an uppercase "/CLEAR" alias case-insensitively', () => {
+    const composerRuntime = makeComposerRuntime('/CLEAR')
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(composerRuntime.setText).toHaveBeenCalledWith('')
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('intercepts a mixed-case "/New" canonical label case-insensitively', () => {
+    const composerRuntime = makeComposerRuntime('/New')
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(composerRuntime.setText).toHaveBeenCalledWith('')
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+  })
+
   it('does not intercept an unknown slash token — caller must dispatch it as a normal message', () => {
     const composerRuntime = makeComposerRuntime('/zzz hi')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
@@ -504,5 +545,64 @@ describe('useSlashMenu — cancelIfStreaming staleness across re-render', () => 
 
     expect(newCancel).toHaveBeenCalledTimes(1)
     expect(oldCancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('useSlashMenu — commandsError (LOW S8)', () => {
+  it('exposes commandsError=true when fetchCommands(\'web\') errors, so the caller can render a fallback row', () => {
+    commandsQueryIsError = true
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.commandsError).toBe(true)
+  })
+
+  it('commandsError is false on the happy path', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.commandsError).toBe(false)
+  })
+
+  it('keeps the menu open (shouldShowSlash=true) even when the error leaves zero matching items', () => {
+    // With the commands query errored, allCommands is just the synthetic
+    // client-only "/resume" entry — a prefix that matches neither "/resume"
+    // nor any skill leaves slashItems empty. shouldShowSlash must still be
+    // true so the caller's "Commands unavailable" row has somewhere to render.
+    commandsQueryIsError = true
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/zzz'))
+    expect(result.current.slashItems).toHaveLength(0)
+    expect(result.current.shouldShowSlash).toBe(true)
+  })
+
+  it('does not force the menu open when nothing has been typed', () => {
+    commandsQueryIsError = true
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  // Documented per the task, not a new behavior: with the commands list
+  // unavailable, only the synthetic "/resume" client command still resolves
+  // locally. Any other slash text — even the name of a real backend command
+  // — can no longer be matched, so interceptClientCommand correctly returns
+  // false and the caller's normal send path takes over (no silent swallow,
+  // no crash; the degradation is the visible "Commands unavailable" row,
+  // not a broken send).
+  it('interceptClientCommand returns false for a command name that can no longer resolve locally', () => {
+    commandsQueryIsError = true
+    const composerRuntime = makeComposerRuntime('/help')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    expect(intercepted).toBe(false)
+  })
+
+  it('the synthetic client-only "/resume" command still intercepts even when the backend commands query errors', () => {
+    commandsQueryIsError = true
+    const composerRuntime = makeComposerRuntime('/resume')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    expect(intercepted).toBe(true)
+    expect(useUiStore.getState().searchModalOpen).toBe(true)
   })
 })

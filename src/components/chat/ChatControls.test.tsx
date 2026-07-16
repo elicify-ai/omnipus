@@ -1,18 +1,20 @@
 /**
  * ChatControls tests.
  *
- * ChatControls was stripped down to New Chat · Sessions · Open browser per
- * the Composer Redesign (variant A1) — the Agent picker, Model selector, and
+ * ChatControls was stripped down to solely the Open browser launcher per the
+ * Composer Redesign (variant A1) — the Agent picker, Model selector, and
  * Token counter moved into the composer's context row (above the card)
- * (src/components/chat/composer/{AgentPicker,ModelPicker,TokenCounter}.tsx).
- * Their assertions moved with them (see AgentPicker.test.tsx for the
- * agent-scoping coverage, AgentPicker.agent-selector-open.test.tsx for SC-005,
- * and ModelPicker.test.tsx / TokenCounter.test.tsx for the rest).
+ * (src/components/chat/composer/{AgentPicker,ModelPicker,TokenCounter}.tsx),
+ * New Chat moved to the sidebar row + /new, and Sessions was superseded by
+ * the sidebar accordion + SearchModal. Their assertions moved with them (see
+ * AgentPicker.test.tsx for the agent-scoping coverage,
+ * AgentPicker.agent-selector-open.test.tsx for SC-005, and
+ * ModelPicker.test.tsx / TokenCounter.test.tsx for the rest).
  *
- * Covers the three controls still rendered by <ChatControls>:
- *   1. New Chat button (always icon + "New Chat" label)
- *   2. Sessions button (always visible)
- *   3. Open browser button (ADR-039 D-A1)
+ * Covers what <ChatControls> renders today:
+ *   1. Open browser button (ADR-039 D-A1) — the sole control
+ *   2. Absence of New Chat and the old "More chat controls" kebab
+ *   3. Composer tab-ring position 7 (last stop of the closed ring)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'

@@ -13,8 +13,8 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { renderSkillAwareContent, VirtualUserMessageRow } from './ChatScreen'
-import type { Skill } from '@/lib/api'
+import { renderSkillAwareContent, VirtualUserMessageRow, commandLabelsWithAliases } from './ChatScreen'
+import type { Skill, SlashCommand } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 
 // ResizeObserver stub — required because VirtualUserMessageRow renders via the
@@ -160,6 +160,46 @@ describe('renderSkillAwareContent — builtin precedence (F7)', () => {
     ]
     renderContent('/clear', skillsWithClear, [])
     expect(screen.getByText('Clear Skill')).toBeInTheDocument()
+  })
+})
+
+// ── M3 side effect — hidden aliases must be treated as builtins too ──────────
+//
+// The F7 gate itself only ever sees a flat commandLabels string[] — it has no
+// idea an entry is a canonical label vs a hidden alias. commandLabelsWithAliases
+// is the piece that expands SlashCommand[] (which DOES carry `aliases`) into
+// that flat list, prefixing each alias with "/" so it participates in the F7
+// gate identically to a canonical label. Post-rename, the backend serves
+// "/new" as the label with "clear" as a hidden alias (pkg/commands/cmd_clear.go)
+// — without this expansion, a typed "/clear" would fall through F7 and (were a
+// same-named skill ever installed) render as a skill chip instead of plain text.
+
+describe('commandLabelsWithAliases — expands hidden aliases into the flat gate list', () => {
+  const COMMANDS: SlashCommand[] = [
+    { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client', aliases: ['clear'] },
+    { name: 'help', label: '/help', description: 'Show available commands', delivery: 'client' },
+  ]
+
+  it('includes the canonical label AND each alias, prefixed with "/"', () => {
+    expect(commandLabelsWithAliases(COMMANDS)).toEqual(['/new', '/clear', '/help'])
+  })
+
+  it('tolerates commands with no aliases field', () => {
+    expect(commandLabelsWithAliases([{ name: 'help', label: '/help', description: 'x', delivery: 'client' }])).toEqual(['/help'])
+  })
+
+  it('end-to-end: a typed "/clear" alias is gated as a builtin by renderSkillAwareContent, not rendered as a skill chip', () => {
+    // Reproduces the exact post-rename shape: /clear is NOT a commandLabel on
+    // its own — it only appears via alias expansion.
+    const skillsWithClear: Skill[] = [
+      { id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active' },
+    ]
+    const fallback = () => <p data-testid="plain-text">clear</p>
+    const el = renderSkillAwareContent('/clear', skillsWithClear, commandLabelsWithAliases(COMMANDS), fallback)
+    const { container } = render(<>{el}</>)
+    // Builtin alias wins — plain text, no "Clear Skill" chip.
+    expect(container.querySelector('[data-testid="plain-text"]')).toBeInTheDocument()
+    expect(screen.queryByText('Clear Skill')).not.toBeInTheDocument()
   })
 })
 

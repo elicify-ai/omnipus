@@ -42,7 +42,10 @@ import {
 interface AgentNodeData extends Record<string, unknown> {
   model: TeamNodeModel
   onOpenAgent?: (agentId: string) => void
-  onRemoveMember?: (agentId: string) => void
+  /** Always supplied by `modelNodes` below (WorkspaceTeamGraphProps.onRemoveMember
+   *  is required) — not optional. A node with no way to remove a team member
+   *  would be a real gap, not a legitimate "sometimes absent" case. */
+  onRemoveMember: (agentId: string) => void
 }
 interface DelegationEdgeData extends Record<string, unknown> {
   model: TeamEdgeModel
@@ -65,8 +68,12 @@ type DelegationFlowEdge = Edge<DelegationEdgeData, 'delegation'>
 // predicate the drag gesture uses. That made `modelNodes` (below) rebuild on
 // EVERY edge edit — editState changes on every mode toggle / depth change / edge
 // add-remove — which produced a brand-new `data` object for EVERY node on EVERY
-// edit, defeating `memo(AgentNode)` for the whole canvas over a change that only
-// ever concerns the one node whose Delegate menu is open.
+// edit. xyflow's own `NodeWrapper` (the internal element React Flow renders
+// each node inside) is memoised and only re-renders a node when that node's
+// object — including its `data` — changes identity, so a fresh `data` object
+// for every node on every edit defeated that memoisation for the whole canvas
+// over a change that only ever concerns the one node whose Delegate menu is
+// open.
 //
 // Custom nodes render inside the `<ReactFlow>` React tree (not a portal to a
 // separate root), so an ordinary context works: a provider wraps the canvas
@@ -77,7 +84,7 @@ type DelegationFlowEdge = Edge<DelegationEdgeData, 'delegation'>
 // `data` object — and therefore its React Flow node object — stays referentially
 // stable across an edge edit that doesn't touch that node.
 interface TeamGraphCanvasContextValue {
-  allNodes: TeamNodeModel[]
+  allNodes: readonly TeamNodeModel[]
   editState: TeamEditState
   workerIds: ReadonlySet<string>
   /** Create a from→to edge — the identical handler wired to the canvas's
@@ -157,20 +164,18 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
               deleted — dangling edge
             </span>
           </div>
-          {data.onRemoveMember && (
-            <button
-              type="button"
-              aria-label={`Remove ${model.id} from team`}
-              title="Remove from team"
-              className="nodrag shrink-0 rounded p-1 text-[var(--color-warning)]/70 hover:bg-[var(--color-warning)]/15 hover:text-[var(--color-warning)]"
-              onClick={(e) => {
-                e.stopPropagation()
-                data.onRemoveMember?.(model.id)
-              }}
-            >
-              <X size={13} weight="bold" />
-            </button>
-          )}
+          <button
+            type="button"
+            aria-label={`Remove ${model.id} from team`}
+            title="Remove from team"
+            className="nodrag shrink-0 rounded p-1 text-[var(--color-warning)]/70 hover:bg-[var(--color-warning)]/15 hover:text-[var(--color-warning)]"
+            onClick={(e) => {
+              e.stopPropagation()
+              data.onRemoveMember(model.id)
+            }}
+          >
+            <X size={13} weight="bold" />
+          </button>
         </div>
       </div>
     )
@@ -259,7 +264,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             <PencilSimple size={12} weight="bold" />
           </button>
         )}
-        {data.onRemoveMember && !model.isDefault && (
+        {!model.isDefault && (
           <button
             type="button"
             data-node-action="remove"
@@ -268,7 +273,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             className="nodrag rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
             onClick={(e) => {
               e.stopPropagation()
-              data.onRemoveMember?.(id)
+              data.onRemoveMember(id)
             }}
           >
             <Trash size={12} weight="bold" />
@@ -499,7 +504,8 @@ function WorkspaceTeamGraphInner({
   // canvas-global and now flow through TeamGraphCanvasContext instead. This is
   // what keeps a node's `data` object (and therefore its React Flow node
   // object) referentially stable across an edge edit that doesn't touch that
-  // node, so `memo(AgentNode)` is effective again.
+  // node, so xyflow's memo'd NodeWrapper re-renders a node only when the node
+  // object — including data — changes identity, instead of on every edit.
   const modelNodes = useMemo<AgentFlowNode[]>(
     () =>
       nodes.map((model) => ({

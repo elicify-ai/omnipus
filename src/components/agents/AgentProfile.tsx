@@ -887,9 +887,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       hbDirtyRef.current = false
       // Refresh the workspace cache so the Heartbeat tab re-reads the latest.
       queryClient.setQueryData(workspacesQueryKeys.detail(editAgentWorkspaceId as string), updated)
-      // I-3 (US-7/US-8/FR-021): invalidate the sessions list so SessionPanel
-      // re-fetches and reflects the new heartbeat state (newly pinned session
-      // appears on enable; delete control re-enables/disables on toggle).
+      // I-3 (US-7/US-8/FR-021): invalidate the sessions list so the session
+      // lists (SearchModal, sidebar accordion) re-fetch and reflect the new
+      // heartbeat state (newly pinned session appears on enable; delete
+      // control re-enables/disables on toggle).
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
       addToast({ message: 'Heartbeat saved', variant: 'success' })
     },

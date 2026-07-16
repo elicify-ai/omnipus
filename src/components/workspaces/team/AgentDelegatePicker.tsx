@@ -14,7 +14,7 @@ export interface AgentDelegatePickerProps {
   /** The agent this button delegates FROM (the node it is rendered on). */
   source: TeamNodeModel
   /** Every node currently on the canvas — filtered down to valid targets. */
-  nodes: TeamNodeModel[]
+  nodes: readonly TeamNodeModel[]
   editState: TeamEditState
   workerIds: ReadonlySet<string>
   /** Create the from→to edge. Callers pass the SAME handler wired to React
@@ -25,7 +25,7 @@ export interface AgentDelegatePickerProps {
 
 /**
  * Keyboard-operable equivalent of "drag the gold Handle onto another node"
- * (WCAG 2.1.1 no-keyboard-trap / 2.5.7 dragging-movements — the canvas has no
+ * (WCAG 2.1.1 Keyboard / 2.5.7 dragging-movements — the canvas has no
  * keyboard path to CREATE a delegation edge, only to select/delete an
  * existing one via the edge chip). A small "Delegate…" button opens a menu of
  * every OTHER agent on the workspace that `validateConnection` currently

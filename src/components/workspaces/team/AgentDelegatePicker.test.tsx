@@ -123,6 +123,26 @@ describe('AgentDelegatePicker — selection', () => {
     expect(onDelegate).toHaveBeenCalledWith('mia', 'jim')
     expect(onDelegate).toHaveBeenCalledTimes(1)
   })
+
+  it('after selecting a candidate (menu closes), focus returns to the trigger button (WCAG 2.1.1 Keyboard)', () => {
+    // Radix's default onCloseAutoFocus restore-to-last-focused-element can
+    // land on <body> when the trigger has unmounted or React Flow's own
+    // focus tracking interferes — AgentDelegatePicker suppresses that and
+    // explicitly refocuses its own trigger (see the onCloseAutoFocus handler
+    // wired to DropdownMenuContent), so a keyboard user keeps their place on
+    // the node they were delegating from instead of losing focus entirely.
+    renderPicker()
+    fireEvent.click(screen.getByTestId('team-node-delegate-target-mia-jim'))
+
+    // The mocked DropdownMenuContent invokes onCloseAutoFocus from its own
+    // onBlur (see the vi.mock at the top of this file) — simulating the
+    // menu-close lifecycle event Radix would fire for real.
+    const content = screen.getByTestId('delegate-menu-content')
+    fireEvent.blur(content)
+
+    const trigger = screen.getByTestId('team-node-delegate-mia')
+    expect(trigger).toHaveFocus()
+  })
 })
 
 describe('AgentDelegatePicker — empty state', () => {
