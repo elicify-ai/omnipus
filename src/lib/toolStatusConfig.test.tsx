@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/react'
 import {
-  getSpanStatusConfig,
   getToolBadgeStatusConfig,
   getSpanStatusDot,
   type SpanLikeStatus,
@@ -25,55 +24,6 @@ function renderIndicatorSpan(indicator: React.ReactNode) {
   const { container } = render(<div>{indicator}</div>)
   return container.querySelector('span')
 }
-
-describe('getSpanStatusConfig — "pill" family (SubagentBlock, ActivityPanel) — UNCHANGED by the flat text-line restyle', () => {
-  it.each([
-    ['running', 'working', 'border-[var(--color-border)]', 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'],
-    ['success', 'done', 'border-[var(--color-success)]/20', 'bg-[var(--color-success)]/10 text-[var(--color-success)]'],
-    ['error', 'failed', 'border-[var(--color-error)]/20', 'bg-[var(--color-error)]/10 text-[var(--color-error)]'],
-    ['cancelled', 'cancelled', 'border-[var(--color-cancelled)]/20', 'bg-[var(--color-cancelled)]/10 text-[var(--color-cancelled)]'],
-    ['interrupted', 'interrupted', 'border-[var(--color-muted)]/20', 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]'],
-    ['timeout', 'timed out', 'border-[var(--color-muted)]/20', 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]'],
-  ] as const)('status=%s → label=%s, border=%s, pill=%s', (status, label, border, pill) => {
-    const config = getSpanStatusConfig(status)
-    expect(config.label).toBe(label)
-    expect(config.border).toBe(border)
-    expect(config.pill).toBe(pill)
-  })
-
-  it('defaults to icon size 13 (SubagentBlock default)', () => {
-    const svg = renderIconSvg(getSpanStatusConfig('running').icon)
-    expect(svg?.getAttribute('width')).toBe('13')
-  })
-
-  it('applies a custom icon size via opts.size (ActivityPanel uses 12)', () => {
-    const svg = renderIconSvg(getSpanStatusConfig('running', { size: 12 }).icon)
-    expect(svg?.getAttribute('width')).toBe('12')
-  })
-
-  it('defaults the running label to "working" (SubagentBlock)', () => {
-    expect(getSpanStatusConfig('running').label).toBe('working')
-  })
-
-  it('overrides the running label via opts.runningLabel (ActivityPanel uses "running")', () => {
-    expect(getSpanStatusConfig('running', { runningLabel: 'running' }).label).toBe('running')
-  })
-
-  it('the running icon spins (animate-spin class)', () => {
-    const svg = renderIconSvg(getSpanStatusConfig('running').icon)
-    expect(svg?.getAttribute('class')).toContain('animate-spin')
-  })
-
-  it('falls back to a muted "unknown" config for a status value outside the known 6-value domain (defensive wire guard)', () => {
-    // The `default` branch in getSpanStatusConfig exists to protect against an
-    // unexpected status string arriving from the wire despite the SpanLikeStatus
-    // union only advertising 6 values — cast past the type to exercise it.
-    const config = getSpanStatusConfig('bogus' as SpanLikeStatus)
-    expect(config.label).toBe('unknown')
-    expect(config.border).toBe('border-[var(--color-muted)]/20')
-    expect(config.pill).toBe('bg-[var(--color-muted)]/10 text-[var(--color-muted)]')
-  })
-})
 
 describe('getToolBadgeStatusConfig — "inline" family (ToolCallBadge, GenericToolCall) — flat text-line dot shape', () => {
   it('running: label "Running...", spinning icon indicator (no dot — a static dot cannot show "in progress")', () => {
@@ -179,7 +129,7 @@ describe('getToolBadgeStatusConfig — "inline" family (ToolCallBadge, GenericTo
   })
 })
 
-describe('getSpanStatusDot — dot-shaped migration target for the pill family (not yet wired into SubagentBlock/ActivityPanel)', () => {
+describe('getSpanStatusDot — span-status flat-line dot shape (SubagentBlock, ActivityPanel)', () => {
   it.each([
     ['success', 'done', 'bg-[var(--color-success)]'],
     ['error', 'failed', 'bg-[var(--color-error)]'],

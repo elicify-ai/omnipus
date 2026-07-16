@@ -1,139 +1,59 @@
 // Shared status → icon/label/color mapping for tool-call and subagent-span
 // status indicators. Previously each of 4 files (SubagentBlock, ActivityPanel,
 // ToolCallBadge, GenericToolCall) reimplemented its own status→config
-// switch/lookup independently. Consolidated here as THREE helpers — not one —
-// because the underlying visual languages are genuinely different, not
-// incidental duplication:
+// switch/lookup independently. Consolidated here as TWO helpers — not one —
+// because the underlying visual languages serve genuinely different status
+// domains, not incidental duplication:
 //
-//   - getSpanStatusConfig — Family A, the "pill" style (SubagentBlock,
-//     ActivityPanel): lowercase labels, colored pill background, full
-//     6-value status domain (running/success/error/cancelled/interrupted/
-//     timeout). UNCHANGED by the flat text-line restyle below — SubagentBlock
-//     and ActivityPanel migrate to getSpanStatusDot (below) in a later stage,
-//     so this pill API must keep working exactly as-is until then.
+//   - getSpanStatusDot — the span-status style (SubagentBlock, ActivityPanel):
+//     lowercase labels, full 6-value status domain (running/success/error/
+//     cancelled/interrupted/timeout). Flat text-line design (ticket "Tool
+//     components in chat", P2): an 8px status dot for terminal states, or
+//     the spinning ArrowsClockwise icon (same slot) for 'running'. This
+//     replaced the earlier pill-shaped `getSpanStatusConfig` (colored pill
+//     background, per-status border) once SubagentBlock/ActivityPanel
+//     finished migrating to it — that pill API had zero remaining
+//     consumers and was deleted rather than kept as dead code.
 //
-//   - getToolBadgeStatusConfig — Family B, the "inline" style (ToolCallBadge,
-//     GenericToolCall). REWORKED for ticket "Tool components in chat" (P2):
-//     tool calls moved from a bordered/backgrounded card to a flat text-line
-//     row, so the returned shape drops `border` entirely (no caller tints a
-//     card border anymore) in favor of `indicator` — an 8px status dot for
-//     terminal states, or the spinning ArrowsClockwise icon (same slot) for
-//     'running', since a static dot can't communicate "in progress". Dot =
-//     status. Narrower 4-value status domain unchanged (running/success/
-//     error/cancelled — these callers' status types have no
-//     interrupted/timeout case).
-//
-//   - getSpanStatusDot — NEW. A dot-shaped sibling to getSpanStatusConfig,
-//     ahead of the span/pill family's own migration to the flat-line
-//     language Family B just adopted. Same 6-value status domain and options
-//     as getSpanStatusConfig (reused directly — the eventual callers are the
-//     same SubagentBlock/ActivityPanel), but returns Family B's dot-based
-//     shape. SubagentBlock/ActivityPanel adopt this in the next stage; until
-//     then getSpanStatusConfig keeps serving them untouched.
+//   - getToolBadgeStatusConfig — the "inline" style (ToolCallBadge,
+//     GenericToolCall): same flat dot indicator, narrower 4-value status
+//     domain (running/success/error/cancelled — these callers' status types
+//     have no interrupted/timeout case), duration folded into the 'success'
+//     label.
 //
 // Real per-caller differences are preserved via options, never dropped:
-//   - ActivityPanel deliberately omits the `border` field from its own local
-//     type (Family A only — Family B has no `border` field at all anymore)
-//     and labels the 'running' case "running" (vs SubagentBlock's "working")
-//     — see ActivityPanel.tsx's file header for why. Both are expressed here
-//     as options rather than silently unified.
+//   - ActivityPanel labels the 'running' case "running" (vs SubagentBlock's
+//     "working") — see ActivityPanel.tsx's file header for why. Expressed
+//     here as an option (`runningLabel`) rather than silently unified.
 //   - GenericToolCall's `cancelled` case is muted-colored (derived from
 //     AssistantUI's incomplete/cancelled reason, not a dedicated cancelled
 //     status field) while ToolCallBadge's dedicated `cancelled` status uses
-//     the cancelled color — both preserved via `cancelledVariant`, which now
-//     selects the dot's fill color instead of a border color.
+//     the cancelled color — both preserved via `cancelledVariant`, which
+//     selects the dot's fill color.
 //   - GenericToolCall's extra `delegationFailure` case has no equivalent in
 //     the other 3 callers, so it is intentionally NOT modeled here — it stays
 //     as GenericToolCall's own local branch, composed alongside calls to
 //     getToolBadgeStatusConfig for the other 4 statuses (reusing the shared
 //     `statusDot` helper below so its dot matches the other four exactly).
+//   - getSpanStatusDot's 'interrupted' and 'timeout' cases share the exact
+//     same muted dot color (the old pill API distinguished them with
+//     different icon glyphs — Prohibit vs Clock — but the flat-dot design
+//     has no icon slot for terminal states); the label text ("interrupted"
+//     vs "timed out") is the only discriminator between them now.
 
 import type { ReactNode } from 'react'
-import { ArrowsClockwise, CheckCircle, XCircle, Prohibit, Clock } from '@phosphor-icons/react'
+import { ArrowsClockwise } from '@phosphor-icons/react'
 import { formatDuration } from './formatDuration'
 
-// ── Family A: "pill" style — SubagentBlock, ActivityPanel ────────────────────
-// UNCHANGED by this restyle — see file header. Do not edit until the
-// SubagentBlock/ActivityPanel migration stage lands.
+// ── Shared span-status domain ─────────────────────────────────────────────────
 
 export type SpanLikeStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout'
 
-export interface SpanStatusConfig { // not-wire-format: SPA-internal render config for the "pill" status indicator (icon node, label text, border/pill CSS classes) consumed only by SubagentBlock/ActivityPanel — never serialized across the gateway/SPA boundary
-  icon: ReactNode
-  label: string
-  /** Colored border class. SubagentBlock renders this; ActivityPanel's rows don't reference it. */
-  border: string
-  pill: string
-}
-
-export interface SpanStatusConfigOptions { // not-wire-format: SPA-internal call-site options bag (icon pixel size, running-label override) for getSpanStatusConfig()'s local rendering behavior — a function parameter shape, never serialized
-  /** Icon pixel size. SubagentBlock uses 13 (default); ActivityPanel uses 12. */
+export interface SpanStatusConfigOptions { // not-wire-format: SPA-internal call-site options bag (icon pixel size, running-label override) for getSpanStatusDot()'s local rendering behavior — a function parameter shape, never serialized
+  /** Icon pixel size — affects only the 'running' spinner. SubagentBlock uses 13 (default); ActivityPanel uses 12. */
   size?: number
   /** Label for the 'running' case. SubagentBlock: "working" (default); ActivityPanel: "running". */
   runningLabel?: string
-}
-
-export function getSpanStatusConfig(
-  status: SpanLikeStatus,
-  opts: SpanStatusConfigOptions = {},
-): SpanStatusConfig {
-  const { size = 13, runningLabel = 'working' } = opts
-  switch (status) {
-    case 'running':
-      return {
-        icon: <ArrowsClockwise size={size} className="animate-spin text-[var(--color-accent)]" aria-hidden="true" />,
-        label: runningLabel,
-        border: 'border-[var(--color-border)]',
-        pill: 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
-      }
-    case 'success':
-      return {
-        icon: <CheckCircle size={size} className="text-[var(--color-success)]" weight="fill" aria-hidden="true" />,
-        label: 'done',
-        border: 'border-[var(--color-success)]/20',
-        pill: 'bg-[var(--color-success)]/10 text-[var(--color-success)]',
-      }
-    case 'error':
-      return {
-        icon: <XCircle size={size} className="text-[var(--color-error)]" weight="fill" aria-hidden="true" />,
-        label: 'failed',
-        border: 'border-[var(--color-error)]/20',
-        pill: 'bg-[var(--color-error)]/10 text-[var(--color-error)]',
-      }
-    case 'cancelled':
-      return {
-        icon: <Prohibit size={size} className="text-[var(--color-cancelled)]" weight="fill" aria-hidden="true" />,
-        label: 'cancelled',
-        border: 'border-[var(--color-cancelled)]/20',
-        pill: 'bg-[var(--color-cancelled)]/10 text-[var(--color-cancelled)]',
-      }
-    case 'interrupted':
-      return {
-        icon: <Prohibit size={size} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'interrupted',
-        border: 'border-[var(--color-muted)]/20',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    case 'timeout':
-      // Timeout is treated like interrupted but with a Clock icon.
-      return {
-        icon: <Clock size={size} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'timed out',
-        border: 'border-[var(--color-muted)]/20',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    default: {
-      // Safe fallback for any unexpected status value arriving from the wire.
-      const _exhaustive: never = status
-      void _exhaustive
-      return {
-        icon: <Prohibit size={size} className="text-[var(--color-muted)]" weight="fill" aria-hidden="true" />,
-        label: 'unknown',
-        border: 'border-[var(--color-muted)]/20',
-        pill: 'bg-[var(--color-muted)]/10 text-[var(--color-muted)]',
-      }
-    }
-  }
 }
 
 // ── Shared dot indicator — flat text-line design (ticket "Tool components in
@@ -149,7 +69,7 @@ export function statusDot(colorClass: string): ReactNode {
   return <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${colorClass}`} />
 }
 
-// ── Family B: "inline" style — ToolCallBadge, GenericToolCall ────────────────
+// ── Inline style — ToolCallBadge, GenericToolCall ─────────────────────────────
 
 export type ToolBadgeStatus = 'running' | 'success' | 'error' | 'cancelled'
 
@@ -216,14 +136,9 @@ export function getToolBadgeStatusConfig(
   }
 }
 
-// ── Family A→dot migration target: getSpanStatusDot ─────────────────────────
-// Same 6-value status domain + options as getSpanStatusConfig (Family A,
-// above) — reused directly, since the eventual callers are the same
-// SubagentBlock/ActivityPanel — but returns Family B's dot-based shape.
-// SubagentBlock/ActivityPanel migrate to this in a later stage; until then
-// they keep calling getSpanStatusConfig, untouched by this restyle.
+// ── Span-status style — SubagentBlock, ActivityPanel ──────────────────────────
 
-export interface SpanStatusDotConfig { // not-wire-format: dot-based render config for the span family's future flat-line indicator. Same shape as ToolBadgeStatusConfig but kept as its own type (not aliased) — Family A, Family B, and this migration-target type are documented and evolve independently per this file's header
+export interface SpanStatusDotConfig { // not-wire-format: dot-based render config for the span family's flat-line indicator, consumed only by SubagentBlock/ActivityPanel — never serialized. Same shape as ToolBadgeStatusConfig but kept as its own type (not aliased) since the two families evolve independently per this file's header
   indicator: ReactNode
   label: string
   textClass?: string

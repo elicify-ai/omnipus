@@ -170,7 +170,7 @@ describe('ActivityPanel — bash row', () => {
 })
 
 describe('ActivityPanel — remaining status coverage (cancelled/interrupted/timeout)', () => {
-  it('renders a cancelled item with cancelled-specific pill color and label, distinct from error/success', () => {
+  it('renders a cancelled item with a cancelled-specific dot color and label, distinct from error/success', () => {
     render(
       <ActivityPanel
         open
@@ -183,15 +183,18 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
     expect(row).toHaveAttribute('data-status', 'cancelled')
     expect(screen.getByText('cancelled')).toBeInTheDocument()
 
-    const pill = screen.getByText('cancelled').parentElement
-    expect(pill?.className).toContain('--color-cancelled')
-    // Distinct from every other status's pill color.
-    expect(pill?.className).not.toContain('--color-error')
-    expect(pill?.className).not.toContain('--color-success')
-    expect(pill?.className).not.toContain('--color-accent')
+    // Flat-dot design (getSpanStatusDot): the status color lives on the 8px
+    // dot indicator (the label's immediately preceding sibling), not on the
+    // label text itself, which is always muted.
+    const dot = screen.getByText('cancelled').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-cancelled)]')
+    // Distinct from every other status's dot color.
+    expect(dot?.getAttribute('class')).not.toContain('--color-error')
+    expect(dot?.getAttribute('class')).not.toContain('--color-success')
+    expect(dot?.getAttribute('class')).not.toContain('--color-accent')
   })
 
-  it('renders an interrupted item with muted pill color, its own label, and a Prohibit icon', () => {
+  it('renders an interrupted item with a muted dot color and its own label', () => {
     render(
       <ActivityPanel
         open
@@ -204,14 +207,19 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
     expect(row).toHaveAttribute('data-status', 'interrupted')
     expect(screen.getByText('interrupted')).toBeInTheDocument()
 
-    const pill = screen.getByText('interrupted').parentElement
-    expect(pill?.className).toContain('--color-muted')
-    expect(pill?.className).not.toContain('--color-cancelled')
+    const dot = screen.getByText('interrupted').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(dot?.getAttribute('class')).not.toContain('--color-cancelled')
     // Distinct label from every other muted-colored status (timeout).
     expect(screen.queryByText('timed out')).not.toBeInTheDocument()
   })
 
-  it('renders a timeout item with its own label and icon, distinguishable from interrupted despite sharing muted pill color', () => {
+  it('renders a timeout item with its own label, sharing the exact same muted dot as interrupted (label is the sole discriminator under the flat-dot design)', () => {
+    // getSpanStatusDot (src/lib/toolStatusConfig.tsx) collapses the old
+    // pill family's per-status Clock/Prohibit icon distinction into a single
+    // shared muted dot for both 'interrupted' and 'timeout' — see that
+    // file's own unit tests. This test now asserts that documented parity
+    // instead of an icon-glyph difference that no longer exists.
     const { unmount } = render(
       <ActivityPanel
         open
@@ -224,11 +232,11 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
     expect(row).toHaveAttribute('data-status', 'timeout')
     expect(screen.getByText('timed out')).toBeInTheDocument()
 
-    const pill = screen.getByText('timed out').parentElement
-    expect(pill?.className).toContain('--color-muted')
-    // Label is the discriminator vs. interrupted (both use muted color/Prohibit-family treatment).
+    const timeoutDot = screen.getByText('timed out').previousElementSibling
+    expect(timeoutDot?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    // Label is the discriminator vs. interrupted.
     expect(screen.queryByText('interrupted')).not.toBeInTheDocument()
-    const timeoutIconSvg = pill?.querySelector('svg')?.outerHTML
+    const timeoutDotClass = timeoutDot?.getAttribute('class')
 
     unmount()
 
@@ -240,13 +248,11 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
         recentlyFinished={[makeAgentItem({ status: 'interrupted', taskLabel: 'ran too long' })]}
       />,
     )
-    const interruptedPill = screen.getByText('interrupted').parentElement
-    const interruptedIconSvg = interruptedPill?.querySelector('svg')?.outerHTML
+    const interruptedDot = screen.getByText('interrupted').previousElementSibling
 
-    // Icon glyph itself (Clock vs Prohibit) differs even though color class matches.
-    expect(timeoutIconSvg).toBeTruthy()
-    expect(interruptedIconSvg).toBeTruthy()
-    expect(timeoutIconSvg).not.toBe(interruptedIconSvg)
+    // Same dot class for both — no icon/color distinction remains between
+    // interrupted and timeout, only the label text differs.
+    expect(interruptedDot?.getAttribute('class')).toBe(timeoutDotClass)
   })
 })
 
@@ -267,12 +273,12 @@ describe('ActivityPanel — bash-kind error state', () => {
     expect(screen.getByText('failed')).toBeInTheDocument()
     expect(screen.getByText('2.3s')).toBeInTheDocument()
 
-    const pill = screen.getByText('failed').parentElement
-    expect(pill?.className).toContain('--color-error')
-    // Same error-distinct pill color an agent error row gets (kind is irrelevant to status styling) —
+    const dot = screen.getByText('failed').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    // Same error-distinct dot color an agent error row gets (kind is irrelevant to status styling) —
     // this is the case that surfaces background-bash failures that are otherwise hidden from inline chat.
-    expect(pill?.className).not.toContain('--color-success')
-    expect(pill?.className).not.toContain('--color-muted')
-    expect(pill?.className).not.toContain('--color-cancelled')
+    expect(dot?.getAttribute('class')).not.toContain('--color-success')
+    expect(dot?.getAttribute('class')).not.toContain('--color-muted')
+    expect(dot?.getAttribute('class')).not.toContain('--color-cancelled')
   })
 })
