@@ -304,12 +304,42 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
     // Reload propagation is asynchronous; give the manualReloadChan a moment
     // to drain and the config-snapshot pointer to swap.
     await page.waitForTimeout(500);
+
+    // ADR-044 / US-5 (cookie-auth cutover, 2026-07-15): auth is the
+    // omnipus-session HttpOnly cookie, not a JS-visible bearer token —
+    // getStoredAuthToken() above is legacy dead code (global-setup.ts no
+    // longer writes omnipus_auth_token to localStorage at all; see its own
+    // doc comment). The cookie captured by global-setup at SUITE START is
+    // what every other spec in this shard reuses via storageState — that's
+    // safe everywhere else because dev_mode_bypass=true short-circuits
+    // checkBearerAuth before the cookie is ever consulted. This is the ONE
+    // test in the whole suite that flips bypass off, so it is the only
+    // place a long-lived session cookie's fate is actually observable.
+    // Rather than assume that suite-start cookie is still the one the
+    // server expects, re-authenticate HERE with a real login so the
+    // browser context is guaranteed to carry a cookie minted seconds ago
+    // against the config that was JUST reloaded. POST /api/v1/auth/login's
+    // Set-Cookie headers (omnipus-session + CSRF) are parsed into
+    // page.context()'s cookie jar automatically — the same mechanism
+    // global-setup.ts's own doc comment describes — so no manual cookie
+    // plumbing is needed; authHeaders() below will also pick up the fresh
+    // CSRF cookie it reads live from page.context().cookies().
+    const reLoginResp = await page.request.post(`${BASE_URL}/api/v1/auth/login`, {
+      data: { username: 'admin', password: 'admin123' },
+      failOnStatusCode: false,
+    });
+    expect(
+      reLoginResp.ok(),
+      `POST /api/v1/auth/login (re-auth after bypass flip) returned ${reLoginResp.status()} ` +
+        `${await reLoginResp.text()}`,
+    ).toBeTruthy();
   }
 
   try {
     // Trigger a retention sweep via the REST API.
     // Correct endpoint: POST /api/v1/security/retention/sweep (pkg/gateway/rest_retention.go:163).
-    // Admin Bearer token is required; we read it from storageState (see authHeaders above).
+    // Auth is the omnipus-session cookie (re-minted just above); authHeaders()
+    // also attaches the matching CSRF header when a CSRF cookie is present.
     const sweepResp = await page.request.post(`${BASE_URL}/api/v1/security/retention/sweep`, {
       headers: await authHeaders(page),
       failOnStatusCode: false,
