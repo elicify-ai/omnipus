@@ -19,7 +19,19 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
-import type { Agent } from '@/lib/api'
+import type { Agent, Workspace } from '@/lib/api'
+
+// Item I (bugfixes3 sign-off): module-level (not per-render) empty-array
+// defaults. `data: agents = []` would otherwise construct a BRAND NEW `[]`
+// on every render during the loading window (before the query resolves) —
+// a fresh array literal every time, defeating the point of the useMemo
+// below for exactly the render count that matters most (initial mount,
+// before either query has data). Hoisting the empty defaults to module
+// scope means every loading-window render reads the SAME `[]` reference,
+// so `chatAgents` genuinely memoizes across those renders too, not just
+// once both queries have resolved.
+const EMPTY_AGENTS: Agent[] = []
+const EMPTY_WORKSPACES: Workspace[] = []
 
 export interface UseChatAgentsResult {
   /** Unfiltered agent list straight from the `['agents']` query — needed by callers that must distinguish "no agents at all" (hard error) from "no chat-eligible agents" (all-draft), e.g. AgentPicker's error/draft branches. */
@@ -31,7 +43,7 @@ export interface UseChatAgentsResult {
 }
 
 export function useChatAgents(): UseChatAgentsResult {
-  const { data: agents = [], isError, refetch } = useQuery({
+  const { data: agents = EMPTY_AGENTS, isError, refetch } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
   })
@@ -39,7 +51,7 @@ export function useChatAgents(): UseChatAgentsResult {
   // Scope to the active workspace's core_team — same query AgentPicker
   // always ran (moved here verbatim).
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-  const { data: workspaces = [] } = useQuery({
+  const { data: workspaces = EMPTY_WORKSPACES } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -51,10 +63,18 @@ export function useChatAgents(): UseChatAgentsResult {
   // Fix 10: memoize the filter chain. This hook is shared (AgentPicker AND
   // the "@" mention menu both call it), and consumers put `chatAgents` in
   // effect dependency lists (AgentPicker's auto-select-first-agent effect
-  // below its own call site) — a plain re-filter on every render hands that
-  // effect a brand-new array identity each time even when the underlying
-  // agents/teamIds are unchanged, re-running the effect on every unrelated
-  // render of either consumer.
+  // below its own call site) — a plain re-filter on every render would hand
+  // that effect a brand-new array identity each time even when the
+  // underlying agents/teamIds are unchanged, re-running the effect on every
+  // unrelated render of either consumer. Item I correction (bugfixes3
+  // sign-off): that guarantee only holds as long as this memo's OWN inputs
+  // are themselves stable. `agents`/`workspaces` come from react-query's
+  // `data`, which is `undefined` until each query resolves — without the
+  // EMPTY_AGENTS/EMPTY_WORKSPACES module-level constants above (as opposed
+  // to an inline `= []` default), `agents`/`workspaces` would get a fresh
+  // identity every render during that loading window, and this useMemo
+  // would recompute right along with them despite looking stable once data
+  // has actually arrived.
   const chatAgents = useMemo(
     () =>
       agents

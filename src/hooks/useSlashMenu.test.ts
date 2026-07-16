@@ -99,6 +99,7 @@ function makeComposerRuntime(text = '') {
     getState: () => ({ text }),
     setText: vi.fn(),
     addAttachment: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
   } as unknown as ComposerRuntime & { setText: ReturnType<typeof vi.fn> }
 }
 
@@ -1056,5 +1057,163 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
 
     expect(intercepted).toBe(false)
     expect(composerRuntime.setText).not.toHaveBeenCalled()
+  })
+})
+
+// bugfixes3 fix round — 14-reviewer sign-off punch list (items A/B/C/D).
+describe('useSlashMenu — composerRuntime subscription resync (Fix A, bugfixes3 sign-off)', () => {
+  // Verified against node_modules/@assistant-ui/react/dist/utils/
+  // createActionButton.js + primitives/composer/ComposerSend.js:
+  // ComposerPrimitive.Send is a plain `type="button"` whose onClick calls
+  // `composer.send()` directly — it does NOT go through
+  // ComposerPrimitive.Root's onSubmit (`form.requestSubmit()`), so the
+  // Fix-4 mirror resync living in ChatScreen.tsx's onSubmit never runs for
+  // a click-Send. This composerRuntime exposes a capturable/invocable
+  // `subscribe` callback so the test can simulate the runtime clearing its
+  // own text out-of-band, exactly the way a click-Send does.
+  function makeSubscribableComposerRuntime(initialText = '') {
+    let currentText = initialText
+    let notify: (() => void) | undefined
+    const runtime = {
+      getState: () => ({ text: currentText }),
+      setText: vi.fn((t: string) => { currentText = t }),
+      addAttachment: vi.fn(),
+      subscribe: vi.fn((cb: () => void) => {
+        notify = cb
+        return vi.fn()
+      }),
+    } as unknown as ComposerRuntime & { setText: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> }
+    return {
+      runtime,
+      setExternalText: (t: string) => { currentText = t },
+      notifySubscribers: () => notify?.(),
+    }
+  }
+
+  it('a runtime-driven text clear that bypasses onChange (e.g. mouse-click Send) still resyncs the mirror, so a stale "@" mirror cannot reopen the menu', () => {
+    const { runtime, setExternalText, notifySubscribers } = makeSubscribableComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime: runtime })))
+
+    // Simulate typing "@x" through the normal onChange path — a real
+    // keystroke updates both this hook's mirror AND the runtime's own text
+    // (see AssistantUI's ComposerInput.js onChange, which calls BOTH the
+    // caller's onChange and `aui.composer().setText(...)`).
+    setExternalText('@x')
+    act(() => result.current.onInputChange('@x'))
+    expect(result.current.slashOpen).toBe(true)
+    expect(result.current.isMentionMode).toBe(true)
+
+    // Simulate the runtime clearing its own text (click-Send) and notifying
+    // subscribers — WITHOUT ever going through onInputChange or onSubmit.
+    setExternalText('')
+    act(() => { notifySubscribers() })
+
+    expect(result.current.inputValue).toBe('')
+    expect(result.current.slashOpen).toBe(false)
+    expect(result.current.isMentionMode).toBe(false)
+
+    // The textarea is now visually empty. Before Fix A, this ArrowDown
+    // would still read the stale "@x" mirror and reopen the full agent menu.
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+    expect(result.current.shouldShowSlash).toBe(false)
+    expect(result.current.slashItems).toHaveLength(0)
+  })
+
+  it('subscribes to the composerRuntime on mount and unsubscribes on unmount', () => {
+    const composerRuntime = makeComposerRuntime()
+    const subscribeMock = composerRuntime.subscribe as unknown as ReturnType<typeof vi.fn>
+    const { unmount } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    const unsubscribe = subscribeMock.mock.results[0]!.value
+    unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useSlashMenu — mentionAnnouncement reconciliation (Fix B, bugfixes3 sign-off)', () => {
+  it('clears mentionAnnouncement when activeAgentId changes via a path OTHER than "@" (e.g. AgentPicker)', () => {
+    const composerRuntime = makeComposerRuntime('@m')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@m'))
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.mentionAnnouncement).toBe('Mia')
+
+    // Simulate an external switch — e.g. AgentPicker's handleAgentSelect —
+    // writing directly to the session store, NOT through selectMentionAgent.
+    act(() => { useSessionStore.setState({ activeAgentId: 'jim' }) })
+
+    expect(result.current.mentionAnnouncement).toBeNull()
+  })
+
+  it('re-announces the SAME agent selected via "@" a second time, after an intervening external switch (A -> picker -> A)', () => {
+    const composerRuntime = makeComposerRuntime('@m')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    // First "@" selection of Mia.
+    act(() => result.current.onInputChange('@m'))
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.mentionAnnouncement).toBe('Mia')
+
+    // Switch to Jim via a DIFFERENT surface (AgentPicker), not through "@".
+    act(() => { useSessionStore.setState({ activeAgentId: 'jim' }) })
+    expect(result.current.mentionAnnouncement).toBeNull()
+
+    // Re-select Mia via "@" again. Before Fix B this was silent: mentionAnnouncement
+    // still held 'Mia' from the first selection, so setMentionAnnouncement('Mia')
+    // was a same-value no-op (no transition, no re-announce). It must now be
+    // a real `null -> 'Mia'` transition.
+    act(() => result.current.onInputChange('@m'))
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.mentionAnnouncement).toBe('Mia')
+  })
+})
+
+describe('useSlashMenu — IME composition guard (Fix C, bugfixes3 sign-off)', () => {
+  it('Enter during an IME composition does not select from the menu or wipe the draft', () => {
+    const composerRuntime = makeComposerRuntime('@m')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@m'))
+
+    const imeEnter = { key: 'Enter', preventDefault: vi.fn(), nativeEvent: { isComposing: true } } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(imeEnter))
+
+    // Nothing was selected — preventDefault was not called, the menu is
+    // still open, and no agent switch happened.
+    expect(imeEnter.preventDefault).not.toHaveBeenCalled()
+    expect(result.current.slashOpen).toBe(true)
+    expect(useSessionStore.getState().activeAgentId).toBeNull()
+
+    // A plain (non-composing) Enter on the SAME highlighted row still
+    // selects normally — proves the guard is IME-specific, not a general
+    // Enter regression.
+    const plainEnter = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(plainEnter))
+    expect(plainEnter.preventDefault).toHaveBeenCalled()
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+  })
+})
+
+describe('useSlashMenu — empty-items keyboard handling (Fix D, bugfixes3 sign-off)', () => {
+  it('commandsError + "/nomatch" + Enter: does not block submit; ArrowDown leaves the highlight at 0 (no NaN)', () => {
+    commandsQueryIsError = true
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/nomatch'))
+    expect(result.current.slashItems).toHaveLength(0)
+    expect(result.current.shouldShowSlash).toBe(true)
+
+    const enterEvent = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(enterEvent))
+    // Enter falls through to the caller's normal submit path — not swallowed.
+    expect(enterEvent.preventDefault).not.toHaveBeenCalled()
+
+    const downEvent = { key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(downEvent))
+    expect(result.current.slashHighlight).toBe(0)
+    expect(downEvent.preventDefault).not.toHaveBeenCalled()
+
+    // Escape still closes the (contentless) menu.
+    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
   })
 })

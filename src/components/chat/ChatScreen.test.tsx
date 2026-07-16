@@ -106,6 +106,7 @@ vi.mock('@assistant-ui/react', () => {
       getState: () => ({ text: '' }),
       setText: vi.fn(),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -349,6 +350,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)
@@ -586,6 +588,7 @@ describe('Partitioned slash menu — Skills section', () => {
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)
@@ -621,6 +624,7 @@ describe('Partitioned slash menu — Skills section', () => {
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)

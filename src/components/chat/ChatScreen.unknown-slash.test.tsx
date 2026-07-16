@@ -88,6 +88,7 @@ vi.mock('@assistant-ui/react', () => {
       getState: () => ({ text: '' }),
       setText: vi.fn(),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -281,6 +282,7 @@ describe('Unknown slash send-path — dispatched as normal message (B10/B11/D4)'
       getState: mockGetState,
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)
@@ -318,6 +320,7 @@ describe('Unknown slash send-path — dispatched as normal message (B10/B11/D4)'
       getState: mockGetState,
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)

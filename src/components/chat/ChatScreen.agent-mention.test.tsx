@@ -1,9 +1,10 @@
 // "@" agent-mention menu — component-level coverage (real DOM, real
 // OmnipusComposer render tree). Complements the hook-level suite in
-// src/hooks/useSlashMenu.test.ts (17 tests covering gating, filtering,
-// keyboard nav, selection, and the active-agent flag on the HOOK's own
-// return value) by proving the same behavior actually reaches the rendered
-// DOM: the "Agents" section header, `agent-mention-item` rows, the
+// src/hooks/useSlashMenu.test.ts (covering gating, filtering, keyboard nav,
+// selection, and the active-agent flag on the HOOK's own return value — see
+// that file for the current count; not pinned here, K.2 correction,
+// bugfixes3 sign-off) by proving the same behavior actually reaches the
+// rendered DOM: the "Agents" section header, `agent-mention-item` rows, the
 // highlight class, and the real setActiveSession/composerRuntime side
 // effects wired through OmnipusComposer — mirrors the established pattern in
 // ChatScreen.skills-filter.test.tsx / ChatScreen.partitioned-menu.test.tsx /
@@ -14,7 +15,7 @@
 // src/hooks/useSlashMenu.ts (isMentionMode/agentItems), ChatScreen.tsx
 // (Agents section header, agent-mention-item rows, active marker).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
@@ -104,6 +105,7 @@ vi.mock('@assistant-ui/react', () => {
       getState: () => ({ text: '' }),
       setText: vi.fn(),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -238,6 +240,26 @@ function resetStores() {
 
 beforeEach(resetStores)
 
+// K.4 (bugfixes3 sign-off): two tests below override `useComposerRuntime`'s
+// return value via `.mockReturnValue(...)` (to capture a `mockSetText` spy
+// for their own assertions). `.mockReturnValue` replaces the mock's
+// implementation for the rest of THIS FILE's test run, not just the single
+// test that sets it — vitest does not reset mock state between tests here
+// (no restoreMocks/clearMocks configured in vite.config.ts) — so without
+// this, a later test in this file would silently inherit a stale
+// composerRuntime (and a `mockSetText` spy meant for a different test's
+// assertions) from an earlier one. Restore the base factory's shape after
+// EVERY test (harmless/idempotent for tests that never overrode it).
+afterEach(async () => {
+  const { useComposerRuntime } = await import('@assistant-ui/react')
+  ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+    getState: () => ({ text: '' }),
+    setText: vi.fn(),
+    addAttachment: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+  })
+})
+
 describe('"@" agent-mention menu — opens and lists scoped agents', () => {
   it('typing "@" renders the slash-menu container with an "Agents" section header and one row per scoped agent', () => {
     render(<OmnipusComposer />)
@@ -257,7 +279,7 @@ describe('"@" agent-mention menu — opens and lists scoped agents', () => {
 })
 
 describe('"@" agent-mention menu — filtering', () => {
-  it('typing "@m" filters to agents whose name/id starts with "m" (case-insensitive)', () => {
+  it('typing "@m" filters to agents whose NAME starts with "m" (case-insensitive)', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
 
@@ -321,6 +343,7 @@ describe('"@" agent-mention menu — selection (keyboard)', () => {
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)
@@ -360,6 +383,7 @@ describe('"@" agent-mention menu — selection (mouse)', () => {
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)

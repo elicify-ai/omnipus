@@ -3,7 +3,8 @@
 // menu). AgentPicker.test.tsx already exercises this hook transitively
 // through AgentPicker's own rendering (worker exclusion, a SET core_team,
 // the all-draft branch), and useSlashMenu.test.ts exercises worker exclusion
-// and name/id filtering transitively through the "@" mention menu — but
+// and NAME filtering (Fix 7 — id is deliberately excluded from the match,
+// K.1 correction, bugfixes3 sign-off) transitively through the "@" mention menu — but
 // neither file drives the hook directly, and neither covers the
 // "core_team is [] " / "core_team is absent" no-filtering paths explicitly.
 // This file closes that gap with a fast, direct renderHook suite so a

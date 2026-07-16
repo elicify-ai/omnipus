@@ -1,4 +1,15 @@
-// /agents client command — opens the agent selector via the ui store flag.
+// Fix E (bugfixes3 sign-off): the slash-menu container's render gate used
+// to be `shouldShowSlash && slashOpen` only. `shouldShowSlash` stays true
+// even when `slashItems` is empty (the LOW S8 commandsError carve-out in
+// useSlashMenu.ts), which is correct when the "Commands unavailable" error
+// row has somewhere to render — but for "/skills" specifically, the error
+// row hides ITSELF (`!isSkillsFilter` fails), so with the commands query
+// errored AND zero skills matching, the container mounted with NEITHER a
+// real item NOR the error row inside it: a bordered, empty box floating
+// above the composer. This file proves the fix — the container must not
+// render at all in that exact combination — and, as a regression guard,
+// that a scenario with real content (a bare "/" under the same commands
+// error) still renders normally.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -7,7 +18,6 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import { useUiStore } from '@/store/ui'
 
 class ResizeObserverStub {
   observe() {}
@@ -98,29 +108,22 @@ vi.mock('@assistant-ui/react', () => {
   }
 })
 
+// Commands query errors (same as ChatScreen.slash-commands-error.test.tsx)
+// but the skills query returns ZERO skills — the one combination that
+// reproduces the empty-shell bug: "/skills" hides the Commands section
+// (D9), the error row hides itself under isSkillsFilter, and there are no
+// skill items to fall back on either.
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
-  const mockCommands = [
-    { name: 'clear',   label: '/clear',   description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
-    { name: 'help',    label: '/help',    description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
-    { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
-    { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
-    { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
-  ]
-  const mockSkills = [
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  ]
   return {
     ...actual,
     useQuery: (opts: { queryKey: unknown[] }) => {
       const key = opts?.queryKey
       if (Array.isArray(key) && key[0] === 'commands' && key[1] === 'web') {
-        return { data: mockCommands, isError: false, refetch: vi.fn() }
+        return { data: undefined, isError: true, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') {
-        return { data: mockSkills, isError: false, refetch: vi.fn() }
+        return { data: [], isError: false, refetch: vi.fn() }
       }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -135,8 +138,8 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
-// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
-// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// importOriginal: useSlashMenu calls useChatAgents unconditionally (the "@"
+// mention menu — src/hooks/useChatAgents.ts), which needs real
 // `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
@@ -147,7 +150,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchSessionMessages: vi.fn().mockResolvedValue([]),
-    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockRejectedValue(new Error('network down')),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
     uploadFiles: vi.fn(),
@@ -160,10 +163,6 @@ vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-// Composer Redesign (variant A1): this file tests the /agents SLASH COMMAND
-// dispatch (setting agentSelectorOpen via the command interceptor), not the
-// picker's own UI, so its sub-components are stubbed to null — avoids mocking
-// the workspaces/providers query plumbing they own.
 vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
@@ -184,74 +183,45 @@ function resetStores() {
       connectionError: null,
     })
     useSessionStore.setState({
-      activeSessionId: 'sess_agents_cmd_test',
+      activeSessionId: 'sess_empty_menu_shell_test',
       activeAgentId: 'general-assistant',
       activeAgentType: null,
     })
-    useUiStore.setState({ agentSelectorOpen: false })
   })
 }
 
 beforeEach(resetStores)
 
-describe('/agents command — opens agent selector', () => {
-  it('/agents appears in the slash menu', async () => {
+describe('Empty menu shell (Fix E, bugfixes3 sign-off)', () => {
+  it('"/skills" + commandsError + zero skills renders NO menu container at all', async () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
-    act(() => { fireEvent.change(input, { target: { value: '/agents' } }) })
+    act(() => { fireEvent.change(input, { target: { value: '/skills' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    expect(screen.getByText('/agents')).toBeInTheDocument()
+    // Neither the container, nor the error row, nor any item — the
+    // pre-fix behavior rendered the bordered container with nothing inside
+    // it; the container itself must simply not mount.
+    expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('slash-commands-error')).not.toBeInTheDocument()
+    expect(screen.queryByText('Commands unavailable')).not.toBeInTheDocument()
   })
 
-  it('selecting /agents from menu sets agentSelectorOpen to true', async () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('composer-input')
-
-    act(() => { fireEvent.change(input, { target: { value: '/agents' } }) })
-    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
-
-    expect(useUiStore.getState().agentSelectorOpen).toBe(false)
-
-    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
-
-    expect(useUiStore.getState().agentSelectorOpen).toBe(true)
-  })
-
-  it('typing "/agents" + Enter via send-path interception sets agentSelectorOpen to true', async () => {
-    const mockSetText = vi.fn()
-    const { useComposerRuntime } = await import('@assistant-ui/react')
-    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-      getState: () => ({ text: '/agents' }),
-      setText: mockSetText,
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    })
-
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('composer-input')
-    const form = screen.getByTestId('composer-form')
-
-    act(() => { fireEvent.change(input, { target: { value: '/agents' } }) })
-
-    // Trigger form submit (send-path interception)
-    act(() => { fireEvent.submit(form) })
-
-    expect(useUiStore.getState().agentSelectorOpen).toBe(true)
-    // Messages must not have changed (no text sent to backend)
-    expect(useChatStore.getState().messages).toHaveLength(0)
-  })
-
-  it('/agents is not shown while streaming (not available_while_streaming)', async () => {
-    act(() => { useChatStore.setState({ isStreaming: true }) })
-
+  it('regression guard: a bare "/" under the SAME commands error still renders the container (error row + synthetic /resume)', async () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    expect(screen.queryByText('/agents')).not.toBeInTheDocument()
+    // Outside the "/skills" filter, the error row's own condition
+    // (`!isSkillsFilter`) is satisfied, so the container has real content
+    // (the error row, plus the synthetic client-only /resume command) and
+    // must still render — proving Fix E's extra gate did not accidentally
+    // hide a menu that legitimately has something to show.
+    expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
+    expect(screen.getByTestId('slash-commands-error')).toBeInTheDocument()
+    expect(screen.getByText('/resume')).toBeInTheDocument()
   })
 })
