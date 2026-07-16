@@ -60,6 +60,8 @@ import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderSubagentSpan } from '@/lib/toolVisibility'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
@@ -386,8 +388,15 @@ function InlineMedia() {
 function SubagentSpansRenderer() {
   const message = useMessage()
   const messages = useChatStore((s) => s.messages)
+  // Fix 2 (user-approved 2026-07-16): delegation cards are hidden from the
+  // thread by default — verbose chat is the only way to bring them back
+  // here (shouldRenderSubagentSpan, src/lib/toolVisibility.ts). Selector
+  // pattern mirrors ToolCallBadge.tsx's use of the same store (a plain hook
+  // call inside a component, not getState()) so this stays reactive to the
+  // preference toggling live.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const storeMsg = messages.find((m) => m.id === message.id)
-  const spans = storeMsg?.spans ?? []
+  const spans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
   if (spans.length === 0) return null
   return (
     <>
@@ -654,6 +663,13 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const toolCalls = useChatStore((s) => s.toolCalls)
+  // Fix 2 (user-approved 2026-07-16): same thread-gating rule as the live
+  // path's SubagentSpansRenderer, applied here for the historical/virtualized
+  // render tree. This component is React.memo'd, so the selector MUST be
+  // called unconditionally at the top with every other hook (Rules of
+  // Hooks) — reading getState() instead would silently freeze this row's
+  // gating at whatever the preference was on its last actual re-render.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
@@ -701,8 +717,18 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   const hasContent = !!message.content?.trim().length
   const hasToolCalls = storeToolCallIds.length > 0
   const hasMedia = mediaItems.length > 0
+  // Unfiltered — matches hasToolCalls above (also unfiltered: individual
+  // GenericToolCall/ToolCallBadge rows self-hide at render time via
+  // shouldRenderToolCall, same as SubagentBlock rows self-hide below via
+  // visibleSpans). This flag only answers "does the message have span data
+  // at all", not "is a span card currently showing".
   const hasSpans = (message.spans ?? []).length > 0
   const showEmptyPlaceholder = !!message.isStreaming && !hasContent && !hasToolCalls && !hasMedia && !hasSpans
+  // Fix 2 (user-approved 2026-07-16): the actual render list, filtered
+  // through the thread gate (shouldRenderSubagentSpan) — separate from
+  // hasSpans above so the empty-placeholder check keeps its existing,
+  // pre-Fix-2 "has span data" semantics.
+  const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
 
   return (
     <div
@@ -839,8 +865,8 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             )
           })}
 
-          {/* Subagent spans */}
-          {(message.spans ?? []).map((span) => (
+          {/* Subagent spans — pre-filtered via visibleSpans above (Fix 2). */}
+          {visibleSpans.map((span) => (
             <SubagentBlock key={span.spanId} span={span} />
           ))}
         </div>

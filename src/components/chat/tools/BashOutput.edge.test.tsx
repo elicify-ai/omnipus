@@ -600,14 +600,32 @@ describe('bash — verbose chat gate', () => {
     expect(container).not.toBeEmptyDOMElement()
   })
 
-  // REGRESSION for the invisible-denial/failure bug: a background bash
-  // dispatch normally hides (see the first test in this describe block), but
-  // an error outcome must override that — a failed background command must
-  // never disappear from the chat transcript just because its args look
-  // like ordinary background dispatch. makeBashUI threads
-  // `isError: status.type === 'incomplete'` into BashOutputBlock, so a
-  // status of 'incomplete' is the real-world error signal here.
-  it('REGRESSION: a background bash run with an error status (incomplete) is NOT hidden', () => {
+  // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden", asserting the
+  // isError-status ('incomplete') override forced this background dispatch
+  // visible). shouldRenderToolCall's isError override no longer applies to
+  // background bash (poll/read/dispatch) — same LLM-mediated rationale as
+  // delegate (toolVisibility.ts doc comment): the failure is explained by
+  // the calling agent's own response text, and the raw output stays
+  // inspectable in the ActivityPanel. Only verboseChatEnabled brings this
+  // row back into the thread now (see the next test).
+  it('a background bash run with an error status (incomplete) stays HIDDEN — no isError exception for background bash', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const element = captured.bashRender({
+      args: { command: 'tail -f log', run_in_background: true },
+      result: 'command not found',
+      status: { type: 'incomplete' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('...but becomes visible once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
     if (!captured.bashRender) {
       expect(BashOutputUI).toBeDefined()
       return

@@ -81,9 +81,15 @@ function ActivityRow({ item }: { item: ActivityItem }) {
 
       {canExpand && expanded && steps && (
         <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-1">
+          {/* surface="panel" (Fix 2, user-approved 2026-07-16): this panel is
+              the designated home for the background/noisy step detail the
+              thread hides by default — its policy INVERTS to show
+              everything except load_tool (shouldRenderToolCallInPanel in
+              toolVisibility.ts), instead of ToolCallBadge's normal
+              thread-scoped shouldRenderToolCall gate. */}
           {steps.map((step, idx) =>
             step.kind === 'tool' ? (
-              <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} />
+              <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} surface="panel" />
             ) : (
               <p key={idx} className="text-[10px] text-[var(--color-secondary)] font-sans py-0.5">
                 {step.text}

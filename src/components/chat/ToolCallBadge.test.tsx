@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { ToolCallBadge } from './ToolCallBadge'
@@ -54,8 +54,31 @@ describe('ToolCallBadge — stable data-tool contract (F1)', () => {
 // ToolCallBadge (SubagentBlock steps / MessageItem history) for the exact
 // same DelegationFailure sentinel shape. Both callers must now render the
 // same chip.
+//
+// Fix 2 (2026-07-16, revised): a denied delegate 'run' call (the default
+// action/shape these fixtures all use) is now hidden in the thread even on
+// error — isError no longer overrides delegate visibility (see
+// toolVisibility.ts's shouldRenderToolCall doc comment: the failure is
+// explained by the delegating agent's own response text, not a thread
+// chip). This describe block is testing the CHIP'S OWN render logic (does it
+// draw the amber "Delegation denied" branch correctly), which is a separate
+// concern from whether the row is visible by default — so verbose chat is
+// forced on here to get past the now-independent visibility gate, exactly
+// as a user who opted into verbose chat would see it.
 
 describe('ToolCallBadge — delegation-denied branch (ported from GenericToolCall)', () => {
+  beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+  })
+
+  afterEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+  })
+
   it('renders amber "Delegation denied · <axis>" and a warning-colored dot, not generic "Failed"', () => {
     render(
       <ToolCallBadge
@@ -416,11 +439,32 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  // REGRESSION: a hidden-by-default tool call (background delegate dispatch,
-  // default/empty params) must still render when its outcome is an error —
-  // an error/denial must never vanish just because its params match the
-  // "noisy background infra" shape.
-  it('REGRESSION: a background delegate dispatch with an error status is NOT hidden', () => {
+  // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden" asserting
+  // visible-on-error): delegate no longer gets an isError override. A
+  // failed/denied delegate 'run' call is returned to the delegating agent's
+  // own turn as the tool result — that agent explains it in its own
+  // response text, and the raw denial stays inspectable in the
+  // ActivityPanel (surface="panel" — see ActivityPanel.test.tsx). The
+  // thread row stays hidden here; only verboseChatEnabled brings it back
+  // (see the next test).
+  it('a background delegate dispatch with an error status stays HIDDEN — no isError exception for delegate (LLM-mediated failure presentation)', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          params: {},
+          status: 'error',
+          error: 'delegation_denied',
+        })}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('...but becomes visible once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
     render(
       <ToolCallBadge
         toolCall={makeToolCall({
@@ -434,7 +478,10 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  it('REGRESSION: a background bash dispatch with an error status is NOT hidden', () => {
+  // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden"): the
+  // background-dispatch/poll/read sub-cases of `bash` carry the same
+  // LLM-mediated rationale as delegate above — no isError exception.
+  it('a background bash dispatch with an error status stays HIDDEN — no isError exception for background bash', () => {
     render(
       <ToolCallBadge
         toolCall={makeToolCall({
@@ -445,16 +492,14 @@ describe('ToolCallBadge — verbose chat gate', () => {
         })}
       />
     )
-    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  // REGRESSION: a hidden-by-default background tool call whose result is the
-  // `_marshal_error` sentinel must still render, even when `status` itself is
-  // non-error — the backend can emit this sentinel when JSON-marshaling a
-  // tool result fails during replay-frame construction, independent of
-  // whether the call itself succeeded. `bash`/`delegate` are used here (not
-  // `exec`) so the hidden-by-default gate actually gets exercised.
-  it('REGRESSION: a background delegate dispatch with a _marshal_error result and success status is NOT hidden', () => {
+  // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden"): same
+  // no-isError-exception rule applies to the `_marshal_error` sentinel too
+  // — it is just another outcome signal, and delegate/background-bash
+  // ignore outcome entirely now (verbose-only).
+  it('a background delegate dispatch with a _marshal_error result and success status stays HIDDEN', () => {
     render(
       <ToolCallBadge
         toolCall={makeToolCall({
@@ -465,10 +510,10 @@ describe('ToolCallBadge — verbose chat gate', () => {
         })}
       />
     )
-    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  it('REGRESSION: a background bash dispatch with a _marshal_error result and success status is NOT hidden', () => {
+  it('a background bash dispatch with a _marshal_error result and success status stays HIDDEN', () => {
     render(
       <ToolCallBadge
         toolCall={makeToolCall({
@@ -479,6 +524,6 @@ describe('ToolCallBadge — verbose chat gate', () => {
         })}
       />
     )
-    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 })

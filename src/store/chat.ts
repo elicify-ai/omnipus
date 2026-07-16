@@ -2781,15 +2781,30 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     if (!msg?.spans) return
                     const span = msg.spans[entry.spanIdx]
                     if (!span) return
-                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: {}, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
+                    // No `params` key here (bug fix — was `params: {}`, which
+                    // clobbered the real start-time params via the spread
+                    // below and made e.g. a hidden `bash {action:'poll'}`
+                    // step misclassify as visible to ToolCallBadge's
+                    // shouldRenderToolCall, since it saw params={} instead of
+                    // the real args). Mirrors the buffered merge paths above
+                    // (startSpan / subagent_start), which never carried this
+                    // bug because they never included a params key at all.
+                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
                     const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
                     if (existingIdx !== -1) {
                       const existingStep = span.steps[existingIdx]
                       if (existingStep.kind === 'tool') {
+                        // Spread order matters: existingStep.tool's params
+                        // (recorded at tool_call_start) survive because
+                        // `step` no longer carries a params key to overwrite it.
                         span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
                       }
                     } else {
-                      span.steps.push({ kind: 'tool' as const, tool: step })
+                      // Genuine race — no tool_call_start was ever recorded
+                      // for this call_id on this span (result arrived first).
+                      // There is no start-time params to inherit here, so
+                      // (only in this orphan-step branch) default to {}.
+                      span.steps.push({ kind: 'tool' as const, tool: { ...step, params: {} } })
                     }
                   }) as Partial<SessionChatState>
                 }
@@ -2805,7 +2820,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   return produce(bucket, (draft) => {
                     const draftMsg = draft.messagesById[msgId]
                     const span = draftMsg.spans![spanIdx]
-                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: {}, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
+                    // See the primary (index-hit) branch above for why
+                    // `params` is intentionally absent from this object.
+                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
                     const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
                     if (existingIdx !== -1) {
                       const existingStep = span.steps[existingIdx]
@@ -2813,7 +2830,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                         span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
                       }
                     } else {
-                      span.steps.push({ kind: 'tool' as const, tool: step })
+                      span.steps.push({ kind: 'tool' as const, tool: { ...step, params: {} } })
                     }
                   }) as Partial<SessionChatState>
                 }

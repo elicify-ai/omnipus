@@ -3,12 +3,14 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
+import { act } from 'react'
 import userEvent from '@testing-library/user-event'
 import axe from 'axe-core'
 import { SubagentBlock } from './SubagentBlock'
 import type { SubagentSpan, SubagentSpanTerminal, SpanStep } from '@/store/chat'
 import type { ToolCall } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 
 // Reset the shared expandedSpans state so each test starts with all blocks
 // collapsed. Expansion state moved out of component-local useState into
@@ -16,6 +18,9 @@ import { useUiStore } from '@/store/ui'
 // (when streaming ends and the virtualizer takes over) without losing state.
 beforeEach(() => {
   useUiStore.setState({ expandedSpans: {} })
+  act(() => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
+  })
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -119,6 +124,54 @@ describe('SubagentBlock_Expanded_NestedToolCallsInOrder', () => {
     // the raw id is preserved in the expanded chip view.
     expect(badges[0]).toHaveTextContent('List')
     expect(badges[1]).toHaveTextContent('Shell')
+  })
+})
+
+// ── Fix 1/2 (2026-07-16): thread-surface step visibility gating ────────────
+// SubagentBlock's expanded steps render through ToolCallBadge with its
+// default surface='thread' policy (shouldRenderToolCall, toolVisibility.ts)
+// — the SAME hidden-by-default noisy-infra set the top-level thread applies
+// everywhere else (background bash poll/read, background delegate dispatch,
+// load_tool). This is deliberately unchanged by Fix 2's panel-inversion
+// policy, which only applies to ActivityPanel's own ToolCallBadge usage
+// (surface='panel') — see ActivityPanel.test.tsx for that side.
+
+describe('SubagentBlock — thread-surface step visibility (hidden-set gating)', () => {
+  it('a bash {action:"poll"} step renders NO ToolCallBadge, while a sibling visible step still renders', () => {
+    const span = makeSpan({
+      status: 'success',
+      steps: [
+        makeStep({ id: 'poll1', call_id: 'poll1', tool: 'bash', params: { action: 'poll' } }),
+        makeStep({ id: 'read1', call_id: 'read1', tool: 'fs.list', params: { path: '/tmp' } }),
+      ],
+    })
+    render(<SubagentBlock span={span} />)
+    fireEvent.click(screen.getByTestId('subagent-collapsed'))
+
+    const expanded = screen.getByTestId('subagent-expanded')
+    // Only the visible sibling step renders a ToolCallBadge.
+    const badges = within(expanded).getAllByTestId('tool-call-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveAttribute('data-tool', 'fs.list')
+    // The hidden bash-poll step must not leak in under any other testid.
+    expect(within(expanded).queryByText('Run command')).toBeNull()
+  })
+
+  it('the same bash {action:"poll"} step becomes visible once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    const span = makeSpan({
+      status: 'success',
+      steps: [makeStep({ id: 'poll1', call_id: 'poll1', tool: 'bash', params: { action: 'poll' } })],
+    })
+    render(<SubagentBlock span={span} />)
+    fireEvent.click(screen.getByTestId('subagent-collapsed'))
+
+    const expanded = screen.getByTestId('subagent-expanded')
+    const badges = within(expanded).getAllByTestId('tool-call-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveAttribute('data-tool', 'bash')
   })
 })
 

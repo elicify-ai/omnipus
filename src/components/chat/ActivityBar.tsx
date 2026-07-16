@@ -21,7 +21,7 @@
 // itself, so the bar doesn't need to be the system of record for it.
 
 import { useState } from 'react'
-import { CaretRight } from '@phosphor-icons/react'
+import { ArrowsClockwise, CaretRight } from '@phosphor-icons/react'
 import { ActivityAvatar } from './ActivityAvatar'
 import { ActivityPanel } from './ActivityPanel'
 import { useRunningActivity } from '@/hooks/useRunningActivity'
@@ -55,6 +55,14 @@ export function ActivityBar() {
           ))}
         </div>
 
+        {/* Running spinner — same running-icon vocabulary as
+            toolStatusConfig's getToolBadgeStatusConfig/getSpanStatusDot
+            'running' case (spinning ArrowsClockwise, accent-colored). This
+            whole pill only renders while runningCount > 0 (see the early
+            return above), so there is no separate conditional here — the
+            icon is decorative; the adjacent "N running" text already
+            carries the same information for assistive tech. */}
+        <ArrowsClockwise size={12} className="shrink-0 animate-spin text-[var(--color-accent)]" aria-hidden="true" />
         <span className="min-w-0 truncate font-medium text-[var(--color-secondary)]">{runningCount} running</span>
 
         <CaretRight size={12} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />

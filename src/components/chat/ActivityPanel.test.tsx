@@ -4,10 +4,18 @@
 // AgentActivityItem, BashActivityItem) — this component is purely prop-driven,
 // no store/query mocking required.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { AgentActivityItem, BashActivityItem } from '@/hooks/useRunningActivity'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+
+beforeEach(() => {
+  act(() => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
+  })
+})
 
 function makeAgentItem(overrides: Partial<AgentActivityItem> = {}): AgentActivityItem {
   return {
@@ -123,6 +131,103 @@ describe('ActivityPanel — expandable native row', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { expanded: true }))
     expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+  })
+})
+
+// ── Fix 2 (2026-07-16, revised same day): panel-only step visibility ───────
+// The panel is the designated transparency surface for exactly the detail
+// the thread hides by default — its default INVERTS to show everything
+// except `load_tool` (shouldRenderToolCallInPanel, toolVisibility.ts),
+// rather than applying the thread's shouldRenderToolCall hidden-set (which
+// would hide a bash poll/read step, a background delegate dispatch, etc.).
+// ToolCallBadge is told to use this policy via surface="panel" — see
+// ActivityPanel.tsx's step-mapping.
+
+describe('ActivityPanel — panel-only step visibility policy (shows all but load_tool)', () => {
+  function makeToolStep(overrides: Partial<import('@/lib/api').ToolCall & { call_id: string }> = {}) {
+    return {
+      kind: 'tool' as const,
+      tool: {
+        id: overrides.id ?? 'step_1',
+        call_id: overrides.call_id ?? overrides.id ?? 'step_1',
+        tool: overrides.tool ?? 'bash',
+        params: overrides.params ?? {},
+        status: overrides.status ?? 'success' as const,
+        result: overrides.result,
+      },
+    }
+  }
+
+  it('SHOWS a bash {action:"poll"} step — hidden in the thread, but visible here', () => {
+    const pollStep = makeToolStep({ id: 'poll1', call_id: 'poll1', tool: 'bash', params: { action: 'poll' } })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [pollStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('data-tool', 'bash')
+  })
+
+  it('HIDES a load_tool step by default (non-verbose)', () => {
+    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'load_tool' })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [loadToolStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+  })
+
+  it('SHOWS a load_tool step once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'load_tool' })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [loadToolStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('data-tool', 'load_tool')
+  })
+
+  it('SHOWS a failed (error-status) delegate step — the panel is the transparency surface for exactly what the thread hides on failure', () => {
+    const failedDelegateStep = makeToolStep({
+      id: 'd1',
+      call_id: 'd1',
+      tool: 'delegate',
+      params: {},
+      status: 'error',
+      result: { error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' },
+    })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [failedDelegateStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('data-tool', 'delegate')
   })
 })
 

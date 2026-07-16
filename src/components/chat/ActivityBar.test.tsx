@@ -91,6 +91,27 @@ describe('ActivityBar — 1 running', () => {
       expect(screen.getByText('1 running')).toBeInTheDocument()
     })
   })
+
+  // Fix 3 (2026-07-16): the pill was missing any in-progress signal beyond
+  // the static avatar stack — the spinning ArrowsClockwise (same running-icon
+  // vocabulary as toolStatusConfig's getToolBadgeStatusConfig/getSpanStatusDot
+  // 'running' case) now sits before the "N running" text, decorative
+  // (aria-hidden) since the text already carries the label for assistive tech.
+  it('shows a spinning indicator (.animate-spin) in the pill while something is running', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([runningSpan({ agentId: 'ray' })])],
+      })
+    })
+    renderBar()
+    await waitFor(() => {
+      expect(screen.getByText('1 running')).toBeInTheDocument()
+    })
+    const bar = screen.getByTestId('activity-bar')
+    const spinner = bar.querySelector('.animate-spin')
+    expect(spinner).not.toBeNull()
+    expect(spinner).toHaveAttribute('aria-hidden', 'true')
+  })
 })
 
 describe('ActivityBar — N running', () => {
