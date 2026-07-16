@@ -98,8 +98,10 @@ export function ModelPicker({
   return (
     <div
       className={cn(
-        'min-w-0 w-[160px] shrink-0',
-        'pointer-coarse:min-h-[44px]',
+        // No pointer-coarse min-height: the 44px floor on this WRAPPER (while
+        // the trigger inside stayed h-7, top-aligned) pushed the model
+        // selector out of line with its h-7 siblings on touch devices.
+        'min-w-0 w-[160px] shrink-0 flex items-center',
         className,
       )}
     >
