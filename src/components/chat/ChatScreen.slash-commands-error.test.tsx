@@ -132,14 +132,24 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockRejectedValue(new Error('network down')),
-  fetchSkills: vi.fn().mockResolvedValue([]),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-  uploadFiles: vi.fn(),
-}))
+// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
+// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
+// doesn't exercise mentions. The workspaces query stays disabled (no
+// activeWorkspaceId set here), so `fetchWorkspaces` is never actually
+// invoked — this just needs to exist so the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockRejectedValue(new Error('network down')),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    uploadFiles: vi.fn(),
+  }
+})
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))

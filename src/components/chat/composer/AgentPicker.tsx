@@ -1,5 +1,4 @@
 import { useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Robot, CaretDown } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
@@ -10,9 +9,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { useSessionStore } from '@/store/session'
-import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
+import { useChatAgents } from '@/hooks/useChatAgents'
 import { cn } from '@/lib/utils'
 
 /**
@@ -25,10 +23,12 @@ import { cn } from '@/lib/utils'
  * keys; same testid (`agent-picker-trigger`); same SC-005 `setActiveSession`
  * contract.
  *
- * Owns the active-workspace core_team scoping and the
- * auto-select-first-ready-agent effect — these are solely the picker's
- * concern (the agent-list query itself is shared: ModelPicker runs the
- * identical `['agents']` query and the two dedupe via React Query's cache).
+ * Owns the auto-select-first-ready-agent effect and the error/all-draft
+ * branch UI below — these are solely the picker's concern. The agent-list
+ * query + status/worker/core_team scoping itself is shared via
+ * `useChatAgents` (src/hooks/useChatAgents.ts) — ModelPicker and the
+ * composer's `@` mention menu (useSlashMenu.ts) run the identical
+ * `['agents']` query and all dedupe via React Query's cache.
  *
  * Side-effect contract: the auto-select effect writes to the global session
  * store (`setActiveSession`) as a side effect of mounting, so this component
@@ -50,26 +50,7 @@ export function AgentPicker({
   const agentSelectorOpen = useUiStore((s) => s.agentSelectorOpen)
   const setAgentSelectorOpen = useUiStore((s) => s.setAgentSelectorOpen)
 
-  const { data: agents = [], isError: agentsError, refetch } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-  })
-
-  // Scope the agent picker to the active workspace's core_team.
-  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-  const { data: workspaces = [] } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
-    staleTime: 30_000,
-    enabled: !!activeWorkspaceId,
-  })
-  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
-  const teamIds = activeWorkspace?.core_team
-
-  // Only ready-to-chat, non-worker agents, optionally scoped to workspace team.
-  const chatAgents = agents
-    .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a))
-    .filter((a) => !teamIds || teamIds.length === 0 || teamIds.includes(a.id))
+  const { agents, chatAgents, isError: agentsError, refetch } = useChatAgents()
 
   // A background-refetch failure (e.g. gateway restart + tab refocus) must
   // not tear down an already-usable cached picker — only treat this as a

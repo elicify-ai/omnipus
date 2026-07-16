@@ -108,13 +108,23 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 
 // Mock API calls
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  createSession: vi.fn(),
-  uploadFiles: vi.fn(),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-}))
+// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
+// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
+// doesn't exercise mentions. The workspaces query stays disabled (no
+// activeWorkspaceId set here), so `fetchWorkspaces` is never actually
+// invoked — this just needs to exist so the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    createSession: vi.fn(),
+    uploadFiles: vi.fn(),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+  }
+})
 
 // Mock SVG asset import
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))

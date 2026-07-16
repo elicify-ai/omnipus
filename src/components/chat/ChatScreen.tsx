@@ -1432,7 +1432,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                       ? 'border-b border-[var(--color-border)]'
                       : 'border-t border-[var(--color-border)]',
                   )}>
-                    {item.section === 'commands' ? 'Commands' : 'Skills'}
+                    {item.section === 'commands' ? 'Commands' : item.section === 'skills' ? 'Skills' : 'Agents'}
                   </div>
                 )}
                 <button tabIndex={0}
@@ -1444,6 +1444,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                       el.scrollIntoView({ block: 'nearest' })
                     }
                   }}
+                  // "@" mention menu rows only — mirrors the slash-command/skill
+                  // rows' shared markup exactly, so this testid is additive
+                  // rather than a fork of the row.
+                  data-testid={item.section === 'agents' ? 'agent-mention-item' : undefined}
                   className={cn(
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
                     globalIndex === slashMenu.slashHighlight
@@ -1459,6 +1463,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   }}
                   onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
                 >
+                  {/* Agent rows only — same avatar-dot markup as AgentPicker's
+                      DropdownMenuItem rows (composer/AgentPicker.tsx) so the
+                      mention menu and the picker dropdown read as the same
+                      "agent row" everywhere in the composer. */}
+                  {item.section === 'agents' && (
+                    <div
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                      style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
+                    >
+                      {item.agentIcon
+                        ? <IconRenderer icon={item.agentIcon} size={11} />
+                        : item.label.charAt(1).toUpperCase() /* label is "@Name" — second char is the initial */}
+                    </div>
+                  )}
                   {/* Fixed-width label column so descriptions align across rows
                       (a two-column table, not per-row flow). 9.5rem fits the
                       longest current label; truncate guards outliers. */}
@@ -1469,6 +1487,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     <span className="ml-auto text-[10px] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
                       {item.argumentHint}
                     </span>
+                  )}
+                  {/* Mirrors AgentPicker's "active" marker (composer/AgentPicker.tsx) */}
+                  {item.section === 'agents' && item.isActiveAgent && (
+                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
                   )}
                 </button>
               </React.Fragment>

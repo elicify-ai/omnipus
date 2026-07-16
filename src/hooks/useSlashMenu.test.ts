@@ -12,6 +12,7 @@ import { renderHook, act } from '@testing-library/react'
 import type { ComposerRuntime } from '@assistant-ui/react'
 import { useSlashMenu } from './useSlashMenu'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 
 const mockCommands = [
   { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client', available_while_streaming: false, aliases: ['clear'] },
@@ -25,6 +26,15 @@ const mockCommands = [
 const mockSkills = [
   { id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active', argument_hint: '<query>' },
   { id: 'code-review', name: 'Code Review', version: '1.0', description: 'Reviews code quality', verified: true, status: 'active' },
+]
+// "@" mention menu source data — includes a worker (builder) to prove
+// useChatAgents' isWorker exclusion carries through to the mention menu,
+// mirroring AgentPicker.test.tsx's own worker-exclusion fixtures.
+const mockAgents = [
+  { id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' },
+  { id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' },
+  { id: 'max', name: 'Max', type: 'Main', status: 'active', description: 'Ops lead' },
+  { id: 'builder', name: 'Builder Worker', type: 'worker', status: 'active', description: 'Labour agent' },
 ]
 
 // LOW S8: mutable flag so individual tests can simulate fetchCommands('web')
@@ -47,15 +57,27 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
           : { data: mockCommands, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') return { data: mockSkills, isError: false, refetch: vi.fn() }
+      if (Array.isArray(key) && key[0] === 'agents') return { data: mockAgents, isError: false, refetch: vi.fn() }
       return { data: [], isError: false, refetch: vi.fn() }
     },
   }
 })
 
-vi.mock('@/lib/api', () => ({
-  fetchCommands: vi.fn().mockResolvedValue([]),
-  fetchSkills: vi.fn().mockResolvedValue([]),
-}))
+// importOriginal for `isWorker`/`workspacesQueryKeys` — useChatAgents (used
+// internally for the "@" mention menu) calls these as real functions, not
+// through the mocked useQuery above. fetchAgents/fetchWorkspaces are never
+// actually invoked (useQuery is fully mocked and never calls queryFn), so
+// stubbing them is only to satisfy the module's static import.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchWorkspaces: vi.fn().mockResolvedValue([]),
+  }
+})
 
 function makeComposerRuntime(text = '') {
   return {
@@ -80,6 +102,19 @@ function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {})
 
 beforeEach(() => {
   act(() => { useUiStore.setState({ modelSelectorOpen: false, agentSelectorOpen: false }) })
+  // useSessionStore is a real (unmocked) singleton store — selectMentionAgent
+  // writes to it via setActiveSession, so it must be reset between tests the
+  // same way useUiStore is, or a mention-selection test would leak its
+  // activeAgentId/activeSessionId into the next test.
+  act(() => {
+    useSessionStore.setState({
+      activeAgentId: null,
+      activeSessionId: null,
+      activeAgentType: null,
+      attachedSessionType: null,
+      attachedTaskTitle: null,
+    })
+  })
   commandsQueryIsError = false
 })
 
@@ -604,5 +639,159 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
     act(() => { intercepted = result.current.interceptClientCommand() })
     expect(intercepted).toBe(true)
     expect(useUiStore.getState().searchModalOpen).toBe(true)
+  })
+})
+
+describe('useSlashMenu — "@" agent-mention menu', () => {
+  it('shows nothing for "@" mid-text — only a leading "@" triggers (same rule as "/")', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('hello @x'))
+    expect(result.current.shouldShowSlash).toBe(false)
+    expect(result.current.isMentionMode).toBe(false)
+    expect(result.current.slashItems).toHaveLength(0)
+  })
+
+  it('a bare "@" opens the menu listing every scoped chat agent (worker excluded) with section "agents"', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.isMentionMode).toBe(true)
+    expect(result.current.shouldShowSlash).toBe(true)
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'jim', 'max'])
+    expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
+  })
+
+  it('the SECOND typed character (the first after "@") already filters the list', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems).toHaveLength(3)
+    act(() => result.current.onInputChange('@m'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'max'])
+  })
+
+  it('filtering is case-insensitive by name or id prefix — "@M" matches identically to "@m"', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@M'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'max'])
+  })
+
+  it('matches by agent id prefix too, not just display name', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@ji'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim'])
+  })
+
+  it('hides the menu entirely when no agent matches the filter', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@zzz'))
+    expect(result.current.slashItems).toHaveLength(0)
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('a commands-fetch error does NOT force the "@" menu open (LOW S8 fallback is "/"-only)', () => {
+    commandsQueryIsError = true
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@zzz'))
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('deleting back to empty input closes the menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@m'))
+    expect(result.current.slashOpen).toBe(true)
+    act(() => result.current.onInputChange(''))
+    expect(result.current.slashOpen).toBe(false)
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('ArrowDown/ArrowUp cycle the highlight across agent rows, same as the "/" menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashHighlight).toBe(0)
+
+    const down = { key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(down))
+    expect(result.current.slashHighlight).toBe(1)
+
+    const up = { key: 'ArrowUp', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(up))
+    act(() => result.current.handleKeyDown(up))
+    expect(result.current.slashHighlight).toBe(result.current.slashItems.length - 1)
+  })
+
+  it('Escape closes the "@" menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashOpen).toBe(true)
+    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('Enter on the highlighted row selects that agent: sets it active (preserving activeSessionId), clears the composer, closes the menu', () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'jim', activeSessionId: 'sess_123' })
+    })
+    const composerRuntime = makeComposerRuntime('@m')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@m'))
+    // highlight 0 -> 'mia'
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    // activeSessionId must be PRESERVED, not detached (same SC-005 contract as AgentPicker).
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_123')
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('')
+    expect(result.current.inputValue).toBe('')
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('clicking (onSelect) a row does the same as Enter — verifies the mouse path independent of keyboard nav', () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: null, activeSessionId: 'sess_click' })
+    })
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@ji'))
+    const item = result.current.slashItems.find((i) => i.key === 'jim')!
+    act(() => item.onSelect())
+
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_click')
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('')
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('passes the agent type through to setActiveSession (not hardcoded/null)', () => {
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@ma'))
+    const item = result.current.slashItems.find((i) => i.key === 'max')!
+    act(() => item.onSelect())
+    expect(useSessionStore.getState().activeAgentType).toBe('Main')
+  })
+
+  it('marks the currently active agent row with isActiveAgent, and no other row', () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'jim' })
+    })
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    const flags = result.current.slashItems.map((i) => [i.key, i.isActiveAgent])
+    expect(flags).toEqual([['mia', false], ['jim', true], ['max', false]])
+  })
+
+  it('agent rows carry color/icon/description through for the render layer', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@mia'))
+    const item = result.current.slashItems[0]
+    expect(item.label).toBe('@Mia')
+    expect(item.description).toBe('Assistant')
+    expect(item.agentColor).toBe('#111111')
+  })
+
+  it('"/" and "@" triggers never mix — "/" still shows commands+skills, unaffected by agent data', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.isMentionMode).toBe(false)
+    expect(result.current.slashItems.every((i) => i.section === 'commands' || i.section === 'skills')).toBe(true)
   })
 })
