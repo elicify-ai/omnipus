@@ -381,6 +381,7 @@ export function GatewaySection() {
             onCheckedChange={handleTogglePreview}
             disabled={previewSaving}
             aria-label="Preview server"
+            data-testid="preview-server-toggle"
           />
         </div>
 
