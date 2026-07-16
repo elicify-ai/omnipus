@@ -28,6 +28,95 @@ function makeToolCall(overrides: Partial<ToolCallWithId>): ToolCallWithId {
   }
 }
 
+// ── stable data-tool contract (gate 6, F1) ───────────────────────────────────
+// Pinned at the unit level (mirrors the same assertion in
+// GenericToolCall.test.tsx) — several consumers (e2e/visual-QA selectors,
+// SubagentBlock step rows) key off `data-tool` to find a specific tool call's
+// badge, so its presence/value is a contract, not an implementation detail.
+
+describe('ToolCallBadge — stable data-tool contract (F1)', () => {
+  it('renders the tool-call-badge root with a data-tool attribute matching the raw tool name', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'read_file', status: 'success', duration_ms: 5 })} />)
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveAttribute('data-tool', 'read_file')
+  })
+
+  it('data-tool reflects the raw (non-humanized) tool id even for a dotted/aliased name', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'browser.navigate', status: 'success', duration_ms: 5 })} />)
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveAttribute('data-tool', 'browser.navigate')
+  })
+})
+
+// ── delegation-denied branch (gate 3) — ported from GenericToolCall.tsx ──────
+// A denied delegate call rendered amber "Delegation denied · <axis>" via
+// GenericToolCall's live/replay path but red generic "Failed" via
+// ToolCallBadge (SubagentBlock steps / MessageItem history) for the exact
+// same DelegationFailure sentinel shape. Both callers must now render the
+// same chip.
+
+describe('ToolCallBadge — delegation-denied branch (ported from GenericToolCall)', () => {
+  it('renders amber "Delegation denied · <axis>" and a warning-colored dot, not generic "Failed"', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          status: 'error',
+          result: {
+            error: 'delegation_denied',
+            reason: 'Scout is not in your trust set for delegation.',
+            policy: 'trust_set',
+            tool: 'delegate',
+            target_agent_id: 'scout-01',
+          },
+        })}
+      />
+    )
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveTextContent('Delegation denied · Trust set')
+    expect(badge).not.toHaveTextContent(/\bFailed\b/)
+    const dot = badge.querySelector('.bg-\\[var\\(--color-warning\\)\\]')
+    expect(dot).toBeTruthy()
+  })
+
+  it('renders the mode policy axis label for a mode-denied delegation', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          status: 'error',
+          result: {
+            error: 'delegation_denied',
+            reason: 'Delegation is disabled in solo mode.',
+            policy: 'mode',
+            tool: 'delegate',
+          },
+        })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toHaveTextContent('Delegation denied · Delegation mode')
+  })
+
+  it('a denial with a non-error status still renders the amber chip (result shape drives the branch, not status alone)', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          status: 'success',
+          result: {
+            error: 'delegation_denied',
+            reason: 'depth exceeded',
+            policy: 'depth',
+            tool: 'delegate',
+          },
+        })}
+      />
+    )
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveTextContent('Delegation denied · Delegation depth')
+  })
+})
+
 describe('ToolCallBadge — running state (test #6)', () => {
   it('shows tool name and spinning icon while running', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Running tool call shows spinner
@@ -262,6 +351,29 @@ describe('ToolCallBadge — flat text-line status dot', () => {
     const detail = screen.getByText('Tool').parentElement?.parentElement
     expect(detail?.className).toContain('border-l-2')
     expect(detail?.className).not.toContain('border-t')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({ status: 'success', duration_ms: 100, params: { q: 'x' }, result: { ok: true } })}
+      />
+    )
+    const btn = document.querySelector('button[aria-expanded]') as HTMLButtonElement
+    fireEvent.click(btn)
+    const root = screen.getByTestId('tool-call-badge')
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
+  })
+
+  it('the caret lives INSIDE the toggle button — the whole row is one click target (no unjustified split-out caret)', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ status: 'success', duration_ms: 100 })} />)
+    const btn = document.querySelector('button[aria-expanded]') as HTMLButtonElement
+    // The caret svg is a descendant of the toggle button itself, not a sibling.
+    expect(btn.querySelector('svg')).toBeTruthy()
+    const root = screen.getByTestId('tool-call-badge')
+    expect(root.querySelectorAll('button').length).toBe(1)
   })
 })
 

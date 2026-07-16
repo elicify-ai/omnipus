@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
 import type { ToolCallStartFrame } from '@/lib/api/generated/asyncapi-types'
 
-type RenderFn = (props: { args: unknown; result: unknown; status: { type: string } }) => React.ReactNode
+type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string } }) => React.ReactNode
 
 // vi.hoisted runs before vi.mock factory and before all imports.
 const captured = vi.hoisted((): Record<string, RenderFn> => ({}))
@@ -284,12 +284,60 @@ describe('FileReadBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
+  it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
+    const { container, getByText } = renderRead(null, 'incomplete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label', () => {
+    const renderFn = captured['read_file']
+    const { container, getByText } = render(
+      renderFn({
+        args: { path: '/workspace/file.ts' },
+        result: null,
+        status: { type: 'incomplete', reason: 'cancelled' },
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('a completed read of a genuinely empty file shows a success dot + "0 lines" — no silent terminal row', () => {
+    const { container, getByText } = renderRead('', 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(getByText('0 lines')).toBeInTheDocument()
+  })
+
+  it('button toggle: disabled and aria-expanded omitted while running', () => {
+    const { container } = renderRead(null, 'running')
+    const toggle = container.querySelector('button')!
+    expect(toggle).toBeDisabled()
+    expect(toggle).not.toHaveAttribute('aria-expanded')
+  })
+
   it('the root has no card-frame classes — flat/transparent on the thread', () => {
     const { container } = renderRead('const x = 1\n', 'complete')
     const root = container.firstElementChild as HTMLElement
     expect(root.className).not.toContain('rounded-md')
     expect(root.className).not.toContain('overflow-hidden')
     expect(root.className).not.toMatch(/\bborder\b/)
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    const { container } = renderRead('const x = 1\n', 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 
   it('expanded content panel uses a left accent line (dark code styling preserved)', () => {
@@ -334,12 +382,63 @@ describe('FileOpBlock (write/edit/append) — flat text-line status dot', () => 
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
   })
 
+  it('running/success/error/cancelled each render a status-differentiating label, not just a bare dot (WCAG 1.4.1)', () => {
+    const renderFn = captured['write_file']
+    expect(
+      render(renderFn({ args: { path: '/file.txt' }, result: null, status: { type: 'running' } }) as React.ReactElement).getByText(
+        'Running...'
+      )
+    ).toBeInTheDocument()
+    expect(
+      render(renderFn({ args: { path: '/file.txt' }, result: null, status: { type: 'complete' } }) as React.ReactElement).getByText(
+        'Done'
+      )
+    ).toBeInTheDocument()
+    expect(
+      render(renderFn({ args: { path: '/file.txt' }, result: null, status: { type: 'incomplete' } }) as React.ReactElement).getByText(
+        'Failed'
+      )
+    ).toBeInTheDocument()
+    expect(
+      render(
+        renderFn({
+          args: { path: '/file.txt' },
+          result: null,
+          status: { type: 'incomplete', reason: 'cancelled' },
+        }) as React.ReactElement
+      ).getByText('Cancelled')
+    ).toBeInTheDocument()
+  })
+
+  it('cancelled: indicator is an 8px muted-colored dot, not the red error dot', () => {
+    const renderFn = captured['write_file']
+    const { container } = render(
+      renderFn({
+        args: { path: '/file.txt' },
+        result: null,
+        status: { type: 'incomplete', reason: 'cancelled' },
+      }) as React.ReactElement
+    )
+    const indicator = container.firstElementChild?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+  })
+
   it('the root has no card-frame classes and is not a toggle (write ops have no detail panel)', () => {
     const { container } = renderWrite('complete')
     const root = container.firstElementChild as HTMLElement
     expect(root.className).not.toContain('rounded-md')
     expect(root.className).not.toMatch(/\bborder\b/)
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
     expect(container.querySelector('button')).toBeNull()
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1)', () => {
+    const { container } = renderWrite('complete')
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 })
 
@@ -366,12 +465,55 @@ describe('FileTreeBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
+  it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
+    const { container, getByText } = renderTree(null, 'incomplete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label', () => {
+    const renderFn = captured['list_dir']
+    const { container, getByText } = render(
+      renderFn({ args: { path: '.' }, result: null, status: { type: 'incomplete', reason: 'cancelled' } }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('a completed listing of an empty directory shows a success dot + "0 entries" — no silent terminal row', () => {
+    const { container, getByText } = renderTree('', 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(getByText('0 entries')).toBeInTheDocument()
+  })
+
+  it('button toggle: disabled and aria-expanded omitted while running', () => {
+    const { container } = renderTree(null, 'running')
+    const toggle = container.querySelector('button')!
+    expect(toggle).toBeDisabled()
+    expect(toggle).not.toHaveAttribute('aria-expanded')
+  })
+
   it('the root has no card-frame classes — flat/transparent on the thread', () => {
     const { container } = renderTree(treeResult, 'complete')
     const root = container.firstElementChild as HTMLElement
     expect(root.className).not.toContain('rounded-md')
     expect(root.className).not.toContain('overflow-hidden')
     expect(root.className).not.toMatch(/\bborder\b/)
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    const { container } = renderTree(treeResult, 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 
   it('expanded tree panel uses a left accent line, and entries keep their Folder/File icons + indentation', () => {

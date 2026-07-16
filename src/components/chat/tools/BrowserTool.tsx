@@ -8,22 +8,11 @@
 
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  Globe,
-  CaretDown,
-  CaretUp,
-  Camera,
-  CursorClick,
-  Keyboard,
-  TextT,
-  Timer,
-  Code,
-  Broadcast,
-} from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Camera, Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 // ── Shared result parser ──────────────────────────────────────────────────────
 
@@ -74,10 +63,9 @@ function parseResult(result: unknown, toolName: string): GenericBrowserResult {
 
 interface BrowserToolBlockProps {
   toolName: string
-  icon: typeof Globe
   args: Record<string, unknown>
   result: unknown
-  status: { type: string }
+  status: { type: string; reason?: string }
   summary: string
 }
 
@@ -85,10 +73,10 @@ interface BrowserToolBlockProps {
 // per-tool identity icon (CursorClick/Keyboard/Camera/…) is no longer
 // rendered here — it was purely decorative alongside `toolName`, which
 // already disambiguates the tool uniquely (e.g. "browser.click"). Status now
-// lives only in the leading dot/spinner. The `icon` prop stays part of
-// BrowserToolBlockProps/BrowserToolSpec (the registration factory and its
-// six call sites still pass it) so the public shape is unchanged; this
-// component simply no longer reads it.
+// lives only in the leading dot/spinner. The `icon` prop/field has been
+// removed entirely from BrowserToolBlockProps, BrowserToolSpec, and the
+// replay-dispatch table (BROWSER_TOOL_SPECS) below — it was fully dead
+// plumbing (mirrors the same cleanup already made in FileWriteConfirm.tsx).
 export function BrowserToolBlock({
   toolName,
   args,
@@ -100,18 +88,22 @@ export function BrowserToolBlock({
 
   const isRunning = status.type === 'running'
   const isError = status.type === 'incomplete'
+  const isCancelled = isCancelledStatus(status)
   const hasResult = result != null
   const hasDetail = !isRunning && hasResult
 
   const parsed = parseResult(result, toolName)
 
-  const statusConfig: ToolBadgeStatusConfig | null = isRunning
+  // Always resolves to a real config — a terminal state (completed, no
+  // error/cancellation) with no result is still a real outcome and must
+  // still show a status dot + label, not a silently blank indicator.
+  const statusConfig: ToolBadgeStatusConfig = isRunning
     ? getToolBadgeStatusConfig('running', { size: 12 })
+    : isCancelled
+    ? getToolBadgeStatusConfig('cancelled', { size: 12, cancelledVariant: 'muted' })
     : isError
     ? getToolBadgeStatusConfig('error', { size: 12 })
-    : hasResult
-    ? getToolBadgeStatusConfig('success', { size: 12 })
-    : null
+    : getToolBadgeStatusConfig('success', { size: 12 })
 
   // ADR-038: "Watch live" opens the app-root BrowserLivePanel overlay onto the
   // browser session driving this tool call. Imperative store reads (not hooks)
@@ -151,19 +143,17 @@ export function BrowserToolBlock({
             hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             !hasDetail && 'cursor-default'
           )}
-          aria-expanded={expanded}
+          aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}
         >
-          {statusConfig?.indicator}
+          {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{toolName}</span>
           <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
             {summary}
           </span>
-          {statusConfig && (
-            <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
-              {statusConfig.label}
-            </span>
-          )}
+          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+            {statusConfig.label}
+          </span>
         </button>
 
         {/* "Watch live" is shown on every browser tool-call row, not only while
@@ -192,7 +182,7 @@ export function BrowserToolBlock({
           bordered/backgrounded panel; each section keeps its own spacing
           via space-y-2 rather than individual borders/fills. */}
       {expanded && hasDetail && (
-        <div className="border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
           {/* Args row */}
           {Object.keys(args).length > 0 && (
             <div>
@@ -240,7 +230,9 @@ export function BrowserToolBlock({
 
           {/* Simple OK for click/type/wait when no rich payload */}
           {!parsed.screenshot && !parsed.text && parsed.result === undefined && !parsed.error && (
-            <div className="text-[10px] text-[var(--color-muted)]">{isError ? 'Failed' : 'OK'}</div>
+            <div className="text-[10px] text-[var(--color-muted)]">
+              {isCancelled ? 'Cancelled' : isError ? 'Failed' : 'OK'}
+            </div>
           )}
         </div>
       )}
@@ -292,19 +284,17 @@ interface BrowserToolSpec<TArgs> {
   displayName: string   // canonical dot name shown in the UI (e.g. "browser.click")
   dotTool: string       // registered tool name with dot (e.g. "browser.click")
   underscoreTool: string // registered tool name with underscore (e.g. "browser_click")
-  icon: typeof Globe
   summary: (args: TArgs) => string
 }
 
 function createBrowserToolUI<TArgs extends object>(
   spec: BrowserToolSpec<TArgs>
 ): { dotUI: ReturnType<typeof makeAssistantToolUI>; underscoreUI: ReturnType<typeof makeAssistantToolUI> } {
-  function renderBlock(toolArgs: TArgs | undefined, result: unknown, status: { type: string }) {
+  function renderBlock(toolArgs: TArgs | undefined, result: unknown, status: { type: string; reason?: string }) {
     const args = toolArgs ?? ({} as TArgs)
     return (
       <BrowserToolBlock
         toolName={spec.displayName}
-        icon={spec.icon}
         args={args as Record<string, unknown>}
         result={result}
         status={status}
@@ -332,7 +322,6 @@ const click = createBrowserToolUI<BrowserClickArgs>({
   displayName: 'browser.click',
   dotTool: 'browser.click',
   underscoreTool: 'browser_click',
-  icon: CursorClick,
   summary: clickSummary,
 })
 export const BrowserClickUI = click.dotUI
@@ -342,7 +331,6 @@ const type_ = createBrowserToolUI<BrowserTypeArgs>({
   displayName: 'browser.type',
   dotTool: 'browser.type',
   underscoreTool: 'browser_type',
-  icon: Keyboard,
   summary: typeSummary,
 })
 export const BrowserTypeUI = type_.dotUI
@@ -352,7 +340,6 @@ const screenshot = createBrowserToolUI<BrowserScreenshotArgs>({
   displayName: 'browser.screenshot',
   dotTool: 'browser.screenshot',
   underscoreTool: 'browser_screenshot',
-  icon: Camera,
   summary: screenshotSummary,
 })
 export const BrowserScreenshotUI = screenshot.dotUI
@@ -362,7 +349,6 @@ const getText = createBrowserToolUI<BrowserGetTextArgs>({
   displayName: 'browser.get_text',
   dotTool: 'browser.get_text',
   underscoreTool: 'browser_get_text',
-  icon: TextT,
   summary: getTextSummary,
 })
 export const BrowserGetTextUI = getText.dotUI
@@ -372,7 +358,6 @@ const wait = createBrowserToolUI<BrowserWaitArgs>({
   displayName: 'browser.wait',
   dotTool: 'browser.wait',
   underscoreTool: 'browser_wait',
-  icon: Timer,
   summary: waitSummary,
 })
 export const BrowserWaitUI = wait.dotUI
@@ -382,7 +367,6 @@ const evaluate = createBrowserToolUI<BrowserEvaluateArgs>({
   displayName: 'browser.evaluate',
   dotTool: 'browser.evaluate',
   underscoreTool: 'browser_evaluate',
-  icon: Code,
   summary: evaluateSummary,
 })
 export const BrowserEvaluateUI = evaluate.dotUI
@@ -404,26 +388,26 @@ export const BrowserEvaluateUnderscoreUI = evaluate.underscoreUI
 // card the live view shows.
 //
 // This lookup + block let the replay renderer reuse the exact same
-// BrowserToolBlock presentation (icon, summary, parsed result, "Watch live"
+// BrowserToolBlock presentation (summary, parsed result, "Watch live"
 // button) as the live path, keyed by either the canonical underscore name or
 // the legacy dot alias (see the naming-convention comment in
 // OmnipusRuntimeProvider.tsx).
 const BROWSER_TOOL_SPECS: Record<
   string,
-  { icon: typeof Globe; summary: (args: Record<string, unknown>) => string; displayName: string }
+  { summary: (args: Record<string, unknown>) => string; displayName: string }
 > = {
-  'browser.click': { icon: CursorClick, summary: (a) => clickSummary(a as BrowserClickArgs), displayName: 'browser.click' },
-  'browser_click': { icon: CursorClick, summary: (a) => clickSummary(a as BrowserClickArgs), displayName: 'browser.click' },
-  'browser.type': { icon: Keyboard, summary: (a) => typeSummary(a as BrowserTypeArgs), displayName: 'browser.type' },
-  'browser_type': { icon: Keyboard, summary: (a) => typeSummary(a as BrowserTypeArgs), displayName: 'browser.type' },
-  'browser.screenshot': { icon: Camera, summary: (a) => screenshotSummary(a as BrowserScreenshotArgs), displayName: 'browser.screenshot' },
-  'browser_screenshot': { icon: Camera, summary: (a) => screenshotSummary(a as BrowserScreenshotArgs), displayName: 'browser.screenshot' },
-  'browser.get_text': { icon: TextT, summary: (a) => getTextSummary(a as BrowserGetTextArgs), displayName: 'browser.get_text' },
-  'browser_get_text': { icon: TextT, summary: (a) => getTextSummary(a as BrowserGetTextArgs), displayName: 'browser.get_text' },
-  'browser.wait': { icon: Timer, summary: (a) => waitSummary(a as BrowserWaitArgs), displayName: 'browser.wait' },
-  'browser_wait': { icon: Timer, summary: (a) => waitSummary(a as BrowserWaitArgs), displayName: 'browser.wait' },
-  'browser.evaluate': { icon: Code, summary: (a) => evaluateSummary(a as BrowserEvaluateArgs), displayName: 'browser.evaluate' },
-  'browser_evaluate': { icon: Code, summary: (a) => evaluateSummary(a as BrowserEvaluateArgs), displayName: 'browser.evaluate' },
+  'browser.click': { summary: (a) => clickSummary(a as BrowserClickArgs), displayName: 'browser.click' },
+  'browser_click': { summary: (a) => clickSummary(a as BrowserClickArgs), displayName: 'browser.click' },
+  'browser.type': { summary: (a) => typeSummary(a as BrowserTypeArgs), displayName: 'browser.type' },
+  'browser_type': { summary: (a) => typeSummary(a as BrowserTypeArgs), displayName: 'browser.type' },
+  'browser.screenshot': { summary: (a) => screenshotSummary(a as BrowserScreenshotArgs), displayName: 'browser.screenshot' },
+  'browser_screenshot': { summary: (a) => screenshotSummary(a as BrowserScreenshotArgs), displayName: 'browser.screenshot' },
+  'browser.get_text': { summary: (a) => getTextSummary(a as BrowserGetTextArgs), displayName: 'browser.get_text' },
+  'browser_get_text': { summary: (a) => getTextSummary(a as BrowserGetTextArgs), displayName: 'browser.get_text' },
+  'browser.wait': { summary: (a) => waitSummary(a as BrowserWaitArgs), displayName: 'browser.wait' },
+  'browser_wait': { summary: (a) => waitSummary(a as BrowserWaitArgs), displayName: 'browser.wait' },
+  'browser.evaluate': { summary: (a) => evaluateSummary(a as BrowserEvaluateArgs), displayName: 'browser.evaluate' },
+  'browser_evaluate': { summary: (a) => evaluateSummary(a as BrowserEvaluateArgs), displayName: 'browser.evaluate' },
 }
 
 /** True when `toolName` is one of the six browser tools (dot or underscore form). */
@@ -447,7 +431,7 @@ export function BrowserToolReplayBlock({
   toolName: string
   args: unknown
   result: unknown
-  status: { type: string }
+  status: { type: string; reason?: string }
 }) {
   const spec = BROWSER_TOOL_SPECS[toolName]
   if (!spec) return null
@@ -455,7 +439,6 @@ export function BrowserToolReplayBlock({
   return (
     <BrowserToolBlock
       toolName={spec.displayName}
-      icon={spec.icon}
       args={resolvedArgs}
       result={result}
       status={status}

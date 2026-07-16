@@ -123,6 +123,23 @@ const mockSkills: unknown[] = []
 const tenAgents = Array.from({ length: 10 }, (_, i) =>
   makeAgent({ id: `ag${String(i + 1).padStart(2, '0')}`, name: `Agent${String(i + 1).padStart(2, '0')}`, type: 'Main', status: 'active' }))
 
+// Cap-footer copy fix (gate 2 LOW) test fixture — 12 skills (more than the
+// SECTION_CAP of 8) so the "/skills" special-filter view (D9: exact input
+// "/skills" shows every skill, capped) actually hits the cap. Zero-padded
+// ids/names for deterministic alphabetical ordering, same convention as
+// tenAgents above. Set via `skillsFixtureOverride` (not `mockSkills`
+// directly) so only the ONE test that needs it opts in — every other test
+// in this file keeps the empty default.
+const twelveSkills = Array.from({ length: 12 }, (_, i) => ({
+  id: `skill${String(i + 1).padStart(2, '0')}`,
+  name: `Skill${String(i + 1).padStart(2, '0')}`,
+  version: '1.0',
+  description: '',
+  verified: true,
+  status: 'active',
+}))
+let skillsFixtureOverride: unknown[] | null = null
+
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
@@ -133,7 +150,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
         return { data: mockCommands, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') {
-        return { data: mockSkills, isError: false, refetch: vi.fn() }
+        return { data: skillsFixtureOverride ?? mockSkills, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'agents') {
         return { data: tenAgents, isError: false, refetch: vi.fn() }
@@ -176,6 +193,7 @@ vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
 function resetStores() {
+  skillsFixtureOverride = null
   act(() => {
     useChatStore.setState({
       messages: [],
@@ -250,5 +268,57 @@ describe('"@" agent-mention menu — cap + hidden-count footer (deferred item 3)
     const footer = screen.getByTestId('slash-menu-footer')
     expect(footer).not.toHaveAttribute('data-highlighted')
     expect(footer).not.toHaveAttribute('role', 'option')
+  })
+})
+
+// Cap-footer copy fix (gate 2 LOW): in the "/skills" special-filter state
+// (D9 — exact input "/skills" shows every skill, capped, ignoring "skills"
+// itself as a filter string), "+N more — keep typing to narrow" was
+// impossible advice: ANY further keystroke changes inputValue away from the
+// exact "/skills" string, which ENDS this special view rather than
+// narrowing it. ChatScreen.tsx now switches to an informational
+// "Showing 8 of N skills" string in that state instead.
+describe('Skills section footer — "/skills" special-filter copy fix (gate 2 LOW)', () => {
+  it('the "/skills" view (more than 8 skills) shows "Showing 8 of 12 skills", NOT the "keep typing to narrow" CTA', () => {
+    skillsFixtureOverride = twelveSkills
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '/skills' } }) })
+
+    const skillOptions = screen.getAllByRole('option')
+    expect(skillOptions).toHaveLength(8)
+
+    const footer = screen.getByTestId('slash-menu-footer')
+    expect(footer).toHaveTextContent('Showing 8 of 12 skills')
+    expect(footer.textContent).not.toContain('keep typing to narrow')
+  })
+
+  it('a normal (non-"/skills") narrowed skills filter still shows the "+N more — keep typing to narrow" CTA unchanged', () => {
+    skillsFixtureOverride = twelveSkills
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    // "/skill" (no trailing "s") is a genuine prefix filter, not the exact
+    // "/skills" special-filter string — every skill id starts with "skill",
+    // so all 12 match, hit the cap, and the CTA IS valid advice here:
+    // typing further (e.g. "/skill01") really does narrow the set.
+    act(() => { fireEvent.change(input, { target: { value: '/skill' } }) })
+
+    expect(screen.getAllByRole('option')).toHaveLength(8)
+    const footer = screen.getByTestId('slash-menu-footer')
+    expect(footer).toHaveTextContent('+4 more — keep typing to narrow')
+  })
+
+  it('sr-only status region announces the cap state when the "/skills" footer is visible (gate 4 MODERATE)', () => {
+    skillsFixtureOverride = twelveSkills
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '/skills' } }) })
+
+    const status = screen.getByTestId('slash-menu-status')
+    expect(status).toHaveAttribute('role', 'status')
+    expect(status).toHaveTextContent('8 of 12 skills shown')
   })
 })

@@ -247,6 +247,19 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
   })
 })
 
+// ── stable data-tool contract (gate 6, F1) ───────────────────────────────────
+// Pinned at the unit level in the MAIN suite too (GenericToolCall.edge.test.tsx
+// already covers this for a degenerate tool name; this locks the contract for
+// the common/happy-path case that this file otherwise exercises).
+
+describe('GenericToolCall — stable data-tool contract (F1)', () => {
+  it('renders the tool-call-badge root with a data-tool attribute matching the raw tool name', () => {
+    render(<GenericToolCall toolName="read_file" status={COMPLETE_STATUS} result={{ ok: true }} />)
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveAttribute('data-tool', 'read_file')
+  })
+})
+
 // ── Baseline: non-sentinel result still renders normally ────────────────────
 
 describe('GenericToolCall — baseline rendering', () => {
@@ -404,6 +417,24 @@ describe('GenericToolCall — flat text-line status dot', () => {
     const block = screen.getByTestId('result-delegation-denied')
     expect(block.className).toContain('border-l-2')
     expect(block.className).not.toContain('rounded')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    render(
+      <GenericToolCall toolName="exec" args={{ cmd: 'ls' }} result={{ ok: true }} status={COMPLETE_STATUS} />
+    )
+    fireEvent.click(screen.getByRole('button'))
+    const root = screen.getByTestId('tool-call-badge')
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
+  })
+
+  it('toggle button: disabled and aria-expanded omitted while there is nothing to expand (running, no args/result/error)', () => {
+    render(<GenericToolCall toolName="exec" status={RUNNING_STATUS} />)
+    const btn = screen.getByRole('button')
+    expect(btn).toBeDisabled()
+    expect(btn).not.toHaveAttribute('aria-expanded')
   })
 })
 

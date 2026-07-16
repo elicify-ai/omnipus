@@ -9,7 +9,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserToolBlock } from './BrowserTool'
-import { Globe } from '@phosphor-icons/react'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
 // ── result edge cases for BrowserToolBlock ────────────────────────────────────
@@ -41,7 +40,6 @@ describe.each([
         render(
           <BrowserToolBlock
             toolName="browser.click"
-            icon={Globe}
             args={{}}
             result={result}
             status={{ type: 'complete' }}
@@ -73,7 +71,6 @@ describe.each([
         render(
           <BrowserToolBlock
             toolName="browser.click"
-            icon={Globe}
             args={args}
             result={null}
             status={{ type: 'running' }}
@@ -99,7 +96,6 @@ describe.each([
         render(
           <BrowserToolBlock
             toolName="browser.screenshot"
-            icon={Globe}
             args={{ selector: '#main' }}
             result={result}
             status={status}
@@ -127,7 +123,6 @@ describe.each([
         render(
           <BrowserToolBlock
             toolName="browser.evaluate"
-            icon={Globe}
             args={{}}
             result={null}
             status={{ type: 'running' }}
@@ -186,7 +181,6 @@ describe.each([
         render(
           <BrowserToolBlock
             toolName={frame.tool}
-            icon={Globe}
             args={frame.params as Record<string, unknown>}
             result={result}
             status={{ type: statusType }}
@@ -244,7 +238,6 @@ describe.each([
         render(
           <BrowserToolBlock
             toolName={frame.tool}
-            icon={Globe}
             args={{}}
             result={frame.result}
             status={{ type: statusType }}
@@ -264,7 +257,6 @@ it('renders toolName as visible text', () => {
   render(
     <BrowserToolBlock
       toolName="browser.navigate"
-      icon={Globe}
       args={{ url: 'https://example.com' }}
       result={null}
       status={{ type: 'running' }}
@@ -279,7 +271,6 @@ it('null result with complete status renders without showing a <script> tag (XSS
   render(
     <BrowserToolBlock
       toolName="browser.evaluate"
-      icon={Globe}
       args={{ script: '<script>alert(1)</script>' }}
       result={'<script>window.__xss=true</script>'}
       status={{ type: 'complete' }}
@@ -310,7 +301,6 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
     const { container } = render(
       <BrowserToolBlock
         toolName="browser.click"
-        icon={Globe}
         args={{}}
         result={null}
         status={{ type: 'running' }}
@@ -326,7 +316,6 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
     const { container } = render(
       <BrowserToolBlock
         toolName="browser.click"
-        icon={Globe}
         args={{}}
         result={{ ok: true }}
         status={{ type: 'complete' }}
@@ -343,7 +332,6 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
     const { container } = render(
       <BrowserToolBlock
         toolName="browser.click"
-        icon={Globe}
         args={{}}
         result={null}
         status={{ type: 'incomplete' }}
@@ -354,14 +342,15 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
   })
 
-  it('the per-tool identity icon passed via `icon` is not rendered as an <svg> before the toolName text', () => {
-    // The CursorClick/Keyboard/etc. glyph the caller passes is redundant with
-    // the toolName text and was dropped — only the status dot/spinner (a
-    // <span> or <svg> from getToolBadgeStatusConfig) leads the row now.
+  it('there is no per-tool identity icon prop at all — the `icon` field was fully removed (dead plumbing)', () => {
+    // The CursorClick/Keyboard/etc. glyph previously threaded through as an
+    // `icon` prop was redundant with the toolName text and has been deleted
+    // entirely from BrowserToolBlockProps/BrowserToolSpec/BROWSER_TOOL_SPECS
+    // — only the status dot/spinner (a <span> or <svg> from
+    // getToolBadgeStatusConfig) leads the row now.
     render(
       <BrowserToolBlock
         toolName="browser.click"
-        icon={Globe}
         args={{}}
         result={{ ok: true }}
         status={{ type: 'complete' }}
@@ -372,11 +361,71 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
     expect(screen.getByText('browser.click')).toBeInTheDocument()
   })
 
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label, not the red error dot', () => {
+    render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        args={{}}
+        result={null}
+        status={{ type: 'incomplete', reason: 'cancelled' }}
+        summary="#btn"
+      />
+    )
+    const indicator = screen.getByText('browser.click').parentElement?.children[0] as HTMLElement
+    expect(indicator.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('a completed call with no result (no error, no cancellation) still shows a status dot + "Done" label — no silent terminal row', () => {
+    render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        args={{}}
+        result={null}
+        status={{ type: 'complete' }}
+        summary="#btn"
+      />
+    )
+    expect(screen.getByText('Done')).toBeInTheDocument()
+  })
+
+  it('button toggle: disabled and aria-expanded omitted while there is nothing to expand (complete, no result)', () => {
+    render(
+      <BrowserToolBlock
+        toolName="browser.click"
+        args={{}}
+        result={null}
+        status={{ type: 'complete' }}
+        summary="#btn"
+      />
+    )
+    const toggle = screen.getByRole('button', { name: /browser\.click/ })
+    expect(toggle).toBeDisabled()
+    expect(toggle).not.toHaveAttribute('aria-expanded')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    render(
+      <BrowserToolBlock
+        toolName="browser.evaluate"
+        args={{ expression: 'document.title' }}
+        result={{ result: 'My Page' }}
+        status={{ type: 'complete' }}
+        summary="document.title"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /browser\.evaluate/ }))
+    const root = screen.getByText('browser.evaluate').closest('div.mt-2') as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
+  })
+
   it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
     const { container } = render(
       <BrowserToolBlock
         toolName="browser.click"
-        icon={Globe}
         args={{}}
         result={{ ok: true }}
         status={{ type: 'complete' }}
@@ -394,7 +443,6 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
     render(
       <BrowserToolBlock
         toolName="browser.evaluate"
-        icon={Globe}
         args={{ expression: 'document.title' }}
         result={{ result: 'My Page' }}
         status={{ type: 'complete' }}

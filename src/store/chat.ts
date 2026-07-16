@@ -354,18 +354,28 @@ export type PositionedToolCall = ToolCall & { textOffset?: number }
  * into whatever the content eventually finalizes to, no matter how much
  * more text or how many more calls land after this one started.
  *
- * Preservation: a call can be baked more than once over its lifetime (the
- * abandoned-bubble copy-bake in the 'token' handler followed by the
- * turn-end bake at `done`; a WS-replay same-turn merge baking a call that
- * was already copy-baked onto an earlier segment; etc). The snapshot table
- * is stable across those re-bakes (written once, only cleared once
- * everything referencing it has been stamped), so a fresh lookup normally
- * reproduces the identical offset every time. `prevOffset` — the offset the
- * call was already stamped with on a PRIOR bake, if any — is the fallback
- * for the case where some path re-bakes a call after its snapshot entry has
- * already been wiped: falling back to the earlier stamp is required, since
- * silently computing `(undefined ?? '').length` would default to 0 and
- * misrepresent "snapshot no longer available" as "started at position 0".
+ * INVARIANT — once stamped, an offset is correct forever: `prevOffset` —
+ * the offset the call was already stamped with on a PRIOR bake, if any —
+ * is checked FIRST, ahead of a fresh `textAtToolCallStart` snapshot. A call
+ * can be baked more than once over its lifetime (the abandoned-bubble
+ * copy-bake in the 'token' handler followed by the turn-end bake at `done`;
+ * a WS-replay same-turn merge baking a call that was already copy-baked
+ * onto an earlier segment; a reconnect replaying a `tool_call_start` for a
+ * call that is already baked into a historical message; etc). In every
+ * LEGITIMATE re-bake, `prevOffset === snapshot.length` anyway (content is
+ * append-only, so the two agree whenever both are available) — so
+ * preferring `prevOffset` changes nothing for those cases. What it fixes is
+ * the ILLEGITIMATE case: a WS reconnect replays the transcript into a
+ * bucket that already baked-and-wiped this call's snapshot, so the
+ * `tool_call_start` reconnect guard (see its own comment) has to record a
+ * FRESH snapshot — one that reflects however much text has accumulated by
+ * reconnect time, not the original call-start position. Preferring
+ * `snapshot` there would silently overwrite a correct, already-stamped
+ * offset with a bogus end-of-text one on the very next bake. Falling back
+ * to `snapshot?.length` only when there is no `prevOffset` at all (first
+ * bake ever) is still required: silently computing `(undefined ?? '').length`
+ * would default to 0 and misrepresent "snapshot no longer available" as
+ * "started at position 0".
  */
 function stampToolCallOffset(
   id: string,
@@ -374,7 +384,7 @@ function stampToolCallOffset(
   prevOffset: number | undefined,
 ): PositionedToolCall {
   const snapshot = textAtToolCallStart[id]
-  const textOffset = snapshot !== undefined ? snapshot.length : prevOffset
+  const textOffset = prevOffset ?? snapshot?.length
   return {
     id,
     tool: tc.tool,
@@ -453,6 +463,51 @@ function bakeToolCallsByOwner(
     for (const tc of baked) mergedById.set(tc.id, tc)
     messagesById[ownerMsgId] = { ...msg, tool_calls: Array.from(mergedById.values()) }
   }
+}
+
+/**
+ * Scan every assistant message in a bucket for an already-baked tool call
+ * with the given id — used by the `tool_call_start` reconnect guard
+ * (defense-in-depth alongside `stampToolCallOffset`'s prevOffset-first
+ * invariant) to detect a WS reattach replaying `tool_call_start` for a call
+ * that has ALREADY been baked into `message.tool_calls` (by a prior `done`
+ * or WS-replay-merge bake, which wipes toolCalls/toolCallOrder/
+ * textAtToolCallStart/toolCallOwnerMessageId — see those bake sites). When
+ * true, the caller must treat the frame as a no-op start: it must NOT
+ * re-record a snapshot (the bucket's current content no longer reflects
+ * where this call originally started — that position is only preserved in
+ * the already-baked entry's `textOffset`) and must NOT re-add the id to
+ * `toolCallOrder` (doing so would queue the call for ANOTHER bake, risking
+ * it landing on the wrong owner message if the tail message has changed
+ * since the original bake — `stampToolCallOffset`'s prevOffset preference
+ * only recovers the correct offset when the re-bake lands back on the SAME
+ * owner message that already holds it).
+ *
+ * Must NOT trigger for a still-streaming turn's calls reattaching mid-turn
+ * (the legitimate reconnect case the guard's surrounding comment describes)
+ * — those calls are not yet baked into any message, so this scan correctly
+ * returns false for them and the existing snapshot/order guards run
+ * unchanged.
+ *
+ * O(messages) — deliberately not indexed. Only a `tool_call_start` frame
+ * calls this, and only the reconnect/replay path ever revisits a call id
+ * that could possibly already be baked (a live turn's own calls are never
+ * baked until `done`/a replay merge, so a live call is never found here —
+ * see the call site). Bucket message counts are capped by
+ * MAX_MESSAGES_PER_SESSION, and there is no cheaper existing index:
+ * toolCallOwnerMessageId is wiped by the very same bake that populates
+ * message.tool_calls, so it cannot answer "is this id baked" for the one
+ * case this function exists to catch.
+ */
+function isToolCallBakedInBucket(messagesById: Record<string, ChatMessage>, callId: string): boolean {
+  for (const id in messagesById) {
+    const msg = messagesById[id]
+    if (msg.role !== 'assistant' || !msg.tool_calls) continue
+    for (const tc of msg.tool_calls) {
+      if (tc.id === callId) return true
+    }
+  }
+  return false
 }
 
 /** Return the ordered message array for a bucket. O(N) — call once per reducer, not per frame. */
@@ -2623,6 +2678,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const existingSnapshot = b.textAtToolCallStart[frame.call_id]
               const existingOwner = b.toolCallOwnerMessageId?.[frame.call_id]
               const existingTC = b.toolCalls[frame.call_id]
+              // Defense-in-depth alongside stampToolCallOffset's prevOffset-
+              // first invariant (see that function's doc comment): a
+              // reconnect can replay `tool_call_start` for a call that has
+              // ALREADY been baked into a historical message's tool_calls
+              // (the done-bake / replay-merge bakes wipe toolCallOrder/
+              // textAtToolCallStart, so orderHasCall/existingSnapshot alone
+              // can't detect this). When that's the case, the frame must be
+              // treated as a no-op start — see isToolCallBakedInBucket's doc
+              // comment for why re-recording a snapshot or re-queuing the id
+              // into toolCallOrder here would risk corrupting the already-
+              // correct stamped offset. A still-streaming turn's calls
+              // reattaching mid-turn are NOT yet baked into any message, so
+              // this is false for them and they take the unchanged path below.
+              const alreadyBaked = isToolCallBakedInBucket(b.messagesById, frame.call_id)
               // FR-21 / T21–T25: a tool_call_start for a top-level (non-subagent)
               // tool means the agent is actively working — set isStreaming:true so
               // the Stop button appears even when the LLM emits a tool call without
@@ -2683,8 +2752,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 if (!existingTC || existingTC.status === 'running') {
                   draft.toolCalls[frame.call_id] = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' }
                 }
-                if (!orderHasCall) draft.toolCallOrder.push(frame.call_id)
-                if (existingSnapshot === undefined) {
+                if (!orderHasCall && !alreadyBaked) draft.toolCallOrder.push(frame.call_id)
+                if (existingSnapshot === undefined && !alreadyBaked) {
                   draft.textAtToolCallStart[frame.call_id] = textSnapshot
                 }
                 if (existingOwner === undefined && ownerMsgId) {
@@ -3153,9 +3222,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                       // already the correct split offset into whatever the
                       // FINAL merged content becomes, including segments
                       // appended after this bake (see stampToolCallOffset's
-                      // doc comment; pinned by
-                      // ChatStore_ReplaySequence_InterleavedTurn_TwoFrames'
-                      // exact-offset assertion in chat.test.ts).
+                      // doc comment; pinned by the "WS-replay same-turn
+                      // merge" describe block's exact-offset assertion in
+                      // chat.tool-call-offset.test.ts).
                       const existingCalls = (candidate.tool_calls ?? []) as PositionedToolCall[]
                       const existingById = new Map(existingCalls.map((tc) => [tc.id, tc]))
                       const baked = draft.toolCallOrder

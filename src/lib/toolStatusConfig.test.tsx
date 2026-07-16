@@ -3,6 +3,7 @@ import { render } from '@testing-library/react'
 import {
   getToolBadgeStatusConfig,
   getSpanStatusDot,
+  isCancelledStatus,
   type SpanLikeStatus,
 } from './toolStatusConfig'
 
@@ -32,6 +33,11 @@ describe('getToolBadgeStatusConfig — "inline" family (ToolCallBadge, GenericTo
     const svg = renderIconSvg(config.indicator)
     expect(svg?.getAttribute('class')).toContain('animate-spin')
     expect(svg?.getAttribute('class')).toContain('text-[var(--color-accent)]')
+  })
+
+  it('running: spinner carries aria-hidden="true" (matches the span-family spinner)', () => {
+    const svg = renderIconSvg(getToolBadgeStatusConfig('running').indicator)
+    expect(svg?.getAttribute('aria-hidden')).toBe('true')
   })
 
   it('error: label "Failed", error-colored 8px dot indicator', () => {
@@ -176,5 +182,27 @@ describe('getSpanStatusDot — span-status flat-line dot shape (SubagentBlock, A
     const config = getSpanStatusDot('success')
     expect(config).not.toHaveProperty('border')
     expect(config).not.toHaveProperty('pill')
+  })
+})
+
+describe('isCancelledStatus — shared AssistantUI-incomplete/cancelled-reason detector', () => {
+  it('true for incomplete status with reason "cancelled"', () => {
+    expect(isCancelledStatus({ type: 'incomplete', reason: 'cancelled' })).toBe(true)
+  })
+
+  it('false for incomplete status with a different reason (e.g. "error")', () => {
+    expect(isCancelledStatus({ type: 'incomplete', reason: 'error' })).toBe(false)
+  })
+
+  it('false for incomplete status with no reason field at all', () => {
+    expect(isCancelledStatus({ type: 'incomplete' })).toBe(false)
+  })
+
+  it('false for a running status', () => {
+    expect(isCancelledStatus({ type: 'running' })).toBe(false)
+  })
+
+  it('false for a complete status', () => {
+    expect(isCancelledStatus({ type: 'complete' })).toBe(false)
   })
 })

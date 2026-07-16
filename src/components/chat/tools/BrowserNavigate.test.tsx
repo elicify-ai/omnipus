@@ -307,6 +307,32 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
   })
 
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label, not the red error dot', () => {
+    const { container } = render(
+      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} isCancelled />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('a completed navigate with no result (no error, no cancellation) still shows a status dot + "Done" label — no silent terminal row', () => {
+    const { container } = render(
+      <BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator).toBeTruthy()
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+  })
+
+  it('button toggle: disabled and aria-expanded omitted while there is nothing to expand (not running, no result)', () => {
+    render(<BrowserNavigateBlock args={{ url: 'https://example.com' }} result={null} isRunning={false} />)
+    const toggle = screen.getByRole('button', { name: /browser\.navigate/ })
+    expect(toggle).toBeDisabled()
+    expect(toggle).not.toHaveAttribute('aria-expanded')
+  })
+
   it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
     const { container } = render(
       <BrowserNavigateBlock
@@ -345,5 +371,20 @@ describe('BrowserNavigateBlock — flat text-line status dot', () => {
     const detail = screen.getByText('page text').parentElement
     expect(detail?.className).toContain('border-l-2')
     expect(detail?.className).not.toContain('border-t')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    const { container } = render(
+      <BrowserNavigateBlock
+        args={{ url: 'https://example.com' }}
+        result={{ title: 'Example', url: 'https://example.com', content: 'page text' }}
+        isRunning={false}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /browser\.navigate/ }))
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 })

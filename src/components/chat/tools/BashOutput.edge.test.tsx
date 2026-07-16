@@ -20,7 +20,7 @@ import { act } from 'react'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
-type RenderFn = (props: { args: unknown; result: unknown; status: { type: string } }) => React.ReactNode
+type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string } }) => React.ReactNode
 
 // vi.hoisted runs before vi.mock factory and before all imports.
 const captured = vi.hoisted(() => ({
@@ -182,6 +182,60 @@ describe('bash — flat text-line status dot', () => {
     const terminal = container.querySelector('[class*="0d1117"]') as HTMLElement | null
     expect(terminal).toBeTruthy()
     expect(terminal?.className).not.toContain('border')
+  })
+
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label, not the red error dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container, getByText } = render(
+      captured.bashRender({
+        args: { command: 'sleep 30' },
+        result: null,
+        status: { type: 'incomplete', reason: 'cancelled' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('the caret lives INSIDE the toggle button (no unjustified split-out sibling caret)', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const button = container.querySelector('button')!
+    expect(button.querySelector('svg[class*="Caret" i], svg')).toBeTruthy()
+    // The row has exactly one button and no caret rendered as its sibling.
+    expect(container.querySelectorAll('button').length).toBe(1)
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 
   it('running with no output: the inline "Executing..." spinner keeps animate-spin', () => {

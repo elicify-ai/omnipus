@@ -10,6 +10,7 @@
 
 import type { ReactNode } from 'react'
 import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { cn } from '@/lib/utils'
 
 export interface PreviewToolHeaderProps {
   /** Phosphor icon element (e.g. <Globe />, <Terminal />). */
@@ -59,6 +60,15 @@ export function PreviewToolHeader({
           {label}
         </code>
       )}
+      {/* Status text — every other flat-line row (BashOutput, BrowserTool,
+          BrowserNavigate, GenericToolCall, ToolCallBadge) renders the status
+          label next to its dot/spinner; this header previously computed
+          statusConfig.label and discarded it, leaving PreviewToolHeader the
+          only row with no status-differentiating text (dot color alone is
+          not enough for colorblind users or screen readers — WCAG 1.4.1). */}
+      <span className={cn('shrink-0 text-[var(--color-muted)] font-mono text-[10px]', statusConfig.textClass)}>
+        {statusConfig.label}
+      </span>
       {trailing && <span className="ml-auto shrink-0">{trailing}</span>}
     </div>
   )

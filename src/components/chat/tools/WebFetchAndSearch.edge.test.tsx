@@ -10,7 +10,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
-type RenderFn = (props: { args: unknown; result: unknown; status: { type: string } }) => React.ReactNode
+type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string } }) => React.ReactNode
 
 // vi.hoisted runs before vi.mock factory and before all imports.
 const captured = vi.hoisted((): Record<string, RenderFn> => ({}))
@@ -243,10 +243,41 @@ describe('WebFetchBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
-  it('error: indicator is an 8px error-colored dot', () => {
-    const { container } = renderFetch(null, 'incomplete')
+  it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
+    const { container, getByText } = renderFetch(null, 'incomplete')
     const indicator = container.querySelector('button')?.children[0] as HTMLElement
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label', () => {
+    const renderFn = captured['web_fetch']
+    const { container, getByText } = render(
+      renderFn({
+        args: { url: 'https://example.com' },
+        result: null,
+        status: { type: 'incomplete', reason: 'cancelled' },
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('a completed fetch with empty content (no error, no cancellation) shows a success dot + "Done" — no silent terminal row', () => {
+    const { container, getByText } = renderFetch('', 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(getByText('Done')).toBeInTheDocument()
+  })
+
+  it('button toggle: disabled and aria-expanded omitted while there is nothing to expand (running)', () => {
+    const { container } = renderFetch(null, 'running')
+    const toggle = container.querySelector('button')!
+    expect(toggle).toBeDisabled()
+    expect(toggle).not.toHaveAttribute('aria-expanded')
   })
 
   it('the root has no card-frame classes — flat/transparent on the thread', () => {
@@ -255,6 +286,16 @@ describe('WebFetchBlock — flat text-line status dot', () => {
     expect(root.className).not.toContain('rounded-md')
     expect(root.className).not.toContain('overflow-hidden')
     expect(root.className).not.toMatch(/\bborder\b/)
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    const { container } = renderFetch('page content', 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 
   it('expanded content panel uses a left accent line, not a bordered/backgrounded card', () => {
@@ -308,12 +349,59 @@ describe('WebSearchBlock — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('rounded-full')
   })
 
+  it('error: indicator is an 8px error-colored dot with a "Failed" label — not a green dot, not silent', () => {
+    const { container, getByText } = renderSearch(null, 'incomplete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-success)]')
+    expect(getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label', () => {
+    const renderFn = captured['web_search']
+    const { container, getByText } = render(
+      renderFn({
+        args: { query: 'test' },
+        result: null,
+        status: { type: 'incomplete', reason: 'cancelled' },
+      }) as React.ReactElement
+    )
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('a completed search that parses no structured results shows a success dot + "0 results" — no silent terminal row', () => {
+    const { container, getByText } = renderSearch('unstructured text with no numbered results', 'complete')
+    const indicator = container.querySelector('button')?.children[0] as HTMLElement
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(getByText('0 results')).toBeInTheDocument()
+  })
+
+  it('button toggle: disabled and aria-expanded omitted while there is nothing to expand (running)', () => {
+    const { container } = renderSearch(null, 'running')
+    const toggle = container.querySelector('button')!
+    expect(toggle).toBeDisabled()
+    expect(toggle).not.toHaveAttribute('aria-expanded')
+  })
+
   it('the root has no card-frame classes — flat/transparent on the thread', () => {
     const { container } = renderSearch(structuredResult, 'complete')
     const root = container.firstElementChild as HTMLElement
     expect(root.className).not.toContain('rounded-md')
     expect(root.className).not.toContain('overflow-hidden')
     expect(root.className).not.toMatch(/\bborder\b/)
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    const { container } = renderSearch(structuredResult, 'complete')
+    fireEvent.click(container.querySelector('button')!)
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
   })
 
   it('expanded results panel uses a left accent line, not a bordered/backgrounded card (no divide-y dividers)', () => {

@@ -24,7 +24,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore, makeBucketMessages, evictMessageFromBucket } from './chat'
+import { useChatStore, makeBucketMessages, evictMessageFromBucket, getMessages } from './chat'
 import type { SessionChatState, PositionedToolCall } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
@@ -397,6 +397,130 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
       expect(bucket.toolCallOrder).toHaveLength(0)
       expect(bucket.textAtToolCallStart['tc1']).toBeUndefined()
       expect(bucket.toolCallOwnerMessageId?.['tc1']).toBeUndefined()
+    })
+  })
+
+  // Permanent pin for the merge-blocking gate finding: a WS reconnect that
+  // replays an already-baked call's tool_call_start/tool_call_result frames
+  // must not corrupt its already-stamped textOffset. Root cause: the
+  // done-bake wipes toolCalls/toolCallOrder/textAtToolCallStart/
+  // toolCallOwnerMessageId (see the `done` case in chat.ts); on reconnect the
+  // transcript replays into the now-warm bucket, so the `tool_call_start`
+  // reconnect guard finds no snapshot for the already-baked call and records
+  // a FRESH one reflecting the CURRENT (already-finalized) content instead of
+  // the original call-start position; the next bake's `stampToolCallOffset`
+  // used to prioritize that fresh snapshot over the already-correct
+  // `prevOffset`, silently overwriting a correct offset with a bogus
+  // end-of-text one. Fixed by (a) `stampToolCallOffset` preferring
+  // `prevOffset` over a fresh snapshot (see its doc comment's INVARIANT), and
+  // (b) `isToolCallBakedInBucket` skipping re-recording the snapshot and
+  // re-queuing into `toolCallOrder` for a call that's already baked.
+  describe('reconnect replay does not corrupt a stamped offset (gate finding pin)', () => {
+    it('a live turn stamps textOffset 5; a WS reconnect replaying tc1\'s start/result (+ a deduped replayed segment) + a fresh done must NOT shift it to 11', () => {
+      // --- Phase 1: ordinary live turn --------------------------------
+      act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Alpha', session_id: SID }) })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start', call_id: 'tc1', tool: 'shell', params: { cmd: 'echo hi' }, session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result', call_id: 'tc1', tool: 'shell', result: { stdout: 'hi\n' }, status: 'success', session_id: SID,
+        })
+      })
+      act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Beta', session_id: SID }) })
+      act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+
+      const afterLiveTurn = useChatStore.getState()
+      const liveAssistant = afterLiveTurn.messages.find((m) => m.role === 'assistant')!
+      expect('Alpha'.length).toBe(5) // pin the literal the offset assertion relies on
+      expect('Alpha\n\nBeta'.length).toBe(11) // pin the literal the pre-fix corruption value relies on
+      expect(liveAssistant.content).toBe('Alpha\n\nBeta')
+      const originalOffset = toolCallOf(liveAssistant)?.textOffset
+      expect(originalOffset).toBe(5)
+      const assistantId = liveAssistant.id
+
+      // --- Phase 2: WS reconnect replays the already-completed turn ----
+      act(() => { useChatStore.getState().setReplaying(true) })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start', call_id: 'tc1', tool: 'shell', params: { cmd: 'echo hi' }, session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result', call_id: 'tc1', tool: 'shell', result: { stdout: 'hi\n' }, status: 'success', session_id: SID,
+        })
+      })
+      // Replayed segment: the backend re-sends the transcript entry for this
+      // same assistant bubble (same server-assigned id) — the SPA's own
+      // id-based replay dedup (see the `replay_message` reducer's
+      // `draft.messageOrder.includes(messageId)` check) recognizes the id is
+      // already present and no-ops, exactly as a warm-bucket reconnect
+      // replaying content the client already rendered live would behave.
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'assistant', content: 'Alpha\n\nBeta', id: assistantId, session_id: SID,
+        })
+      })
+      act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+
+      const final = useChatStore.getState()
+      const finalAssistant = final.messages.find((m) => m.id === assistantId)!
+      // Content is unchanged — the replayed segment was a dedup no-op, so
+      // the pre-fix corrupted value (content.length === 11) is well-defined.
+      expect(finalAssistant.content).toBe('Alpha\n\nBeta')
+      // THE PIN.
+      expect(toolCallOf(finalAssistant)?.textOffset).toBe(originalOffset)
+      expect(toolCallOf(finalAssistant)?.textOffset).toBe(5)
+      expect(toolCallOf(finalAssistant)?.textOffset).not.toBe(11)
+    })
+  })
+
+  // gate-6 F5: the offset-stamping bake must work identically for a
+  // background (non-active) session bucket — a session the user isn't
+  // currently viewing, but whose WS frames still arrive and must still be
+  // baked correctly — and must never leak into or read from the foreground
+  // (active session) projection.
+  describe('background-bucket bake (gate-6 F5)', () => {
+    it('bakes textOffset correctly into sessionsById[SID] while a DIFFERENT session is active, and leaves the active bucket untouched', () => {
+      const OTHER_SID = 'other-session-active'
+      useSessionStore.setState({ ...useSessionStore.getState(), activeSessionId: OTHER_SID })
+
+      act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Let me check. ', session_id: SID }) })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start', call_id: 'tc1', tool: 'web_search', params: { query: 'the answer' }, session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result', call_id: 'tc1', tool: 'web_search', result: { hits: [] }, status: 'success', session_id: SID,
+        })
+      })
+      act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'The answer is 42.', session_id: SID }) })
+      act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+
+      const state = useChatStore.getState()
+      // The active session (OTHER_SID) was never targeted by any of these
+      // SID-tagged frames — its bucket must never have been created, and the
+      // foreground `messages` projection (which mirrors the active bucket)
+      // must stay empty.
+      expect(state.sessionsById[OTHER_SID]).toBeUndefined()
+      expect(state.messages).toEqual([])
+
+      // The background bucket (SID) must have baked exactly as the
+      // single-call offset case (first test in this file) does when SID is
+      // active — routing to a background bucket must not change the bake.
+      const bucket = state.sessionsById[SID]!
+      const assistant = getMessages(bucket).find((m) => m.role === 'assistant')!
+      expect(assistant.content).toBe('Let me check. \n\nThe answer is 42.')
+      const toolCalls = (assistant.tool_calls ?? []) as PositionedToolCall[]
+      expect(toolCalls).toHaveLength(1)
+      expect(toolCalls[0].textOffset).toBe(14)
+      expect(bucket.textAtToolCallStart).toEqual({})
+      expect(bucket.toolCallOrder).toEqual([])
     })
   })
 })

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
-import { statusDot } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 interface ReadFileArgs {
   path?: string
@@ -18,10 +18,14 @@ function FileReadBlock({
   args,
   result,
   isRunning,
+  isError,
+  isCancelled,
 }: {
   args: ReadFileArgs
   result: unknown
   isRunning: boolean
+  isError?: boolean
+  isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -29,9 +33,26 @@ function FileReadBlock({
   const name = basename(path)
   const content = result != null ? String(result) : ''
   const lines = content.split('\n')
-  const lineCount = lines.length
+  // Zero (not 1) for a genuinely empty read — `''.split('\n')` yields `['']`,
+  // which would otherwise misreport an empty file as "1 lines".
+  const lineCount = content ? lines.length : 0
   const preview = lines.slice(0, 20).join('\n')
   const isTruncated = lineCount > 20
+
+  // Always resolves to a real config — a completed read with empty content
+  // (no error, no cancellation) is still a real "0 lines" success, not a
+  // silently blank indicator (the old `content ? successDot : null` dropped
+  // the indicator entirely for that case).
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 12, cancelledVariant: 'muted' }
+  )
+  // On a real success, always show the line count — including "0 lines" for
+  // a genuinely empty file (previously silent: no text shown at all when
+  // content was falsy). Running/error/cancelled show the shared status label
+  // instead, matching BashOutput/WebFetchPreview.
+  const countOrStatusLabel =
+    isRunning || isError || isCancelled ? statusConfig.label : `${lineCount} lines`
 
   return (
     // Flat text-line design (ticket "Tool components in chat", P2): no card
@@ -48,19 +69,15 @@ function FileReadBlock({
           !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
           isRunning && 'cursor-default'
         )}
-        aria-expanded={expanded}
+        aria-expanded={!isRunning ? expanded : undefined}
         disabled={isRunning}
       >
-        {isRunning ? (
-          <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)] shrink-0" />
-        ) : content ? (
-          statusDot('bg-[var(--color-success)]')
-        ) : null}
+        {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{name}</span>
         <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
-          {content && <span>{lineCount} lines</span>}
+          <span className={cn(statusConfig.textClass)}>{countOrStatusLabel}</span>
           {!isRunning && (
-            <span className="ml-1">{expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}</span>
+            <span className="ml-1">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}
         </span>
       </button>
@@ -91,6 +108,8 @@ export const FileReadPreviewUI = makeAssistantToolUI<ReadFileArgs, unknown>({
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })
@@ -103,6 +122,8 @@ export const FileReadAliasDotUI = makeAssistantToolUI<ReadFileArgs, unknown>({
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })

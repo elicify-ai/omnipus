@@ -22,7 +22,7 @@ import { ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
-import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 // ── Args shape ────────────────────────────────────────────────────────────────
 //
@@ -68,12 +68,14 @@ function BashOutputBlock({
   result,
   isRunning,
   isError,
+  isCancelled,
 }: {
   toolName: string
   args: BashArgs
   result: unknown
   isRunning: boolean
   isError?: boolean
+  isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(true)
 
@@ -115,13 +117,17 @@ function BashOutputBlock({
   // GenericToolCall/ToolCallBadge via getToolBadgeStatusConfig). The
   // per-tool Terminal glyph is dropped as redundant with the `label` text
   // ("bash" / "bash poll" / …) it used to sit beside.
-  const statusConfig = getToolBadgeStatusConfig(isRunning ? 'running' : isError ? 'error' : 'success', {
-    size: 12,
-  })
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 12, cancelledVariant: 'muted' }
+  )
 
   return (
     <div className="mt-2 text-xs font-mono">
-      {/* Header row */}
+      {/* Header row — a single toggle button; there is no sibling action on
+          this row (unlike BrowserTool/BrowserNavigate's "Watch live"), so
+          the caret lives INSIDE the button and the whole row is one click
+          target. */}
       <div className="flex w-full items-center gap-2">
         <button tabIndex={0}
           type="button"
@@ -135,17 +141,17 @@ function BashOutputBlock({
           <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
             {statusConfig.label}
           </span>
+          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+          </span>
         </button>
-        <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-          {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-        </span>
       </div>
 
       {/* Output panel — indented left-accent block; the dark terminal panel
           keeps its own identity (bg-[#0d1117]) but is no longer wrapped in
           an outer bordered frame. */}
       {expanded && (
-        <div className="border-l-2 border-[var(--color-border)] pl-3 py-1">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1">
           <div className="bg-[#0d1117] rounded-sm">
             {isRunning && !output ? (
               <div className="px-3 py-2 text-[var(--color-muted)] italic flex items-center gap-2">
@@ -174,6 +180,7 @@ function makeBashUI(toolName: string) {
         result={result}
         isRunning={status.type === 'running'}
         isError={status.type === 'incomplete'}
+        isCancelled={isCancelledStatus(status)}
       />
     ),
   })

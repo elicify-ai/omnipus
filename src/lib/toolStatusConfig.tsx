@@ -110,7 +110,13 @@ export function getToolBadgeStatusConfig(
   switch (status) {
     case 'running':
       return {
-        indicator: <ArrowsClockwise size={size} className="animate-spin text-[var(--color-accent)]" />,
+        indicator: (
+          <ArrowsClockwise
+            size={size}
+            className="animate-spin text-[var(--color-accent)]"
+            aria-hidden="true"
+          />
+        ),
         label: 'Running...',
       }
     case 'success':
@@ -134,6 +140,25 @@ export function getToolBadgeStatusConfig(
             label: 'Cancelled',
           }
   }
+}
+
+/**
+ * True when a MessagePartStatus (or any status-like object shaped `{ type:
+ * string; reason?: string }`) is the user-cancelled variant of AssistantUI's
+ * `incomplete` status. `reason` is declared optional here rather than
+ * required — AssistantUI's own `incomplete` variant type doesn't always
+ * carry it in its public surface, so a plain `{ type: 'incomplete' }` (no
+ * `reason` at all) is still a valid, well-typed argument, not just a
+ * generic-failure fallthrough. Mirrors GenericToolCall.tsx's original inline
+ * detector (see its `isCancelled` computation). Centralized here so every
+ * assistant-ui-driven tool-call renderer that needs to distinguish
+ * "cancelled" from a generic failure (BashOutput, BrowserTool,
+ * BrowserNavigate, FileWriteConfirm, WebFetchPreview, FileReadPreview,
+ * FileTreeView, WebSearchResult, GenericToolCall) uses identical detection
+ * logic instead of re-deriving it per file.
+ */
+export function isCancelledStatus(status: { type: string; reason?: string }): boolean {
+  return status.type === 'incomplete' && status.reason === 'cancelled'
 }
 
 // ── Span-status style — SubagentBlock, ActivityPanel ──────────────────────────

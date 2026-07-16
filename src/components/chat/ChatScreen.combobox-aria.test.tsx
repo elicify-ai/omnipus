@@ -131,6 +131,14 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
     { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
   ]
+  // F3 (test hardening): a small "@" mention-mode fixture — real, chat-eligible
+  // agents (status active, type Main so isWorker() excludes none of them) so
+  // the '@'-mode ARIA pass below exercises actual listbox/option rows instead
+  // of an empty (unrenderable) menu.
+  const mockAgents = [
+    { id: 'ag-alpha', name: 'Alpha', type: 'Main', locked: false, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, steering_mode: 'one-at-a-time' },
+    { id: 'ag-bravo', name: 'Bravo', type: 'Main', locked: false, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, steering_mode: 'one-at-a-time' },
+  ]
   return {
     ...actual,
     useQuery: (opts: { queryKey: unknown[] }) => {
@@ -140,6 +148,9 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       }
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: mockSkills, isError: false, refetch: vi.fn() }
+      }
+      if (Array.isArray(key) && key[0] === 'agents') {
+        return { data: mockAgents, isError: false, refetch: vi.fn() }
       }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -246,6 +257,98 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
     expect(input).not.toHaveAttribute('aria-activedescendant')
   })
+
+  // F3 (test hardening, gate 6): the fixture has 4 commands (the synthetic
+  // /resume + clear/help/cancel) then 2 skills sorted alphabetically (Code
+  // Review, Web Research) — 6 rows total, indices 0-5, with the
+  // commands→skills SECTION boundary falling between index 3 and index 4.
+  // Cycling ArrowDown across that boundary is exactly the case a
+  // per-section (rather than global) highlight bug would miss.
+  it('aria-activedescendant always identifies the DOM element carrying aria-selected="true", stepping ArrowDown across the commands→skills section boundary, and every option id is unique', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+    act(() => { fireEvent.change(input, { target: { value: '/' } }) })
+
+    const initialOptions = screen.getAllByRole('option')
+    expect(initialOptions).toHaveLength(6)
+    // Option ids must be unique — a duplicate id would make getElementById
+    // resolve to the WRONG row (the first match) without any test noticing,
+    // silently invalidating every activedescendant assertion below.
+    const ids = initialOptions.map((o) => o.id)
+    expect(new Set(ids).size).toBe(ids.length)
+
+    function assertActivedescendantMatchesSelectedRow() {
+      const activedescendant = input.getAttribute('aria-activedescendant')
+      expect(activedescendant).toBeTruthy()
+      const resolved = document.getElementById(activedescendant!)
+      expect(resolved).not.toBeNull()
+      expect(resolved).toHaveAttribute('role', 'option')
+      expect(resolved).toHaveAttribute('aria-selected', 'true')
+      // Exactly one row selected at a time — activedescendant is never
+      // ambiguous between two simultaneously-"selected" rows.
+      expect(document.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1)
+      return resolved!
+    }
+
+    // Index 0 (initial highlight) — a command row.
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+
+    // Step through indices 1, 2, 3 — still inside the Commands section.
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 1: /clear
+    assertActivedescendantMatchesSelectedRow()
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 2: /help
+    assertActivedescendantMatchesSelectedRow()
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 3: /cancel — last Commands row
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/cancel')
+
+    // Cross the section boundary: index 3 (Commands) -> index 4 (Skills).
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/code-review')
+
+    // Index 5 — still Skills.
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/web-research')
+
+    // Wraps back to index 0 (Commands) — the boundary is crossed in both directions.
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+  })
+})
+
+describe('Composer combobox ARIA — "@" mention mode (F3 hardening: same contract as "/")', () => {
+  it('the "@" agent-mention menu carries the identical combobox ARIA contract — role=combobox on the textarea, role=listbox on the menu, role=option rows, and a matching aria-activedescendant', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '@' } }) })
+
+    expect(input).toHaveAttribute('role', 'combobox')
+    expect(input).toHaveAttribute('aria-expanded', 'true')
+    expect(input).toHaveAttribute('aria-controls', 'composer-slash-menu')
+
+    const menu = screen.getByTestId('slash-menu')
+    expect(menu).toHaveAttribute('role', 'listbox')
+    expect(menu).toHaveAttribute('id', 'composer-slash-menu')
+
+    // Fixture: 2 chat-eligible agents (Alpha, Bravo) — see mockAgents above.
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(2)
+    for (const option of options) {
+      expect(option).toHaveAttribute('tabindex', '-1')
+      expect(option.id).toMatch(/^composer-option-\d+$/)
+    }
+
+    expect(input).toHaveAttribute('aria-activedescendant', 'composer-option-0')
+    expect(document.getElementById('composer-option-0')).toHaveAttribute('aria-selected', 'true')
+    expect(document.getElementById('composer-option-0')?.textContent).toContain('Alpha')
+
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+    expect(input).toHaveAttribute('aria-activedescendant', 'composer-option-1')
+    expect(document.getElementById('composer-option-1')).toHaveAttribute('aria-selected', 'true')
+    expect(document.getElementById('composer-option-1')?.textContent).toContain('Bravo')
+    // The previously-highlighted row is no longer selected.
+    expect(document.getElementById('composer-option-0')).toHaveAttribute('aria-selected', 'false')
+  })
 })
 
 describe('Composer combobox ARIA — menu container and rows (deferred item 2)', () => {
@@ -296,8 +399,6 @@ describe('Composer combobox ARIA — menu container and rows (deferred item 2)',
   })
 
   it('mouse selection (onMouseDown) still works on role="option" rows — the ARIA changes did not remove mouse selection', () => {
-    const mockSetText = vi.fn()
-    void mockSetText
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })

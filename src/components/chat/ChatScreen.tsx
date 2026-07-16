@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -66,7 +66,7 @@ import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentC
 import { cn, initialOf } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
-import { useSlashMenu } from '@/hooks/useSlashMenu'
+import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
 
@@ -624,8 +624,32 @@ function StaticCopyButton({ text }: { text: string }) {
   )
 }
 
-/** Standalone assistant message row for the virtualizer (historical / completed messages). */
-function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
+/**
+ * Standalone assistant message row for the virtualizer (historical / completed messages).
+ *
+ * Perf (gate 5 MEDIUM): wrapped in React.memo. Prop-identity correctness —
+ * `message` is a safe memo key: the chat store (src/store/chat.ts) keeps
+ * every message in an Immer-backed `messagesById` map, and every mutation
+ * path goes through `produce()` (or an equivalent single-key replace inside
+ * `withBucket`/`applyMessageArray`). Immer's structural sharing means a
+ * `produce()` call that touches ONE message only allocates a new object
+ * identity for THAT message (and the containing `messagesById`/array
+ * wrappers) — every sibling message keeps its exact prior object reference.
+ * `getMessages()`/`bucketToForeground()` (chat.ts) rebuild the top-level
+ * `messages` ARRAY on every store update (so the array itself always has a
+ * new identity), but each ELEMENT of that array is the same reference as
+ * before unless that specific message was baked/edited. Since this
+ * component is invoked per-row with its own `message` element (never the
+ * whole array), React.memo's default shallow prop comparison — Object.is on
+ * `message` and `liteMode` — correctly skips re-rendering any row whose
+ * underlying message object is referentially unchanged, even though the
+ * parent's `messages` array (and therefore the JSX call each render) is
+ * rebuilt every time. This is exactly the "replaces message objects by
+ * reference on bake" contract the memo key relies on — verified against
+ * chat.ts's `produce`/`withBucket`/`applyMessageArray`/`getMessages`, not
+ * assumed.
+ */
+const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
@@ -643,6 +667,29 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
   // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
   const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
   const storeToolCallIds = positionedToolCalls.map((tc) => tc.id)
+
+  // Perf (gate 5 MEDIUM): memoized on the message's OWN content/tool_calls
+  // fields (not the derived `positionedToolCalls`, which gets a brand-new
+  // `[]` identity every render whenever message.tool_calls is undefined —
+  // keying on that would defeat the memo, recomputing every render exactly
+  // like before). splitMessageParts does real work (a sort + a content
+  // slice per positioned call) that was previously re-run inline in JSX on
+  // every render of this row, including renders triggered by state this
+  // row doesn't even display (e.g. liteMode toggling on OTHER rows, before
+  // the React.memo above cut most of those). This memo is still valuable
+  // even with the row memoized: message.content mutates in place many
+  // times per second while a turn is streaming (each `token` frame), so
+  // this row itself legitimately re-renders often — the memo just stops
+  // re-running the split when a re-render was triggered by something OTHER
+  // than a content/tool_calls change (e.g. liteMode).
+  const messageParts = useMemo(
+    () => splitMessageParts(message.content ?? '', positionedToolCalls),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the
+    // message's raw fields (stable references unless the message actually
+    // changed), not the freshly-allocated `positionedToolCalls` derived
+    // above — see comment.
+    [message.content, message.tool_calls],
+  )
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -739,7 +786,7 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
               text-segment boundary — so the finished view now matches what
               was on screen while it was still streaming, instead of
               (incorrectly) rendering the paragraph as one unbroken block. */}
-          {splitMessageParts(message.content ?? '', positionedToolCalls).map((part, idx) => {
+          {messageParts.map((part, idx) => {
             if (part.type === 'text') {
               return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
             }
@@ -819,7 +866,7 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
       </div>
     </div>
   )
-}
+})
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
 function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
@@ -1318,6 +1365,66 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // what's actually rendered.
   const menuIsRendered = slashMenu.shouldShowSlash && slashMenu.slashOpen && hasMenuContent
 
+  // ARIA clamp (gates 2+4): `slashMenu.slashHighlight` can point at an index
+  // that no longer exists in `slashItems` for exactly one render — the
+  // highlight is reset to 0 by a useEffect INSIDE useSlashMenu.ts (keyed on
+  // the joined item keys), which necessarily runs AFTER the render where the
+  // list already narrowed (e.g. a keystroke shrinks slashItems from 5 rows
+  // to 2 while slashHighlight was still 3 from the previous, longer list).
+  // Between that render and the effect's correction, an UNCLAMPED
+  // `aria-activedescendant`/`aria-selected`/`data-highlighted` would
+  // reference a row that doesn't exist in the DOM this render — invisible to
+  // sighted users (no row LOOKS highlighted either, since the loop below
+  // never finds `globalIndex === 3` in a 2-item list) but a broken/absent
+  // announcement for screen-reader users, who rely on activedescendant
+  // pointing at a real, currently-rendered option. Clamping at render time
+  // (rather than waiting for the effect) means these ARIA attributes are
+  // always consistent with what's actually in the DOM THIS render,
+  // regardless of when the highlight-reset effect catches up. `undefined`
+  // when there are zero items — there is no valid index to clamp to.
+  const clampedSlashHighlight =
+    slashMenu.slashItems.length > 0
+      ? Math.min(slashMenu.slashHighlight, slashMenu.slashItems.length - 1)
+      : undefined
+
+  // Cap-footer copy (gate 2 LOW) + SR gap (gate 4 MODERATE): single source of
+  // truth for the currently-active capped section's overflow state, shared
+  // by the VISIBLE "+N more" footer row below AND its sr-only announcement
+  // mirror (menuFooterAnnouncement) — computed once so the two can never say
+  // different things. Only one capped section can be showing a footer at a
+  // time: "/" mode caps skills (commands has no cap), "@" mode caps agents,
+  // and the two triggers are mutually exclusive by construction (see
+  // useSlashMenu.ts's file header), so `isMentionMode` alone picks the right
+  // count.
+  const activeSectionHiddenCount = slashMenu.isMentionMode ? slashMenu.agentsHiddenCount : slashMenu.skillsHiddenCount
+  // Cap-footer copy (gate 2 LOW): in the "/skills" special-filter state (D9
+  // — exact input "/skills" shows every skill, capped, ignoring "skills"
+  // itself as a filter string), "keep typing to narrow" is impossible advice
+  // — ANY further keystroke changes inputValue away from the exact
+  // "/skills" string, which ENDS this special view rather than narrowing it
+  // (the next filter is evaluated as a normal skill-name prefix/substring
+  // match against the new text, not a continuation of "showing everything").
+  // Switch to a purely informational count in that state instead of a CTA
+  // that can't do what it claims.
+  const footerCopy =
+    activeSectionHiddenCount > 0
+      ? slashMenu.isSkillsFilter
+        ? `Showing ${SECTION_CAP} of ${SECTION_CAP + activeSectionHiddenCount} skills`
+        : `+${activeSectionHiddenCount} more — keep typing to narrow`
+      : null
+  // SR gap (gate 4 MODERATE): sr-only mirror of the same cap state, worded
+  // for a listener with no visual context of the row list above it. Reuses
+  // the exact same activeSectionHiddenCount/isSkillsFilter inputs as
+  // `footerCopy` so the two can never drift on the underlying numbers, even
+  // though the wording is deliberately more explicit for a non-visual
+  // medium.
+  const menuFooterAnnouncement =
+    activeSectionHiddenCount > 0
+      ? slashMenu.isSkillsFilter
+        ? `${SECTION_CAP} of ${SECTION_CAP + activeSectionHiddenCount} skills shown`
+        : `${SECTION_CAP} options shown, ${activeSectionHiddenCount} more — keep typing`
+      : null
+
   // Deferred item 2: replaces the old inline ref-callback scroll hack (which
   // called `el.scrollIntoView()` from INSIDE a per-row `ref` callback on
   // every render where that row happened to be the highlighted one — a side
@@ -1329,11 +1436,21 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // `getElementById` — no ref plumbing needed since ids are already unique
   // within this single-instance composer (verified: OmnipusComposer has
   // exactly one call site, ChatScreen.tsx's own render below).
+  //
+  // Scroll effect (gate 2 LOW): also keyed on the item-SET (joined item
+  // keys), not just the numeric highlight index. Without this, a keystroke
+  // that changes WHICH items are at each index (e.g. a filter narrowing from
+  // one set of skills to a different set, where the highlighted numeric
+  // index happens to stay the same) never re-ran this effect — the row now
+  // highlighted at that index could be freshly scrolled off-screen with
+  // nothing to bring it back into view, since neither `menuIsRendered` nor
+  // `slashHighlight` (the number) changed.
+  const menuItemKeysForScroll = slashMenu.slashItems.map((i) => i.key).join(',')
   useEffect(() => {
     if (!menuIsRendered) return
     const highlighted = document.getElementById(`composer-option-${slashMenu.slashHighlight}`)
     highlighted?.scrollIntoView({ block: 'nearest' })
-  }, [menuIsRendered, slashMenu.slashHighlight])
+  }, [menuIsRendered, slashMenu.slashHighlight, menuItemKeysForScroll])
 
   // Top-level keydown orchestration.
   //
@@ -1429,6 +1546,31 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           nothing actually changed. */}
       <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="agent-mention-announcement">
         {slashMenu.mentionAnnouncement && <span>Now chatting with {slashMenu.mentionAnnouncement}</span>}
+      </div>
+
+      {/* SR gap (gate 4 MODERATE): the "Commands unavailable" error row
+          inside the listbox below is deliberately `role="presentation"` —
+          excluded from the listbox's accessible option children (see that
+          row's own comment) — which means it is entirely silent to screen
+          readers: a sighted user sees the italic error text, but nothing is
+          ever announced. Mirror it (and the cap-footer's overflow state —
+          see `menuFooterAnnouncement` above) into a dedicated sr-only
+          `role="status"` region OUTSIDE the listbox, reusing the same
+          sr-only live-region pattern as the "@" mention announcement just
+          above, so both states reach assistive tech without changing a
+          single visible pixel of the rows themselves. Unconditionally
+          mounted (content conditionally populated) — a live region must
+          already exist in the DOM before its content changes for most
+          screen readers to reliably announce the change; a freshly-mounted
+          region with content already inside it is not guaranteed to fire.
+          `role="status"` carries an implicit `aria-live="polite"` +
+          `aria-atomic="true"`, matching the pattern above explicitly for
+          clarity. */}
+      <div role="status" aria-atomic="true" className="sr-only" data-testid="slash-menu-status">
+        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
+          <span>Commands unavailable</span>
+        )}
+        {menuIsRendered && menuFooterAnnouncement && <span>{menuFooterAnnouncement}</span>}
       </div>
 
       {fileUpload.isDragging && !attachDisabled && (
@@ -1614,7 +1756,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   type="button"
                   id={`composer-option-${globalIndex}`}
                   role="option"
-                  aria-selected={globalIndex === slashMenu.slashHighlight}
+                  aria-selected={globalIndex === clampedSlashHighlight}
                   // Deferred item 2 (APG combobox pattern, amends the eb4de2a2
                   // blanket tabIndex=0 stamp for THIS widget specifically):
                   // options inside a combobox's listbox popup are NOT
@@ -1640,10 +1782,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   // string below (which stays purely presentational; `undefined`
                   // when not highlighted, so the attribute doesn't render at all
                   // rather than serializing as `data-highlighted="false"`).
-                  data-highlighted={globalIndex === slashMenu.slashHighlight || undefined}
+                  data-highlighted={globalIndex === clampedSlashHighlight || undefined}
                   className={cn(
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
-                    globalIndex === slashMenu.slashHighlight
+                    globalIndex === clampedSlashHighlight
                       ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
                       : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
                   )}
@@ -1710,7 +1852,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     role="presentation"
                     className="px-3 py-1.5 text-[10px] text-[var(--color-muted)] italic"
                   >
-                    +{sectionHiddenCount} more — keep typing to narrow
+                    {/* Cap-footer copy fix (gate 2 LOW): `footerCopy` (declared
+                        above, alongside `menuIsRendered`) already accounts for
+                        the "/skills" special-filter state, where "keep typing
+                        to narrow" is impossible advice — see its own comment.
+                        `sectionHiddenCount > 0` here is guaranteed to equal the
+                        `activeSectionHiddenCount` `footerCopy` was computed
+                        from (only one capped section can be rendering a footer
+                        at a time — "/" caps skills, "@" caps agents, and the
+                        two triggers are mutually exclusive), so reusing the
+                        single shared value here (rather than re-deriving the
+                        copy per-row) is exactly correct, not a coincidence. */}
+                    {footerCopy}
                   </div>
                 )}
               </React.Fragment>
@@ -1823,7 +1976,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               // (cursor-not-allowed/opacity) on isStreaming via the className
               // below, not the disabled attribute.
               disabled={!inputEnabled}
-              aria-disabled={!inputEnabled || isStreaming || undefined}
+              // aria-disabled (gate 4 LOW): deliberately does NOT include
+              // isStreaming. `disabled` (native, above) is likewise gated on
+              // `!inputEnabled` alone — the textarea genuinely accepts
+              // keystrokes mid-stream by design (FR-3a: the slash menu must
+              // stay reachable while a turn is streaming). Including
+              // isStreaming here previously told assistive tech the input
+              // was disabled mid-turn even though it demonstrably was not —
+              // a screen-reader user would be misinformed that they could
+              // not type, when they could. Submission-blocking during a
+              // stream is conveyed by the Stop button replacing Send (see
+              // the ternary below), not by marking the TEXT INPUT disabled.
+              aria-disabled={!inputEnabled || undefined}
               rows={1}
               cancelOnEscape={false}
               className={cn(
@@ -1861,8 +2025,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               // useSlashMenu.ts's Fix D) — there is no real option for the id
               // to point at in either case.
               aria-activedescendant={
-                menuIsRendered && slashMenu.slashItems.length > 0
-                  ? `composer-option-${slashMenu.slashHighlight}`
+                menuIsRendered && clampedSlashHighlight !== undefined
+                  ? `composer-option-${clampedSlashHighlight}`
                   : undefined
               }
               aria-autocomplete="list"

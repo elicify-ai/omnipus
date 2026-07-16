@@ -23,12 +23,11 @@
  */
 
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { Globe, Terminal, CheckCircle, ArrowsClockwise, XCircle } from '@phosphor-icons/react'
+import { Globe, Terminal } from '@phosphor-icons/react'
 import { type ServeWorkspaceResult as ServeWorkspaceIframeResult, type RunInWorkspaceResult as RunInWorkspaceIframeResult } from '@/lib/api'
 import { hasPreviewShape } from '@/lib/preview-url'
 import { IframePreview } from '../IframePreview'
 import { PreviewToolHeader } from './PreviewToolHeader'
-import { cn } from '@/lib/utils'
 
 // ── Result types ──────────────────────────────────────────────────────────────
 
@@ -106,7 +105,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
     // rounded/bordered/backgrounded error card is a border-l-2 left accent
     // instead — matches GenericToolCall.tsx's marshal-error/delegation-denied
     // banners. This is the only frame WebServeUI itself owns; PreviewToolHeader
-    // (used above by WebServeBlock) is a sibling's file — left untouched.
+    // (used above by WebServeBlock) was restyled separately (commit 48325168).
     <div data-testid="webserve-malformed-block" className="mt-2 border-l-2 border-[var(--color-error)]/40 pl-2.5 py-1 text-xs space-y-1.5">
       <p className="text-[var(--color-error)]">
         web_serve tool returned a malformed result — cannot render preview.
@@ -154,14 +153,6 @@ export function WebServeBlock({
   const isDevMode = effectiveKind === 'dev' ||
     (effectiveKind === null && (typeof args.command === 'string' || typeof args.port === 'number'))
 
-  const statusIcon = isRunning ? (
-    <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-  ) : typedResult ? (
-    <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-  ) : (
-    <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
-  )
-
   const portChip =
     isDevMode && port !== undefined ? (
       <span className="text-[var(--color-muted)] font-mono">:{port}</span>
@@ -199,35 +190,25 @@ export function WebServeBlock({
     <div className="mt-2 text-xs">
       <PreviewToolHeader
         data-testid="webserve-tool-header"
+        // Mode icon (Terminal/Globe) is a fixed, muted glyph — it identifies
+        // WHICH kind of preview this is (dev server vs static), never the
+        // call's status. Status lives only in PreviewToolHeader's own
+        // leading dot/spinner; tinting this icon by isRunning/typedResult
+        // (the old behavior) duplicated that signal and, in static mode,
+        // rendered a SECOND running spinner alongside the header's own.
         icon={
           isDevMode ? (
-            <Terminal
-              size={13}
-              className={cn(
-                isRunning
-                  ? 'text-[var(--color-accent)] animate-pulse'
-                  : typedResult
-                  ? 'text-[var(--color-success)]'
-                  : 'text-[var(--color-error)]',
-              )}
-            />
+            <Terminal size={13} className="text-[var(--color-muted)]" />
           ) : (
-            <Globe
-              size={13}
-              weight="duotone"
-              className={cn(
-                isRunning
-                  ? 'text-[var(--color-accent)]'
-                  : typedResult
-                  ? 'text-[var(--color-success)]'
-                  : 'text-[var(--color-error)]',
-              )}
-            />
+            <Globe size={13} weight="duotone" className="text-[var(--color-muted)]" />
           )
         }
         toolName={toolName}
         label={isDevMode ? (command || undefined) : (pathLabel || undefined)}
-        trailing={isDevMode ? portChip : statusIcon}
+        // Static mode has no trailing chip — the header's own leading dot
+        // already carries status (see comment above); a second trailing
+        // status icon here was a duplicate/triplicate status render.
+        trailing={isDevMode ? portChip : undefined}
         isRunning={isRunning}
         hasResult={typedResult !== null}
       />
