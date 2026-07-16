@@ -156,9 +156,39 @@ export function useCancelState(isStreaming: boolean, cancelStream: () => void): 
   // reaching this handler. So: menu open → this function never runs for that
   // keypress; menu closed (including "closed by the Escape that just ran") →
   // this function runs normally, e.g. on the immediately-following Escape.
+  //
+  // bugfixes3 deferred Fix (item 5): the menu-close branch above is the only
+  // one that stops propagation — ChatScreen.handleKeyDown's OWN cancel-Escape
+  // branch (the `isStreaming || stopLabel === 'stopping'` guard) calls
+  // `e.preventDefault()` and then `cancelState.cancelIfStreaming()` directly,
+  // but does NOT stopPropagation. That keydown therefore still bubbles all
+  // the way to `document`, where — before this `defaultPrevented` check
+  // existed — this handler ran its OWN `shouldCancel` check (unconditioned
+  // on how the event got here), found `liveState.isStreaming` still true, and
+  // called `cancelStream()` a SECOND time for the exact same keypress. A
+  // focused-textarea Escape mid-stream was thus double-dispatching: once via
+  // the React synthetic handler, once via this native listener. Skipping
+  // whenever `e.defaultPrevented` fixes this for that specific case (the
+  // synthetic handler already called preventDefault before this listener
+  // ever sees the event) while leaving the FR-23/T23 unfocused-Escape case
+  // untouched — with no textarea focused, no React onKeyDown runs at all, so
+  // `defaultPrevented` is still false by the time this listener fires and
+  // cancellation proceeds exactly as before. Verified no OTHER Escape
+  // producer in the app relies on this listener ALSO firing after its own
+  // preventDefault: grep for `key === 'Escape'` across src/ turns up
+  // Sidebar.tsx, image-lightbox.tsx, WorkspaceHeader.tsx, SearchModal.tsx,
+  // and BrowserLiveView.tsx — none of them intend to also cancel an
+  // unrelated, possibly-backgrounded chat stream as a side effect of their
+  // own Escape handling; the ones that DO call preventDefault (SearchModal's
+  // title-edit-cancel, BrowserLiveView's driving-mode release) were
+  // incidentally reaching this listener too and could double-fire a stream
+  // cancel that had nothing to do with what the user was doing — this check
+  // removes that unintended coupling as a side effect, not just the
+  // documented double-dispatch.
   useEffect(() => {
     function handleGlobalEscape(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
+      if (e.defaultPrevented) return
       // Read live state from the store — bypasses the stale React closure
       // value for isStreaming.
       const liveState = useChatStore.getState()

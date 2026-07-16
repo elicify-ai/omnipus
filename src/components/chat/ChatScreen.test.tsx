@@ -66,8 +66,16 @@ vi.mock('@assistant-ui/react', () => {
           'data-testid': 'composer-input',
         }),
       // The mock Send button accepts an onClick so test code can wire
-      // up the assistant-ui onNew path. In production, ComposerPrimitive.Send
-      // calls composer.send() internally — the onClick prop is a noop there.
+      // up the assistant-ui onNew path. bugfixes3 deferred item 1: in
+      // production ComposerPrimitive.Send now receives a REAL onClick from
+      // ChatScreen.tsx (the send-path client-command interception — mirrors
+      // onSubmit's interceptClientCommand() check) — it is composed with the
+      // internal composer.send() callback via assistant-ui's
+      // composeEventHandlers (checkForDefaultPrevented=true), NOT a noop. This
+      // file doesn't click chat-send in any of its own tests, so the simpler
+      // passthrough here (no defaultPrevented-aware gating of a "send"
+      // callback) is sufficient — see ChatScreen.send-button-intercept.test.tsx
+      // for the dedicated coverage of that composeEventHandlers behavior.
       Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick }: {
         disabled?: boolean; children?: React.ReactNode; className?: string;
         'data-testid'?: string; 'aria-label'?: string; onClick?: () => void

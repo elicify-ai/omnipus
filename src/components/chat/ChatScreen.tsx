@@ -1285,6 +1285,32 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     slashMenu.slashItems.length > 0 ||
     (slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode)
 
+  // Deferred item 2: single source of truth for "the menu is actually
+  // mounted right now" — reused by the render gate below, the combobox
+  // `aria-expanded`/`aria-controls`/`aria-activedescendant` on the textarea,
+  // and the scroll-into-view effect just below. Previously this exact
+  // three-way `&&` was duplicated inline at the JSX render site; centralizing
+  // it means the ARIA attributes literally cannot drift out of sync with
+  // what's actually rendered.
+  const menuIsRendered = slashMenu.shouldShowSlash && slashMenu.slashOpen && hasMenuContent
+
+  // Deferred item 2: replaces the old inline ref-callback scroll hack (which
+  // called `el.scrollIntoView()` from INSIDE a per-row `ref` callback on
+  // every render where that row happened to be the highlighted one — a side
+  // effect smuggled into a ref callback, re-running on every re-render of
+  // the menu, not just on highlight changes). A `useEffect` keyed on the
+  // highlight index (and whether the menu is even mounted) runs exactly
+  // once per actual highlight change; the row's `id` (composer-option-N,
+  // assigned in the render loop below) makes the lookup a plain
+  // `getElementById` — no ref plumbing needed since ids are already unique
+  // within this single-instance composer (verified: OmnipusComposer has
+  // exactly one call site, ChatScreen.tsx's own render below).
+  useEffect(() => {
+    if (!menuIsRendered) return
+    const highlighted = document.getElementById(`composer-option-${slashMenu.slashHighlight}`)
+    highlighted?.scrollIntoView({ block: 'nearest' })
+  }, [menuIsRendered, slashMenu.slashHighlight])
+
   // Top-level keydown orchestration.
   //
   // Fix 3 (precedence): menu-close now wins over stream-cancel. Previously
@@ -1478,12 +1504,29 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           transition, making the `section` field load-bearing and removing the
           duplicate render blocks + the off-by-one `globalIndex` variable.
           FR-014/R3: skill items show their argument_hint as muted help text.
-          Fix E: also gated on `hasMenuContent` (declared above, alongside
-          `slashMenu`) — `shouldShowSlash` alone can be true with nothing to
-          actually render; see that constant's own comment. */}
-      {slashMenu.shouldShowSlash && slashMenu.slashOpen && hasMenuContent && (
+          Fix E / deferred item 2: gated on `menuIsRendered` (declared above,
+          alongside `slashMenu`), which folds in `hasMenuContent` —
+          `shouldShowSlash` alone can be true with nothing to actually
+          render; see that constant's own comment.
+
+          Deferred item 2 (W3C APG combobox pattern): this container is the
+          combobox's `listbox` — `role="listbox"`, a stable `id` the
+          textarea's `aria-controls` points to, and an `aria-label` since the
+          listbox has no visible heading of its own (its rows have section
+          headers, but the LISTBOX itself doesn't). Rows below are
+          `role="option"` with `tabIndex={-1}` (NOT 0 — see the row's own
+          comment) and `aria-selected`; the textarea (ChatScreen.tsx's
+          ComposerPrimitive.Input, below) carries
+          `aria-activedescendant={composer-option-${slashHighlight}}` so
+          screen readers announce the highlighted row without moving DOM
+          focus off the input, per APG's combobox-with-listbox-popup
+          pattern. */}
+      {menuIsRendered && (
         <div
           data-testid="slash-menu"
+          id="composer-slash-menu"
+          role="listbox"
+          aria-label="Commands, skills and agents"
           // max-h + scroll: the menu opens UPWARD from the composer, so a tall
           // list (many commands + skills) pushed its top rows above the
           // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
@@ -1502,10 +1545,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               isMentionMode from the "keep the menu open on error" carve-out.
               Without this clause the row leaked into the "@" menu whenever
               the commands query happened to be erroring, even though the
-              "@" menu has nothing to do with commands. */}
+              "@" menu has nothing to do with commands.
+              Deferred item 2: `role="presentation"` — this row is
+              informational text, not a selectable listbox option; without
+              this it would silently pollute the `listbox`'s accessible
+              children with a non-option row. */}
           {slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
             <div
               data-testid="slash-commands-error"
+              role="presentation"
               className="px-3 py-2 text-xs text-[var(--color-error)] italic"
             >
               Commands unavailable
@@ -1514,27 +1562,51 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           {slashMenu.slashItems.map((item, globalIndex) => {
             const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
             const isFirstInSection = item.section !== prevSection
+            const nextSection = globalIndex < slashMenu.slashItems.length - 1 ? slashMenu.slashItems[globalIndex + 1].section : null
+            const isLastInSection = item.section !== nextSection
+            // Deferred item 3: the section's overflow count, rendered as a
+            // muted footer row right after that section's last visible row.
+            // Only skills/agents are capped (commands has no cap — see
+            // useSlashMenu.ts) — 0 for commands, so the footer simply never
+            // renders there.
+            const sectionHiddenCount =
+              item.section === 'skills' ? slashMenu.skillsHiddenCount :
+              item.section === 'agents' ? slashMenu.agentsHiddenCount : 0
             return (
               <React.Fragment key={item.key}>
                 {isFirstInSection && (
-                  <div className={cn(
-                    'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
-                    globalIndex === 0
-                      ? 'border-b border-[var(--color-border)]'
-                      : 'border-t border-[var(--color-border)]',
-                  )}>
+                  <div
+                    role="presentation"
+                    className={cn(
+                      'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
+                      globalIndex === 0
+                        ? 'border-b border-[var(--color-border)]'
+                        : 'border-t border-[var(--color-border)]',
+                    )}>
                     {item.section === 'commands' ? 'Commands' : item.section === 'skills' ? 'Skills' : 'Agents'}
                   </div>
                 )}
-                <button tabIndex={0}
+                <button
                   type="button"
-                  ref={(el) => {
-                    // Keep the keyboard-highlighted row visible inside the
-                    // scroll-capped menu as ArrowUp/Down move the highlight.
-                    if (el && globalIndex === slashMenu.slashHighlight) {
-                      el.scrollIntoView({ block: 'nearest' })
-                    }
-                  }}
+                  id={`composer-option-${globalIndex}`}
+                  role="option"
+                  aria-selected={globalIndex === slashMenu.slashHighlight}
+                  // Deferred item 2 (APG combobox pattern, amends the eb4de2a2
+                  // blanket tabIndex=0 stamp for THIS widget specifically):
+                  // options inside a combobox's listbox popup are NOT
+                  // separately tabbable — focus stays on the textarea the
+                  // whole time the menu is open (that's the entire point of
+                  // aria-activedescendant), and ArrowUp/ArrowDown move the
+                  // active-descendant highlight without ever moving real DOM
+                  // focus. tabIndex=0 here was actively harmful: Tab-focusing
+                  // a row started the textarea's 150ms blur-close timer
+                  // (onInputBlur, useSlashMenu.ts), which unmounted the menu
+                  // out from under the just-focused row and dropped focus to
+                  // `body` — a keyboard dead end. Selection still works via
+                  // onMouseDown (mouse) and Enter (keyboard, through the
+                  // textarea's own onKeyDown → slashMenu.handleKeyDown) —
+                  // neither depends on this button ever receiving focus.
+                  tabIndex={-1}
                   // "@" mention menu rows only — mirrors the slash-command/skill
                   // rows' shared markup exactly, so this testid is additive
                   // rather than a fork of the row.
@@ -1599,6 +1671,24 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
                   )}
                 </button>
+                {/* Deferred item 3: "+N more" footer — rendered right after
+                    the LAST visible row of a capped section that still has
+                    overflow. Deliberately `role="presentation"` and OUTSIDE
+                    `slashMenu.slashItems` entirely (not just visually
+                    de-emphasized) — it is not part of `globalIndex`'s
+                    sequence, so it can never receive an
+                    `id="composer-option-N"`, can never be `aria-selected`,
+                    and ArrowUp/ArrowDown (which cycle modulo
+                    `slashItems.length`) can never land the highlight on it. */}
+                {isLastInSection && sectionHiddenCount > 0 && (
+                  <div
+                    data-testid="slash-menu-footer"
+                    role="presentation"
+                    className="px-3 py-1.5 text-[10px] text-[var(--color-muted)] italic"
+                  >
+                    +{sectionHiddenCount} more — keep typing to narrow
+                  </div>
+                )}
               </React.Fragment>
             )
           })}
@@ -1725,6 +1815,33 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
               )}
               aria-label="Message input"
+              // Deferred item 2 (W3C APG combobox pattern — combobox with
+              // listbox popup). Verified against node_modules/@assistant-ui/
+              // react/dist/primitives/composer/ComposerInput.js: the real
+              // ComposerPrimitive.Input destructures a fixed, small prop list
+              // (autoFocus/asChild/render/disabled/onChange/onKeyDown/onPaste/
+              // onSelect/submitOnEnter/submitMode/cancelOnEscape/unstable_*/
+              // addAttachmentOnPaste) and spreads everything ELSE — including
+              // `role` and any `aria-*` prop — via `...rest` straight onto the
+              // underlying `TextareaAutosize` element (only overridden if this
+              // app used `Unstable_TriggerPopoverRoot`, which it doesn't — that
+              // context is optional and unset here). So `role="combobox"` and
+              // the aria-* props below reach the real DOM node unmodified; no
+              // fallback is needed.
+              role="combobox"
+              aria-expanded={menuIsRendered}
+              aria-controls={menuIsRendered ? 'composer-slash-menu' : undefined}
+              // Undefined (not rendered) when the menu is closed OR has zero
+              // navigable items (the LOW S8 commandsError carve-out can leave
+              // shouldShowSlash true with slashItems empty — see
+              // useSlashMenu.ts's Fix D) — there is no real option for the id
+              // to point at in either case.
+              aria-activedescendant={
+                menuIsRendered && slashMenu.slashItems.length > 0
+                  ? `composer-option-${slashMenu.slashHighlight}`
+                  : undefined
+              }
+              aria-autocomplete="list"
               onChange={(e) => {
                 const val = (e.target as HTMLTextAreaElement).value
                 slashMenu.onInputChange(val)
@@ -1800,30 +1917,47 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // Fix 3: when reconnecting (fast or slow), allow send — messages go to
             // the outbound queue and drain automatically on reconnect.
             //
-            // Native ComposerPrimitive.Send (bugfixes3 sign-off — J correction):
-            // verified against node_modules/@assistant-ui/react/dist/utils/
-            // createActionButton.js + primitives/composer/ComposerSend.js — the
-            // Send button renders a plain `type="button"` whose onClick calls
-            // `composer.send()` DIRECTLY, NOT `form.requestSubmit()`. A mouse
-            // click on Send therefore NEVER fires this ComposerPrimitive.Root's
-            // onSubmit above — Send and Enter do NOT go through an identical code
-            // path. The isStreaming preventDefault guard, interceptClientCommand(),
-            // and the Fix-4 mirror resync all live in onSubmit and only run for a
-            // keyboard Enter submit. (Known, NOT fixed here: a typed client command
-            // like "/new" sent via a mouse click on this button skips
-            // interceptClientCommand and reaches the backend as literal chat text —
-            // filed as a follow-up issue, not this fix round's scope.) The
-            // text-mirror staleness this split caused is fixed separately and
-            // generally in useSlashMenu.ts (Fix A), which subscribes directly to
-            // composerRuntime so `inputValue` stays correct after ANY out-of-band
-            // clear — click-Send included, not just this one path. Send still
-            // auto-disables when the composer is empty (no text and no
-            // attachments) via the runtime's canSend, so no manual empty-check is
-            // needed here.
+            // Native ComposerPrimitive.Send (bugfixes3 sign-off — J correction;
+            // FIXED bugfixes3 deferred item 1, below): verified against
+            // node_modules/@assistant-ui/react/dist/utils/createActionButton.js +
+            // primitives/composer/ComposerSend.js — the Send button is built via
+            // createActionButton, which renders a plain `type="button"` whose
+            // onClick is `composeEventHandlers(primitiveProps.onClick, callback)`
+            // (from `@radix-ui/primitive`, checkForDefaultPrevented=true by
+            // default — verified in node_modules/@radix-ui/primitive/dist/
+            // index.js): OUR `onClick` prop below runs FIRST; `callback` (which
+            // invokes `composer.send()` DIRECTLY, NOT `form.requestSubmit()`) only
+            // runs afterward if our handler did NOT call `e.preventDefault()`. A
+            // mouse click on Send therefore never fires this ComposerPrimitive.
+            // Root's onSubmit above — Send and Enter do NOT share a code path —
+            // so the interception below intentionally duplicates (not reuses)
+            // onSubmit's `interceptClientCommand()` check for this button's own
+            // click path, converging typed-"/new"-then-click-Send with
+            // typed-"/new"-then-Enter.
+            //
+            // No isStreaming guard here (unlike onSubmit's own preventDefault
+            // check): this button is swapped for the Stop button above whenever
+            // `isStreaming || cancelState.stopLabel === 'stopping'` is true, so
+            // ComposerPrimitive.Send is never even mounted while a turn is
+            // streaming — verified against the ternary a few lines up — there is
+            // no click path to guard against.
+            //
+            // The Fix-4 text-mirror resync (onSubmit, above) is NOT duplicated
+            // here either: it is unconditionally handled by useSlashMenu.ts's Fix
+            // A, which subscribes directly to composerRuntime so `inputValue`
+            // stays correct after ANY out-of-band clear — click-Send included,
+            // not just the keyboard path. Send still auto-disables when the
+            // composer is empty (no text and no attachments) via the runtime's
+            // canSend, so no manual empty-check is needed here either.
             <ComposerPrimitive.Send
               disabled={!inputEnabled || isReplaying}
               data-testid="chat-send"
               tabIndex={6}
+              onClick={(e) => {
+                if (slashMenu.interceptClientCommand()) {
+                  e.preventDefault()
+                }
+              }}
               className={cn(
                 'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying

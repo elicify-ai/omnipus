@@ -279,19 +279,22 @@ describe('"@" agent-mention menu — opens and lists scoped agents', () => {
 })
 
 describe('"@" agent-mention menu — filtering', () => {
-  it('typing "@m" filters to agents whose NAME starts with "m" (case-insensitive)', () => {
+  it('typing "@m" filters to agents whose NAME prefix- or substring-matches "m" (case-insensitive)', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
 
     act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
 
+    // Deferred item 4 (prefix-then-substring matching): "Mia" prefix-matches
+    // "m"; "Jim" now ALSO matches via the substring rank ("jim" contains
+    // "m", just not at the start) — ranked after the prefix match.
     const rows = screen.getAllByTestId('agent-mention-item')
-    expect(rows).toHaveLength(1)
+    expect(rows).toHaveLength(2)
     expect(screen.getByText('@Mia')).toBeInTheDocument()
-    expect(screen.queryByText('@Jim')).not.toBeInTheDocument()
+    expect(screen.getByText('@Jim')).toBeInTheDocument()
     expect(screen.queryByText('@Ava')).not.toBeInTheDocument()
     // Max Worker also starts with "m" but must stay excluded — worker
-    // exclusion applies before the prefix filter runs.
+    // exclusion applies before the prefix/substring filter runs.
     expect(screen.queryByText('Max Worker')).not.toBeInTheDocument()
   })
 
@@ -301,9 +304,12 @@ describe('"@" agent-mention menu — filtering', () => {
 
     act(() => { fireEvent.change(input, { target: { value: '@M' } }) })
 
+    // Deferred item 4: same prefix+substring result set as "@m" (see the
+    // sibling test above) — "Mia" (prefix) and "Jim" (substring).
     const rows = screen.getAllByTestId('agent-mention-item')
-    expect(rows).toHaveLength(1)
+    expect(rows).toHaveLength(2)
     expect(screen.getByText('@Mia')).toBeInTheDocument()
+    expect(screen.getByText('@Jim')).toBeInTheDocument()
   })
 
   it('typing "@zzz" (no match) hides the menu entirely', () => {
@@ -328,10 +334,13 @@ describe('"@" agent-mention menu — second-character immediacy', () => {
 
     // Second character (the first typed after "@") — filtering must be
     // visible in the SAME synchronous update, not one render/tick later.
+    // Deferred item 4: "@m" now matches both "Mia" (prefix) and "Jim"
+    // (substring — see the "filtering" describe block above).
     act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
     const rows = screen.getAllByTestId('agent-mention-item')
-    expect(rows).toHaveLength(1)
+    expect(rows).toHaveLength(2)
     expect(screen.getByText('@Mia')).toBeInTheDocument()
+    expect(screen.getByText('@Jim')).toBeInTheDocument()
   })
 })
 
@@ -493,11 +502,13 @@ describe('"@" agent-mention menu — Escape precedence (Fix 3)', () => {
 
       // Second Escape: menu already closed — falls through to the
       // pre-existing cancel-Escape branch, which calls cancelStream (that
-      // branch is unchanged by Fix 3; this test doesn't pin an exact call
-      // count, only that cancel actually fired — see the sibling test in
-      // ChatScreen.partitioned-menu.test.tsx for why the count can be >1).
+      // branch is unchanged by Fix 3). bugfixes3 deferred item 5
+      // (useCancelState.ts's global Escape listener now early-returns on
+      // `e.defaultPrevented`) killed the double-dispatch this branch used to
+      // cause — see ChatScreen.partitioned-menu.test.tsx's sibling test for
+      // the full explanation. Pinned to exactly 1 call.
       act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
-      expect(cancelStream).toHaveBeenCalled()
+      expect(cancelStream).toHaveBeenCalledTimes(1)
     } finally {
       // Restore the real implementation — useChatStore is a shared
       // singleton across this whole file's test suite.

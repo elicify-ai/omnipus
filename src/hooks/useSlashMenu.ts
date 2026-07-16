@@ -106,6 +106,17 @@ export interface UseSlashMenuResult {
   /** True when the input starts with "@" (leading position, same gate as the slash trigger) — `slashItems` is agent rows only while this is true. */
   isMentionMode: boolean
   /**
+   * Deferred item 3: how many MATCHING skills exist beyond the 8-row cap
+   * (0 when the filtered set fits within the cap, or when the Skills
+   * section isn't showing at all). The cap silently hid this count before —
+   * the caller renders a "+N more — keep typing to narrow" footer row when
+   * this is nonzero, so a user typing a broad filter (e.g. bare "/") knows
+   * there's more to narrow toward instead of assuming those 8 are everything.
+   */
+  skillsHiddenCount: number
+  /** Deferred item 3: the "@" mention menu's own version of `skillsHiddenCount` — how many matching agents exist beyond the 8-row cap. */
+  agentsHiddenCount: number
+  /**
    * Fix 2 (a11y HIGH): the just-selected agent's display name, set the
    * instant `selectMentionAgent` fires — null before any selection has
    * happened this session, AND reset to null whenever `activeAgentId`
@@ -159,6 +170,53 @@ export interface UseSlashMenuResult {
 }
 
 const GHOST_TEXT_PLACEHOLDER = '<message>'
+
+// Deferred item 3: both capped sections (skills, agents) cap at this many
+// visible rows — kept as a single named constant so the render layer
+// (ChatScreen.tsx) and this hook's hidden-count math can't drift apart.
+const SECTION_CAP = 8
+
+// Deferred item 4: prefix-then-substring matching, shared by all three
+// sections (commands/skills/agents) so "@assist" can find "Code Assistant"
+// the same way "/assist" can find a "/assistant-setup" command or an
+// "Assistant Tools" skill — prefix-only matching (the pre-existing
+// behavior) missed anything where the typed text wasn't the very start of
+// the name.
+type MatchRank = 'prefix' | 'substring' | 'none'
+
+/** Case-insensitive: `text` either starts with, contains, or doesn't contain `lowerFilter` (already lowercased). */
+function matchRank(text: string, lowerFilter: string): MatchRank {
+  const lowerText = text.toLowerCase()
+  if (lowerText.startsWith(lowerFilter)) return 'prefix'
+  if (lowerText.includes(lowerFilter)) return 'substring'
+  return 'none'
+}
+
+/**
+ * Partitions `items` into [prefix matches, substring-only matches] and
+ * concatenates — prefix matches rank above substring matches, and the
+ * RELATIVE ORDER of `items` is preserved within each rank (callers that want
+ * alphabetical ordering pre-sort `items` by name before calling this; see
+ * `visibleSkillMenuItems`/`agentItems` below — commands deliberately do NOT
+ * pre-sort, preserving API order within each rank instead).
+ *
+ * An empty filter always matches everything, returned in the input's
+ * original order — this preserves the pre-existing "bare '/' or '@' shows
+ * everything unranked" behavior exactly (ranking a no-op filter would be
+ * meaningless: every item would tie at 'prefix').
+ */
+function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFilter: string) => MatchRank): T[] {
+  if (filter === '') return items
+  const lowerFilter = filter.toLowerCase()
+  const prefixMatches: T[] = []
+  const substringMatches: T[] = []
+  for (const item of items) {
+    const rank = getRank(item, lowerFilter)
+    if (rank === 'prefix') prefixMatches.push(item)
+    else if (rank === 'substring') substringMatches.push(item)
+  }
+  return [...prefixMatches, ...substringMatches]
+}
 
 export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   const { isStreaming, isReplaying, inputEnabled, composerRuntime, appendMessage, startNewSession, cancelIfStreaming } = params
@@ -336,12 +394,14 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   const isMentionMode = mentionFilter !== null
 
   // Commands section — hidden when typing "/skills" (D9)
+  //
+  // Deferred item 4: prefix-then-substring ranking via rankByFilter, keeping
+  // allCommands' own API order within each rank (no alphabetical pre-sort —
+  // commands are a short, developer-authored, backend-ordered list; unlike
+  // skills/agents there is no cap to make a stable pre-sort load-bearing).
   const visibleCommandItems: SlashItem[] = (() => {
     if (menuFilter === null || isSkillsFilter) return []
-    const all = allCommands.filter((cmd) => {
-      const cmdName = cmd.label.slice(1).toLowerCase() // strip leading /
-      return menuFilter === '' || cmdName.startsWith(menuFilter)
-    })
+    const all = rankByFilter(allCommands, menuFilter, (cmd, lf) => matchRank(cmd.label.slice(1), lf))
     const filtered = isStreaming ? all.filter((cmd) => cmd.available_while_streaming === true) : all
     return filtered.map((cmd) => ({
       key: cmd.label,
@@ -352,64 +412,79 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }))
   })()
 
-  // Skills section — always shown when "/" typed, unless empty
-  const visibleSkillMenuItems: SlashItem[] = (() => {
+  // Skills section — always shown when "/" typed, unless empty.
+  //
+  // Deferred item 3: sorted by name (localeCompare) BEFORE ranking/capping,
+  // so which 8 survive the cap is deterministic rather than API-order luck,
+  // and matches within a rank read alphabetically.
+  // Deferred item 4: prefix-then-substring ranking (still against id OR
+  // name, same two fields as before — only the matching STRENGTH changed,
+  // not which fields are checked).
+  const sortedSkills = [...skills].sort((a, b) => a.name.localeCompare(b.name))
+  const matchedSkills: Skill[] = (() => {
     if (menuFilter === null) return []
     const lower = isSkillsFilter ? '' : menuFilter
-    const filtered = skills.filter((s) =>
-      lower === '' ||
-      s.id.toLowerCase().startsWith(lower) ||
-      s.name.toLowerCase().startsWith(lower),
-    )
-    return filtered.slice(0, 8).map((s) => {
-      // F3-frontend/FR-014/R3: the skill's argument_hint drives the menu
-      // help text and the inline ghost (Skill.argument_hint is on the
-      // generated wire type).
-      const argHint: string | undefined = s.argument_hint
-      return {
-        key: s.id,
-        label: `/${s.id}`,
-        description: s.name + (s.description ? ` — ${s.description}` : ''),
-        section: 'skills' as const,
-        argumentHint: argHint,
-        onSelect: () => completeSkillName(s.id, argHint),
-      }
+    return rankByFilter(sortedSkills, lower, (s, lf) => {
+      const idRank = matchRank(s.id, lf)
+      const nameRank = matchRank(s.name, lf)
+      if (idRank === 'prefix' || nameRank === 'prefix') return 'prefix'
+      if (idRank === 'substring' || nameRank === 'substring') return 'substring'
+      return 'none'
     })
   })()
+  // Deferred item 3: expose the overflow count so the caller can render a
+  // "+N more" footer instead of silently hiding it — see ChatScreen.tsx's
+  // slash-menu-footer render block.
+  const skillsHiddenCount = Math.max(0, matchedSkills.length - SECTION_CAP)
+  const visibleSkillMenuItems: SlashItem[] = matchedSkills.slice(0, SECTION_CAP).map((s) => {
+    // F3-frontend/FR-014/R3: the skill's argument_hint drives the menu
+    // help text and the inline ghost (Skill.argument_hint is on the
+    // generated wire type).
+    const argHint: string | undefined = s.argument_hint
+    return {
+      key: s.id,
+      label: `/${s.id}`,
+      description: s.name + (s.description ? ` — ${s.description}` : ''),
+      section: 'skills' as const,
+      argumentHint: argHint,
+      onSelect: () => completeSkillName(s.id, argHint),
+    }
+  })
 
   // Agent section — the "@" mention menu's sole content. Mirrors the
-  // skills filter's startsWith convention (case-insensitive prefix match;
-  // empty filter ⇒ every scoped chat agent).
+  // skills filter's matching convention (case-insensitive prefix-then-
+  // substring; empty filter ⇒ every scoped chat agent).
   //
-  // Fix 7: NAME prefix only — no id clause. User-created agent ids are
-  // UUIDs (or otherwise arbitrary), so matching `id.startsWith(filter)` too
-  // surfaced agents into "@a" whose UUID happened to start with "a" but
-  // whose visible name had nothing to do with what was typed — noise
-  // unrelated to the label the user is actually reading in the menu.
+  // Fix 7: NAME only — no id clause. User-created agent ids are UUIDs (or
+  // otherwise arbitrary), so matching against `id` too surfaced agents into
+  // "@a" whose UUID happened to contain an "a" but whose visible name had
+  // nothing to do with what was typed — noise unrelated to the label the
+  // user is actually reading in the menu. (Deferred item 4 extends this
+  // from prefix-only to prefix-then-substring, still name-only — a
+  // divergent-id fixture in useSlashMenu.test.ts pins that the id itself
+  // still never matches, by either rank.)
+  //
+  // Deferred item 3: sorted by name (localeCompare) BEFORE ranking/capping —
+  // same rationale as skills above.
   const effectiveActiveAgentId = activeAgentId || chatAgents[0]?.id
-  const agentItems: SlashItem[] = (() => {
+  const sortedAgents = [...chatAgents].sort((a, b) => a.name.localeCompare(b.name))
+  const matchedAgents: Agent[] = (() => {
     if (mentionFilter === null) return []
-    const filtered = chatAgents.filter((a) =>
-      mentionFilter === '' || a.name.toLowerCase().startsWith(mentionFilter),
-    )
-    // Fix 6: cap at 8, matching visibleSkillMenuItems' own cap. Agents can
-    // create agents, so the roster is unbounded in principle — without a
-    // cap, a large roster would rebuild N full rows (each with its own
-    // avatar/description) on every keystroke, and ArrowDown/ArrowUp
-    // wrap-around nav over a very long list stops being usable from the
-    // keyboard.
-    return filtered.slice(0, 8).map((agent) => ({
-      key: agent.id,
-      label: `@${agent.name}`,
-      description: agent.description || agent.model || '',
-      section: 'agents' as const,
-      agentColor: agent.color ?? undefined,
-      agentIcon: agent.icon ?? undefined,
-      agentName: agent.name,
-      isActiveAgent: agent.id === effectiveActiveAgentId,
-      onSelect: () => selectMentionAgent(agent),
-    }))
+    return rankByFilter(sortedAgents, mentionFilter, (a, lf) => matchRank(a.name, lf))
   })()
+  // Deferred item 3: overflow count for the "@" menu's own "+N more" footer.
+  const agentsHiddenCount = Math.max(0, matchedAgents.length - SECTION_CAP)
+  const agentItems: SlashItem[] = matchedAgents.slice(0, SECTION_CAP).map((agent) => ({
+    key: agent.id,
+    label: `@${agent.name}`,
+    description: agent.description || agent.model || '',
+    section: 'agents' as const,
+    agentColor: agent.color ?? undefined,
+    agentIcon: agent.icon ?? undefined,
+    agentName: agent.name,
+    isActiveAgent: agent.id === effectiveActiveAgentId,
+    onSelect: () => selectMentionAgent(agent),
+  }))
 
   // Unified list for keyboard nav. The "/" and "@" triggers are mutually
   // exclusive (inputValue can't start with both characters at once), so
@@ -746,6 +821,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     commandsError,
     isSkillsFilter,
     isMentionMode,
+    skillsHiddenCount,
+    agentsHiddenCount,
     mentionAnnouncement,
     showGhostText,
     ghostText,

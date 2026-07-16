@@ -25,7 +25,7 @@ import '@xyflow/react/dist/style.css'
 import '../reactflow-theme.css'
 import { Star, Lightning, Trash, Warning, PencilSimple, X } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import { AgentDelegatePicker } from './AgentDelegatePicker'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
@@ -114,7 +114,7 @@ const FULL_TARGET_HANDLE_CLASS =
 // ── Custom node: one agent ───────────────────────────────────────────────────
 function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
   const { model } = data
-  const initial = model.name.charAt(0).toUpperCase()
+  const initial = initialOf(model.name)
   const { allNodes, editState, workerIds, onDelegate } = useTeamGraphCanvasContext()
 
   const connection = useConnection()
