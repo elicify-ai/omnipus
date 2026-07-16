@@ -14,7 +14,7 @@ import {
   CaretRight,
   PencilSimple,
   CircleNotch,
-  FloppyDisk,
+  PlugsConnected,
 } from '@phosphor-icons/react'
 import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -301,7 +301,7 @@ export function SkillsScreen() {
                         >
                           {testingMcp === server.id
                             ? <CircleNotch size={14} className="animate-spin" />
-                            : <FloppyDisk size={14} />
+                            : <PlugsConnected size={14} />
                           }
                         </button>
                         {/* Edit button (G8) */}
@@ -318,7 +318,9 @@ export function SkillsScreen() {
                           type="button"
                           onClick={() => setExpandedMcp(isExpanded ? null : server.id)}
                           className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
-                          aria-label="Toggle tool list"
+                          aria-expanded={isExpanded}
+                          aria-controls={`mcp-tools-${server.id}`}
+                          aria-label={`${isExpanded ? 'Hide' : 'Show'} tools for ${server.name}`}
                         >
                           {isExpanded ? <CaretUp size={13} /> : <CaretDown size={13} />}
                         </button>
@@ -333,7 +335,7 @@ export function SkillsScreen() {
                       </div>
                     </div>
                     {isExpanded && (
-                      <div className="px-4 pb-4 border-t border-[var(--color-border)]">
+                      <div id={`mcp-tools-${server.id}`} className="px-4 pb-4 border-t border-[var(--color-border)]">
                         {server.tools && server.tools.length > 0 ? (
                           <div className="pt-3 flex flex-wrap gap-1.5">
                             {server.tools.map((tool) => (

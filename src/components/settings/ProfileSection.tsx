@@ -193,6 +193,7 @@ export function ProfileSection() {
               value={timezone}
               onValueChange={setTimezone}
               triggerClassName="w-[200px] h-8 text-xs font-mono"
+              ariaLabel="Timezone"
               items={TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
             />
           </div>
@@ -228,6 +229,7 @@ export function ProfileSection() {
               value={[fontSize]}
               onValueChange={([v]) => setFontSize(v)}
               className="w-full"
+              aria-label="Font size"
             />
             <div className="flex justify-between text-[10px] text-[var(--color-muted)]">
               <span>12px</span>
@@ -246,7 +248,13 @@ export function ProfileSection() {
             <p className="text-xs text-[var(--color-muted)]">Update your login password. Must be at least 8 characters.</p>
           </div>
 
-          <div className="space-y-3">
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault()
+              handlePasswordChange()
+            }}
+          >
             <div className="space-y-1.5">
               <Label htmlFor="current-password" className="text-xs text-[var(--color-secondary)]">
                 Current password
@@ -297,15 +305,15 @@ export function ProfileSection() {
             )}
 
             <Button
+              type="submit"
               size="sm"
-              onClick={handlePasswordChange}
               disabled={isChangingPassword}
               className="gap-1.5"
             >
               <LockKey size={13} weight="bold" />
               {isChangingPassword ? 'Changing...' : 'Change Password'}
             </Button>
-          </div>
+          </form>
         </div>
       </section>
 

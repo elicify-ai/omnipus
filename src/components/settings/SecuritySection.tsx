@@ -397,6 +397,7 @@ export function SecuritySection() {
               value={execApproval}
               onValueChange={(v) => { markDirty(); setExecApproval(v as typeof execApproval) }}
               triggerClassName="w-[130px] h-8 text-xs"
+              ariaLabel="Shell command approval"
               items={[
                 { value: 'auto', label: 'Auto-allow' },
                 { value: 'ask', label: 'Ask each time' },
@@ -432,7 +433,11 @@ export function SecuritySection() {
               </span>
               <span>Cap: ${capValue.toFixed(2)}</span>
             </div>
-            <Progress value={spendPercent} className="h-1.5" />
+            <Progress
+              value={spendPercent}
+              className="h-1.5"
+              aria-label={`Daily spend $${todaySpend.toFixed(2)} of $${capValue.toFixed(2)} cap`}
+            />
           </div>
         </div>
 

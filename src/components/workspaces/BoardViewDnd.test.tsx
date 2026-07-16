@@ -121,9 +121,23 @@ describe('canDropTransition — backend-mirrored guard', () => {
 describe('BoardView — DnD wiring', () => {
   it('renders the dragged card with a draggable role attribute', () => {
     renderBoard()
-    // dnd-kit's useDraggable applies role="button" + aria-roledescription="draggable"
-    const card = screen.getByText('Draggable task').closest('[aria-roledescription="draggable"]')
+    // TaskCard's own root carries dnd-kit's attributes (overridden roleDescription
+    // "draggable task") — the DraggableTaskCard wrapper in BoardView is a plain,
+    // non-interactive measurement div (see the single-tab-stop test below).
+    const card = screen.getByText('Draggable task').closest('[aria-roledescription="draggable task"]')
     expect(card).not.toBeNull()
+  })
+
+  it('renders exactly one focusable tab stop per card (WCAG 4.1.2 — no nested role="button")', () => {
+    renderBoard()
+    const card = screen.getByText('Draggable task').closest('[role="button"]')
+    expect(card).not.toBeNull()
+    // The `useDraggable` wrapper (this card's parent) must NOT also be a
+    // role="button" — only TaskCard's own root should carry it, so there is
+    // exactly one role="button" descendant under the wrapper.
+    const wrapper = card?.parentElement
+    expect(wrapper?.getAttribute('role')).not.toBe('button')
+    expect(wrapper?.querySelectorAll('[role="button"]').length).toBe(1)
   })
 
   it('renders one droppable column per status (all 7)', () => {

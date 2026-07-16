@@ -70,13 +70,6 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
     toggleSpanExpansion(span.spanId)
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      toggle()
-    }
-  }
-
   return (
     <div
       className={cn(
@@ -89,10 +82,9 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
         type="button"
         data-testid="subagent-collapsed"
         onClick={toggle}
-        onKeyDown={handleKeyDown}
         aria-expanded={expanded}
         aria-label={`Subagent: ${label}, ${stepCountText(stepCount)}, status ${span.status}`}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-3)] cursor-pointer focus-visible:outline-none"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-3)] cursor-pointer"
       >
         {/* Subagent icon */}
         <UserCircle size={13} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />

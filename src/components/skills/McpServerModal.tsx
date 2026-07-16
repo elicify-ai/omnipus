@@ -540,7 +540,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                                 type="button"
                                 onClick={() => handleRemoveHeaderRow(idx)}
                                 className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 rounded shrink-0"
-                                aria-label="Remove header"
+                                aria-label={`Remove header ${row.key.trim() || `row ${idx + 1}`}`}
                               >
                                 <Trash size={13} />
                               </button>

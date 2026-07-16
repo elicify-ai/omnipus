@@ -324,6 +324,7 @@ export function GatewaySection() {
             value={logLevel}
             onValueChange={(v) => { markDirty(); setLogLevel(v) }}
             triggerClassName="w-[120px] h-8 text-xs"
+            ariaLabel="Log level"
             items={[
               { value: 'debug', label: 'Debug' },
               { value: 'info', label: 'Info' },
@@ -442,6 +443,8 @@ export function GatewaySection() {
           className="flex items-center gap-2 w-full text-left py-1"
           onClick={() => setRemoteAccessOpen((v) => !v)}
           type="button"
+          aria-expanded={remoteAccessOpen}
+          aria-controls="remote-access-panel"
         >
           {remoteAccessOpen ? (
             <CaretDown size={12} className="text-[var(--color-muted)]" />
@@ -452,7 +455,7 @@ export function GatewaySection() {
         </button>
 
         {remoteAccessOpen && (
-          <div className="mt-3 space-y-4">
+          <div id="remote-access-panel" className="mt-3 space-y-4">
             {/* Tailscale */}
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
               <p className="text-sm font-semibold text-[var(--color-secondary)]">Tailscale</p>

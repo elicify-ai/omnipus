@@ -4,6 +4,7 @@ import { CheckSquare } from '@phosphor-icons/react'
 import { RollupBadge } from './RollupBadge'
 import { TaskChildren } from './TaskChildren'
 import type { BoardAltitude } from '@/store/workspacesStore'
+import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
 export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
@@ -29,6 +30,16 @@ interface TaskCardProps {
   altitude?: BoardAltitude
   onClick: () => void
   onChildClick?: (child: Task) => void
+  /**
+   * dnd-kit drag wiring — supplied only by BoardView's DraggableTaskCard,
+   * whose own wrapper `<div>` is a plain, non-interactive measurement node
+   * (see BoardView.tsx). Applying these to THIS component's own root keeps
+   * each card a single tab stop (WCAG 4.1.2) instead of nesting a second
+   * focusable/role="button" element around it.
+   */
+  dragAttributes?: DraggableAttributes
+  dragListeners?: DraggableSyntheticListeners
+  dragActivatorRef?: (element: HTMLElement | null) => void
 }
 
 export function TaskCard({
@@ -38,6 +49,9 @@ export function TaskCard({
   altitude = 'top-level',
   onClick,
   onChildClick,
+  dragAttributes,
+  dragListeners,
+  dragActivatorRef,
 }: TaskCardProps) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
@@ -47,14 +61,38 @@ export function TaskCard({
   const rollup = task.rollup ?? []
   const hasRollup = rollup.length > 0
   const showChildren = altitude === 'show-all'
+  const isDraggable = Boolean(dragAttributes)
+
+  // dnd-kit hands back its pointer/keyboard activators typed as bare
+  // `Function`s (DraggableSyntheticListeners = Record<string, Function>);
+  // narrow them to the real per-event signature so they can be invoked and
+  // composed with this card's own onKeyDown below. The KeyboardSensor's
+  // onKeyDown activator lifts the card on Space — it must keep firing
+  // alongside (not instead of) TaskCard's own Enter-to-open handling.
+  const dragKeyDown = dragListeners?.onKeyDown as
+    | ((event: React.KeyboardEvent<HTMLDivElement>) => void)
+    | undefined
+  const dragPointerDown = dragListeners?.onPointerDown as
+    | ((event: React.PointerEvent<HTMLDivElement>) => void)
+    | undefined
 
   return (
     <div
+      ref={dragActivatorRef}
       role="button"
       tabIndex={0}
+      aria-disabled={dragAttributes?.['aria-disabled']}
+      aria-pressed={dragAttributes?.['aria-pressed']}
+      aria-roledescription={dragAttributes?.['aria-roledescription']}
+      aria-describedby={dragAttributes?.['aria-describedby']}
+      aria-label={isDraggable ? `${task.title} — Enter to open, Space to move` : undefined}
       onClick={onClick}
+      onPointerDown={dragPointerDown}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
+        dragKeyDown?.(e)
+        // Space is reserved for dnd-kit's keyboard-drag lift (see BoardView's
+        // KeyboardSensor `keyboardCodes` override) — only Enter opens the task.
+        if (e.key === 'Enter') {
           e.preventDefault()
           onClick()
         }

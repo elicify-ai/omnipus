@@ -130,6 +130,15 @@ export function AppShell() {
       className="fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"
       style={{ top: 'var(--app-top, 0px)', height: 'var(--app-vh, 100dvh)' }}
     >
+      {/* Skip-to-content link — first focusable element in the shell, visually
+          hidden until it receives keyboard focus (WCAG 2.4.1 Bypass Blocks). */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-3 focus:py-2 focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-sm"
+      >
+        Skip to content
+      </a>
+
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 
@@ -179,7 +188,7 @@ export function AppShell() {
           )}
 
           {/* Screen content — relative so children can use absolute inset-0 for bounded scrolling */}
-          <main className="flex-1 relative min-h-0 overflow-hidden">
+          <main id="main-content" tabIndex={-1} className="flex-1 relative min-h-0 overflow-hidden">
             <ErrorBoundary>
               <Outlet />
             </ErrorBoundary>

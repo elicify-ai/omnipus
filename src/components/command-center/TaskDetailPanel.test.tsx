@@ -827,7 +827,7 @@ describe('TaskDetailPanel — done-terminal status guard', () => {
     const statusLabel = await screen.findByText(/^status$/i)
     const fieldRoot = statusLabel.parentElement as HTMLElement
     // 6 options → SmartSelect renders a SearchableSelect (button, listbox popup).
-    const trigger = fieldRoot.querySelector('[aria-haspopup="listbox"]') as HTMLElement
+    const trigger = fieldRoot.querySelector('[aria-haspopup="dialog"]') as HTMLElement
     expect(trigger).toBeTruthy()
     fireEvent.click(trigger)
 

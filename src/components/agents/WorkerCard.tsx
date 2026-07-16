@@ -56,7 +56,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
         className={cn(
           'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
-          'focus-visible:outline-none'
+          'focus-visible:border-[var(--color-accent)]'
         )}
         aria-label={`View worker ${agent.name}`}
       >

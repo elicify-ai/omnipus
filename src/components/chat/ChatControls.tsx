@@ -103,8 +103,8 @@ export function ChatControls({ className }: ChatControlsProps) {
         type="button"
         onClick={() => void handleOpenBrowser()}
         disabled={creatingBrowserSession}
-        // Composer tab ring position 5 (input=1 agent=2 model=3 attach=4).
-        tabIndex={5}
+        // Composer tab ring position 6 (input=1 agent=2 model=3 attach=4 send=5).
+        tabIndex={6}
         aria-label="Open browser"
         aria-busy={creatingBrowserSession}
         title="Open a live browser session"

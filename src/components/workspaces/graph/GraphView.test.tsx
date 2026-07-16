@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { GraphView } from './GraphView'
 import type { Task } from '@/lib/api'
 
@@ -95,5 +95,53 @@ describe('GraphView — renders nodes + edges', () => {
     )
     expect(container.querySelector('.react-flow__edges')).not.toBeNull()
     expect(container.querySelector('.react-flow__viewport')).not.toBeNull()
+  })
+})
+
+describe('GraphView — keyboard operability (WCAG 2.1.1 / 4.1.2)', () => {
+  // Nodes render with `visibility: hidden` in jsdom (React Flow never gets a
+  // real ResizeObserver measurement here), which excludes them from
+  // Testing Library's default accessible-role tree — so, like the existing
+  // tests above, we locate nodes via the stable `data-testid` rather than
+  // `getByRole`, and assert the ARIA wiring directly.
+
+  it('exposes each node as a single focusable role="button" with a title+status label', () => {
+    const tasks = [makeTask({ id: 'a', title: 'Design the schema', status: 'in_progress' })]
+    const { container } = render(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+
+    const node = container.querySelector('[data-testid="task-node-a"]')
+    expect(node).not.toBeNull()
+    expect(node).toHaveAttribute('role', 'button')
+    expect(node).toHaveAttribute('tabindex', '0')
+    expect(node).toHaveAttribute('aria-label', 'Design the schema, In Progress')
+
+    // React Flow's own node wrapper (`.react-flow__node`, the parent) must
+    // NOT also be a tab stop — GraphView marks nodes `focusable: false` so
+    // there is exactly one keyboard stop per card, not two.
+    const rfWrapper = node?.closest('.react-flow__node')
+    expect(rfWrapper).not.toBeNull()
+    expect(rfWrapper).not.toHaveAttribute('tabindex')
+    expect(rfWrapper).not.toHaveAttribute('role')
+  })
+
+  it('Enter on a focused node opens the task via onTaskClick', () => {
+    const tasks = [makeTask({ id: 'a', title: 'Design the schema' })]
+    const onTaskClick = vi.fn()
+    const { container } = render(<GraphView tasks={tasks} agents={[]} onTaskClick={onTaskClick} />)
+
+    const node = container.querySelector('[data-testid="task-node-a"]') as HTMLElement
+    fireEvent.keyDown(node, { key: 'Enter' })
+    expect(onTaskClick).toHaveBeenCalledTimes(1)
+    expect(onTaskClick.mock.calls[0][0]).toMatchObject({ id: 'a', title: 'Design the schema' })
+  })
+
+  it('Space on a focused node also opens the task via onTaskClick', () => {
+    const tasks = [makeTask({ id: 'a', title: 'Build the API' })]
+    const onTaskClick = vi.fn()
+    const { container } = render(<GraphView tasks={tasks} agents={[]} onTaskClick={onTaskClick} />)
+
+    const node = container.querySelector('[data-testid="task-node-a"]') as HTMLElement
+    fireEvent.keyDown(node, { key: ' ' })
+    expect(onTaskClick).toHaveBeenCalledTimes(1)
   })
 })

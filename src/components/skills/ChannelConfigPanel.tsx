@@ -130,7 +130,7 @@ function PasswordField({
         type="button"
         onClick={() => setVisible((v) => !v)}
         className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
-        aria-label={visible ? 'Hide' : 'Show'}
+        aria-label={visible ? 'Hide password' : 'Show password'}
       >
         {visible ? <EyeSlash size={13} /> : <Eye size={13} />}
       </button>
@@ -238,6 +238,7 @@ function ChannelFieldRow({
     <div className="space-y-1.5">
       <Label
         htmlFor={`field-${field.key}`}
+        id={`field-label-${field.key}`}
         className="text-xs font-medium text-[var(--color-secondary)]"
       >
         {field.label}
@@ -253,6 +254,7 @@ function ChannelFieldRow({
             checked={Boolean(getValue(field.key))}
             onCheckedChange={(checked) => setValue(field.key, checked)}
             aria-describedby={field.helpText ? `help-${field.key}` : undefined}
+            aria-labelledby={`field-label-${field.key}`}
           />
         </div>
       ) : field.type === 'password' ? (

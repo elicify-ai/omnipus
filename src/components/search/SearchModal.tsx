@@ -182,10 +182,10 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
       </button>
       {/* Hover-revealed on pointer devices; always visible on touch ([@media(hover:none)]). */}
       <button type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
-        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
+        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
         aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></button>
       <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
-        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
         aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : 'Delete'}><Trash size={13} /></button>
     </div>
   )

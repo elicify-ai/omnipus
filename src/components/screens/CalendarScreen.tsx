@@ -329,9 +329,13 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     [openCreateAt],
   )
 
-  const handleNewTask = useCallback(() => {
+  // WCAG 2.1.1 keyboard-equivalent path (see CalendarToolbar.handleNewTask):
+  // the toolbar passes the calendar's currently-VIEWED date so a keyboard user
+  // who cannot pointer-click a day cell still gets it pre-filled — matching
+  // the all-day format `openCreateAt` uses for a dateClick on an all-day cell.
+  const handleNewTask = useCallback((date?: Date) => {
     triggerElRef.current = null
-    setInitialDue(undefined)
+    setInitialDue(date ? `${formatLocalDate(date)}T00:00` : undefined)
     setCreateOpen(true)
   }, [])
 

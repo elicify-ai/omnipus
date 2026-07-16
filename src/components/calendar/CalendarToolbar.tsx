@@ -69,6 +69,18 @@ export function CalendarToolbar({
     onViewChange(view)
   }
 
+  // WCAG 2.1.1 (keyboard) — dateClick/select on the FullCalendar grid are
+  // pointer/drag-only, so a keyboard user has NO way to pick a target day when
+  // creating a task by clicking a cell. This button is the keyboard-equivalent
+  // path: it pre-fills the create form with the date the calendar is CURRENTLY
+  // showing (`getApi().getDate()` — "today" when today is in view, otherwise
+  // the reference day of the visible period) instead of opening with no date
+  // at all, so browsing to e.g. a future month and creating a task doesn't
+  // silently default to real-world "today".
+  const handleNewTask = () => {
+    onNewTask(getApi()?.getDate?.())
+  }
+
   // ── Shared touch-target class (WCAG 2.5.8 / I-4) ────────────────────────
   const touchTarget = 'pointer-coarse:min-h-[44px]'
 
@@ -182,9 +194,15 @@ export function CalendarToolbar({
           'justify-between @2xl:justify-end',
         )}
       >
-        {/* View switcher — four tabs */}
+        {/* View switcher — a group of four toggle buttons, NOT a tabpanel-driven
+            tablist: there is no arrow-key roving-tabindex or aria-controls
+            wired here, so `role="tablist"`/`role="tab"`/`aria-selected` would
+            promise the ARIA tab pattern (Left/Right to move focus, one stop in
+            the Tab order) without implementing it — a11y audit fix option (b).
+            `role="group"` + `aria-pressed` per button correctly describes four
+            independently-tabbable toggle buttons instead. */}
         <div
-          role="tablist"
+          role="group"
           aria-label="Calendar view"
           className="flex items-center gap-0.5 rounded-md bg-[var(--color-surface-2)] p-0.5"
         >
@@ -194,8 +212,7 @@ export function CalendarToolbar({
               <button
                 key={view}
                 type="button"
-                role="tab"
-                aria-selected={isActive}
+                aria-pressed={isActive}
                 aria-label={CALENDAR_VIEW_LABELS[view]}
                 data-testid={`calendar-view-${view}`}
                 onClick={() => handleViewChange(view)}
@@ -234,7 +251,7 @@ export function CalendarToolbar({
           type="button"
           data-testid="calendar-new-task"
           aria-label="Create a new task"
-          onClick={onNewTask}
+          onClick={handleNewTask}
           variant="default"
           size="sm"
           className={cn(

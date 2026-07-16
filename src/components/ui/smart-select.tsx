@@ -32,6 +32,9 @@ interface SmartSelectProps {
   className?: string
   triggerClassName?: string
   items: SmartSelectItem[]
+  /** Accessible name for the trigger, forwarded to both the plain Radix
+   *  trigger and the searchable cmdk trigger. */
+  ariaLabel?: string
 }
 
 const SEARCHABLE_THRESHOLD = 5
@@ -44,11 +47,12 @@ export function SmartSelect({
   className,
   triggerClassName,
   items,
+  ariaLabel,
 }: SmartSelectProps) {
   if (items.length <= SEARCHABLE_THRESHOLD) {
     return (
       <Select value={value} onValueChange={onValueChange} disabled={disabled}>
-        <SelectTrigger className={cn(triggerClassName, className)}>
+        <SelectTrigger className={cn(triggerClassName, className)} aria-label={ariaLabel}>
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
@@ -71,6 +75,7 @@ export function SmartSelect({
       className={className}
       triggerClassName={triggerClassName}
       items={items}
+      ariaLabel={ariaLabel}
     />
   )
 }
@@ -83,6 +88,7 @@ function SearchableSelect({
   className,
   triggerClassName,
   items,
+  ariaLabel,
 }: SmartSelectProps) {
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -105,7 +111,8 @@ function SearchableSelect({
           type="button"
           disabled={disabled}
           aria-expanded={open}
-          aria-haspopup="listbox"
+          aria-haspopup="dialog"
+          aria-label={ariaLabel}
           className={cn(
             'flex h-9 w-full items-center justify-between rounded-md border px-3 py-2 text-sm',
             'bg-[var(--color-surface-1)] text-[var(--color-secondary)]',

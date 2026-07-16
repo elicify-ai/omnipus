@@ -193,6 +193,8 @@ function AgentsLibraryView({
                       ? 'var(--color-accent)'
                       : 'var(--color-muted)',
                 }}
+                aria-haspopup="true"
+                aria-expanded={filterMenuOpen}
               >
                 <FunnelSimple size={12} weight={workspaceFilter !== 'all' ? 'fill' : 'regular'} />
                 {workspaceFilter === 'all'
@@ -202,10 +204,9 @@ function AgentsLibraryView({
               </button>
             </PopoverTrigger>
             <PopoverContent align="start" sideOffset={4} className="w-56 p-1">
-              <div role="menu" aria-label="Filter agents by workspace">
+              <div role="group" aria-label="Filter by workspace">
                 <button
                   type="button"
-                  role="menuitem"
                   data-testid="workspace-filter-all"
                   onClick={() => {
                     setWorkspaceFilter('all')
@@ -226,7 +227,6 @@ function AgentsLibraryView({
                   <button
                     key={ws.id}
                     type="button"
-                    role="menuitem"
                     data-testid={`workspace-filter-${ws.id}`}
                     onClick={() => {
                       setWorkspaceFilter(ws.id)
@@ -352,7 +352,7 @@ function AgentsLibraryView({
                       variant="ghost"
                       className="gap-1.5 ml-0 sm:ml-2 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                       data-testid="add-external-trigger"
-                      aria-haspopup="menu"
+                      aria-haspopup="true"
                       aria-expanded={externalMenuOpen}
                     >
                       <Plus size={12} weight="bold" /> + Add Subagent (External)
@@ -365,14 +365,13 @@ function AgentsLibraryView({
                     className="w-56 p-1"
                     data-testid="add-external-menu"
                   >
-                    <div role="menu" aria-label="Choose a third-party CLI">
+                    <div role="group" aria-label="External CLI type">
                       {CLI_ORDER.map((cli) => {
                         const available = cliAvailable[cli]
                         return (
                           <button
                             key={cli}
                             type="button"
-                            role="menuitem"
                             disabled={!available}
                             title={available ? undefined : cliTooltip[cli]}
                             onClick={() => {

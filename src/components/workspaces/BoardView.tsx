@@ -1,13 +1,16 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   DndContext,
   PointerSensor,
   KeyboardSensor,
+  KeyboardCode,
   useSensor,
   useSensors,
   useDraggable,
   useDroppable,
   DragOverlay,
+  type Announcements,
+  type ScreenReaderInstructions,
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core'
@@ -36,6 +39,15 @@ const COLUMNS: ColumnConfig[] = STATUS_ORDER.map((status) => ({
   label: STATUS_LABELS[status],
   headerColor: STATUS_COLORS[status],
 }))
+
+// Screen-reader-only instructions dnd-kit surfaces via aria-describedby on
+// every draggable card, announced once when a card first receives focus.
+// Space (not Enter) lifts a card — Enter opens the task instead (see the
+// KeyboardSensor `keyboardCodes` override below and TaskCard's onKeyDown).
+const BOARD_SCREEN_READER_INSTRUCTIONS: ScreenReaderInstructions = {
+  draggable:
+    'To pick up a task card, press space. While dragging, use the arrow keys to move the card between columns. Press space again to drop the task in its new column, or press escape to cancel.',
+}
 
 /**
  * Whether a card may be dropped into the target column, mirroring the backend
@@ -100,8 +112,46 @@ export function BoardView({
     // A small activation distance lets a plain click still open the detail panel
     // (the card's onClick) without being swallowed by the drag.
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor),
+    // Restrict the lift/drop key to Space only (dnd-kit's default is Space
+    // AND Enter) so Enter stays free for TaskCard's "open task" action —
+    // otherwise a focused card's Enter key would be ambiguous between
+    // opening the task and starting a keyboard drag.
+    useSensor(KeyboardSensor, {
+      keyboardCodes: {
+        start: [KeyboardCode.Space],
+        cancel: [KeyboardCode.Esc],
+        end: [KeyboardCode.Space],
+      },
+    }),
   )
+
+  // Live-region announcements for the drag lifecycle, read by screen readers
+  // as a card is picked up, moved over a column, dropped, or cancelled.
+  const announcements = useMemo<Announcements>(() => {
+    const taskTitle = (id: string | number) => rootTasks.find((t) => t.id === id)?.title ?? 'the task'
+    const columnLabel = (id: string | number | undefined) => COLUMNS.find((c) => c.status === id)?.label
+
+    return {
+      onDragStart({ active }) {
+        return `Picked up task "${taskTitle(active.id)}".`
+      },
+      onDragOver({ active, over }) {
+        if (!over) return undefined
+        const label = columnLabel(over.id)
+        return label ? `Task "${taskTitle(active.id)}" is over the ${label} column.` : undefined
+      },
+      onDragEnd({ active, over }) {
+        if (!over) return `Task "${taskTitle(active.id)}" was dropped.`
+        const label = columnLabel(over.id)
+        return label
+          ? `Task "${taskTitle(active.id)}" was moved to the ${label} column.`
+          : `Task "${taskTitle(active.id)}" was dropped.`
+      },
+      onDragCancel({ active }) {
+        return `Moving task "${taskTitle(active.id)}" was cancelled.`
+      },
+    }
+  }, [rootTasks])
 
   function handleDragStart(event: DragStartEvent) {
     const id = String(event.active.id)
@@ -132,6 +182,10 @@ export function BoardView({
       {/* Columns */}
       <DndContext
         sensors={sensors}
+        accessibility={{
+          screenReaderInstructions: BOARD_SCREEN_READER_INSTRUCTIONS,
+          announcements,
+        }}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragCancel={() => setActiveTask(null)}
@@ -281,13 +335,21 @@ function DraggableTaskCard({
   onClick,
   onChildClick,
 }: DraggableTaskCardProps) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id })
+  // `roleDescription: 'draggable task'` overrides dnd-kit's generic default
+  // ("draggable") so screen readers announce something meaningful.
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useDraggable({
+    id: task.id,
+    attributes: { roleDescription: 'draggable task' },
+  })
 
   return (
+    // Plain measurement/positioning node only — NOT a tab stop. dnd-kit's
+    // attributes/listeners are spread onto TaskCard's own root button below
+    // instead, so each card has exactly one focusable element (WCAG 4.1.2 —
+    // previously this wrapper AND TaskCard's inner div were both
+    // role="button" tabIndex=0, two tab stops for one card).
     <div
       ref={setNodeRef}
-      {...attributes}
-      {...listeners}
       // The card while being dragged is shown in the DragOverlay; hide the source.
       className={cn(isDragging && 'opacity-40')}
     >
@@ -298,6 +360,9 @@ function DraggableTaskCard({
         altitude={altitude}
         onClick={onClick}
         onChildClick={onChildClick}
+        dragAttributes={attributes}
+        dragListeners={listeners}
+        dragActivatorRef={setActivatorNodeRef}
       />
     </div>
   )
