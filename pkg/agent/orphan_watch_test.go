@@ -23,6 +23,7 @@
 // Because there is only a single grace timer now (no PHASE B/C sub-timers),
 // these tests no longer need to shrink package-level escalation-delay vars —
 // grace is passed directly to ArmOrphanForegroundTurnWatch in whole seconds.
+
 package agent
 
 import (
@@ -503,8 +504,13 @@ func TestOrphanWatch_DifferentRootAtFireTime_StillReaped(t *testing.T) {
 	al.activeTurnStates.Store(sessionID, rootV2) // overwrites rootV1's map entry
 	defer al.activeTurnStates.Delete(sessionID)
 
-	require.Eventually(t, func() bool { return reapCount.Load() == 1 }, 3*time.Second, 20*time.Millisecond,
-		"the session's CURRENT root turn at fire time must be reaped even though it differs from the turn live at arm time")
+	require.Eventually(
+		t,
+		func() bool { return reapCount.Load() == 1 },
+		3*time.Second,
+		20*time.Millisecond,
+		"the session's CURRENT root turn at fire time must be reaped even though it differs from the turn live at arm time",
+	)
 }
 
 // TestOrphanWatch_ArmDisarmStress_NoPanicConsistentFinalState is the MA-6

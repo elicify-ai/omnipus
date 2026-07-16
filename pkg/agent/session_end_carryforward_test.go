@@ -167,7 +167,11 @@ func TestRunRecap_AllCandidatesFail_CarriesRecentContextForward(t *testing.T) {
 		t.Fatalf("last-session.md not produced within 5s after all-candidates-fail recap")
 	}
 	if !strings.Contains(string(content), nonce) {
-		t.Fatalf("fallback last-session.md must carry the recent user fact forward verbatim.\nwant substring: %q\ngot:\n%s", nonce, content)
+		t.Fatalf(
+			"fallback last-session.md must carry the recent user fact forward verbatim.\nwant substring: %q\ngot:\n%s",
+			nonce,
+			content,
+		)
 	}
 	// The status stub must still be present (we append to it, not replace it).
 	if !strings.Contains(string(content), "Fallback reason:") {

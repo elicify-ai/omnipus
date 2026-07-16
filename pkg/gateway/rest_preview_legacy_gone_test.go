@@ -4,11 +4,11 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package gateway — regression test for the ADR-044 preview-on-main-listener
+// rest_preview_legacy_gone_test.go is a regression test for the ADR-044 preview-on-main-listener
 // production bug: registerPreviewEndpoints (rest.go) registers ONLY
 // middleware.PreviewPathPrefix ("/preview/") on the main mux. The legacy
 // /serve/ and /dev/ back-compat prefixes were retired on the backend, but the
-// SPA (src/lib/preview-url.ts's PREVIEW_PATH_REGEX) still recognises and
+// SPA (src/lib/preview-url.ts's PREVIEW_PATH_REGEX) still recognizes and
 // renders/HEAD-probes them for historical transcript replay
 // (IframePreview.tsx's warmup poll). Because no handler was registered for
 // those two prefixes, an unmatched /serve/... or /dev/... request fell
@@ -31,6 +31,7 @@
 //     HandlePreview and serves real content.
 //   - An unrelated SPA path (not under any preview prefix) is unaffected —
 //     still hits the "/" catch-all.
+
 package gateway
 
 import (
@@ -147,7 +148,14 @@ func TestPreviewPrefix_UnaffectedByLegacyPrefixFix(t *testing.T) {
 	api, srv := newWiredLegacyPreviewRealMux(t)
 
 	workDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(workDir, "index.html"), []byte("<h1>legacy-gone-test canonical preview</h1>"), 0o644))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(workDir, "index.html"),
+			[]byte("<h1>legacy-gone-test canonical preview</h1>"),
+			0o644,
+		),
+	)
 
 	// newPreviewRouteTestAPI wires a real ServedSubdirs onto the restAPI, but
 	// this helper only returns the *restAPI — reach servedSubdirs via the

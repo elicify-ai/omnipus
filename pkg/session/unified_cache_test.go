@@ -630,8 +630,9 @@ func TestNewUnifiedStore_LoadMetaCache_HappyPath(t *testing.T) {
 
 	const n = 4
 	ids := make([]string, n)
+	var meta *UnifiedMeta
 	for i := 0; i < n; i++ {
-		meta, err := first.NewSession(SessionTypeChat, "", "agent-1")
+		meta, err = first.NewSession(SessionTypeChat, "", "agent-1")
 		require.NoError(t, err)
 		ids[i] = meta.ID
 	}
@@ -797,7 +798,12 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 				break
 			}
 		}
-		assert.True(t, found, "known-field %q listed in this test no longer exists on UnifiedMeta — update the test", path)
+		assert.True(
+			t,
+			found,
+			"known-field %q listed in this test no longer exists on UnifiedMeta — update the test",
+			path,
+		)
 	}
 
 	clone := original.Clone()

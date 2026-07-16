@@ -4891,7 +4891,7 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 // this, an unmatched /serve/... or /dev/... request falls through to the
 // "/" SPA catch-all (embed.go's newSPAHandler), which answers any unknown
 // path with a 200 + index.html. The SPA's own link validator
-// (src/lib/preview-url.ts's PREVIEW_PATH_REGEX) still recognises /serve/ and
+// (src/lib/preview-url.ts's PREVIEW_PATH_REGEX) still recognizes /serve/ and
 // /dev/ paths for historical transcript replay, and its warmup probe
 // (IframePreview.tsx) does a same-origin HEAD fetch expecting a genuine
 // non-2xx/3xx status to detect a dead legacy link — a 200-index.html

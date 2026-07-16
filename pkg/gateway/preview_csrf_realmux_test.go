@@ -4,7 +4,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package gateway — closes PTA-2 (7-reviewer gate, pass 2, feat/preview-on-main-listener):
+// preview_csrf_realmux_test.go closes PTA-2 (7-reviewer gate, pass 2, feat/preview-on-main-listener):
 // no existing test wires the ACTUAL PRODUCTION middleware chain (CSRFMiddleware +
 // configSnapshotMiddleware) around a REAL mux populated by registerPreviewEndpoints
 // and proves the /preview/ CSRF-exemption boundary end to end.
@@ -39,6 +39,7 @@
 // OUTERMOST. The resulting request order is exactly what gateway.go's own
 // comment (line 2205) states: "CSRF check → configSnapshot injection → mux
 // dispatch → auth check in handler".
+
 package gateway
 
 import (

@@ -75,7 +75,11 @@ func TestRetentionSweepE2E_SessionCookieSurvivesBypassFlipAndReload(t *testing.T
 	}
 	require.NotNil(t, sessionCookie, "login must issue an omnipus-session cookie")
 	require.NotEmpty(t, sessionCookie.Value)
-	require.NotNil(t, csrfCookie, "login must issue a CSRF cookie (needed to pass the CSRF gate on cookie-only requests)")
+	require.NotNil(
+		t,
+		csrfCookie,
+		"login must issue a CSRF cookie (needed to pass the CSRF gate on cookie-only requests)",
+	)
 	require.NotEmpty(t, csrfCookie.Value)
 
 	// Step 3: mimic retention.spec.ts's raw config.json read -> JSON.parse ->

@@ -30,7 +30,12 @@ func TestResolveInt_ExplicitZero_ReturnsZeroVerbatim(t *testing.T) {
 	// rely on this to distinguish "operator explicitly disabled" (0) from
 	// "operator never set it" (nil).
 	zero := 0
-	assert.Equal(t, 0, ResolveInt(&zero, 300), "an explicit *int=0 must be returned verbatim, not replaced by the default")
+	assert.Equal(
+		t,
+		0,
+		ResolveInt(&zero, 300),
+		"an explicit *int=0 must be returned verbatim, not replaced by the default",
+	)
 }
 
 func TestResolveInt_ExplicitNegative_ReturnsNegativeVerbatim(t *testing.T) {
@@ -40,7 +45,12 @@ func TestResolveInt_ExplicitNegative_ReturnsNegativeVerbatim(t *testing.T) {
 
 func TestResolveInt_ExplicitPositive_ReturnsPositiveVerbatim(t *testing.T) {
 	v := 42
-	assert.Equal(t, 42, ResolveInt(&v, 300), "an explicit positive *int must be returned verbatim regardless of the default")
+	assert.Equal(
+		t,
+		42,
+		ResolveInt(&v, 300),
+		"an explicit positive *int must be returned verbatim regardless of the default",
+	)
 }
 
 // ---------------------------------------------------------------------------

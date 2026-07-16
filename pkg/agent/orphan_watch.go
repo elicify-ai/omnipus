@@ -294,7 +294,7 @@ func (al *AgentLoop) DisarmOrphanForegroundTurnWatch(sessionID string) {
 // attributed to "system:orphan-watchdog" — BEFORE calling reap, so the audit
 // trail always records WHY a cancel was triggered even if reap itself
 // encounters an error. reap is responsible for the actual RequestCancel call
-// (and therefore for RequestCancel's own turn_cancel_attempt/turn_cancelled
+// (and therefore for RequestCancel's own turn_cancel_attempt/turn_canceled
 // audit events, transcript writes, and graceful->hard->detached escalation).
 func (al *AgentLoop) fireOrphanForegroundTurnWatch(
 	sessionID string,

@@ -752,7 +752,12 @@ func TestServeWebOriginMatchesCanonical(t *testing.T) {
 		},
 	}
 	result = tool.Execute(ctx, map[string]any{"path": "."})
-	require.False(t, result.IsError, "serve_web must succeed again once preview_enabled flips back true: %s", result.ForLLM)
+	require.False(
+		t,
+		result.IsError,
+		"serve_web must succeed again once preview_enabled flips back true: %s",
+		result.ForLLM,
+	)
 	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed))
 	urlVal, _ = parsed["url"].(string)
 	assert.True(t, strings.HasPrefix(urlVal, wantOrigin+"/preview/"),

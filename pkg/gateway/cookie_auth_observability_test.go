@@ -29,6 +29,7 @@
 //  1. The helper itself has the right logs-vs-silent behavior in isolation.
 //  2. Each of the three real call sites is actually wired to it — not just
 //     that the helper works standalone.
+
 package gateway
 
 import (

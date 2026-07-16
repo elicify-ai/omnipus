@@ -579,7 +579,16 @@ func TestNoCredentialReturns401(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
 			Users: []config.UserConfig{
-				{Username: "someone", Tokens: []config.TokenEntry{{Hash: config.BcryptHash("$2a$10$notarealbcrypthashvalueXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")}}},
+				{
+					Username: "someone",
+					Tokens: []config.TokenEntry{
+						{
+							Hash: config.BcryptHash(
+								"$2a$10$notarealbcrypthashvalueXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+							),
+						},
+					},
+				},
 			},
 		},
 		Agents: config.AgentsConfig{
