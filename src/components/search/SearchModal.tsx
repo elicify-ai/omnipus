@@ -26,7 +26,7 @@ import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { IconRenderer } from '@/components/shared/IconRenderer'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -85,11 +85,12 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
       <span
         className="w-4 h-4 rounded-full border border-[var(--color-primary)] flex items-center justify-center text-[7px] shrink-0"
         style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
+        aria-hidden="true"
       >
         {agent?.icon ? (
           <IconRenderer icon={agent.icon} size={8} />
         ) : (
-          <span className="text-[var(--color-secondary)] font-bold">{name.charAt(0).toUpperCase()}</span>
+          <span className="text-[var(--color-secondary)] font-bold">{initialOf(name)}</span>
         )}
       </span>
       <span className="flex-1 text-left truncate">{name}</span>

@@ -328,12 +328,17 @@ describe('Escape precedence — menu-close wins over stream-cancel (Fix 3)', () 
 
     // Second Escape: menu is already closed, so this one falls through to
     // the pre-existing cancel-Escape branch, which calls cancelStream (that
-    // branch is unchanged by Fix 3 and, since it doesn't stopPropagation,
-    // can also reach useCancelState's own document-level Escape listener —
-    // a pre-existing, unrelated double-dispatch quirk this test doesn't
-    // pin an exact count for; only that cancel actually fired).
+    // branch is unchanged by Fix 3). That branch's own React synthetic
+    // handler calls preventDefault() before calling cancelIfStreaming(), so
+    // even though it does NOT stopPropagation and the native keydown still
+    // bubbles to `document`, useCancelState's own global Escape listener now
+    // (bugfixes3 deferred item 5 — src/hooks/useCancelState.ts) early-returns
+    // on `e.defaultPrevented` instead of re-dispatching cancelStream a SECOND
+    // time for the same keypress. Pinned to exactly 1 call — restored from
+    // the temporarily relaxed `toHaveBeenCalled()` now that the double-fire
+    // is fixed at the source.
     act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
-    expect(cancelStream).toHaveBeenCalled()
+    expect(cancelStream).toHaveBeenCalledTimes(1)
   })
 
   it('streaming with no menu open: Escape cancels immediately (the new branch does not swallow every Escape)', async () => {
@@ -345,8 +350,11 @@ describe('Escape precedence — menu-close wins over stream-cancel (Fix 3)', () 
 
     // Nothing typed — shouldShowSlash is false, so the menu-close guard's
     // condition never matches and Escape falls straight through to cancel.
+    // Pinned to exactly 1 call (bugfixes3 deferred item 5 — see the sibling
+    // test above and useCancelState.ts's global-Escape doc comment for why
+    // this can no longer double-fire).
     act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
-    expect(cancelStream).toHaveBeenCalled()
+    expect(cancelStream).toHaveBeenCalledTimes(1)
   })
 })
 

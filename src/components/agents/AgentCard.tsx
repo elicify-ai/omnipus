@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 
 interface AgentCardProps {
   agent: Agent
@@ -40,16 +40,17 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         aria-label={`View agent ${agent.name}`}
       >
         <div className="flex items-start gap-3">
-          {/* Avatar */}
+          {/* Avatar — decorative next to the visible name below */}
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold"
             style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
+            aria-hidden="true"
           >
             {agent.icon ? (
               <IconRenderer icon={agent.icon} size={18} className="text-[var(--color-secondary)]" />
             ) : (
               <span className="text-[var(--color-secondary)]">
-                {agent.name.charAt(0).toUpperCase()}
+                {initialOf(agent.name)}
               </span>
             )}
           </div>
