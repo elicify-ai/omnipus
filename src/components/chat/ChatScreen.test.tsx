@@ -160,24 +160,35 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockResolvedValue([
-    { name: 'clear',   label: '/clear',   description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
-    { name: 'help',    label: '/help',    description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
-    { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
-    { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
-    { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
-  ]),
-  fetchSkills: vi.fn().mockResolvedValue([
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  ]),
-  uploadFiles: vi.fn(),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-}))
+// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
+// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
+// doesn't exercise mentions (AgentPicker itself is stubbed below). The
+// workspaces query stays disabled (no activeWorkspaceId set here), so
+// `fetchWorkspaces` is never actually invoked — this just needs to exist so
+// the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockResolvedValue([
+      { name: 'clear',   label: '/clear',   description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
+      { name: 'help',    label: '/help',    description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
+      { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
+      { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
+      { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
+    ]),
+    fetchSkills: vi.fn().mockResolvedValue([
+      { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+      { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+      { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+    ]),
+    uploadFiles: vi.fn(),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+  }
+})
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))

@@ -4,15 +4,25 @@
 // ~862-line body (Wave 3 structural refactor) — behavior is unchanged, only
 // ownership moved.
 //
+// Also owns the `@` agent-mention menu — a second leading-character trigger
+// that reuses this hook's plumbing rather than living in a parallel hook,
+// because this hook is already the single owner of the composer's text
+// mirror AND the menu's keyboard nav; a second hook would need to duplicate
+// both (and would race this one for the mirror) to add its own trigger. The
+// two triggers are mutually exclusive by construction — `inputValue` cannot
+// simultaneously start with "/" and "@" — so `slashItems` simply swaps its
+// source list depending on which (if either) fired.
+//
 // Owns the composer's text mirror (`inputValue`) — AssistantUI's
 // `composerRuntime` is the actual source of truth for what gets sent, but
 // this hook needs a React-reactive copy of the current text to: gate
-// whether the menu should be showing (`inputValue.startsWith('/')`), decide
-// whether the ghost-text overlay should render, and filter the palette.
-// Every place that needs to change the composer's text (selecting a
-// command/skill, running a client command, the plain onChange handler)
-// goes through this hook's actions so `composerRuntime.setText(...)` and
-// the local mirror never drift apart — see each action below.
+// whether the menu should be showing (`inputValue.startsWith('/')` or
+// `startsWith('@')`), decide whether the ghost-text overlay should render,
+// and filter the palette. Every place that needs to change the composer's
+// text (selecting a command/skill/agent, running a client command, the
+// plain onChange handler) goes through this hook's actions so
+// `composerRuntime.setText(...)` and the local mirror never drift apart —
+// see each action below.
 //
 // The `/cancel` client command needs to drive the Stop button's visual
 // state, which is owned by the sibling `useCancelState` hook — the caller
@@ -26,18 +36,26 @@ import { useQuery } from '@tanstack/react-query'
 import type { ComposerRuntime } from '@assistant-ui/react'
 import { generateId } from '@/lib/constants'
 import { fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill } from '@/lib/api'
+import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
+import { useChatAgents } from '@/hooks/useChatAgents'
 
-// ── Slash/skill palette item shape ───────────────────────────────────────────
+// ── Slash/skill/agent palette item shape ─────────────────────────────────────
 
 export interface SlashItem {
   key: string
   label: string
   description: string
-  section: 'commands' | 'skills'
+  section: 'commands' | 'skills' | 'agents'
   argumentHint?: string
+  /** Agent-row-only (section === 'agents') — the avatar dot's background color. */
+  agentColor?: string
+  /** Agent-row-only — Phosphor icon name for the avatar; falls back to the agent's initial when unset. */
+  agentIcon?: string
+  /** Agent-row-only — true when this row is the currently active chat agent (renders the "active" marker). */
+  isActiveAgent?: boolean
   onSelect: () => void
 }
 
@@ -76,11 +94,13 @@ export interface UseSlashMenuResult {
   commandsError: boolean
   /** D9: true when the input is exactly "/skills" — Commands section (and its error row) are hidden while this filter is active. */
   isSkillsFilter: boolean
+  /** True when the input starts with "@" (leading position, same gate as the slash trigger) — `slashItems` is agent rows only while this is true. */
+  isMentionMode: boolean
   /** True when the ghost-text overlay should render (value is exactly `/<skillId> ` right after that skill was selected from the menu). */
   showGhostText: boolean
   /** The ghost text to display — the skill's argument_hint if it declared one, else the generic placeholder. */
   ghostText: string
-  /** Composer textarea onChange — updates the mirror, clears a stale ghost, and opens/closes the menu on the leading "/". */
+  /** Composer textarea onChange — updates the mirror, clears a stale ghost, and opens/closes the menu on the leading "/" or "@". */
   onInputChange: (val: string) => void
   /** Composer textarea onBlur — clears ghost text and closes the menu (delayed so a mouseDown on a menu item fires first). */
   onInputBlur: () => void
@@ -152,6 +172,13 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     enabled: inputEnabled,
   })
 
+  // "@" agent-mention trigger — shares this hook's text mirror + keyboard
+  // nav (see file header). `chatAgents` reuses AgentPicker's exact
+  // status/worker/core_team scoping via useChatAgents so the mention menu
+  // never offers an agent the picker itself wouldn't.
+  const { chatAgents } = useChatAgents()
+  const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
+
   // FR-005: partitioned slash menu — Commands + Skills sections. Triggered
   // when input starts with "/" (no old skill-arg gate).
   const menuFilter = (() => {
@@ -159,7 +186,16 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     return inputValue.slice(1).toLowerCase() // the text after "/"
   })()
 
+  // Mirrors menuFilter for the "@" trigger — leading position only, same
+  // isReplaying/inputEnabled gate. "hello @x" must NOT trigger: only a
+  // leading "@" (index 0 of the raw input) opens the mention menu.
+  const mentionFilter = (() => {
+    if (!inputValue.startsWith('@') || isReplaying || !inputEnabled) return null
+    return inputValue.slice(1).toLowerCase() // the text after "@"
+  })()
+
   const isSkillsFilter = menuFilter === 'skills'
+  const isMentionMode = mentionFilter !== null
 
   // Commands section — hidden when typing "/skills" (D9)
   const visibleCommandItems: SlashItem[] = (() => {
@@ -203,13 +239,45 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     })
   })()
 
-  // Unified list for keyboard nav — commands first, then skills
-  const slashItems: SlashItem[] = [...visibleCommandItems, ...visibleSkillMenuItems]
+  // Agent section — the "@" mention menu's sole content. Mirrors the
+  // skills filter's startsWith convention (case-insensitive name OR id
+  // prefix match; empty filter ⇒ every scoped chat agent).
+  const effectiveActiveAgentId = activeAgentId || chatAgents[0]?.id
+  const agentItems: SlashItem[] = (() => {
+    if (mentionFilter === null) return []
+    const filtered = chatAgents.filter((a) =>
+      mentionFilter === '' ||
+      a.name.toLowerCase().startsWith(mentionFilter) ||
+      a.id.toLowerCase().startsWith(mentionFilter),
+    )
+    return filtered.map((agent) => ({
+      key: agent.id,
+      label: `@${agent.name}`,
+      description: agent.description || agent.model || '',
+      section: 'agents' as const,
+      agentColor: agent.color ?? undefined,
+      agentIcon: agent.icon ?? undefined,
+      isActiveAgent: agent.id === effectiveActiveAgentId,
+      onSelect: () => selectMentionAgent(agent),
+    }))
+  })()
+
+  // Unified list for keyboard nav. The "/" and "@" triggers are mutually
+  // exclusive (inputValue can't start with both characters at once), so
+  // mention mode simply swaps in agentItems as the whole list rather than
+  // concatenating — commands/skills never mix with agent rows.
+  const slashItems: SlashItem[] = isMentionMode
+    ? agentItems
+    : [...visibleCommandItems, ...visibleSkillMenuItems]
   // LOW S8: keep the menu open on a commands-query error even when it would
   // otherwise have zero items (e.g. no skills match either) — the caller's
   // "Commands unavailable" row needs somewhere to render. `menuFilter !==
   // null` reuses the same gate (starts with "/", not replaying, enabled) so
-  // this never opens the menu for reasons unrelated to a "/" being typed.
+  // this never opens the menu for reasons unrelated to a "/" being typed —
+  // in particular, it must NOT fire in mention mode: a commands-fetch error
+  // has nothing to do with "@" and must not force that menu open when zero
+  // agents match. `slashItems.length > 0` alone already covers "agents
+  // matched" for mention mode, since agentItems IS slashItems there.
   const shouldShowSlash =
     (slashItems.length > 0 || (commandsError && menuFilter !== null)) && !isReplaying && inputEnabled
 
@@ -365,6 +433,21 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     closeSlash()
   }
 
+  // selectMentionAgent — called when the user selects an agent from the "@"
+  // mention menu (Enter or click). Same `setActiveSession` contract as
+  // AgentPicker's handleAgentSelect (src/components/chat/composer/
+  // AgentPicker.tsx): preserves activeSessionId (passing it through
+  // unchanged) rather than detaching whatever session is currently active.
+  // Unlike completeSkillName, the `@query` text is fully cleared (not left
+  // as `@name `) — the mention is a one-shot agent switch, not something the
+  // user continues typing after.
+  function selectMentionAgent(agent: Agent) {
+    setActiveSession(activeSessionId, agent.id, agent.type ?? null)
+    composerRuntime.setText('')
+    setInputValue('')
+    closeSlash()
+  }
+
   // Send-path interception: before AssistantUI's onNew fires, check if the
   // trimmed input is exactly a client-delivery slash command (e.g.
   // "/new", or its legacy alias "/clear"). If it is, run it locally and
@@ -409,7 +492,12 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       setGhostSkillId(null)
       setGhostArgumentHint(null)
     }
-    if (val.startsWith('/')) {
+    // Leading "/" opens the command/skill palette, leading "@" opens the
+    // agent-mention menu — mid-text "@" (e.g. "hello @x") must NOT trigger,
+    // hence startsWith rather than includes. Every keystroke re-runs this
+    // (including the first character after "@"), so the second typed
+    // character already filters — there is no separate "arm" step.
+    if (val.startsWith('/') || val.startsWith('@')) {
       setSlashOpen(true)
     } else {
       closeSlash()
@@ -457,6 +545,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     slashItems,
     commandsError,
     isSkillsFilter,
+    isMentionMode,
     showGhostText,
     ghostText,
     onInputChange,
