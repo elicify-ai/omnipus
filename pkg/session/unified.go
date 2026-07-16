@@ -117,17 +117,21 @@ type UnifiedStore struct {
 	backend  *memory.JSONLStore
 
 	// metaCache holds one independent clone per session, keyed by session ID.
-	// It is the sole data source for ListSessions/GetOrCreateScheduledSession's
-	// existence check and GetMeta's fast path — removing the O(N) os.ReadDir +
+	// It is the primary data source for ListSessions/GetOrCreateScheduledSession's
+	// existence check and GetMeta's fast path — avoiding the O(N) os.ReadDir +
 	// per-session os.ReadFile+json.Unmarshal that ListSessions previously did
-	// under the single store-wide lock on every call. Populated via three
+	// under the single store-wide lock on every call. Populated via four
 	// paths: once at construction (loadMetaCacheLocked); on every successful
 	// mutation via writeMetaLocked (every mutation path funnels through it);
-	// and via readMetaLocked self-healing the cache on a cache-miss disk read
+	// via readMetaLocked self-healing the cache on a cache-miss disk read
 	// (SetMeta, SwitchAgent, AppendTranscript, GetOrCreateScheduledSession, and
-	// GetMeta's cache-miss path all reach the cache this way). Explicit
-	// eviction on DeleteSession, ClearAll, and RetentionSweep's empty-dir
-	// removal.
+	// GetMeta's cache-miss path all reach the cache this way); and via
+	// ListSessions' own reconciliation pass, which uses a directory-NAMES-only
+	// os.ReadDir to find sessions written directly to disk out-of-band
+	// (bypassing this store) and self-heals them into the cache the same way
+	// readMetaLocked does — without any per-file disk read for entries already
+	// cached. Explicit eviction on DeleteSession, ClearAll, and
+	// RetentionSweep's empty-dir removal.
 	metaCache map[string]*UnifiedMeta
 
 	// cacheLoadFailures counts sessions whose meta.json failed to read/parse
@@ -1045,19 +1049,63 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 
 // ListSessions returns all session metas, sorted by UpdatedAt descending.
 //
-// Served entirely from metaCache — no disk I/O, replacing the previous
-// os.ReadDir + per-session os.ReadFile+json.Unmarshal scan that ran under
-// the single store-wide lock on every call (the O(N)-disk-scan-under-one-
-// global-lock root cause). The lock is only held long enough to clone each
-// cache entry into the result slice; sorting happens after RUnlock so a
-// large corpus's sort cost never blocks concurrent writers.
+// Primarily served from metaCache — avoiding the old per-call O(N)
+// os.ReadDir + per-session os.ReadFile+json.Unmarshal scan — but first
+// reconciles the cache against disk with a directory-NAMES-only os.ReadDir
+// (one syscall, no per-file reads for entries already cached). Any directory
+// not yet in metaCache — e.g. a session written directly to disk out-of-band,
+// bypassing this store entirely — is lazily loaded via readMetaLocked (the
+// same self-heal path GetMeta/SetMeta/etc. use on a cache miss), which also
+// populates the cache so the disk read is paid at most once per session, not
+// on every ListSessions call. A session whose meta.json fails to read/parse
+// is logged at Warn and skipped, not treated as fatal.
+//
+// Reconciliation requires mutating metaCache (via readMetaLocked), which
+// needs the full write lock — an RLock cannot be upgraded to a Lock without
+// risking deadlock, so the whole method runs under us.mu.Lock() rather than
+// the previous RLock. This serializes ListSessions with writers for the
+// duration of the call, but ListSessions is not on a hot path, and the
+// steady-state (no out-of-band directories) cost is unchanged: one
+// os.ReadDir plus map lookups, still zero per-session disk reads.
 func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
-	us.mu.RLock()
+	us.mu.Lock()
+
+	entries, err := os.ReadDir(us.baseDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("unified_store: list sessions: read base dir", "dir", us.baseDir, "error", err)
+		}
+	} else {
+		for _, entry := range entries {
+			if !entry.IsDir() || entry.Name() == ".context" {
+				continue
+			}
+			name := entry.Name()
+			if err := validateSessionID(name); err != nil {
+				continue
+			}
+			if _, cached := us.metaCache[name]; cached {
+				// Already cached — no per-file disk read needed.
+				continue
+			}
+			// Unknown on-disk directory: lazily load via the standard
+			// self-heal path, which also populates metaCache as a side
+			// effect (see readMetaLocked's cache-miss branch).
+			if _, readErr := us.readMetaLocked(name); readErr != nil {
+				slog.Warn(
+					"unified_store: list sessions: skipping unreadable out-of-band session dir",
+					"dir", name, "error", readErr,
+				)
+				continue
+			}
+		}
+	}
+
 	metas := make([]*UnifiedMeta, 0, len(us.metaCache))
 	for _, meta := range us.metaCache {
 		metas = append(metas, meta.Clone())
 	}
-	us.mu.RUnlock()
+	us.mu.Unlock()
 
 	slices.SortFunc(metas, func(a, b *UnifiedMeta) int {
 		return b.UpdatedAt.Compare(a.UpdatedAt)
