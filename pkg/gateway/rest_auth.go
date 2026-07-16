@@ -560,6 +560,22 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// dev_mode_bypass synthetic identity: like the CLI caller above, the
+	// "_dev_bypass" user (checkBearerAuth's bypass short-circuit, auth.go) has no
+	// Gateway.Users row, so the username lookup below would fail with "user not
+	// found" (500) and skip clearing the browser cookies entirely. Expiring the
+	// browser-side cookies is the only meaningful logout action for a synthetic
+	// identity, so do that and report success — matching the CLI-token path.
+	// Only reachable when gateway.dev_mode_bypass=true (never in production,
+	// where bypass is off and the request authenticates as a real cookie/bearer
+	// user with a genuine Gateway.Users row to revoke).
+	if user.Username == devBypassUser.Username {
+		middleware.ClearSessionCookie(w, r)
+		middleware.ClearCSRFCookie(w, r)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// SEC-1 / UAT #399: revoke ONLY the caller's presented bearer token, not
 	// every token the user holds — concurrent sessions on other tabs/devices
 	// must remain valid. Recover the presented token from the Authorization
