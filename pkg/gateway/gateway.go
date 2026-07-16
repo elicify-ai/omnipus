@@ -210,6 +210,15 @@ type services struct {
 	devServers    *sandbox.DevServerRegistry
 	egressProxy   *sandbox.EgressProxy
 
+	// browserVideo is the live-browser-video-streaming orchestrator (component
+	// M, ADR-044). Created once at boot by setupAndStartServices; executeReload
+	// re-syncs its FR-020 kill-switch to the live gateway.browser_video_enabled
+	// config value on every successful reload (SetVideoEnabled), so the flag
+	// takes effect without a redeploy. Nil only if boot itself failed before
+	// RegisterBrowserVideo ran (setupAndStartServices returns an error in that
+	// case, so executeReload never observes a nil browserVideo in practice).
+	browserVideo *BrowserVideoOrchestrator
+
 	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
 	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
 	// (the M16 live-deps re-population in RunContextWithOptions creates a fresh
@@ -1736,6 +1745,17 @@ func executeReload(
 		markDegraded(err)
 		return err
 	}
+
+	// FR-020/m-4: re-sync the live-browser-video kill-switch to the just-
+	// reloaded config on every SUCCESSFUL reload (a failed reload above already
+	// returned, keeping the prior live value). SetVideoEnabled(false) both
+	// blocks new attaches AND tears down every active stream; SetVideoEnabled
+	// (true) is a no-op transition when it was already on. This is what makes
+	// gateway.browser_video_enabled a live toggle — no gateway restart needed.
+	if runningServices.browserVideo != nil {
+		runningServices.browserVideo.SetVideoEnabled(newCfg.Gateway.IsBrowserVideoEnabled())
+	}
+
 	clearDegraded()
 	return nil
 }
@@ -2107,20 +2127,23 @@ func setupAndStartServices(
 	// relay orchestrator + its loopback capture-ingest endpoint
 	// (/api/v1/browser/capture-ingest, component E). Registered
 	// unconditionally, same posture as browserWSHandler below — the FR-020
-	// kill-switch (BrowserVideoConfig.Enabled, default true here) and the
-	// DS-5 host classification are runtime/per-connection gates
-	// (videoAttachCapable in browser_ws.go), not registration-time ones.
-	// gateway.browser_video_enabled does not exist as a config.Config field
-	// yet, so there is no live config-reload toggle wired to
-	// browserVideo.SetVideoEnabled — a follow-up for whoever owns
-	// pkg/config/pkg/gateway's config-reload path.
+	// kill-switch and the DS-5 host classification are runtime/per-connection
+	// gates (videoAttachCapable in browser_ws.go), not registration-time
+	// ones. The kill-switch's initial value comes from
+	// gateway.browser_video_enabled (config.GatewayConfig.IsBrowserVideoEnabled,
+	// default true); runningServices.browserVideo below is re-synced to the
+	// live config value on every successful reload (executeReload), so
+	// flipping it in config.json takes effect without a redeploy (FR-020,
+	// m-4) — see the SetVideoEnabled call there.
 	browserVideo := RegisterBrowserVideo(runningServices.ChannelManager, BrowserVideoDeps{
 		Audit:       agentLoop.AuditLogger(),
 		InstallRoot: browserInstallRoot,
 		Config: BrowserVideoConfig{
 			IngestWSURL: fmt.Sprintf("ws://127.0.0.1:%d/api/v1/browser/capture-ingest", cfg.Gateway.Port),
+			Enabled:     boolPtr(cfg.Gateway.IsBrowserVideoEnabled()),
 		},
 	})
+	runningServices.browserVideo = browserVideo
 	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin, browserVideo)
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
 

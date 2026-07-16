@@ -1771,13 +1771,23 @@ func registerSharedTools(
 					coord := al.browserCoordinator
 					al.browserMgrs[agentID] = mgr
 					al.mu.Unlock()
-					if coord != nil {
+					if prior != nil && prior.OwnsConnection() {
+						// Remote-CDP (cfg.CDPURL) or the no-coordinator managed
+						// fallback: the prior owns its own allocator/connection
+						// and is NOT registered with the coordinator, so
+						// coord.Release() can't reach it — Shutdown() is the only
+						// thing that releases its connection / kills its own
+						// Chrome. A coordinator OBJECT may still exist (it is
+						// created unconditionally), so the discriminator must be
+						// prior ownership, not `coord != nil`.
+						prior.Shutdown()
+					} else if coord != nil {
 						// CRIT-002 path: connection-only teardown, Chrome +
 						// browser context survive for the new manager to
 						// re-adopt.
 						coord.Release(agentID)
 					} else if prior != nil {
-						// No-coordinator test/legacy path: the old manager owns
+						// No-coordinator legacy path: the old manager owns
 						// its own Chrome, so Shutdown actually kills it.
 						prior.Shutdown()
 					}

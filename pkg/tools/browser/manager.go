@@ -361,6 +361,30 @@ func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, age
 	m.agentID = agentID
 }
 
+// RootContext exposes the coordinator's SHARED, session-independent root
+// chromedp context (ADR-043/CRIT-002, live-browser-video-streaming) — the SAME
+// rootCtx this manager's own tab contexts are children of. It exists for
+// callers outside this package (the gateway's video stream orchestrator) that
+// hold a *BrowserManager but need the coordinator's root, not this agent's own
+// tab context, so work they launch off it (an encoder page, as an isolated
+// chromedp.WithNewBrowserContext() sibling) survives this agent's tab context
+// being torn down and recreated mid-stream.
+//
+// ok is false — and callers MUST degrade cleanly rather than use a nil
+// context — in the no-coordinator managed-mode fallback, the remote-CDP-
+// override mode (cfg.CDPURL set, m.coordinator is nil in both), or when a
+// coordinator is wired but hasn't launched Chrome yet (never started, or torn
+// down awaiting a crash-relaunch).
+func (m *BrowserManager) RootContext() (context.Context, bool) {
+	m.mu.Lock()
+	coordinator := m.coordinator
+	m.mu.Unlock()
+	if coordinator == nil {
+		return nil, false
+	}
+	return coordinator.RootContext()
+}
+
 // blockedSchemes are URL schemes that bypass network-level SSRF and must be
 // denied at the application layer. file:// would bypass Landlock restrictions.
 var blockedSchemes = map[string]bool{
@@ -1845,6 +1869,23 @@ func (m *BrowserManager) Started() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.started
+}
+
+// OwnsConnection reports whether this manager owns its own allocator/connection
+// lifetime — i.e. it is a remote-CDP manager (cfg.CDPURL, a RemoteAllocator) or
+// the no-coordinator managed fallback (its own cdppipe Chrome). In those modes
+// m.allocCancel is non-nil and Shutdown() actually releases the connection/kills
+// the Chrome. A coordinator-backed manager (ADR-043 shared Chrome, CRIT-001) has
+// m.allocCancel == nil — it never owns the shared rootCtx, and its teardown must
+// go through the coordinator's Release (connection-only; the shared Chrome +
+// browser context survive for re-adoption, CRIT-002). The hot-reload teardown
+// path (loop.go registerSharedTools) uses this to decide Shutdown() vs Release():
+// a self-owning prior is NOT registered with the coordinator, so Release() can't
+// reach it and Shutdown() is the only thing that releases its connection.
+func (m *BrowserManager) OwnsConnection() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.allocCancel != nil
 }
 
 // Preprovision resolves — and, if resolution lands on the managed

@@ -2607,6 +2607,17 @@ type GatewayConfig struct {
 	// rendering in tool UIs (emergency rollback knob).
 	PreviewListenerEnabled *bool `json:"preview_listener_enabled,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_LISTENER_ENABLED"`
 
+	// BrowserVideoEnabled is the FR-020 live-browser-video-streaming
+	// kill-switch (live-browser-video-streaming-spec.md FR-020). Defaults to
+	// true. Unlike PreviewListenerEnabled/RestartGatedKeys, this is
+	// deliberately a LIVE toggle, not restart-gated: flipping it to false via
+	// a hot-reloaded config.json edit (or the /reload endpoint) must both move
+	// new video-capable viewer attaches to the unavailable state AND tear down
+	// every already-active stream, without a gateway restart (m-4/FR-020). See
+	// gateway.BrowserVideoOrchestrator.SetVideoEnabled, wired from the
+	// executeReload path.
+	BrowserVideoEnabled *bool `json:"browser_video_enabled,omitempty" env:"OMNIPUS_GATEWAY_BROWSER_VIDEO_ENABLED"`
+
 	// AuthMismatchLogLevel controls the log level emitted when the gateway
 	// detects an authentication mismatch (e.g. token supplied but does not
 	// match, or user not found). Valid values: "debug", "info", "warn"
@@ -3499,6 +3510,16 @@ func (g *GatewayConfig) IsPreviewListenerEnabled() bool {
 		return *g.PreviewListenerEnabled
 	}
 	return previewListenerEnabledDefault()
+}
+
+// IsBrowserVideoEnabled resolves the effective value of
+// gateway.browser_video_enabled (FR-020 kill-switch). Returns the configured
+// value when set; defaults to true (video streaming on) when unset.
+func (g *GatewayConfig) IsBrowserVideoEnabled() bool {
+	if g.BrowserVideoEnabled != nil {
+		return *g.BrowserVideoEnabled
+	}
+	return true
 }
 
 // ValidateAndApplyPreviewDefaults validates gateway preview fields and applies

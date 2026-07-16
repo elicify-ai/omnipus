@@ -281,6 +281,82 @@ func TestCoordinator_LockfileSingleLaunch(t *testing.T) {
 	t.Cleanup(func() { coord2.Shutdown() })
 }
 
+// TestManager_RootContext_SharedAcrossAgents proves the CRIT-002
+// (live-browser-video-streaming) RootContext accessor end to end, hermetically
+// (a fake pipeLauncher — no real Chrome, mirrors TestCoordinator_LockfileSingleLaunch):
+//  1. A manager with no coordinator attached (managed-mode/remote-CDP
+//     fallback) reports ok=false, ctx=nil.
+//  2. A manager attached to a coordinator that hasn't launched Chrome yet
+//     ALSO reports ok=false — there is no shared root to hand out before a
+//     launch.
+//  3. Once the coordinator has launched, RootContext returns ok=true with a
+//     non-nil context, and a SECOND, independently-attached manager on the
+//     SAME coordinator observes the IDENTICAL context — proving the root is
+//     shared across every agent on one coordinator, not per-manager — and it
+//     is exactly the coordinator's own RootContext() value (the manager
+//     accessor is a pure delegate).
+func TestManager_RootContext_SharedAcrossAgents(t *testing.T) {
+	// (1) No coordinator attached at all.
+	noCoordMgr := &BrowserManager{}
+	if ctx, ok := noCoordMgr.RootContext(); ok || ctx != nil {
+		t.Fatalf("expected ok=false, ctx=nil with no coordinator attached; got ok=%v ctx=%v", ok, ctx)
+	}
+
+	home := t.TempDir()
+	execPath := filepath.Join(home, "fake-chrome")
+	writeExecutable(t, execPath, "#!/bin/sh\nexit 0\n")
+	cfg := BrowserConfig{
+		Enabled:     true,
+		Headless:    true,
+		PageTimeout: 30_000_000_000,
+		MaxTabs:     5,
+		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
+		ExecPath:    execPath,
+	}
+
+	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord.pipeLauncher = fakePipeLaunch()
+
+	mgrA := newTestManager(t, cfg)
+	mgrA.AttachSharedChrome(coord, "agent-a")
+
+	// (2) Coordinator wired but Chrome not yet launched — still ok=false.
+	if ctx, ok := mgrA.RootContext(); ok || ctx != nil {
+		t.Fatalf("expected ok=false before the coordinator has launched Chrome; got ok=%v ctx=%v", ok, ctx)
+	}
+
+	// Launch hermetically — no real Chrome (fakePipeLaunch never spawns one).
+	if err := coord.ensureLaunched(context.Background()); err != nil {
+		t.Fatalf("ensureLaunched: %v", err)
+	}
+	t.Cleanup(func() { coord.Shutdown() })
+
+	// (3) Now RootContext resolves for agent A...
+	ctxA, ok := mgrA.RootContext()
+	if !ok || ctxA == nil {
+		t.Fatalf("expected ok=true with a non-nil context once Chrome is live; got ok=%v ctx=%v", ok, ctxA)
+	}
+
+	// ...and a SECOND manager on the SAME coordinator sees the IDENTICAL
+	// shared root context (CRIT-002: not a per-agent/per-manager context).
+	mgrB := newTestManager(t, cfg)
+	mgrB.AttachSharedChrome(coord, "agent-b")
+	ctxB, ok := mgrB.RootContext()
+	if !ok || ctxB == nil {
+		t.Fatalf("expected ok=true for a second manager on the same coordinator; got ok=%v ctx=%v", ok, ctxB)
+	}
+	if ctxA != ctxB {
+		t.Fatal("RootContext must return the SAME shared root context for every agent on one coordinator")
+	}
+
+	// Sanity: BrowserManager.RootContext is a pure delegate to the
+	// coordinator's own accessor.
+	coordCtx, coordOK := coord.RootContext()
+	if !coordOK || coordCtx != ctxA {
+		t.Fatalf("BrowserManager.RootContext must delegate to coordinator.RootContext; coord ok=%v ctx=%v want %v", coordOK, coordCtx, ctxA)
+	}
+}
+
 // TestManager_NoCoordinator_ManagedPipeLaunch exercises the MIGRATED
 // no-coordinator managed-mode fallback with a REAL Chrome: ensureStarted launches
 // Chrome over the CDP pipe (CRIT-001, no TCP port), bootstrapBrowserCtx creates a

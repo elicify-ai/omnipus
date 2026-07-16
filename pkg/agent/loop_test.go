@@ -1671,11 +1671,14 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		Content: "/new",
 		Peer:    baseMsg.Peer,
 	})
-	if newResp != "LLM reply" {
+	// /new is a real handled command (pkg/commands/cmd_clear.go — "clear chat
+	// history"), NOT an LLM passthrough. It replies directly and does not call
+	// the provider, so calls stays at 1 (from the /foo passthrough above).
+	if newResp != "Chat history cleared!" {
 		t.Fatalf("unexpected /new reply: %q", newResp)
 	}
-	if provider.calls != 2 {
-		t.Fatalf("LLM should be called for passthrough /new command, calls=%d", provider.calls)
+	if provider.calls != 1 {
+		t.Fatalf("/new is a handled command; the LLM must NOT be called, calls=%d", provider.calls)
 	}
 }
 

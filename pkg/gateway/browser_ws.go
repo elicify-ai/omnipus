@@ -774,25 +774,18 @@ func (h *BrowserWSHandler) handleAttach(
 	// internally), used by component L's capture driver to start the
 	// screencast this stream encodes.
 	//
-	// RootCtx SHOULD be the coordinator's shared, session-independent root
-	// context (so the encoder page's isolated browser context survives a
-	// relaunch even if this agent's OWN tab context is later torn down and
-	// recreated — CRIT-002) — *browser.BrowserManager exposes no accessor for
-	// it today (only the tab-level Session() context is exported; the
-	// underlying allocCtx/coordinator rootCtx are unexported, and
-	// pkg/tools/browser is out of scope for this change). AgentCtx is reused
-	// here as the best available value: verified safe against chromedp
-	// v0.15.1 (chromedp.go NewContext/WithNewBrowserContext — a child's
-	// `first` flag is false whenever its parent already has a bound Browser,
-	// which AgentCtx does, and NewContext never inherits Target), so this
-	// does not panic and correctly creates an isolated sibling browser
-	// context. The one known gap: if THIS agent's own tab context gets torn
-	// down/recreated while its video stream is live, a later relaunch
-	// attempt on it fails closed to the unavailable state instead of
-	// surviving independently — never a crash, just a narrower blast radius
-	// than the ideal fix (an exported RootContext()-style accessor on
-	// *browser.BrowserManager, a follow-up for whoever owns
-	// pkg/tools/browser).
+	// RootCtx is the coordinator's shared, session-independent root context
+	// (CRIT-002) via *browser.BrowserManager.RootContext() — NOT this agent's
+	// own tab context. The encoder page LaunchEncoderPage starts is created as
+	// a chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext()) sibling
+	// of rootCtx (encoder_launch.go), so it survives this agent's OWN tab
+	// context being torn down and recreated mid-stream (a crash-relaunch,
+	// ReconcileTabs, or the agent closing/reopening its tab) — it no longer
+	// shares that context's lifecycle. RootContext() returns ok=false in the
+	// no-coordinator managed-mode fallback, remote-CDP-override mode, or when
+	// the coordinator hasn't launched Chrome yet; AgentCtx is the fallback for
+	// those cases (the prior behavior — fail-safe, never a panic, just unable
+	// to survive an agent-tab-ctx recreation independently).
 	agentCtx, sessErr := mgr.Session(browser.DefaultSessionID)
 	if sessErr != nil {
 		slog.Warn("browser-ws: video attach: resolve agent session failed",
@@ -800,13 +793,17 @@ func (h *BrowserWSHandler) handleAttach(
 		h.browserVideo.sendUnavailable(wc, chatSessionID, viewerID, "agent_session_failed:"+sessErr.Error())
 		return
 	}
+	rootCtx, rootOK := mgr.RootContext()
+	if !rootOK {
+		rootCtx = agentCtx
+	}
 
 	handle, verr := h.browserVideo.AttachViewer(AttachParams{
 		WC:        wc,
 		AgentID:   frame.AgentId,
 		SessionID: chatSessionID,
 		ViewerID:  viewerID,
-		RootCtx:   agentCtx,
+		RootCtx:   rootCtx,
 		AgentCtx:  agentCtx,
 		VideoCaps: frame.VideoCaps,
 		AudioCaps: frame.AudioCaps,

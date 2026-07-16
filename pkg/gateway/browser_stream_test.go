@@ -438,6 +438,130 @@ func TestStream_KillSwitch_TearsDown(t *testing.T) {
 	}
 }
 
+// TestNewOrchestrator_EnabledFromConfig proves the orchestrator's enabled
+// state is read from BrowserVideoConfig.Enabled at construction (FR-020) —
+// never a hardcoded true — so the gateway.browser_video_enabled config value
+// (resolved by config.GatewayConfig.IsBrowserVideoEnabled and passed in as
+// deps.Config.Enabled) takes effect from the very first attach, not only
+// after a later SetVideoEnabled call.
+func TestNewOrchestrator_EnabledFromConfig(t *testing.T) {
+	falseVal := false
+	trueVal := true
+
+	unset := newTestOrchestrator(capable(), newFakeIngest(), (&fakeLauncher{}).launch, (&fakeCaptureStarter{}).start, &fakeEncoderServer{})
+	if !unset.Enabled() {
+		t.Fatal("an unset Config.Enabled must default to enabled (FR-020 default true)")
+	}
+
+	offOrch := newOrchestrator(BrowserVideoDeps{
+		Config: BrowserVideoConfig{
+			IngestWSURL:     "ws://127.0.0.1:5000/api/v1/browser/capture-ingest",
+			LivenessTimeout: time.Hour,
+			Enabled:         &falseVal,
+		},
+		Classify:      capable(),
+		LaunchEncoder: (&fakeLauncher{}).launch,
+		StartCapture:  (&fakeCaptureStarter{}).start,
+		EncoderServer: &fakeEncoderServer{},
+	})
+	offOrch.ingest = newFakeIngest()
+	if offOrch.Enabled() {
+		t.Fatal("Config.Enabled=false must start the orchestrator disabled — not a hardcoded true")
+	}
+
+	// A construction-time-disabled orchestrator must reject an attach exactly
+	// like a runtime SetVideoEnabled(false) does: unavailable state, no stream.
+	wc := newTestVideoConn()
+	h, err := offOrch.AttachViewer(AttachParams{
+		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
+		RootCtx: context.Background(), AgentCtx: context.Background(),
+		VideoCaps: []string{"avc1.4D401E"},
+	})
+	if err != nil {
+		t.Fatalf("AttachViewer error: %v", err)
+	}
+	if h != nil {
+		t.Fatal("expected nil handle — construction-time kill-switch-off must block the very first attach")
+	}
+	f := findStatusError(t, wc)
+	if f.Message == nil || *f.Message != browserVideoUnavailableMessage {
+		t.Fatalf("expected generic unavailable message, got %v", f.Message)
+	}
+
+	onOrch := newOrchestrator(BrowserVideoDeps{
+		Config: BrowserVideoConfig{Enabled: &trueVal},
+	})
+	if !onOrch.Enabled() {
+		t.Fatal("Config.Enabled=true must start the orchestrator enabled")
+	}
+}
+
+// TestStream_KillSwitch_ReEnable_AllowsNewAttach extends the FR-020 kill-switch
+// coverage (TestStream_KillSwitch_TearsDown covers OFF blocking new attaches +
+// tearing down the active one) to the full runtime round-trip a config
+// reload flips gateway.browser_video_enabled back to true drives:
+// SetVideoEnabled(true) after an OFF period must let a brand-new attach start
+// a brand-new stream — the reload hook (executeReload calling
+// SetVideoEnabled(newCfg.Gateway.IsBrowserVideoEnabled())) is the only path
+// that can re-enable it, so this proves that path's target API behaves
+// correctly for BOTH directions of the live toggle, not just OFF.
+func TestStream_KillSwitch_ReEnable_AllowsNewAttach(t *testing.T) {
+	ing := newFakeIngest()
+	launch := &fakeLauncher{}
+	cap := &fakeCaptureStarter{}
+	srv := &fakeEncoderServer{}
+	o := newTestOrchestrator(capable(), ing, launch.launch, cap.start, srv)
+
+	// Flip OFF with no active stream (simulates a reload landing while idle).
+	o.SetVideoEnabled(false)
+	if o.Enabled() {
+		t.Fatal("kill-switch should be off")
+	}
+
+	wcBlocked := newTestVideoConn()
+	hBlocked, err := o.AttachViewer(AttachParams{
+		WC: wcBlocked, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
+		RootCtx: context.Background(), AgentCtx: context.Background(),
+		VideoCaps: []string{"avc1.4D401E"},
+	})
+	if err != nil {
+		t.Fatalf("AttachViewer error: %v", err)
+	}
+	if hBlocked != nil {
+		t.Fatal("expected nil handle while kill-switch is off")
+	}
+	if ing.mintCount() != 0 || launch.count() != 0 {
+		t.Fatalf("kill-switch-off attach must start no stream machinery; mint=%d launch=%d", ing.mintCount(), launch.count())
+	}
+
+	// Flip back ON (simulates a second reload restoring browser_video_enabled=true).
+	o.SetVideoEnabled(true)
+	if !o.Enabled() {
+		t.Fatal("kill-switch should be back on")
+	}
+
+	// A new attach must now succeed and bring up a real stream.
+	wcOK := newTestVideoConn()
+	hOK, err := o.AttachViewer(AttachParams{
+		WC: wcOK, AgentID: "agent1", SessionID: "sess1", ViewerID: "v2",
+		RootCtx: context.Background(), AgentCtx: context.Background(),
+		VideoCaps: []string{"avc1.4D401E"},
+	})
+	if err != nil {
+		t.Fatalf("AttachViewer error: %v", err)
+	}
+	if hOK == nil {
+		t.Fatal("expected a live stream once the kill-switch is back on")
+	}
+	defer hOK.Detach()
+
+	if ing.mintCount() != 1 || launch.count() != 1 || cap.count() != 1 {
+		t.Fatalf("expected exactly one stream to start post-re-enable; mint=%d launch=%d capture=%d",
+			ing.mintCount(), launch.count(), cap.count())
+	}
+	drainStreamInit(t, wcOK)
+}
+
 func TestStream_IngestDrop_Remints(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}

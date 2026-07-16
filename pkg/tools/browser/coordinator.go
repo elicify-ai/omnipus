@@ -456,6 +456,33 @@ func (c *BrowserCoordinator) totalOpenTabsLocked() int {
 	return n
 }
 
+// RootContext returns the coordinator's SHARED, session-independent root
+// chromedp context (the same rootCtx Register returns) — the context every
+// agent's browser context is a CHILD of, over the one multiplexed CDP pipe.
+//
+// CRIT-002 (live-browser-video-streaming): callers that only hold a
+// *BrowserManager (not the coordinator itself) use this to launch work — most
+// notably the video stream orchestrator's encoder page — as an isolated
+// SIBLING of rootCtx (via chromedp.NewContext(rootCtx,
+// chromedp.WithNewBrowserContext())) rather than as a child of one agent's own
+// TAB context. A sibling of rootCtx survives that agent's tab context being
+// torn down and recreated (e.g. a crash-relaunch, ReconcileTabs, or the agent
+// closing/reopening its tab) mid-stream; a child of the tab context does not.
+//
+// ok is false when no Chrome is currently live — never launched yet, or torn
+// down by Shutdown/a crash awaiting relaunch. Callers MUST treat ok=false as
+// "no shared root available right now" and degrade cleanly (e.g. fall back to
+// an agent's own tab context, or fail the caller's operation closed) rather
+// than using a nil/stale context.
+func (c *BrowserCoordinator) RootContext() (context.Context, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rootCtx == nil {
+		return nil, false
+	}
+	return c.rootCtx, true
+}
+
 // PID returns the shared Chrome process pid (0 if none live) — the R1/R3
 // regression tests observe reload-no-kill + Close-only-kill through this.
 func (c *BrowserCoordinator) PID() int {
