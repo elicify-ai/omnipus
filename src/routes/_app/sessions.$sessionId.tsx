@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChatScreen } from '@/components/chat/ChatScreen'
@@ -6,6 +6,28 @@ import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys, isApiError } 
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+
+// A just-deleted session (confirmed 404, not merely still loading) previously
+// fell through to a bare <ChatScreen /> — the loader caught the 404 and
+// returned null, the effect below never ran (no detail.session), and nothing
+// distinguished "loading" from "gone" — so the user saw what looked like a
+// fresh, empty chat instead of any indication the session was deleted.
+function SessionNotFound() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
+      <p className="text-sm font-medium text-[var(--color-secondary)]">Session not found</p>
+      <p className="text-xs text-[var(--color-muted)] max-w-sm">
+        This session may have been deleted.
+      </p>
+      <Link
+        to="/"
+        className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+      >
+        Back to Chat
+      </Link>
+    </div>
+  )
+}
 
 function SessionRoute() {
   const { sessionId } = Route.useParams()
@@ -20,7 +42,7 @@ function SessionRoute() {
 
   const loaderData = Route.useLoaderData()
 
-  const { data: detail } = useQuery({
+  const { data: detail, isError: detailIsError, error: detailError } = useQuery({
     queryKey: ['session-detail', sessionId],
     initialData: loaderData ?? undefined,
     queryFn: () => fetchSessionDetail(sessionId),
@@ -86,9 +108,25 @@ function SessionRoute() {
       setWorkspaceSessionDescriptor(wsId, descriptor)
 
       // Step 3: send attach_session frame (or defer to onConnected path).
-      if (connection && attachedRef.current !== session.id) {
+      // The activeSessionId check guards against re-attaching an already-active
+      // session id — mirrors enterWorkspaceChat's no-op guard (session.ts) —
+      // so re-mounting this route for a session already attached this tab
+      // doesn't fire a redundant attach_session + bucket wipe.
+      if (
+        connection &&
+        attachedRef.current !== session.id &&
+        useSessionStore.getState().activeSessionId !== session.id
+      ) {
         attachedRef.current = session.id
-        attachToSession(session.id, session.type, session.title ?? undefined, headerAgentId)
+        const attached = attachToSession(session.id, session.type, session.title ?? undefined, headerAgentId)
+        if (!attached) {
+          // connection.send() itself failed (e.g. mid reconnect-backoff) —
+          // attachToSession left state untouched. Fall back to setActiveSession
+          // so activeSessionId still records this session; otherwise
+          // WsLifecycle.onConnected -> reattachActiveSession would reattach
+          // whatever session was PREVIOUSLY active instead of this one.
+          setActiveSession(session.id, headerAgentId, null)
+        }
       } else if (!connection) {
         // Offline: setActiveSession records the session so reattachActiveSession
         // can send the frame once the WS connects (WsLifecycle.onConnected path).
@@ -107,10 +145,28 @@ function SessionRoute() {
       return
     }
 
-    // Fallback inline path — no workspace, or workspace not yet loaded.
-    if (connection && attachedRef.current !== session.id) {
+    // Fallback inline path — no workspace, or workspace not yet loaded. Attach
+    // with the session's REAL type/title (not a hardcoded 'chat'/undefined —
+    // that clobbered channel/scheduled/heartbeat sessions' labelling and, when
+    // useSelectSession also attached before navigating here, wiped the real
+    // values a second time). The activeSessionId check guards against
+    // re-attaching an already-active session id — mirrors enterWorkspaceChat's
+    // no-op guard (session.ts) — since useSelectSession no longer attaches for
+    // Unfiled sessions, this route is now the SOLE attacher for them.
+    if (
+      connection &&
+      attachedRef.current !== session.id &&
+      useSessionStore.getState().activeSessionId !== session.id
+    ) {
       attachedRef.current = session.id
-      attachToSession(session.id, 'chat', undefined, headerAgentId)
+      const attached = attachToSession(session.id, session.type, session.title ?? undefined, headerAgentId)
+      if (!attached) {
+        // connection.send() itself failed — attachToSession left state
+        // untouched. Fall back to setActiveSession so activeSessionId still
+        // records this session (see the identical comment in the
+        // workspace-known branch above for why this matters on reconnect).
+        setActiveSession(session.id, headerAgentId, null)
+      }
     } else if (!connection) {
       setActiveSession(session.id, headerAgentId, null)
     }
@@ -133,6 +189,13 @@ function SessionRoute() {
     setActiveWorkspaceId,
     navigate,
   ])
+
+  // Confirmed 404 (loader caught it and returned null, then the client-side
+  // refetch above hit the same 404) — surface it instead of falling through
+  // to a bare ChatScreen that looks like a fresh, empty chat.
+  if (!detail?.session && detailIsError && isApiError(detailError) && detailError.status === 404) {
+    return <SessionNotFound />
+  }
 
   // Suppress inline render while workspace redirect is in flight.
   const wsId = detail?.session?.workspace_id

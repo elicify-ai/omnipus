@@ -2233,3 +2233,123 @@ describe('ChannelConfigPanel — cross-channel form-state leak fix (CRITICAL)', 
     })
   })
 })
+
+// ── R2F-1 HIGH fix regression: same-CHANNEL close→reopen showed a permanently
+// EMPTY/stale form. The hydration effect used to depend only on
+// [currentConfig, isGoogleChat] — on a same-instance reopen (no ConnectorsScreen
+// `key` remount, since the channel identity is unchanged) TanStack Query's
+// structural sharing hands back the SAME `currentConfig` object reference once
+// the reopen's refetch resolves to unchanged data, so the effect never re-fired
+// and the form stayed on whatever the `!open` reset effect cleared it to. The
+// fix adds `open` to the hydration effect's dependency list so it re-hydrates
+// on every reopen regardless of whether the query data object changed. These
+// tests render the SAME component instance across a close/reopen cycle via
+// `rerender` (no parent `key` remount) with the mock query fn returning the
+// literal SAME object reference both times, to directly reproduce the
+// structural-sharing scenario without depending on TanStack Query's internal
+// equality semantics. ──────────────────────────────────────────────────────
+
+describe('ChannelConfigPanel — same-channel close→reopen rehydration (R2F-1 HIGH)', () => {
+  let client: QueryClient
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchAgents).mockResolvedValue([])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+    vi.mocked(fetchWorkspace).mockResolvedValue({} as Workspace)
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; clear: () => void }) => unknown) =>
+        selector({ byChannel: {}, clear: vi.fn() })) as never,
+    )
+    client = makeQueryClient()
+  })
+
+  function renderPanelControlled(channelId: string, channelName: string, open: boolean) {
+    return render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel
+          channelId={channelId}
+          channelName={channelName}
+          open={open}
+          onOpenChange={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('Telegram: reopening the SAME channel re-shows the configured-token sentinel, not an empty field', async () => {
+    // Literal same object reference on every call — simulates TanStack Query's
+    // structural sharing returning the pre-close cached reference on reopen.
+    const telegramConfig = { type: 'telegram', enabled: true, token: '[configured]' }
+    vi.mocked(fetchChannelConfig).mockImplementation(() => Promise.resolve(telegramConfig))
+
+    const { rerender } = renderPanelControlled('telegram', 'Telegram', true)
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('[configured]')
+    })
+
+    // Close without editing anything.
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="telegram" channelName="Telegram" open={false} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    // Reopen the SAME channel — the query refetches and (per the mock) resolves
+    // to the identical object reference as before.
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="telegram" channelName="Telegram" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    // Pre-fix: the `!open` effect cleared formValues to {} on close, and the
+    // hydration effect (keyed only on [currentConfig, isGoogleChat]) never
+    // re-fired because currentConfig's reference never changed — token field
+    // stayed permanently empty, blocking Save with "Bot Token is required".
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Bot Token/)).toHaveValue('[configured]')
+    })
+  })
+
+  it('Google Chat: reopening the SAME channel re-detects the stored service-account auth method', async () => {
+    const gchatConfig = { service_account_json: '{"type":"service_account"}' }
+    vi.mocked(fetchChannelConfig).mockImplementation(() => Promise.resolve(gchatConfig))
+
+    const { rerender } = renderPanelControlled('google-chat', 'Google Chat', true)
+    await waitFor(() => {
+      const radio = screen.getByLabelText('Service account') as HTMLInputElement
+      expect(radio.checked).toBe(true)
+    })
+
+    // Close without editing anything.
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="google-chat" channelName="Google Chat" open={false} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    // Reopen the SAME channel — same object reference resolved again.
+    rerender(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="google-chat" channelName="Google Chat" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    // Pre-fix: the `!open` effect reset gChatAuthMethod to 'webhook' on close,
+    // and the hydration effect's SA-detection never re-ran on reopen — the
+    // radio stayed on Webhook even though a service-account config is stored,
+    // and completing the (visually empty) webhook form would send '' for the
+    // SA fields via buildSubmitPayload, revoking the stored credential.
+    await waitFor(() => {
+      const radio = screen.getByLabelText('Service account') as HTMLInputElement
+      expect(radio.checked).toBe(true)
+    })
+    // The auth-group RADIO OPTION itself ("Webhook URL") always renders — only
+    // the webhook_url text FIELD toggles with the selected group.
+    expect(document.getElementById('field-service_account_json')).not.toBeNull()
+    expect(document.getElementById('field-webhook_url')).toBeNull()
+  })
+})

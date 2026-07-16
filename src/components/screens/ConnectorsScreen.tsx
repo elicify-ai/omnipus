@@ -82,6 +82,12 @@ function deriveBaseType(channel: ChannelEntry): string {
 
 type ConfiguredChannelEntry = ChannelEntry & { instance_id: string }
 
+/** Identity + capability snapshot ConnectorsScreen tracks for whichever channel
+ *  instance ChannelConfigPanel is currently open (or was last open) for — both
+ *  the live `configuringChannel` state and its close-animation-surviving ref
+ *  carry this same shape. */
+type ConfiguringChannel = { id: string; name: string; nativeAvailable?: boolean; enabled?: boolean }
+
 function isTemplateStub(channel: ChannelEntry): boolean {
   // Bare-type key = no "." (ADR-029 instance grammar is <type>.<slug>; only
   // DefaultConfig and legacy single-instance configs use bare keys). A
@@ -857,14 +863,14 @@ export function ConnectorsScreen() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string; nativeAvailable?: boolean; enabled?: boolean } | null>(null)
+  const [configuringChannel, setConfiguringChannel] = useState<ConfiguringChannel | null>(null)
   // Retains the last non-null configuringChannel so ChannelConfigPanel can stay
   // ALWAYS mounted (mirrors EmailMailboxPanel/CreateChannelSheet below) — its props
   // must survive the close animation instead of unmounting immediately when
   // configuringChannel is cleared to null. Written in an effect (not during
   // render) per React's rules-of-refs; the effect from the last non-null render
   // always commits before configuringChannel can transition back to null.
-  const lastConfiguringChannelRef = useRef<{ id: string; name: string; nativeAvailable?: boolean; enabled?: boolean } | null>(null)
+  const lastConfiguringChannelRef = useRef<ConfiguringChannel | null>(null)
   useEffect(() => {
     if (configuringChannel) lastConfiguringChannelRef.current = configuringChannel
   }, [configuringChannel])
@@ -1206,22 +1212,29 @@ export function ConnectorsScreen() {
             and CreateChannelSheet below) so its props survive the close
             animation instead of unmounting immediately.
             key={configuringChannelProps?.id}: forces a fresh ChannelConfigPanel
-            instance whenever the CONFIGURED channel identity changes, which
-            happens in two cases the panel's own close-effect can't cover on its
-            own: (1) clicking "Configure" on a different row while the panel is
-            already open for another channel — configuringChannel jumps straight
-            from A to B, `open` never transitions to false, so the panel's
-            `!open` reset effect never runs; (2) eliminating the one-frame flash
-            of the PREVIOUS channel's hydrated values that a same-instance
-            close+reopen would otherwise show before the hydration effect
-            re-runs post-paint. Keyed on `configuringChannelProps` (the
-            close-animation-surviving ref), not `configuringChannel` directly:
-            keying on the latter would go to the `'none'` key the instant the
-            panel starts closing (configuringChannel -> null), destroying the
-            instance mid-close and killing the exit animation. Keying on the
-            ref-backed value keeps the key — and the instance — stable for the
-            whole close animation of a given channel, and only changes when a
-            genuinely different channel becomes current. */}
+            instance whenever the CONFIGURED channel identity changes. This
+            covers the one case the panel's own close-effect can't: clicking
+            "Configure" on a different row while the panel is already open for
+            another channel — configuringChannel jumps straight from A to B,
+            `open` never transitions to false, so the panel's `!open` reset
+            effect never runs and B would otherwise inherit A's leftover
+            formValues/dirty flag/auth-method selection.
+            A same-instance close+reopen of the SAME channel does NOT rely on
+            this key — it does not remount at all, and does not need to: the
+            panel's own `!open` reset effect clears formValues/isDirtyRef/
+            gChatAuthMethod on close, and its hydration effect re-runs on every
+            reopen because `open` is itself one of that effect's dependencies
+            (see ChannelConfigPanel.tsx), so it re-hydrates from the query data
+            even when that data is the same object reference TanStack Query's
+            structural sharing handed back from before the close.
+            Keyed on `configuringChannelProps` (the close-animation-surviving
+            ref), not `configuringChannel` directly: keying on the latter would
+            go to the `'none'` key the instant the panel starts closing
+            (configuringChannel -> null), destroying the instance mid-close and
+            killing the exit animation. Keying on the ref-backed value keeps
+            the key — and the instance — stable for the whole close animation
+            of a given channel, and only changes when a genuinely different
+            channel becomes current. */}
         <ChannelConfigPanel
           key={configuringChannelProps?.id ?? 'none'}
           channelId={configuringChannelProps?.id ?? ''}

@@ -205,7 +205,18 @@ describe('Chat screen — empty state', () => {
 
   it('renders "Welcome to omnipus.ai" heading (gold .ai split into its own span)', () => {
     render(<ChatScreen />, { wrapper })
-    expect(screen.getByText(/Welcome to omnipus/)).toBeTruthy()
+    // M4: the heading now composes "Welcome to " with the shared <Wordmark>
+    // component, which nests "omnipus" one level deeper (inside its own
+    // <span>) than the old hand-rolled markup did — getByText's default
+    // matcher only reads an element's OWN direct text nodes, so a plain
+    // /Welcome to omnipus/ text query no longer finds a single matching
+    // element even though the rendered text is unchanged. Assert on the
+    // heading's full (recursive) textContent instead, plus confirm the
+    // split-span brand survived the Wordmark adoption (".ai" still renders
+    // in its own Forge Gold span, not flattened into a single text node).
+    const heading = screen.getByRole('heading', { level: 1 })
+    expect(heading.textContent).toMatch(/Welcome to omnipus\.ai/)
+    expect(heading.querySelector('span')).not.toBeNull()
   })
 
   it('renders prompt to select an agent (no active agent in empty state)', () => {

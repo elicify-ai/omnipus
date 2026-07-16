@@ -82,7 +82,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: ' ' })
 
-    expect(drag.listeners?.onKeyDown).toHaveBeenCalledTimes(1)
+    expect(drag.listeners.onKeyDown).toHaveBeenCalledTimes(1)
   })
 })
 

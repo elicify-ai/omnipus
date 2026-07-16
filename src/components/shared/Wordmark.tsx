@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils'
 /**
  * Brand wordmark — "omnipus.ai", all lowercase, with the ".ai" in Forge Gold.
  * The single source of truth for the textual brand across the UI (sidebar,
- * login, onboarding, landing, about). Size via className (text-sm/xl/…).
+ * login, landing, about, chat welcome). Size via className (text-sm/xl/…).
  */
 export function Wordmark({ className }: { className?: string }) {
   return (

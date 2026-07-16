@@ -4,6 +4,7 @@ import { useSelectSession } from './useSelectSession'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
 // useSelectSession behavioral coverage.
@@ -87,22 +88,30 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
 
 const attachToSessionSpy = vi.fn()
 const setActiveAgentTypeSpy = vi.fn()
+const setActiveSessionSpy = vi.fn()
 const seedSessionTokensSpy = vi.fn()
 const setActiveWorkspaceIdSpy = vi.fn()
+const addToastSpy = vi.fn()
 const onClose = vi.fn()
 
 beforeEach(() => {
   mockNavigate.mockReset()
   attachToSessionSpy.mockReset()
+  // Default: attach succeeds. Individual failure tests override this to
+  // `false` to exercise the abort path (Wave-1/round-2 Bug 1 regression).
+  attachToSessionSpy.mockReturnValue(true)
   setActiveAgentTypeSpy.mockReset()
+  setActiveSessionSpy.mockReset()
   seedSessionTokensSpy.mockReset()
   setActiveWorkspaceIdSpy.mockReset()
+  addToastSpy.mockReset()
   onClose.mockReset()
 
   act(() => {
     useSessionStore.setState({
       attachToSession: attachToSessionSpy,
       setActiveAgentType: setActiveAgentTypeSpy,
+      setActiveSession: setActiveSessionSpy,
     } as unknown as Parameters<typeof useSessionStore.setState>[0])
     useChatStore.setState({
       seedSessionTokens: seedSessionTokensSpy,
@@ -111,6 +120,9 @@ beforeEach(() => {
       activeWorkspaceId: null,
       setActiveWorkspaceId: setActiveWorkspaceIdSpy,
     })
+    useUiStore.setState({
+      addToast: addToastSpy,
+    } as unknown as Parameters<typeof useUiStore.setState>[0])
   })
 })
 
@@ -162,6 +174,32 @@ describe('useSelectSession — workspace-switch branch', () => {
       params: { workspaceId: 'ws-a' },
     })
   })
+
+  it('shows a toast and ABORTS (no seed, no agent type, no close, no navigate) when attach fails mid-workspace-switch', () => {
+    // BDD: Given a real WS outage (connection.send() returns false),
+    //   When selecting a session that requires a workspace switch,
+    //   Then attachToSession returns false and the rest of the flow never runs —
+    //   the user's click must not look like it worked.
+    attachToSessionSpy.mockReturnValue(false)
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+    const result = renderSelectSession()
+    const session = makeSession({ id: 'sess-b', workspace_id: 'ws-b', title: 'In B', total_tokens: 500 })
+
+    act(() => {
+      result.current(session)
+    })
+
+    expect(attachToSessionSpy).toHaveBeenCalledWith('sess-b', 'chat', 'In B', 'agent-chat-1')
+    expect(seedSessionTokensSpy).not.toHaveBeenCalled()
+    expect(setActiveAgentTypeSpy).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(addToastSpy).toHaveBeenCalledTimes(1)
+    expect(addToastSpy.mock.calls[0][0]).toMatchObject({ variant: 'error' })
+    expect(addToastSpy.mock.calls[0][0].message.toLowerCase()).toMatch(/connection|not.*switch/)
+  })
 })
 
 // ── In-place branch (same workspace / no active workspace) ─────────────────
@@ -187,12 +225,33 @@ describe('useSelectSession — in-place branch', () => {
       params: { workspaceId: 'ws-a' },
     })
   })
+
+  it('shows a toast and ABORTS when attach fails for an in-place (same-workspace) session', () => {
+    attachToSessionSpy.mockReturnValue(false)
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+    const result = renderSelectSession()
+    const session = makeSession({ id: 'sess-a', workspace_id: 'ws-a', title: 'In A' })
+
+    act(() => {
+      result.current(session)
+    })
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(addToastSpy).toHaveBeenCalledTimes(1)
+  })
 })
 
 // ── HIGH bug fix: "Unfiled" sessions must never attach-and-vanish ──────────
 
 describe('useSelectSession — Unfiled session (HIGH: never attach-and-vanish)', () => {
-  it('attaches and navigates to the standalone /sessions/$sessionId route when the session has no workspace_id', () => {
+  it('does NOT attach, but closes and navigates to the standalone /sessions/$sessionId route when the session has no workspace_id', () => {
+    // Round-2 fix: attaching here AND letting the /sessions/$sessionId route
+    // attach again on mount double-attached (two attach_session frames, two
+    // bucket wipes, and a type/title clobber). The route now owns the single
+    // attach for Unfiled sessions — this hook navigates only.
     const result = renderSelectSession()
     const session = makeSession({ id: 'sess-orphan', title: 'Orphan Session' })
     // No workspace_id set.
@@ -201,7 +260,9 @@ describe('useSelectSession — Unfiled session (HIGH: never attach-and-vanish)',
       result.current(session)
     })
 
-    expect(attachToSessionSpy).toHaveBeenCalledWith('sess-orphan', 'chat', 'Orphan Session', 'agent-chat-1')
+    expect(attachToSessionSpy).not.toHaveBeenCalled()
+    expect(seedSessionTokensSpy).not.toHaveBeenCalled()
+    expect(setActiveAgentTypeSpy).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalledTimes(1)
     // Must navigate somewhere the attach is visible — never silently attach with
     // no route rendering it (the previous bug: no navigation call at all).
@@ -211,7 +272,7 @@ describe('useSelectSession — Unfiled session (HIGH: never attach-and-vanish)',
     })
   })
 
-  it('attaches and navigates to /sessions/$sessionId when workspace_id points at a DELETED workspace', () => {
+  it('does NOT attach, but navigates to /sessions/$sessionId when workspace_id points at a DELETED workspace', () => {
     const result = renderSelectSession()
     const session = makeSession({
       id: 'sess-deleted-ws',
@@ -225,12 +286,8 @@ describe('useSelectSession — Unfiled session (HIGH: never attach-and-vanish)',
 
     // The deleted workspace is not in `workspaces`, so no setActiveWorkspaceId call.
     expect(setActiveWorkspaceIdSpy).not.toHaveBeenCalled()
-    expect(attachToSessionSpy).toHaveBeenCalledWith(
-      'sess-deleted-ws',
-      'chat',
-      'Deleted Workspace Session',
-      'agent-chat-1',
-    )
+    expect(attachToSessionSpy).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/sessions/$sessionId',
       params: { sessionId: 'sess-deleted-ws' },
@@ -260,11 +317,21 @@ describe('useSelectSession — Unfiled session (HIGH: never attach-and-vanish)',
 })
 
 // ── attach -> seed-tokens -> set-agent-type sequence ────────────────────────
+//
+// This sequence only runs for known-workspace sessions (attachAndSeed is not
+// called at all for Unfiled sessions — see the describe block above), so
+// every session here carries a `workspace_id` that exists in `workspaces`.
 
 describe('useSelectSession — attach -> seedSessionTokens -> setActiveAgentType sequence', () => {
+  beforeEach(() => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+  })
+
   it('seeds the token counter with total_tokens when the session has tokens', () => {
     const result = renderSelectSession()
-    const session = makeSession({ id: 'sess-tok', title: 'Tokens', total_tokens: 4200 })
+    const session = makeSession({ id: 'sess-tok', workspace_id: 'ws-a', title: 'Tokens', total_tokens: 4200 })
 
     act(() => {
       result.current(session)
@@ -277,10 +344,10 @@ describe('useSelectSession — attach -> seedSessionTokens -> setActiveAgentType
     const result = renderSelectSession()
 
     act(() => {
-      result.current(makeSession({ id: 'sess-zero-tok', title: 'Zero', total_tokens: 0 }))
+      result.current(makeSession({ id: 'sess-zero-tok', workspace_id: 'ws-a', title: 'Zero', total_tokens: 0 }))
     })
     act(() => {
-      result.current(makeSession({ id: 'sess-no-tok', title: 'None' }))
+      result.current(makeSession({ id: 'sess-no-tok', workspace_id: 'ws-a', title: 'None' }))
     })
 
     expect(seedSessionTokensSpy).not.toHaveBeenCalled()
@@ -288,7 +355,13 @@ describe('useSelectSession — attach -> seedSessionTokens -> setActiveAgentType
 
   it('sets activeAgentType from the resolved agent for a chat-type session', () => {
     const result = renderSelectSession()
-    const session = makeSession({ id: 'sess-chat', title: 'Chat', agent_id: 'agent-chat-1', active_agent_id: 'agent-chat-1' })
+    const session = makeSession({
+      id: 'sess-chat',
+      workspace_id: 'ws-a',
+      title: 'Chat',
+      agent_id: 'agent-chat-1',
+      active_agent_id: 'agent-chat-1',
+    })
 
     act(() => {
       result.current(session)
@@ -301,6 +374,7 @@ describe('useSelectSession — attach -> seedSessionTokens -> setActiveAgentType
     const result = renderSelectSession()
     const session = makeSession({
       id: 'sess-task',
+      workspace_id: 'ws-a',
       title: 'Task',
       type: 'task',
       agent_id: 'agent-task-1',
@@ -319,15 +393,46 @@ describe('useSelectSession — attach -> seedSessionTokens -> setActiveAgentType
     const result = renderSelectSession()
 
     act(() => {
-      result.current(makeSession({ id: 'sess-first', title: 'First' }))
+      result.current(makeSession({ id: 'sess-first', workspace_id: 'ws-a', title: 'First' }))
     })
     act(() => {
-      result.current(makeSession({ id: 'sess-second', title: 'Second' }))
+      result.current(makeSession({ id: 'sess-second', workspace_id: 'ws-a', title: 'Second' }))
     })
 
     expect(attachToSessionSpy).toHaveBeenCalledTimes(2)
     expect(attachToSessionSpy.mock.calls[0][0]).toBe('sess-first')
     expect(attachToSessionSpy.mock.calls[1][0]).toBe('sess-second')
     expect(attachToSessionSpy.mock.calls[0][0]).not.toBe(attachToSessionSpy.mock.calls[1][0])
+  })
+})
+
+// ── W2-1 regression: setActiveSession must never be called by this hook ────
+
+describe('useSelectSession — never calls setActiveSession (W2-1 regression)', () => {
+  // setActiveSession resets attachedSessionType/attachedTaskTitle/isReplaying —
+  // calling it after attachToSession would wipe the state attachToSession just
+  // initialized. Covers BOTH select branches: a known-workspace session (which
+  // attaches directly) and an Unfiled session (which now only navigates).
+  it('is never called for a known-workspace session', () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+    const result = renderSelectSession()
+
+    act(() => {
+      result.current(makeSession({ id: 'sess-a', workspace_id: 'ws-a', title: 'In A' }))
+    })
+
+    expect(setActiveSessionSpy).not.toHaveBeenCalled()
+  })
+
+  it('is never called for an Unfiled session', () => {
+    const result = renderSelectSession()
+
+    act(() => {
+      result.current(makeSession({ id: 'sess-orphan', title: 'Orphan Session' }))
+    })
+
+    expect(setActiveSessionSpy).not.toHaveBeenCalled()
   })
 })

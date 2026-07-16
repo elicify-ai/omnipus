@@ -8,10 +8,34 @@
  * there are.
  */
 
-import { describe, it, expect, beforeAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { GraphView } from './GraphView'
+import type { Node } from '@xyflow/react'
 import type { Task } from '@/lib/api'
+
+// Capture every `nodes` array React Flow is rendered with, by wrapping the
+// real `ReactFlow` component and recording its props before delegating to
+// the actual implementation. This is how the position-stability regression
+// test below (GraphView — position stability across an unrelated re-render)
+// observes node-object identity without needing to simulate a real drag
+// gesture (React Flow's pointer-based DnD cannot be driven faithfully in
+// jsdom — see the file-level comment above).
+const capturedNodesCalls: Node[][] = []
+vi.mock('@xyflow/react', async () => {
+  const actual = await vi.importActual<typeof import('@xyflow/react')>('@xyflow/react')
+  return {
+    ...actual,
+    ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
+      capturedNodesCalls.push(props.nodes as Node[])
+      return <actual.ReactFlow {...props} />
+    },
+  }
+})
+
+// `vi.mock` calls are hoisted above every import in this file (including the
+// one below), so GraphView's own `import { ReactFlow } from '@xyflow/react'`
+// resolves to the wrapped version above.
+import { GraphView } from './GraphView'
 
 // ── React Flow jsdom shims ──────────────────────────────────────────────────
 beforeAll(() => {
@@ -32,6 +56,10 @@ beforeAll(() => {
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
     x: 0, y: 0, width: 248, height: 96, top: 0, left: 0, right: 248, bottom: 96, toJSON: () => ({}),
   } as DOMRect)
+})
+
+beforeEach(() => {
+  capturedNodesCalls.length = 0
 })
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -143,5 +171,66 @@ describe('GraphView — keyboard operability (WCAG 2.1.1 / 4.1.2)', () => {
     const node = container.querySelector('[data-testid="task-node-a"]') as HTMLElement
     fireEvent.keyDown(node, { key: ' ' })
     expect(onTaskClick).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('GraphView — position stability across an unrelated re-render', () => {
+  // Regression test for the re-seed effect described in GraphView.tsx
+  // (`nodesWithOpen` / `stableOnOpen`): the parent commonly passes
+  // `onTaskClick` as a fresh inline closure every render (e.g.
+  // WorkspaceGraphTab's `onTaskClick={(task) => setSelectedTaskId(task.id)}`).
+  // If the re-seed effect's memo ever depended on that raw prop again instead
+  // of the ref-backed `stableOnOpen`, a parent re-render with no actual graph
+  // change would recompute `nodesWithOpen` into brand-new node objects, the
+  // effect would re-fire `setNodes(nodesWithOpen)`, and every user-dragged
+  // node position would snap back to the dagre layout. We assert the ACTUAL
+  // node objects React Flow renders with stay referentially identical across
+  // such a re-render — dagre would recompute the SAME numeric positions for
+  // unchanged input, so asserting on position VALUES wouldn't catch a re-seed;
+  // object identity is the only observable that distinguishes "recomputed"
+  // from "untouched".
+  it('keeps the nodes array passed to React Flow referentially stable when the parent re-renders with a fresh onTaskClick closure', () => {
+    const tasks = [
+      makeTask({ id: 'a', title: 'Design the schema' }),
+      makeTask({ id: 'b', title: 'Build the API', blocked_by: ['a'] }),
+    ]
+    // Stable `agents` reference across every render below — an inline `[]`
+    // literal in the JSX would itself be a fresh array identity on every
+    // call, which would recompute GraphView's `layout` (and thus
+    // `nodesWithOpen`) regardless of onTaskClick, confounding exactly the
+    // thing this test isolates. Mirrors production, where `agents` comes
+    // from a TanStack Query cache and is only a new reference when the data
+    // actually changes.
+    const agents: never[] = []
+    const onTaskClickA = () => {}
+    const { rerender } = render(
+      <GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickA} />,
+    )
+
+    // Prime: re-render once with the SAME onTaskClick reference before taking
+    // the baseline snapshot. This settles any one-time mount-effect churn
+    // unrelated to what we're testing (e.g. the "reflect external selection"
+    // effect normalising an initial `selected: undefined` to `selected: false`
+    // on every node the first time it runs) — since the reference is
+    // unchanged here, `nodesWithOpen` cannot recompute either way (fixed or
+    // reverted), so this step is neutral with respect to the regression this
+    // test targets.
+    rerender(<GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickA} />)
+    expect(capturedNodesCalls.length).toBeGreaterThan(0)
+    const firstNodes = capturedNodesCalls[capturedNodesCalls.length - 1]
+    expect(firstNodes).toHaveLength(2)
+
+    // Re-render with a BRAND NEW onTaskClick closure — same tasks/agents, so
+    // nothing about the actual graph changed.
+    const onTaskClickB = () => {}
+    rerender(<GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickB} />)
+
+    const lastNodes = capturedNodesCalls[capturedNodesCalls.length - 1]
+    // Same array reference — `nodesWithOpen` did not recompute, so the re-seed
+    // effect never re-fired `setNodes`.
+    expect(lastNodes).toBe(firstNodes)
+    // And every individual node object is untouched too (not just the array).
+    expect(lastNodes[0]).toBe(firstNodes[0])
+    expect(lastNodes[1]).toBe(firstNodes[1])
   })
 })

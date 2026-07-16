@@ -2082,7 +2082,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
             delete sessionsById['__pending']
             return { sessionsById, ...bucketToForeground(baseBucket) }
           })
-          // Invalidate sessions list so SessionPanel shows the new session.
+          // Invalidate sessions list so the session lists (SearchModal, sidebar
+          // accordion) re-fetch and show the new session.
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break
         }

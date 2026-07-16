@@ -63,7 +63,7 @@ Re-grill #2 confirmed A1 closed 3/4 round-1 criticals; the remaining two were me
 | `src/store/ui.ts::openEditAgentSlideOver` | **modify** | add explicit `workspaceId` param (A5); update all callers |
 | `src/components/workspaces/WorkspaceTeamTab.tsx` | **modify** | pass `workspaceId` when opening the edit slide-over |
 | `src/components/screens/SettingsScreen.tsx` (+ a new `MemorySection.tsx`) | **extend** | add Memory tab over global recap/retention settings |
-| `src/components/chat/SessionPanel.tsx` | **modify** | pin/badge heartbeat session; disable its delete while active |
+| `src/components/chat/SessionPanel.tsx` | **modify** | pin/badge heartbeat session; disable its delete while active [2026-07-16: SessionPanel.tsx was removed; session-list UI now lives in SearchModal + the sidebar accordion — retarget accordingly] |
 
 ### Impact Assessment
 | Symbol Modified | Risk | Direct dependents (d=1) | Indirect (d=2) |

@@ -93,11 +93,13 @@ function makeClient() {
 }
 
 function renderModal() {
-  return render(
-    <QueryClientProvider client={makeClient()}>
+  const client = makeClient()
+  const utils = render(
+    <QueryClientProvider client={client}>
       <SearchModal />
     </QueryClientProvider>,
   )
+  return { ...utils, client }
 }
 
 beforeEach(() => {
@@ -176,6 +178,26 @@ describe('SearchModal — delete flow', () => {
     await waitFor(() => expect(deleteSession).toHaveBeenCalledWith('s-1'))
     expect(useSessionStore.getState().activeSessionId).toBe('s-2')
   })
+
+  it('disables the delete control for a protected (heartbeat) session and never opens the confirm step', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', protected: true }),
+    ])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const deleteBtn = screen.getByRole('button', { name: 'Delete Session One' })
+    expect(deleteBtn).toBeDisabled()
+    expect(deleteBtn).toHaveAttribute('title', 'Protected (heartbeat)')
+
+    // A disabled button ignores clicks — the destructive confirm step must
+    // never appear, and no delete request must be made.
+    await user.click(deleteBtn)
+    expect(screen.queryByText('Delete "Session One"?')).not.toBeInTheDocument()
+    expect(deleteSession).not.toHaveBeenCalled()
+  })
 })
 
 describe('SearchModal — rename flow', () => {
@@ -207,6 +229,116 @@ describe('SearchModal — rename flow', () => {
     expect(renameSession).not.toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByDisplayValue('Should not stick')).not.toBeInTheDocument())
     expect(screen.getByText('Session One')).toBeInTheDocument()
+  })
+
+  it('restores focus to the row rename button after Escape-cancel', async () => {
+    const user = userEvent.setup()
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const renameBtn = screen.getByRole('button', { name: 'Rename Session One' })
+    await user.click(renameBtn)
+    const input = screen.getByDisplayValue('Session One')
+    await user.type(input, '{Escape}')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename Session One' })).toHaveFocus())
+  })
+
+  it('restores focus to the row rename button after a successful commit', async () => {
+    const user = userEvent.setup()
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Rename Session One' }))
+    const input = screen.getByDisplayValue('Session One')
+    await user.type(input, ' 2{Enter}')
+
+    // renameSession is mocked and doesn't feed back into the fetchSessions
+    // mock, so the row's displayed title (prop-driven) reverts to "Session
+    // One" once the post-mutation invalidateQueries refetch resolves — the
+    // rename button's accessible name reverts with it. What this test
+    // verifies is that focus lands back on THE ROW'S rename button (not
+    // dropped to <body>) the moment the inline editor unmounts on commit.
+    await waitFor(() => expect(renameSession).toHaveBeenCalledWith('s-1', 'Session One 2'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename Session One' })).toHaveFocus())
+  })
+})
+
+describe('SearchModal — editing-state contract (Escape-to-close suppression)', () => {
+  it('Escape closes the modal when no row is being renamed', async () => {
+    const user = userEvent.setup()
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+  })
+
+  it('unmounting a mid-rename row (group collapse) does not wedge Escape-to-close (wedge regression)', async () => {
+    const user = userEvent.setup()
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Rename Session One' }))
+    expect(screen.getByDisplayValue('Session One')).toBeInTheDocument()
+
+    // Collapse the workspace group the renaming row lives in — SessionRow
+    // (still mid-rename) unmounts without ever calling setEditing(false).
+    await user.click(screen.getByRole('button', { name: 'Alpha Workspace' }))
+    await waitFor(() => expect(screen.queryByDisplayValue('Session One')).not.toBeInTheDocument())
+
+    // Pre-fix, the ref never gets reset to `false` on unmount, so Escape
+    // stays permanently suppressed for the rest of the modal's life.
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+  })
+
+  it('a parent re-render mid-rename does not silently re-enable Escape-to-close (re-render regression)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', updated_at: '2026-07-16T11:00:00Z', workspace_id: 'ws-1' }),
+      makeSession({ id: 's-2', title: 'Session Two', updated_at: '2026-07-16T10:00:00Z', workspace_id: 'ws-1' }),
+    ])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Session Two')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Rename Session One' }))
+    const input = screen.getByDisplayValue('Session One')
+    await user.type(input, ' extra')
+
+    // Force a SearchModal re-render for a reason unrelated to either row's
+    // own editing state — e.g. a background refetch of `sessions`,
+    // `workspaces`, or `agents` re-renders the whole tree the same way.
+    // Setting the workspace filter to the workspace both sessions already
+    // belong to changes zero visible results (nothing is filtered out) but
+    // does change the `wsFilter` value SearchModal selects from the store,
+    // forcing a genuine re-render of SearchModal and — since SessionRow is
+    // not memoized — fresh `onEditingChange` props on every row, all without
+    // moving focus off the rename input (a real click would).
+    // Note: `sessions` (and thus `groups`/`flatSessions`) are TanStack Query
+    // data, which uses structural sharing — resolving a fresh-but-equal
+    // array back to the SAME reference and skipping the re-render entirely,
+    // so mutating query data directly does not reliably reproduce this bug.
+    act(() => {
+      useUiStore.setState({ searchModalWorkspaceFilter: 'ws-1' })
+    })
+
+    await user.keyboard('{Escape}')
+
+    // Escape must cancel the in-progress rename, not close the whole modal
+    // and discard it.
+    await waitFor(() => expect(screen.queryByDisplayValue('Session One extra')).not.toBeInTheDocument())
+    expect(useUiStore.getState().searchModalOpen).toBe(true)
+    expect(screen.getByText('Session One')).toBeInTheDocument()
+    expect(screen.getByText('Session Two')).toBeInTheDocument()
+    expect(renameSession).not.toHaveBeenCalled()
   })
 })
 

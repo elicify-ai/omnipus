@@ -101,20 +101,45 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
 
 function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDelete, deleting, onEditingChange }: {
   session: Session; isActive: boolean; isHighlighted: boolean; onSelect: () => void; onRename: (t: string) => void; onDelete: () => void; deleting: boolean
-  /** Notifies the parent modal whenever this row enters/leaves inline-rename
-   *  mode — used to suppress the Dialog's own Escape-to-close while a rename
-   *  is in progress (see the DialogContent onEscapeKeyDown wiring below). */
-  onEditingChange?: (editing: boolean) => void
+  /** Notifies the parent modal whenever THIS row (identified by session.id)
+   *  enters/leaves inline-rename mode — used to suppress the Dialog's own
+   *  Escape-to-close while any row is mid-rename (see the DialogContent
+   *  onEscapeKeyDown wiring below). Required (single private caller in
+   *  SearchModal) and must be a stable identity — SearchModal passes a
+   *  useCallback-memoized handler so this row's effect doesn't re-fire on
+   *  every unrelated parent re-render. The effect below also reports `false`
+   *  on unmount, so collapsing this row's group (or a refetch dropping it)
+   *  while mid-rename can't leave the parent's aggregate wedged `true`. */
+  onEditingChange: (sessionId: string, editing: boolean) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [val, setVal] = useState(session.title || '')
+  const renameButtonRef = useRef<HTMLButtonElement>(null)
   const commit = () => {
     const t = val.trim()
     if (t && t !== session.title) onRename(t)
     setEditing(false)
   }
-  useEffect(() => { onEditingChange?.(editing) }, [editing, onEditingChange])
+  useEffect(() => {
+    onEditingChange(session.id, editing)
+    // Unmount cleanup: report this row as no-longer-editing regardless of
+    // its last-known state. Without this, closing the modal (or the group
+    // collapsing / a refetch dropping the row) mid-rename leaves the
+    // session's id stuck in the parent's editing set forever.
+    return () => onEditingChange(session.id, false)
+  }, [editing, onEditingChange, session.id])
+
+  // Restore focus to the rename (pencil) button whenever a rename ends
+  // (Escape-cancel, ✕-cancel, or successful commit) — the inline input
+  // unmounts on all three paths and focus would otherwise drop to <body>.
+  const wasEditingRef = useRef(false)
+  useEffect(() => {
+    if (wasEditingRef.current && !editing) {
+      renameButtonRef.current?.focus()
+    }
+    wasEditingRef.current = editing
+  }, [editing])
 
   if (editing) {
     return (
@@ -177,15 +202,18 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
         </div>
         {/* flex-wrap + hiding the token count under 400px keeps the metadata legible on phones */}
         <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0 text-[11px] text-[var(--color-muted)]">
-          <span>Started {formatRelative(session.created_at)}</span>
+          {/* formatRelative returns '' for an unparseable date (documented
+              contract in src/lib/formatRelative.ts) — fall back to an em
+              dash here rather than rendering a dangling "Started ". */}
+          <span>Started {formatRelative(session.created_at) || '—'}</span>
           <span aria-hidden>·</span>
-          <span>Active {formatRelative(session.updated_at)}</span>
+          <span>Active {formatRelative(session.updated_at) || '—'}</span>
           {session.total_tokens ? (<span className="hidden min-[400px]:inline"><span aria-hidden>· </span><span className="font-mono">{formatTokens(session.total_tokens)}</span></span>) : null}
           {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[9px]">HB</span></>)}
         </div>
       </button>
       {/* Hover-revealed on pointer devices; always visible on touch ([@media(hover:none)]). */}
-      <button type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
+      <button ref={renameButtonRef} type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
         className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
         aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></button>
       <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
@@ -204,12 +232,21 @@ export function SearchModal() {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const setActiveSession = useSessionStore((s) => s.setActiveSession)
-  // Tracks whether any SessionRow is currently in inline-rename mode, so the
+  // Tracks the set of session ids currently in inline-rename mode, so the
   // Dialog's own Escape-to-close can be suppressed in favour of just
-  // cancelling the rename (see SessionRow's onEditingChange + the
-  // DialogContent onEscapeKeyDown below).
-  const anyRowEditingRef = useRef(false)
+  // cancelling the rename(s) in progress (see SessionRow's onEditingChange +
+  // the DialogContent onEscapeKeyDown below). A Set (not a single boolean)
+  // because more than one row can be mid-rename at once — one row cancelling
+  // must not re-enable Escape-to-close while another is still editing.
+  // handleEditingChange is a stable useCallback (not an inline arrow) so
+  // SessionRow's effect only re-fires when ITS OWN editing state actually
+  // changes, never on an unrelated parent re-render (e.g. a background
+  // refetch delivering a new `sessions` array reference).
+  const editingSessionIdsRef = useRef<Set<string>>(new Set())
+  const handleEditingChange = useCallback((sessionId: string, editing: boolean) => {
+    if (editing) editingSessionIdsRef.current.add(sessionId)
+    else editingSessionIdsRef.current.delete(sessionId)
+  }, [])
 
   const [searchText, setSearchText] = useState('')
   const [showDateFilter, setShowDateFilter] = useState(false)
@@ -229,7 +266,10 @@ export function SearchModal() {
   }, [])
 
   useEffect(() => {
-    if (!open) { setSearchText(''); setShowDateFilter(false); setFromDate(''); setToDate(''); setCollapsedWs(new Set()); setCollapsedAgent(new Set()) }
+    if (!open) {
+      setSearchText(''); setShowDateFilter(false); setFromDate(''); setToDate(''); setCollapsedWs(new Set()); setCollapsedAgent(new Set())
+      editingSessionIdsRef.current.clear()
+    }
   }, [open])
 
   const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), enabled: open })
@@ -247,11 +287,11 @@ export function SearchModal() {
     mutationFn: (id: string) => deleteSession(id),
     onSuccess: (_data, deletedId) => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
-      // Mirror the old SessionPanel behaviour: deleting the currently-attached
-      // session must not leave chat pointed at a now-dead session id.
-      if (activeSessionId === deletedId) {
-        setActiveSession(null, null, null)
-      }
+      // Prunes any sessionByWorkspace entry pointing at the deleted session
+      // (so a later enterWorkspaceChat doesn't zombie-reattach the dead id)
+      // and clears activeSessionId if it matches — logic now lives in the
+      // store so every delete path shares it, not just this one.
+      useSessionStore.getState().pruneSessionDescriptor(deletedId)
     },
     onError: (e) => addToast({ message: getErrorMessage(e, 'Delete failed'), variant: 'error' }),
   })
@@ -348,7 +388,7 @@ export function SearchModal() {
           result list grows (e.g. clearing the workspace filter). dvh tracks
           the actual visible height. */}
       <DialogContent
-        onEscapeKeyDown={(e) => { if (anyRowEditingRef.current) e.preventDefault() }}
+        onEscapeKeyDown={(e) => { if (editingSessionIdsRef.current.size > 0) e.preventDefault() }}
         className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl">
         {/* Header with search input + date toggle */}
         <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0 border-b border-[var(--color-border)]">
@@ -450,7 +490,7 @@ export function SearchModal() {
                                     onRename={(t) => renameMut.mutate({ id: s.id, title: t })}
                                     onDelete={() => deleteMut.mutate(s.id)}
                                     deleting={deleteMut.isPending && deleteMut.variables === s.id}
-                                    onEditingChange={(editing) => { anyRowEditingRef.current = editing }} />
+                                    onEditingChange={handleEditingChange} />
                                 ))}
                               </div>
                             )}

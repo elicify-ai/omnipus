@@ -22,16 +22,7 @@ import { cn } from '@/lib/utils'
 // The workspace container surface: 6 view tabs (+ the workspace-name →
 // settings item). Each tab is a deep-linkable sub-route under
 // /workspaces/$workspaceId. Chat is the default landing tab.
-export type TabSegment = 'chat' | 'board' | 'list' | 'graph' | 'calendar' | 'team'
-export type WorkspaceSegment = TabSegment | 'settings'
-
-export interface WorkspaceTab {
-  segment: TabSegment
-  label: string
-  Icon: Icon
-}
-
-export const WORKSPACE_TABS: WorkspaceTab[] = [
+export const WORKSPACE_TABS = [
   { segment: 'chat', label: 'Chat', Icon: ChatCircle },
   { segment: 'board', label: 'Board', Icon: SquaresFour },
   { segment: 'list', label: 'List', Icon: ListBullets },
@@ -42,22 +33,44 @@ export const WORKSPACE_TABS: WorkspaceTab[] = [
   // not a view. It's reached by clicking the workspace NAME in the top bar
   // (WorkspaceTabContainer) or the compact dropdown's settings entry,
   // Notion-style. The /settings route still exists.
-]
+] as const
+
+/** Every real WORKSPACE_TABS segment — derived from the array itself (not a
+ * hand-maintained union), so adding/renaming/removing a tab there can never
+ * silently drift out of sync with this type, including the SEGMENT_LABELS
+ * completeness check below. */
+export type TabSegment = (typeof WORKSPACE_TABS)[number]['segment']
+export type WorkspaceSegment = TabSegment | 'settings'
+
+export interface WorkspaceTab {
+  segment: TabSegment
+  label: string
+  Icon: Icon
+}
 
 /** Single source for every segment's display label — the six WORKSPACE_TABS
- * labels plus 'settings', which deliberately has no WORKSPACE_TABS entry.
- * Both header renderings (full strip's compact switcher, and the compact
- * dropdown) read from this instead of each re-deriving their own
- * `activeTab?.label ?? (segment === 'settings' ? ... : 'Chat')` fallback —
- * that duplication is what previously let the two renderings drift
- * ('Workspace settings' vs 'Settings') for the same state. */
-export const SEGMENT_LABELS: Record<WorkspaceSegment, string> = {
-  ...(Object.fromEntries(WORKSPACE_TABS.map((t) => [t.segment, t.label])) as Record<
-    TabSegment,
-    string
-  >),
-  settings: 'Settings',
-}
+ * labels plus 'settings', which deliberately has no WORKSPACE_TABS entry. All
+ * three usages of this map are inside the ONE compact dropdown (the
+ * view-switcher trigger button + its settings menu entry, both below @6xl) —
+ * the full tab strip reads `label` directly off WORKSPACE_TABS and never
+ * touches this map. Before this map existed, the compact dropdown re-derived
+ * its own `activeTab?.label ?? (segment === 'settings' ? ... : 'Chat')`
+ * fallback at each of those three call sites, and that duplication is what
+ * previously let them drift ('Workspace settings' vs 'Settings') for the same
+ * state. Built via `reduce` (not `Object.fromEntries`, whose lib type always
+ * widens to a `{[k: string]: string}` index signature — TypeScript's
+ * `Object.fromEntries` has no literal-key-preserving overload) so the
+ * `tab.segment` key assignment below is checked against the declared
+ * `Record<WorkspaceSegment, string>` on every iteration, derived straight
+ * from `TabSegment` — a tab added to WORKSPACE_TABS without a label is a
+ * compile error here, not a silent runtime gap. */
+const SEGMENT_LABELS: Record<WorkspaceSegment, string> = WORKSPACE_TABS.reduce(
+  (acc, tab) => {
+    acc[tab.segment] = tab.label
+    return acc
+  },
+  { settings: 'Settings' } as Record<WorkspaceSegment, string>,
+)
 
 interface WorkspaceTabBarProps {
   workspaceId: string
@@ -206,6 +219,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
             <DropdownMenuItem
               key="settings"
               data-testid="workspace-view-switcher-settings"
+              aria-current={settingsActive ? 'page' : undefined}
               onClick={() => {
                 void navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
               }}
@@ -227,6 +241,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               return (
                 <DropdownMenuItem
                   key={segment}
+                  aria-current={isActive ? 'page' : undefined}
                   onClick={() => {
                     void navigate({
                       to: `/workspaces/$workspaceId/${segment}`,

@@ -71,7 +71,7 @@ Every conversation is a **session**, and the app remembers what you discussed so
 
 You can share things with your agents, not just type at them.
 
-**Attach a file** by clicking the **paperclip** in the message box and picking a file.
+**Attach a file** by clicking the **+ (Add files or context)** button in the message box and picking a file.
 
 **Paste an image** by copying an image (a screenshot, a photo, a diagram) and pasting it straight into the chat with Cmd/Ctrl+V.
 

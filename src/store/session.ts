@@ -35,12 +35,29 @@ interface SessionStore {
   setActiveAgentType: (type: AgentKind | null) => void
   attachedSessionType: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | null
   attachedTaskTitle: string | null
+  /**
+   * Attaches the WS to a session (sends `attach_session`) and updates local
+   * state. Returns whether the attach actually succeeded:
+   *   - `true`  — the frame was sent (connected path), OR the WS is offline
+   *               (state is still recorded and a toast warns the user;
+   *               `WsLifecycle.onConnected` -> `reattachActiveSession` finishes
+   *               the job once the connection returns).
+   *   - `false` — the WS is connected but `connection.send()` itself returned
+   *               false (a real "up but currently unable to send" state, e.g.
+   *               mid reconnect-backoff). Store state is intentionally left
+   *               UNTOUCHED on this path (Wave-1 Bug 2 regression test) — the
+   *               caller MUST check this return value and abort any follow-on
+   *               work (seeding tokens, navigating, closing a modal, etc.)
+   *               rather than proceeding as though the attach worked. Model:
+   *               `reattachActiveSession`'s failed-send branch in
+   *               `OmnipusRuntimeProvider.tsx`.
+   */
   attachToSession: (
     sessionId: string,
     type: Session['type'],
     title?: string,
     agentId?: string
-  ) => void
+  ) => boolean
   setAttachedContext: (type: Session['type'], title: string | null) => void
   startNewSession: (agentId?: string | null, agentType?: AgentKind | null) => void
   sessionByWorkspace: Record<string, WorkspaceSessionDescriptor | null>
@@ -54,6 +71,17 @@ interface SessionStore {
     workspaceId: string,
     descriptor: WorkspaceSessionDescriptor | null
   ) => void
+  /**
+   * Removes any `sessionByWorkspace` entries that point at `sessionId` — set
+   * to `null` ("explicitly fresh") rather than deleted, so the next
+   * `enterWorkspaceChat` for that workspace starts a new session instead of
+   * silently reattaching the now-deleted id (a zombie reattach). Also clears
+   * `activeSessionId` (via `setActiveSession`) when it matches the deleted
+   * session — this replaces the inline `activeSessionId === deletedId` check
+   * that used to live in SearchModal's `deleteMut.onSuccess`, so the pruning
+   * logic lives in one place regardless of which UI triggers the delete.
+   */
+  pruneSessionDescriptor: (sessionId: string) => void
   enterWorkspaceChat: (workspaceId: string) => void
 }
 
@@ -147,7 +175,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         useConnectionStore.getState().setConnectionError(
           'Could not attach to session — connection dropped. Please reconnect and try again.'
         )
-        return
+        return false
       }
       // Only wipe the chat bucket once the attach frame is confirmed sent —
       // resetting first (as before) would permanently lose the bucket's
@@ -177,6 +205,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }
       syncForeground()
       setChatReplaying(true)
+      return true
     } else {
       console.warn('[session] attachToSession: no connection — attach_session not sent')
       logDiagnostic('sessionAttachToSessionNoConnection', { sessionId, type })
@@ -211,6 +240,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         }))
       }
       syncForeground()
+      return true
     }
   },
 
@@ -251,6 +281,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }))
   },
 
+  pruneSessionDescriptor: (sessionId) => {
+    set((state) => {
+      const next: Record<string, WorkspaceSessionDescriptor | null> = {}
+      for (const [workspaceId, descriptor] of Object.entries(state.sessionByWorkspace)) {
+        next[workspaceId] = descriptor?.id === sessionId ? null : descriptor
+      }
+      return { sessionByWorkspace: next }
+    })
+    // Mirrors the inline check this replaces: deleting the currently-attached
+    // session must not leave chat pointed at a now-dead session id.
+    if (get().activeSessionId === sessionId) {
+      get().setActiveSession(null, null, null)
+    }
+  },
+
   sessionByWorkspace: {},
 
   enterWorkspaceChat: (workspaceId: string) => {
@@ -279,7 +324,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       return
     }
 
-    // Restore the previous conversation for this workspace.
+    // Restore the previous conversation for this workspace. The boolean
+    // return is intentionally ignored here: on failure (send() returned
+    // false), attachToSession leaves state untouched — this descriptor still
+    // points at the same session — and surfaces a connection error itself
+    // via setConnectionError. There is no follow-on work in this function to
+    // abort; the next enterWorkspaceChat for this workspace (re-entering it,
+    // or after reconnect) simply retries the same attach.
     state.attachToSession(
       descriptor.id,
       descriptor.type,

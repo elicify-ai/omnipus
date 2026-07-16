@@ -20,10 +20,21 @@ export const PRIORITY_BADGE: Record<number, { label: string; className: string }
  * `useDraggable` call, so they are all-or-nothing in practice; grouping them
  * into one optional prop (rather than three independently-optional props)
  * makes that invariant explicit at the type level instead of by convention.
+ *
+ * `listeners` is narrowed to the non-undefined `SyntheticListenerMap` (dnd-kit's
+ * own `DraggableSyntheticListeners = SyntheticListenerMap | undefined`) — a
+ * `TaskCardDrag` with `drag` present but `listeners` undefined would be
+ * representable otherwise, and that combination is exactly the "Space to
+ * move" aria-label promising a dead key: dnd-kit's `useDraggable` returns
+ * `listeners: undefined` only while `disabled: true` (never set here), but
+ * the type itself doesn't rule it out. BoardView's DraggableTaskCard collapses
+ * both optionality levels before constructing this prop (see `drag={listeners
+ * ? {...} : undefined}` there) so a real, non-undefined `TaskCardDrag` always
+ * carries real, non-undefined listeners.
  */
 export interface TaskCardDrag {
   attributes: DraggableAttributes
-  listeners: DraggableSyntheticListeners
+  listeners: NonNullable<DraggableSyntheticListeners>
   activatorRef: (element: HTMLElement | null) => void
 }
 
@@ -77,10 +88,10 @@ export function TaskCard({
   // composed with this card's own onKeyDown below. The KeyboardSensor's
   // onKeyDown activator lifts the card on Space — it must keep firing
   // alongside (not instead of) TaskCard's own Enter-to-open handling.
-  const dragKeyDown = drag?.listeners?.onKeyDown as
+  const dragKeyDown = drag?.listeners.onKeyDown as
     | ((event: React.KeyboardEvent<HTMLDivElement>) => void)
     | undefined
-  const dragPointerDown = drag?.listeners?.onPointerDown as
+  const dragPointerDown = drag?.listeners.onPointerDown as
     | ((event: React.PointerEvent<HTMLDivElement>) => void)
     | undefined
 

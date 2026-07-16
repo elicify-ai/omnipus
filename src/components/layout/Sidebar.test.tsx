@@ -428,6 +428,42 @@ const accordionSession = {
   message_count: 1,
 }
 
+// A second, regular (non-heartbeat) session, MORE recently updated than
+// `accordionSession` — used to prove "More…" still lands last with >=2
+// session rows (the previous fixture only ever had one).
+const accordionSessionTwo = {
+  id: 'sess-accordion-2',
+  agent_id: 'agent-1',
+  active_agent_id: 'agent-1',
+  title: 'Accordion Session Two',
+  type: 'chat' as const,
+  workspace_id: accordionWorkspace.id,
+  channel: 'webchat',
+  created_at: '2026-04-01T00:00:00Z',
+  updated_at: '2026-04-01T03:00:00Z',
+  message_count: 1,
+}
+
+// A heartbeat-type session, deliberately OLDER (by updated_at) than both
+// regular sessions above — Sidebar.tsx's accordion sort (:382-383) sorts
+// heartbeat sessions first regardless of recency, then falls back to
+// recent-first. This fixture proves the sort is type-driven, not just
+// recency-driven (a heartbeat session with a newer updated_at would pass a
+// weaker "heartbeat sorts by recency too" test even if the type-priority
+// branch were deleted).
+const accordionSessionHeartbeat = {
+  id: 'sess-accordion-hb',
+  agent_id: 'agent-1',
+  active_agent_id: 'agent-1',
+  title: 'Accordion Heartbeat Session',
+  type: 'heartbeat' as const,
+  workspace_id: accordionWorkspace.id,
+  channel: 'webchat',
+  created_at: '2026-04-01T00:00:00Z',
+  updated_at: '2026-04-01T00:30:00Z',
+  message_count: 1,
+}
+
 // Locates the expanded accordion body (the sibling div rendered right after
 // the workspace's header row) from its "Expand … sessions" toggle button.
 function getAccordionBody(workspaceName: string): HTMLElement {
@@ -483,6 +519,86 @@ describe('Sidebar — workspace session accordion', () => {
     // Every other button (New chat + session rows) must precede it.
     for (const btn of buttons.slice(0, -1)) {
       expect(btn.textContent).not.toBe('More…')
+    }
+  })
+
+  it('renders "More…" LAST with >=2 session rows (not just the single-session fixture above)', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue(
+      [accordionSession, accordionSessionTwo] as never,
+    )
+    await renderAndExpandAccordion()
+    await screen.findByText('Accordion Session One')
+    await screen.findByText('Accordion Session Two')
+
+    const body = getAccordionBody('Accordion Workspace')
+    const buttons = Array.from(body.querySelectorAll('button'))
+    // New chat, session one, session two, More… — at least 4 rows.
+    expect(buttons.length).toBeGreaterThanOrEqual(4)
+
+    const last = buttons[buttons.length - 1]
+    expect(last.textContent).toBe('More…')
+    for (const btn of buttons.slice(0, -1)) {
+      expect(btn.textContent).not.toBe('More…')
+    }
+  })
+
+  it('sorts heartbeat-type sessions before regular sessions regardless of recency (heartbeat-first, Sidebar.tsx accordion sort)', async () => {
+    // accordionSessionHeartbeat.updated_at is OLDER than both regular
+    // sessions — if the sort were purely recency-based, it would sort last,
+    // not first. This proves the `s.type === 'heartbeat'` branch is real.
+    vi.mocked(fetchSessions).mockResolvedValue(
+      [accordionSession, accordionSessionTwo, accordionSessionHeartbeat] as never,
+    )
+    await renderAndExpandAccordion()
+    await screen.findByText('Accordion Heartbeat Session')
+    await screen.findByText('Accordion Session One')
+    await screen.findByText('Accordion Session Two')
+
+    const body = getAccordionBody('Accordion Workspace')
+    const rowTitles = Array.from(body.querySelectorAll('button'))
+      .map((b) => (b.textContent ?? '').trim())
+      .filter((t) => t !== 'New chat' && t !== 'More…')
+
+    // Heartbeat session must be the FIRST session row (right after "New chat").
+    expect(rowTitles[0]).toContain('Accordion Heartbeat Session')
+    // The two regular sessions follow, most-recently-updated first.
+    expect(rowTitles[1]).toContain('Accordion Session Two')
+    expect(rowTitles[2]).toContain('Accordion Session One')
+
+    // The heartbeat row also carries the "HB" badge (the other cue for the
+    // same underlying state).
+    const hbRow = screen.getByText('Accordion Heartbeat Session').closest('button')
+    expect(hbRow?.textContent).toContain('HB')
+  })
+
+  it('does not offer a delete/remove action for any session row in the accordion (none exists in Sidebar.tsx today)', async () => {
+    // Session.protected (see src/lib/api.ts) documents that a protected
+    // (heartbeat-backed) session should have its delete button HIDDEN — but
+    // the accordion never renders a delete/trash action for ANY session,
+    // protected or not, so there is nothing to conditionally disable here.
+    // Asserting the absence directly (rather than skipping this) keeps a
+    // future "add session delete to the sidebar" change honest about also
+    // wiring the protected-session guard.
+    vi.mocked(fetchSessions).mockResolvedValue(
+      [accordionSession, accordionSessionHeartbeat] as never,
+    )
+    await renderAndExpandAccordion()
+    await screen.findByText('Accordion Session One')
+    await screen.findByText('Accordion Heartbeat Session')
+
+    const body = getAccordionBody('Accordion Workspace')
+    const interactive = Array.from(body.querySelectorAll('button, [role="button"]'))
+    expect(interactive.length).toBeGreaterThan(0)
+
+    for (const el of interactive) {
+      const signal = [
+        el.getAttribute('aria-label') ?? '',
+        el.getAttribute('title') ?? '',
+        el.textContent ?? '',
+      ]
+        .join(' ')
+        .toLowerCase()
+      expect(signal).not.toMatch(/delete|remove|trash/)
     }
   })
 

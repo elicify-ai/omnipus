@@ -368,7 +368,14 @@ function DraggableTaskCard({
         altitude={altitude}
         onClick={onClick}
         onChildClick={onChildClick}
-        drag={{ attributes, listeners, activatorRef: setActivatorNodeRef }}
+        // `useDraggable`'s `listeners` is `SyntheticListenerMap | undefined`
+        // (undefined only while the draggable is `disabled`, which this call
+        // never sets — but the type doesn't know that). Collapse it into the
+        // `drag` prop's own optionality here so `TaskCardDrag.listeners` can
+        // stay non-undefined: a card is either fully draggable (attributes +
+        // real listeners + activatorRef) or not draggable at all, never
+        // "draggable but with dead keyboard/pointer activators".
+        drag={listeners ? { attributes, listeners, activatorRef: setActivatorNodeRef } : undefined}
       />
     </div>
   )

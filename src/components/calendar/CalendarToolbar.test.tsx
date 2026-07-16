@@ -269,6 +269,36 @@ describe('CalendarToolbar — New task button (spec §9 #19, FR-012)', () => {
   })
 })
 
+describe('CalendarToolbar — withApi: unwired ref warns on every action, not just New task', () => {
+  // S9 fix: prev/next/today/view-change previously no-op'd silently via
+  // `getApi()?.foo()` — the exact unwired-ref failure mode `handleNewTask`
+  // already warned about. All five now route through the same `withApi`
+  // helper, so this asserts one more of them (calendar-prev) fails the
+  // identical, observable way instead of doing nothing.
+  it('clicking calendar-prev with an unwired calendarRef warns once and does not throw', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unwiredRef: CalendarApiRef = { current: null }
+
+    render(
+      <CalendarToolbar
+        calendarRef={unwiredRef}
+        currentView="dayGridMonth"
+        title="June 2026"
+        onViewChange={vi.fn()}
+        onNewTask={vi.fn()}
+      />,
+    )
+
+    expect(() => fireEvent.click(screen.getByTestId('calendar-prev'))).not.toThrow()
+
+    expect(warnSpy).toHaveBeenCalledOnce()
+    expect(warnSpy.mock.calls[0][0]).toMatch(/calendarRef not wired/i)
+    expect(warnSpy.mock.calls[0][0]).toMatch(/prev/i)
+
+    warnSpy.mockRestore()
+  })
+})
+
 describe('CalendarToolbar — title and view rendering', () => {
   it('renders the title prop as a heading text', () => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #19

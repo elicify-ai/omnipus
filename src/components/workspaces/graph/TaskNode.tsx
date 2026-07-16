@@ -39,6 +39,16 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
   // clicks still flow through React Flow's onNodeClick; Enter/Space here
   // call the identical onTaskClick via the `onOpen` callback GraphView wires
   // into `data` (WCAG 2.1.1 — the click action now has a keyboard equivalent).
+  //
+  // `onOpen` is optional on `TaskNodeData` (see taskGraph.ts) so a dropped
+  // injection compiles cleanly — it wouldn't be a type error, just a
+  // keyboard-open that silently does nothing. Surface it loudly in dev so a
+  // regression here is caught before it ships, not by accident in manual QA.
+  if (import.meta.env.DEV && !onOpen) {
+    console.warn(
+      `[TaskNode] task "${task.id}" rendered with no data.onOpen — keyboard Enter/Space will not open it (GraphView must inject onOpen per node).`,
+    )
+  }
   const handleOpen = useCallback(() => {
     onOpen?.(task)
   }, [onOpen, task])

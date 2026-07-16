@@ -164,10 +164,14 @@ describe('SessionRoute component — task-session attach path (useEffect)', () =
   })
 
   it(
-    'calls attachToSession when WS is connected and navigating to a session',
+    'calls attachToSession with the session REAL type/title when WS is connected and navigating to a session',
     async () => {
       // BDD: Given a connected WS, When SessionRoute mounts for a task session,
-      // Then attachToSession(sessionId, 'chat', undefined, agentId) fires.
+      // Then attachToSession(sessionId, session.type, session.title, agentId) fires
+      // with the session's REAL type/title — round-2 fix: this used to be
+      // hardcoded to 'chat'/undefined, which clobbered channel/scheduled/
+      // heartbeat sessions' labelling (and double-clobbered when
+      // useSelectSession also attached before navigating here).
       //
       // Traces to: sessions.$sessionId.tsx useEffect — attachToSession path.
       // This test FAILS on a version that only calls setActiveSession.
@@ -188,8 +192,8 @@ describe('SessionRoute component — task-session attach path (useEffect)', () =
       await waitFor(() => {
         expect(attachToSession).toHaveBeenCalledWith(
           mockSessionId,
-          'chat',
-          undefined,
+          'task',
+          'Fix bug #42',
           'jim',
         )
       })
@@ -308,10 +312,10 @@ describe('SessionRoute component — task-session attach path (useEffect)', () =
       })
 
       await waitFor(() => {
-        expect(attachToSession).toHaveBeenCalledWith(mockSessionId, 'chat', undefined, 'jim')
+        expect(attachToSession).toHaveBeenCalledWith(mockSessionId, 'chat', 'General chat', 'jim')
       })
       // Mutation check: never attach under the creating agent after a handover.
-      expect(attachToSession).not.toHaveBeenCalledWith(mockSessionId, 'chat', undefined, 'mia')
+      expect(attachToSession).not.toHaveBeenCalledWith(mockSessionId, 'chat', 'General chat', 'mia')
     },
   )
 

@@ -405,13 +405,16 @@ describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regres
     const failingConnection = { send: vi.fn().mockReturnValue(false), close: vi.fn(), isConnected: true }
     useConnectionStore.setState({ connection: failingConnection as never, isConnected: true })
 
-    useSessionStore.getState().attachToSession('sess-fail', 'chat', 'Title', 'agent-1')
+    const result = useSessionStore.getState().attachToSession('sess-fail', 'chat', 'Title', 'agent-1')
 
     expect(resetSpy).not.toHaveBeenCalled()
     // Connection error must be surfaced.
     expect(useConnectionStore.getState().connectionError).toMatch(/Could not attach/)
     // activeSessionId must NOT have been switched to the failed session.
     expect(useSessionStore.getState().activeSessionId).toBeNull()
+    // Round-2 fix: the return value is the caller-facing success signal —
+    // useSelectSession (and other callers) key their abort logic off this.
+    expect(result).toBe(false)
   })
 
   it('DOES reset the chat bucket once send is confirmed successful', () => {
@@ -422,10 +425,11 @@ describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regres
     const okConnection = { send: vi.fn().mockReturnValue(true), close: vi.fn(), isConnected: true }
     useConnectionStore.setState({ connection: okConnection as never, isConnected: true })
 
-    useSessionStore.getState().attachToSession('sess-ok', 'chat', 'Title', 'agent-1')
+    const result = useSessionStore.getState().attachToSession('sess-ok', 'chat', 'Title', 'agent-1')
 
     expect(resetSpy).toHaveBeenCalledWith('sess-ok')
     expect(useSessionStore.getState().activeSessionId).toBe('sess-ok')
+    expect(result).toBe(true)
   })
 })
 
@@ -437,21 +441,26 @@ describe('attachToSession — WS-down user feedback (fix 6)', () => {
 
   it('shows a user-visible toast when there is no WS connection (previously console.warn only)', () => {
     // No connection set up — attachToSession takes the offline branch.
-    useSessionStore.getState().attachToSession('sess-offline-toast', 'chat', 'Title', 'agent-1')
+    const result = useSessionStore.getState().attachToSession('sess-offline-toast', 'chat', 'Title', 'agent-1')
 
     const toasts = useUiStore.getState().toasts
     expect(toasts).toHaveLength(1)
     expect(toasts[0].message.toLowerCase()).toMatch(/not connected|connection/)
     expect(toasts[0].variant).toBe('warning')
+    // Offline is a "recorded, will finish later" state, not a failure — the
+    // caller should proceed (seed tokens / navigate), unlike the send-false
+    // branch above which returns false.
+    expect(result).toBe(true)
   })
 
   it('does NOT show a toast when the WS is connected and the attach succeeds', () => {
     const okConnection = { send: vi.fn().mockReturnValue(true), close: vi.fn(), isConnected: true }
     useConnectionStore.setState({ connection: okConnection as never, isConnected: true })
 
-    useSessionStore.getState().attachToSession('sess-online', 'chat', 'Title', 'agent-1')
+    const result = useSessionStore.getState().attachToSession('sess-online', 'chat', 'Title', 'agent-1')
 
     expect(useUiStore.getState().toasts).toHaveLength(0)
+    expect(result).toBe(true)
   })
 
   it('still records activeSessionId (offline path is otherwise unchanged) alongside the new toast', () => {
@@ -460,5 +469,80 @@ describe('attachToSession — WS-down user feedback (fix 6)', () => {
     expect(useSessionStore.getState().activeSessionId).toBe('sess-offline-toast-2')
     expect(useSessionStore.getState().attachedSessionType).toBe('task')
     expect(useUiStore.getState().toasts).toHaveLength(1)
+  })
+})
+
+describe('pruneSessionDescriptor — round-2 fix: no zombie reattach after delete', () => {
+  beforeEach(resetAll)
+
+  it('nulls the sessionByWorkspace entry for a deleted session so entering that workspace does not reattach the dead id', () => {
+    // BDD: Given workspace W's stored descriptor points at session S,
+    //   When S is deleted (pruneSessionDescriptor(S) is called, e.g. from
+    //   SearchModal's deleteMut.onSuccess),
+    //   Then entering W afterwards must NOT attach S — it's gone.
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({
+      activeSessionId: 'some-other-session',
+      sessionByWorkspace: {
+        'ws-1': { id: 'sess-deleted', type: 'chat', title: 'Deleted', agentId: 'agent-1' },
+      },
+    })
+
+    useSessionStore.getState().pruneSessionDescriptor('sess-deleted')
+
+    // The descriptor is nulled ("explicitly fresh"), not left pointing at the
+    // dead id.
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+
+    // Entering ws-1 now must start fresh, never attach the dead session id.
+    useSessionStore.getState().enterWorkspaceChat('ws-1')
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+  })
+
+  it('clears activeSessionId when the deleted session is the currently-attached one', () => {
+    useSessionStore.setState({
+      activeSessionId: 'sess-current',
+      sessionByWorkspace: {
+        'ws-1': { id: 'sess-current', type: 'chat', title: 'Current', agentId: 'agent-1' },
+      },
+    })
+
+    useSessionStore.getState().pruneSessionDescriptor('sess-current')
+
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+  })
+
+  it('does NOT touch activeSessionId when the deleted session is not the active one', () => {
+    useSessionStore.setState({
+      activeSessionId: 'sess-active',
+      sessionByWorkspace: {
+        'ws-1': { id: 'sess-other', type: 'chat', title: 'Other', agentId: 'agent-1' },
+      },
+    })
+
+    useSessionStore.getState().pruneSessionDescriptor('sess-other')
+
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-active')
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+  })
+
+  it('preserves descriptors for OTHER workspaces untouched', () => {
+    useSessionStore.setState({
+      activeSessionId: null,
+      sessionByWorkspace: {
+        'ws-1': { id: 'sess-deleted', type: 'chat', title: 'Deleted', agentId: 'agent-1' },
+        'ws-2': { id: 'sess-alive', type: 'task', title: 'Alive', agentId: 'agent-2' },
+      },
+    })
+
+    useSessionStore.getState().pruneSessionDescriptor('sess-deleted')
+
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    expect(useSessionStore.getState().sessionByWorkspace['ws-2']).toEqual({
+      id: 'sess-alive',
+      type: 'task',
+      title: 'Alive',
+      agentId: 'agent-2',
+    })
   })
 })

@@ -190,6 +190,8 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     const settingsEntry = screen.getByTestId('workspace-view-switcher-settings')
     expect(menu.contains(settingsEntry)).toBe(true)
     expect(settingsEntry.textContent).toContain('Settings')
+    // Not the active entry here (chat is active) — no aria-current.
+    expect(settingsEntry).not.toHaveAttribute('aria-current')
 
     fireEvent.click(settingsEntry)
     expect(mockNavigate).toHaveBeenCalledWith({
@@ -203,9 +205,36 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const settingsEntry = screen.getByTestId('workspace-view-switcher-settings')
     expect(settingsEntry.className).toContain('text-[var(--color-accent)]')
+    // WCAG 1.3.1 — activeness must be conveyed programmatically (aria-current),
+    // not only via accent colour + the aria-hidden "●" dot.
+    expect(settingsEntry).toHaveAttribute('aria-current', 'page')
     // The switcher trigger itself should also read "Settings" while active.
     const switcher = screen.getByTestId('workspace-view-switcher')
     expect(switcher.textContent).toContain('Settings')
+  })
+
+  it('compact dropdown marks the active view tab item with aria-current="page", and every other tab item with none', () => {
+    // WCAG 1.3.1 — the mapped WORKSPACE_TABS items in the compact dropdown
+    // must also carry aria-current, not just the settings entry.
+    mockPathname = '/workspaces/ws-1/board'
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const menu = screen.getByTestId('view-switcher-menu')
+
+    for (const tab of WORKSPACE_TABS) {
+      const item = Array.from(menu.querySelectorAll('button')).find((el) =>
+        el.textContent?.includes(tab.label),
+      )
+      expect(item, `no dropdown item found for ${tab.segment}`).toBeTruthy()
+      if (tab.segment === 'board') {
+        expect(item).toHaveAttribute('aria-current', 'page')
+      } else {
+        expect(item).not.toHaveAttribute('aria-current')
+      }
+    }
+    // The settings entry is also not active on this route.
+    expect(screen.getByTestId('workspace-view-switcher-settings')).not.toHaveAttribute(
+      'aria-current',
+    )
   })
 })
 

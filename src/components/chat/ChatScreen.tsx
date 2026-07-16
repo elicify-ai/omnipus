@@ -31,6 +31,7 @@ import {
 } from '@phosphor-icons/react'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { IconRenderer } from '@/components/shared/IconRenderer'
+import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { WebServeBlock } from './tools/WebServeUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
@@ -77,8 +78,10 @@ import { useCancelState } from '@/hooks/useCancelState'
 // Exported for focused unit tests (F1 test requirement).
 //
 // F7: a leading /token that matches a known built-in command label (e.g.
-// /clear, /help, /model, /agents) must NOT produce a chip — built-ins win (D3).
-// We receive the `commands` list and use it to exclude those tokens.
+// /new, /help, /model) must NOT produce a chip — built-ins win (D3). Hidden
+// aliases (e.g. "clear" for "/new") must be excluded too — see
+// commandLabelsWithAliases below. We receive the `commandLabels` list and
+// use it to exclude those tokens.
 //
 // F9: the regex uses [\s\S]* so multi-line bodies (foo\nbar) are captured.
 //
@@ -87,9 +90,10 @@ import { useCancelState } from '@/hooks/useCancelState'
 export function renderSkillAwareContent(
   content: string | null,
   skills: Skill[],
-  // Command label strings, e.g. ['/clear', '/help', '/model'] — used to apply
-  // the F7 built-in precedence gate. Pass the fetched commands list when
-  // available; callers that can't access the store pass [].
+  // Command label strings, e.g. ['/new', '/help', '/model'] — used to apply
+  // the F7 built-in precedence gate. Pass commandLabelsWithAliases(commands)
+  // so hidden aliases (e.g. "/clear") are excluded from skill-chip matching
+  // too; callers that can't access the store pass [].
   commandLabels: string[],
   // Fallback plain-text renderer — used by live UserMessage (which has access
   // to MessagePrimitive.Parts) vs historical messages (which use a simple <p>).
@@ -134,6 +138,21 @@ export function renderSkillAwareContent(
   return fallbackRenderer()
 }
 
+// M3/F7: build the commandLabels list renderSkillAwareContent gates on, from
+// a fetched SlashCommand[] — including hidden aliases (e.g. "clear" for
+// "/new") prefixed with "/", so a typed "/clear" is excluded from
+// skill-chip matching exactly like the canonical "/new" label is. Without
+// this, a hidden alias would fall through the F7 gate and (if a skill
+// happened to share that id) render as a skill chip instead of plain text.
+export function commandLabelsWithAliases(commands: SlashCommand[]): string[] {
+  const labels: string[] = []
+  for (const c of commands) {
+    labels.push(c.label)
+    for (const alias of c.aliases ?? []) labels.push(`/${alias}`)
+  }
+  return labels
+}
+
 // ── Message components ────────────────────────────────────────────────────────
 
 function UserMessage() {
@@ -157,7 +176,7 @@ function UserMessage() {
     return (textPart as { text: string }).text
   })()
 
-  const commandLabels = commands.map((c) => c.label)
+  const commandLabels = commandLabelsWithAliases(commands)
 
   return (
     <MessagePrimitive.Root data-testid="user-message" data-message-id={message.id} className="group flex gap-3 px-4 py-3 flex-row-reverse">
@@ -487,7 +506,7 @@ function useSkillChipData(): { skills: Skill[]; commandLabels: string[] } {
     queryFn: () => fetchCommands('web'),
     staleTime: 60_000,
   })
-  return { skills, commandLabels: commands.map((c) => c.label) }
+  return { skills, commandLabels: commandLabelsWithAliases(commands) }
 }
 
 // F1/R2: skills + commandLabels are passed in by the parent list (fetched ONCE
@@ -1386,6 +1405,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
           className="mb-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
         >
+          {/* LOW S8: fetchCommands('web') errored — surface the gap instead
+              of letting every backend command silently vanish from the
+              palette. Hidden during the "/skills" filter (D9 already hides
+              the whole Commands section there, so an error row would be a
+              non-sequitur). Muted styling matches SearchModal's own
+              query-error row (src/components/search/SearchModal.tsx). */}
+          {slashMenu.commandsError && !slashMenu.isSkillsFilter && (
+            <div
+              data-testid="slash-commands-error"
+              className="px-3 py-2 text-xs text-[var(--color-error)] italic"
+            >
+              Commands unavailable
+            </div>
+          )}
           {slashMenu.slashItems.map((item, globalIndex) => {
             const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
             const isFirstInSection = item.section !== prevSection
@@ -1737,7 +1770,7 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
         />
         <div>
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)] mb-2">
-            Welcome to omnipus<span className="text-[var(--color-accent)]">.ai</span>
+            Welcome to <Wordmark className="text-2xl" />
           </h1>
           <p className="text-[var(--color-muted)] text-sm">
             {hasAgent
