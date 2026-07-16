@@ -1291,6 +1291,22 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		}
 		removed++
 	}
+
+	// Evict any remaining cache entry whose on-disk directory is already gone.
+	// The per-dir loop above only deletes cache entries for directories THIS
+	// call physically removed; when several stores share one baseDir (e.g.
+	// multiple agents configured with the same workspace), whichever store's
+	// ClearAll runs first removes the shared directories, and the others then
+	// find nothing to remove and never evict their now-stale cache entries —
+	// leaving ListSessions to resurrect sessions that are gone from disk.
+	// Entries whose directory survived (a failed removal above) are kept, since
+	// those sessions genuinely still exist.
+	for id := range us.metaCache {
+		if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); errors.Is(statErr, os.ErrNotExist) {
+			delete(us.metaCache, id)
+		}
+	}
+
 	return removed, errors.Join(errs...)
 }
 
