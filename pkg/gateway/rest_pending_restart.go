@@ -62,6 +62,10 @@ var RestartGatedKeys = []config.ConfigKey{
 	// requires a restart (ADR-044, US-6/FR-007).
 	config.GatewayPublicURL,
 	config.ToolsWebServeWarmup,
+	// gateway.orphaned_turn_grace_seconds is deliberately NOT listed here: the
+	// orphan-foreground-turn watchdog (ADR-045) reads the config live on
+	// every WS teardown when deciding whether/how long to arm, so a change
+	// takes effect on the very next disconnect with no restart required.
 }
 
 // pendingRestartEntry is an alias for the generated type — same dotted key

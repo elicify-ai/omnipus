@@ -36,6 +36,11 @@ const (
 	// GatewayPreviewEnabled gates /preview/ and serve_web. Read live — it is
 	// deliberately NOT in RestartGatedKeys (ADR-044, FR-006/FR-007).
 	GatewayPreviewEnabled ConfigKey = "gateway.preview_enabled"
+	// GatewayOrphanedTurnGraceSeconds bounds the orphan-foreground-turn
+	// watchdog's grace period (ADR-045). Read live on every WS teardown — it
+	// is deliberately NOT in RestartGatedKeys, matching GatewayPreviewEnabled's
+	// precedent.
+	GatewayOrphanedTurnGraceSeconds ConfigKey = "gateway.orphaned_turn_grace_seconds"
 	// ToolsWebServeWarmup is the dotted JSON path of the web_serve warmup
 	// timeout in config.json. The on-disk key is still named
 	// `tools.run_in_workspace.warmup_timeout_seconds` for backwards

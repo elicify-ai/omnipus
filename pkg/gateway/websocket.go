@@ -606,6 +606,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.agentLoop.UnsubscribeEvents(eventSub.ID)
 		<-eventDone // wait for forwarder goroutine to exit
 		h.mu.Lock()
+		// ADR-045: capture this connection's own session mapping BEFORE the
+		// deletes below — needed both to arm the watchdog for the right
+		// session and so the multi-tab-safety scan just after reflects state
+		// with THIS connection already removed.
+		sid := h.sessionIDs[chatID]
 		if tid, ok := h.taskChatIDs[chatID]; ok {
 			// sessions is never keyed by tid (only by chatID); clean up only sessionIDs.
 			delete(h.sessionIDs, tid)
@@ -613,8 +618,27 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(h.sessions, chatID)
 		delete(h.sessionIDs, chatID)
+		// ADR-045 multi-tab safety: only arm the orphan-foreground-turn
+		// watchdog when no OTHER connection is still watching this same
+		// session — a second open tab on the same chat must never have its
+		// live turn interrupted just because a sibling tab closed.
+		armOrphanWatch := false
+		if sid != "" {
+			armOrphanWatch = true
+			for _, otherSID := range h.sessionIDs {
+				if otherSID == sid {
+					armOrphanWatch = false
+					break
+				}
+			}
+		}
 		h.mu.Unlock()
 		wc.close()
+
+		if armOrphanWatch {
+			grace := h.agentLoop.GetConfig().EffectiveOrphanedTurnGraceSeconds()
+			h.agentLoop.ArmOrphanForegroundTurnWatch(sid, grace)
+		}
 
 		// Emit observability counters at connection teardown so operators can
 		// act on them (e.g. alert when a client is sending many invalid refs).
@@ -1244,6 +1268,11 @@ func (h *WSHandler) handleChatMessage(
 				h.sessionIDs[chatID] = sessionID
 			}
 			h.mu.Unlock()
+
+			// ADR-045: this connection just confirmed itself live on an
+			// EXISTING session (continuation, not a brand-new one) — cancel
+			// any pending orphan-foreground-turn watchdog for it.
+			h.agentLoop.DisarmOrphanForegroundTurnWatch(sessionID)
 		}
 
 		if sessionID != "" {
@@ -1660,6 +1689,11 @@ func (h *WSHandler) handleAttachSession(
 	h.sessionIDs[attachID] = attachID
 	h.sessionIDs[chatID] = attachID
 	h.mu.Unlock()
+
+	// ADR-045: a live connection just (re)confirmed itself on attachID — cancel
+	// any pending orphan-foreground-turn watchdog for this session. Covers the
+	// common browser-refresh/reconnect case with zero user-visible effect.
+	h.agentLoop.DisarmOrphanForegroundTurnWatch(attachID)
 
 	// Arm the divert: any sendConnGenFrame calls after this point will route live
 	// frames into replayDivertCh instead of sendCh.
