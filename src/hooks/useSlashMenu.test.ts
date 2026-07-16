@@ -37,6 +37,14 @@ const mockAgents = [
   { id: 'builder', name: 'Builder Worker', type: 'worker', status: 'active', description: 'Labour agent' },
 ]
 
+// Fix 7 (bugfixes3 review): mutable per-test override for the ['agents']
+// query, mirroring the `commandsQueryIsError` pattern above. Only the
+// "NAME prefix only" test needs a fixture whose id and name diverge (a
+// UUID-like id with an unrelated display name) — overriding here keeps
+// every other test's agent list (and its exact expected row counts/order)
+// untouched.
+let mentionAgentsOverride: typeof mockAgents | null = null
+
 // LOW S8: mutable flag so individual tests can simulate fetchCommands('web')
 // erroring — read lazily inside useQuery's closure (only touched when a test
 // actually invokes the hook), so the module-load-order TDZ concern that
@@ -57,7 +65,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
           : { data: mockCommands, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') return { data: mockSkills, isError: false, refetch: vi.fn() }
-      if (Array.isArray(key) && key[0] === 'agents') return { data: mockAgents, isError: false, refetch: vi.fn() }
+      if (Array.isArray(key) && key[0] === 'agents') return { data: mentionAgentsOverride ?? mockAgents, isError: false, refetch: vi.fn() }
       return { data: [], isError: false, refetch: vi.fn() }
     },
   }
@@ -116,6 +124,7 @@ beforeEach(() => {
     })
   })
   commandsQueryIsError = false
+  mentionAgentsOverride = null
 })
 
 afterEach(() => {
@@ -225,6 +234,40 @@ describe('useSlashMenu — keyboard navigation', () => {
 
     act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
     expect(result.current.slashOpen).toBe(false)
+  })
+
+  // Fix 8 (bugfixes3 review): Shift+Enter is universally "insert a
+  // newline" — selecting from the menu on Shift+Enter silently ate the
+  // newline and could mutate a multiline draft that happened to start with
+  // "/" or "@". Applies identically to "/" and "@" mode; exercised here via
+  // "/" (the two modes share this exact handleKeyDown code path).
+  it('Shift+Enter does NOT select from the menu — falls through so the caller can insert a newline', () => {
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+    act(() => result.current.onInputChange('/'))
+    // Move highlight off "/resume" (index 0, whose onSelect touches the
+    // global ui store) onto "/new" (index 1, whose onSelect calls the
+    // locally-mocked startNewSession) so this test's assertions stay
+    // self-contained.
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashItems[result.current.slashHighlight].key).toBe('/new')
+
+    const shiftEnter = { key: 'Enter', shiftKey: true, preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(shiftEnter))
+
+    // Nothing was selected — preventDefault was not called, the menu is
+    // still open, and no command handler ran.
+    expect(shiftEnter.preventDefault).not.toHaveBeenCalled()
+    expect(result.current.slashOpen).toBe(true)
+    expect(startNewSession).not.toHaveBeenCalled()
+
+    // Plain Enter (no Shift) on the SAME highlighted row still selects
+    // normally, proving the guard is Shift-specific, not a general Enter
+    // regression.
+    const plainEnter = { key: 'Enter', shiftKey: false, preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(plainEnter))
+    expect(plainEnter.preventDefault).toHaveBeenCalled()
+    expect(startNewSession).toHaveBeenCalledTimes(1)
   })
 
   it('is a no-op when the menu should not be showing', () => {
@@ -668,16 +711,34 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'max'])
   })
 
-  it('filtering is case-insensitive by name or id prefix — "@M" matches identically to "@m"', () => {
+  it('filtering is case-insensitive by NAME prefix — "@M" matches identically to "@m"', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@M'))
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia', 'max'])
   })
 
-  it('matches by agent id prefix too, not just display name', () => {
+  // Fix 7 (bugfixes3 review): inverted from "matches by agent id prefix
+  // too" — user-created agent ids are UUIDs/arbitrary strings unrelated to
+  // the visible label, so an id-prefix clause surfaced agents into "@a"
+  // whose id happened to start with "a" but whose NAME had nothing to do
+  // with what was typed. Filtering is NAME-prefix only now. A fixture whose
+  // id and name diverge proves both directions: the divergent id must NOT
+  // leak a match, and the real name must still match normally.
+  it('matches by agent NAME prefix only — a divergent id does not leak a match', () => {
+    mentionAgentsOverride = [
+      ...mockAgents,
+      { id: 'ops-7', name: 'Marcus', type: 'core', status: 'active', description: 'Support' },
+    ]
     const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('@ji'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim'])
+
+    // Matches by NAME prefix ("Marcus" starts with "marc").
+    act(() => result.current.onInputChange('@marc'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['ops-7'])
+
+    // Does NOT match by the divergent ID prefix ("ops-7" starts with "op",
+    // but the name "Marcus" does not).
+    act(() => result.current.onInputChange('@op'))
+    expect(result.current.slashItems).toHaveLength(0)
   })
 
   it('hides the menu entirely when no agent matches the filter', () => {

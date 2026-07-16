@@ -142,6 +142,20 @@ export function useCancelState(isStreaming: boolean, cancelStream: () => void): 
   // cancelStream() internally gates the WS send on isStreaming, so calling
   // it when the turn is already done is safe: it just marks the last
   // message interrupted, which is correct and desired here.
+  //
+  // bugfixes3 Fix 3: this listener is intentionally NOT menu-aware — it has
+  // no idea whether the composer's "/" or "@" menu is open. That's handled
+  // upstream instead: ChatScreen.handleKeyDown (composer's onKeyDown, a
+  // React synthetic handler) checks `slashOpen && shouldShowSlash` BEFORE
+  // its own cancel-Escape branch, and when the menu is open it calls
+  // `e.stopPropagation()` after closing the menu. Because this listener is
+  // plain BUBBLE-phase on `document` (no `capture: true` below) and this app
+  // mounts via `createRoot(#root)` (src/main.tsx) — React delegates its
+  // synthetic events at that root container, an ancestor of which is
+  // `document` — stopPropagation there prevents the native keydown from ever
+  // reaching this handler. So: menu open → this function never runs for that
+  // keypress; menu closed (including "closed by the Escape that just ran") →
+  // this function runs normally, e.g. on the immediately-following Escape.
   useEffect(() => {
     function handleGlobalEscape(e: KeyboardEvent) {
       if (e.key !== 'Escape') return

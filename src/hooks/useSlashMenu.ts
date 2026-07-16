@@ -54,6 +54,15 @@ export interface SlashItem {
   agentColor?: string
   /** Agent-row-only — Phosphor icon name for the avatar; falls back to the agent's initial when unset. */
   agentIcon?: string
+  /**
+   * Agent-row-only — the agent's display name, for the render layer's
+   * avatar-initial computation (Fix 9). Carrying the name explicitly (not
+   * deriving the initial from `label.charAt(1)`, which assumes `label` is
+   * always exactly "@" + one BMP character) keeps the initial correct for
+   * astral-plane first characters and survives any future label formatting
+   * change without a silent initial regression.
+   */
+  agentName?: string
   /** Agent-row-only — true when this row is the currently active chat agent (renders the "active" marker). */
   isActiveAgent?: boolean
   onSelect: () => void
@@ -96,6 +105,18 @@ export interface UseSlashMenuResult {
   isSkillsFilter: boolean
   /** True when the input starts with "@" (leading position, same gate as the slash trigger) — `slashItems` is agent rows only while this is true. */
   isMentionMode: boolean
+  /**
+   * Fix 2 (a11y HIGH): the just-selected agent's display name, set the
+   * instant `selectMentionAgent` fires — null before any selection has
+   * happened this session. The composer silently empties and routing
+   * silently changes on a mention selection, which was zero non-visual
+   * feedback for a screen-reader user; the caller renders this in an
+   * sr-only `aria-live="polite"` element so the switch is announced.
+   * Re-selecting the SAME agent twice in a row leaves this string
+   * unchanged (no state transition), so the live region does not
+   * re-announce — acceptable per spec, since nothing actually changed.
+   */
+  mentionAnnouncement: string | null
   /** True when the ghost-text overlay should render (value is exactly `/<skillId> ` right after that skill was selected from the menu). */
   showGhostText: boolean
   /** The ghost text to display — the skill's argument_hint if it declared one, else the generic placeholder. */
@@ -133,6 +154,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // skill declares one.
   const [ghostSkillId, setGhostSkillId] = useState<string | null>(null)
   const [ghostArgumentHint, setGhostArgumentHint] = useState<string | null>(null)
+  // Fix 2: last-announced mention selection — see mentionAnnouncement's doc
+  // comment on UseSlashMenuResult.
+  const [mentionAnnouncement, setMentionAnnouncement] = useState<string | null>(null)
 
   // US-4 / FR-008: fetch the web-surface command list from the single
   // source of truth. On error the palette shows nothing crash-wise (per
@@ -177,7 +201,19 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // status/worker/core_team scoping via useChatAgents so the mention menu
   // never offers an agent the picker itself wouldn't.
   const { chatAgents } = useChatAgents()
-  const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
+  // Fix 5: reactive slice, not a whole-store subscription. `useSessionStore()`
+  // (no selector) re-rendered this hook — and therefore the whole composer —
+  // on ANY write to the session store, including ones this hook doesn't
+  // care about (e.g. attachedTaskTitle churn from an unrelated deep-link).
+  // Only `activeAgentId` needs to be reactive here (it drives the
+  // `isActiveAgent` marker recomputed on every render); `activeSessionId`
+  // and `setActiveSession` are read fresh from `.getState()` at write time
+  // inside `selectMentionAgent` below — the same "fresh-state-in-write-path"
+  // pattern AgentPicker's own auto-select effect documents (composer/
+  // AgentPicker.tsx) — which also closes the stale-closure window where a
+  // captured `activeSessionId` could be stale by the time the user actually
+  // selects an agent.
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
 
   // FR-005: partitioned slash menu — Commands + Skills sections. Triggered
   // when input starts with "/" (no old skill-arg gate).
@@ -240,23 +276,34 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   })()
 
   // Agent section — the "@" mention menu's sole content. Mirrors the
-  // skills filter's startsWith convention (case-insensitive name OR id
-  // prefix match; empty filter ⇒ every scoped chat agent).
+  // skills filter's startsWith convention (case-insensitive prefix match;
+  // empty filter ⇒ every scoped chat agent).
+  //
+  // Fix 7: NAME prefix only — no id clause. User-created agent ids are
+  // UUIDs (or otherwise arbitrary), so matching `id.startsWith(filter)` too
+  // surfaced agents into "@a" whose UUID happened to start with "a" but
+  // whose visible name had nothing to do with what was typed — noise
+  // unrelated to the label the user is actually reading in the menu.
   const effectiveActiveAgentId = activeAgentId || chatAgents[0]?.id
   const agentItems: SlashItem[] = (() => {
     if (mentionFilter === null) return []
     const filtered = chatAgents.filter((a) =>
-      mentionFilter === '' ||
-      a.name.toLowerCase().startsWith(mentionFilter) ||
-      a.id.toLowerCase().startsWith(mentionFilter),
+      mentionFilter === '' || a.name.toLowerCase().startsWith(mentionFilter),
     )
-    return filtered.map((agent) => ({
+    // Fix 6: cap at 8, matching visibleSkillMenuItems' own cap. Agents can
+    // create agents, so the roster is unbounded in principle — without a
+    // cap, a large roster would rebuild N full rows (each with its own
+    // avatar/description) on every keystroke, and ArrowDown/ArrowUp
+    // wrap-around nav over a very long list stops being usable from the
+    // keyboard.
+    return filtered.slice(0, 8).map((agent) => ({
       key: agent.id,
       label: `@${agent.name}`,
       description: agent.description || agent.model || '',
       section: 'agents' as const,
       agentColor: agent.color ?? undefined,
       agentIcon: agent.icon ?? undefined,
+      agentName: agent.name,
       isActiveAgent: agent.id === effectiveActiveAgentId,
       onSelect: () => selectMentionAgent(agent),
     }))
@@ -441,11 +488,21 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Unlike completeSkillName, the `@query` text is fully cleared (not left
   // as `@name `) — the mention is a one-shot agent switch, not something the
   // user continues typing after.
+  //
+  // Fix 5: reads activeSessionId/setActiveSession fresh via `.getState()`
+  // rather than closing over the render-time values — this is the write
+  // path, so the freshest state wins (matches AgentPicker's own documented
+  // pattern) and there is no stale-closure window on a captured
+  // activeSessionId between render and the user's actual click/Enter.
   function selectMentionAgent(agent: Agent) {
+    const { activeSessionId, setActiveSession } = useSessionStore.getState()
     setActiveSession(activeSessionId, agent.id, agent.type ?? null)
     composerRuntime.setText('')
     setInputValue('')
     closeSlash()
+    // Fix 2: announce the switch for screen-reader users — see
+    // mentionAnnouncement's doc comment on UseSlashMenuResult.
+    setMentionAnnouncement(agent.name)
   }
 
   // Send-path interception: before AssistantUI's onNew fires, check if the
@@ -526,7 +583,13 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       e.preventDefault()
       setSlashHighlight((h) => (h - 1 + slashItems.length) % slashItems.length)
       setSlashOpen(true)
-    } else if (e.key === 'Enter' && slashOpen) {
+    } else if (e.key === 'Enter' && slashOpen && !e.shiftKey) {
+      // Fix 8: Shift+Enter is universally "insert a newline" in this
+      // composer (and everywhere else) — intercepting it to select from the
+      // menu instead silently ate the newline and wiped/mutated multiline
+      // drafts that happened to start with "/" or "@". Falls through to the
+      // textarea's native handling: the newline gets inserted, the menu
+      // stays open, and the list simply refilters on the next onChange.
       e.preventDefault()
       slashItems[slashHighlight]?.onSelect()
     } else if (e.key === 'Escape') {
@@ -546,6 +609,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     commandsError,
     isSkillsFilter,
     isMentionMode,
+    mentionAnnouncement,
     showGhostText,
     ghostText,
     onInputChange,

@@ -104,10 +104,18 @@ vi.mock('@assistant-ui/react', () => {
 
 // Commands query errors; skills query succeeds with one match so we can also
 // prove the error row and a real skill item coexist in the same menu.
+// Fix 1 (bugfixes3 review): also stock one scoped chat agent, so a
+// mention-mode test below can prove the "Commands unavailable" row does NOT
+// leak into the "@" menu — without at least one agent, "@" would never open
+// the menu at all (shouldShowSlash false either way), which would make that
+// assertion trivially true regardless of whether the fix exists.
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   const mockSkills = [
     { id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active' },
+  ]
+  const mockAgents = [
+    { id: 'mia', name: 'Mia', type: 'core', status: 'active', description: 'Assistant' },
   ]
   return {
     ...actual,
@@ -118,6 +126,9 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       }
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: mockSkills, isError: false, refetch: vi.fn() }
+      }
+      if (Array.isArray(key) && key[0] === 'agents') {
+        return { data: mockAgents, isError: false, refetch: vi.fn() }
       }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -228,5 +239,24 @@ describe('Slash menu — commands query error (LOW S8)', () => {
 
     expect(screen.queryByTestId('slash-commands-error')).not.toBeInTheDocument()
     expect(screen.getByText('/web-research')).toBeInTheDocument()
+  })
+
+  // Fix 1 (bugfixes3 review, highest priority): the render gate previously
+  // read `commandsError && !isSkillsFilter` only — missing the
+  // `!isMentionMode` clause useSlashMenu's own shouldShowSlash fallback
+  // already applies. A commands-fetch error has nothing to do with the "@"
+  // agent-mention menu, so the row must never appear there.
+  it('the error row does NOT leak into the "@" agent-mention menu', async () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '@' } }) })
+
+    // The "@" menu itself opens (one scoped agent, Mia)...
+    expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
+    expect(screen.getByText('@Mia')).toBeInTheDocument()
+    // ...but the commands-error row must not appear alongside it.
+    expect(screen.queryByTestId('slash-commands-error')).not.toBeInTheDocument()
+    expect(screen.queryByText('Commands unavailable')).not.toBeInTheDocument()
   })
 })

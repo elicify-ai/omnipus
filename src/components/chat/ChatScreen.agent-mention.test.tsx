@@ -446,6 +446,39 @@ describe('"@" agent-mention menu — regression guard: "/" and "@" never mix', (
   })
 })
 
+describe('"@" agent-mention menu — Escape precedence (Fix 3)', () => {
+  it('menu open + streaming: first Escape closes the menu only (no cancel); second Escape cancels', () => {
+    const cancelStream = vi.fn()
+    const realCancelStream = useChatStore.getState().cancelStream
+    act(() => { useChatStore.setState({ isStreaming: true, cancelStream }) })
+
+    try {
+      render(<OmnipusComposer />)
+      const input = screen.getByTestId('chat-input')
+
+      act(() => { fireEvent.change(input, { target: { value: '@' } }) })
+      expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
+
+      // First Escape: the "@" menu closes, the stream keeps running.
+      act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+      expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
+      expect(cancelStream).not.toHaveBeenCalled()
+
+      // Second Escape: menu already closed — falls through to the
+      // pre-existing cancel-Escape branch, which calls cancelStream (that
+      // branch is unchanged by Fix 3; this test doesn't pin an exact call
+      // count, only that cancel actually fired — see the sibling test in
+      // ChatScreen.partitioned-menu.test.tsx for why the count can be >1).
+      act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+      expect(cancelStream).toHaveBeenCalled()
+    } finally {
+      // Restore the real implementation — useChatStore is a shared
+      // singleton across this whole file's test suite.
+      act(() => { useChatStore.setState({ cancelStream: realCancelStream }) })
+    }
+  })
+})
+
 describe('"@" agent-mention menu — active-agent marker', () => {
   it('marks the currently active agent\'s row with the "active" text, and no other row', () => {
     act(() => {
