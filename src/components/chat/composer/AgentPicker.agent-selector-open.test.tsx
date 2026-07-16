@@ -75,7 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   act(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' })
-    useUiStore.setState({ agentSelectorOpen: false, sessionPanelOpen: false })
+    useUiStore.setState({ agentSelectorOpen: false })
     useWorkspacesStore.setState({ activeWorkspaceId: null })
   })
 })

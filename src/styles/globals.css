@@ -129,7 +129,7 @@ html {
 }
 
 /* ── Central focus ring ──────────────────────────────────────────────────
-   ONE definition for every focusable element: 1px Forge Gold, no offset.
+   ONE definition for every focusable element: 1px Forge Gold, 2px offset.
    Do NOT add per-component focus-visible ring/outline classes — they fight
    this rule and produce inconsistent rings (blue browser default on the
    attach button, grey Tailwind default on the model selector, fat ring-2+

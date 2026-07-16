@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ArrowBendUpRight } from '@phosphor-icons/react'
 import {
   DropdownMenu,
@@ -44,6 +44,7 @@ export function AgentDelegatePicker({
   onDelegate,
 }: AgentDelegatePickerProps) {
   const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   const candidates = useMemo(
     () =>
@@ -59,6 +60,7 @@ export function AgentDelegatePicker({
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           data-node-action="delegate"
           data-testid={`team-node-delegate-${source.id}`}
@@ -73,7 +75,16 @@ export function AgentDelegatePicker({
       <DropdownMenuContent
         align="end"
         className="nodrag nopan w-56"
-        onCloseAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => {
+          // Suppress Radix's default restore-to-last-focused-element behavior
+          // (which can land on `<body>` when the trigger has unmounted or
+          // React Flow's own focus tracking interferes), then explicitly put
+          // focus back on the trigger button so a keyboard user keeps their
+          // place on the node they were delegating from instead of losing
+          // focus entirely.
+          e.preventDefault()
+          triggerRef.current?.focus()
+        }}
       >
         <DropdownMenuLabel>Delegate to…</DropdownMenuLabel>
         <DropdownMenuSeparator />

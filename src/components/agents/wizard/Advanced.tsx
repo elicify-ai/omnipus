@@ -197,6 +197,7 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
                     v as 'one-at-a-time' | 'queue-and-process',
                   )
                 }
+                ariaLabel="Steering mode"
                 items={[
                   { value: 'one-at-a-time', label: 'One at a time' },
                   { value: 'queue-and-process', label: 'Queue and process' },

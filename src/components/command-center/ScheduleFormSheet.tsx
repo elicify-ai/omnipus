@@ -458,6 +458,7 @@ export function ScheduleFormSheet({
               value={form.ownerAgentId}
               onValueChange={(v) => setValue('ownerAgentId', v)}
               placeholder={agentsLoadFailed ? 'Could not load agents' : 'Select an agent'}
+              ariaLabel="Which agent"
               items={ownerAgents.map((a) => ({ value: a.id, label: a.name }))}
             />
             {agentsLoadFailed && (
@@ -659,6 +660,7 @@ function WhenSection({ form, setValue, triggerServerError }: WhenSectionProps) {
         <SmartSelect
           value={form.friendlyMode}
           onValueChange={(v) => setFriendlyMode(v as FriendlyMode)}
+          ariaLabel="When?"
           items={[
             { value: 'once', label: 'Once' },
             { value: 'repeat', label: 'Repeat' },
@@ -733,6 +735,7 @@ function RepeatSection({ form, setValue }: RepeatSectionProps) {
         <SmartSelect
           value={form.repeatShape}
           onValueChange={(v) => setValue('repeatShape', v as RepeatShape)}
+          ariaLabel="Repeat"
           items={[
             { value: 'interval', label: 'Every N minutes / hours / days' },
             { value: 'daily-at', label: 'Every day at a time' },
@@ -757,6 +760,7 @@ function RepeatSection({ form, setValue }: RepeatSectionProps) {
             <SmartSelect
               value={form.everyUnit}
               onValueChange={(v) => setValue('everyUnit', v as EveryUnit)}
+              ariaLabel="Interval unit"
               items={[
                 { value: 'minutes', label: 'minutes' },
                 { value: 'hours', label: 'hours' },
@@ -773,6 +777,7 @@ function RepeatSection({ form, setValue }: RepeatSectionProps) {
           <SmartSelect
             value={form.weekday}
             onValueChange={(v) => setValue('weekday', v)}
+            ariaLabel="Day of week"
             items={WEEKDAY_LABELS}
           />
         </Field>

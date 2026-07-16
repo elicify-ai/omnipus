@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Wordmark } from '@/components/shared/Wordmark'
 import { login, fetchAppState, isApiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import { resetTokenValidationCache } from './authValidation'
@@ -104,7 +105,7 @@ function LoginScreen() {
       >
         <h1 className="font-headline text-3xl font-bold text-center mb-2"
           style={{ color: 'var(--color-secondary)' }}>
-          Sign in to omnipus<span className="text-[var(--color-accent)]">.ai</span>
+          Sign in to <Wordmark />
         </h1>
         <p className="text-sm text-center mb-8" style={{ color: 'var(--color-muted)' }}>
           Enter your username and password

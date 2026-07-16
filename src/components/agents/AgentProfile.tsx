@@ -1848,6 +1848,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       value={steeringMode}
                       onValueChange={(v) => { markDirty(); setSteeringMode(v as 'one-at-a-time' | 'queue-and-process') }}
                       triggerClassName="text-xs h-8"
+                      ariaLabel="Message handling"
                       items={[
                         { value: 'one-at-a-time', label: 'One at a time' },
                         { value: 'queue-and-process', label: 'Queue and process' },

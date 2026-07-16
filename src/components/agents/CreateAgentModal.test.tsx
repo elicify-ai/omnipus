@@ -161,7 +161,6 @@ beforeEach(() => {
   act(() => {
     useUiStore.setState({
       createAgentModalOpen: false,
-      sessionPanelOpen: false,
       toasts: [],
     })
   })

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -43,15 +43,6 @@ interface AgentNodeData extends Record<string, unknown> {
   model: TeamNodeModel
   onOpenAgent?: (agentId: string) => void
   onRemoveMember?: (agentId: string) => void
-  /** Every node on the canvas + the live edit state — threaded down so the
-   *  keyboard "Delegate…" picker (WCAG 2.1.1) can list valid targets using
-   *  the SAME `validateConnection` predicate the drag gesture uses. */
-  allNodes: TeamNodeModel[]
-  editState: TeamEditState
-  workerIds: ReadonlySet<string>
-  /** Create a from→to edge — the identical handler wired to the canvas's
-   *  `onConnect`, so a keyboard-created edge shares one mutation path. */
-  onDelegate: (from: string, to: string) => void
 }
 interface DelegationEdgeData extends Record<string, unknown> {
   model: TeamEdgeModel
@@ -66,6 +57,44 @@ interface DelegationEdgeData extends Record<string, unknown> {
 type AgentFlowNode = Node<AgentNodeData, 'agent'>
 type DelegationFlowEdge = Edge<DelegationEdgeData, 'delegation'>
 
+// ── Canvas-global state, threaded via context (NOT per-node data) ────────────
+//
+// `allNodes` / `editState` / `workerIds` / `onDelegate` used to be copied into
+// every node's own `data` object (see git history) so the keyboard "Delegate…"
+// picker (WCAG 2.1.1) could list valid targets with the same `validateConnection`
+// predicate the drag gesture uses. That made `modelNodes` (below) rebuild on
+// EVERY edge edit — editState changes on every mode toggle / depth change / edge
+// add-remove — which produced a brand-new `data` object for EVERY node on EVERY
+// edit, defeating `memo(AgentNode)` for the whole canvas over a change that only
+// ever concerns the one node whose Delegate menu is open.
+//
+// Custom nodes render inside the `<ReactFlow>` React tree (not a portal to a
+// separate root), so an ordinary context works: a provider wraps the canvas
+// with the global state, `AgentNode` reads it here and forwards it to
+// `AgentDelegatePicker` as props (that component's own prop API is unchanged —
+// it stays directly testable with explicit props, no provider required). This
+// keeps `modelNodes` depending only on the actual per-node model, so a node's
+// `data` object — and therefore its React Flow node object — stays referentially
+// stable across an edge edit that doesn't touch that node.
+interface TeamGraphCanvasContextValue {
+  allNodes: TeamNodeModel[]
+  editState: TeamEditState
+  workerIds: ReadonlySet<string>
+  /** Create a from→to edge — the identical handler wired to the canvas's
+   *  `onConnect`, so a keyboard-created edge shares one mutation path. */
+  onDelegate: (from: string, to: string) => void
+}
+
+const TeamGraphCanvasContext = createContext<TeamGraphCanvasContextValue | null>(null)
+
+function useTeamGraphCanvasContext(): TeamGraphCanvasContextValue {
+  const ctx = useContext(TeamGraphCanvasContext)
+  if (!ctx) {
+    throw new Error('useTeamGraphCanvasContext must be used within WorkspaceTeamGraph')
+  }
+  return ctx
+}
+
 // Full-node-sized TARGET handle. Fills the node body so the ENTIRE shape is the
 // DROP hit-area for COMPLETING a connection (the React Flow target-only
 // easy-connect recipe). Invisible, and pointer-events are gated by the caller on
@@ -78,6 +107,7 @@ const FULL_TARGET_HANDLE_CLASS =
 function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
   const { model } = data
   const initial = model.name.charAt(0).toUpperCase()
+  const { allNodes, editState, workerIds, onDelegate } = useTeamGraphCanvasContext()
 
   const connection = useConnection()
   const isTarget = connection.inProgress && connection.fromNode?.id !== id
@@ -176,7 +206,6 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
       className={cn(
         'group relative w-[220px] cursor-grab rounded-xl border bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm transition-colors active:cursor-grabbing',
         'border-[var(--color-border)] hover:border-[var(--color-accent)]/50',
-        'focus-visible:outline-none',
         isTarget && 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/70',
       )}
       title={`Click to edit ${model.name} (applies everywhere). Drag the gold dot onto another agent to delegate. Drag the body to reposition.`}
@@ -209,10 +238,10 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         {canBeSource && (
           <AgentDelegatePicker
             source={model}
-            nodes={data.allNodes}
-            editState={data.editState}
-            workerIds={data.workerIds}
-            onDelegate={data.onDelegate}
+            nodes={allNodes}
+            editState={editState}
+            workerIds={workerIds}
+            onDelegate={onDelegate}
           />
         )}
         {data.onOpenAgent && (
@@ -465,24 +494,32 @@ function WorkspaceTeamGraphInner({
     [handleConnect],
   )
 
+  // Depends ONLY on the actual per-node model (+ the two stable node-level
+  // callbacks) — NOT on editState/workerIds/handleDelegate, which are
+  // canvas-global and now flow through TeamGraphCanvasContext instead. This is
+  // what keeps a node's `data` object (and therefore its React Flow node
+  // object) referentially stable across an edge edit that doesn't touch that
+  // node, so `memo(AgentNode)` is effective again.
   const modelNodes = useMemo<AgentFlowNode[]>(
     () =>
       nodes.map((model) => ({
         id: model.id,
         type: 'agent' as const,
         position: model.position,
-        data: {
-          model,
-          onOpenAgent,
-          onRemoveMember,
-          allNodes: nodes,
-          editState,
-          workerIds,
-          onDelegate: handleDelegate,
-        },
+        data: { model, onOpenAgent, onRemoveMember },
         connectable: true,
       })),
-    [nodes, onOpenAgent, onRemoveMember, editState, workerIds, handleDelegate],
+    [nodes, onOpenAgent, onRemoveMember],
+  )
+
+  // Canvas-global state for AgentNode/AgentDelegatePicker — see
+  // TeamGraphCanvasContext above. Memoized so the provider's own value
+  // identity only changes when one of these four actually changes (it still
+  // changes on every edge edit, by design — editState IS the thing that
+  // edits — but that no longer cascades into `modelNodes` above).
+  const canvasContextValue = useMemo<TeamGraphCanvasContextValue>(
+    () => ({ allNodes: nodes, editState, workerIds, onDelegate: handleDelegate }),
+    [nodes, editState, workerIds, handleDelegate],
   )
 
   // Controlled node state so positions can be DRAGGED while dagre still provides
@@ -541,39 +578,41 @@ function WorkspaceTeamGraphInner({
       data-testid="team-graph-canvas"
       className="h-full w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]"
     >
-      <ReactFlow
-        className="sovereign-flow"
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onNodesChange={onNodesChange}
-        onConnect={handleConnect}
-        onConnectEnd={handleConnectEnd}
-        isValidConnection={isValidConnection}
-        onPaneClick={() => setSelectedEdgeId(null)}
-        nodesDraggable
-        nodesConnectable
-        // Audit fix 5c: React Flow's own `.react-flow__node` wrapper gets a
-        // SECOND tabIndex=0 (redundant tab stop) whenever `nodesFocusable` is
-        // true (the default). AgentNode already sets its own tabIndex/role on
-        // the inner content div when it's clickable (`data.onOpenAgent`), so
-        // that inner element stays reachable with this off — this just removes
-        // the duplicate outer stop, without touching drag/connect/select.
-        nodesFocusable={false}
-        elementsSelectable
-        fitView
-        fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
-        proOptions={{ hideAttribution: true }}
-        defaultEdgeOptions={{ type: 'delegation' }}
-        colorMode="dark"
-      >
-        <Background color="var(--color-border)" gap={20} />
-        <Controls
-          showInteractive={false}
-          className="!border-[var(--color-border)] !bg-[var(--color-surface-1)]"
-        />
-      </ReactFlow>
+      <TeamGraphCanvasContext.Provider value={canvasContextValue}>
+        <ReactFlow
+          className="sovereign-flow"
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodesChange={onNodesChange}
+          onConnect={handleConnect}
+          onConnectEnd={handleConnectEnd}
+          isValidConnection={isValidConnection}
+          onPaneClick={() => setSelectedEdgeId(null)}
+          nodesDraggable
+          nodesConnectable
+          // Audit fix 5c: React Flow's own `.react-flow__node` wrapper gets a
+          // SECOND tabIndex=0 (redundant tab stop) whenever `nodesFocusable` is
+          // true (the default). AgentNode already sets its own tabIndex/role on
+          // the inner content div when it's clickable (`data.onOpenAgent`), so
+          // that inner element stays reachable with this off — this just removes
+          // the duplicate outer stop, without touching drag/connect/select.
+          nodesFocusable={false}
+          elementsSelectable
+          fitView
+          fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
+          proOptions={{ hideAttribution: true }}
+          defaultEdgeOptions={{ type: 'delegation' }}
+          colorMode="dark"
+        >
+          <Background color="var(--color-border)" gap={20} />
+          <Controls
+            showInteractive={false}
+            className="!border-[var(--color-border)] !bg-[var(--color-surface-1)]"
+          />
+        </ReactFlow>
+      </TeamGraphCanvasContext.Provider>
     </div>
   )
 }

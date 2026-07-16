@@ -1,12 +1,15 @@
 import React from 'react'
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 
 // Mock TanStack Router primitives the tab bar uses (Link, useLocation, useNavigate).
+// mockNavigate is shared (not a fresh vi.fn() per call) so tests can assert on it —
+// the "mock" prefix is required for Vitest's vi.mock hoisting to see it.
 let mockPathname = '/workspaces/ws-1/chat'
+const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: mockPathname }),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
   Link: ({
     children,
     to,
@@ -54,12 +57,13 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
     children,
     onClick,
     className,
+    ...rest
   }: {
     children: React.ReactNode
     onClick?: () => void
     className?: string
-  }) => (
-    <button type="button" onClick={onClick} className={className}>
+  } & Record<string, unknown>) => (
+    <button type="button" onClick={onClick} className={className} {...rest}>
       {children}
     </button>
   ),
@@ -67,12 +71,16 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 import { WorkspaceTabBar, WORKSPACE_TABS, resolveActiveSegment } from './WorkspaceTabBar'
 
+beforeEach(() => {
+  mockNavigate.mockClear()
+})
+
 describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
   it('renders all six workspace tab links in the full strip with correct test ids and hrefs', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
-    // All 7 tabs present — each segment appears at least once (full strip + sr-only strip).
+    // All six tabs present — each segment appears at least once (full strip + sr-only strip).
     for (const tab of WORKSPACE_TABS) {
       const els = screen.getAllByTestId(`workspace-tab-${tab.segment}`)
       expect(els.length).toBeGreaterThan(0)
@@ -159,16 +167,45 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     expect(found, `No ancestor div with 'flex @6xl:hidden' found. Container HTML:\n${container.innerHTML}`).toBe(true)
   })
 
-  it('view-switcher menu renders all 7 view options', () => {
+  it('view-switcher menu renders all six view tab options', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     // The DropdownMenuContent stub renders with data-testid="view-switcher-menu"
     const menu = screen.getByTestId('view-switcher-menu')
     expect(menu).toBeInTheDocument()
-    // All 7 view labels should appear in the menu
+    // All six view-tab labels should appear in the menu (plus the settings
+    // entry, covered separately below).
     for (const tab of WORKSPACE_TABS) {
       expect(menu.textContent).toContain(tab.label)
     }
+  })
+
+  it('compact dropdown contains a settings entry that navigates to /workspaces/$id/settings', () => {
+    // Narrow viewports (<1152px, e.g. phones) hide the full-strip name
+    // button entirely — the compact dropdown is the ONLY settings entry
+    // point in the header at those widths, so it must carry one too.
+    mockPathname = '/workspaces/ws-1/chat'
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const menu = screen.getByTestId('view-switcher-menu')
+    const settingsEntry = screen.getByTestId('workspace-view-switcher-settings')
+    expect(menu.contains(settingsEntry)).toBe(true)
+    expect(settingsEntry.textContent).toContain('Settings')
+
+    fireEvent.click(settingsEntry)
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/settings',
+      params: { workspaceId: 'ws-1' },
+    })
+  })
+
+  it('compact dropdown marks the settings entry selected on the settings route', () => {
+    mockPathname = '/workspaces/ws-1/settings'
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const settingsEntry = screen.getByTestId('workspace-view-switcher-settings')
+    expect(settingsEntry.className).toContain('text-[var(--color-accent)]')
+    // The switcher trigger itself should also read "Settings" while active.
+    const switcher = screen.getByTestId('workspace-view-switcher')
+    expect(switcher.textContent).toContain('Settings')
   })
 })
 
@@ -198,5 +235,55 @@ describe('resolveActiveSegment', () => {
   it('defaults to chat for an unrelated path or unknown segment', () => {
     expect(resolveActiveSegment('/agents', 'ws-1')).toBe('chat')
     expect(resolveActiveSegment('/workspaces/ws-1/bogus', 'ws-1')).toBe('chat')
+  })
+
+  it('resolves the settings segment for the workspace settings route', () => {
+    // Regression test: 'settings' is a real segment (reached via the
+    // workspace-name button / compact dropdown, not a WORKSPACE_TABS entry)
+    // and previously had no coverage — every other branch was tested.
+    expect(resolveActiveSegment('/workspaces/ws-1/settings', 'ws-1')).toBe('settings')
+  })
+})
+
+describe('WorkspaceTabBar — workspace-name button (settings entry, full strip)', () => {
+  it('renders as role="tab", first inside the tablist', () => {
+    mockPathname = '/workspaces/ws-1/chat'
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const tablist = screen.getByRole('tablist', { name: 'Workspace views' })
+    const nameButton = screen.getByTestId('workspace-name-button')
+
+    expect(nameButton).toBeInTheDocument()
+    expect(nameButton.getAttribute('role')).toBe('tab')
+    // Inside the tablist (not a stray sibling) — and first in DOM order,
+    // ahead of all six view tabs.
+    expect(tablist.contains(nameButton)).toBe(true)
+    expect(tablist.children[0]).toBe(nameButton)
+  })
+
+  it('is aria-selected on the settings route', () => {
+    mockPathname = '/workspaces/ws-1/settings'
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const nameButton = screen.getByTestId('workspace-name-button')
+    expect(nameButton.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('is not aria-selected on a non-settings route', () => {
+    mockPathname = '/workspaces/ws-1/chat'
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const nameButton = screen.getByTestId('workspace-name-button')
+    expect(nameButton.getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('navigates to the workspace settings route when clicked', () => {
+    mockPathname = '/workspaces/ws-1/chat'
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    const nameButton = screen.getByTestId('workspace-name-button')
+
+    fireEvent.click(nameButton)
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/settings',
+      params: { workspaceId: 'ws-1' },
+    })
   })
 })

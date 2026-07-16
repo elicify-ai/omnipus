@@ -25,7 +25,7 @@ export function ModelPicker({
   className?: string
   /** Read-only mode (e.g. agentRemoved) — disables the underlying ModelSelector trigger. */
   disabled?: boolean
-  /** Explicit tab-order position (composer tab ring). */
+  /** Explicit tab-order position — composer tab ring, see the map in ChatControls.tsx. */
   tabIndex?: number
 }) {
   const messages = useChatStore((s) => s.messages)

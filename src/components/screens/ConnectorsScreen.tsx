@@ -1204,8 +1204,26 @@ export function ConnectorsScreen() {
 
         {/* Channel config slide-over — always mounted (mirrors EmailMailboxPanel
             and CreateChannelSheet below) so its props survive the close
-            animation instead of unmounting immediately. */}
+            animation instead of unmounting immediately.
+            key={configuringChannelProps?.id}: forces a fresh ChannelConfigPanel
+            instance whenever the CONFIGURED channel identity changes, which
+            happens in two cases the panel's own close-effect can't cover on its
+            own: (1) clicking "Configure" on a different row while the panel is
+            already open for another channel — configuringChannel jumps straight
+            from A to B, `open` never transitions to false, so the panel's
+            `!open` reset effect never runs; (2) eliminating the one-frame flash
+            of the PREVIOUS channel's hydrated values that a same-instance
+            close+reopen would otherwise show before the hydration effect
+            re-runs post-paint. Keyed on `configuringChannelProps` (the
+            close-animation-surviving ref), not `configuringChannel` directly:
+            keying on the latter would go to the `'none'` key the instant the
+            panel starts closing (configuringChannel -> null), destroying the
+            instance mid-close and killing the exit animation. Keying on the
+            ref-backed value keeps the key — and the instance — stable for the
+            whole close animation of a given channel, and only changes when a
+            genuinely different channel becomes current. */}
         <ChannelConfigPanel
+          key={configuringChannelProps?.id ?? 'none'}
           channelId={configuringChannelProps?.id ?? ''}
           channelName={configuringChannelProps?.name ?? ''}
           nativeAvailable={configuringChannelProps?.nativeAvailable}

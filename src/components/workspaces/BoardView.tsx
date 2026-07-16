@@ -71,6 +71,38 @@ export function canDropTransition(from: TaskStatus, to: TaskStatus): { ok: boole
   return { ok: true }
 }
 
+/**
+ * Builds the dnd-kit `Announcements` (screen-reader live-region text) for a
+ * drag lifecycle over the given root tasks. Pure and exported so the message
+ * text is unit-testable without mounting `DndContext` (dnd-kit's pointer DnD
+ * cannot be driven faithfully in jsdom — see BoardViewDnd.test.tsx).
+ */
+export function buildBoardAnnouncements(rootTasks: Task[]): Announcements {
+  const taskTitle = (id: string | number) => rootTasks.find((t) => t.id === id)?.title ?? 'the task'
+  const columnLabel = (id: string | number | undefined) => COLUMNS.find((c) => c.status === id)?.label
+
+  return {
+    onDragStart({ active }) {
+      return `Picked up task "${taskTitle(active.id)}".`
+    },
+    onDragOver({ active, over }) {
+      if (!over) return undefined
+      const label = columnLabel(over.id)
+      return label ? `Task "${taskTitle(active.id)}" is over the ${label} column.` : undefined
+    },
+    onDragEnd({ active, over }) {
+      if (!over) return `Task "${taskTitle(active.id)}" was dropped.`
+      const label = columnLabel(over.id)
+      return label
+        ? `Task "${taskTitle(active.id)}" was moved to the ${label} column.`
+        : `Task "${taskTitle(active.id)}" was dropped.`
+    },
+    onDragCancel({ active }) {
+      return `Moving task "${taskTitle(active.id)}" was cancelled.`
+    },
+  }
+}
+
 interface BoardViewProps {
   tasks: Task[]
   milestones: Milestone[]
@@ -127,31 +159,7 @@ export function BoardView({
 
   // Live-region announcements for the drag lifecycle, read by screen readers
   // as a card is picked up, moved over a column, dropped, or cancelled.
-  const announcements = useMemo<Announcements>(() => {
-    const taskTitle = (id: string | number) => rootTasks.find((t) => t.id === id)?.title ?? 'the task'
-    const columnLabel = (id: string | number | undefined) => COLUMNS.find((c) => c.status === id)?.label
-
-    return {
-      onDragStart({ active }) {
-        return `Picked up task "${taskTitle(active.id)}".`
-      },
-      onDragOver({ active, over }) {
-        if (!over) return undefined
-        const label = columnLabel(over.id)
-        return label ? `Task "${taskTitle(active.id)}" is over the ${label} column.` : undefined
-      },
-      onDragEnd({ active, over }) {
-        if (!over) return `Task "${taskTitle(active.id)}" was dropped.`
-        const label = columnLabel(over.id)
-        return label
-          ? `Task "${taskTitle(active.id)}" was moved to the ${label} column.`
-          : `Task "${taskTitle(active.id)}" was dropped.`
-      },
-      onDragCancel({ active }) {
-        return `Moving task "${taskTitle(active.id)}" was cancelled.`
-      },
-    }
-  }, [rootTasks])
+  const announcements = useMemo<Announcements>(() => buildBoardAnnouncements(rootTasks), [rootTasks])
 
   function handleDragStart(event: DragStartEvent) {
     const id = String(event.active.id)
@@ -360,9 +368,7 @@ function DraggableTaskCard({
         altitude={altitude}
         onClick={onClick}
         onChildClick={onChildClick}
-        dragAttributes={attributes}
-        dragListeners={listeners}
-        dragActivatorRef={setActivatorNodeRef}
+        drag={{ attributes, listeners, activatorRef: setActivatorNodeRef }}
       />
     </div>
   )

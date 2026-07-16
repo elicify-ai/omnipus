@@ -26,7 +26,15 @@ export interface UseSelectSessionOptions {
  *    the filtered REST payload and tool-call history is silently dropped).
  * 4. Seeds the token counter from the persisted total.
  * 5. Sets the active agent type for non-task sessions (composer behaviour).
- * 6. Navigates to the workspace chat route — only when switching workspaces.
+ * 6. Navigates — to the workspace chat route whenever the session belongs to a
+ *    known workspace, or to the standalone `/sessions/$sessionId` route when it
+ *    does not (no `workspace_id`, or `workspace_id` points at a deleted
+ *    workspace). That route's own "fallback inline path" (see
+ *    `routes/_app/sessions.$sessionId.tsx`) renders the attached session with
+ *    no workspace required — the one screen built for exactly this case — so
+ *    an "Unfiled" session never attaches silently with nowhere to render it
+ *    (previously: selecting one from a non-chat route like /agents or
+ *    /settings attached in the background and navigated nowhere).
  * 7. Calls `onClose` to dismiss the sidebar / panel / modal.
  *
  * Does NOT call `setActiveSession` — it would call `resetChatSession()` a second
@@ -44,6 +52,23 @@ export function useSelectSession(options: UseSelectSessionOptions) {
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
   const setActiveWorkspaceId = useWorkspacesStore((s) => s.setActiveWorkspaceId)
 
+  // Shared attach -> seed-tokens -> set-agent-type tail. Every branch below
+  // needs this exact sequence, so it exists once here rather than duplicated
+  // per branch (previously duplicated verbatim across the workspace-switch and
+  // in-place branches).
+  function attachAndSeed(session: Session, agentId: string | undefined) {
+    attachToSession(session.id, session.type, session.title, agentId)
+    if (session.total_tokens && session.total_tokens > 0) {
+      seedSessionTokens(session.total_tokens)
+    }
+    if (session.type !== 'task') {
+      const agent = agents.find((a) => a.id === agentId)
+      if (agent?.type) {
+        setActiveAgentType(agent.type)
+      }
+    }
+  }
+
   return function selectSession(session: Session) {
     const agentId = session.active_agent_id ?? session.agent_id
 
@@ -58,39 +83,27 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       sessionWsId !== activeWorkspaceId
     ) {
       setActiveWorkspaceId(sessionWsId)
-      attachToSession(session.id, session.type, session.title, agentId)
-      if (session.total_tokens && session.total_tokens > 0) {
-        seedSessionTokens(session.total_tokens)
-      }
-      if (session.type !== 'task') {
-        const agent = agents.find((a) => a.id === agentId)
-        if (agent?.type) {
-          setActiveAgentType(agent.type)
-        }
-      }
+      attachAndSeed(session, agentId)
       onClose()
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: sessionWsId } })
       return
     }
 
     // Same workspace, no workspace, or deleted-workspace session — attach in place.
-    attachToSession(session.id, session.type, session.title, agentId)
-    if (session.total_tokens && session.total_tokens > 0) {
-      seedSessionTokens(session.total_tokens)
-    }
-    if (session.type !== 'task') {
-      const agent = agents.find((a) => a.id === agentId)
-      if (agent?.type) {
-        setActiveAgentType(agent.type)
-      }
-    }
+    attachAndSeed(session, agentId)
     onClose()
-    // Always navigate to the workspace chat route if the session has a known
-    // workspace — the sidebar/search-modal entry points are globally reachable
-    // (not just from chat routes), so without this the user would stay stranded
-    // on /agents or /settings after selecting a same-workspace session.
+
     if (sessionWsId && existingWorkspaceIds.has(sessionWsId)) {
+      // Known workspace — the sidebar/search-modal entry points are globally
+      // reachable (not just from chat routes), so always navigate to land the
+      // user on the chat screen rather than leaving them stranded on
+      // /agents or /settings.
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: sessionWsId } })
+    } else {
+      // "Unfiled" session (no workspace_id, or workspace_id points at a
+      // deleted workspace) — there is no workspace-scoped route to land on.
+      // Route to the standalone session view so the attach is always visible.
+      void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id } })
     }
   }
 }

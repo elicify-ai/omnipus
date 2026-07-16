@@ -253,12 +253,14 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
             value={eventFilter}
             onValueChange={setEventFilter}
             triggerClassName="h-7 text-xs w-[150px]"
+            ariaLabel="Event type filter"
             items={EVENT_TYPE_OPTIONS}
           />
           <SmartSelect
             value={decisionFilter}
             onValueChange={setDecisionFilter}
             triggerClassName="h-7 text-xs w-[140px]"
+            ariaLabel="Decision filter"
             items={DECISION_OPTIONS}
           />
           <Button

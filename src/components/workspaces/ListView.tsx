@@ -182,7 +182,7 @@ function TaskRow({
         }
       }}
       aria-label={`${task.title}, status ${statusLabel(task.status)}`}
-      className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-2)]/40 cursor-pointer transition-colors focus-visible:outline-none"
+      className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-2)]/40 cursor-pointer transition-colors"
     >
       <td className="px-4 py-2.5">
         <span className={cn('rounded border px-1.5 py-0.5 text-[10px] font-bold', badge.className)}>

@@ -387,7 +387,7 @@ export function GenericToolCall({
             onClick={handleWatchLive}
             aria-label="Watch live"
             title="Watch this agent's browser live"
-            className="shrink-0 flex items-center gap-1 px-2 py-2 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+            className="shrink-0 flex items-center gap-1 px-2 py-2 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-colors"
           >
             <Broadcast size={13} />
             <span>Watch live</span>

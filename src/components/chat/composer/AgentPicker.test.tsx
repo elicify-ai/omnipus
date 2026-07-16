@@ -153,6 +153,22 @@ describe('AgentPicker — trigger', () => {
       )
     })
   })
+
+  // Composer tab ring, position 3 — the value itself is ChatScreen's
+  // contract (see src/components/chat/ChatScreen.tab-ring.test.tsx), but the
+  // plumbing that the `tabIndex` prop actually reaches the interactive
+  // trigger element (not just an ignored prop) is this component's own
+  // contract to keep.
+  it('forwards the tabIndex prop onto the trigger button', async () => {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <AgentPicker tabIndex={3} />
+      </QueryClientProvider>,
+    )
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('agent-picker-trigger')).toHaveAttribute('tabindex', '3')
+    })
+  })
 })
 
 // ── Workspace core_team scoping ────────────────────────────────────────────────

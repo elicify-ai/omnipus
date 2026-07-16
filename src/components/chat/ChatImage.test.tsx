@@ -103,4 +103,18 @@ describe('ChatImage', () => {
     fireEvent.click(container.querySelector('img')!)
     expect(useUiStore.getState().mediaLightbox).toMatchObject({ kind: 'image', src: '/api/v1/uploads/s/x' })
   })
+
+  it('pressing Space on the focused image also opens the lightbox', () => {
+    const { container } = render(<ChatImage src="/api/v1/uploads/s/x" alt="shot" filename="x.png" />)
+    expect(useUiStore.getState().mediaLightbox).toBeNull()
+
+    fireEvent.keyDown(container.querySelector('img')!, { key: ' ' })
+
+    expect(useUiStore.getState().mediaLightbox).toEqual({
+      kind: 'image',
+      src: '/api/v1/uploads/s/x',
+      alt: 'shot',
+      filename: 'x.png',
+    })
+  })
 })

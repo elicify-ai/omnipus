@@ -19,14 +19,16 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
-// The 7-tab workspace container surface. Each tab is a deep-linkable sub-route
-// under /workspaces/$workspaceId. Chat is the default landing tab.
+// The workspace container surface: 6 view tabs (+ the workspace-name →
+// settings item). Each tab is a deep-linkable sub-route under
+// /workspaces/$workspaceId. Chat is the default landing tab.
+export type TabSegment = 'chat' | 'board' | 'list' | 'graph' | 'calendar' | 'team'
+export type WorkspaceSegment = TabSegment | 'settings'
+
 export interface WorkspaceTab {
-  segment: 'chat' | 'board' | 'list' | 'graph' | 'calendar' | 'team' | 'settings'
+  segment: TabSegment
   label: string
   Icon: Icon
-  /** Icon-only tab — the label is aria/tooltip only, never rendered as text. */
-  iconOnly?: boolean
 }
 
 export const WORKSPACE_TABS: WorkspaceTab[] = [
@@ -38,8 +40,24 @@ export const WORKSPACE_TABS: WorkspaceTab[] = [
   { segment: 'team', label: 'Team', Icon: UsersThree },
   // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
   // not a view. It's reached by clicking the workspace NAME in the top bar
-  // (WorkspaceTabContainer), Notion-style. The /settings route still exists.
+  // (WorkspaceTabContainer) or the compact dropdown's settings entry,
+  // Notion-style. The /settings route still exists.
 ]
+
+/** Single source for every segment's display label — the six WORKSPACE_TABS
+ * labels plus 'settings', which deliberately has no WORKSPACE_TABS entry.
+ * Both header renderings (full strip's compact switcher, and the compact
+ * dropdown) read from this instead of each re-deriving their own
+ * `activeTab?.label ?? (segment === 'settings' ? ... : 'Chat')` fallback —
+ * that duplication is what previously let the two renderings drift
+ * ('Workspace settings' vs 'Settings') for the same state. */
+export const SEGMENT_LABELS: Record<WorkspaceSegment, string> = {
+  ...(Object.fromEntries(WORKSPACE_TABS.map((t) => [t.segment, t.label])) as Record<
+    TabSegment,
+    string
+  >),
+  settings: 'Settings',
+}
 
 interface WorkspaceTabBarProps {
   workspaceId: string
@@ -52,8 +70,11 @@ interface WorkspaceTabBarProps {
  * that slides between tabs with a spring transition.
  *
  * Responsive strategy (container-query, relative to the @container top-bar):
- *   ≥ 72rem (1152px): full 7-tab strip (hidden @6xl:flex)
- *   < 72rem (1152px): single "Active ▾" view-switcher dropdown (flex @6xl:hidden)
+ *   ≥ 72rem (1152px): full strip — 6 view tabs (+ the workspace-name →
+ *     settings item) (hidden @6xl:flex)
+ *   < 72rem (1152px): single "Active ▾" view-switcher dropdown (flex
+ *     @6xl:hidden) — also carries a settings entry, since narrow viewports
+ *     have no other settings entry point in this header
  *
  * The full strip retains all workspace-tab-<segment> test ids so Playwright
  * tests at 1280px viewport (container ≥1152px) still find them.
@@ -75,7 +96,8 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           NO overflow-x-auto: a scrollable tablist let mouse-wheel/touch
           gestures scroll the menu itself up/down (overflow containers clip +
           scroll BOTH axes) — chrome must never move. The strip's content is
-          bounded (7 items, name truncated) so overflow can't occur. ─────── */}
+          bounded (6 view tabs + the workspace-name → settings item, name
+          truncated) so overflow can't occur. ─────── */}
       <div
         role="tablist"
         aria-label="Workspace views"
@@ -113,7 +135,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           )}
         </button>
 
-        {WORKSPACE_TABS.map(({ segment, label, Icon, iconOnly }) => {
+        {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
           const isActive = segment === activeSegment
           return (
             <Link
@@ -123,7 +145,6 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               role="tab"
               aria-selected={isActive}
               aria-label={label}
-              title={iconOnly ? label : undefined}
               data-testid={`workspace-tab-${segment}`}
               className={cn(
                 // h-chrome-header (the literal 44px token, NOT h-11) makes the tab
@@ -141,7 +162,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               )}
             >
               <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
-              {!iconOnly && <span>{label}</span>}
+              <span>{label}</span>
               {isActive && (
                 <motion.div
                   layoutId="workspace-tab-underline"
@@ -161,7 +182,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
             <button
               type="button"
               data-testid="workspace-view-switcher"
-              aria-label={`Switch view, currently ${activeTab?.label ?? (activeSegment === 'settings' ? 'Workspace settings' : 'Chat')}`}
+              aria-label={`Switch view, currently ${SEGMENT_LABELS[activeSegment]}`}
               className={cn(
                 'flex items-center gap-1.5 px-3 h-11 text-sm font-headline whitespace-nowrap rounded-md',
                 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors',
@@ -169,12 +190,38 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 'pointer-coarse:min-h-[44px]',
               )}
             >
-              {activeTab && <activeTab.Icon size={16} weight="fill" className="text-[var(--color-accent)]" />}
-              <span className="text-[var(--color-accent)]">{activeTab?.label ?? (activeSegment === 'settings' ? 'Settings' : 'Chat')}</span>
+              {settingsActive ? (
+                <Tray size={16} weight="fill" className="text-[var(--color-accent)]" />
+              ) : (
+                activeTab && <activeTab.Icon size={16} weight="fill" className="text-[var(--color-accent)]" />
+              )}
+              <span className="text-[var(--color-accent)]">{SEGMENT_LABELS[activeSegment]}</span>
               <CaretDown size={13} className="opacity-60" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
+            {/* Settings entry — narrow viewports have no other settings entry
+                point in this header (the full-strip name button is hidden
+                below @6xl), so the compact dropdown must carry one too. */}
+            <DropdownMenuItem
+              key="settings"
+              data-testid="workspace-view-switcher-settings"
+              onClick={() => {
+                void navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
+              }}
+              className={cn(
+                'flex items-center gap-2',
+                settingsActive && 'text-[var(--color-accent)]',
+              )}
+            >
+              <Tray size={15} weight={settingsActive ? 'fill' : 'regular'} />
+              <span>{SEGMENT_LABELS.settings}</span>
+              {settingsActive && (
+                <span className="ml-auto text-[10px] text-[var(--color-accent)]" aria-hidden="true">
+                  ●
+                </span>
+              )}
+            </DropdownMenuItem>
             {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
               const isActive = segment === activeSegment
               return (
@@ -215,15 +262,16 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
 export function resolveActiveSegment(
   pathname: string,
   workspaceId: string,
-): WorkspaceTab['segment'] {
+): WorkspaceSegment {
   const base = `/workspaces/${workspaceId}`
   if (!pathname.startsWith(base)) return 'chat'
   const rest = pathname.slice(base.length).replace(/^\//, '')
   const segment = rest.split('/')[0]
   // 'settings' is a real segment but deliberately NOT in WORKSPACE_TABS (it's
-  // reached via the workspace-name button, not a tab). It must still resolve —
-  // otherwise /settings falls through to 'chat', wrongly marking the Chat tab
-  // active and rendering the chat-only header controls on the settings page.
+  // reached via the workspace-name button or the compact dropdown's settings
+  // entry, not a tab). It must still resolve — otherwise /settings falls
+  // through to 'chat', wrongly marking the Chat tab active and rendering the
+  // chat-only header controls on the settings page.
   if (segment === 'settings') return 'settings'
   const match = WORKSPACE_TABS.find((t) => t.segment === segment)
   return match?.segment ?? 'chat'

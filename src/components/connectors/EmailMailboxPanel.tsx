@@ -511,6 +511,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                   value={form.agent_id || '__none__'}
                   onValueChange={(v) => setField('agent_id', v === '__none__' ? '' : v)}
                   placeholder={form.workspace_id ? '(select an agent)' : '(select a workspace first)'}
+                  ariaLabel="Owning agent"
                   items={agentItems}
                 />
               )}
@@ -531,6 +532,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                   value={form.workspace_id || '__none__'}
                   onValueChange={(v) => setField('workspace_id', v === '__none__' ? '' : v)}
                   placeholder="(select a workspace)"
+                  ariaLabel="Workspace"
                   items={workspaceItems}
                 />
               )}

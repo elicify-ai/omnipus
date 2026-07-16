@@ -1604,7 +1604,7 @@ export function BrowserLiveView({
             onClick={onPopOut}
             aria-label="Pop out"
             title="Pop out into its own window"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
           >
             <ArrowSquareOut size={15} />
           </button>
@@ -1615,7 +1615,7 @@ export function BrowserLiveView({
             onClick={onClose}
             aria-label="Close live browser panel"
             title="Close"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
           >
             <X size={15} />
           </button>

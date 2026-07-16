@@ -61,7 +61,7 @@ function previewResponse(overrides: Partial<ExecutorCommandPreviewResponse> = {}
 
 beforeEach(() => {
   act(() => {
-    useUiStore.setState({ createAgentModalOpen: false, sessionPanelOpen: false, toasts: [] })
+    useUiStore.setState({ createAgentModalOpen: false, toasts: [] })
   })
   vi.mocked(fetchCliDetect).mockReset().mockResolvedValue(detect())
   vi.mocked(fetchCliValidate).mockReset().mockResolvedValue(validateResult())

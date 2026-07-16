@@ -360,7 +360,12 @@ export function ChannelConfigPanel({
   // group's useState value so a stale secret cannot be resurrected on switch-back (F-G08).
   const [gChatAuthMethod, setGChatAuthMethod] = useState<GChatAuthMethod>('webhook')
 
-  const { data: currentConfig, isLoading } = useQuery({
+  const {
+    data: currentConfig,
+    isLoading,
+    isError: configError,
+    refetch: refetchConfig,
+  } = useQuery({
     queryKey: ['channel-config', channelId],
     queryFn: () => fetchChannelConfig(channelId),
     enabled: open,
@@ -445,12 +450,24 @@ export function ChannelConfigPanel({
     },
   })
   // Reset transient state when the dialog closes so next open starts fresh.
+  // Must clear EVERYTHING the form can carry between channels, not just the
+  // routing selects — this panel is always-mounted (ConnectorsScreen keeps it
+  // in the tree across the close animation, see ADR/finding on leaked form
+  // state), so nothing here is naturally torn down by unmount. Before this
+  // fix, formValues/isDirtyRef/gChatAuthMethod survived a close: typing a
+  // secret into channel A, closing without saving, then opening channel B
+  // showed A's values under B's generic field keys (token/api_key) and Save
+  // would submit A's secret to B, because the hydration effect below bails
+  // on `isDirtyRef.current` and never overwrote the stale values.
   useEffect(() => {
     if (!open) {
       setWasJustEnabled(false)
       setSelectedWorkspaceId('')
       setSelectedAgentId('__none__')
       setFieldErrors({})
+      setFormValues({})
+      isDirtyRef.current = false
+      setGChatAuthMethod('webhook')
     }
   }, [open])
 
@@ -704,6 +721,30 @@ export function ChannelConfigPanel({
               <div key={i} className="h-10 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
             ))}
           </div>
+        ) : configError ? (
+          // A failed config fetch must not fall through to an empty/stale form —
+          // that would look like "this channel has no config yet" and Save could
+          // submit a payload built from nothing over a real stored config. Mirrors
+          // the app-level fetch-error banner pattern (AppShell's
+          // app-state-fetch-error-banner: role="alert" + explicit retry copy)
+          // rather than the routing sub-section's inline red text, since this
+          // failure blocks the whole form, not one field.
+          <div className="px-6 pt-6">
+            <div
+              data-testid="channel-config-fetch-error"
+              role="alert"
+              className="flex flex-col items-start gap-2 px-4 py-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-medium"
+            >
+              <span>Couldn&apos;t load {channelName} configuration. Check your connection and try again.</span>
+              <button
+                type="button"
+                className="underline hover:no-underline text-amber-400"
+                onClick={() => refetchConfig()}
+              >
+                Retry
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="px-6 pt-5 space-y-5">
             {/* #324 — Google Chat auth method picker */}
@@ -837,6 +878,7 @@ export function ChannelConfigPanel({
                             // Bound flow: do not persist until agent is also chosen (FR-001).
                           }}
                           placeholder="No workspace (global default routing)"
+                          ariaLabel="Workspace"
                           items={[
                             { value: '__none__', label: 'No workspace (global default routing)' },
                             ...workspaces.map((ws) => ({ value: ws.id, label: ws.name })),
@@ -888,6 +930,7 @@ export function ChannelConfigPanel({
                           <SmartSelect
                             value={selectedAgentId}
                             disabled={!isBoundFlow}
+                            ariaLabel="Default agent"
                             onValueChange={(v) => {
                               const next = v === '__none__' ? undefined : v
                               setSelectedAgentId(v)

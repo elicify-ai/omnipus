@@ -193,7 +193,7 @@ function AgentsLibraryView({
                       ? 'var(--color-accent)'
                       : 'var(--color-muted)',
                 }}
-                aria-haspopup="true"
+                aria-haspopup="dialog"
                 aria-expanded={filterMenuOpen}
               >
                 <FunnelSimple size={12} weight={workspaceFilter !== 'all' ? 'fill' : 'regular'} />
@@ -352,7 +352,7 @@ function AgentsLibraryView({
                       variant="ghost"
                       className="gap-1.5 ml-0 sm:ml-2 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                       data-testid="add-external-trigger"
-                      aria-haspopup="true"
+                      aria-haspopup="dialog"
                       aria-expanded={externalMenuOpen}
                     >
                       <Plus size={12} weight="bold" /> + Add Subagent (External)

@@ -16,16 +16,10 @@ export interface Toast {
 }
 
 interface UiStore {
-  // Session panel
-  sessionPanelOpen: boolean
-  openSessionPanel: () => void
-  closeSessionPanel: () => void
-
   // Search modal — cross-workspace session search (step 6 of the sidebar-merge
-  // plan). Same store-driven pattern as sessionPanelOpen; opened from the
-  // sidebar search icon (Sidebar.tsx) and the /search slash command
-  // (useSlashMenu.ts). The SearchModal component is mounted once at the AppShell
-  // root, so either entry point drives the same single instance.
+  // plan). Opened from the sidebar search icon (Sidebar.tsx) and the /resume
+  // slash command (useSlashMenu.ts). The SearchModal component is mounted once
+  // at the AppShell root, so either entry point drives the same single instance.
   searchModalOpen: boolean
   searchModalWorkspaceFilter: string | null
   openSearchModal: (workspaceId?: string) => void
@@ -140,7 +134,7 @@ interface UiStore {
   // Deliberately NOT localStorage-persisted, unlike useSidebarStore's
   // `isPinned` (a SEPARATE store that wraps itself in zustand's `persist`
   // middleware for exactly that one field): no other field in THIS store
-  // persists across a reload either (sessionPanelOpen, notificationPanelOpen,
+  // persists across a reload either (searchModalOpen, notificationPanelOpen,
   // mediaLightbox, browserPanel itself, …) — adding persistence here would
   // make this the one and only persisted field of an otherwise entirely
   // session-scoped store, for a narrow toggle nobody asked to survive a
@@ -161,10 +155,6 @@ export type MediaLightboxContent =
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export const useUiStore = create<UiStore>((set, get) => ({
-  sessionPanelOpen: false,
-  openSessionPanel: () => set({ sessionPanelOpen: true }),
-  closeSessionPanel: () => set({ sessionPanelOpen: false }),
-
   searchModalOpen: false,
   searchModalWorkspaceFilter: null,
   openSearchModal: (workspaceId?: string) => set({ searchModalOpen: true, searchModalWorkspaceFilter: workspaceId ?? null }),

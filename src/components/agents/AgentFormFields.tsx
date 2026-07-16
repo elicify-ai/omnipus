@@ -306,6 +306,7 @@ export function IconPicker({
         value={value}
         onValueChange={(v) => onChange(v as IconName)}
         triggerClassName={triggerClassName}
+        ariaLabel="Icon"
         items={ICON_OPTIONS.map(({ name: iconName }) => ({ value: iconName, label: iconName }))}
       />
     </div>

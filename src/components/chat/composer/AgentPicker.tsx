@@ -43,7 +43,7 @@ export function AgentPicker({
   className?: string
   /** Read-only mode (e.g. agentRemoved) — disables the trigger and skips auto-select. */
   disabled?: boolean
-  /** Explicit tab-order position (composer tab ring: input=1 agent=2 model=3 attach=4 browser=5). */
+  /** Explicit tab-order position — composer tab ring, see the map in ChatControls.tsx. */
   tabIndex?: number
 }) {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
