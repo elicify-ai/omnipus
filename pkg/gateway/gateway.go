@@ -2088,7 +2088,40 @@ func setupAndStartServices(
 	// the route or the listener. See config.go's LiveViewEnabled doc for why
 	// (a raw HTTP-level rejection would surface to browser JS as an opaque,
 	// unparseable WebSocket error).
-	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin)
+	//
+	// browserInstallRoot mirrors pkg/tools/browser/exec_resolver.go's private
+	// installRoot derivation (installRoot = <ProfileDir>/../chromium — the
+	// managed-Chromium download root EnsureChromium/ClassifyVideoCapability
+	// both inspect) so the live-browser video capability check (component M,
+	// ADR-044) classifies the SAME install exec_resolver.go would actually
+	// launch. cfg.Tools.Browser.ProfileDir is empty on a fresh/default
+	// install, in which case browser.DefaultConfig's own default
+	// (<homePath>/browser/profiles/default, manager.go:78) applies.
+	browserProfileDir := cfg.Tools.Browser.ProfileDir
+	if browserProfileDir == "" {
+		browserProfileDir = filepath.Join(homePath, "browser", "profiles", "default")
+	}
+	browserInstallRoot := filepath.Clean(filepath.Join(filepath.Dir(filepath.Clean(browserProfileDir)), "..", "chromium"))
+
+	// Live-browser video streaming (component M, ADR-044): the WebCodecs
+	// relay orchestrator + its loopback capture-ingest endpoint
+	// (/api/v1/browser/capture-ingest, component E). Registered
+	// unconditionally, same posture as browserWSHandler below — the FR-020
+	// kill-switch (BrowserVideoConfig.Enabled, default true here) and the
+	// DS-5 host classification are runtime/per-connection gates
+	// (videoAttachCapable in browser_ws.go), not registration-time ones.
+	// gateway.browser_video_enabled does not exist as a config.Config field
+	// yet, so there is no live config-reload toggle wired to
+	// browserVideo.SetVideoEnabled — a follow-up for whoever owns
+	// pkg/config/pkg/gateway's config-reload path.
+	browserVideo := RegisterBrowserVideo(runningServices.ChannelManager, BrowserVideoDeps{
+		Audit:       agentLoop.AuditLogger(),
+		InstallRoot: browserInstallRoot,
+		Config: BrowserVideoConfig{
+			IngestWSURL: fmt.Sprintf("ws://127.0.0.1:%d/api/v1/browser/capture-ingest", cfg.Gateway.Port),
+		},
+	})
+	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin, browserVideo)
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
 
 	// Build the in-process tool-approval registry (FR-016, FR-070, M10).

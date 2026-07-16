@@ -133,7 +133,7 @@ func newBrowserWSTestHandler(t *testing.T, mutate func(cfg *config.Config)) (*Br
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	handler := newBrowserWSHandler(al, "")
+	handler := newBrowserWSHandler(al, "", nil) // nil: video relay not exercised by this fixture
 	return handler, al
 }
 
@@ -583,7 +583,7 @@ func newBrowserWSHandlerWithAudit(t *testing.T) (*BrowserWSHandler, *agent.Agent
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	handler := newBrowserWSHandler(al, "")
+	handler := newBrowserWSHandler(al, "", nil) // nil: video relay not exercised by this fixture
 	return handler, al, auditDir
 }
 

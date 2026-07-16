@@ -145,6 +145,20 @@ const (
 	// live browser (ADR-038 D6).
 	EventBrowserLiveControlReleased = "browser.live.control_released"
 
+	// EventBrowserLiveStreamStarted / EventBrowserLiveStreamStopped — INFO.
+	// Lifecycle of a live-browser VIDEO stream (ADR-044): the capture-ingest
+	// endpoint minted a per-stream token / the stream ended. Exactly one
+	// started + one stopped per logical stream. Canonical names for the local
+	// consts in pkg/gateway/browser_ingest.go (FR-024).
+	EventBrowserLiveStreamStarted = "browser.live.stream_started"
+	EventBrowserLiveStreamStopped = "browser.live.stream_stopped"
+
+	// EventBrowserLiveIngestRejected — WARN. A capture-ingest connection was
+	// rejected (absent/invalid/mis-scoped/dead/duplicate token, non-loopback
+	// RemoteAddr, or an oversize/malformed chunk). Emitted on every rejection
+	// on the privileged ingest entry point (ADR-044 FR-024, CRIT-002).
+	EventBrowserLiveIngestRejected = "browser.live.ingest_rejected"
+
 	// EventChannelRoutingDriftDrop — WARN. A workspace-bound channel instance's
 	// configured agent is unresolvable (deleted or a worker): the
 	// inbound message is dropped rather than silently degraded to the global

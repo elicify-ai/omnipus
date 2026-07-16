@@ -194,6 +194,14 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// just because it landed inside the same 2s window. See handleInput's
 	// doc comment.
 	lastInputErrorMessage string
+	// videoHandle is the component-M stream-orchestrator viewer handle for
+	// this connection's CURRENT attachment, set only when handleAttach chose
+	// the video relay path (videoAttachCapable()) over the legacy JPEG
+	// screencast. nil whenever this connection isn't (or isn't currently)
+	// video-attached. Detached alongside state.mgr/sessionID everywhere this
+	// connection's attachment is torn down — re-attach, explicit
+	// browser_detach, and readLoop's disconnect cleanup — see detachVideo.
+	videoHandle *VideoViewerHandle
 }
 
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
@@ -211,6 +219,13 @@ type BrowserWSHandler struct {
 	allowedOrigin string
 	upgrader      websocket.Upgrader
 
+	// browserVideo is component M's stream orchestrator (ADR-044,
+	// docs/internal/specs/live-browser-video-streaming-spec.md). May be nil
+	// (tests, or a caller that hasn't wired the video subsystem) — every use
+	// below is nil-checked and falls back to the legacy JPEG screencast path
+	// (F-02) unchanged.
+	browserVideo *BrowserVideoOrchestrator
+
 	// activeConns tracks in-flight ServeHTTP goroutines so Wait() can block
 	// until all connections have fully torn down (test cleanup, mirroring
 	// WSHandler.Wait()).
@@ -220,11 +235,14 @@ type BrowserWSHandler struct {
 // newBrowserWSHandler constructs a BrowserWSHandler. allowedOrigin is the
 // same value the gateway computes for the chat WS (middleware.
 // CanonicalGatewayOrigin) — passed in rather than recomputed so the two
-// sockets can never disagree on CORS/origin policy.
-func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string) *BrowserWSHandler {
+// sockets can never disagree on CORS/origin policy. browserVideo is
+// component M's stream orchestrator (nil is valid — see the field's doc
+// comment).
+func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string, browserVideo *BrowserVideoOrchestrator) *BrowserWSHandler {
 	return &BrowserWSHandler{
 		agentLoop:     agentLoop,
 		allowedOrigin: allowedOrigin,
+		browserVideo:  browserVideo,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: wsCheckOrigin(allowedOrigin),
 		},
@@ -463,6 +481,7 @@ func (h *BrowserWSHandler) readLoop(
 
 	var state browserConnState
 	defer func() {
+		h.detachVideo(&state)
 		if state.mgr != nil && state.sessionID != "" {
 			h.detach(state.mgr, state.sessionID, viewerID, userID)
 		}
@@ -535,6 +554,48 @@ func (h *BrowserWSHandler) readLoop(
 	}
 }
 
+// videoAttachCapable reports whether handleAttach should hand this viewer to
+// the component-M stream orchestrator (the WebCodecs relay, ADR-044) instead
+// of the legacy CDP JPEG screencast (F-02). True only when an orchestrator is
+// wired AND its FR-020 kill-switch is on AND the host classifies as
+// video-capable (DS-5: linux + full Chrome installed + Xvfb). This mirrors
+// the same two checks BrowserVideoOrchestrator.AttachViewer makes internally
+// (browser_stream.go) — checked here FIRST, before ever calling AttachViewer,
+// so a host that simply CAN'T do video (or has the kill-switch off) falls
+// straight through to the untouched legacy screencast path below rather than
+// going through AttachViewer at all. That distinction matters: AttachViewer
+// itself never falls back to JPEG for a per-VIEWER failure (e.g. a codec
+// negotiation mismatch against an already-active stream) — per the spec's
+// A2-only/no-A1 posture (US-5/US-6) such a viewer gets the unavailable state,
+// not JPEG. This method decides the coarser, host-level branch: can this
+// install do video AT ALL right now.
+func (h *BrowserWSHandler) videoAttachCapable() bool {
+	if h.browserVideo == nil || !h.browserVideo.Enabled() {
+		return false
+	}
+	// classify/installRoot are unexported BrowserVideoOrchestrator fields —
+	// accessible here because browser_ws.go and browser_stream.go are the
+	// same package (gateway). This is the exact classification AttachViewer
+	// performs internally (ensureStreamLocked's capab lookup), computed here
+	// only to decide the OUTER host-level branch described above.
+	return h.browserVideo.classify(h.browserVideo.installRoot).Capable
+}
+
+// detachVideo unbinds state's video-relay attachment (if any), set only when
+// handleAttach chose the video path (videoAttachCapable()). Safe to call
+// unconditionally — a nil videoHandle (legacy-screencast viewer, or an
+// orchestrator-less build) is a no-op. Must be paired with every call to
+// h.detach (re-attach, explicit browser_detach, and readLoop's disconnect
+// cleanup) so a torn-down connection never leaves a video stream's viewer set
+// holding a stale entry.
+func (h *BrowserWSHandler) detachVideo(state *browserConnState) {
+	if state.videoHandle == nil {
+		return
+	}
+	state.videoHandle.Detach()
+	state.videoHandle = nil
+}
+
 // handleAttach binds this connection to the target agent's live browser
 // (ADR-038 D3): resolves the agent's BrowserManager, starts (or joins) its
 // screencast, and streams browser_screencast frames back until detach. A
@@ -571,6 +632,7 @@ func (h *BrowserWSHandler) handleAttach(
 	}
 
 	if state.mgr != nil && state.sessionID != "" {
+		h.detachVideo(state)
 		h.detach(state.mgr, state.sessionID, viewerID, userID)
 		state.mgr = nil
 		state.sessionID = ""
@@ -590,7 +652,27 @@ func (h *BrowserWSHandler) handleAttach(
 	}
 
 	chatSessionID := frame.SessionId // context/logging + wire echo ONLY — see doc comment above.
-	controlledByOther, err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, func(lf browser.LiveFrame) {
+
+	// FR-005/US-1/US-6 (ADR-044): a video-capable, kill-switch-enabled install
+	// drives this viewer over the component-M WebCodecs relay instead of the
+	// legacy JPEG screencast (F-02 — the legacy path is UNCHANGED for every
+	// other install/state, this only adds a parallel one). mgr.Live().Attach
+	// below is called identically on BOTH paths — take-the-wheel input, tabs,
+	// and viewer control/status authz (FR-015) all flow through the SAME
+	// LiveViewRegistry regardless of which frame transport is chosen; only
+	// the onFrame SINK differs, so a video viewer never receives a
+	// browser_screencast frame racing its browser_video_chunk stream (the
+	// video relay drives frames instead — see AttachViewer below). Note
+	// LiveView.attach (pkg/tools/browser/live.go) starts the real CDP
+	// Page.startScreencast at most once per SESSION regardless of viewer
+	// count or transport choice (piggybacked by every later Attach call,
+	// video or not), so this branch changes only what reaches the wire, not
+	// whether a screencast subscription exists underneath.
+	videoCapable := h.videoAttachCapable()
+	onFrame := func(lf browser.LiveFrame) {
+		if videoCapable {
+			return
+		}
 		pageScale, offsetTop, scrollX, scrollY := lf.PageScale, lf.OffsetTop, lf.ScrollOffsetX, lf.ScrollOffsetY
 		wc.sendFrameGen(generated.BrowserScreencastFrame{
 			Type:          string(generated.WsFrameTypeBrowserScreencast),
@@ -604,7 +686,8 @@ func (h *BrowserWSHandler) handleAttach(
 			ScrollOffsetX: &scrollX,
 			ScrollOffsetY: &scrollY,
 		})
-	}, func(message string) {
+	}
+	controlledByOther, err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, onFrame, func(message string) {
 		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
 		// context died without an explicit browser_detach — e.g. this
 		// connection is still holding a reference to a BrowserManager that
@@ -675,6 +758,69 @@ func (h *BrowserWSHandler) handleAttach(
 		SessionId:         &chatSessionID,
 		ControlledByOther: &cbo,
 	}, dropContext(chatSessionID, viewerID, "attach-ok"))
+
+	if !videoCapable {
+		return
+	}
+
+	// Hand off to the component-M stream orchestrator (AttachViewer sends its
+	// own browser_stream_init — or, on any negotiation/bring-up failure, its
+	// own generic unavailable browser_status — so nothing further is sent
+	// from here either way; FR-015's viewer-authz gate and the GOP replay
+	// both happen inside AttachViewer, before this call returns).
+	//
+	// AgentCtx is the agent's own tab CDP context (browser.DefaultSessionID —
+	// the same session mgr.Live().Attach just resolved via mgr.Session
+	// internally), used by component L's capture driver to start the
+	// screencast this stream encodes.
+	//
+	// RootCtx SHOULD be the coordinator's shared, session-independent root
+	// context (so the encoder page's isolated browser context survives a
+	// relaunch even if this agent's OWN tab context is later torn down and
+	// recreated — CRIT-002) — *browser.BrowserManager exposes no accessor for
+	// it today (only the tab-level Session() context is exported; the
+	// underlying allocCtx/coordinator rootCtx are unexported, and
+	// pkg/tools/browser is out of scope for this change). AgentCtx is reused
+	// here as the best available value: verified safe against chromedp
+	// v0.15.1 (chromedp.go NewContext/WithNewBrowserContext — a child's
+	// `first` flag is false whenever its parent already has a bound Browser,
+	// which AgentCtx does, and NewContext never inherits Target), so this
+	// does not panic and correctly creates an isolated sibling browser
+	// context. The one known gap: if THIS agent's own tab context gets torn
+	// down/recreated while its video stream is live, a later relaunch
+	// attempt on it fails closed to the unavailable state instead of
+	// surviving independently — never a crash, just a narrower blast radius
+	// than the ideal fix (an exported RootContext()-style accessor on
+	// *browser.BrowserManager, a follow-up for whoever owns
+	// pkg/tools/browser).
+	agentCtx, sessErr := mgr.Session(browser.DefaultSessionID)
+	if sessErr != nil {
+		slog.Warn("browser-ws: video attach: resolve agent session failed",
+			"agent_id", frame.AgentId, "session_id", chatSessionID, "error", sessErr)
+		h.browserVideo.sendUnavailable(wc, chatSessionID, viewerID, "agent_session_failed:"+sessErr.Error())
+		return
+	}
+
+	handle, verr := h.browserVideo.AttachViewer(AttachParams{
+		WC:        wc,
+		AgentID:   frame.AgentId,
+		SessionID: chatSessionID,
+		ViewerID:  viewerID,
+		RootCtx:   agentCtx,
+		AgentCtx:  agentCtx,
+		VideoCaps: frame.VideoCaps,
+		AudioCaps: frame.AudioCaps,
+	})
+	if verr != nil {
+		// AttachViewer's own internal failure branches (kill-switch,
+		// capability, codec negotiation, relay/bring-up) already send the
+		// client its unavailable browser_status before returning — this
+		// error return is only the WC==nil guard, unreachable here since wc
+		// is always non-nil. Logged defensively; nothing further to send.
+		slog.Warn("browser-ws: video attach failed", "agent_id", frame.AgentId, "session_id", chatSessionID, "error", verr)
+		return
+	}
+	state.videoHandle = handle
 }
 
 // handleInput dispatches a viewer input event, gated by the LiveView's
@@ -981,6 +1127,7 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 		return
 	}
 	chatSessionID := state.sessionID
+	h.detachVideo(state)
 	h.detach(state.mgr, chatSessionID, viewerID, userID)
 	state.mgr = nil
 	state.sessionID = ""
