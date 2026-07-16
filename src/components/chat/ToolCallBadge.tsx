@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CaretDown, CaretUp, Terminal, Globe, FileText, Wrench } from '@phosphor-icons/react'
+import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import type { ToolCall } from '@/lib/api'
 import type { MarshalErrorResult } from '@/lib/ws'
 import { cn } from '@/lib/utils'
@@ -25,15 +25,6 @@ function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
     value !== null &&
     typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
   )
-}
-
-function getToolIcon(tool: string) {
-  // ADR-036: `bash` is the canonical unified shell tool; `exec` (and its
-  // `exec.` sub-actions) is kept only for historical session transcripts.
-  if (tool === 'bash' || tool === 'exec' || tool.startsWith('exec.')) return Terminal
-  if (tool === 'web_search' || tool === 'browser.search') return Globe
-  if (tool.startsWith('file.') || tool.startsWith('fs.')) return FileText
-  return Wrench
 }
 
 export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
@@ -62,56 +53,53 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
     return null
   }
 
-  const Icon = getToolIcon(toolCall.tool)
-
   const config = getToolBadgeStatusConfig(toolCall.status, { durationMs: toolCall.duration_ms })
+  const isRunning = toolCall.status === 'running'
 
   return (
-    <div
-      data-testid="tool-call-badge"
-      data-tool={toolCall.tool}
-      className={cn(
-        'mt-2 rounded-md border bg-[var(--color-surface-1)] text-xs font-mono overflow-hidden',
-        config.border
-      )}
-    >
-      {/* Header row. Mirrors GenericToolCall.tsx's `disabled={!hasDetail}`
-          gate: while running, there is nothing to expand — a focusable
-          button whose Enter/Space no-ops while still announcing
-          aria-expanded is an inert-focusable trap for keyboard/AT users.
-          Disabling natively removes it from the tab order and drops
-          aria-expanded entirely (rather than leaving it stuck at `false`,
-          which would falsely announce "collapsible, currently collapsed"
-          for a row that can never actually expand yet). */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => toolCall.status !== 'running' && setExpanded((e) => !e)}
-        disabled={toolCall.status === 'running'}
-        className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors',
-          toolCall.status !== 'running' && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
-          toolCall.status === 'running' && 'cursor-default'
-        )}
-        aria-expanded={toolCall.status !== 'running' ? expanded : undefined}
-      >
-        <Icon size={13} className="text-[var(--color-muted)] shrink-0" />
-        <span className="text-[var(--color-secondary)] font-medium">
-          {humanizeToolName(toolCall.tool)}
-        </span>
-        <span className="flex items-center gap-1 ml-1">
-          {config.icon}
-          <span className="text-[var(--color-muted)]">{config.label}</span>
-        </span>
-        {toolCall.status !== 'running' && (
-          <span className="ml-auto text-[var(--color-muted)]">
+    // Flat text-line design (ticket "Tool components in chat", P2): no
+    // border, no surface fill, no rounded frame, no overflow-hidden — the
+    // row is transparent on the thread. Separation comes from `mt-2`
+    // spacing and the status dot, not a card frame.
+    <div data-testid="tool-call-badge" data-tool={toolCall.tool} className="mt-2 text-xs font-mono">
+      <div className="flex w-full items-center gap-2">
+        {/* Toggle button. Mirrors GenericToolCall.tsx's `disabled={!hasDetail}`
+            gate: while running, there is nothing to expand — a focusable
+            button whose Enter/Space no-ops while still announcing
+            aria-expanded is an inert-focusable trap for keyboard/AT users.
+            Disabling natively removes it from the tab order and drops
+            aria-expanded entirely (rather than leaving it stuck at `false`,
+            which would falsely announce "collapsible, currently collapsed"
+            for a row that can never actually expand yet). */}
+        <button tabIndex={0}
+          type="button"
+          onClick={() => !isRunning && setExpanded((e) => !e)}
+          disabled={isRunning}
+          className={cn(
+            'flex min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
+            isRunning && 'cursor-default'
+          )}
+          aria-expanded={!isRunning ? expanded : undefined}
+        >
+          {config.indicator}
+          <span className="text-[var(--color-secondary)] font-medium">
+            {humanizeToolName(toolCall.tool)}
+          </span>
+          <span className={cn('text-[var(--color-muted)]', config.textClass)}>{config.label}</span>
+        </button>
+        {!isRunning && (
+          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
             {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
           </span>
         )}
-      </button>
+      </div>
 
-      {/* Expanded detail */}
-      {expanded && toolCall.status !== 'running' && (
-        <div className="border-t border-[var(--color-border)] px-3 py-2 space-y-2">
+      {/* Expanded detail — indented quote-block: a thin left accent line
+          stands in for the old bordered panel, aligned under the status-dot
+          column instead of boxing the whole row. */}
+      {expanded && !isRunning && (
+        <div className="ml-[3px] space-y-2 border-l-2 border-[var(--color-border)] py-1 pl-3">
           <div>
             <div className="text-[var(--color-muted)] mb-1">Tool</div>
             <code className="text-[10px] text-[var(--color-secondary)] break-all">

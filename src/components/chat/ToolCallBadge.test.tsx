@@ -39,7 +39,7 @@ describe('ToolCallBadge — running state (test #6)', () => {
     expect(spinner).toBeTruthy()
   })
 
-  it('shows "Cancelled" label with the Prohibit icon for cancelled tool call', () => {
+  it('shows "Cancelled" label with the cancelled-colored status dot for cancelled tool call', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Cancel during tool execution
     render(<ToolCallBadge toolCall={makeToolCall({ status: 'cancelled' })} />)
     expect(screen.getByText(/Cancelled/i)).toBeInTheDocument()
@@ -47,16 +47,20 @@ describe('ToolCallBadge — running state (test #6)', () => {
 })
 
 describe('ToolCallBadge — success state (test #6 continued)', () => {
-  it('shows green checkmark icon and duration for successful tool call', () => {
+  it('shows the success-colored status dot and duration for successful tool call', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Successful tool call collapses by default
+    // Was: queried the CheckCircle icon's `.text-[var(--color-success)]` text-color
+    // class. Flat text-line design (ticket "Tool components in chat") replaced the
+    // status icon with an 8px filled dot, so success is now a `bg-` class, not `text-`.
     const { container } = render(
       <ToolCallBadge
         toolCall={makeToolCall({ status: 'success', duration_ms: 2300, result: { results: [] } })}
       />
     )
-    // Check circle icon renders (success state)
-    const checkIcon = container.querySelector('.text-\\[var\\(--color-success\\)\\]')
-    expect(checkIcon ?? screen.getByText(/2\.3s|done/i)).toBeTruthy()
+    const dot = container.querySelector('.bg-\\[var\\(--color-success\\)\\]')
+    expect(dot).toBeTruthy()
+    expect(dot?.className).toContain('rounded-full')
+    expect(screen.getByText(/2\.3s/i)).toBeInTheDocument()
   })
 
   it('collapses by default — result not visible without clicking', () => {
@@ -76,7 +80,7 @@ describe('ToolCallBadge — success state (test #6 continued)', () => {
 })
 
 describe('ToolCallBadge — error state (test #6 continued)', () => {
-  it('shows red XCircle icon and error message', () => {
+  it('shows error-colored status dot and error message', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Failed tool call shows error with retry
     render(
       <ToolCallBadge
@@ -192,6 +196,72 @@ describe('ToolCallBadge — cannot click when running', () => {
     const btn = document.querySelector('button') as HTMLButtonElement
     expect(btn).not.toBeDisabled()
     expect(btn).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded card was replaced by a flat text line whose
+// only status color comes from an 8px dot (running keeps the spinning icon
+// in the same slot). These lock the dot-per-status color mapping and the
+// absence of any card-frame class on the root, independent of the
+// icon/label assertions above.
+
+describe('ToolCallBadge — flat text-line status dot', () => {
+  /** First child of the toggle button is always the status indicator (dot or spinner). */
+  function getIndicatorEl(container: HTMLElement) {
+    return container.querySelector('button')?.children[0] as HTMLElement | undefined
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = render(<ToolCallBadge toolCall={makeToolCall({ status: 'running' })} />)
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it.each([
+    ['success', 'bg-[var(--color-success)]'],
+    ['error', 'bg-[var(--color-error)]'],
+    ['cancelled', 'bg-[var(--color-cancelled)]'],
+  ] as const)('%s: indicator is an 8px %s dot', (status, dotColor) => {
+    const { container } = render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          status,
+          duration_ms: 100,
+          error: status === 'error' ? 'boom' : undefined,
+        })}
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain(dotColor)
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+    expect(indicator?.getAttribute('class')).toContain('w-2')
+    expect(indicator?.getAttribute('class')).toContain('h-2')
+  })
+
+  it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ status: 'success', duration_ms: 100 })} />)
+    const root = screen.getByTestId('tool-call-badge')
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('border')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('expanded detail uses a left accent line, not a full bordered panel', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({ status: 'success', duration_ms: 100, params: { q: 'x' }, result: { ok: true } })}
+      />
+    )
+    const btn = document.querySelector('button[aria-expanded]') as HTMLButtonElement
+    fireEvent.click(btn)
+    // "Tool" label only appears in the expanded panel, so its ancestor is the detail block.
+    const detail = screen.getByText('Tool').parentElement?.parentElement
+    expect(detail?.className).toContain('border-l-2')
+    expect(detail?.className).not.toContain('border-t')
   })
 })
 

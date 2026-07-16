@@ -280,6 +280,133 @@ describe('GenericToolCall — baseline rendering', () => {
   })
 })
 
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded card was replaced by a flat text line whose
+// only status color comes from an 8px dot (running keeps the spinning icon
+// in the same slot; delegation-denied reuses the same dot via the shared
+// `statusDot` helper — see toolStatusConfig.tsx's file header). The five
+// result-path banners lost their bordered/backgrounded boxes in favor of a
+// left accent line, keeping their sentinel testids and (where applicable)
+// amber/warning text color.
+
+describe('GenericToolCall — flat text-line status dot', () => {
+  /** The toggle button is always the first <button> in the row (Watch Live,
+   * when present, is a separate sibling button) — its first child is always
+   * the status indicator (dot or spinner). */
+  function getIndicatorEl(container: HTMLElement) {
+    return container.querySelector('button')?.children[0] as HTMLElement | undefined
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = render(<GenericToolCall toolName="exec" status={RUNNING_STATUS} />)
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('success: indicator is an 8px success-colored dot', () => {
+    const { container } = render(
+      <GenericToolCall toolName="exec" result={{ ok: true }} status={COMPLETE_STATUS} />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('error: indicator is an 8px error-colored dot', () => {
+    const { container } = render(
+      <GenericToolCall
+        toolName="exec"
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it("cancelled: indicator is an 8px muted-colored dot (GenericToolCall's cancelledVariant)", () => {
+    const { container } = render(
+      <GenericToolCall
+        toolName="exec"
+        status={{ type: 'incomplete', reason: 'cancelled' } as MessagePartStatus}
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+  })
+
+  it('delegation-denied: indicator is an 8px warning-colored dot (local branch, shares statusDot)', () => {
+    const { container } = render(
+      <GenericToolCall
+        toolName="delegate"
+        result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-warning)]')
+  })
+
+  it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
+    render(<GenericToolCall toolName="exec" result={{ ok: true }} status={COMPLETE_STATUS} />)
+    const root = screen.getByTestId('tool-call-badge')
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('border')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('expanded detail uses a left accent line, not a full bordered panel', () => {
+    render(
+      <GenericToolCall toolName="exec" args={{ cmd: 'ls' }} result={{ ok: true }} status={COMPLETE_STATUS} />
+    )
+    fireEvent.click(screen.getByRole('button'))
+    const detail = screen.getByText('Tool').parentElement?.parentElement
+    expect(detail?.className).toContain('border-l-2')
+    expect(detail?.className).not.toContain('border-t')
+  })
+
+  it('the truncated-result banner uses a left accent, not a bordered/backgrounded box (amber text kept)', () => {
+    render(
+      <GenericToolCall
+        toolName="fs.read"
+        result={{ _truncated: true, original_size_bytes: 2048, preview: 'preview' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    fireEvent.click(screen.getByRole('button'))
+    const banner = screen.getByTestId('result-truncated-banner')
+    expect(banner.className).toContain('border-l-2')
+    expect(banner.className).not.toContain('rounded')
+    expect(banner.className).not.toContain('bg-amber-500/10')
+    expect(banner.className).toContain('text-amber-400')
+  })
+
+  it('the marshal-error banner uses a left accent, not a bordered/backgrounded box', () => {
+    render(<GenericToolCall toolName="exec" result={{ _marshal_error: 'boom' }} status={COMPLETE_STATUS} />)
+    fireEvent.click(screen.getByRole('button'))
+    const banner = screen.getByTestId('result-marshal-error')
+    expect(banner.className).toContain('border-l-2')
+    expect(banner.className).not.toContain('rounded')
+    expect(banner.className).not.toContain('bg-[var(--color-error)]/10')
+  })
+
+  it('the delegation-denied block uses a left accent, not a full bordered/backgrounded box', () => {
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    fireEvent.click(screen.getByRole('button'))
+    const block = screen.getByTestId('result-delegation-denied')
+    expect(block.className).toContain('border-l-2')
+    expect(block.className).not.toContain('rounded')
+  })
+})
+
 // ── activity-bar tool visibility: verbose-chat gate ─────────────────────────
 // Traces to: src/lib/toolVisibility.ts shouldRenderToolCall — GenericToolCall
 // is the live/streaming fallback renderer for load_tool and delegate (neither
