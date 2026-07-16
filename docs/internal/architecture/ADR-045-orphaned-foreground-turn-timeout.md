@@ -16,8 +16,8 @@ dropping side effects (approval auto-deny, background-session kill,
 session-status-interrupted) that every other cancel surface gets.
 
 **Redesign (2026-07-16, same day, before merge):** commit
-`<REDESIGN_COMMIT_SHA>` (`fix(agent,gateway): redesign orphan watchdog to
-reap via RequestCancel (gate round-1)`) replaces the bespoke escalation
+`06bb26998c58a2315573fe497e3bba3639521674` (`fix(agent,gateway): redesign
+orphan watchdog to reap via RequestCancel (gate round-1)`) replaces the bespoke escalation
 entirely with a single grace timer that hands the abandoned session to
 `AgentLoop.RequestCancel` — the SAME cancellation path every other cancel
 surface (web SPA Stop button, Tier A `/cancel`, Tier B text-parsing
