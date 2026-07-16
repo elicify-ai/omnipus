@@ -16,11 +16,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
@@ -85,8 +87,10 @@ const (
 	recapInterruptHintLiteral = "Interrupt requested. Stop scheduling tools and provide a short final summary."
 	// carryForwardMaxRunes bounds the verbatim recent-context tail the fallback
 	// recap carries forward when summarisation is unavailable (see buildCarryForward).
-	// ~1500 runes is comfortably under the 2000-token summarisation budget while
-	// still preserving the essential facts a user stated most recently.
+	// ~1500 runes is ~19% of the summariser's own input budget (2000 tokens ≈ 8000
+	// runes at this file's ~4-runes-per-token ratio; see runRecap's tokenBudget),
+	// enough to preserve the essential facts a user stated most recently without
+	// bloating last-session.md.
 	carryForwardMaxRunes = 1500
 )
 
@@ -127,11 +131,29 @@ func buildCarryForward(userTurns []string, maxRunes int) string {
 		kept = append(kept, t)
 		total += len(r)
 	}
-	// Restore chronological order.
-	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
-		kept[i], kept[j] = kept[j], kept[i]
-	}
+	slices.Reverse(kept) // accumulated newest→oldest; restore chronological order
 	return strings.Join(kept, "\n\n")
+}
+
+// filterRecapUserTurns extracts the real user turns from a transcript (FR-028:
+// user-role, non-empty, non-SubTurn-result, non-interrupt-hint) and counts tool
+// calls across all entries. Shared by runRecap and writeHeuristicFallbackRetro so
+// the two can never diverge on what counts as a "user turn" — the reason the
+// recapSubTurnPrefix/recapInterruptHintLiteral constants were hoisted to package
+// scope. (User-role entries never carry ToolCalls, so the count is identical to a
+// version that summed unconditionally.)
+func filterRecapUserTurns(entries []session.TranscriptEntry) (userTurns []string, toolCallCount int) {
+	for _, e := range entries {
+		if e.Role == "user" {
+			content := strings.TrimSpace(e.Content)
+			if content == "" || strings.HasPrefix(content, recapSubTurnPrefix) || content == recapInterruptHintLiteral {
+				continue
+			}
+			userTurns = append(userTurns, content)
+		}
+		toolCallCount += len(e.ToolCalls)
+	}
+	return userTurns, toolCallCount
 }
 
 // runRecap performs the session-end LLM summarisation and persists the result.
@@ -171,18 +193,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	}
 
 	// FR-028: filter to user-role, non-empty, non-SubTurn, non-interrupt-hint messages.
-	var userTurns []string
-	toolCallCount := 0
-	for _, e := range entries {
-		if e.Role == "user" {
-			content := strings.TrimSpace(e.Content)
-			if content == "" || strings.HasPrefix(content, recapSubTurnPrefix) || content == recapInterruptHintLiteral {
-				continue
-			}
-			userTurns = append(userTurns, content)
-		}
-		toolCallCount += len(e.ToolCalls)
-	}
+	userTurns, toolCallCount := filterRecapUserTurns(entries)
 
 	// Carry-forward tail for the fallback path: if summarisation fails below,
 	// the recent user turns are preserved verbatim so cross-session continuity
@@ -533,16 +544,7 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 		if store := al.sharedSessionStore; store != nil {
 			if entries, err := store.ReadTranscript(sessionID); err == nil {
 				turnCount = len(entries)
-				for _, e := range entries {
-					if e.Role == "user" {
-						content := strings.TrimSpace(e.Content)
-						if content == "" || strings.HasPrefix(content, recapSubTurnPrefix) || content == recapInterruptHintLiteral {
-							continue
-						}
-						userTurns = append(userTurns, content)
-					}
-					toolCallCount += len(e.ToolCalls)
-				}
+				userTurns, toolCallCount = filterRecapUserTurns(entries)
 			}
 		}
 	}

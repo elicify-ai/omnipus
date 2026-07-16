@@ -36,6 +36,12 @@ func TestBuildCarryForward(t *testing.T) {
 			want:     "",
 		},
 		{
+			name:     "negative budget yields empty",
+			turns:    []string{"hello"},
+			maxRunes: -10,
+			want:     "",
+		},
+		{
 			name:     "single turn within budget",
 			turns:    []string{"the codename is BLUEHERON"},
 			maxRunes: 1500,
