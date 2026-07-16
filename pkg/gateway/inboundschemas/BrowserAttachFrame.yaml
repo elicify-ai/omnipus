@@ -17,6 +17,36 @@ properties:
   type:
     type: string
     const: browser_attach
+  video_caps:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+    description: >-
+      Video codec strings this viewer's VideoDecoder.isConfigSupported
+      reports as decodable (e.g. "avc1.4D401E", "vp8"), most-preferred
+      first. Optional for wire-compat with clients that predate the video
+      relay (treated as an empty array — no video-capable codec — by the
+      gateway); the SPA MUST send it once it advertises capabilities
+      (FR-005). An empty/absent array means no video-capable codec is
+      available; if it intersects no codec the active/negotiable encoder can
+      produce, the viewer gets the unavailable state, never JPEG or an A1
+      fallback (FR-006, US-5, US-6, DS-1).
+  audio_caps:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+    description: >-
+      Audio codec strings this viewer's AudioDecoder.isConfigSupported
+      reports as decodable (e.g. "opus"). Optional, same wire-compat
+      rationale as video_caps. An empty/absent array means audio is silently
+      unavailable to this viewer — video streams normally either way
+      (FR-005, FR-011, US-4).
   session_id:
     type: string
     minLength: 1

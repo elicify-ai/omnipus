@@ -1,0 +1,62 @@
+title: BrowserChunkEnvelope
+description: >
+  Binary AsyncAPI message payload (contentType application/octet-stream, NOT
+  JSON) shared by browser_video_chunk, browser_audio_chunk, and
+  browser_ingest_chunk (FR-002, FR-011, FR-012, FR-017). This schema documents
+  the logical field layout of the fixed compact envelope carried by each
+  binary WebSocket message: a header of seq (u32), ts (u64), key (u8,
+  boolean keyframe flag), len (u32), followed by exactly `len` trailing
+  payload bytes. There is deliberately no fragment field (M-4): a chunk is
+  always sent whole in one binary WS message, never split/reassembled. An
+  ingest-leg chunk exceeding the endpoint's configured max-message bound (≥ 2
+  MB default, FR-014) MUST be rejected outright (triggering an encoder
+  bitrate/resolution step-down) rather than fragmented. A zero-length payload
+  (len=0) MUST also be rejected (FR-014). See ADR-044 §6.3, spec R7 DS-2.
+type: object
+required:
+  - seq
+  - ts
+  - key
+  - len
+  - payload
+additionalProperties: false
+properties:
+  seq:
+    type: integer
+    minimum: 0
+    description: >-
+      Monotonic chunk sequence number for this stream connection. Wire width
+      u32 (wraps at 2^32-1); used to detect gaps/reordering, not for replay
+      addressing (the GOP cache replays by keyframe, not by seq).
+  ts:
+    type: integer
+    minimum: 0
+    description: >-
+      Monotonic capture timestamp (milliseconds), injected source-side so the
+      glass-to-glass span (SC-002) can be measured on one common clock end to
+      end. Wire width u64 (R3/m-3: NOT the non-standard u48) — the full u64
+      range exceeds the JSON/JS safe-integer range, so this field is only
+      JSON-Schema-documented here; real (de)serialization is fixed-width
+      binary, not JSON parsing of this schema.
+  key:
+    type: boolean
+    description: >-
+      True when this chunk is a keyframe (encoded as a single byte, u8, on
+      the wire: 1=keyframe, 0=delta). A newly attached viewer's GOP replay
+      always starts from the most recent key=true chunk (FR-003, FR-015).
+  len:
+    type: integer
+    minimum: 0
+    description: >-
+      Byte length of the trailing payload field (u32 wire width). Chunks
+      whose actual payload exceeds the endpoint's configured bound are
+      rejected, never fragmented (FR-014, M-4).
+  payload:
+    type: string
+    format: binary
+    description: >-
+      The encoded chunk bytes: H.264/VP8 video (browser_video_chunk,
+      browser_ingest_chunk when carrying video) or Opus audio
+      (browser_audio_chunk, browser_ingest_chunk when carrying audio), of
+      length `len`. Framed as the trailing bytes of one binary WS message
+      (FR-017) — never base64/JSON-embedded.

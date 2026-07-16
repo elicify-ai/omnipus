@@ -35,6 +35,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -597,20 +598,25 @@ func newControlTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) {
 	require.NoError(t, err)
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan *wsSendItem, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{mgr: mgr, sessionID: "control-test-session"}
 	return wc, state
 }
 
 // readWCFrame reads one frame directly off a browserWSConn's sendCh
 // (bypassing the network entirely — handleControl's sendCriticalGen only
-// touches sendCh/doneCh, never the underlying *websocket.Conn).
+// touches sendCh/doneCh, never the underlying *websocket.Conn). Every frame
+// exercised by this helper's callers is a JSON control frame (sendCritical),
+// so item.Binary is never expected true here; a nil item (the ping sentinel)
+// is likewise never expected since pingPump isn't running in these
+// direct-dispatch tests.
 func readWCFrame(t *testing.T, wc *browserWSConn, timeout time.Duration) browserFrameDecoder {
 	t.Helper()
 	select {
-	case data := <-wc.sendCh:
+	case item := <-wc.sendCh:
+		require.NotNil(t, item, "unexpected ping sentinel on sendCh")
 		var f browserFrameDecoder
-		require.NoError(t, json.Unmarshal(data, &f))
+		require.NoError(t, json.Unmarshal(item.Data, &f))
 		return f
 	case <-time.After(timeout):
 		t.Fatal("no frame sent to wc.sendCh within timeout")
@@ -638,7 +644,7 @@ func newTabActionTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) 
 	browserCfg.ExecPath = filepath.Join(tmpDir, "no-such-chromium-binary")
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan *wsSendItem, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{mgr: mgr, sessionID: "tab-action-test-session"}
 	return wc, state
 }
@@ -664,7 +670,7 @@ func marshalTabActionFrame(t *testing.T, action string, index *int) []byte {
 // managing tabs" gate must fire before any manager state is consulted.
 func TestBrowserWS_HandleTabAction_NotAttached_Rejected(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan *wsSendItem, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
 
 	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "switch", intPtr(0)))
@@ -908,7 +914,7 @@ func lastBrowserAuditRecord(t *testing.T, auditDir, event string) audit.Record {
 // consulted.
 func TestBrowserWS_HandleControl_NotAttached_Rejected(t *testing.T) {
 	handler, al, _ := newBrowserWSHandlerWithAudit(t)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan *wsSendItem, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
 
 	handler.handleControl(wc, state, "viewer1", "user1", marshalControlFrame(t, "take"), al.GetConfig())
@@ -1086,7 +1092,7 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 	handler.handleInput(wc, state, "viewer1", moveFrame)
 	select {
 	case f := <-wc.sendCh:
-		t.Fatalf("an identical repeated error must still be throttled inside minInputErrorInterval, got: %s", f)
+		t.Fatalf("an identical repeated error must still be throttled inside minInputErrorInterval, got: %s", f.Data)
 	case <-time.After(300 * time.Millisecond):
 		// expected: nothing sent
 	}
@@ -1396,4 +1402,149 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 		broadcastToB2,
 	)
 	assert.True(t, *broadcastToB2.ControlOnly)
+}
+
+// ---------------------------------------------------------------------------
+// FR-017: binary WS framing in the write pump (Test 11)
+// ---------------------------------------------------------------------------
+
+// wsWrittenMessage is one recorded call to fakeWSWriter.WriteMessage — the
+// opcode writePump chose plus the exact bytes it wrote.
+type wsWrittenMessage struct {
+	Opcode int
+	Data   []byte
+}
+
+// fakeWSWriter is a hermetic stand-in for *websocket.Conn implementing only
+// wsFrameWriter (browser_ws.go), so TestWSFraming_BinaryChunks_TextControl
+// can drive BrowserWSHandler.writePump directly with no real network
+// connection at all (no httptest.Server, no gorilla Dial/Upgrade). Safe for
+// concurrent use since writePump runs on its own goroutine while the test
+// goroutine asserts on the recorded messages.
+type fakeWSWriter struct {
+	mu       sync.Mutex
+	messages []wsWrittenMessage
+}
+
+func (f *fakeWSWriter) WriteMessage(messageType int, data []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Defensively copy: writePump must not retain a reference into a
+	// caller-owned buffer it could mutate after this call returns.
+	cp := append([]byte(nil), data...)
+	f.messages = append(f.messages, wsWrittenMessage{Opcode: messageType, Data: cp})
+	return nil
+}
+
+func (f *fakeWSWriter) snapshot() []wsWrittenMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]wsWrittenMessage, len(f.messages))
+	copy(out, f.messages)
+	return out
+}
+
+func (f *fakeWSWriter) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.messages)
+}
+
+// TestWSFraming_BinaryChunks_TextControl is FR-017's Test 11: it enqueues a
+// mix of JSON control frames (via sendCritical/sendFrame — the existing
+// browser_status/browser_tabs/browser_screencast senders) and binary chunks
+// (via the new sendChunk) onto one browserWSConn.sendCh, then asserts:
+//  1. writePump emits each JSON frame as a WS Text frame (unaffected by the
+//     opcode-tagged queue — the FR-017 regression bar).
+//  2. writePump emits each chunk as a WS Binary frame carrying the exact
+//     bytes handed to sendChunk.
+//  3. The pre-existing nil sentinel (pingPump's keepalive mechanism) still
+//     triggers a real websocket.PingMessage write, unmodified by the
+//     chan []byte → chan *wsSendItem type change.
+//
+// Hermetic: wc.conn is a fakeWSWriter (no real socket, no httptest.Server),
+// per the wsFrameWriter seam introduced alongside this test.
+//
+// BDD:
+//
+//	Given a browserWSConn whose write pump is running against a fake writer,
+//	When a JSON control frame, a binary chunk, another JSON frame, and the
+//	nil ping sentinel are enqueued in that order,
+//	Then the fake writer records exactly that sequence of opcodes
+//	(Text, Binary, Text, Ping) with the JSON frames' bytes round-tripping as
+//	valid JSON and the chunk's bytes matching byte-for-byte.
+func TestWSFraming_BinaryChunks_TextControl(t *testing.T) {
+	handler := &BrowserWSHandler{}
+	fw := &fakeWSWriter{}
+	wc := &browserWSConn{
+		conn:   fw,
+		sendCh: make(chan *wsSendItem, 8),
+		doneCh: make(chan struct{}),
+	}
+
+	pumpDone := make(chan struct{})
+	go func() {
+		handler.writePump(wc)
+		close(pumpDone)
+	}()
+
+	// 1. JSON control frame via the existing critical-frame sender.
+	wc.sendCriticalGen(generated.BrowserStatusFrame{
+		Type:  string(generated.WsFrameTypeBrowserStatus),
+		State: "ready",
+	}, "test11-status")
+
+	// 2. A binary encoded chunk via the new sendChunk (FR-017).
+	chunkData := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0x10}
+	wc.sendChunk(chunkData)
+
+	// 3. Another JSON frame via the screencast-style sendFrameGen sender —
+	// proves existing Text senders keep working alongside binary traffic.
+	wc.sendFrameGen(generated.BrowserTabsFrame{
+		Type: string(generated.WsFrameTypeBrowserTabs),
+	})
+
+	// 4. The nil sentinel pingPump enqueues every 30s — driven directly here
+	// rather than waiting on the real ticker.
+	select {
+	case wc.sendCh <- nil:
+	case <-time.After(2 * time.Second):
+		t.Fatal("could not enqueue the nil ping sentinel")
+	}
+
+	require.Eventually(t, func() bool { return fw.count() >= 4 }, 2*time.Second, 10*time.Millisecond,
+		"writePump must have processed all four queued items")
+
+	msgs := fw.snapshot()
+	require.Len(t, msgs, 4)
+
+	// Item 1: Text, valid JSON, the browser_status frame.
+	assert.Equal(t, websocket.TextMessage, msgs[0].Opcode, "JSON control frame must go out as Text")
+	var status browserFrameDecoder
+	require.NoError(t, json.Unmarshal(msgs[0].Data, &status))
+	assert.Equal(t, "browser_status", status.Type)
+	assert.Equal(t, "ready", status.State)
+
+	// Item 2: Binary, exact chunk bytes — the FR-017 core assertion.
+	assert.Equal(t, websocket.BinaryMessage, msgs[1].Opcode, "sendChunk data must go out as Binary")
+	assert.Equal(t, chunkData, msgs[1].Data, "binary chunk bytes must round-trip unmodified")
+
+	// Item 3: Text again, valid JSON, the browser_tabs frame — proves Text
+	// senders are unaffected by binary traffic interleaved on the same queue.
+	assert.Equal(t, websocket.TextMessage, msgs[2].Opcode, "JSON browser_tabs frame must go out as Text")
+	var tabs browserFrameDecoder
+	require.NoError(t, json.Unmarshal(msgs[2].Data, &tabs))
+	assert.Equal(t, "browser_tabs", tabs.Type)
+
+	// Item 4: the nil sentinel must still produce a real ping write — proof
+	// the ping mechanism survived the chan []byte -> chan *wsSendItem change.
+	assert.Equal(t, websocket.PingMessage, msgs[3].Opcode, "nil sentinel must trigger a PingMessage write")
+	assert.Empty(t, msgs[3].Data, "a ping frame carries no payload")
+
+	wc.close()
+	select {
+	case <-pumpDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("writePump did not exit after wc.close()")
+	}
 }

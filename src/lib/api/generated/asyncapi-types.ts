@@ -44,9 +44,11 @@ export type WsFrameType =
   | "browser_control"
   | "browser_detach"
   | "browser_screencast"
+  | "browser_stream_init"
   | "browser_status"
   | "browser_tab_action"
-  | "browser_tabs";
+  | "browser_tabs"
+  | "browser_ingest_init";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -376,6 +378,8 @@ export interface NotificationFrame {
 
 export interface BrowserAttachFrame {
   type: "browser_attach";
+  video_caps?: Array<string>;
+  audio_caps?: Array<string>;
   session_id: string;
   agent_id: string;
 }
@@ -419,6 +423,31 @@ export interface BrowserScreencastFrame {
   scroll_offset_y?: number;
 }
 
+export interface BrowserStreamInitFrame {
+  type: "browser_stream_init";
+  session_id?: string;
+  codec: string;
+  width: number;
+  height: number;
+  keyframe_interval: number;
+  has_audio: boolean;
+}
+
+export interface BrowserChunkEnvelope {
+  seq: number;
+  ts: number;
+  key: boolean;
+  len: number;
+  payload: string;
+}
+
+export interface BrowserFrameFeedEnvelope {
+  seq: number;
+  ts: number;
+  len: number;
+  payload: string;
+}
+
 export interface BrowserStatusFrame {
   type: "browser_status";
   state: "attached" | "idle" | "controlling" | "released" | "detached" | "error";
@@ -447,6 +476,15 @@ export interface BrowserTabsFrame {
     url?: string;
     active?: boolean;
   }>;
+}
+
+export interface BrowserIngestInitFrame {
+  type: "browser_ingest_init";
+  stream_id: string;
+  token: string;
+  video_codec: string;
+  has_audio: boolean;
+  audio_codec?: string;
 }
 
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
@@ -489,9 +527,11 @@ export type WsFrame =
   | BrowserControlFrame
   | BrowserDetachFrame
   | BrowserScreencastFrame
+  | BrowserStreamInitFrame
   | BrowserStatusFrame
   | BrowserTabActionFrame
-  | BrowserTabsFrame;
+  | BrowserTabsFrame
+  | BrowserIngestInitFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -542,6 +582,8 @@ export type ServerFrame =
   | WhatsAppPairingFrame
   | NotificationFrame
   | BrowserScreencastFrame
+  | BrowserStreamInitFrame
   | BrowserStatusFrame
   | BrowserTabActionFrame
-  | BrowserTabsFrame;
+  | BrowserTabsFrame
+  | BrowserIngestInitFrame;

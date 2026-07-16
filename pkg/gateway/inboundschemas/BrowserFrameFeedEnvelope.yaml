@@ -1,0 +1,46 @@
+title: BrowserFrameFeedEnvelope
+description: >
+  Binary AsyncAPI message payload (contentType application/octet-stream, NOT
+  JSON) for browser_frame_feed: one CDP Page.startScreencast JPEG frame of the
+  agent's tab, pushed by the gateway down the authenticated loopback ingest
+  connection to the encoder page for createImageBitmap → VideoFrame →
+  VideoEncoder processing (FR-001, FR-016; mechanism (b), ADR-044 §6.0.2 R4).
+  Same fixed-header shape as BrowserChunkEnvelope minus the keyframe flag
+  (every screencast frame is a complete JPEG still, so "key" is not
+  meaningful here) — a header of seq (u32), ts (u64), len (u32), followed by
+  exactly `len` trailing JPEG bytes. No fragment field (M-4): always sent
+  whole in one binary WS message. See spec R7 DS-2 (envelope shape), FR-001.
+type: object
+required:
+  - seq
+  - ts
+  - len
+  - payload
+additionalProperties: false
+properties:
+  seq:
+    type: integer
+    minimum: 0
+    description: >-
+      Monotonic screencast frame sequence number for this ingest connection.
+      Wire width u32 (wraps at 2^32-1).
+  ts:
+    type: integer
+    minimum: 0
+    description: >-
+      Monotonic capture timestamp (milliseconds) from the CDP screencast
+      frame, carried through so the encoder page can preserve source timing
+      when constructing VideoFrame instances. Wire width u64 (m-3) — beyond
+      the JSON/JS safe-integer range; documented here, fixed-width binary on
+      the wire, not JSON-parsed.
+  len:
+    type: integer
+    minimum: 0
+    description: Byte length of the trailing payload field (u32 wire width).
+  payload:
+    type: string
+    format: binary
+    description: >-
+      Raw JPEG bytes of the CDP screencast frame, of length `len`. Framed as
+      the trailing bytes of one binary WS message — never base64/JSON-
+      embedded.

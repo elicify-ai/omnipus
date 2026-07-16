@@ -39,9 +39,27 @@ type AuthFrame struct {
 
 // BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts the screencast. Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is the binding key (selects which agent's BrowserManager + browser context the live view attaches to), and session_id is correlation-only (the server binds to the active tab in that agent's context).
 type BrowserAttachFrame struct {
-	AgentId   string `json:"agent_id"`
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	AgentId string `json:"agent_id"`
+	// Audio codec strings this viewer's AudioDecoder.isConfigSupported reports as decodable (e.g. "opus"). Optional, same wire-compat rationale as video_caps. An empty/absent array means audio is silently unavailable to this viewer — video streams normally either way (FR-005, FR-011, US-4).
+	AudioCaps []string `json:"audio_caps,omitempty"`
+	SessionId string   `json:"session_id"`
+	Type      string   `json:"type"`
+	// Video codec strings this viewer's VideoDecoder.isConfigSupported reports as decodable (e.g. "avc1.4D401E", "vp8"), most-preferred first. Optional for wire-compat with clients that predate the video relay (treated as an empty array by the gateway); the SPA MUST send it once it advertises capabilities (FR-005). An empty/absent array means no video-capable codec is available; if it intersects no codec the active/negotiable encoder can produce, the viewer gets the unavailable state, never JPEG or an A1 fallback (FR-006, US-5, US-6, DS-1).
+	VideoCaps []string `json:"video_caps,omitempty"`
+}
+
+// BrowserChunkEnvelope — Binary AsyncAPI message payload (contentType application/octet-stream, NOT JSON) shared by browser_video_chunk, browser_audio_chunk, and browser_ingest_chunk (FR-002, FR-011, FR-012, FR-017). Documents the logical field layout of the fixed compact envelope carried by each binary WebSocket message: a header of seq (u32), ts (u64), key (u8, boolean keyframe flag), len (u32), followed by exactly `len` trailing payload bytes. Deliberately no fragment field (M-4): a chunk is always sent whole in one binary WS message. An ingest-leg chunk exceeding the endpoint's configured max-message bound (>= 2 MB default, FR-014) MUST be rejected outright rather than fragmented; a zero-length payload MUST also be rejected.
+type BrowserChunkEnvelope struct {
+	// True when this chunk is a keyframe (encoded as a single byte, u8, on the wire: 1=keyframe, 0=delta). A newly attached viewer's GOP replay always starts from the most recent key=true chunk (FR-003, FR-015).
+	Key bool `json:"key"`
+	// Byte length of the trailing payload field (u32 wire width). Chunks whose actual payload exceeds the endpoint's configured bound are rejected, never fragmented (FR-014, M-4).
+	Len int `json:"len"`
+	// The encoded chunk bytes: H.264/VP8 video or Opus audio, of length `len`. Framed as the trailing bytes of one binary WS message (FR-017) — never base64/JSON-embedded.
+	Payload string `json:"payload"`
+	// Monotonic chunk sequence number for this stream connection. Wire width u32 (wraps at 2^32-1).
+	Seq int `json:"seq"`
+	// Monotonic capture timestamp (milliseconds), injected source-side for glass-to-glass measurement (SC-002). Wire width u64 (R3/m-3) — beyond the JSON/JS safe-integer range; documented here, fixed- width binary on the wire, not JSON-parsed.
+	Ts int `json:"ts"`
 }
 
 // BrowserControlFrame — Client → server. Take or release interactive control of the live browser. While a viewer holds control, the agent's own browser tools defer (cooperative turn-coordination, ADR-038 D6).
@@ -54,6 +72,33 @@ type BrowserControlFrame struct {
 type BrowserDetachFrame struct {
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
+}
+
+// BrowserFrameFeedEnvelope — Binary AsyncAPI message payload (contentType application/octet-stream, NOT JSON) for browser_frame_feed: one CDP Page.startScreencast JPEG frame of the agent's tab, pushed by the gateway down the authenticated loopback ingest connection to the encoder page for createImageBitmap → VideoFrame → VideoEncoder processing (FR-001, FR-016; mechanism (b)). Same fixed-header shape as BrowserChunkEnvelope minus the keyframe flag (every screencast frame is a complete JPEG still) — a header of seq (u32), ts (u64), len (u32), followed by exactly `len` trailing JPEG bytes. No fragment field (M-4).
+type BrowserFrameFeedEnvelope struct {
+	// Byte length of the trailing payload field (u32 wire width).
+	Len int `json:"len"`
+	// Raw JPEG bytes of the CDP screencast frame, of length `len`. Framed as the trailing bytes of one binary WS message.
+	Payload string `json:"payload"`
+	// Monotonic screencast frame sequence number for this ingest connection. Wire width u32 (wraps at 2^32-1).
+	Seq int `json:"seq"`
+	// Monotonic capture timestamp (milliseconds) from the CDP screencast frame, carried through so the encoder page can preserve source timing when constructing VideoFrame instances. Wire width u64 (m-3) — beyond the JSON/JS safe-integer range.
+	Ts int `json:"ts"`
+}
+
+// BrowserIngestInitFrame — Encoder-page → gateway. First frame sent on the loopback capture-ingest connection (/api/v1/browser/capture-ingest, FR-012), presenting the per-stream capability token (FR-013) and announcing the stream id plus the codec(s)/caps the encoder is about to produce. A connection presenting no, an invalid, or a mis-scoped token MUST be rejected before any chunk is relayed (US-9/AC-1, DS-4). This token is a distinct capability-token model, never a user bearer token — the encoder page holds no user credential.
+type BrowserIngestInitFrame struct {
+	// The audio codec the encoder's WebCodecs AudioEncoder is configured to produce, e.g. "opus". Present only when has_audio is true.
+	AudioCodec *string `json:"audio_codec,omitempty"`
+	// True if the encoder will also emit browser_ingest_chunk carrying Opus audio (getUserMedia on the PulseAudio sink monitor, FR-023); false if this stream is video-only.
+	HasAudio bool `json:"has_audio"`
+	// Unguessable per-stream key this connection is registering encoded chunks for (never the human tab title, FR-016). Mis-scoped or post-stream-end tokens for this id are rejected (DS-4).
+	StreamId string `json:"stream_id"`
+	// The per-stream capability token minted by the gateway and delivered to the encoder page out-of-band via CDP addScriptToEvaluateOnNewDocument (FR-013) — never via URL. Stream-lifecycle-scoped with a single connection: invalidated when the stream ends, and NOT reusable for a same-token reconnect (a transient drop causes the gateway to re-mint a fresh token and relaunch the encoder page instead, CRIT-002).
+	Token string `json:"token"`
+	Type  string `json:"type"`
+	// The video codec the encoder's WebCodecs VideoEncoder is configured to produce for this stream, e.g. "avc1.4D401E" (H.264 main) or "vp8" (FR-006).
+	VideoCodec string `json:"video_codec"`
 }
 
 // BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame.
@@ -100,6 +145,23 @@ type BrowserStatusFrame struct {
 	SessionId         *string `json:"session_id,omitempty"`
 	State             string  `json:"state"`
 	Type              string  `json:"type"`
+}
+
+// BrowserStreamInitFrame — Server → client. Sent once, immediately before the first browser_video_chunk (and browser_audio_chunk, if has_audio), announcing the negotiated codec and encode parameters for this viewer's stream (FR-005, FR-006, US-6). A viewer MAY receive a fresh browser_stream_init if the stream is re-negotiated (e.g. after an encoder-page relaunch, CRIT-002) — the new values supersede the prior ones for this connection.
+type BrowserStreamInitFrame struct {
+	// The negotiated video codec string for this stream's browser_video_chunk payloads, e.g. "avc1.4D401E" (H.264 main) or "vp8" (FR-006). A single active encoder serves one codec per source (v1, no ABR/multi-encode).
+	Codec string `json:"codec"`
+	// True if this stream also emits browser_audio_chunk (Opus) frames to this viewer; false if audio is unavailable/not negotiated — video streams normally either way (FR-011, US-4).
+	HasAudio bool `json:"has_audio"`
+	// Encoded video height in pixels.
+	Height int `json:"height"`
+	// Encoder GOP size: the number of encoded video frames between forced keyframes. The relay's own GOP cache bound is independent (FR-003).
+	KeyframeInterval int `json:"keyframe_interval"`
+	// Correlation-only, echoed back from the attach request (mirrors browser_status/browser_screencast). Does not select the stream.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+	// Encoded video width in pixels.
+	Width int `json:"width"`
 }
 
 // BrowserTabActionFrame — Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab, or open a new (blank) tab. Honoured the same way as browser_input/browser_control — switch/close target the active browsing context's tab set. index is required for switch/close, ignored for open. See ADR-041.
@@ -515,7 +577,9 @@ const (
 	WsFrameTypeBrowserControl           WsFrameType = "browser_control"
 	WsFrameTypeBrowserDetach            WsFrameType = "browser_detach"
 	WsFrameTypeBrowserScreencast        WsFrameType = "browser_screencast"
+	WsFrameTypeBrowserStreamInit        WsFrameType = "browser_stream_init"
 	WsFrameTypeBrowserStatus            WsFrameType = "browser_status"
 	WsFrameTypeBrowserTabAction         WsFrameType = "browser_tab_action"
 	WsFrameTypeBrowserTabs              WsFrameType = "browser_tabs"
+	WsFrameTypeBrowserIngestInit        WsFrameType = "browser_ingest_init"
 )

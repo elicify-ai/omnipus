@@ -48,12 +48,36 @@ const browserWSSendCap = 64
 // much smaller scale since browser-live has no large inbound payloads.
 const browserWSMaxMessageBytes = 64 * 1024
 
+// wsSendItem is one outbound queue entry on browserWSConn.sendCh (FR-017).
+// Binary tags the WS opcode the write pump must use: true → Binary frame
+// (encoded video/audio chunks relayed byte-for-byte from the encoder page —
+// component D/relay), false → Text frame (JSON control frames: browser_status,
+// browser_tabs, browser_screencast, error, etc). A nil *wsSendItem is the
+// ping-keepalive sentinel (pingPump) — preserved unchanged from the prior
+// `chan []byte` design, where a nil slice played the same role; switching the
+// channel's element type to a pointer keeps "nil enqueued item == send a
+// ping" working exactly as before with no special-case wrapping at the
+// enqueue sites.
+type wsSendItem struct {
+	Binary bool
+	Data   []byte
+}
+
+// wsFrameWriter is the write-side seam writePump uses to reach the
+// underlying socket. *websocket.Conn satisfies it (its WriteMessage has this
+// exact signature), so production behavior is unchanged; the seam exists so
+// Test 11 (FR-017) can inject a fake writer and assert per-item opcodes
+// hermetically, with no real network connection.
+type wsFrameWriter interface {
+	WriteMessage(messageType int, data []byte) error
+}
+
 // browserWSConn holds one connection's write-side state. It intentionally
 // carries far less than chat's wsConn (no replay divert, no session
 // tracking) — this socket does exactly one thing: relay one live browser.
 type browserWSConn struct { // not-wire-format: internal connection bookkeeping, never marshaled.
-	conn      *websocket.Conn
-	sendCh    chan []byte
+	conn      wsFrameWriter
+	sendCh    chan *wsSendItem
 	doneCh    chan struct{}
 	closeOnce sync.Once
 }
@@ -62,14 +86,30 @@ func (c *browserWSConn) close() {
 	c.closeOnce.Do(func() { close(c.doneCh) })
 }
 
-// sendFrame enqueues a screencast frame, dropping it immediately (never
-// blocking) if the channel is backed up. Correct for a repaint-driven, lossy
-// stream (ADR-038 D3): a dropped frame is superseded by the next repaint, so
-// blocking the CDP event-ack goroutine to avoid a drop would be strictly
-// worse (it would stall frame delivery to every other attached session).
+// sendFrame enqueues a JSON screencast frame (Text opcode), dropping it
+// immediately (never blocking) if the channel is backed up. Correct for a
+// repaint-driven, lossy stream (ADR-038 D3): a dropped frame is superseded by
+// the next repaint, so blocking the CDP event-ack goroutine to avoid a drop
+// would be strictly worse (it would stall frame delivery to every other
+// attached session).
 func (c *browserWSConn) sendFrame(data []byte) {
 	select {
-	case c.sendCh <- data:
+	case c.sendCh <- &wsSendItem{Data: data}:
+	case <-c.doneCh:
+	default:
+	}
+}
+
+// sendChunk enqueues an encoded binary media chunk (video/audio, FR-002/017)
+// as a WS Binary frame — the binary analog of sendFrame, with the identical
+// drop-on-full, latest-wins discipline (FR-004: "a full-queue viewer MUST
+// have its chunks dropped in isolation"; a stale encoded chunk is superseded
+// by the next one, same rationale as the JPEG-era screencast frame). Called
+// by the relay path (component D) for every encoded chunk forwarded to this
+// viewer.
+func (c *browserWSConn) sendChunk(data []byte) {
+	select {
+	case c.sendCh <- &wsSendItem{Binary: true, Data: data}:
 	case <-c.doneCh:
 	default:
 	}
@@ -96,7 +136,7 @@ func (c *browserWSConn) sendFrameGen(frame any) {
 // to correlate with a specific session/viewer after the fact.
 func (c *browserWSConn) sendCritical(data []byte, dropCtx string) {
 	select {
-	case c.sendCh <- data:
+	case c.sendCh <- &wsSendItem{Data: data}:
 	case <-c.doneCh:
 	case <-time.After(2 * time.Second):
 		slog.Warn("browser-ws: send channel full, dropping critical frame", "context", dropCtx)
@@ -125,8 +165,8 @@ func dropContext(sessionID, viewerID, label string) string {
 // browserConnState tracks the single live-browser attachment this connection
 // currently holds. Mutated only from readLoop's goroutine — the screencast
 // FrameSink/StatusSink callbacks (a different goroutine, driven by chromedp's
-// CDP event dispatch) never touch it, only wc.sendFrame(Gen)/wc.sendCritical(Gen),
-// which are channel-safe.
+// CDP event dispatch) never touch it, only wc.sendFrame(Gen)/wc.sendCritical(Gen)/
+// wc.sendChunk, which are channel-safe.
 type browserConnState struct { // not-wire-format: internal connection bookkeeping, never marshaled.
 	mgr *browser.BrowserManager
 	// sessionID is the CLIENT-supplied (chat) session id from the attach
@@ -255,7 +295,7 @@ func (h *BrowserWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	wc := &browserWSConn{
 		conn:   conn,
-		sendCh: make(chan []byte, browserWSSendCap),
+		sendCh: make(chan *wsSendItem, browserWSSendCap),
 		doneCh: make(chan struct{}),
 	}
 	viewerID := uuid.New().String()
@@ -356,22 +396,31 @@ func writeCloseAuthFailed(conn *websocket.Conn) {
 
 // writePump is the single goroutine that writes all frames to the
 // connection. gorilla/websocket requires all writes to happen from the same
-// goroutine. A nil message on sendCh is the sentinel for a ping frame.
+// goroutine. A nil *wsSendItem on sendCh is the sentinel for a ping frame
+// (unchanged from the prior nil-[]byte sentinel — see wsSendItem's doc
+// comment). Every non-nil item is written using the WS opcode its Binary tag
+// selects (FR-017): Binary frame for encoded video/audio chunks, Text frame
+// for JSON control frames (browser_status, browser_tabs, browser_screencast,
+// error, etc).
 func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
 	for {
 		select {
-		case msg, ok := <-wc.sendCh:
+		case item, ok := <-wc.sendCh:
 			if !ok {
 				return
 			}
-			if msg == nil {
+			if item == nil {
 				if err := wc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					slog.Debug("browser-ws: ping write error", "error", err)
 					return
 				}
 				continue
 			}
-			if err := wc.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			opcode := websocket.TextMessage
+			if item.Binary {
+				opcode = websocket.BinaryMessage
+			}
+			if err := wc.conn.WriteMessage(opcode, item.Data); err != nil {
 				slog.Debug("browser-ws: write error", "error", err)
 				return
 			}

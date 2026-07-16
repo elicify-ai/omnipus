@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Omnipus Encoder</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #0A0A0B;
+    color: #E2E8F0;
+  }
+  #status {
+    padding: 10px 14px;
+    font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    opacity: 0.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
+</head>
+<body>
+<div id="status">omnipus encoder — idle</div>
+<script type="module">
+'use strict';
+
+/* ===========================================================================
+ * Omnipus browser-video encoder page
+ * ADR-044 / docs/internal/specs/live-browser-video-streaming-spec.md (R7)
+ * Wave 1 component G — FR-001, FR-011, FR-016, FR-023.
+ *
+ * This file is the ENTIRE page. It is self-contained (no remote fetch, no
+ * externally-sourced script or stylesheet tag, no import, no CDN, no fonts),
+ * loopback-only, non-navigable, and embedded verbatim into the omnipus
+ * binary via go:embed (pkg/tools/browser/encoderpage/encoderpage.go). Do
+ * not add any reference to a remote origin — FR-016's isolation guarantee
+ * (an agent-navigated page has no capture API) depends on this page being a
+ * controlled, static, unreachable surface with nothing to fetch and nowhere
+ * to navigate.
+ *
+ * Runtime contract (FR-013):
+ *   window.__OMNIPUS_INGEST__ = {
+ *     token:       string,   // per-stream ingest capability token
+ *     wsURL:       string,   // loopback ingest WS URL (/api/v1/browser/capture-ingest)
+ *     streamId:    string,   // unguessable per-stream key (never the tab title)
+ *     // Optional encoder tuning (defaulted below if absent — the gateway is
+ *     // not required to set these; actual video width/height are always
+ *     // derived from the first decoded frame, never trusted from init):
+ *     framerate:        number, // default 30 (Gate-0 measured capture fps)
+ *     bitrate:          number, // default 2_500_000 (video, bits/sec)
+ *     keyframeInterval: number, // default framerate * 2 (frames between keyframes)
+ *     audioBitrate:     number, // default 64_000 (Opus, bits/sec)
+ *   }
+ * is injected by the gateway via CDP Page.addScriptToEvaluateOnNewDocument
+ * BEFORE this script runs. The token is NEVER read from location/URL/query
+ * string — only from this global.
+ *
+ * Wire (contracts/asyncapi.yaml, channel `browser-ingest`, already landed in
+ * this branch by the W0 contracts wave — this page conforms to it exactly):
+ *   - Opens exactly one WebSocket to wsURL, binaryType = 'arraybuffer'.
+ *   - First message sent after open: JSON `browser_ingest_init`
+ *     (schemas/BrowserIngestInitFrame.yaml) — auth handshake + negotiated
+ *     codec announcement.
+ *   - Downstream (gateway -> page): binary `browser_frame_feed`
+ *     (schemas/BrowserFrameFeedEnvelope.yaml) — one CDP-screencast-derived
+ *     JPEG frame per message.
+ *   - Upstream (page -> gateway): binary `browser_ingest_chunk`
+ *     (schemas/BrowserChunkEnvelope.yaml) — one WebCodecs-encoded video or
+ *     audio chunk per message.
+ *   - Text frames in either direction are JSON control/status messages and
+ *     never carry media payload.
+ *
+ * ---- Wire byte layout (all multi-byte integers big-endian / DataView) -----
+ * Matches the landed contracts/components/schemas/BrowserChunkEnvelope.yaml
+ * and BrowserFrameFeedEnvelope.yaml EXACTLY — this page adds no extra
+ * envelope-level field. `ts` on the wire is MILLISECONDS (per those schemas'
+ * own field description) — NOT the microseconds WebCodecs uses natively for
+ * VideoFrame/EncodedVideoChunk/AudioData timestamps, so this page converts
+ * at both edges (see msFromMicros/microsFromMs below).
+ *
+ * Downstream `browser_frame_feed` (gateway -> page), one WS binary message:
+ *   [0:4)    seq      u32   capture-side frame sequence number
+ *   [4:12)   ts       u64   capture timestamp, MILLISECONDS, monotonic
+ *   [12:16)  len      u32   JPEG payload length in bytes
+ *   [16:16+len)        payload  raw JPEG bytes (as produced by CDP
+ *                               Page.startScreencast)
+ *   total message length = 16 + len
+ *
+ * Upstream `browser_ingest_chunk` (page -> gateway), one WS binary message —
+ * BrowserChunkEnvelope, identical shape to the viewer-facing
+ * browser_video_chunk/browser_audio_chunk:
+ *   [0:4)    seq      u32   monotonic sequence number for THIS ingest
+ *                           connection — ONE shared counter across both
+ *                           video and audio chunks (the schema documents a
+ *                           single per-connection counter, not one per kind)
+ *   [4:12)   ts       u64   EncodedVideoChunk/EncodedAudioChunk timestamp,
+ *                           converted to MILLISECONDS
+ *   [12:13)  key      u8    1 = keyframe (video only; always 0 for audio —
+ *                           Opus packets here are never classified key/delta)
+ *   [13:17)  len      u32   payload length in bytes (see kind-tag note below)
+ *   [17:17+len)        payload  see "Ingest kind-tagging" note immediately
+ *                               below — NOT raw codec bytes by themselves
+ *   total message length = 17 + len
+ *
+ * ---- Ingest kind-tagging (video vs audio) — COORDINATION NOTE -------------
+ * BrowserChunkEnvelope/BrowserIngestChunkFrame, as landed, carry NO
+ * discriminator between a video chunk and an audio chunk — the same message
+ * type (`browser_ingest_chunk`) multiplexes both over the one ingest
+ * connection (BrowserIngestInitFrame's `has_audio`/`audio_codec` describe
+ * what a SINGLE connection will carry). Since this page cannot add a field
+ * to the landed envelope schema (out of this component's file scope —
+ * contracts/asyncapi.yaml belongs to the W0 wave), it instead prefixes the
+ * envelope's opaque `payload` bytes with ONE tag byte it owns the meaning
+ * of: `payload = [kind:u8][...real encoded bytes]`, kind 0 = video, 1 =
+ * audio (INGEST_PAYLOAD_KIND_VIDEO / INGEST_PAYLOAD_KIND_AUDIO below). `len`
+ * covers the tag byte too (len = 1 + real-payload-length). The real H.264/
+ * VP8/Opus bytes are payload[1:].
+ * REPORT TO THE INGEST-ENDPOINT IMPLEMENTER: strip payload[0] as the
+ * kind tag before treating payload[1:] as codec bytes; route kind=0 to the
+ * video relay path, kind=1 to the audio relay path. This is flagged as a
+ * coordination item, not assumed silently — consider a follow-up contract
+ * revision adding a real `kind` field to BrowserChunkEnvelope so this
+ * tagging can move from "inside the opaque payload" to a proper schema
+ * field.
+ * ==========================================================================
+ */
+
+// >>> OMNIPUS_TESTABLE_LOGIC_START
+// Everything between this marker and the END marker is pure (no DOM, no
+// WebSocket, no WebCodecs global side effects at call time beyond the one
+// documented `VideoEncoderCtor.isConfigSupported` probe) and is exercised
+// verbatim by the Node test at encoder_logic.test.mjs, which extracts this
+// exact substring out of the shipped HTML and runs it under Node — so this
+// region must stay self-sufficient (no reference to `document`, `window`,
+// or anything outside this block) and must not be reformatted in a way that
+// breaks the marker-delimited extraction.
+
+const INGEST_PAYLOAD_KIND_VIDEO = 0;
+const INGEST_PAYLOAD_KIND_AUDIO = 1;
+
+/** Convert a WebCodecs microsecond timestamp to the wire's millisecond field. */
+function msFromMicros(us) {
+  return Math.round(Number(us) / 1000);
+}
+
+/** Convert a wire millisecond timestamp to a WebCodecs microsecond timestamp. */
+function microsFromMs(ms) {
+  return Math.round(Number(ms) * 1000);
+}
+
+/**
+ * Encode one downstream `browser_frame_feed` envelope
+ * (schemas/BrowserFrameFeedEnvelope.yaml: seq u32, ts u64 ms, len u32, payload).
+ * @param {number} seq
+ * @param {number} tsMillis wire timestamp, milliseconds
+ * @param {ArrayBuffer|Uint8Array} payload
+ * @returns {ArrayBuffer}
+ */
+function encodeFrameFeed(seq, tsMillis, payload) {
+  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+  const buf = new ArrayBuffer(16 + bytes.byteLength);
+  const view = new DataView(buf);
+  view.setUint32(0, seq >>> 0, false);
+  setUint64BE(view, 4, tsMillis);
+  view.setUint32(12, bytes.byteLength >>> 0, false);
+  new Uint8Array(buf, 16).set(bytes);
+  return buf;
+}
+
+/**
+ * Decode one downstream `browser_frame_feed` envelope.
+ * @param {ArrayBuffer} buf
+ */
+function decodeFrameFeed(buf) {
+  if (buf.byteLength < 16) {
+    throw new RangeError('browser_frame_feed envelope shorter than 16-byte header');
+  }
+  const view = new DataView(buf);
+  const seq = view.getUint32(0, false);
+  const tsMillis = getUint64BE(view, 4);
+  const len = view.getUint32(12, false);
+  if (16 + len > buf.byteLength) {
+    throw new RangeError('browser_frame_feed len exceeds message bounds');
+  }
+  const payload = buf.slice(16, 16 + len);
+  return { seq, tsMillis, len, payload };
+}
+
+/**
+ * Encode one `BrowserChunkEnvelope` (seq u32, ts u64 ms, key u8, len u32,
+ * payload) — the exact wire shape shared by browser_ingest_chunk /
+ * browser_video_chunk / browser_audio_chunk.
+ * @param {number} seq
+ * @param {number} tsMillis wire timestamp, milliseconds
+ * @param {boolean} key true for a video keyframe; false for audio and video deltas
+ * @param {ArrayBuffer|Uint8Array} payload
+ * @returns {ArrayBuffer}
+ */
+function encodeChunkEnvelope(seq, tsMillis, key, payload) {
+  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+  const buf = new ArrayBuffer(17 + bytes.byteLength);
+  const view = new DataView(buf);
+  view.setUint32(0, seq >>> 0, false);
+  setUint64BE(view, 4, tsMillis);
+  view.setUint8(12, key ? 1 : 0);
+  view.setUint32(13, bytes.byteLength >>> 0, false);
+  new Uint8Array(buf, 17).set(bytes);
+  return buf;
+}
+
+/**
+ * Decode one `BrowserChunkEnvelope`.
+ * @param {ArrayBuffer} buf
+ */
+function decodeChunkEnvelope(buf) {
+  if (buf.byteLength < 17) {
+    throw new RangeError('BrowserChunkEnvelope shorter than 17-byte header');
+  }
+  const view = new DataView(buf);
+  const seq = view.getUint32(0, false);
+  const tsMillis = getUint64BE(view, 4);
+  const key = view.getUint8(12) !== 0;
+  const len = view.getUint32(13, false);
+  if (17 + len > buf.byteLength) {
+    throw new RangeError('BrowserChunkEnvelope len exceeds message bounds');
+  }
+  const payload = buf.slice(17, 17 + len);
+  return { seq, tsMillis, key, len, payload };
+}
+
+/**
+ * Prefix a real encoded payload with the 1-byte ingest kind tag (see the
+ * "Ingest kind-tagging" note above the testable-logic block).
+ * @param {number} kind INGEST_PAYLOAD_KIND_VIDEO | INGEST_PAYLOAD_KIND_AUDIO
+ * @param {ArrayBuffer|Uint8Array} payload real encoded (H.264/VP8/Opus) bytes
+ * @returns {Uint8Array}
+ */
+function tagIngestPayload(kind, payload) {
+  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+  const tagged = new Uint8Array(1 + bytes.byteLength);
+  tagged[0] = kind & 0xff;
+  tagged.set(bytes, 1);
+  return tagged;
+}
+
+/**
+ * Split a tagged ingest payload back into its kind and the real bytes.
+ * @param {ArrayBuffer|Uint8Array} tagged
+ * @returns {{kind: number, payload: Uint8Array}}
+ */
+function untagIngestPayload(tagged) {
+  const bytes = tagged instanceof Uint8Array ? tagged : new Uint8Array(tagged);
+  if (bytes.byteLength < 1) {
+    throw new RangeError('ingest payload missing the leading kind-tag byte');
+  }
+  return { kind: bytes[0], payload: bytes.subarray(1) };
+}
+
+/** Write a non-negative integer/BigInt as an unsigned 64-bit big-endian field. */
+function setUint64BE(view, offset, value) {
+  const big = typeof value === 'bigint' ? value : BigInt(Math.trunc(value));
+  view.setBigUint64(offset, big < 0n ? 0n : big, false);
+}
+
+/** Read an unsigned 64-bit big-endian field back as a Number when safe, else BigInt. */
+function getUint64BE(view, offset) {
+  const big = view.getBigUint64(offset, false);
+  return big <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(big) : big;
+}
+
+// Codec negotiation: H.264 main first (FR-006 — Gate-0 iPad result, EC-4, may
+// later invert this to VP8-first; that inversion touches only this table),
+// VP8 fallback. H.264 baseline (avc1.42E01E) is explicitly unsupported
+// (S-1b) and must never be offered.
+const VIDEO_CODEC_CANDIDATES = [
+  { label: 'h264-main', codec: 'avc1.4D4028', avc: { format: 'annexb' } },
+  { label: 'vp8', codec: 'vp8' },
+];
+
+/**
+ * Negotiate a VideoEncoder config, trying H.264 main then VP8, using the
+ * real `VideoEncoder.isConfigSupported` probe. Never throws — returns null
+ * if nothing is supported so the caller can report a clean error instead of
+ * crashing the encode loop.
+ * @param {number} width
+ * @param {number} height
+ * @param {number} framerate
+ * @param {number} bitrate
+ * @param {{isConfigSupported: Function}} VideoEncoderCtor
+ * @returns {Promise<{label: string, config: object} | null>}
+ */
+async function selectVideoCodec(width, height, framerate, bitrate, VideoEncoderCtor) {
+  for (const candidate of VIDEO_CODEC_CANDIDATES) {
+    const config = {
+      codec: candidate.codec,
+      width,
+      height,
+      framerate,
+      bitrate,
+      latencyMode: 'realtime',
+    };
+    if (candidate.avc) {
+      config.avc = candidate.avc;
+    }
+    try {
+      const support = await VideoEncoderCtor.isConfigSupported(config);
+      if (support && support.supported) {
+        return { label: candidate.label, config: support.config || config };
+      }
+    } catch (_err) {
+      // Unsupported codec string on this build — try the next candidate.
+      // Never throw out of the negotiation loop.
+    }
+  }
+  return null;
+}
+
+// <<< OMNIPUS_TESTABLE_LOGIC_END
+
+// ---------------------------------------------------------------------------
+// Runtime wiring (DOM / WebSocket / WebCodecs / media capture). Not part of
+// the extracted Node test above — exercised manually per the Definition of
+// Done (no headless DOM+WebCodecs+WS harness exists in this repo's toolchain
+// for a go:embed static page). See the Go accessor's report for the manual
+// verification steps.
+// ---------------------------------------------------------------------------
+
+const statusEl = document.getElementById('status');
+const PLACEHOLDER_PROBE_WIDTH = 1280;
+const PLACEHOLDER_PROBE_HEIGHT = 720;
+
+function setStatus(text) {
+  if (statusEl) {
+    statusEl.textContent = text;
+  }
+}
+
+function reportStatus(ws, level, context, message) {
+  try {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // NOTE: `browser_ingest_status` is NOT (yet) part of the landed
+      // contracts/asyncapi.yaml browser-ingest channel — it is an optional,
+      // best-effort diagnostic text frame this page sends for operator
+      // visibility. The receiving endpoint MAY safely ignore any JSON text
+      // frame it doesn't recognise on this channel; nothing on the media
+      // path depends on it being understood. Flagged as a coordination item
+      // (see this file's header) for a possible follow-up contract addition.
+      ws.send(JSON.stringify({
+        type: 'browser_ingest_status',
+        level,
+        context,
+        message: String(message == null ? '' : message),
+      }));
+    }
+  } catch (_err) {
+    // Status reporting must never itself throw.
+  }
+  setStatus(`${level}: ${context}${message ? ' — ' + message : ''}`);
+}
+
+function reportError(ws, context, err) {
+  reportStatus(ws, 'error', context, err && err.message ? err.message : err);
+}
+
+async function main() {
+  const init = window.__OMNIPUS_INGEST__;
+  if (!init || !init.token || !init.wsURL || !init.streamId) {
+    setStatus('error: missing window.__OMNIPUS_INGEST__ — not launched by the gateway');
+    return;
+  }
+
+  if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
+    setStatus('error: WebCodecs (VideoEncoder/VideoFrame) unavailable in this browser build');
+    return;
+  }
+
+  const framerate = init.framerate > 0 ? init.framerate : 30;
+  const videoBitrate = init.bitrate > 0 ? init.bitrate : 2_500_000;
+  const keyframeInterval = init.keyframeInterval > 0 ? init.keyframeInterval : framerate * 2;
+  const audioBitrate = init.audioBitrate > 0 ? init.audioBitrate : 64_000;
+
+  // BrowserIngestInitFrame.video_codec is REQUIRED, so the codec must be
+  // negotiated before the init handshake is sent, ahead of knowing the real
+  // capture resolution — probe at a reference size. VIDEO_CODEC_CANDIDATES
+  // is tried in the same fixed priority order regardless of resolution, so
+  // `ensureVideoEncoder` (below) re-probing at the REAL frame dimensions on
+  // the first `browser_frame_feed` message lands on the same label in every
+  // realistic case; if it doesn't, the actually-used codec simply differs
+  // from what was announced, which does not break the wire protocol itself.
+  const initialCodec = await selectVideoCodec(
+    PLACEHOLDER_PROBE_WIDTH,
+    PLACEHOLDER_PROBE_HEIGHT,
+    framerate,
+    videoBitrate,
+    VideoEncoder,
+  );
+  if (!initialCodec) {
+    setStatus('error: no supported video codec (h264-main / vp8) on this Chrome build');
+    return;
+  }
+
+  const audioSupported = typeof MediaStreamTrackProcessor !== 'undefined' && typeof AudioEncoder !== 'undefined';
+
+  setStatus('connecting');
+  const ws = new WebSocket(init.wsURL);
+  ws.binaryType = 'arraybuffer';
+
+  // One shared sequence counter for this ingest connection (BrowserChunkEnvelope's
+  // `seq` is documented as monotonic "for this stream connection", not per kind).
+  let chunkSeq = 0;
+
+  const video = {
+    encoder: null,
+    label: initialCodec.label,
+    width: 0,
+    height: 0,
+    framesSinceKeyframe: 0,
+  };
+
+  const audio = {
+    encoder: null,
+    track: null,
+    reader: null,
+    stopped: false,
+    configured: false,
+  };
+
+  async function ensureVideoEncoder(width, height) {
+    if (video.encoder && video.width === width && video.height === height) {
+      return;
+    }
+    if (video.encoder && video.encoder.state !== 'closed') {
+      try { video.encoder.close(); } catch (_err) { /* already closing */ }
+    }
+    const selected = await selectVideoCodec(width, height, framerate, videoBitrate, VideoEncoder);
+    if (!selected) {
+      throw new Error('no supported video codec (h264-main / vp8) at the real capture resolution');
+    }
+    video.label = selected.label;
+    video.width = width;
+    video.height = height;
+    video.framesSinceKeyframe = 0;
+
+    video.encoder = new VideoEncoder({
+      output: (chunk) => {
+        try {
+          const raw = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(raw);
+          const tagged = tagIngestPayload(INGEST_PAYLOAD_KIND_VIDEO, raw);
+          const envelope = encodeChunkEnvelope(
+            chunkSeq++,
+            msFromMicros(chunk.timestamp),
+            chunk.type === 'key',
+            tagged,
+          );
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(envelope);
+          }
+        } catch (err) {
+          reportError(ws, 'video-output', err);
+        }
+      },
+      error: (err) => {
+        reportError(ws, 'video-encoder', err);
+      },
+    });
+    video.encoder.configure(selected.config);
+  }
+
+  async function handleFrameFeed(buf) {
+    let tsMillis;
+    let payload;
+    try {
+      ({ tsMillis, payload } = decodeFrameFeed(buf));
+    } catch (err) {
+      reportError(ws, 'frame-feed-decode', err);
+      return;
+    }
+    if (payload.byteLength === 0) {
+      return;
+    }
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(new Blob([payload], { type: 'image/jpeg' }));
+    } catch (err) {
+      // Skip the undecodable frame — never throw the ingest loop.
+      reportError(ws, 'bitmap-decode', err);
+      return;
+    }
+    try {
+      await ensureVideoEncoder(bitmap.width, bitmap.height);
+      const frame = new VideoFrame(bitmap, { timestamp: microsFromMs(tsMillis) });
+      try {
+        const forceKeyframe = video.framesSinceKeyframe === 0;
+        video.encoder.encode(frame, { keyFrame: forceKeyframe });
+        video.framesSinceKeyframe = (video.framesSinceKeyframe + 1) % keyframeInterval;
+      } finally {
+        frame.close();
+      }
+    } catch (err) {
+      reportError(ws, 'video-encode', err);
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  async function startAudioCapture() {
+    // FR-023: decoupled from video; failure here MUST NOT stop video.
+    if (!audioSupported) {
+      throw new Error('WebCodecs audio capture path (MediaStreamTrackProcessor/AudioEncoder) unavailable');
+    }
+    // Consent is pre-granted by the gateway via CDP
+    // Browser.grantPermissions({origin, permissions:['audioCapture']}) scoped
+    // to this exact encoder-page target (FR-016) — this resolves without a
+    // user-visible prompt. The captured device is the PulseAudio monitor
+    // source wired as the default input by the audio sidecar (FR-022).
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const [track] = stream.getAudioTracks();
+    if (!track) {
+      throw new Error('getUserMedia({audio:true}) returned no audio track');
+    }
+    audio.track = track;
+
+    const processor = new MediaStreamTrackProcessor({ track });
+    const reader = processor.readable.getReader();
+    audio.reader = reader;
+
+    audio.encoder = new AudioEncoder({
+      output: (chunk) => {
+        try {
+          const raw = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(raw);
+          const tagged = tagIngestPayload(INGEST_PAYLOAD_KIND_AUDIO, raw);
+          const envelope = encodeChunkEnvelope(chunkSeq++, msFromMicros(chunk.timestamp), false, tagged);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(envelope);
+          }
+        } catch (err) {
+          reportError(ws, 'audio-output', err);
+        }
+      },
+      error: (err) => {
+        reportError(ws, 'audio-encoder', err);
+      },
+    });
+
+    // Encode loop runs detached from startAudioCapture's own promise so
+    // main() isn't blocked waiting on the (indefinite) audio stream.
+    (async () => {
+      try {
+        while (!audio.stopped) {
+          const { value: audioData, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          try {
+            if (!audio.configured) {
+              audio.encoder.configure({
+                codec: 'opus',
+                sampleRate: audioData.sampleRate,
+                numberOfChannels: audioData.numberOfChannels,
+                bitrate: audioBitrate,
+              });
+              audio.configured = true;
+            }
+            audio.encoder.encode(audioData);
+          } catch (err) {
+            reportError(ws, 'audio-encode', err);
+          } finally {
+            audioData.close();
+          }
+        }
+      } catch (err) {
+        // Reader loop ended (track ended / stream torn down) — audio goes
+        // silently absent; video is unaffected (FR-011/FR-023).
+        reportError(ws, 'audio-loop', err);
+      }
+    })();
+  }
+
+  function stopAudioCapture() {
+    audio.stopped = true;
+    try { audio.reader && audio.reader.cancel(); } catch (_err) { /* ignore */ }
+    try { audio.track && audio.track.stop(); } catch (_err) { /* ignore */ }
+    if (audio.encoder && audio.encoder.state !== 'closed') {
+      try { audio.encoder.close(); } catch (_err) { /* ignore */ }
+    }
+  }
+
+  ws.addEventListener('open', () => {
+    setStatus('connected — authenticating');
+    // BrowserIngestInitFrame (schemas/BrowserIngestInitFrame.yaml): type,
+    // stream_id, token, video_codec, has_audio[, audio_codec] — additionalProperties: false.
+    const initFrame = {
+      type: 'browser_ingest_init',
+      stream_id: init.streamId,
+      token: init.token,
+      video_codec: initialCodec.config.codec,
+      has_audio: audioSupported,
+    };
+    if (audioSupported) {
+      initFrame.audio_codec = 'opus';
+    }
+    ws.send(JSON.stringify(initFrame));
+    setStatus('streaming');
+    if (audioSupported) {
+      startAudioCapture().catch((err) => {
+        reportError(ws, 'audio-capture-start', err);
+      });
+    }
+  });
+
+  ws.addEventListener('message', (event) => {
+    if (typeof event.data === 'string') {
+      // JSON control/status frame from the gateway (e.g. auth rejection) —
+      // no media payload; nothing further to do on this build.
+      return;
+    }
+    handleFrameFeed(event.data).catch((err) => {
+      // Never let one bad frame kill the ingest loop.
+      reportError(ws, 'frame-handle', err);
+    });
+  });
+
+  ws.addEventListener('close', () => {
+    setStatus('ingest connection closed');
+    stopAudioCapture();
+    if (video.encoder && video.encoder.state !== 'closed') {
+      try { video.encoder.close(); } catch (_err) { /* ignore */ }
+    }
+  });
+
+  ws.addEventListener('error', () => {
+    setStatus('ingest connection error');
+  });
+}
+
+main().catch((err) => {
+  setStatus('fatal: ' + (err && err.message ? err.message : err));
+});
+</script>
+</body>
+</html>

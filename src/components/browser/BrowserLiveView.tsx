@@ -46,6 +46,7 @@ import {
   Plus,
   Robot,
   SpinnerGap,
+  VideoCameraSlash,
   WarningCircle,
   X,
 } from '@phosphor-icons/react'
@@ -67,11 +68,29 @@ import {
 } from '@/lib/browserLiveCoords'
 import { resolveOmniboxInput } from '@/lib/browserLiveUrl'
 import { submitAnnotation, AnnotationBusyError } from '@/lib/browserAnnotate'
+import { maybeDevToast } from '@/lib/dev-toast'
 import { useUiStore } from '@/store/ui'
 import { useChatStore } from '@/store/chat'
 import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
 import type { BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
+
+/** The single shared metadata + sizing space for whichever transport is
+ * currently live — legacy JSON `browser_screencast` (width/height/page_scale
+ * carried per-frame) or the new binary video path (width/height from
+ * `browser_stream_init`; page_scale isn't carried on that frame — the video
+ * capture dimensions ARE the CDP device-pixel dimensions directly, so 1 is
+ * the correct assumption, matching an unset page_scale's existing meaning
+ * elsewhere in this file). Drives BOTH the take-the-wheel coordinate mapping
+ * (FR-008: unchanged math, just reading from this instead of the raw
+ * screencast frame) and the live `<canvas>`'s width/height attributes (its
+ * "intrinsic size" for the h-auto/w-auto CSS sizing, exactly the role
+ * frame.width/height played for the old `<img>`'s naturalWidth/Height). */
+interface LiveDims { // not-wire-format: local unified sizing/mapping state derived from either transport, never serialized
+  width: number
+  height: number
+  page_scale: number
+}
 
 export interface BrowserLiveViewProps {
   sessionId: string
@@ -233,20 +252,41 @@ export function BrowserLiveView({
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const imgRef = useRef<HTMLImageElement | null>(null)
+  // live-browser-video-streaming epic — the `<img>` this used to be is now a
+  // `<canvas>` fed by EITHER transport (see the drawing effects/callbacks
+  // below); imgRef is gone, canvasRef is the one rendering surface for both.
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // Discards a stale async JPEG decode that resolves after a newer
+  // screencast frame's own effect already ran/cleaned up — see the drawing
+  // effect further down.
+  const jpegDrawSeqRef = useRef(0)
   // WCAG 2.1.2 fix — Escape-releases-the-wheel focus target: handleKeyDown's
   // Escape branch moves focus here once driving ends, so the user lands
   // somewhere useful instead of on a container that just stopped capturing
   // keys (see releaseWheel below).
   const addressBarRef = useRef<HTMLInputElement | null>(null)
-  const frameRef = useRef<BrowserScreencastFrame | null>(null)
+  // The unified sizing/mapping source (see LiveDims's own doc comment above)
+  // — every take-the-wheel coordinate-mapping call site below reads this
+  // instead of frameRef directly, so input mapping (FR-008) and annotate
+  // crop math work identically whether the picture came from the legacy
+  // screencast or the new video-chunk path.
+  const activeDimsRef = useRef<LiveDims | null>(null)
+  // Counts decode failures (malformed/JPEG/WebCodecs) for observability —
+  // never surfaced as a hard error to the end user (FR-007 posture: drop the
+  // frame, dev-mode toast, keep going).
+  const decodeErrorCountRef = useRef(0)
+  // Web Audio playback state for onAudioData (FR-011) — a fresh AudioContext
+  // per mount, and a monotonic "next scheduled start" clock so consecutive
+  // decoded chunks play back-to-back instead of overlapping/racing.
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const audioPlaybackTimeRef = useRef(0)
   const controllingRef = useRef(false)
   // ── ADR-040 D2 implicit control model ───────────────────────────────────
   // agentWorkingRef mirrors the `agentWorking` (chat-store isStreaming for
   // this session) state into a ref so the pointer/keyboard/wheel handlers
   // below (all stable useCallbacks) always read the LATEST value without
   // needing it in their dependency arrays — same rationale as
-  // frameRef/controllingRef.
+  // activeDimsRef/controllingRef.
   const agentWorkingRef = useRef(false)
   // True from the instant an implicit (click-to-drive) or explicit (Take
   // over) `sendControl('take')` is sent until the server's 'controlling'
@@ -316,7 +356,7 @@ export function BrowserLiveView({
   // mutually exclusive with driving (isControlling). annotateDraggingRef +
   // selectionStartClientRef are refs (not state) so the pointerup handler
   // always reads the exact values captured on pointerdown, never a stale
-  // closure — same pattern as frameRef/controllingRef above.
+  // closure — same pattern as activeDimsRef/controllingRef above.
   const annotateDraggingRef = useRef(false)
   const selectionStartClientRef = useRef<{ x: number; y: number } | null>(null)
   const pendingAnnotationRef = useRef<PendingAnnotation | null>(null)
@@ -329,6 +369,18 @@ export function BrowserLiveView({
   const moveFlushScheduledRef = useRef(false)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
+  // The reactive mirror of activeDimsRef (see its own doc comment) — a ref
+  // alone never re-renders, and the body/spinner/canvas-vs-empty-state gate
+  // further down needs to react to it. Set by BOTH onScreencast (legacy) and
+  // onStreamInit (new video path, only once decoders configure — see
+  // browserLiveWs.ts's onStreamInit doc comment).
+  const [activeDims, setActiveDims] = useState<LiveDims | null>(null)
+  // FR-007/FR-018/FR-020 — non-null exactly when the live view has concluded
+  // it cannot/will not produce video for this viewer (see browserLiveWs.ts's
+  // onUnavailable doc comment for the three triggers). `reason` is an
+  // internal label for the dev console only — the rendered UI always shows
+  // the one FR-007 generic string, never this value.
+  const [unavailableReason, setUnavailableReason] = useState<string | null>(null)
   const [statusState, setStatusState] = useState<LiveStatus>('connecting')
   // The human-readable text carried on the latest browser_status frame (set
   // whenever state === 'error' — already-controlled, take-control-disabled,
@@ -557,9 +609,6 @@ export function BrowserLiveView({
   }, [])
 
   useEffect(() => {
-    frameRef.current = frame
-  }, [frame])
-  useEffect(() => {
     controllingRef.current = isControlling
     // ADR-040 D2: once the server confirms this connection holds the lock,
     // any implicit/explicit take that was in flight has resolved — clear the
@@ -672,7 +721,89 @@ export function BrowserLiveView({
   // `${sessionId}:${agentId}` so a new target always gets a fresh mount). ──
   useEffect(() => {
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
-      onScreencast: (f) => setFrame(f),
+      onScreencast: (f) => {
+        // A real screencast frame is unambiguous proof this viewer's live
+        // picture works — recover from any prior unavailable verdict (e.g.
+        // a stale bring-up-timeout flip from before this frame won the
+        // race) exactly like the other per-connection flags below already
+        // reset on a fresh round-trip.
+        const dims: LiveDims = { width: f.width, height: f.height, page_scale: f.page_scale ?? 1 }
+        activeDimsRef.current = dims
+        setActiveDims(dims)
+        setUnavailableReason(null)
+        setFrame(f)
+      },
+      // live-browser-video-streaming epic (FR-005/FR-006) — announces the
+      // negotiated video stream's resolution once this connection's
+      // VideoDecoder/AudioDecoder configured successfully (browserLiveWs.ts
+      // withholds this callback entirely otherwise — see its own doc
+      // comment — so `dims` here always describes a stream this client can
+      // actually decode).
+      onStreamInit: (f) => {
+        const dims: LiveDims = { width: f.width, height: f.height, page_scale: 1 }
+        activeDimsRef.current = dims
+        setActiveDims(dims)
+        setUnavailableReason(null)
+      },
+      // One decoded video frame — draw it straight to the live canvas. Kept
+      // OUT of React state (imperative ref mutation only): at up to ~30fps
+      // this must never trigger a component re-render, mirroring why the
+      // synthetic-cursor state was removed elsewhere in this file.
+      onVideoFrame: (vf) => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+        if (canvas.width !== vf.displayWidth || canvas.height !== vf.displayHeight) {
+          canvas.width = vf.displayWidth
+          canvas.height = vf.displayHeight
+        }
+        const ctx = canvas.getContext('2d')
+        ctx?.drawImage(vf, 0, 0, canvas.width, canvas.height)
+      },
+      // One decoded Opus audio chunk (FR-011) — scheduled back-to-back on a
+      // lazily-created AudioContext via the standard Web Audio
+      // "createBufferSource + monotonic start-time clock" streaming-PCM
+      // pattern. Any failure here (suspended context, malformed data) is
+      // swallowed — audio must never block or degrade video (FR-011/023).
+      onAudioData: (data) => {
+        if (typeof AudioContext === 'undefined') return
+        try {
+          if (!audioCtxRef.current) {
+            audioCtxRef.current = new AudioContext()
+          }
+          const ctx = audioCtxRef.current
+          const numChannels = data.numberOfChannels
+          const numFrames = data.numberOfFrames
+          const buffer = ctx.createBuffer(numChannels, numFrames, data.sampleRate)
+          for (let ch = 0; ch < numChannels; ch++) {
+            const channelData = new Float32Array(numFrames)
+            data.copyTo(channelData, { planeIndex: ch, format: 'f32-planar' })
+            buffer.copyToChannel(channelData, ch)
+          }
+          const source = ctx.createBufferSource()
+          source.buffer = buffer
+          source.connect(ctx.destination)
+          const startAt = Math.max(ctx.currentTime, audioPlaybackTimeRef.current)
+          source.start(startAt)
+          audioPlaybackTimeRef.current = startAt + buffer.duration
+        } catch {
+          // Dropped silently — see the callback's own doc comment above.
+        }
+      },
+      // A binary chunk failed to parse/decode, or a configured decoder
+      // reported an error — count it and surface a throttled dev-mode toast
+      // (never a prod crash, never a user-facing error banner: FR-007's
+      // "drop the frame and keep going" posture).
+      onDecodeError: (kind, message) => {
+        decodeErrorCountRef.current += 1
+        void maybeDevToast(`[browser-live] ${kind} decode error: ${message}`, `browser-live-decode-${kind}`, 'warning')
+      },
+      // FR-007/FR-018/FR-020 — this viewer cannot/will not get video. `reason`
+      // is an internal label for the dev console only (O-3) — the render
+      // below always shows the one generic FR-007 string.
+      onUnavailable: (reason) => {
+        if (import.meta.env.DEV) console.debug('[browser-live] unavailable:', reason)
+        setUnavailableReason(reason)
+      },
       // ADR-041 D4 — tab list + active index, broadcast on any
       // open/close/switch/title-change. This is the sole source of truth
       // the tab strip renders from (see the `tabState` doc comment above).
@@ -760,6 +891,11 @@ export function BrowserLiveView({
         // drops the optimistic "you're driving" chip (UAT A8).
         setPendingTake(false)
         implicitDriveRef.current = false
+        // A disconnect mid-bring-up is not itself a verdict — the fresh
+        // browser_attach → (screencast|stream_init|bring-up-timeout) cycle
+        // after reconnect re-derives unavailability from scratch rather than
+        // leaving a stale flip showing through a transient drop.
+        setUnavailableReason(null)
       },
     })
     wsRef.current = conn
@@ -768,9 +904,51 @@ export function BrowserLiveView({
       conn.detach()
       conn.close()
       wsRef.current = null
+      if (audioCtxRef.current) {
+        void audioCtxRef.current.close().catch(() => {
+          // Best-effort — nothing further to do if the AudioContext refuses to close.
+        })
+        audioCtxRef.current = null
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, agentId])
+
+  // ── Legacy JPEG screencast → canvas (live-browser-video-streaming epic) ──
+  // The `<canvas>` below is the ONE rendering surface for both transports.
+  // For the still-current `browser_screencast` path this decodes each JPEG
+  // (via a plain <img>, NOT createImageBitmap — jsdom/very old browsers lack
+  // the latter, and this mirrors exactly what the removed `<img src=...>`
+  // element already did natively) and draws it into the canvas at
+  // activeDims' resolution. `jpegDrawSeqRef` discards a stale decode that
+  // finishes AFTER a newer frame's effect already ran (repaint-driven
+  // screencast frames can arrive faster than a JPEG decode completes) —
+  // strictly better than the old `<img src=...>` swap, which had no such
+  // guard at all.
+  useEffect(() => {
+    if (!frame) return undefined
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+    let cancelled = false
+    const seq = ++jpegDrawSeqRef.current
+    const img = new window.Image()
+    img.onload = () => {
+      if (cancelled || jpegDrawSeqRef.current !== seq) return
+      canvas.width = frame.width
+      canvas.height = frame.height
+      const ctx = canvas.getContext('2d')
+      ctx?.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    img.onerror = () => {
+      if (cancelled || jpegDrawSeqRef.current !== seq) return
+      decodeErrorCountRef.current += 1
+      void maybeDevToast('[browser-live] JPEG decode error', 'browser-live-jpeg-decode', 'warning')
+    }
+    img.src = `data:image/jpeg;base64,${frame.data}`
+    return () => {
+      cancelled = true
+    }
+  }, [frame])
 
   // ── ADR-040 D2 refactor — the single "can this event reach the remote tab"
   // gate. Every handler below (wheel/pointerMove/pointerUp/keyDown/keyUp)
@@ -801,16 +979,16 @@ export function BrowserLiveView({
       // gives annotating top priority — closes a latent gap where a stale
       // isControlling:true during the annotate-entry release race used to
       // let a scroll through).
-      if (!canDispatchInput(false) || !frameRef.current) return
+      if (!canDispatchInput(false) || !activeDimsRef.current) return
       e.preventDefault()
       const rect = el!.getBoundingClientRect()
       const device = mapClientToDevice(
         e.clientX,
         e.clientY,
         rect,
-        frameRef.current.width,
-        frameRef.current.height,
-        frameRef.current.page_scale,
+        activeDimsRef.current.width,
+        activeDimsRef.current.height,
+        activeDimsRef.current.page_scale,
       )
       if (!device) return
       wsRef.current?.sendInput({
@@ -824,7 +1002,9 @@ export function BrowserLiveView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [frame !== null, canDispatchInput])
+    // activeDims (not frame) mirrors the render gate below — the container
+    // div this effect attaches to only exists once activeDims is set.
+  }, [activeDims !== null, canDispatchInput])
 
   // ── mouse_move RAF coalescing ────────────────────────────────────────────
   // Native pointermove fires far faster than the backend's input rate limiter
@@ -990,30 +1170,23 @@ export function BrowserLiveView({
     setAnnotateMode(true)
   }, [annotateMode, isControlling, handleCancelAnnotation, setPendingTake])
 
-  // Crops the CURRENTLY-RENDERED screencast frame's <img> to a PNG File
-  // (mirrors the canvas pattern in media-actions.ts's fetchImagePng). Reads
-  // the live <img> at call time (not a stale snapshot) so the crop always
-  // reflects exactly what the user was looking at when they finished the
-  // drag/click.
+  // Crops the CURRENTLY-RENDERED live `<canvas>` to a PNG File (mirrors the
+  // canvas pattern in media-actions.ts's fetchImagePng). Reads the live
+  // canvas at call time (not a stale snapshot) so the crop always reflects
+  // exactly what the user was looking at when they finished the drag/click.
   const cropFrameToFile = useCallback(
     async (rect: FrameCropRect, frameWidth: number, frameHeight: number): Promise<File | null> => {
-      const img = imgRef.current
-      if (!img || !img.complete || img.naturalWidth === 0) return null
-      // UAT finding (blank crop): `rect` is in frame-METADATA space
-      // (frame.width/height = CDP Metadata.DeviceWidth/DeviceHeight — the full
-      // viewport device-pixel size), but the screencast JPEG is captured with
-      // BOTH WithMaxWidth(screencastMaxWidth=1280) AND
-      // WithMaxHeight(screencastMaxHeight=720) (live.go), so the decoded
-      // <img>'s natural pixels (img.naturalWidth/Height) are DOWNSCALED
-      // whenever the device size exceeds the screencast max bound on EITHER
-      // axis (a narrow-tall/portrait viewport hits the same downscale via the
-      // height axis). Using `rect` directly as the drawImage SOURCE rect then
-      // reads an out-of-bounds/misaligned region of the smaller bitmap →
-      // drawImage draws nothing → a transparent (blank white/black) crop.
-      // Scale the source rect from frame space into the img's actual
-      // natural-pixel space; the destination canvas is sized to that native
-      // region so we capture at the JPEG's true resolution.
-      const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, img.naturalWidth, img.naturalHeight)
+      const liveCanvas = canvasRef.current
+      if (!liveCanvas || liveCanvas.width === 0 || liveCanvas.height === 0) return null
+      // UAT finding (blank crop), still relevant post-canvas-swap: `rect` is
+      // in frame-METADATA space (frameWidth/Height = activeDims, the full
+      // viewport device-pixel size). Both drawing paths (the legacy JPEG
+      // effect and the video onVideoFrame callback, further down) size the
+      // live canvas's width/height attributes to exactly that same metadata
+      // space, so this scale is normally a 1:1 no-op — kept (rather than
+      // assuming canvas.width===frameWidth) as defense-in-depth against any
+      // future path that draws at a genuinely different resolution.
+      const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, liveCanvas.width, liveCanvas.height)
       const { x: sx, y: sy, width: sw, height: sh } = src
       // Reviewer finding: drawImage/getContext can throw synchronously (e.g.
       // IndexSizeError on a degenerate zero-width/height rect, or a tainted
@@ -1029,7 +1202,7 @@ export function BrowserLiveView({
         canvas.height = Math.round(sh)
         const ctx = canvas.getContext('2d')
         if (!ctx) return null
-        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+        ctx.drawImage(liveCanvas, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
         const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
         if (!blob) return null
         return new File([blob], 'annotation.png', { type: 'image/png' })
@@ -1056,20 +1229,20 @@ export function BrowserLiveView({
         useUiStore.getState().addToast({ message: 'Could not capture that region — try again.', variant: 'error' })
         resetSelection()
       }
-      const frame = frameRef.current
-      if (!frame) return fail()
-      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, frame.width, frame.height)
-      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, frame.width, frame.height)
+      const dims = activeDimsRef.current
+      if (!dims) return fail()
+      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, dims.width, dims.height)
+      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, dims.width, dims.height)
       if (!startPx || !endPx) return fail()
-      const cropRect = computeCropRect(startPx, endPx, frame.width, frame.height)
+      const cropRect = computeCropRect(startPx, endPx, dims.width, dims.height)
       if (!cropRect) return fail()
 
-      const file = await cropFrameToFile(cropRect, frame.width, frame.height)
+      const file = await cropFrameToFile(cropRect, dims.width, dims.height)
       if (!file) return fail()
       const center = framePixelToDeviceCoords(
         cropRect.x + cropRect.width / 2,
         cropRect.y + cropRect.height / 2,
-        frame.page_scale,
+        dims.page_scale,
       )
       setPendingAnnotation({ file, previewUrl: URL.createObjectURL(file), point: center })
     },
@@ -1191,7 +1364,7 @@ export function BrowserLiveView({
     // ack may not have landed yet — see implicitDriveRef's doc comment).
     // canDispatchInput folds in the agent-working / annotate-mode / drive
     // gates that used to be re-derived here separately.
-    if (!canDispatchInput(implicitDriveRef.current) || !frameRef.current || !containerRef.current) return
+    if (!canDispatchInput(implicitDriveRef.current) || !activeDimsRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     // Local cursor overlay updates immediately every event — only the
     // network send is throttled, so the synthetic cursor still tracks the
@@ -1200,9 +1373,9 @@ export function BrowserLiveView({
       e.clientX,
       e.clientY,
       rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
+      activeDimsRef.current.width,
+      activeDimsRef.current.height,
+      activeDimsRef.current.page_scale,
     )
     if (!device) return
     pendingMoveRef.current = { x: device.x, y: device.y, modifiers: computeModifiers(e) }
@@ -1232,7 +1405,7 @@ export function BrowserLiveView({
       // must be Cancelled or Sent before starting a new drag; reading the
       // ref (rather than adding pendingAnnotation to the dep array) keeps
       // this callback's identity stable across every popover open/close.
-      if (!frameRef.current || !containerRef.current || pendingAnnotationRef.current) return
+      if (!activeDimsRef.current || !containerRef.current || pendingAnnotationRef.current) return
       focusAndCapturePointer(e)
       const rect = containerRef.current.getBoundingClientRect()
       const point = { x: e.clientX - rect.left, y: e.clientY - rect.top }
@@ -1277,16 +1450,16 @@ export function BrowserLiveView({
       takeWheelIfNeeded()
       implicitDriveRef.current = true
     }
-    if (!frameRef.current || !containerRef.current) return
+    if (!activeDimsRef.current || !containerRef.current) return
     focusAndCapturePointer(e)
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapClientToDevice(
       e.clientX,
       e.clientY,
       rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
+      activeDimsRef.current.width,
+      activeDimsRef.current.height,
+      activeDimsRef.current.page_scale,
     )
     if (!device) return
     wsRef.current?.sendInput({
@@ -1319,15 +1492,15 @@ export function BrowserLiveView({
     // duration, not the just-cleared one.
     const wasImplicitDrive = implicitDriveRef.current
     implicitDriveRef.current = false
-    if (!canDispatchInput(wasImplicitDrive) || !frameRef.current || !containerRef.current) return
+    if (!canDispatchInput(wasImplicitDrive) || !activeDimsRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapClientToDevice(
       e.clientX,
       e.clientY,
       rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
+      activeDimsRef.current.width,
+      activeDimsRef.current.height,
+      activeDimsRef.current.page_scale,
     )
     if (!device) return
     wsRef.current?.sendInput({
@@ -1784,7 +1957,26 @@ export function BrowserLiveView({
           data-visual-state={visualState}
           className="pointer-events-none absolute inset-0 z-30"
         />
-        {!frame && (
+        {/* FR-007/FR-018/FR-020 (live-browser-video-streaming epic) — the
+            generic "video can't run here" state. Takes priority over both
+            the spinner/error empty-state AND the live body below: no
+            infinite spinner, no frozen frame, never JPEG, never a synthetic
+            fallback. Chrome controls (header, omnibox, tab strip) are all
+            SIBLINGS of this body div, so they stay fully rendered/operable —
+            only the picture area itself is replaced. The specific `reason`
+            is dev-console-only (O-3); this string is intentionally the only
+            thing the end user ever sees, matching FR-007's exact wording. */}
+        {unavailableReason && (
+          <div
+            data-testid="browser-live-unavailable"
+            className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]"
+          >
+            <VideoCameraSlash size={22} />
+            <p>Live view needs a video-capable browser</p>
+          </div>
+        )}
+
+        {!unavailableReason && !activeDims && (
           <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
             {displayError ? (
               <>
@@ -1800,7 +1992,7 @@ export function BrowserLiveView({
           </div>
         )}
 
-        {frame && (
+        {!unavailableReason && activeDims && (
           <div
             ref={containerRef}
             tabIndex={0}
@@ -1821,11 +2013,23 @@ export function BrowserLiveView({
             onKeyUp={handleKeyUp}
             onDragStart={(e) => e.preventDefault()}
           >
-            <img
-              ref={imgRef}
-              src={`data:image/jpeg;base64,${frame.data}`}
-              alt="Live browser session"
-              draggable={false}
+            {/* live-browser-video-streaming epic (FR-005/FR-008) — the ONE
+                rendering surface for both transports (legacy JPEG drawn via
+                the effect above; decoded video via onVideoFrame further up).
+                `width`/`height` attributes are this canvas's INTRINSIC size
+                (the exact role frame.width/height's naturalWidth/Height
+                played for the old `<img>`) — the SAME `h-auto max-h-full
+                w-auto max-w-full` classes therefore produce an IDENTICAL
+                rendered CSS box, so the take-the-wheel coordinate mapping
+                (which reads only `containerRef`'s rect + activeDims, never
+                the canvas element itself) is unchanged (FR-008). Kept in
+                sync with activeDims here so the very first paint (before any
+                draw callback fires) already has the right aspect ratio. */}
+            <canvas
+              ref={canvasRef}
+              width={activeDims.width}
+              height={activeDims.height}
+              aria-label="Live browser session"
               className="block h-auto max-h-full w-auto max-w-full select-none"
             />
             {/* Synthetic cursor removed — the native cursor is used directly
@@ -1955,7 +2159,7 @@ export function BrowserLiveView({
           Covers both transport errors (connError) and a terminal browser_status{state:'error'}
           (already-controlled, take-control-disabled, no-manager-for-agent, live-view-disabled,
           malformed control, …) so a semantic status error is just as visible as a transport one. */}
-      {frame && displayError && (
+      {activeDims && displayError && (
         <div role="alert" className="shrink-0 border-t border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-2 text-xs text-[var(--color-error)]">
           {displayError}
         </div>

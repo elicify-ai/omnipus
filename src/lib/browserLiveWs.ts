@@ -15,6 +15,72 @@
 // Wire types are sourced exclusively from the generated AsyncAPI types/Zod —
 // hand-written interface declarations for wire-format frames are FORBIDDEN
 // (CLAUDE.md hard-constraint #8).
+//
+// ── live-browser-video-streaming epic (FR-005/FR-006/FR-011/FR-017/FR-018/
+//    FR-020) — binary decode path ──────────────────────────────────────────
+//
+// This connection now ALSO speaks the binary video/audio relay introduced
+// alongside the legacy JSON `browser_screencast` transport: `binaryType` is
+// set to 'arraybuffer' so `onmessage` can branch on `event.data instanceof
+// ArrayBuffer` — a binary message is one `browser_video_chunk`/
+// `browser_audio_chunk` envelope (see decodeChunkEnvelope below), fed to a
+// WebCodecs VideoDecoder/AudioDecoder configured from the preceding
+// `browser_stream_init`; anything else is the existing JSON control-frame
+// path (validated via the generated Zod WsFrame schema, unchanged). The JSON
+// `browser_screencast` path is KEPT working unchanged — it remains, as of
+// this wave, the only transport the current backend actually emits; the
+// binary path is additive (FR-010/M-10/F-02: `browser_screencast` is
+// removed only in a later wave, once the video path is reachable).
+//
+// Binary envelope wire-format gap (FLAGGED for the cross-wave integration
+// review — verified against the actual backend code, not just the contract):
+// contracts/components/schemas/BrowserChunkEnvelope.yaml documents ONLY
+// {seq:u32, ts:u64, key:u8, len:u32, payload} — shared verbatim by both
+// browser_video_chunk and browser_audio_chunk — with no field distinguishing
+// which is which when both ride the same `/api/v1/browser/ws` connection.
+// Confirmed against pkg/tools/browser/stream_relay.go (component D, already
+// on this branch): `EncodeChunk` serializes an `EncodedChunk` — which DOES
+// carry a `Kind string // "video"|"audio"` field internally — into exactly
+// that 17-byte-header shape with NO kind byte; `deliverToViewer` calls
+// `Viewer.SendChunk(wire)` with `Kind` dropped. The `Viewer` adapter that
+// would bridge `StreamRelay` to `browserWSConn.sendChunk` (component M,
+// stream orchestration — the piece that actually decides what a given
+// binary WS message TO A VIEWER contains) does not exist anywhere in the
+// tree yet (confirmed by grepping pkg/gateway for a SendChunk
+// implementation), so this is a genuinely open cross-wave question, not
+// something already answered by shipped code.
+//
+// This client's resolution: treat the FIRST byte of every binary WS message
+// as a 1-byte kind tag (CHUNK_KIND_VIDEO=0 / CHUNK_KIND_AUDIO=1), with the
+// REMAINING bytes being EncodeChunk's exact, unmodified 17-byte-header
+// output (seq/ts/key/len each shifted +1 byte, payload unchanged) — i.e.
+// "prefix one tag byte in front of what component D already produces
+// verbatim," the minimal change for whoever wires the not-yet-built Viewer
+// adapter (`sendCh <- &wsSendItem{Binary:true, Data: append([]byte{tag},
+// wire...)}` before calling sendChunk, using the chunk's own `Kind` field to
+// pick the tag). REQUIRES CONFIRMATION during the integration review before
+// end-to-end video/audio delivery is wired — this file's own tests define
+// and exercise the tag so the SPA side is independently correct regardless
+// of how that confirmation resolves.
+//
+// FR-007/FR-018/FR-020 (unavailable state): the SPA-visible "unavailable"
+// signal is derived here, not carried by a dedicated wire message (none
+// exists in the W0 contract). Two triggers:
+//   1. A bring-up timeout (STREAM_BRINGUP_TIMEOUT_MS) with NO live frame of
+//      any kind (screencast, stream_init, or a chunk) ever received since
+//      attach — FR-018's "no infinite spinner". Cleared permanently on the
+//      first live frame; never re-armed mid-stream (an idle-but-healthy
+//      screencast legitimately sends nothing for long stretches — see this
+//      file's own header above — so there is deliberately no ongoing
+//      mid-stream liveness watchdog, only the initial bring-up guard).
+//   2. VideoDecoder.configure() rejecting the negotiated codec/resolution —
+//      a genuine "this client cannot decode what the server is sending"
+//      case, distinct from the client simply lacking VideoDecoder (which
+//      empties video_caps in browser_attach and is expected to make the
+//      server never negotiate video in the first place).
+// A dedicated backend kill-switch/decline signal (FR-020's
+// gateway.browser_video_enabled teardown) isn't yet defined on the wire —
+// once it is (W2/W3), route it into the same onUnavailable callback here.
 
 import { WsFrame as WsFrameSchema } from '@/lib/api/generated/schemas'
 import type {
@@ -24,13 +90,20 @@ import type {
   BrowserInputFrame,
   BrowserScreencastFrame,
   BrowserStatusFrame,
+  BrowserStreamInitFrame,
   BrowserTabActionFrame,
   BrowserTabsFrame,
   ErrorFrame,
 } from '@/lib/api/generated/asyncapi-types'
+import { maybeDevToast } from '@/lib/dev-toast'
 
-/** Frame types this socket ever receives — a narrow slice of the full WsFrame union. */
-type BrowserServerFrame = BrowserScreencastFrame | BrowserStatusFrame | BrowserTabsFrame | ErrorFrame
+/** Frame types this socket ever receives over the JSON (Text) path — a narrow slice of the full WsFrame union. */
+type BrowserServerFrame =
+  | BrowserScreencastFrame
+  | BrowserStreamInitFrame
+  | BrowserStatusFrame
+  | BrowserTabsFrame
+  | ErrorFrame
 
 export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback interface passed to BrowserLiveWsConnection's constructor. Never serialized to or from the gateway.
   onScreencast: (frame: BrowserScreencastFrame) => void
@@ -41,6 +114,42 @@ export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback 
   onError: (message: string) => void
   onConnected?: () => void
   onDisconnected?: () => void
+  /**
+   * FR-005/FR-006 — sent once by the server immediately before the first
+   * `browser_video_chunk` (and `browser_audio_chunk`, if `has_audio`),
+   * announcing the negotiated codec/resolution/keyframe-interval/audio
+   * availability for this viewer's stream. This connection configures its
+   * own VideoDecoder/AudioDecoder from it internally; it is also handed to
+   * the caller (once decoders are successfully configured) so it can size
+   * its canvas. Not called at all if this client cannot actually decode the
+   * negotiated codec (see onUnavailable).
+   */
+  onStreamInit?: (frame: BrowserStreamInitFrame) => void
+  /**
+   * One decoded video frame, ready to paint (FR-005). This connection CLOSES
+   * the frame immediately after this callback returns — draw it
+   * synchronously (e.g. `ctx.drawImage(frame, ...)`); never retain it past
+   * the callback.
+   */
+  onVideoFrame?: (frame: VideoFrame) => void
+  /**
+   * One decoded audio chunk, ready to schedule for playback (FR-011). This
+   * connection CLOSES the data immediately after this callback returns —
+   * copy any samples out synchronously; never retain it past the callback.
+   */
+  onAudioData?: (data: AudioData) => void
+  /** A binary chunk failed to decode, or a configured decoder reported an error. Dropped, never crashes (FR-007 posture). */
+  onDecodeError?: (kind: 'video' | 'audio', message: string) => void
+  /**
+   * FR-007/FR-018/FR-020 — this viewer cannot/will not get video: no
+   * VideoDecoder in this browser, the bring-up timeout expired with no live
+   * frame ever received, or the negotiated codec failed to configure.
+   * `reason` is an internal, operator-facing label — the caller MUST show
+   * only the generic FR-007 string to the end user, never this value.
+   */
+  onUnavailable?: (reason: string) => void
+  /** Observability/testing hook — the video/audio codec caps this connection advertised in browser_attach (FR-005). */
+  onCaps?: (caps: { video: string[]; audio: string[] }) => void
 }
 
 // ── Reconnect schedule ────────────────────────────────────────────────────
@@ -53,13 +162,122 @@ const MAX_RECONNECT_ATTEMPTS = 5
 const RECONNECT_BASE_DELAY_MS = 1000
 const RECONNECT_MAX_DELAY_MS = 8000
 
+// FR-018 — client-side "no infinite spinner" backstop: if NEITHER a legacy
+// browser_screencast frame NOR a browser_stream_init/video-chunk ever
+// arrives within this window after attach, the viewer moves to the
+// unavailable state. Deliberately generous — well above the SC-001a ≤3s
+// cold-start placeholder — since this is a backstop for a genuinely stuck
+// connection, not the authoritative bring-up timeout (that's server-side,
+// W2/component M). Cleared permanently the first time ANY live frame
+// arrives; never re-armed afterwards (see the file header comment on why
+// there is no ongoing mid-stream liveness watchdog here).
+const STREAM_BRINGUP_TIMEOUT_MS = 20_000
+
+// FR-005 — capability-probe candidates. Video: H.264 main (avc1.4D4028) then
+// VP8 (FR-006's priority order, Gate-0/EC-4-gated — see that FR's own doc
+// comment on the codec-negotiation surface being built/tunable last).
+// Audio: Opus only (FR-011/FR-023).
+const VIDEO_CODEC_CANDIDATES = ['avc1.4D4028', 'vp8'] as const
+const AUDIO_CODEC_CANDIDATES = ['opus'] as const
+
+// Binary envelope: kind(u8) + seq(u32) + ts(u64) + key(u8) + len(u32), BigEndian throughout (DS-2).
+const CHUNK_KIND_VIDEO = 0
+const CHUNK_KIND_AUDIO = 1
+const ENVELOPE_HEADER_BYTES = 1 + 4 + 8 + 1 + 4
+
+let _droppedBinaryChunkCount = 0
+
+/** Count of binary WS messages dropped as malformed (too short, bad kind byte, length mismatch) since the last reset. Test/observability hook — mirrors ws.ts's getDroppedFrameCount pattern. */
+export function getDroppedBinaryChunkCount(): number {
+  return _droppedBinaryChunkCount
+}
+
+export function resetDroppedBinaryChunkCount(): void {
+  _droppedBinaryChunkCount = 0
+}
+
+export interface DecodedChunkEnvelope { // not-wire-format: local parsed shape of one binary browser_video_chunk/browser_audio_chunk WS message, never re-serialized
+  kind: 'video' | 'audio'
+  seq: number
+  ts: bigint
+  key: boolean
+  payload: Uint8Array
+}
+
+/**
+ * Parses one binary WS message into a DecodedChunkEnvelope. Returns null
+ * (never throws) on any malformed input: too short to hold a header, an
+ * unrecognized leading kind byte, or a declared `len` that doesn't match the
+ * actual trailing byte count — mirrors the backend's own FR-014 "reject,
+ * never fragment/partially-reassemble" posture on the client side. BigEndian
+ * throughout, per the contract (DS-2).
+ */
+export function decodeChunkEnvelope(buffer: ArrayBuffer): DecodedChunkEnvelope | null {
+  if (buffer.byteLength < ENVELOPE_HEADER_BYTES) return null
+  const view = new DataView(buffer)
+  const kindByte = view.getUint8(0)
+  if (kindByte !== CHUNK_KIND_VIDEO && kindByte !== CHUNK_KIND_AUDIO) return null
+  const seq = view.getUint32(1, false)
+  const ts = view.getBigUint64(5, false)
+  const key = view.getUint8(13) !== 0
+  const len = view.getUint32(14, false)
+  const payloadOffset = ENVELOPE_HEADER_BYTES
+  if (len !== buffer.byteLength - payloadOffset) return null
+  return {
+    kind: kindByte === CHUNK_KIND_VIDEO ? 'video' : 'audio',
+    seq,
+    ts,
+    key,
+    payload: new Uint8Array(buffer, payloadOffset, len),
+  }
+}
+
+/**
+ * Probes VideoDecoder.isConfigSupported for each FR-006 candidate codec.
+ * Returns `[]` with NO probing at all when VideoDecoder doesn't exist (old
+ * Safari — FR-007's "no VideoDecoder" guard) — never throws.
+ */
+export async function probeVideoCaps(): Promise<string[]> {
+  if (typeof VideoDecoder === 'undefined') return []
+  const supported: string[] = []
+  for (const codec of VIDEO_CODEC_CANDIDATES) {
+    try {
+      const result = await VideoDecoder.isConfigSupported({ codec })
+      if (result.supported) supported.push(codec)
+    } catch {
+      // isConfigSupported can reject on a codec string the engine doesn't
+      // recognize at all — treat as unsupported, not an error.
+    }
+  }
+  return supported
+}
+
+/**
+ * Probes AudioDecoder.isConfigSupported for Opus. Returns `[]` when
+ * AudioDecoder doesn't exist — audio is simply absent, never blocks video
+ * (FR-011).
+ */
+export async function probeAudioCaps(): Promise<string[]> {
+  if (typeof AudioDecoder === 'undefined') return []
+  const supported: string[] = []
+  for (const codec of AUDIO_CODEC_CANDIDATES) {
+    try {
+      const result = await AudioDecoder.isConfigSupported({ codec, sampleRate: 48000, numberOfChannels: 2 })
+      if (result.supported) supported.push(codec)
+    } catch {
+      // as above
+    }
+  }
+  return supported
+}
+
 function getBrowserWsUrl(): string {
   const httpBase = (import.meta.env.VITE_API_URL as string | undefined) || window.location.origin
   const wsBase = httpBase.replace(/^http/, 'ws')
   return `${wsBase}/api/v1/browser/ws`
 }
 
-/** Validates + narrows an incoming payload to the frames this socket cares about. Never throws. */
+/** Validates + narrows an incoming JSON payload to the frames this socket cares about. Never throws. */
 export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   let raw: unknown
   if (typeof data === 'string') {
@@ -78,6 +296,7 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   const frame = result.data
   if (
     frame.type === 'browser_screencast' ||
+    frame.type === 'browser_stream_init' ||
     frame.type === 'browser_status' ||
     frame.type === 'browser_tabs' ||
     frame.type === 'error'
@@ -98,6 +317,10 @@ export class BrowserLiveWsConnection {
   private intentionalClose = false
   private reconnectAttempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private bringupTimer: ReturnType<typeof setTimeout> | null = null
+  private everReceivedLiveFrame = false
+  private videoDecoder: VideoDecoder | null = null
+  private audioDecoder: AudioDecoder | null = null
 
   constructor(sessionId: string, agentId: string, callbacks: BrowserLiveWsCallbacks) {
     this.sessionId = sessionId
@@ -121,6 +344,9 @@ export class BrowserLiveWsConnection {
       )
       return
     }
+    // FR-017 — binary chunks arrive as ArrayBuffer (not Blob) so onmessage
+    // can synchronously DataView-parse the envelope with no extra async hop.
+    ws.binaryType = 'arraybuffer'
     this.ws = ws
 
     ws.onopen = () => {
@@ -132,20 +358,40 @@ export class BrowserLiveWsConnection {
         return
       }
       this._rawSend({ type: 'auth', token })
-      const attach: BrowserAttachFrame = {
-        type: 'browser_attach',
-        session_id: this.sessionId,
-        agent_id: this.agentId,
+
+      const attachBase = { session_id: this.sessionId, agent_id: this.agentId }
+      // FR-005 — keep the no-decoder path (today's reality in every existing
+      // test environment, and on old Safari) FULLY SYNCHRONOUS: sending the
+      // handshake must not gain a microtask delay when there is nothing to
+      // probe. Only await isConfigSupported when at least one WebCodecs
+      // decoder actually exists in this browser.
+      if (typeof VideoDecoder === 'undefined' && typeof AudioDecoder === 'undefined') {
+        this._sendAttach(attachBase, [], [])
+      } else {
+        void this._probeCapsAndSendAttach(attachBase)
       }
-      this._rawSend(attach)
-      this.callbacks.onConnected?.()
     }
 
     ws.onmessage = (event: MessageEvent) => {
+      if (event.data instanceof ArrayBuffer) {
+        this._handleBinaryMessage(event.data)
+        return
+      }
       const frame = parseBrowserFrame(event.data as string)
       if (!frame) return
       if (frame.type === 'browser_screencast') {
+        this._markLiveFrameReceived()
         this.callbacks.onScreencast(frame)
+      } else if (frame.type === 'browser_stream_init') {
+        this._markLiveFrameReceived()
+        // Only surface the stream to the caller if this client can actually
+        // decode it — otherwise we'd hand the caller stream dimensions for a
+        // picture that will never paint a single frame (see the file header
+        // comment on why onUnavailable and onStreamInit are mutually
+        // exclusive for a given stream_init).
+        if (this._configureDecoders(frame)) {
+          this.callbacks.onStreamInit?.(frame)
+        }
       } else if (frame.type === 'browser_status') {
         this.callbacks.onStatus(frame)
       } else if (frame.type === 'browser_tabs') {
@@ -161,6 +407,8 @@ export class BrowserLiveWsConnection {
 
     ws.onclose = (event: CloseEvent) => {
       this.ws = null
+      this._clearBringupTimer()
+      this._closeDecoders()
       this.callbacks.onDisconnected?.()
       if (this.intentionalClose) return
 
@@ -184,6 +432,187 @@ export class BrowserLiveWsConnection {
       )
       this.reconnectAttempts++
       this.reconnectTimer = setTimeout(() => this._createSocket(), delay)
+    }
+  }
+
+  private async _probeCapsAndSendAttach(attachBase: { session_id: string; agent_id: string }): Promise<void> {
+    const [videoCaps, audioCaps] = await Promise.all([probeVideoCaps(), probeAudioCaps()])
+    this._sendAttach(attachBase, videoCaps, audioCaps)
+  }
+
+  private _sendAttach(
+    attachBase: { session_id: string; agent_id: string },
+    videoCaps: string[],
+    audioCaps: string[],
+  ): void {
+    const attach: BrowserAttachFrame = {
+      type: 'browser_attach',
+      ...attachBase,
+      ...(videoCaps.length > 0 ? { video_caps: videoCaps } : {}),
+      ...(audioCaps.length > 0 ? { audio_caps: audioCaps } : {}),
+    }
+    this._rawSend(attach)
+    this.callbacks.onCaps?.({ video: videoCaps, audio: audioCaps })
+    this._startBringupTimer()
+    this.callbacks.onConnected?.()
+  }
+
+  private _startBringupTimer(): void {
+    this._clearBringupTimer()
+    this.everReceivedLiveFrame = false
+    this.bringupTimer = setTimeout(() => {
+      this.bringupTimer = null
+      if (!this.everReceivedLiveFrame) {
+        this.callbacks.onUnavailable?.(
+          typeof VideoDecoder === 'undefined' ? 'no-video-decoder' : 'bring-up-timeout',
+        )
+      }
+    }, STREAM_BRINGUP_TIMEOUT_MS)
+  }
+
+  private _clearBringupTimer(): void {
+    if (this.bringupTimer !== null) {
+      clearTimeout(this.bringupTimer)
+      this.bringupTimer = null
+    }
+  }
+
+  private _markLiveFrameReceived(): void {
+    this.everReceivedLiveFrame = true
+    this._clearBringupTimer()
+  }
+
+  /**
+   * Configures this connection's VideoDecoder (and, best-effort, its
+   * AudioDecoder) from a browser_stream_init. Returns true only if the video
+   * decoder configured successfully — a false return means this client
+   * cannot render this stream at all, and onUnavailable has already been
+   * called; the caller must not treat the stream as active. Audio
+   * configuration failure is always best-effort (FR-011/FR-023: never
+   * blocks video) and never affects the return value.
+   */
+  private _configureDecoders(init: BrowserStreamInitFrame): boolean {
+    this._closeDecoders()
+
+    if (typeof VideoDecoder === 'undefined') {
+      // Defensive only: a spec-compliant server shouldn't negotiate video
+      // for a viewer that advertised empty video_caps, but guard anyway.
+      this.callbacks.onUnavailable?.('no-video-decoder')
+      return false
+    }
+
+    this.videoDecoder = new VideoDecoder({
+      output: (frame) => {
+        try {
+          this.callbacks.onVideoFrame?.(frame)
+        } finally {
+          frame.close()
+        }
+      },
+      error: (err) => {
+        this.callbacks.onDecodeError?.('video', err.message)
+      },
+    })
+    try {
+      this.videoDecoder.configure({ codec: init.codec, codedWidth: init.width, codedHeight: init.height })
+    } catch (err) {
+      this.callbacks.onDecodeError?.('video', err instanceof Error ? err.message : String(err))
+      this.callbacks.onUnavailable?.('video-decoder-configure-failed')
+      this.videoDecoder = null
+      return false
+    }
+
+    if (init.has_audio && typeof AudioDecoder !== 'undefined') {
+      this.audioDecoder = new AudioDecoder({
+        output: (data) => {
+          try {
+            this.callbacks.onAudioData?.(data)
+          } finally {
+            data.close()
+          }
+        },
+        error: (err) => {
+          this.callbacks.onDecodeError?.('audio', err.message)
+        },
+      })
+      try {
+        // The negotiated audio codec/rate/channels aren't carried on
+        // BrowserStreamInitFrame — FR-011's audio path is Opus-only, matching
+        // probeAudioCaps' own probe config (48kHz stereo).
+        this.audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 })
+      } catch (err) {
+        // Audio failure never blocks/degrades video (FR-011/FR-023) — drop
+        // audio only, video proceeds.
+        this.callbacks.onDecodeError?.('audio', err instanceof Error ? err.message : String(err))
+        this.audioDecoder = null
+      }
+    }
+
+    return true
+  }
+
+  private _handleBinaryMessage(buffer: ArrayBuffer): void {
+    const decoded = decodeChunkEnvelope(buffer)
+    if (!decoded) {
+      _droppedBinaryChunkCount++
+      void maybeDevToast('[browser-live] Dropped malformed binary chunk', 'browser-live-chunk-malformed', 'warning')
+      return
+    }
+    this._markLiveFrameReceived()
+
+    if (decoded.kind === 'video') {
+      if (!this.videoDecoder) {
+        _droppedBinaryChunkCount++
+        return
+      }
+      try {
+        this.videoDecoder.decode(
+          new EncodedVideoChunk({
+            type: decoded.key ? 'key' : 'delta',
+            timestamp: Number(decoded.ts),
+            data: decoded.payload,
+          }),
+        )
+      } catch (err) {
+        this.callbacks.onDecodeError?.('video', err instanceof Error ? err.message : String(err))
+        void maybeDevToast('[browser-live] Video decode error', 'browser-live-video-decode', 'error')
+      }
+      return
+    }
+
+    // Audio: silently dropped if not negotiated/configured (FR-011 — never
+    // an error, video is unaffected).
+    if (!this.audioDecoder) return
+    try {
+      this.audioDecoder.decode(
+        new EncodedAudioChunk({
+          type: decoded.key ? 'key' : 'delta',
+          timestamp: Number(decoded.ts),
+          data: decoded.payload,
+        }),
+      )
+    } catch (err) {
+      this.callbacks.onDecodeError?.('audio', err instanceof Error ? err.message : String(err))
+      void maybeDevToast('[browser-live] Audio decode error', 'browser-live-audio-decode', 'error')
+    }
+  }
+
+  private _closeDecoders(): void {
+    if (this.videoDecoder) {
+      try {
+        if (this.videoDecoder.state !== 'closed') this.videoDecoder.close()
+      } catch {
+        // Already closed/errored — nothing further to release.
+      }
+      this.videoDecoder = null
+    }
+    if (this.audioDecoder) {
+      try {
+        if (this.audioDecoder.state !== 'closed') this.audioDecoder.close()
+      } catch {
+        // as above
+      }
+      this.audioDecoder = null
     }
   }
 
@@ -240,9 +669,11 @@ export class BrowserLiveWsConnection {
     this._rawSend(frame)
   }
 
-  /** Closes the socket and cancels any pending reconnect. Call detach() first if the viewer is going away cleanly. */
+  /** Closes the socket and cancels any pending reconnect/bring-up timer. Call detach() first if the viewer is going away cleanly. */
   close(): void {
     this.intentionalClose = true
+    this._clearBringupTimer()
+    this._closeDecoders()
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null

@@ -1,0 +1,60 @@
+title: BrowserStreamInitFrame
+description: >
+  Server → client. Sent once, immediately before the first browser_video_chunk
+  (and browser_audio_chunk, if has_audio), announcing the negotiated codec and
+  encode parameters for this viewer's stream (FR-005, FR-006, US-6). A viewer
+  MAY receive a fresh browser_stream_init if the stream is re-negotiated (e.g.
+  after an encoder-page relaunch, CRIT-002) — the new values supersede the
+  prior ones for this connection. See ADR-044 §6.3, spec R7 DS-1.
+type: object
+required:
+  - type
+  - codec
+  - width
+  - height
+  - keyframe_interval
+  - has_audio
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_stream_init
+  session_id:
+    type: string
+    maxLength: 128
+    description: >-
+      Correlation-only, echoed back from the attach request (mirrors
+      browser_status/browser_screencast). Does not select the stream.
+  codec:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >-
+      The negotiated video codec string for this stream's browser_video_chunk
+      payloads, e.g. "avc1.4D401E" (H.264 main) or "vp8" (FR-006). A single
+      active encoder serves one codec per source (v1, no ABR/multi-encode);
+      the codec-first-priority order is Gate-0/EC-4-gated and may change
+      without a wire-shape impact — this field only carries whatever was
+      actually negotiated.
+  width:
+    type: integer
+    minimum: 1
+    description: Encoded video width in pixels.
+  height:
+    type: integer
+    minimum: 1
+    description: Encoded video height in pixels.
+  keyframe_interval:
+    type: integer
+    minimum: 1
+    description: >-
+      Encoder GOP size: the number of encoded video frames between forced
+      keyframes. Informational for the viewer (e.g. worst-case cold-start
+      latency after a dropped keyframe); the relay's own GOP cache bound is
+      independent (FR-003).
+  has_audio:
+    type: boolean
+    description: >-
+      True if this stream also emits browser_audio_chunk (Opus) frames to
+      this viewer; false if audio is unavailable/not negotiated — video
+      streams normally either way and this is never an error (FR-011, US-4).

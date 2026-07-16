@@ -7123,7 +7123,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_stream_init", "browser_status", "browser_tab_action", "browser_tabs", "browser_ingest_init"]);
 
 export const AuthFrame = z
   .object({
@@ -7542,6 +7542,8 @@ export const NotificationFrame = z
 export const BrowserAttachFrame = z
   .object({
     type: z.literal("browser_attach"),
+    video_caps: z.array(z.string().min(1).max(128)).max(16).optional(),
+    audio_caps: z.array(z.string().min(1).max(128)).max(16).optional(),
     session_id: z.string().min(1).max(128),
     agent_id: z.string().min(1).max(128),
   })
@@ -7594,6 +7596,37 @@ export const BrowserScreencastFrame = z
   })
   .strict();
 
+export const BrowserStreamInitFrame = z
+  .object({
+    type: z.literal("browser_stream_init"),
+    session_id: z.string().max(128).optional(),
+    codec: z.string().min(1).max(64),
+    width: z.number().int().min(1),
+    height: z.number().int().min(1),
+    keyframe_interval: z.number().int().min(1),
+    has_audio: z.boolean(),
+  })
+  .strict();
+
+export const BrowserChunkEnvelope = z
+  .object({
+    seq: z.number().int().min(0),
+    ts: z.number().int().min(0),
+    key: z.boolean(),
+    len: z.number().int().min(0),
+    payload: z.string(),
+  })
+  .strict();
+
+export const BrowserFrameFeedEnvelope = z
+  .object({
+    seq: z.number().int().min(0),
+    ts: z.number().int().min(0),
+    len: z.number().int().min(0),
+    payload: z.string(),
+  })
+  .strict();
+
 export const BrowserStatusFrame = z
   .object({
     type: z.literal("browser_status"),
@@ -7629,6 +7662,17 @@ export const BrowserTabsFrame = z
       active: z.boolean().optional(),
     })
     .strict()).max(32),
+  })
+  .strict();
+
+export const BrowserIngestInitFrame = z
+  .object({
+    type: z.literal("browser_ingest_init"),
+    stream_id: z.string().min(1).max(128),
+    token: z.string().min(1).max(256),
+    video_codec: z.string().min(1).max(64),
+    has_audio: z.boolean(),
+    audio_codec: z.string().min(1).max(64).optional(),
   })
   .strict();
 
@@ -7672,9 +7716,11 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserControlFrame,
   BrowserDetachFrame,
   BrowserScreencastFrame,
+  BrowserStreamInitFrame,
   BrowserStatusFrame,
   BrowserTabActionFrame,
   BrowserTabsFrame,
+  BrowserIngestInitFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

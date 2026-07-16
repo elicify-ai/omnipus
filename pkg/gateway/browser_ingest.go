@@ -1,0 +1,736 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+//
+// browser_ingest.go — Wave 1 component E of the live-browser video epic.
+//
+// The capture-ingest endpoint (/api/v1/browser/capture-ingest, FR-012) is the
+// gateway's LOOPBACK-ONLY receiving side for the WebCodecs encoder page. The
+// gateway drives CDP Page.startScreencast on the agent tab, pushes each JPEG
+// frame DOWN this connection to the encoder page (FeedFrame → browser_frame_feed),
+// and the encoder page pushes encoded H.264/VP8/Opus chunks back UP
+// (browser_ingest_init + binary browser_ingest_chunk). Encoded chunks are
+// handed to the stream relay (component D) via the injected Relay interface.
+//
+// THREAT MODEL / SECURITY POSTURE (why this endpoint is distinct from the
+// viewer WS in browser_ws.go):
+//
+//   - The encoder page holds NO user bearer token. It authenticates with a
+//     per-stream CAPABILITY TOKEN (FR-013) minted here and delivered to the page
+//     out-of-band via CDP addScriptToEvaluateOnNewDocument — never via URL. So
+//     this endpoint uses a capability-token model, not the viewer AuthFrame
+//     user-identity model.
+//   - The endpoint is loopback-only (FR-012): any connection whose RemoteAddr is
+//     not a loopback address is rejected BEFORE the WebSocket upgrade and before
+//     any relay. A remote attacker can never reach it.
+//   - Single connection per token (CRIT-002): a token is good for exactly ONE
+//     successful connection. A second concurrent connection presenting a live
+//     token is rejected; once a connection closes the token is DEAD (there is no
+//     same-token reconnect — a transient drop is recovered by orchestration
+//     (W2-M) re-minting a fresh token and relaunching the encoder page). A dead,
+//     mis-scoped, or absent token is rejected before any relay.
+//   - Every ingest-auth rejection and every stream lifecycle transition is
+//     audit-logged (FR-024).
+//
+// This file OWNS only the ingest endpoint. It depends on component D purely
+// through the Relay interface, and on nothing in browser_ws.go. Integration
+// (registering the handler + wiring MintIngestToken/FeedFrame/EndStream into the
+// stream orchestrator) is documented at RegisterCaptureIngest.
+
+package gateway
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+)
+
+// captureIngestPath is the loopback-only ingest endpoint (FR-012).
+const captureIngestPath = "/api/v1/browser/capture-ingest"
+
+// defaultIngestMaxMessageBytes is the FR-014 max-message bound for a single
+// encoded chunk. Sized for a realistic keyframe (>= 2 MB) and independent of
+// browser_ws.go's 64 KB viewer-inbound cap. A chunk whose payload exceeds this
+// is rejected + triggers an encoder step-down (never fragmented/reassembled).
+const defaultIngestMaxMessageBytes = 2 * 1024 * 1024
+
+// ingestChunkHeaderLen is the fixed BigEndian header of an upstream
+// browser_ingest_chunk: seq(u32) + ts(u64) + key(u8) + len(u32) = 17 bytes,
+// followed by exactly `len` payload bytes.
+const ingestChunkHeaderLen = 17
+
+// ingestFrameFeedHeaderLen is the fixed BigEndian header of a downstream
+// browser_frame_feed: seq(u32) + ts(u64) + len(u32) = 16 bytes, followed by
+// exactly `len` JPEG bytes (no keyframe flag — every screencast frame is a
+// complete JPEG still).
+const ingestFrameFeedHeaderLen = 16
+
+// ingestFeedCap is the per-connection downstream (JPEG feed) buffer depth.
+// The JPEG feed is lossy repaint-driven traffic like the viewer screencast:
+// dropping a stale frame on a briefly-slow encoder is correct (the next
+// screencast frame supersedes it), so FeedFrame never blocks the capture driver.
+const ingestFeedCap = 64
+
+// ingestInitDeadline bounds how long the endpoint waits for the first
+// (browser_ingest_init) frame before giving up on a connection.
+const ingestInitDeadline = 15 * time.Second
+
+// ingestReadDeadline bounds silence on an established ingest connection. The
+// encoder page streams continuously; a read-silence this long means a dead
+// encoder, so the connection is closed and orchestration (W2-M) re-mints.
+const ingestReadDeadline = 120 * time.Second
+
+// Chunk discriminator byte values carried in the envelope's key(u8) field.
+// Values 0/1 are the video keyframe flag (DS-2); value 2 marks an audio chunk
+// so a single ingest connection can multiplex video + Opus audio over the fixed
+// envelope without adding a wire field (M-4 keeps the envelope fixed).
+//
+// [INFERRED] The spec's binary envelope (seq,ts,key,len,payload) has no explicit
+// video/audio discriminator; DS-2 only exercises key ∈ {0,1} (video). This
+// widens the meaning of the existing u8 to also carry audio (value 2), which is
+// backward-compatible with DS-2. If component D/G settle on a different audio
+// discriminator this is a one-line change in classifyChunk — flagged at
+// integration.
+const (
+	chunkVideoDelta byte = 0
+	chunkVideoKey   byte = 1
+	chunkAudio      byte = 2
+)
+
+// Audit event names for the ingest lifecycle (FR-024). These follow the
+// existing browser.live.* namespace (see EventBrowserLiveControlTaken in
+// pkg/audit/events.go). They are emitted via audit.Emit, whose Record path does
+// not validate against IsValidEventName, so they log correctly today; adding
+// them to IsValidEventName is a follow-up for SIEM tooling (noted in the report).
+const (
+	eventIngestStreamStarted = "browser.live.stream_started"
+	eventIngestStreamStopped = "browser.live.stream_stopped"
+	eventIngestRejected      = "browser.live.ingest_rejected"
+)
+
+// ingestRejectReason is the machine-readable `reason` recorded on every ingest
+// rejection audit entry (FR-024 / SC-009 — explainable rejects).
+type ingestRejectReason string
+
+const (
+	rejectNonLoopback     ingestRejectReason = "non_loopback"
+	rejectBadInit         ingestRejectReason = "bad_init_frame"
+	rejectChunkBeforeInit ingestRejectReason = "chunk_before_init"
+	rejectAbsentToken     ingestRejectReason = "absent_token"
+	rejectUnknownStream   ingestRejectReason = "unknown_or_dead_token"
+	rejectDeadToken       ingestRejectReason = "dead_token"
+	rejectBadToken        ingestRejectReason = "bad_token"
+	rejectMisScoped       ingestRejectReason = "mis_scoped_token"
+	rejectDuplicateConn   ingestRejectReason = "duplicate_connection"
+	rejectOversizeChunk   ingestRejectReason = "oversize_chunk"
+)
+
+var (
+	errEnvelopeTooShort    = errors.New("ingest envelope shorter than 17-byte header")
+	errEnvelopeLenMismatch = errors.New("ingest envelope declared len != actual payload len")
+)
+
+// EncodedChunk is one encoded media chunk decoded off the ingest leg and handed
+// to the stream relay (component D). Field-identical to the relay's own chunk
+// type by design; the integration adapter (see RegisterCaptureIngest) maps
+// between the two so the two parallel components stay file-disjoint.
+type EncodedChunk struct {
+	Seq     uint32 // monotonic per-connection sequence (wraps at 2^32-1)
+	TS      uint64 // monotonic capture timestamp (ms), source-injected for glass-to-glass
+	Key     bool   // true == keyframe (video only)
+	Codec   string // e.g. "avc1.4D401E" (H.264 main), "vp8", "opus"
+	Kind    string // "video" | "audio"
+	Payload []byte // encoded bytes; owned by the relay (copied off the read buffer)
+}
+
+// Relay is the stream relay (component D) dependency. This endpoint depends ONLY
+// on this interface — component D's concrete StreamRelay (pkg/tools/browser)
+// implements the equivalent; the integration adapter bridges the two chunk types.
+type Relay interface {
+	Ingest(streamID string, c EncodedChunk)
+}
+
+// IngestMux is the minimal HTTP-registration surface this component needs. The
+// gateway's channel manager (*channels.Manager) already satisfies it via
+// RegisterHTTPHandler — matching how browser_ws.go's handler is wired
+// (gateway.go:2091). Keeping it an interface keeps this file testable and
+// decoupled from the concrete mux.
+type IngestMux interface {
+	RegisterHTTPHandler(pattern string, handler http.Handler)
+}
+
+// IngestDeps are the injected dependencies for the ingest endpoint.
+type IngestDeps struct {
+	// Relay receives decoded encoded chunks (component D). Required in
+	// production; if nil, chunks are dropped with an error log (degraded).
+	Relay Relay
+
+	// Audit is the audit sink (FR-024). nil disables audit (no-op), matching
+	// the package-wide "audit disabled == nil logger" contract.
+	Audit *audit.Logger
+
+	// MaxMessageBytes overrides the FR-014 per-chunk bound. <= 0 uses
+	// defaultIngestMaxMessageBytes (>= 2 MB).
+	MaxMessageBytes int
+
+	// StepDown is the FR-014 encoder step-down hook, invoked (best-effort) when
+	// an oversize chunk is rejected so the encoder can drop bitrate/resolution.
+	// nil is tolerated (reject-only, no step-down signal).
+	StepDown func(streamID string)
+}
+
+// streamState is the token/connection lifecycle of one registered stream.
+type streamState int
+
+const (
+	streamFresh     streamState = iota // token minted, no connection yet — the only acceptable state
+	streamConnected                    // a live ingest connection currently holds the token
+	streamDead                         // token consumed/ended — reject any connection (CRIT-002)
+)
+
+// ingestStream is the per-stream registry entry. All fields are guarded by
+// CaptureIngestHandler.mu EXCEPT the codec fields, which are set once under mu
+// at claim time and thereafter read only by the owning connection's read loop.
+type ingestStream struct {
+	token      string
+	state      streamState
+	conn       ingestConn    // the single live connection (nil when not connected)
+	sendCh     chan []byte   // downstream JPEG feed queue (nil when not connected)
+	doneCh     chan struct{} // closed to stop this connection's write pump
+	doneClosed bool
+	videoCodec string
+	audioCodec string
+}
+
+// stopPump closes doneCh exactly once. Caller MUST hold CaptureIngestHandler.mu.
+func (s *ingestStream) stopPump() {
+	if s.doneCh != nil && !s.doneClosed {
+		close(s.doneCh)
+		s.doneClosed = true
+	}
+}
+
+// ingestConn is the minimal WebSocket surface the connection logic needs.
+// *gorilla/websocket.Conn satisfies it directly; tests inject a fake conn.
+type ingestConn interface {
+	ReadMessage() (messageType int, p []byte, err error)
+	WriteMessage(messageType int, data []byte) error
+	SetReadLimit(limit int64)
+	SetReadDeadline(t time.Time) error
+	Close() error
+}
+
+// CaptureIngestHandler implements the loopback-only capture-ingest endpoint.
+type CaptureIngestHandler struct {
+	deps          IngestDeps
+	maxChunkBytes int
+	upgrader      websocket.Upgrader
+
+	mu      sync.Mutex
+	streams map[string]*ingestStream
+}
+
+// NewCaptureIngestHandler constructs a handler. Prefer RegisterCaptureIngest,
+// which also wires the route.
+func NewCaptureIngestHandler(deps IngestDeps) *CaptureIngestHandler {
+	maxBytes := deps.MaxMessageBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultIngestMaxMessageBytes
+	}
+	return &CaptureIngestHandler{
+		deps:          deps,
+		maxChunkBytes: maxBytes,
+		streams:       make(map[string]*ingestStream),
+		upgrader: websocket.Upgrader{
+			// Defense-in-depth against cross-site WS hijack from an
+			// agent-navigated page: only a loopback (or empty) Origin may
+			// upgrade. The real gate is loopback RemoteAddr + capability token.
+			CheckOrigin: ingestCheckOrigin,
+		},
+	}
+}
+
+// RegisterCaptureIngest constructs the handler, registers it on the mux at
+// captureIngestPath, and returns it so the stream orchestrator (W2-M) and the
+// screencast capture driver (W2-L) can call MintIngestToken / EndStream /
+// FeedFrame.
+//
+// INTEGRATION SEAM (for the lead): wire this exactly where browser_ws.go's
+// handler is wired — pkg/gateway/gateway.go around line 2091, right after
+//
+//	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin)
+//	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
+//
+// add, e.g.:
+//
+//	captureIngest := gateway.RegisterCaptureIngest(runningServices.ChannelManager, gateway.IngestDeps{
+//	    Relay:    relayAdapter,               // bridges gateway.EncodedChunk → browser.EncodedChunk (component D)
+//	    Audit:    agentLoop.AuditLogger(),
+//	    StepDown: streamOrchestrator.StepDown, // component M
+//	})
+//	// hand `captureIngest` to the stream orchestrator (W2-M) and capture driver (W2-L).
+//
+// *channels.Manager already satisfies IngestMux. The relay adapter is a ~5-line
+// shim because gateway.EncodedChunk and browser.EncodedChunk are field-identical.
+func RegisterCaptureIngest(mux IngestMux, deps IngestDeps) *CaptureIngestHandler {
+	h := NewCaptureIngestHandler(deps)
+	mux.RegisterHTTPHandler(captureIngestPath, h)
+	return h
+}
+
+// MintIngestToken registers a stream (or re-mints its token) and returns an
+// unguessable per-stream capability token (FR-013). For a NEW stream id this
+// emits stream_started (FR-024). For an EXISTING stream id this is a re-mint
+// (CRIT-002 drop recovery, driven by W2-M): the OLD token is invalidated, any
+// live connection is closed, and the entry is reset to a fresh token — NO
+// lifecycle audit (it is the same logical stream, so exactly one start/stop is
+// emitted per stream regardless of how many transient drops/re-mints occur).
+func (h *CaptureIngestHandler) MintIngestToken(streamID string) string {
+	tok := newIngestToken()
+
+	h.mu.Lock()
+	s, ok := h.streams[streamID]
+	var oldConn ingestConn
+	if !ok {
+		h.streams[streamID] = &ingestStream{token: tok, state: streamFresh}
+	} else {
+		// Re-mint: replace the entry with a fresh struct so any in-flight
+		// connection's deferred releaseConn sees it has been superseded and
+		// cannot mutate the new state. Old token value is dropped → dead.
+		oldConn = s.conn
+		s.stopPump()
+		h.streams[streamID] = &ingestStream{token: tok, state: streamFresh}
+	}
+	h.mu.Unlock()
+
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	if !ok {
+		h.audit(eventIngestStreamStarted, audit.SeverityInfo, "allow", map[string]any{
+			"stream_id": streamID,
+		})
+	}
+	return tok
+}
+
+// EndStream invalidates a stream's token, closes any live ingest connection, and
+// emits stream_stopped (FR-024). Idempotent: ending an unknown stream is a no-op.
+func (h *CaptureIngestHandler) EndStream(streamID string) {
+	h.mu.Lock()
+	s, ok := h.streams[streamID]
+	if ok {
+		delete(h.streams, streamID)
+		s.state = streamDead
+		s.stopPump()
+	}
+	h.mu.Unlock()
+
+	if !ok {
+		return
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+	h.audit(eventIngestStreamStopped, audit.SeverityInfo, "allow", map[string]any{
+		"stream_id": streamID,
+	})
+}
+
+// FeedFrame pushes one CDP screencast JPEG frame down to the encoder page for
+// streamID (browser_frame_feed, FR-001/FR-016). Called by the capture driver
+// (W2-L). Non-blocking: if there is no live connection or its feed queue is
+// full, the frame is dropped (lossy repaint-driven feed — the next frame
+// supersedes it), never stalling the capture driver.
+func (h *CaptureIngestHandler) FeedFrame(streamID string, jpeg []byte, seq uint32, ts uint64) {
+	h.mu.Lock()
+	s := h.streams[streamID]
+	var sendCh chan []byte
+	var doneCh chan struct{}
+	if s != nil && s.state == streamConnected {
+		sendCh = s.sendCh
+		doneCh = s.doneCh
+	}
+	h.mu.Unlock()
+
+	if sendCh == nil {
+		return // no live encoder connection; drop
+	}
+	data := encodeFrameFeed(seq, ts, jpeg)
+	select {
+	case sendCh <- data:
+	case <-doneCh:
+	default: // queue full → drop (lossy feed)
+	}
+}
+
+// ServeHTTP enforces loopback-only (FR-012) BEFORE the WebSocket upgrade, then
+// upgrades and serves the connection.
+func (h *CaptureIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// FR-012: loopback-only. Reject non-loopback sources before anything else —
+	// before the upgrade, before any relay.
+	if !isLoopbackRemoteAddr(r.RemoteAddr) {
+		h.auditReject("", rejectNonLoopback, r.RemoteAddr)
+		http.Error(w, "capture-ingest is loopback-only", http.StatusForbidden)
+		return
+	}
+
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		http.Error(w, "websocket upgrade required", http.StatusUpgradeRequired)
+		return
+	}
+
+	conn, err := h.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		slog.Warn("browser-ingest: upgrade failed", "error", err)
+		return
+	}
+	h.serveConn(conn, r.RemoteAddr)
+}
+
+// serveConn drives one ingest connection: read+validate the init frame, claim
+// the single-connection slot, then relay chunks until the connection closes.
+// Split out from ServeHTTP so tests can drive it with a fake conn (no real
+// WebSocket / no HTTP hijack).
+func (h *CaptureIngestHandler) serveConn(conn ingestConn, remoteAddr string) {
+	defer conn.Close()
+
+	// Read ceiling is 2x the logical bound + header so an OVERSIZE chunk is
+	// still received and rejected+step-down at the app layer (FR-014) rather
+	// than the transport silently killing the connection. This also bounds
+	// per-message memory to ~2x the bound.
+	conn.SetReadLimit(int64(h.maxChunkBytes*2 + ingestChunkHeaderLen))
+
+	// --- init frame ---
+	_ = conn.SetReadDeadline(time.Now().Add(ingestInitDeadline))
+	mt, data, err := conn.ReadMessage()
+	if err != nil {
+		h.auditReject("", rejectBadInit, remoteAddr)
+		return
+	}
+	if mt != websocket.TextMessage {
+		// A binary message before init means a chunk arrived with no init.
+		h.auditReject("", rejectChunkBeforeInit, remoteAddr)
+		return
+	}
+	var init generated.BrowserIngestInitFrame
+	if jerr := json.Unmarshal(data, &init); jerr != nil ||
+		init.Type != string(generated.WsFrameTypeBrowserIngestInit) {
+		h.auditReject("", rejectBadInit, remoteAddr)
+		return
+	}
+	streamID := init.StreamId
+	if init.Token == "" {
+		h.auditReject(streamID, rejectAbsentToken, remoteAddr)
+		return
+	}
+
+	// --- token validation + single-connection claim (atomic under mu) ---
+	s, reason := h.claim(streamID, conn, init)
+	if reason != "" {
+		h.auditReject(streamID, reason, remoteAddr)
+		return
+	}
+	// Accepted. On any exit, mark the token dead (single-use, CRIT-002) and stop
+	// the write pump.
+	defer h.releaseConn(streamID, s)
+
+	go h.writePump(conn, s.sendCh, s.doneCh)
+
+	// --- chunk relay loop ---
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(ingestReadDeadline))
+		mt, msg, rerr := conn.ReadMessage()
+		if rerr != nil {
+			return // drop; orchestration (W2-M) re-mints + relaunches
+		}
+		if mt != websocket.BinaryMessage {
+			continue // ignore stray text frames after init
+		}
+		h.handleChunk(streamID, s, msg)
+	}
+}
+
+// claim validates the presented token against the registry and atomically
+// claims the single-connection slot. On success it transitions the stream to
+// streamConnected, records the connection, and provisions the downstream feed
+// queue. Returns a non-empty reason on rejection (nothing is relayed).
+func (h *CaptureIngestHandler) claim(streamID string, conn ingestConn, init generated.BrowserIngestInitFrame) (*ingestStream, ingestRejectReason) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	s, ok := h.streams[streamID]
+	if !ok {
+		// No such stream (never minted, or already ended → token invalidated).
+		if h.tokenMatchesOtherLocked(streamID, init.Token) {
+			return nil, rejectMisScoped
+		}
+		return nil, rejectUnknownStream
+	}
+
+	// Constant-time token comparison (capability-token confidentiality).
+	if subtle.ConstantTimeCompare([]byte(s.token), []byte(init.Token)) != 1 {
+		if h.tokenMatchesOtherLocked(streamID, init.Token) {
+			return nil, rejectMisScoped
+		}
+		return nil, rejectBadToken
+	}
+
+	switch s.state {
+	case streamDead:
+		return nil, rejectDeadToken
+	case streamConnected:
+		// Single connection per token (CRIT-002): a second concurrent
+		// connection presenting a live token is rejected; the existing holder
+		// is left untouched.
+		return nil, rejectDuplicateConn
+	case streamFresh:
+		s.state = streamConnected
+		s.conn = conn
+		s.videoCodec = init.VideoCodec
+		if init.AudioCodec != nil {
+			s.audioCodec = *init.AudioCodec
+		}
+		s.sendCh = make(chan []byte, ingestFeedCap)
+		s.doneCh = make(chan struct{})
+		s.doneClosed = false
+		return s, ""
+	default:
+		return nil, rejectDeadToken
+	}
+}
+
+// tokenMatchesOtherLocked reports whether `token` is the live token of some
+// stream OTHER than exceptID — i.e. the caller presented a token scoped to a
+// different stream (mis-scoped, DS-4). Caller MUST hold mu.
+func (h *CaptureIngestHandler) tokenMatchesOtherLocked(exceptID, token string) bool {
+	for id, s := range h.streams {
+		if id == exceptID || s.state == streamDead {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(s.token), []byte(token)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseConn is deferred once a connection is accepted. It marks the token dead
+// (single-use — no same-token reconnect, CRIT-002) and stops the write pump. If
+// the entry was superseded by a re-mint or removed by EndStream, only this
+// connection's pump is stopped; the new/absent entry is left alone.
+func (h *CaptureIngestHandler) releaseConn(streamID string, s *ingestStream) {
+	h.mu.Lock()
+	if cur, ok := h.streams[streamID]; ok && cur == s && s.state == streamConnected {
+		s.state = streamDead
+	}
+	s.stopPump()
+	h.mu.Unlock()
+}
+
+// writePump is the single goroutine that writes downstream frame-feed messages
+// for one connection (gorilla requires all writes from one goroutine). It exits
+// when the feed queue is closed or the connection is torn down (doneCh).
+func (h *CaptureIngestHandler) writePump(conn ingestConn, sendCh chan []byte, doneCh chan struct{}) {
+	for {
+		select {
+		case msg, ok := <-sendCh:
+			if !ok {
+				return
+			}
+			if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+				slog.Debug("browser-ingest: frame-feed write error", "error", err)
+				return
+			}
+		case <-doneCh:
+			return
+		}
+	}
+}
+
+// handleChunk decodes one upstream browser_ingest_chunk envelope and relays it.
+// Enforces FR-014 bounds: a malformed or zero-length chunk is dropped (never
+// relayed); an oversize chunk is rejected + signals encoder step-down (never
+// fragmented/reassembled).
+func (h *CaptureIngestHandler) handleChunk(streamID string, s *ingestStream, msg []byte) {
+	seq, ts, keyByte, payload, err := decodeChunkEnvelope(msg)
+	if err != nil {
+		// Malformed framing — never relay a partial/garbled chunk (FR-014).
+		// Not an auth rejection; slog only (avoids per-frame audit spam from a
+		// broken encoder), and drop.
+		slog.Warn("browser-ingest: malformed chunk dropped", "stream_id", streamID, "error", err)
+		return
+	}
+	if len(payload) == 0 {
+		// Zero-length payload MUST be rejected, never relayed (FR-014 / DS-2).
+		slog.Warn("browser-ingest: empty chunk dropped", "stream_id", streamID)
+		return
+	}
+	if len(payload) > h.maxChunkBytes {
+		// FR-014: oversize → reject + step-down; NEVER fragment/reassemble.
+		h.audit(eventIngestRejected, audit.SeverityWarn, "deny", map[string]any{
+			"stream_id":   streamID,
+			"reason":      string(rejectOversizeChunk),
+			"chunk_bytes": len(payload),
+			"max_bytes":   h.maxChunkBytes,
+		})
+		if h.deps.StepDown != nil {
+			h.deps.StepDown(streamID)
+		}
+		return
+	}
+
+	if h.deps.Relay == nil {
+		slog.Error("browser-ingest: no relay configured; dropping chunk", "stream_id", streamID)
+		return
+	}
+
+	kind, codec, key := classifyChunk(keyByte, s)
+	// Copy the payload off the read buffer — the relay's GOP cache retains
+	// chunks, so it must own an independent slice.
+	buf := make([]byte, len(payload))
+	copy(buf, payload)
+	h.deps.Relay.Ingest(streamID, EncodedChunk{
+		Seq:     seq,
+		TS:      ts,
+		Key:     key,
+		Codec:   codec,
+		Kind:    kind,
+		Payload: buf,
+	})
+}
+
+// classifyChunk maps the envelope's key(u8) discriminator + the connection's
+// init-declared codecs to (kind, codec, key). See the chunk* const block.
+func classifyChunk(keyByte byte, s *ingestStream) (kind, codec string, key bool) {
+	switch keyByte {
+	case chunkAudio:
+		codec = s.audioCodec
+		if codec == "" {
+			codec = "opus"
+		}
+		return "audio", codec, false
+	case chunkVideoKey:
+		return "video", s.videoCodec, true
+	default: // chunkVideoDelta (0) and any unknown value → video delta
+		return "video", s.videoCodec, false
+	}
+}
+
+// audit emits one audit record (FR-024). No-op when audit is disabled (nil
+// logger). `decision` (allow|deny) is carried in fields for explainability.
+func (h *CaptureIngestHandler) audit(event string, sev audit.Severity, decision string, fields map[string]any) {
+	if h.deps.Audit == nil {
+		return
+	}
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	if decision != "" {
+		fields["decision"] = decision
+	}
+	audit.Emit(context.Background(), h.deps.Audit, event, sev, fields)
+}
+
+// auditReject records one ingest-auth rejection (FR-024). Every rejection path
+// funnels through here so no rejection is ever silent.
+func (h *CaptureIngestHandler) auditReject(streamID string, reason ingestRejectReason, remoteAddr string) {
+	h.audit(eventIngestRejected, audit.SeverityWarn, "deny", map[string]any{
+		"stream_id":   streamID,
+		"reason":      string(reason),
+		"remote_addr": remoteAddr,
+	})
+}
+
+// newIngestToken mints a 256-bit unguessable capability token (FR-013).
+func newIngestToken() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure is catastrophic; a predictable token would defeat
+		// the capability model, so fail closed with an unusable value that no
+		// mint result can accidentally match.
+		panic(fmt.Sprintf("browser-ingest: crypto/rand failed: %v", err))
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// decodeChunkEnvelope parses the fixed BigEndian upstream chunk envelope:
+// seq(u32) | ts(u64) | key(u8) | len(u32) | payload[len]. It returns an error
+// if the message is shorter than the header or the declared len does not equal
+// the actual payload length (framing corruption — never relayed).
+func decodeChunkEnvelope(msg []byte) (seq uint32, ts uint64, keyByte byte, payload []byte, err error) {
+	if len(msg) < ingestChunkHeaderLen {
+		return 0, 0, 0, nil, errEnvelopeTooShort
+	}
+	seq = binary.BigEndian.Uint32(msg[0:4])
+	ts = binary.BigEndian.Uint64(msg[4:12])
+	keyByte = msg[12]
+	declaredLen := binary.BigEndian.Uint32(msg[13:17])
+	payload = msg[ingestChunkHeaderLen:]
+	if uint32(len(payload)) != declaredLen {
+		return 0, 0, 0, nil, errEnvelopeLenMismatch
+	}
+	return seq, ts, keyByte, payload, nil
+}
+
+// encodeFrameFeed builds a downstream browser_frame_feed binary message:
+// seq(u32) | ts(u64) | len(u32) | jpeg[len] (BigEndian, no keyframe flag).
+func encodeFrameFeed(seq uint32, ts uint64, jpeg []byte) []byte {
+	buf := make([]byte, ingestFrameFeedHeaderLen+len(jpeg))
+	binary.BigEndian.PutUint32(buf[0:4], seq)
+	binary.BigEndian.PutUint64(buf[4:12], ts)
+	binary.BigEndian.PutUint32(buf[12:16], uint32(len(jpeg)))
+	copy(buf[ingestFrameFeedHeaderLen:], jpeg)
+	return buf
+}
+
+// isLoopbackRemoteAddr reports whether an http.Request.RemoteAddr is a loopback
+// source (FR-012). Handles "ip:port", bare IPs, and the literal "localhost".
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// ingestCheckOrigin allows only an empty or loopback Origin to upgrade — a
+// cheap defense-in-depth against cross-site WS hijack from an agent-navigated
+// page. The primary gate is loopback RemoteAddr (FR-012) + capability token.
+func ingestCheckOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}

@@ -1,0 +1,62 @@
+title: BrowserIngestInitFrame
+description: >
+  Encoder-page → gateway. First frame sent on the loopback capture-ingest
+  connection (/api/v1/browser/capture-ingest, FR-012), presenting the
+  per-stream capability token (FR-013) and announcing the stream id plus the
+  codec(s)/caps the encoder is about to produce. A connection presenting no,
+  an invalid, or a mis-scoped token MUST be rejected before any chunk is
+  relayed (US-9/AC-1, DS-4). This token is a distinct capability-token model,
+  never a user bearer token — the encoder page holds no user credential. See
+  ADR-044 §6.3/§6.6, spec R7 FR-013.
+type: object
+required:
+  - type
+  - stream_id
+  - token
+  - video_codec
+  - has_audio
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_ingest_init
+  stream_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      Unguessable per-stream key this connection is registering encoded
+      chunks for (never the human tab title, FR-016). Mis-scoped or
+      post-stream-end tokens for this id are rejected (DS-4).
+  token:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: >-
+      The per-stream capability token minted by the gateway and delivered to
+      the encoder page out-of-band via CDP addScriptToEvaluateOnNewDocument
+      (FR-013) — never via URL. Stream-lifecycle-scoped with a single
+      connection: invalidated when the stream ends, and NOT reusable for a
+      same-token reconnect (a transient drop causes the gateway to re-mint a
+      fresh token and relaunch the encoder page instead, CRIT-002).
+  video_codec:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >-
+      The video codec the encoder's WebCodecs VideoEncoder is configured to
+      produce for this stream, e.g. "avc1.4D401E" (H.264 main) or "vp8"
+      (FR-006).
+  has_audio:
+    type: boolean
+    description: >-
+      True if the encoder will also emit browser_ingest_chunk carrying Opus
+      audio (getUserMedia on the PulseAudio sink monitor, FR-023); false if
+      this stream is video-only.
+  audio_codec:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >-
+      The audio codec the encoder's WebCodecs AudioEncoder is configured to
+      produce, e.g. "opus". Present only when has_audio is true.
