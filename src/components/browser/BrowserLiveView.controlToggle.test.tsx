@@ -320,41 +320,19 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
   })
 })
 
-describe('BrowserLiveView — ADR-040 D1 Pin toggle', () => {
-  it('is hidden when onTogglePin is not provided', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+// The ADR-040 D1/D4 Pin toggle was retired 2026-07-16 (operator direction):
+// the panel is ALWAYS docked when open, so there is no overlay layout to
+// pin/unpin between and the view renders no pin control at all. These
+// negative guards keep it retired.
+describe('BrowserLiveView — Pin toggle retired (always-docked)', () => {
+  it('never renders a pin/unpin button', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" onPopOut={vi.fn()} onClose={vi.fn()} />)
     expect(screen.queryByRole('button', { name: /pin live browser panel/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /unpin live browser panel/i })).not.toBeInTheDocument()
   })
 
-  it('renders "Pin live browser panel" when unpinned and calls onTogglePin when clicked', () => {
-    const onTogglePin = vi.fn()
-    render(<BrowserLiveView sessionId="s1" agentId="a1" onTogglePin={onTogglePin} />)
-    const button = screen.getByRole('button', { name: /pin live browser panel/i })
-    expect(button).toHaveAttribute('aria-pressed', 'false')
-    fireEvent.click(button)
-    expect(onTogglePin).toHaveBeenCalledTimes(1)
-  })
-
-  it('renders "Unpin live browser panel" and aria-pressed=true when isPinned', () => {
-    const onTogglePin = vi.fn()
-    render(<BrowserLiveView sessionId="s1" agentId="a1" isPinned onTogglePin={onTogglePin} />)
-    const button = screen.getByRole('button', { name: /unpin live browser panel/i })
-    expect(button).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  // ADR-040 D4 (reviewer finding): the internal `&& !isPinned` gate was
-  // removed — Pop-out now renders purely on `onPopOut` presence, exactly
-  // like onClose/onTogglePin. Not offering pop-out while pinned is now
-  // entirely the panel owner's responsibility (BrowserLivePanel.tsx simply
-  // stops passing `onPopOut` once pinned) rather than this view
-  // second-guessing a decision the host already has to make.
-  it('still renders Pop out while isPinned if the host still provides onPopOut (host now owns that decision)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" isPinned onPopOut={vi.fn()} onTogglePin={vi.fn()} />)
-    expect(screen.getByRole('button', { name: /pop out/i })).toBeInTheDocument()
-  })
-
-  it('shows the Pop out button when not pinned', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" isPinned={false} onPopOut={vi.fn()} onTogglePin={vi.fn()} />)
+  it('renders Pop out purely on onPopOut presence (the fullscreen escape from the docked panel)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" onPopOut={vi.fn()} />)
     expect(screen.getByRole('button', { name: /pop out/i })).toBeInTheDocument()
   })
 })

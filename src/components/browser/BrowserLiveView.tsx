@@ -7,10 +7,9 @@
 // Owns the second WS connection (browserLiveWs.ts), the latest screencast
 // frame, the ADR-040 "implicit control" state machine (D2), and
 // pointer/keyboard capture while driving. Deliberately has NO knowledge of
-// how it's being hosted (Sheet vs. docked vs. fullscreen route) — onPopOut/
-// onClose/onTogglePin are optional callbacks so each host wires up its own
-// chrome semantics (window.open vs. store close vs. window.close vs. ui
-// store pin toggle).
+// how it's being hosted (docked panel vs. fullscreen route) — onPopOut/
+// onClose are optional callbacks so each host wires up its own chrome
+// semantics (window.open vs. store close vs. window.close).
 //
 // ADR-040 "Take the wheel" redesign: control is no longer a persistent
 // Take/Release toggle. It is implicit and contextual, derived from two
@@ -45,8 +44,6 @@ import {
   Globe,
   HandGrabbing,
   Plus,
-  PushPin,
-  PushPinSlash,
   Robot,
   SpinnerGap,
   WarningCircle,
@@ -79,7 +76,7 @@ import type { BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } fro
 export interface BrowserLiveViewProps {
   sessionId: string
   agentId: string
-  /** Rendered as a header "Pop out" button when provided — exactly like `onClose`/`onTogglePin` below. */
+  /** Rendered as a header "Pop out" button when provided — exactly like `onClose` below. */
   onPopOut?: () => void
   /** Rendered as a header "Close" button when provided. */
   onClose?: () => void
@@ -99,27 +96,6 @@ export interface BrowserLiveViewProps {
    * the "Annotate" button there entirely removes the dead-end.
    */
   canAnnotate?: boolean
-  /**
-   * ADR-040 D4/D6 — display-only: whether the panel owner currently has this
-   * view docked beside chat (pinned) rather than in the overlay Sheet. This
-   * view stays otherwise agnostic to the layout. Reviewer finding: an
-   * earlier version also used `isPinned` internally to hide the "Pop out"
-   * button — that duplicated a decision the panel owner already has to make
-   * (a docked panel popping into its own window is a layout no-op the caller
-   * would have to reconcile anyway) as a SECOND, easy-to-drift gate on top
-   * of `onPopOut`'s own presence. Pop-out now renders purely on `onPopOut`
-   * being provided, exactly like `onClose`/`onTogglePin` — the host simply
-   * stops passing `onPopOut` once pinned.
-   */
-  isPinned?: boolean
-  /**
-   * ADR-040 D1/D4 — renders a header "Pin" toggle when provided; omitted
-   * entirely (button hidden) by hosts that don't support docking, exactly
-   * like `onPopOut`/`onClose`. The pin/unpin layout swap itself is owned by
-   * the caller (BrowserLivePanel.tsx + the `ui` store) — this view only
-   * renders the affordance and reflects `isPinned`'s current value.
-   */
-  onTogglePin?: () => void
   className?: string
 }
 
@@ -253,8 +229,6 @@ export function BrowserLiveView({
   onPopOut,
   onClose,
   canAnnotate = false,
-  isPinned = false,
-  onTogglePin,
   className,
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
@@ -1554,7 +1528,7 @@ export function BrowserLiveView({
             (handleToggleAnnotate). Hidden entirely when !canAnnotate (FE-4) —
             see the prop's doc comment. */}
         {canAnnotate && (
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={handleToggleAnnotate}
             disabled={!connected}
@@ -1572,34 +1546,13 @@ export function BrowserLiveView({
             {annotateMode ? 'Exit annotate' : 'Annotate'}
           </button>
         )}
-        {/* Pin (ADR-040 D1/D4) — hidden entirely when the host doesn't supply
-            onTogglePin (e.g. the fullscreen pop-out), exactly like Pop
-            out/Close below. Layout itself is entirely the panel owner's job;
-            this view only renders the toggle and reflects `isPinned`. */}
-        {onTogglePin && (
-          <button
-            type="button"
-            onClick={onTogglePin}
-            aria-label={isPinned ? 'Unpin live browser panel' : 'Pin live browser panel'}
-            aria-pressed={isPinned}
-            title={isPinned ? 'Unpin — return to overlay' : 'Pin — dock beside chat'}
-            className={cn(
-              'shrink-0 rounded p-1.5 transition-colors',
-              'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-            )}
-          >
-            {isPinned ? <PushPinSlash size={15} /> : <PushPin size={15} />}
-          </button>
-        )}
+        {/* Pin toggle retired 2026-07-16 (operator direction, amends ADR-040
+            D4): the panel is ALWAYS docked when open — there is no overlay
+            layout to pin/unpin between. Fullscreen is the pop-out below. */}
         {/* Pop out — de-emphasised utility affordance (ADR-040 D1). Gated on
-            `onPopOut` presence ONLY (reviewer finding: dropped the internal
-            `&& !isPinned`) — a docked panel popping into its own window is a
-            layout no-op the panel owner already has to reconcile, so THAT
-            decision (whether to even offer pop-out while pinned) belongs
-            entirely to whether the host passes `onPopOut` at all, exactly
-            like onClose/onTogglePin above. */}
+            `onPopOut` presence ONLY, exactly like onClose. */}
         {onPopOut && (
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={onPopOut}
             aria-label="Pop out"
@@ -1610,7 +1563,7 @@ export function BrowserLiveView({
           </button>
         )}
         {onClose && (
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={onClose}
             aria-label="Close live browser panel"
@@ -1698,7 +1651,7 @@ export function BrowserLiveView({
               >
                 <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
                 <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={(e) => handleTabClose(tab.index, e)}
                   disabled={!connected}
@@ -1712,7 +1665,7 @@ export function BrowserLiveView({
               </div>
             )
           })}
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={handleTabOpen}
             disabled={!connected}
@@ -1737,7 +1690,7 @@ export function BrowserLiveView({
         onSubmit={handleOmniboxSubmit}
         className="flex shrink-0 items-center gap-1 px-2 py-1.5"
       >
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => handleToolbarNav('navigate_back')}
           disabled={!connected || (controlledByOther && !isControlling)}
@@ -1747,7 +1700,7 @@ export function BrowserLiveView({
         >
           <CaretLeft size={16} weight="bold" />
         </button>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => handleToolbarNav('reload')}
           disabled={!connected || (controlledByOther && !isControlling)}
@@ -1852,7 +1805,7 @@ export function BrowserLiveView({
             immediately rather than waiting on the first screencast frame. */}
         {visualState === 'agent-working' && (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={takeWheelIfNeeded}
               // FE-6, preserved: disabled while a DIFFERENT connection of
@@ -1911,7 +1864,7 @@ export function BrowserLiveView({
                   </p>
                 )}
                 <div className="mt-2 flex justify-end gap-2">
-                  <button
+                  <button tabIndex={0}
                     type="button"
                     onClick={handleCancelAnnotation}
                     disabled={annotateSubmitting}
@@ -1919,7 +1872,7 @@ export function BrowserLiveView({
                   >
                     Cancel
                   </button>
-                  <button
+                  <button tabIndex={0}
                     type="button"
                     onClick={handleSendAnnotation}
                     disabled={annotateSubmitting || annotateComment.trim().length === 0}
