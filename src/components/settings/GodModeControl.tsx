@@ -185,7 +185,7 @@ export function GodModeControl() {
           </div>
 
           {/* Switch — accessible role=switch, danger styling when ON. */}
-          <button
+          <button tabIndex={0}
             type="button"
             role="switch"
             aria-checked={enabled}

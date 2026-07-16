@@ -203,7 +203,7 @@ function Abi4Banner({
         Your Linux kernel uses Landlock v{abiVersion}, which is not yet supported (issue {issueRef}).
         Enforce mode will exit with code 78 at boot. Use &lsquo;permissive&rsquo; or &lsquo;off&rsquo; until Landlock support is upgraded.
       </p>
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={onDismiss}
         className="shrink-0 text-[10px] text-yellow-400 underline hover:text-yellow-300 focus:outline-none focus:ring-yellow-400 rounded"
@@ -722,7 +722,7 @@ export function SandboxSection(): React.ReactElement {
 
         {hasCapabilities && (
           <>
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => setStatusExpanded((e) => !e)}
               className="mt-3 flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
@@ -820,7 +820,7 @@ export function SandboxSection(): React.ReactElement {
                         : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
                     }`}
                   >
-                    <input
+                    <input tabIndex={0}
                       type="radio"
                       name="sandbox-mode"
                       value={m.value}

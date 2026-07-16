@@ -39,7 +39,7 @@ export function AdvancedDisclosure({
       className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
       data-testid="advanced-disclosure"
     >
-      <button
+      <button tabIndex={0}
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}

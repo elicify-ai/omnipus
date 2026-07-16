@@ -44,7 +44,7 @@ export function ToastContainer() {
           )}
           <p className="flex-1 text-sm">{toast.message}</p>
           {toast.action && (
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => {
                 toast.action!.onClick()
@@ -55,7 +55,7 @@ export function ToastContainer() {
               {toast.action.label}
             </button>
           )}
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={() => removeToast(toast.id)}
             className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors shrink-0"

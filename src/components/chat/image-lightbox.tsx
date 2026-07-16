@@ -182,7 +182,7 @@ export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageL
         </div>
 
         {/* Close button */}
-        <button
+        <button tabIndex={0}
           type="button"
           className="ml-3 w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-3,var(--color-surface-2))] transition-colors z-10"
           onClick={onClose}

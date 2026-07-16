@@ -95,7 +95,7 @@ function MermaidErrorCard({ error, code }: { error: string; code: string }) {
           <Code size={13} />
           <span>Diagram couldn&apos;t be drawn — showing source</span>
         </span>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={handleFix}
           disabled={sent}

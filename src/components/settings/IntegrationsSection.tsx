@@ -152,7 +152,7 @@ export function IntegrationsSection() {
                   autoComplete="off"
                   data-testid={`key-input-${p.id}`}
                 />
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => setShowKey((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"

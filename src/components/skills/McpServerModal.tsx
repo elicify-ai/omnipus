@@ -387,7 +387,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             {editMode
               ? 'Update the configuration for this MCP server.'
               : <>Connect a Model Context Protocol server to extend agent capabilities.{' '}
-                <a
+                <a tabIndex={0}
                   href="https://modelcontextprotocol.io/docs"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -419,7 +419,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             <div className="space-y-2" role="group" aria-labelledby="mcp-connect-mode-label">
               <span id="mcp-connect-mode-label" className="block text-xs text-[var(--color-muted)]">Connect via</span>
               <div className="flex gap-2">
-                <button
+                <button tabIndex={0}
                   type="button"
                   data-testid="mode-network"
                   aria-pressed={mode === 'network'}
@@ -434,7 +434,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   <Globe size={13} />
                   A network address
                 </button>
-                <button
+                <button tabIndex={0}
                   type="button"
                   data-testid="mode-local"
                   aria-pressed={mode === 'local'}
@@ -536,7 +536,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                               data-testid={`header-value-${idx}`}
                             />
                             {headerRows.length > 1 && (
-                              <button
+                              <button tabIndex={0}
                                 type="button"
                                 onClick={() => handleRemoveHeaderRow(idx)}
                                 className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 rounded shrink-0"
@@ -547,7 +547,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                             )}
                           </div>
                         ))}
-                        <button
+                        <button tabIndex={0}
                           type="button"
                           onClick={handleAddHeaderRow}
                           className="flex items-center gap-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
@@ -611,7 +611,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                         {initialServer!.env_keys!.join(', ')}
                       </p>
                     )}
-                    <textarea
+                    <textarea tabIndex={0}
                       id="mcp-env"
                       value={env}
                       onChange={(e) => setEnv(e.target.value)}

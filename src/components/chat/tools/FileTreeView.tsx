@@ -64,7 +64,7 @@ function FileTreeBlock({
   return (
     <div className="mt-2 rounded-md border border-[var(--color-border)] overflow-hidden text-xs">
       {/* Header */}
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(

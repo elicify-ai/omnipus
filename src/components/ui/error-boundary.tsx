@@ -40,7 +40,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <p style={{ color: 'var(--color-error)' }}>Something went wrong</p>
           <p className="text-xs">{error?.message}</p>
           {isChunkLoadError ? (
-            <button
+            <button tabIndex={0}
               onClick={() => window.location.reload()}
               className="px-3 py-1.5 rounded-md text-xs border transition-colors"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
@@ -48,7 +48,7 @@ export class ErrorBoundary extends Component<Props, State> {
               Reload
             </button>
           ) : (
-            <button
+            <button tabIndex={0}
               onClick={() => this.setState({ hasError: false, error: null })}
               className="px-3 py-1.5 rounded-md text-xs border transition-colors"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}

@@ -159,7 +159,7 @@ export function AppShell() {
           {connectionError && (
             <div className="flex items-center justify-between gap-2 px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-xs text-[var(--color-error)] shrink-0">
               <span>{connectionError}</span>
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={reconnect}
                 className="px-2 py-1 rounded text-xs hover:bg-[var(--color-error)]/20 transition-colors"
@@ -222,20 +222,18 @@ export function AppShell() {
       {/* Notification center panel — #264 */}
       <NotificationPanel />
 
-      {/* Live interactive browser panel — ADR-038, Pin/side-by-side ADR-040 D4.
-          Rendered here as a plain (non-portaled) child of this `flex` row
-          deliberately: when the panel is open AND pinned, BrowserLivePanel's
-          own root becomes a `flex-shrink-0` docked column (see its file for
-          the width/min/max), which makes the chat region's `flex-1 min-w-0`
-          above shrink automatically to share width with it — a real
-          side-by-side split, no extra layout code needed here. When closed,
-          or open-but-unpinned (the default), BrowserLivePanel instead
-          renders its content through a Radix `Sheet` (Dialog + Portal),
-          which detaches from this DOM position entirely (portals to
-          `document.body`) — same overlay behaviour as before ADR-040. Do NOT
-          move this render call outside the flex row, and do NOT wrap it in
-          anything `fixed`/`absolute` — either would break the docked-pinned
-          layout's participation in this flex row. */}
+      {/* Live interactive browser panel — ADR-038; always-docked since
+          2026-07-16 (operator direction, amends ADR-040 D4 — the unpinned
+          Sheet overlay + pin toggle are retired). Rendered here as a plain
+          (non-portaled) child of this `flex` row deliberately: when open,
+          BrowserLivePanel's root is a `flex-shrink-0` docked column (see its
+          file for the width/min/max), which makes the chat region's
+          `flex-1 min-w-0` above shrink automatically to share width with it
+          — a real side-by-side split, no extra layout code needed here.
+          Closed = renders null. Do NOT move this render call outside the
+          flex row, and do NOT wrap it in anything `fixed`/`absolute` —
+          either would break the docked layout's participation in this flex
+          row. */}
       <BrowserLivePanel />
     </div>
   )

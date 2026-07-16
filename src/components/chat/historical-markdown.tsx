@@ -68,7 +68,7 @@ function HistoricalCodeBlock({ code, className, children, language }: Historical
         <span className="text-[10px] text-[var(--color-muted)] font-mono uppercase tracking-wide">
           {language || 'code'}
         </span>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={handleCopy}
           className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"

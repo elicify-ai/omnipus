@@ -68,7 +68,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
       >
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-2">
           <MagnifyingGlass size={14} className="text-[var(--color-muted)]" />
-          <input
+          <input tabIndex={0}
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -86,7 +86,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
             </p>
           ) : (
             candidates.map((a) => (
-              <button
+              <button tabIndex={0}
                 key={a.id}
                 type="button"
                 data-testid={`team-add-agent-option-${a.id}`}

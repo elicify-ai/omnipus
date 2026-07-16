@@ -111,7 +111,7 @@ export function ReAuthDialog({
               className="pr-10"
               data-testid="reauth-password-input"
             />
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => setShowPassword((v) => !v)}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"

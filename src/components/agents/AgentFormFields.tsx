@@ -79,7 +79,7 @@ export function UploadMdButton({
 }) {
   const addToast = useUiStore((s) => s.addToast)
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       data-testid={testId}
       onClick={() => {
@@ -256,7 +256,7 @@ export function AvatarColorPicker({
         const name = AVATAR_COLORS_BY_NAME[color] ?? color
         const isSelected = value === color
         return (
-          <button
+          <button tabIndex={0}
             key={color}
             type="button"
             data-testid={`${testIdPrefix}-${name}`}

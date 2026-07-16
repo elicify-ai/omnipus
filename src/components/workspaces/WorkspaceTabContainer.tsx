@@ -147,7 +147,7 @@ function WorkspaceTabContainerView({
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
         >
-          <button
+          <button tabIndex={0}
             type="button"
             id="sidebar-hamburger"
             onClick={toggle}
@@ -204,7 +204,7 @@ function WorkspaceNotFoundState() {
       <p className="text-[var(--color-muted)] text-xs max-w-xs">
         This workspace may have been deleted or the link may be outdated.
       </p>
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={handleBackToWorkspace}
         data-testid="workspace-not-found-back-btn"

@@ -7,6 +7,9 @@ const Switch = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root>
 >(({ className, ...props }, ref) => (
   <SwitchPrimitives.Root
+    // WebKit tabbability (repo convention): Radix renders the switch button,
+    // so the explicit tabIndex stamp lives here; {...props} may override.
+    tabIndex={0}
     className={cn(
       'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-50',
       'data-[state=unchecked]:bg-[var(--color-surface-3)]',

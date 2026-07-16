@@ -13,6 +13,7 @@ import {
   type NodeTypes,
 } from '@xyflow/react'
 import { GraphIcon } from '@phosphor-icons/react'
+import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import type { Task } from '@/lib/api'
 import { TaskNode } from './TaskNode'
 import {
@@ -125,12 +126,18 @@ function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphVie
     [onTaskClick],
   )
 
+  // React Flow renders the <Controls> zoom/fit buttons itself — no JSX site
+  // here can carry the repo's explicit-tabIndex convention, so stamp them
+  // post-render (WebKit Tab reachability; see useLibraryTabIndex).
+  const canvasRef = useRef<HTMLDivElement>(null)
+  useLibraryTabIndex(canvasRef)
+
   if (layout.nodes.length === 0) {
     return <GraphEmptyState />
   }
 
   return (
-    <div className="absolute inset-0">
+    <div ref={canvasRef} className="absolute inset-0">
       <ReactFlow
         className="sovereign-flow"
         nodes={nodes}

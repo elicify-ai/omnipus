@@ -326,7 +326,7 @@ function AssistantMessageRetryButton() {
   }
 
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       onClick={handleRetry}
       aria-label="Retry — resend the last user message"
@@ -365,7 +365,7 @@ function InlineMedia() {
             )}
           </div>
         ) : (
-          <a
+          <a tabIndex={0}
             key={`${m.url}-${i}`}
             href={m.url}
             download={m.filename}
@@ -477,7 +477,7 @@ function UserMessageRetryButton({ message }: { message: ChatMessage }) {
   return (
     <div className="flex items-center justify-end gap-2 mt-1">
       <span className="text-[10px] text-[var(--color-error)]">Send failed</span>
-      <button
+      <button tabIndex={0}
         type="button"
         data-testid="user-message-retry"
         onClick={handleRetry}
@@ -601,7 +601,7 @@ function StaticCopyButton({ text }: { text: string }) {
     })
   }, [text])
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       aria-label="Copy message"
       onClick={handleCopy}
@@ -698,7 +698,7 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
                     )}
                   </div>
                 ) : (
-                  <a
+                  <a tabIndex={0}
                     key={`${m.url}-${i}`}
                     href={m.url}
                     download={m.filename}
@@ -1106,7 +1106,7 @@ function AssistantMessage() {
         {!showEmptyPlaceholder && (
           <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
             <ActionBarPrimitive.Copy asChild>
-              <button
+              <button tabIndex={0}
                 type="button"
                 aria-label="Copy message"
                 className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
@@ -1326,7 +1326,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <span className="text-xs text-[var(--color-error)] flex-1">
             Connection lost after all retry attempts.
           </span>
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={reconnect}
             className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
@@ -1434,7 +1434,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     {item.section === 'commands' ? 'Commands' : 'Skills'}
                   </div>
                 )}
-                <button
+                <button tabIndex={0}
                   type="button"
                   ref={(el) => {
                     // Keep the keyboard-highlighted row visible inside the
@@ -1617,7 +1617,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           </div>
 
           {isStreaming || cancelState.stopLabel === 'stopping' ? (
-            <button
+            <button tabIndex={0}
               type="button"
               data-testid="stop-btn"
               onClick={() => {

@@ -509,7 +509,7 @@ export function CreateTaskSlideOver({
                 {depCandidates.map((t) => {
                   const checked = form.blockedBy.includes(t.id)
                   return (
-                    <button
+                    <button tabIndex={0}
                       key={t.id}
                       type="button"
                       onClick={() => toggleDep(t.id)}
@@ -532,7 +532,7 @@ export function CreateTaskSlideOver({
                       className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-secondary)]"
                     >
                       <span className="max-w-[120px] truncate">{t?.title ?? id}</span>
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         onClick={() => toggleDep(id)}
                         aria-label={`Remove dependency ${t?.title ?? id}`}
@@ -598,7 +598,7 @@ export function CreateTaskSlideOver({
                     className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
                   >
                     <span className="flex-1 text-[var(--color-secondary)] truncate">{text}</span>
-                    <button
+                    <button tabIndex={0}
                       type="button"
                       onClick={() => removeTodo(idx)}
                       aria-label={`Remove checklist item ${text}`}

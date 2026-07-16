@@ -121,7 +121,7 @@ export function AboutSection() {
             className="h-8 gap-1.5 text-xs"
             asChild
           >
-            <a href="https://github.com/elicify-ai/omnipus" target="_blank" rel="noopener noreferrer">
+            <a tabIndex={0} href="https://github.com/elicify-ai/omnipus" target="_blank" rel="noopener noreferrer">
               <GithubLogo size={13} />
               View on GitHub
               <ArrowSquareOut size={11} className="text-[var(--color-muted)]" />

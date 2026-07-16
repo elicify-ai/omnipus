@@ -309,7 +309,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
             {(SUPPORTED_CLIS as readonly WizardCli[]).map((cli) => {
               const selected = payload.cli === cli
               return (
-                <button
+                <button tabIndex={0}
                   key={cli}
                   type="button"
                   onClick={() => {
@@ -381,7 +381,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
       <div className="space-y-2" data-testid="wizard-env-overrides">
         <div className="flex items-center justify-between">
           <label className="text-sm font-medium">Environment overrides</label>
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={addEnvRow}
             className="text-[11px] text-[var(--color-accent)] hover:underline"
@@ -412,7 +412,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
                 className="font-mono text-xs flex-1"
                 aria-label="Environment variable value"
               />
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => removeEnvRow(k)}
                 className="text-[var(--color-muted)] hover:text-[var(--color-error)] text-xs px-2"

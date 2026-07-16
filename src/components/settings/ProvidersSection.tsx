@@ -262,7 +262,7 @@ function EndpointFormatToggle({
         Endpoint format
       </label>
       <div className="flex gap-1.5" role="group" aria-label="Endpoint format">
-        <button
+        <button tabIndex={0}
           type="button"
           aria-pressed={value === 'openai'}
           onClick={() => onChange('openai')}
@@ -271,7 +271,7 @@ function EndpointFormatToggle({
         >
           OpenAI-compatible (default)
         </button>
-        <button
+        <button tabIndex={0}
           type="button"
           aria-pressed={value === 'anthropic'}
           onClick={() => onChange('anthropic')}
@@ -497,7 +497,7 @@ function ProviderConfigSheet({
                 autoComplete="off"
                 data-testid={`api-key-input-${providerId}`}
               />
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() =>
                   setShowKey((prev) => ({ ...prev, [draftKey]: !prev[draftKey] }))
@@ -542,7 +542,7 @@ function ProviderConfigSheet({
                       <li key={slug}>
                         <Badge variant="muted" className="gap-1 font-mono">
                           {slug}
-                          <button
+                          <button tabIndex={0}
                             type="button"
                             onClick={() => removeSlug(slug)}
                             aria-label={`Remove ${slug}`}
@@ -603,7 +603,7 @@ function ProviderConfigSheet({
           <div className="flex justify-between gap-2 pt-2">
             <div className="flex gap-2">
               {provider && catalogMode === 'live' && (
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => handleRefreshModels(providerId)}
                   disabled={refreshing[providerId]}
@@ -617,7 +617,7 @@ function ProviderConfigSheet({
                 </button>
               )}
               {provider && provider.status === 'connected' && (
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => handleTest(providerId)}
                   disabled={testing[providerId]}

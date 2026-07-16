@@ -125,7 +125,7 @@ export function Step3Tools({
                   key={skill.id}
                   className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-surface-3)] transition-colors"
                 >
-                  <input
+                  <input tabIndex={0}
                     type="checkbox"
                     checked={granted}
                     onChange={(e) => {
@@ -277,7 +277,7 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
                 ))}
               </SelectContent>
             </Select>
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => removeFallback(idx)}
               className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-1"

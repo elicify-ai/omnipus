@@ -49,7 +49,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
 
   return (
     <div className="relative group/card">
-      <button
+      <button tabIndex={0}
         type="button"
         data-testid={`worker-card-${agent.id}`}
         onClick={() => navigate({ to: '/agents/$agentId', params: { agentId: agent.id } })}
@@ -132,7 +132,7 @@ function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternal
 
   if (!isExternalCli) {
     return (
-      <button
+      <button tabIndex={0}
         type="button"
         disabled
         data-testid={`worker-test-run-${agentId}`}
@@ -148,7 +148,7 @@ function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternal
 
   return (
     <div className="absolute bottom-3 right-4 flex flex-col items-end gap-1">
-      <button
+      <button tabIndex={0}
         type="button"
         disabled={isPending}
         data-testid={`worker-test-run-${agentId}`}

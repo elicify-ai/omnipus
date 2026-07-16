@@ -101,7 +101,7 @@ export function BrowserNavigateBlock({
           "Watch live" can be a separate, independently clickable sibling
           rather than nested inside it. */}
       <div className="flex w-full items-center gap-1 bg-[var(--color-surface-1)] transition-colors">
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
@@ -135,7 +135,7 @@ export function BrowserNavigateBlock({
         {/* "Watch live" is shown on every navigate row, running or completed —
             browser.navigate is the near-universal first browser action, and
             the agent's browser session persists after the call completes. */}
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={handleWatchLive}
           aria-label="Watch live"

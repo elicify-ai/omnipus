@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
   ({ className, type, ...props }, ref) => {
     return (
-      <input
+      <input tabIndex={0}
         type={type}
         className={cn(
           // 44px tap target on mobile (touch min); compact 36px on sm+ (pointer).

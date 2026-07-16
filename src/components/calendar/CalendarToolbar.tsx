@@ -149,7 +149,7 @@ export function CalendarToolbar({
         )}
       >
         {/* prev */}
-        <button
+        <button tabIndex={0}
           type="button"
           data-testid="calendar-prev"
           aria-label="Go to previous period"
@@ -160,7 +160,7 @@ export function CalendarToolbar({
         </button>
 
         {/* today */}
-        <button
+        <button tabIndex={0}
           type="button"
           data-testid="calendar-today"
           aria-label="Go to today"
@@ -180,7 +180,7 @@ export function CalendarToolbar({
         </button>
 
         {/* next */}
-        <button
+        <button tabIndex={0}
           type="button"
           data-testid="calendar-next"
           aria-label="Go to next period"
@@ -229,7 +229,7 @@ export function CalendarToolbar({
           {CALENDAR_VIEWS.map((view) => {
             const isActive = view === currentView
             return (
-              <button
+              <button tabIndex={0}
                 key={view}
                 type="button"
                 aria-pressed={isActive}

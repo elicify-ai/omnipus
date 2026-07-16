@@ -9,6 +9,10 @@ const Checkbox = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <CheckboxPrimitive.Root
     ref={ref}
+    // WebKit tabbability (repo convention): Radix renders the checkbox
+    // button, so the explicit tabIndex stamp lives here; {...props} may
+    // override.
+    tabIndex={0}
     className={cn(
       'peer h-4 w-4 shrink-0 rounded-sm border border-[var(--color-border)] bg-[var(--color-surface-1)]',
       '',

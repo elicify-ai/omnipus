@@ -523,7 +523,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 whitespace-pre-wrap break-words leading-relaxed">
               {task.prompt || <span className="text-[var(--color-muted)]">No prompt set.</span>}
             </pre>
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => setEditingPrompt(true)}
               className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
@@ -711,7 +711,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             {depCandidates.map((t) => {
               const checked = blockedBy.includes(t.id)
               return (
-                <button
+                <button tabIndex={0}
                   key={t.id}
                   type="button"
                   onClick={() => handleToggleDep(t.id)}
@@ -734,7 +734,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                   className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-secondary)]"
                 >
                   <span className="max-w-[120px] truncate">{dep?.title ?? id}</span>
-                  <button
+                  <button tabIndex={0}
                     type="button"
                     onClick={() => handleToggleDep(id)}
                     aria-label={`Remove dependency ${dep?.title ?? id}`}
@@ -772,7 +772,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               key={idx}
               className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
             >
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => handleToggleTodo(idx)}
                 aria-label={`Toggle ${todo.text}`}
@@ -793,7 +793,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                   {todo.text}
                 </span>
               </button>
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => handleRemoveTodo(idx)}
                 aria-label={`Remove checklist item ${todo.text}`}
@@ -881,7 +881,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">
               {task.result}
             </pre>
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={handleCopyResult}
               className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
@@ -900,7 +900,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             {task.artifacts!.map((path) => (
               <div key={path} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs">
                 <span className="flex-1 font-mono text-[var(--color-secondary)] truncate">{path}</span>
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => handleCopyPath(path)}
                   className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
@@ -919,7 +919,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <Field label={`Sub-tasks (${subtasks.length})`}>
           <div className="space-y-1">
             {subtasks.map((sub) => (
-              <button
+              <button tabIndex={0}
                 key={sub.id}
                 type="button"
                 onClick={() => onTaskSelect?.(sub)}

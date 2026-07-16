@@ -79,7 +79,7 @@ function LandingPage() {
 
         {/* US-6: Forge Gold CTA */}
         <div className="flex flex-col sm:flex-row gap-4 mt-4">
-          <a
+          <a tabIndex={0}
             href="https://github.com/omnipus-ai/omnipus"
             target="_blank"
             rel="noopener noreferrer"
@@ -88,7 +88,7 @@ function LandingPage() {
             <GithubLogo size={20} />
             View on GitHub
           </a>
-          <a
+          <a tabIndex={0}
             href="/#/"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-[var(--color-border)] text-[var(--color-secondary)] font-medium text-base hover:bg-[var(--color-surface-2)] transition-colors"
           >
@@ -126,7 +126,7 @@ function LandingPage() {
             <Wordmark />
           </div>
           <div className="flex items-center gap-6 text-sm text-[var(--color-muted)]">
-            <a
+            <a tabIndex={0}
               href="https://github.com/omnipus-ai/omnipus"
               target="_blank"
               rel="noopener noreferrer"
@@ -135,7 +135,7 @@ function LandingPage() {
               <GithubLogo size={16} />
               GitHub
             </a>
-            <a
+            <a tabIndex={0}
               href="https://github.com/omnipus-ai/omnipus"
               target="_blank"
               rel="noopener noreferrer"

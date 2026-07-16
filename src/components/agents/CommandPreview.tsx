@@ -148,7 +148,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
           ) : (
             <>Couldn't compute a live command preview — the settings below still apply when this agent runs.</>
           )}{' '}
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={retry}
             data-testid={testId ? `${testId}-retry` : undefined}
@@ -171,7 +171,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
       >
         <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] font-medium text-[var(--color-secondary)]">Command Omnipus will run</p>
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={() => copyCommand(result.command_line)}
             data-testid={testId ? `${testId}-copy` : undefined}
@@ -315,7 +315,7 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
             Runs a real request through this CLI (spends a small amount of usage).
           </p>
         </div>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={handleClick}
           disabled={isPending}

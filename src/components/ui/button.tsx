@@ -48,6 +48,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     const Comp = asChild ? Slot : 'button'
     return (
       <Comp
+        // Explicit tabindex: WebKit's default Tab policy skips native buttons
+        // without one (repo convention — see tabindex-convention.test.ts).
+        // Placed before {...props} so a caller-supplied tabIndex wins.
+        tabIndex={0}
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         {...props}

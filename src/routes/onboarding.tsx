@@ -922,7 +922,7 @@ function PasswordStep({
               className="pr-9"
               autoFocus
             />
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={onToggleShowPassword}
               className={EYE_TOGGLE_CLASS}
@@ -978,7 +978,7 @@ function PasswordStep({
               autoComplete="new-password"
               className="pr-9"
             />
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={onToggleShowPassword}
               className={EYE_TOGGLE_CLASS}
@@ -1165,7 +1165,7 @@ function ModelKeyStep({
             const multi = isMultiVariant(providers, company)
             const slug = logoSlugForCompany(providers, company)
             return (
-              <button
+              <button tabIndex={0}
                 key={company}
                 type="button"
                 onClick={() => onSelectCompany(company)}
@@ -1239,7 +1239,7 @@ function ModelKeyStep({
                 </p>
                 <div className="flex flex-wrap gap-1.5" role="group" aria-label="Select plan">
                   {companyPlans.map((plan) => (
-                    <button
+                    <button tabIndex={0}
                       key={plan}
                       type="button"
                       onClick={() => onSelectPlan(plan)}
@@ -1292,7 +1292,7 @@ function ModelKeyStep({
                   </p>
                   <div className="flex flex-wrap gap-1.5" role="group" aria-label="Select region">
                     {currentPlanRegions.map((region) => (
-                      <button
+                      <button tabIndex={0}
                         key={region}
                         type="button"
                         onClick={() => onSelectRegion(region)}
@@ -1371,7 +1371,7 @@ function ModelKeyStep({
                     autoComplete="off"
                     autoFocus
                   />
-                  <button
+                  <button tabIndex={0}
                     type="button"
                     onClick={onToggleShowKey}
                     className={EYE_TOGGLE_CLASS}
@@ -1436,7 +1436,7 @@ function ModelKeyStep({
                     </span>
                     {testError && (
                       <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
-                        <summary className="cursor-pointer select-none">
+                        <summary tabIndex={0} className="cursor-pointer select-none">
                           Technical details
                         </summary>
                         <p className="mt-1 font-mono break-words">{testError}</p>

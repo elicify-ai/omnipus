@@ -78,7 +78,7 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
       )}
     >
       {/* Collapsed header — FR-H-008 */}
-      <button
+      <button tabIndex={0}
         type="button"
         data-testid="subagent-collapsed"
         onClick={toggle}

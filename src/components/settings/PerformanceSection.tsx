@@ -354,7 +354,7 @@ export function PerformanceSection(): React.ReactElement {
 
       {/* Escape hatch: manual trigger exposed for keyboard users / edge cases */}
       {dirty && !reauthOpen && (
-        <button
+        <button tabIndex={0}
           type="button"
           data-testid="performance-save-btn"
           onClick={triggerSave}

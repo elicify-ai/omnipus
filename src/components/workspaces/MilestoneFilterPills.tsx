@@ -61,7 +61,7 @@ export function MilestoneFilterPills({
       )}
 
       {/* New milestone button */}
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={onNewMilestone}
         className="flex items-center gap-1 rounded-full border border-dashed border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors flex-shrink-0"
@@ -85,7 +85,7 @@ function Pill({
   muted?: boolean
 }) {
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       onClick={onClick}
       aria-pressed={active}

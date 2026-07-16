@@ -44,7 +44,7 @@ function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps
           <p className="text-xs text-[var(--color-muted)] mt-0.5 leading-relaxed">{description}</p>
         )}
       </div>
-      <button
+      <button tabIndex={0}
         id={id}
         type="button"
         role="switch"
@@ -404,7 +404,7 @@ export function MemorySection(): React.ReactElement {
                           <Warning size={12} weight="fill" />
                         </span>
                       )}
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         data-testid={`recap-fallback-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
@@ -414,7 +414,7 @@ export function MemorySection(): React.ReactElement {
                       >
                         <ArrowUp size={12} />
                       </button>
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         data-testid={`recap-fallback-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
@@ -424,7 +424,7 @@ export function MemorySection(): React.ReactElement {
                       >
                         <ArrowDown size={12} />
                       </button>
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         data-testid={`recap-fallback-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}

@@ -24,6 +24,11 @@ const AccordionTrigger = React.forwardRef<
   <AccordionPrimitive.Header className="flex">
     <AccordionPrimitive.Trigger
       ref={ref}
+      // Explicit tabindex: WebKit's default Tab policy skips native buttons
+      // without one (repo convention — tabindex-convention.test.ts covers
+      // literal JSX; Radix renders this button, so the stamp lives here).
+      // Before {...props} so a caller-supplied tabIndex wins.
+      tabIndex={0}
       className={cn(
         'flex flex-1 items-center justify-between py-3 text-sm font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
         className

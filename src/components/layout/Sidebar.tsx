@@ -247,7 +247,7 @@ export function Sidebar() {
       <div className="flex items-center gap-2.5 px-4 h-chrome-header min-h-chrome-header shrink-0">
         <Wordmark className="text-base" />
         {/* Search icon — opens the cross-workspace session search modal */}
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => useUiStore.getState().openSearchModal()}
           aria-label="Search sessions"
@@ -258,7 +258,7 @@ export function Sidebar() {
         </button>
         {/* Pin toggle — icon-only in the brand row (not a full-width bottom button) */}
         {canPin && (
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={togglePin}
             aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
@@ -285,7 +285,7 @@ export function Sidebar() {
             <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
               Workspaces
             </span>
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => setCreatingWorkspace(true)}
               aria-label="New workspace"
@@ -300,7 +300,7 @@ export function Sidebar() {
           {creatingWorkspace && (
             <div className="flex items-center gap-2 px-4 py-1.5">
               <Tray size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
-              <input
+              <input tabIndex={0}
                 autoFocus
                 type="text"
                 value={newWorkspaceName}
@@ -332,7 +332,7 @@ export function Sidebar() {
             <div className="px-4 py-1.5 flex items-center gap-1.5">
               <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
               <span className="text-xs text-[var(--color-error)] flex-1">Could not load workspaces</span>
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
                 aria-label="Retry loading workspaces"
@@ -360,7 +360,7 @@ export function Sidebar() {
           {!projectsLoading && !projectsError && projects.length === 0 && (
             <div className="px-4 py-1.5">
               <span className="text-xs text-[var(--color-muted)]">No workspaces yet — </span>
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => setCreatingWorkspace(true)}
                 className="text-xs text-[var(--color-accent)] hover:underline"
@@ -395,7 +395,7 @@ export function Sidebar() {
                       : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
                   )}
                 >
-                  <button
+                  <button tabIndex={0}
                     type="button"
                     onClick={() => {
                       setActiveWorkspaceId(project.id)
@@ -414,7 +414,7 @@ export function Sidebar() {
                     />
                     <span className="flex-1 truncate">{project.name}</span>
                   </button>
-                  <button
+                  <button tabIndex={0}
                     type="button"
                     onClick={(e) => { e.stopPropagation(); toggleWorkspaceExpansion(project.id) }}
                     aria-expanded={isExpanded}
@@ -429,7 +429,7 @@ export function Sidebar() {
                      pl-8 indentation — communicates "children of the workspace"
                      by connectedness while reclaiming ~14px of row width. */
                   <div className="pb-1 ml-5 border-l border-[var(--color-border)]">
-                    <button
+                    <button tabIndex={0}
                       type="button"
                       onClick={() => {
                         setActiveWorkspaceId(project.id)
@@ -450,7 +450,7 @@ export function Sidebar() {
                       visibleSessions.map((s) => {
                         const sActive = s.id === activeSessionId
                         return (
-                          <button
+                          <button tabIndex={0}
                             key={s.id}
                             type="button"
                             onClick={() => selectSession(s)}
@@ -472,7 +472,7 @@ export function Sidebar() {
                     )}
                     {/* Always the last entry — opens the session search pre-filtered to this workspace */}
                     {workspaceSessions.length > 0 && (
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         onClick={() => useUiStore.getState().openSearchModal(project.id)}
                         className="flex items-center gap-1 w-full pl-3 pr-4 py-1.5 text-[13px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
@@ -488,7 +488,7 @@ export function Sidebar() {
 
           {/* Show more / less toggle */}
           {!projectsLoading && hasMore && (
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={() => setProjectsExpanded((v) => !v)}
               className="flex items-center gap-2 w-full px-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
@@ -500,7 +500,7 @@ export function Sidebar() {
           )}
 
           {/* Archive section (Fix 9) */}
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={() => setArchiveOpen((v) => !v)}
             className="flex items-center gap-1.5 w-full px-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-1"
@@ -513,7 +513,7 @@ export function Sidebar() {
           {archiveOpen && archivedError && (
             <div className="flex items-center justify-between gap-2 px-4 py-2 text-xs text-[var(--color-error)]">
               <span>Could not load archived workspaces</span>
-              <button
+              <button tabIndex={0}
                 type="button"
                 onClick={() => refetchArchived()}
                 className="text-[var(--color-accent)] hover:underline flex-shrink-0"
@@ -525,7 +525,7 @@ export function Sidebar() {
 
           {archiveOpen && archivedProjects.map((project) => {
             return (
-              <button
+              <button tabIndex={0}
                 key={project.id}
                 type="button"
                 onClick={() => {
@@ -581,7 +581,7 @@ export function Sidebar() {
       {/* Username — stable at the very bottom, opens a popup menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
+          <button tabIndex={0}
             type="button"
             aria-label="Open user menu"
             data-testid="sidebar-profile-trigger"

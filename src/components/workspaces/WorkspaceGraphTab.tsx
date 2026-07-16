@@ -56,7 +56,7 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
         <p className="text-sm text-[var(--color-muted)]">
           Failed to load the task graph. Check your connection and try again.
         </p>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => void refetchTasks()}
           className="text-xs text-[var(--color-accent)] underline underline-offset-2"

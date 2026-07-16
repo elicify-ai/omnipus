@@ -6,7 +6,7 @@ const Textarea = React.forwardRef<
   React.TextareaHTMLAttributes<HTMLTextAreaElement>
 >(({ className, ...props }, ref) => {
   return (
-    <textarea
+    <textarea tabIndex={0}
       className={cn(
         'flex min-h-[80px] w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-sm text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]  disabled:cursor-not-allowed disabled:opacity-50 resize-none',
         className

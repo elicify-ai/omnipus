@@ -156,7 +156,7 @@ function ToolResultRefDisplay({
 
       {/* Fetch button — hidden once data is loaded */}
       {!data && !isError && (
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => setFetchEnabled(true)}
           disabled={isFetching}
@@ -356,7 +356,7 @@ export function GenericToolCall({
       {/* Header row — a composed row so browser tools can carry a separate,
           independently clickable "Watch live" launcher next to the toggle. */}
       <div className="flex w-full items-center">
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
@@ -382,7 +382,7 @@ export function GenericToolCall({
           )}
         </button>
         {isBrowserTool && (
-          <button
+          <button tabIndex={0}
             type="button"
             onClick={handleWatchLive}
             aria-label="Watch live"

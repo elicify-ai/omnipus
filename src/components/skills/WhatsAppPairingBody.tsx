@@ -29,7 +29,7 @@ function RetryableState({
         <p className="text-xs">{message}</p>
       </div>
       {onRetry && (
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onRetry}
           data-testid="whatsapp-retry"

@@ -51,7 +51,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
   if (isError) {
     return (
       <div className="mt-2 pl-2 border-l-2 border-[var(--color-error)]/40">
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={(e) => {
             e.stopPropagation()
@@ -75,7 +75,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
       aria-label="Subtasks"
     >
       {children.map((child) => (
-        <button
+        <button tabIndex={0}
           key={child.id}
           type="button"
           role="listitem"

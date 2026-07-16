@@ -42,6 +42,14 @@ const TabsContent = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <TabsPrimitive.Content
     ref={ref}
+    // Radix defaults tabpanels to tabindex="0" (APG's escape hatch for panels
+    // with no focusable children). Every panel in this app contains focusable
+    // controls, so the wrapper itself is a do-nothing Tab stop — pressing
+    // Enter on it has no effect, and on WebKit (Safari's default Tab policy
+    // reaches ONLY explicitly-tabindexed elements + form fields) these
+    // wrappers used to be nearly the whole tab ring. Opt the panel out;
+    // callers with a genuinely control-free panel can pass tabIndex={0} back.
+    tabIndex={-1}
     className={cn(
       'mt-4 ring-offset-[var(--color-primary)]',
       className

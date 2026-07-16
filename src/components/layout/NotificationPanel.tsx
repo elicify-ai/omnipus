@@ -94,7 +94,7 @@ export function NotificationPanel() {
             Notifications
           </SheetTitle>
           {unreadCount > 0 && (
-            <button
+            <button tabIndex={0}
               type="button"
               onClick={handleMarkAllRead}
               className="text-xs text-[var(--color-accent)] hover:underline"
@@ -110,7 +110,7 @@ export function NotificationPanel() {
           <ul className="divide-y divide-[var(--color-border)]">
             {items.map((item) => (
               <li key={item.id}>
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={() => handleClick(item)}
                   className={`flex w-full items-start gap-2.5 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-2)] ${

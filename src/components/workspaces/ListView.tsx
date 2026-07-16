@@ -119,7 +119,7 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
                 Agent
               </th>
               <th className="px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-28">
-                <button
+                <button tabIndex={0}
                   type="button"
                   onClick={toggleSort}
                   className="hover:text-[var(--color-secondary)] transition-colors"

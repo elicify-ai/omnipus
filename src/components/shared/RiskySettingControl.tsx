@@ -162,7 +162,7 @@ export function RiskySettingControl<T extends string>({
             const isSafe = opt.value === safeValue
             const isActive = activeHighlightValue === opt.value
             return (
-              <button
+              <button tabIndex={0}
                 key={opt.value}
                 type="button"
                 disabled={disabled}

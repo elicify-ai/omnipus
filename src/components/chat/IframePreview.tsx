@@ -158,7 +158,7 @@ function LinkOnlyFallback({ href, label }: { href: string; label: string }) {
     <div data-testid="preview-link-fallback" className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs">
       <span className="text-[var(--color-muted)]">{label}: </span>
       {safe ? (
-        <a
+        <a tabIndex={0}
           href={href}
           target="_blank"
           rel="noopener noreferrer"
@@ -193,7 +193,7 @@ function ErrorBlock({
     <div className="mt-2 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 px-3 py-2 text-xs space-y-1.5">
       <p className="text-[var(--color-error)]">{message}</p>
       {href && (
-        <a
+        <a tabIndex={0}
           href={href}
           target="_blank"
           rel="noopener noreferrer"
@@ -203,7 +203,7 @@ function ErrorBlock({
         </a>
       )}
       {onRetry && (
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={onRetry}
           aria-label="Retry warmup"
@@ -274,7 +274,7 @@ function ChromeBar({
       </span>
 
       {/* Reload / Retry */}
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={handleReload}
         aria-label={reloadLabel}
@@ -285,7 +285,7 @@ function ChromeBar({
       </button>
 
       {/* Open in new tab */}
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={handleOpen}
         aria-label="Open preview in new tab"
@@ -296,7 +296,7 @@ function ChromeBar({
       </button>
 
       {/* Copy link */}
-      <button
+      <button tabIndex={0}
         type="button"
         onClick={handleCopy}
         aria-label="Copy preview link"
@@ -669,7 +669,7 @@ export function IframePreview(props: IframePreviewProps) {
         <p className="text-[var(--color-error)]">
           Could not load preview configuration. The gateway may be unreachable.
         </p>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => { void aboutRefetch() }}
           className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"

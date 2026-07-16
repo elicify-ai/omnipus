@@ -152,7 +152,7 @@ export function MessageItem({ message }: MessageItemProps) {
                           return <span>{children}</span>
                         }
                         return (
-                          <a
+                          <a tabIndex={0}
                             href={href}
                             target="_blank"
                             rel="noopener noreferrer"

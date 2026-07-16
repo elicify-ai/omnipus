@@ -153,7 +153,7 @@ export function BrowserToolBlock({
           the expand/collapse toggle is its own button so "Watch live" can be a
           separate, independently clickable sibling rather than nested inside it. */}
       <div className="flex w-full items-center gap-1 bg-[var(--color-surface-1)] transition-colors">
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
@@ -175,7 +175,7 @@ export function BrowserToolBlock({
             the call is running: browser tools complete in well under a second,
             but the agent's browser session persists afterwards, so the viewer
             can open the live panel to watch/continue at any point. */}
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={handleWatchLive}
           aria-label="Watch live"

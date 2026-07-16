@@ -191,7 +191,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
                       className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-secondary)]"
                     >
                       {agent?.name ?? agentId}
-                      <button
+                      <button tabIndex={0}
                         type="button"
                         onClick={() => setForm((s) => ({ ...s, core_team: s.core_team.filter((id) => id !== agentId) }))}
                         aria-label={`Remove ${agent?.name ?? agentId} from core team`}

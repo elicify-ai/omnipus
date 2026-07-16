@@ -319,7 +319,7 @@ function IconAction({
   destructive?: boolean
 }) {
   return (
-    <button
+    <button tabIndex={0}
       type="button"
       aria-label={label}
       title={label}
@@ -395,7 +395,7 @@ function ScheduleDetailSheet({
                           </div>
                         </div>
                         {run.session_id && (
-                          <a
+                          <a tabIndex={0}
                             href={`/sessions/${encodeURIComponent(run.session_id)}`}
                             className="flex items-center gap-1 text-[11px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] shrink-0"
                             onClick={(e) => e.stopPropagation()}

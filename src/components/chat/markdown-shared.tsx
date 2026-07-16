@@ -84,7 +84,7 @@ export function createLinkRenderer(effectivePreview: EffectivePreview) {
       )
     }
     return (
-      <a
+      <a tabIndex={0}
         href={rewritten}
         target="_blank"
         rel="noopener noreferrer"
