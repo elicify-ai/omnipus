@@ -3,53 +3,48 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // Regression/unit coverage for the orphan-foreground-turn watchdog
-// (ADR-045, pkg/agent/orphan_watch.go). The safety-critical property under
-// test is that the watchdog is TURN-SCOPED, not session-wide: a live
-// Critical/background delegate sub-turn sharing the armed session's
-// transcriptSessionID must survive the full escalation (graceful nudge,
-// turn-scoped hard abort, turn-scoped detach) untouched, exactly mirroring
-// the protection TestRequestCancel_OrphanedBackgroundDelegate_...
-// (cancel_orphan_delegate_test.go) already proves for the real user-cancel
-// path.
+// (ADR-045, pkg/agent/orphan_watch.go), redesigned (2026-07) to reap an
+// abandoned foreground turn by calling into RequestCancel (the SAME
+// cancellation state machine every other cancel surface uses) rather than
+// reimplementing its own turn-scoped PHASE A/B/C escalation.
 //
-// orphanWatchHardAbortDelay/orphanWatchDetachDelay are shrunk for the
-// duration of each cascade test (and restored via t.Cleanup) so these tests
-// don't pay the full production 3s+5s wall-clock cost. None of these tests
-// use t.Parallel(), so mutating those package-level vars is race-free: Go's
-// testing framework only begins running parallel-marked tests concurrently
-// once every non-parallel top-level test (these included) has already
-// returned — see testing.T.Parallel's documented pause/resume model.
+// The safety-critical property under test is unchanged from the original
+// design's intent, even though the mechanism is now completely different:
+// a live Critical/background delegate sub-turn sharing the armed session's
+// transcriptSessionID must NEVER be reaped by this mechanism — see
+// TestOrphanWatch_RootAlreadyClearedFromActiveTurnStates_CriticalDelegateNeverReaped
+// and TestOrphanWatch_LiveRootWithLiveCriticalDelegate_ReapDeferred below,
+// which mirror the protection
+// TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGracefullyFinishes
+// (cancel_orphan_delegate_test.go) already proves for the real user-cancel
+// path — except here the correct behavior is to DEFER reaping entirely
+// (RequestCancel is never even called) rather than to escalate around it.
+//
+// Because there is only a single grace timer now (no PHASE B/C sub-timers),
+// these tests no longer need to shrink package-level escalation-delay vars —
+// grace is passed directly to ArmOrphanForegroundTurnWatch in whole seconds.
 package agent
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// shrinkOrphanWatchTimersForTest overrides the PHASE B/C escalation delays
-// to short durations for the lifetime of the calling test, restoring the
-// real production values via t.Cleanup. Not safe to call from a
-// t.Parallel() test (see package doc comment above).
-func shrinkOrphanWatchTimersForTest(t *testing.T, hardAbortDelay, detachDelay time.Duration) {
-	t.Helper()
-	origHard, origDetach := orphanWatchHardAbortDelay, orphanWatchDetachDelay
-	orphanWatchHardAbortDelay = hardAbortDelay
-	orphanWatchDetachDelay = detachDelay
-	t.Cleanup(func() {
-		orphanWatchHardAbortDelay = origHard
-		orphanWatchDetachDelay = origDetach
-	})
-}
-
 // newOrphanTestAgentLoop builds a minimal AgentLoop + shared session store for
 // the orphan-watch tests, mirroring cancel_orphan_delegate_test.go's setup.
+// The returned sessionID belongs to a real SessionTypeChat session, so MA-2's
+// session-type gate never blocks arming in tests that don't specifically
+// exercise it.
 func newOrphanTestAgentLoop(t *testing.T) (*AgentLoop, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -74,37 +69,71 @@ func newOrphanTestAgentLoop(t *testing.T) (*AgentLoop, string) {
 	return al, meta.ID
 }
 
-// TestOrphanWatch_GraceElapses_TurnScopedHardAbortFires is
-// the basic end-to-end escalation case: a lone root turn (no descendants)
-// that never finishes on its own must be turn-scoped hard-aborted once the
-// grace period AND the PHASE B window elapse.
-func TestOrphanWatch_GraceElapses_TurnScopedHardAbortFires(t *testing.T) {
-	shrinkOrphanWatchTimersForTest(t, 150*time.Millisecond, 150*time.Millisecond)
+// alwaysOrphaned is a stillOrphaned callback stub for tests where no
+// reconnect is being simulated.
+func alwaysOrphaned() bool { return true }
+
+// TestOrphanWatch_GraceElapses_ReapInvokedOnceWithOrphanReason is the basic
+// end-to-end case (MA-4): a lone root turn with no descendants that never
+// finishes on its own must have the caller-supplied reap callback invoked
+// EXACTLY ONCE, with reason "orphan_timeout", once the grace period elapses
+// — proving the redesigned fire path actually calls through to the
+// side-effecting reap closure (which the gateway wires to RequestCancel).
+// Also asserts the dedicated turn.orphan_timeout audit event is emitted.
+func TestOrphanWatch_GraceElapses_ReapInvokedOnceWithOrphanReason(t *testing.T) {
 	al, sessionID := newOrphanTestAgentLoop(t)
+	auditDir := t.TempDir()
+	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
 
 	rootTS := &turnState{
 		turnID:              "root-basic-fire",
 		transcriptSessionID: sessionID,
 		depth:               0,
 		finishedChan:        make(chan struct{}),
-		transcriptStore:     al.GetSessionStore(),
 		// providerCancel intentionally nil: this bare turnState never finishes
-		// on its own, so PHASE A's graceful nudge alone cannot terminate it —
-		// PHASE B's turn-scoped hard abort must be the thing that fires.
+		// on its own, so it stays "alive" for the whole test.
 	}
 	al.activeTurnStates.Store(sessionID, rootTS)
 	defer al.activeTurnStates.Delete(sessionID)
 
-	al.ArmOrphanForegroundTurnWatch(sessionID, 1)
+	var reapCount atomic.Int64
+	var mu sync.Mutex
+	var lastReason string
+	reap := func(reason string) {
+		reapCount.Add(1)
+		mu.Lock()
+		lastReason = reason
+		mu.Unlock()
+	}
 
-	require.Eventually(t, rootTS.hardAbortRequested, 5*time.Second, 20*time.Millisecond,
-		"the orphaned root turn must be turn-scoped hard-aborted once grace + PHASE B elapse")
-	assert.True(t, rootTS.IsAlive(), "a bare test turnState with no real loop never observes its own hardAbort flag and finishes — this just confirms hard-abort didn't panic/crash anything")
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1, reap, alwaysOrphaned)
+
+	require.Eventually(t, func() bool { return reapCount.Load() == 1 }, 5*time.Second, 20*time.Millisecond,
+		"reap must be invoked exactly once once the grace period elapses")
+
+	mu.Lock()
+	assert.Equal(t, "orphan_timeout", lastReason)
+	mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		events := readCancelAuditEvents(t, auditDir)
+		for _, ev := range events {
+			if ev == audit.EventTurnOrphanTimeout {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 20*time.Millisecond, "turn.orphan_timeout audit event must be emitted when the watchdog reaps")
+
+	// reap must not fire again even after waiting further — the watch was a
+	// single-shot timer, already removed from the map at fire time.
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, int64(1), reapCount.Load(), "reap must fire at most once per arm")
 }
 
-// TestOrphanWatch_DisarmBeforeGrace_NoOp proves Disarm
-// called before the grace timer fires cancels the watch entirely — the turn
-// is never touched at all, not even the PHASE A graceful nudge.
+// TestOrphanWatch_DisarmBeforeGrace_NoOp proves Disarm called before the
+// grace timer fires cancels the watch entirely — reap is never invoked, not
+// even once.
 func TestOrphanWatch_DisarmBeforeGrace_NoOp(t *testing.T) {
 	al, sessionID := newOrphanTestAgentLoop(t)
 
@@ -117,34 +146,75 @@ func TestOrphanWatch_DisarmBeforeGrace_NoOp(t *testing.T) {
 	al.activeTurnStates.Store(sessionID, rootTS)
 	defer al.activeTurnStates.Delete(sessionID)
 
-	al.ArmOrphanForegroundTurnWatch(sessionID, 1)
+	var reapCalled atomic.Bool
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
+		func(reason string) { reapCalled.Store(true) },
+		alwaysOrphaned,
+	)
 	al.DisarmOrphanForegroundTurnWatch(sessionID)
 
-	// Wait past the grace period with margin. Because Disarm stops the
-	// INITIAL timer, fireOrphanForegroundTurnWatch never runs at all, so
-	// there is no need to wait through PHASE B/C — they are only ever
-	// scheduled from within that function.
+	// Wait past the grace period with margin.
 	time.Sleep(1500 * time.Millisecond)
 
-	graceful, _ := rootTS.gracefulInterruptRequested()
-	assert.False(t, graceful, "a disarmed watch must never send even the graceful nudge")
-	assert.False(t, rootTS.hardAbortRequested())
+	assert.False(t, reapCalled.Load(), "a disarmed watch must never reap")
 	assert.True(t, rootTS.IsAlive())
 
 	_, armed := al.orphanWatches.Load(sessionID)
 	assert.False(t, armed, "the disarmed watch must be removed from the map")
 }
 
-// TestOrphanWatch_CriticalDescendantSurvives is the
-// safety-critical regression test: a background/Critical delegate sub-turn
-// sharing the armed session's transcriptSessionID must survive the FULL
-// escalation (graceful, turn-scoped hard, turn-scoped detach) untouched,
-// even though the root turn it descends from finishes gracefully almost
-// immediately (the common case — mirrors
-// TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGracefullyFinishes's
-// scenario, but for the ORPHAN-WATCHDOG path instead of RequestCancel).
-func TestOrphanWatch_CriticalDescendantSurvives(t *testing.T) {
-	shrinkOrphanWatchTimersForTest(t, 150*time.Millisecond, 150*time.Millisecond)
+// TestOrphanWatch_DisarmAfterFire_NoOpOnAlreadyReapedTurn covers MA-3: once
+// the grace timer has already fired and reaped, a LATER Disarm call (e.g. a
+// reconnect landing after the fact) must be a harmless no-op — no panic, and
+// critically no SECOND reap. The watch's map entry is removed the instant
+// fireOrphanForegroundTurnWatch runs, so Disarm finds nothing to cancel.
+func TestOrphanWatch_DisarmAfterFire_NoOpOnAlreadyReapedTurn(t *testing.T) {
+	al, sessionID := newOrphanTestAgentLoop(t)
+
+	rootTS := &turnState{
+		turnID:              "root-disarm-after-fire",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		finishedChan:        make(chan struct{}),
+	}
+	al.activeTurnStates.Store(sessionID, rootTS)
+	defer al.activeTurnStates.Delete(sessionID)
+
+	var reapCount atomic.Int64
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
+		func(reason string) { reapCount.Add(1) },
+		alwaysOrphaned,
+	)
+
+	require.Eventually(t, func() bool { return reapCount.Load() == 1 }, 3*time.Second, 20*time.Millisecond,
+		"precondition: the watch must fire-and-reap once")
+
+	require.NotPanics(t, func() { al.DisarmOrphanForegroundTurnWatch(sessionID) },
+		"MA-3: disarming after fire-and-reap must not panic")
+
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, int64(1), reapCount.Load(), "disarm after fire-and-reap must not cause a second reap")
+}
+
+// TestOrphanWatch_RootAlreadyClearedFromActiveTurnStates_CriticalDelegateNeverReaped
+// is the MA-1 regression test: it mirrors production's clearActiveTurn by
+// EXPLICITLY removing the root's own activeTurnStates entry once it
+// finishes — loop.go's `defer al.clearActiveTurn(ts)` runs BEFORE
+// `defer ts.Finish(false)` even sets isFinished (see turn.go/loop.go's
+// documented defer ordering) — so by the time the grace timer fires, the
+// session's ONLY resolvable turnState is the still-alive Critical delegate.
+//
+// The PRIOR version of this test (pre-redesign) only called
+// rootTS.Finish(false) and left the (now-finished) root's own map entry in
+// place — GetActiveTurnHookForSession's root-preferring match still found
+// that stale, finished entry, and the bespoke fire code's OWN
+// TurnID-mismatch/IsAlive() check bailed for a reason that had NOTHING to do
+// with the actual MA-1 invariant, completely masking the real bug (a
+// resolved-but-uncleared root looks identical to a live one from that
+// check's perspective). Explicitly deleting the root's map entry here closes
+// that gap and proves getActiveRootTurnStateForSession genuinely returns nil
+// (never falling back to the child) once the root is truly gone.
+func TestOrphanWatch_RootAlreadyClearedFromActiveTurnStates_CriticalDelegateNeverReaped(t *testing.T) {
 	al, sessionID := newOrphanTestAgentLoop(t)
 
 	rootTS := &turnState{
@@ -152,48 +222,115 @@ func TestOrphanWatch_CriticalDescendantSurvives(t *testing.T) {
 		transcriptSessionID: sessionID,
 		depth:               0,
 		finishedChan:        make(chan struct{}),
-		transcriptStore:     al.GetSessionStore(),
 	}
-	// Simulates the common case: PHASE A's providerCancel call unwinds the
-	// root's own in-flight LLM call almost instantly.
-	rootTS.providerCancel = func() { rootTS.Finish(false) }
-
 	childTS := &turnState{
 		turnID:              "child-critical-delegate",
 		transcriptSessionID: sessionID, // shares the parent's session
 		depth:               1,
 		parentTurnID:        rootTS.turnID,
 		parentTurnState:     rootTS,
+		critical:            true, // marks this as a Critical/background delegate
 		finishedChan:        make(chan struct{}),
-		// providerCancel intentionally nil: an orphaned background delegate
-		// that ignores its own graceful nudge (mid multi-tool task) is
-		// exactly what this test simulates.
 	}
 
+	al.activeTurnStates.Store(sessionID, rootTS)
+	al.activeTurnStates.Store(childTS.turnID, childTS)
+	defer al.activeTurnStates.Delete(childTS.turnID)
+
+	var reapCalled atomic.Bool
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
+		func(reason string) { reapCalled.Store(true) },
+		alwaysOrphaned,
+	)
+
+	// Mirror production: root finishes AND is cleared from activeTurnStates,
+	// while the Critical delegate keeps running.
+	rootTS.Finish(false)
+	al.activeTurnStates.Delete(sessionID)
+
+	time.Sleep(1500 * time.Millisecond) // past the 1s grace, with margin
+
+	assert.False(t, reapCalled.Load(),
+		"MA-1 REGRESSION: reap must NEVER be attempted when the only resolvable turn is a Critical delegate")
+	assert.True(t, childTS.IsAlive(), "the Critical delegate must never be touched by this mechanism")
+}
+
+// TestOrphanWatch_LiveRootWithLiveCriticalDelegate_ReapDeferred covers the
+// second half of the core invariant: even when the ROOT turn is ALSO still
+// genuinely alive (not yet cleared), a live Critical/background delegate
+// sharing the session must still block the reap entirely. Reaping the root
+// via RequestCancel here would risk RequestCancel's own session-wide
+// PHASE B/C escalation reaching the still-working delegate.
+func TestOrphanWatch_LiveRootWithLiveCriticalDelegate_ReapDeferred(t *testing.T) {
+	al, sessionID := newOrphanTestAgentLoop(t)
+
+	rootTS := &turnState{
+		turnID:              "root-still-alive",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		finishedChan:        make(chan struct{}),
+	}
+	childTS := &turnState{
+		turnID:              "child-critical-alive",
+		transcriptSessionID: sessionID,
+		depth:               1,
+		parentTurnID:        rootTS.turnID,
+		parentTurnState:     rootTS,
+		critical:            true,
+		finishedChan:        make(chan struct{}),
+	}
 	al.activeTurnStates.Store(sessionID, rootTS)
 	al.activeTurnStates.Store(childTS.turnID, childTS)
 	defer al.activeTurnStates.Delete(sessionID)
 	defer al.activeTurnStates.Delete(childTS.turnID)
 
-	al.ArmOrphanForegroundTurnWatch(sessionID, 1)
+	var reapCalled atomic.Bool
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
+		func(reason string) { reapCalled.Store(true) },
+		alwaysOrphaned,
+	)
 
-	// The root must finish gracefully shortly after PHASE A fires.
-	require.Eventually(t, func() bool { return !rootTS.IsAlive() }, 3*time.Second, 10*time.Millisecond,
-		"root turn must finish gracefully shortly after the watchdog's PHASE A cascade fires")
+	time.Sleep(1500 * time.Millisecond)
 
-	// Give PHASE B and PHASE C their full (shrunk) windows to run, then
-	// assert the child was NEVER touched at any point.
-	time.Sleep(1 * time.Second)
-
-	assert.True(t, childTS.IsAlive(), "the descendant must survive the entire escalation — turn-scoped means it is structurally unreachable")
-	assert.False(t, childTS.hardAbortRequested(), "BUG REGRESSION: a Critical/background delegate must never be turn-scoped hard-aborted by the orphan watchdog")
+	assert.False(t, reapCalled.Load(),
+		"reap must be deferred entirely while a live Critical delegate survives, even with a live root")
+	assert.True(t, rootTS.IsAlive())
+	assert.True(t, childTS.IsAlive())
 }
 
-// TestOrphanWatch_ReArmReplacesPriorTimer proves that
-// arming a session that already has a pending watch cancels the OLD watch
-// and installs a new one — at most one timer is ever pending per session.
+// TestOrphanWatch_StillOrphanedFalseAtFire_NoReap covers MA-5: a reconnect
+// that races the grace timer (landing after a Disarm call would have caught
+// it, but before the fire goroutine actually runs) must still prevent the
+// reap via the stillOrphaned() callback's own fresh check at fire time.
+func TestOrphanWatch_StillOrphanedFalseAtFire_NoReap(t *testing.T) {
+	al, sessionID := newOrphanTestAgentLoop(t)
+
+	rootTS := &turnState{
+		turnID:              "root-reconnect-race",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		finishedChan:        make(chan struct{}),
+	}
+	al.activeTurnStates.Store(sessionID, rootTS)
+	defer al.activeTurnStates.Delete(sessionID)
+
+	var reapCalled atomic.Bool
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
+		func(reason string) { reapCalled.Store(true) },
+		func() bool { return false }, // simulates "someone reconnected"
+	)
+
+	time.Sleep(1500 * time.Millisecond)
+
+	assert.False(t, reapCalled.Load(), "MA-5: stillOrphaned()==false at fire time must prevent reap")
+	assert.True(t, rootTS.IsAlive())
+}
+
+// TestOrphanWatch_ReArmReplacesPriorTimer proves that arming a session that
+// already has a pending watch cancels the OLD watch and installs a new one —
+// at most one timer is ever pending per session, and the OLD watch's reap
+// callback must never fire.
 func TestOrphanWatch_ReArmReplacesPriorTimer(t *testing.T) {
-	shrinkOrphanWatchTimersForTest(t, 150*time.Millisecond, 150*time.Millisecond)
 	al, sessionID := newOrphanTestAgentLoop(t)
 
 	rootTS := &turnState{
@@ -205,8 +342,11 @@ func TestOrphanWatch_ReArmReplacesPriorTimer(t *testing.T) {
 	al.activeTurnStates.Store(sessionID, rootTS)
 	defer al.activeTurnStates.Delete(sessionID)
 
+	var reapCount atomic.Int64
+	reap := func(reason string) { reapCount.Add(1) }
+
 	// Arm with a long grace first (would not fire within this test's budget).
-	al.ArmOrphanForegroundTurnWatch(sessionID, 100)
+	al.ArmOrphanForegroundTurnWatch(sessionID, 100, reap, alwaysOrphaned)
 
 	oldVal, ok := al.orphanWatches.Load(sessionID)
 	require.True(t, ok, "first arm must register a watch")
@@ -214,7 +354,7 @@ func TestOrphanWatch_ReArmReplacesPriorTimer(t *testing.T) {
 	require.True(t, ok)
 
 	// Re-arm with a short grace — must cancel and replace the long-grace watch.
-	al.ArmOrphanForegroundTurnWatch(sessionID, 1)
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1, reap, alwaysOrphaned)
 
 	assert.True(t, oldWatch.isCanceled(), "the prior (long-grace) watch must be canceled by the re-arm")
 
@@ -227,13 +367,13 @@ func TestOrphanWatch_ReArmReplacesPriorTimer(t *testing.T) {
 	// Proof the short-grace watch is the one actually driving behavior: if
 	// the long-grace timer had NOT been canceled/replaced, this would never
 	// go true within the test's bounded wait (its own grace is 100s).
-	require.Eventually(t, rootTS.hardAbortRequested, 5*time.Second, 20*time.Millisecond,
-		"the re-armed (short-grace) watch must be the one that actually escalates")
+	require.Eventually(t, func() bool { return reapCount.Load() == 1 }, 5*time.Second, 20*time.Millisecond,
+		"the re-armed (short-grace) watch must be the one that actually fires")
 }
 
-// TestOrphanWatch_GraceZeroOrNegative_Disabled proves the
-// watchdog is a no-op (disabled) for graceSeconds <= 0 — no timer is ever
-// registered and the turn is left completely untouched.
+// TestOrphanWatch_GraceZeroOrNegative_Disabled proves the watchdog is a no-op
+// (disabled) for graceSeconds <= 0 — no timer is ever registered and reap is
+// never invoked.
 func TestOrphanWatch_GraceZeroOrNegative_Disabled(t *testing.T) {
 	al, sessionID := newOrphanTestAgentLoop(t)
 
@@ -246,27 +386,89 @@ func TestOrphanWatch_GraceZeroOrNegative_Disabled(t *testing.T) {
 	al.activeTurnStates.Store(sessionID, rootTS)
 	defer al.activeTurnStates.Delete(sessionID)
 
+	reap := func(reason string) { t.Error("reap must never be called when the watchdog is disabled") }
+
 	for _, grace := range []int{0, -1, -300} {
-		al.ArmOrphanForegroundTurnWatch(sessionID, grace)
+		al.ArmOrphanForegroundTurnWatch(sessionID, grace, reap, alwaysOrphaned)
 		_, armed := al.orphanWatches.Load(sessionID)
 		assert.False(t, armed, "graceSeconds=%d must never register a watch", grace)
 	}
 
 	time.Sleep(1200 * time.Millisecond)
-	graceful, _ := rootTS.gracefulInterruptRequested()
-	assert.False(t, graceful)
-	assert.False(t, rootTS.hardAbortRequested())
 	assert.True(t, rootTS.IsAlive())
 }
 
-// TestOrphanWatch_TurnIDMismatch_ReplacementTurnUntouched
-// proves the "turn finished naturally and a DIFFERENT turn now owns the
-// session" case is a harmless no-op: the watch was armed for turnID
-// "root-v1"; by the time it fires, "root-v1" has finished and a brand-new
-// "root-v2" (same session, unrelated to the armed watch) has taken its
-// place. The watchdog must never touch root-v2.
-func TestOrphanWatch_TurnIDMismatch_ReplacementTurnUntouched(t *testing.T) {
-	shrinkOrphanWatchTimersForTest(t, 150*time.Millisecond, 150*time.Millisecond)
+// TestOrphanWatch_NilCallbacks_Disabled proves a nil reap or stillOrphaned
+// callback also disables arming entirely (defensive: the gateway must always
+// supply both, but AgentLoop does not trust that blindly).
+func TestOrphanWatch_NilCallbacks_Disabled(t *testing.T) {
+	al, sessionID := newOrphanTestAgentLoop(t)
+	rootTS := &turnState{
+		turnID:              "root-nil-callbacks",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		finishedChan:        make(chan struct{}),
+	}
+	al.activeTurnStates.Store(sessionID, rootTS)
+	defer al.activeTurnStates.Delete(sessionID)
+
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1, nil, alwaysOrphaned)
+	_, armed := al.orphanWatches.Load(sessionID)
+	assert.False(t, armed, "a nil reap callback must never arm a watch")
+
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1, func(string) {}, nil)
+	_, armed = al.orphanWatches.Load(sessionID)
+	assert.False(t, armed, "a nil stillOrphaned callback must never arm a watch")
+}
+
+// TestOrphanWatch_TaskSessionType_NeverArmed is the MA-2 regression test: a
+// Task-type session must never arm the orphan-foreground-turn watchdog, even
+// with a genuinely active turn present — proving the non-arming is
+// attributable to the session-type gate specifically, not to "no active
+// turn".
+func TestOrphanWatch_TaskSessionType_NeverArmed(t *testing.T) {
+	al, _ := newOrphanTestAgentLoop(t)
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeTask, "web", "main")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	rootTS := &turnState{
+		turnID:              "root-task-session",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		finishedChan:        make(chan struct{}),
+	}
+	al.activeTurnStates.Store(sessionID, rootTS)
+	defer al.activeTurnStates.Delete(sessionID)
+
+	var reapCalled atomic.Bool
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
+		func(reason string) { reapCalled.Store(true) },
+		alwaysOrphaned,
+	)
+
+	_, armed := al.orphanWatches.Load(sessionID)
+	assert.False(t, armed, "MA-2: a Task-type session must never arm the orphan-foreground-turn watchdog")
+
+	time.Sleep(1200 * time.Millisecond)
+	assert.False(t, reapCalled.Load())
+}
+
+// TestOrphanWatch_DifferentRootAtFireTime_StillReaped documents a deliberate
+// behavior simplification versus the original (pre-redesign) bespoke
+// mechanism: the watchdog now tracks "is this SESSION's CURRENT root turn
+// still genuinely orphaned", not "is the EXACT turn ID armed at Arm time
+// still the one running". If the originally-armed root finishes and a
+// brand-new root turn takes over the same session before the grace timer
+// fires (e.g. an agent-initiated follow-up), and that NEW root is ALSO still
+// genuinely unwatched (stillOrphaned() still true) by fire time, it receives
+// the exact same protection: an abandoned foreground turn on this session,
+// regardless of which specific turn ID currently occupies it. The original
+// design's turnID-equality check existed only to compensate for its own
+// bespoke escalation timers and is not reintroduced here.
+func TestOrphanWatch_DifferentRootAtFireTime_StillReaped(t *testing.T) {
 	al, sessionID := newOrphanTestAgentLoop(t)
 
 	rootV1 := &turnState{
@@ -277,11 +479,12 @@ func TestOrphanWatch_TurnIDMismatch_ReplacementTurnUntouched(t *testing.T) {
 	}
 	al.activeTurnStates.Store(sessionID, rootV1)
 
-	al.ArmOrphanForegroundTurnWatch(sessionID, 1)
+	var reapCount atomic.Int64
+	al.ArmOrphanForegroundTurnWatch(sessionID, 1,
+		func(reason string) { reapCount.Add(1) },
+		alwaysOrphaned,
+	)
 
-	// Simulate "root-v1 finished naturally and a brand new turn started on
-	// the same session before the grace timer fired" — e.g. a scheduled
-	// follow-up or a fresh user message via another channel.
 	rootV1.Finish(false)
 	rootV2 := &turnState{
 		turnID:              "root-v2",
@@ -289,14 +492,103 @@ func TestOrphanWatch_TurnIDMismatch_ReplacementTurnUntouched(t *testing.T) {
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
-	al.activeTurnStates.Store(sessionID, rootV2)
+	al.activeTurnStates.Store(sessionID, rootV2) // overwrites rootV1's map entry
 	defer al.activeTurnStates.Delete(sessionID)
 
-	// Wait past grace + PHASE B + PHASE C with margin.
-	time.Sleep(1200 * time.Millisecond)
+	require.Eventually(t, func() bool { return reapCount.Load() == 1 }, 3*time.Second, 20*time.Millisecond,
+		"the session's CURRENT root turn at fire time must be reaped even though it differs from the turn live at arm time")
+}
 
-	graceful, _ := rootV2.gracefulInterruptRequested()
-	assert.False(t, graceful, "BUG: the watchdog must not act on a turn it was never armed for")
-	assert.False(t, rootV2.hardAbortRequested())
-	assert.True(t, rootV2.IsAlive())
+// TestOrphanWatch_ArmDisarmStress_NoPanicConsistentFinalState is the MA-6
+// coverage: since pkg/agent cannot run under -race (transitively imports
+// !cgo-gated middleware), this is a FUNCTIONAL stress test — hammering
+// Arm then immediate Disarm on the same session from many goroutines — that
+// asserts no panic/deadlock and a consistent final state. It does not
+// replace a real race detector run; MA-6's actual fix (constructing and
+// fully initializing the timer before publishing the watch) is a targeted,
+// reviewable one-line reorder in ArmOrphanForegroundTurnWatch.
+func TestOrphanWatch_ArmDisarmStress_NoPanicConsistentFinalState(t *testing.T) {
+	al, sessionID := newOrphanTestAgentLoop(t)
+	rootTS := &turnState{
+		turnID:              "root-stress",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		finishedChan:        make(chan struct{}),
+	}
+	al.activeTurnStates.Store(sessionID, rootTS)
+	defer al.activeTurnStates.Delete(sessionID)
+
+	reap := func(reason string) {}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			al.ArmOrphanForegroundTurnWatch(sessionID, 1, reap, alwaysOrphaned)
+			al.DisarmOrphanForegroundTurnWatch(sessionID)
+		}()
+	}
+	wg.Wait()
+
+	// Give any timer that raced past its own disarm a moment to (harmlessly)
+	// fire and settle.
+	time.Sleep(1500 * time.Millisecond)
+
+	_, armed := al.orphanWatches.Load(sessionID)
+	assert.False(t, armed, "no watch should remain armed after the stress sequence settles")
+}
+
+// TestOrphanWatch_Close_StopsTimerAndNeverReaps proves AgentLoop.Close()
+// stops every pending orphan-watch timer so none of them can fire (and
+// therefore reap) against a torn-down AgentLoop after Close() returns.
+func TestOrphanWatch_Close_StopsTimerAndNeverReaps(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "orphan-watch-close-test",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	// NOTE: no t.Cleanup(al.Close) — calling Close() explicitly is the very
+	// thing this test exercises.
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	rootTS := &turnState{
+		turnID:              "root-close-test",
+		transcriptSessionID: sessionID,
+		depth:               0,
+		finishedChan:        make(chan struct{}),
+	}
+	al.activeTurnStates.Store(sessionID, rootTS)
+	defer al.activeTurnStates.Delete(sessionID)
+
+	var reapCalled atomic.Bool
+	al.ArmOrphanForegroundTurnWatch(sessionID, 100, // long grace — Close() must stop it before it ever fires
+		func(reason string) { reapCalled.Store(true) },
+		alwaysOrphaned,
+	)
+	_, armed := al.orphanWatches.Load(sessionID)
+	require.True(t, armed, "precondition: watch must be armed before Close")
+
+	al.Close()
+
+	_, stillArmed := al.orphanWatches.Load(sessionID)
+	assert.False(t, stillArmed, "Close must remove the pending watch from the map")
+
+	// Give any (incorrectly still-running) timer a moment it would need to
+	// fire, then confirm reap was never invoked.
+	time.Sleep(200 * time.Millisecond)
+	assert.False(t, reapCalled.Load(), "Close must stop the grace timer — reap must never fire after Close")
 }

@@ -2601,13 +2601,22 @@ type GatewayConfig struct {
 	// OrphanedTurnGraceSeconds bounds an orphaned FOREGROUND (webchat) turn —
 	// one whose last watching WebSocket connection has closed and never
 	// reconnected — to at most this many seconds before the orphan watchdog
-	// (ADR-045, pkg/agent/orphan_watch.go) escalates it: graceful session-wide
-	// interrupt immediately, a turn-scoped hard abort +3s later if still
-	// alive, and a turn-scoped detach +5s after that. The watchdog is
-	// turn-scoped, NOT session-wide, so a Critical/background delegate
-	// sub-turn sharing the session survives indefinitely regardless of this
-	// value — see ADR-045 for the full mechanism and why a session-wide
-	// escalation would be wrong here.
+	// (ADR-045, pkg/agent/orphan_watch.go) reaps it. "Reaps" means: hands the
+	// session to al.RequestCancel — the SAME cancellation state machine every
+	// other cancel surface (web SPA Stop button, Tier A /cancel, Tier B
+	// channels, CLI) uses, with its full graceful->hard->detached escalation,
+	// approval auto-deny, background-session kill, and audit/transcript
+	// writes — but ONLY once the watchdog has confirmed (a) a genuine live
+	// ROOT turn still exists, (b) no Critical/background delegate sub-turn is
+	// still alive on the session, and (c) nobody has reconnected. Condition
+	// (b) is what protects a Critical/background delegate: RequestCancel's
+	// own PHASE-B/PHASE-C hard-abort escalation
+	// (InterruptSessionHard/sessionTurnsStillAlive) is SESSION-WIDE by
+	// construction — note PHASE-A/InterruptSession's own graceful cascade is
+	// ALSO session-wide, just harmless there because a Critical delegate is
+	// designed to ignore a mere graceful nudge — so rather than reuse it while
+	// a delegate is still working, the watchdog defers reaping entirely for
+	// that fire; see ADR-045 for the full mechanism.
 	//
 	// nil (unset) resolves to DefaultOrphanedTurnGraceSeconds (300s / 5min)
 	// via config.ResolveInt — `[INFERRED]`, no BRD-specified number exists.

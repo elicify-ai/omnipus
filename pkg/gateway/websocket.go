@@ -637,7 +637,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if armOrphanWatch {
 			grace := h.agentLoop.GetConfig().EffectiveOrphanedTurnGraceSeconds()
-			h.agentLoop.ArmOrphanForegroundTurnWatch(sid, grace)
+			sidCopy := sid
+			h.agentLoop.ArmOrphanForegroundTurnWatch(sidCopy, grace,
+				func(reason string) { h.reapOrphanForegroundTurn(sidCopy, reason) },
+				func() bool { return h.sessionStillOrphaned(sidCopy) },
+			)
 		}
 
 		// Emit observability counters at connection teardown so operators can
@@ -1414,6 +1418,47 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 	// existed in the old inline implementation.
 }
 
+// buildCancelHooks constructs the transport-specific agent.CancelHooks for a
+// web-SPA-originated cancel. wc is the live connection to notify via
+// cancel_stage frames — nil when there is no live connection to notify.
+//
+// The nil case is exactly the orphan-foreground-turn watchdog's reap path
+// (ADR-045, reapOrphanForegroundTurn below): it fires precisely because
+// nobody is watching the session anymore, so there is no wc to send a
+// cancel_stage frame to. sendCancelStageFrame already no-ops safely on a nil
+// wc, so the SAME hook set handleCancel builds for a real Stop-click also
+// works, unmodified, for the orphan-reap path — there is only one place in
+// this file that knows how to build a web-cancel's side effects.
+func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
+	return agent.CancelHooks{
+		SendStageFrame: func(sid, stage string) {
+			sendCancelStageFrame(wc, sid, stage)
+		},
+		CancelPendingApprovals: func(sid, reason string) {
+			if h.approvalRegV2 != nil {
+				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
+			}
+		},
+		KillBackgroundSessions: func(sid string) int {
+			// Cascade the cancel to any detached background bash/exec
+			// sessions this chat session started (FR-B10/FR-B11, User Story 5).
+			// The returned count flows back through RequestCancel into the
+			// turn_canceled audit event's background_sessions_killed field.
+			return tools.GetSharedSessionManager().KillAllForSession(sid)
+		},
+		SetSessionInterrupted: func(sid string) {
+			store := h.resolveSessionStore(sid)
+			if store != nil {
+				status := session.StatusInterrupted
+				if err := store.SetMeta(sid, session.MetaPatch{Status: &status}); err != nil {
+					slog.Warn("ws: could not mark session interrupted",
+						"session_id", sid, "error", err)
+				}
+			}
+		},
+	}
+}
+
 // handleCancel delegates to agentLoop.RequestCancel — the canonical cancel
 // state machine that provides uniform audit, transcript, abuse-detection, and
 // 2-stage timer behavior across all four cancel entry points (web SPA,
@@ -1436,33 +1481,7 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		UserID:  wc.userID,
 		Channel: "web",
 	}
-	hooks := agent.CancelHooks{
-		SendStageFrame: func(sid, stage string) {
-			sendCancelStageFrame(wc, sid, stage)
-		},
-		CancelPendingApprovals: func(sid, reason string) {
-			if h.approvalRegV2 != nil {
-				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
-			}
-		},
-		KillBackgroundSessions: func(sid string) int {
-			// Cascade the web SPA cancel to any detached background bash/exec
-			// sessions this chat session started (FR-B10/FR-B11, User Story 5).
-			// The returned count flows back through RequestCancel into the
-			// turn_canceled audit event's background_sessions_killed field.
-			return tools.GetSharedSessionManager().KillAllForSession(sid)
-		},
-		SetSessionInterrupted: func(sid string) {
-			store := h.resolveSessionStore(sid)
-			if store != nil {
-				status := session.StatusInterrupted
-				if err := store.SetMeta(sid, session.MetaPatch{Status: &status}); err != nil {
-					slog.Warn("ws: could not mark session interrupted",
-						"session_id", sid, "error", err)
-				}
-			}
-		},
-	}
+	hooks := h.buildCancelHooks(wc)
 
 	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
 	if err != nil {
@@ -1477,6 +1496,58 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	if !outcome.Fired {
 		slog.Debug("ws: cancel — no active turn or already canceled", "session_id", sessionID)
 	}
+}
+
+// reapOrphanForegroundTurn is the ADR-045 orphan-foreground-turn watchdog's
+// reap callback (wired at Arm time in ServeHTTP's teardown defer). It is
+// invoked by agent.AgentLoop.fireOrphanForegroundTurnWatch AT MOST ONCE per
+// arm, and only once that function has itself confirmed all three safety
+// conditions hold (a genuine live root turn, no surviving Critical/background
+// delegate, no reconnect) — see that function's doc comment for the full
+// gate. This performs the EXACT SAME cancellation every other cancel surface
+// gets: RequestCancel's audit/transcript writes, approval auto-deny,
+// background-session kill, and graceful->hard->detached escalation —
+// attributed to the system rather than a human canceller, since this is
+// precisely the WHOLE reason this fired: nobody is here to have clicked Stop.
+//
+// wc is nil here (see buildCancelHooks) — there is no live connection to
+// notify with cancel_stage frames.
+func (h *WSHandler) reapOrphanForegroundTurn(sessionID, reason string) {
+	scope := agent.CancelScope{SessionID: sessionID}
+	canceller := agent.CancelCanceller{
+		UserID:  "system",
+		Channel: "orphan-watchdog",
+	}
+	hooks := h.buildCancelHooks(nil)
+
+	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
+	if err != nil {
+		slog.Warn("ws: orphan watchdog: RequestCancel error",
+			"session_id", sessionID, "reason", reason, "error", err)
+		return
+	}
+	if !outcome.Fired {
+		slog.Debug("ws: orphan watchdog: RequestCancel no-op (turn already finished or already canceled)",
+			"session_id", sessionID, "reason", reason)
+	}
+}
+
+// sessionStillOrphaned reports whether sessionID currently has NO live WS
+// connection watching it — i.e. nobody has reconnected/reattached since the
+// orphan-foreground-turn watch was armed. Called by
+// agent.AgentLoop.fireOrphanForegroundTurnWatch immediately before reaping so
+// a reconnect that raced the grace timer — landing after
+// DisarmOrphanForegroundTurnWatch would have caught it, but before the fire
+// goroutine actually ran — still wins (MA-5).
+func (h *WSHandler) sessionStillOrphaned(sessionID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, sid := range h.sessionIDs {
+		if sid == sessionID {
+			return false
+		}
+	}
+	return true
 }
 
 // applySinceCursor applies the since-cursor filter to a slice of transcript entries.

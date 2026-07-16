@@ -4,14 +4,36 @@
 **Date:** 2026-07-16
 **Deciders:** architect (+ backend-lead, qa-lead for implementation/review)
 
-**Implementation note (2026-07-16):** Implemented as designed in commit
+**Implementation note (2026-07-16):** Initially implemented as a bespoke
+turn-scoped PHASE A/B/C escalation in commit
 `4677b6f75b14731d645ef1498759425cca8b6a4b` (`feat(agent,gateway): orphaned-foreground-turn
-watchdog (ADR-045) to bound leaked turns`) — `pkg/agent/orphan_watch.go` (Arm/Disarm/fire),
-`TurnCancelHook.RequestHardAbort` (`pkg/agent/turn.go`), gateway wiring in
-`pkg/gateway/websocket.go`, `GatewayConfig.OrphanedTurnGraceSeconds` (`pkg/config`), two new
-audit events, and the e2e harness `OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20` override
-(`.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`). Pending human merge-gate approval
-per CLAUDE.md.
+watchdog (ADR-045) to bound leaked turns`). A 7-reviewer gate on that
+implementation found 8 real bugs, including three sev-9 correctness/safety
+issues (MA-1, MA-3, MA-6 below) — the root cause of most was that the
+bespoke design REIMPLEMENTED cancellation instead of reusing the existing,
+battle-tested `RequestCancel` state machine (`pkg/agent/cancel.go`), silently
+dropping side effects (approval auto-deny, background-session kill,
+session-status-interrupted) that every other cancel surface gets.
+
+**Redesign (2026-07-16, same day, before merge):** commit
+`<REDESIGN_COMMIT_SHA>` (`fix(agent,gateway): redesign orphan watchdog to
+reap via RequestCancel (gate round-1)`) replaces the bespoke escalation
+entirely with a single grace timer that hands the abandoned session to
+`AgentLoop.RequestCancel` — the SAME cancellation path every other cancel
+surface (web SPA Stop button, Tier A `/cancel`, Tier B text-parsing
+channels, CLI) already uses — gated by three conditions checked at fire time
+(a genuine live root turn, no surviving Critical/background delegate, no
+reconnect). This is strictly safer than the original turn-scoped-hard-abort
+approach: rather than inventing a parallel, turn-scoped-only hard-abort
+primitive to avoid touching a live delegate, the redesign defers reaping
+entirely for good whenever a Critical delegate survives, and otherwise
+reuses RequestCancel's full, audited, side-effect-complete escalation
+unmodified. See "Mechanism" below for the current design; the bespoke
+PHASE A/B/C escalation, `TurnCancelHook.RequestHardAbort`, and the
+`turn.orphan_hard_aborted` audit event it introduced are all retired — see
+"Alternatives Considered" for why the original rejection of reusing
+`RequestCancel` no longer applies. Pending human merge-gate approval per
+CLAUDE.md.
 
 ## Context
 
@@ -82,64 +104,92 @@ notes the routing question explicitly for the user (see Consequences/Neutral).
 
 ## Decision
 
-Add a new, narrowly-scoped **orphaned foreground turn watchdog** in
-`pkg/agent`, wired from the gateway's WebSocket layer, that bounds only the
-ROOT turn of a webchat session when its last watching connection disappears
-— WITHOUT ever touching Critical/background descendant sub-turns.
+Add a narrowly-scoped **orphaned foreground turn watchdog** in `pkg/agent`,
+wired from the gateway's WebSocket layer, that bounds only the ROOT turn of
+a webchat session when its last watching connection disappears — WITHOUT
+ever touching Critical/background descendant sub-turns.
 
-This is option (a) from the brief (orphaned-turn timeout), deliberately
-**not** implemented by reusing `RequestCancel`/`InterruptSessionHard`
-wholesale (which would cascade to Critical children), and **not** option (b)
-(a bounded server-side LLM-call timeout) because `TimeoutSeconds`'s own
-doc comment establishes that fixed per-call timeouts are unreliable under
-exactly the queued/high-load conditions e2e itself creates. Option (c)
-(harness-only `cancelOnTeardown` hardening) is adopted as a secondary,
-low-risk defense-in-depth measure but not the primary fix, because it does
-nothing for the real production risk of an abandoned tab.
+This is option (a) from the brief (orphaned-turn timeout), and **not**
+option (b) (a bounded server-side LLM-call timeout) because
+`TimeoutSeconds`'s own doc comment establishes that fixed per-call timeouts
+are unreliable under exactly the queued/high-load conditions e2e itself
+creates. Option (c) (harness-only `cancelOnTeardown` hardening) is adopted
+as a secondary, low-risk defense-in-depth measure but not the primary fix,
+because it does nothing for the real production risk of an abandoned tab.
+
+**Redesign (same day, before merge):** the mechanism REUSES
+`RequestCancel` directly — a deliberate reversal of the original decision to
+avoid it (see "Alternatives Considered" for why the original rejection no
+longer applies). The watchdog's own job shrinks to: decide, once, whether
+reaping via `RequestCancel` is safe; if so, call it; if not, do nothing and
+give up for this arm (no bespoke escalation timers of its own).
 
 ### Mechanism
 
 1. **Arm**: `pkg/gateway/websocket.go`'s `ServeHTTP` teardown defer
-   (`websocket.go:605-633`) — when the closing connection's `chatID` was the
+   (`websocket.go:605-650`) — when the closing connection's `chatID` was the
    **last** connection watching its `sessionID` (checked via `h.sessionIDs`
-   before/after the existing map deletes) — calls a new
-   `AgentLoop.ArmOrphanForegroundTurnWatch(sessionID, graceSeconds, hooks)`.
-   This resolves the session's current root turn via the existing
-   `GetActiveTurnHookForSession` (`pkg/agent/turn.go:415-441`, already
-   root-preferring), captures its `TurnID()`, and starts a `time.AfterFunc`
-   grace timer keyed by `sessionID` in a new `orphanWatches sync.Map` field
-   on `AgentLoop` (alongside `activeTurnStates`, `pkg/agent/loop.go:100`).
-2. **Disarm**: `handleAttachSession` (`websocket.go:1548`) and the
-   session-continuation path of `handleChatMessage` (`websocket.go:1053`)
-   call `AgentLoop.DisarmOrphanForegroundTurnWatch(sessionID)` as soon as a
-   live connection is confirmed on that session — covering the common
-   browser-refresh/reconnect case with zero user-visible effect.
-3. **Fire** (grace period elapsed, no reattachment): re-resolve the root
-   turn hook for `sessionID`; if it's gone or its `TurnID()` no longer
-   matches the armed one, no-op (already finished or replaced). Otherwise:
-   - PHASE A (graceful, session-wide, reused as-is):
-     `al.InterruptSession(sessionID, hint)` — safe for Critical descendants
-     per the existing regression test cited above.
-   - PHASE B (hard, **turn-scoped only**, new): after a short escalation
-     window (3s, mirroring `RequestCancel`'s own timing), if that SAME
-     `turnID` is still the resolved root and still alive, call a new
-     `RequestHardAbort() bool` method added to the `TurnCancelHook`
-     interface (`pkg/agent/turn.go:377-392`) — a thin exported wrapper
-     around the existing unexported `ts.requestHardAbort()`
-     (`pkg/agent/turn.go:771-789`). This hard-aborts **only** that one
-     `turnState`'s own `providerCancel`/`turnCancel`; it never walks
-     `transcriptSessionID` matches, so a Critical/background descendant
-     (independent context tree) is structurally unreachable by it.
-   - PHASE C (detached, turn-scoped, new, defensive symmetry with
-     `RequestCancel`'s own PHASE C): +5s more, if still alive, call the
-     existing `MarkAbandoned()` on that turn only.
-4. **Audit + transcript**: emit new audit events (`turn.orphan_timeout`,
-   `turn.orphan_hard_aborted`) distinguishing this from a real user cancel
-   (`canceller_channel: "system:orphan-watchdog"` equivalent attribution),
-   and append a transcript entry so a user who does return later sees why
-   the turn stopped (mirrors `RequestCancel`'s `onCancelFinish` transcript
-   annotation, since this path does not go through `ClaimCancel`/
-   `onCancelFinish` at all and would otherwise leave the transcript silent).
+   before/after the existing map deletes), and only when the session is a
+   foreground **CHAT** session (`session.SessionTypeChat`; Task/Scheduled/
+   Channel/Heartbeat sessions are never watched) — calls
+   `AgentLoop.ArmOrphanForegroundTurnWatch(sessionID, graceSeconds, reap, stillOrphaned)`.
+   `reap` and `stillOrphaned` are gateway-supplied closures (see step 3).
+   Arm starts a single `time.AfterFunc` grace timer keyed by `sessionID` in
+   the `orphanWatches sync.Map` field on `AgentLoop`
+   (`pkg/agent/orphan_watch.go`).
+2. **Disarm**: `handleAttachSession` (`websocket.go`) and the
+   session-continuation path of `handleChatMessage` (`websocket.go`) call
+   `AgentLoop.DisarmOrphanForegroundTurnWatch(sessionID)` as soon as a live
+   connection is confirmed on that session — covering the common
+   browser-refresh/reconnect case with zero user-visible effect. Disarming
+   AFTER the grace timer has already fired-and-reaped is a harmless no-op —
+   the watch's map entry is removed the instant it fires — and a reconnect
+   landing during `RequestCancel`'s OWN subsequent escalation window behaves
+   exactly like a user clicking Stop and then reconnecting (there is no
+   "abort an in-flight cancel" mechanism for that case, for ANY cancel
+   surface, today; the orphan-reap path does not invent one either).
+3. **Fire** (grace period elapsed, no reattachment): reap the session's
+   current root turn — by calling the gateway's `reap` closure, which itself
+   calls `al.RequestCancel(ctx, agent.CancelScope{SessionID: sessionID}, canceller, hooks)`
+   with the SAME `agent.CancelHooks` a web-SPA Stop-click gets
+   (`buildCancelHooks`, `pkg/gateway/websocket.go`, shared between
+   `handleCancel` and the orphan path) and a dedicated
+   `agent.CancelCanceller{UserID: "system", Channel: "orphan-watchdog"}` —
+   **ONLY IF ALL THREE** conditions hold, checked by
+   `AgentLoop.fireOrphanForegroundTurnWatch` (`pkg/agent/orphan_watch.go`):
+   1. A genuine **LIVE ROOT** turn exists for the session — resolved via a
+      dedicated root-ONLY resolver (`getActiveRootTurnStateForSession`,
+      `pkg/agent/turn.go`), never `GetActiveTurnHookForSession`'s non-root
+      `anyMatch` fallback (that fallback existing at all is exactly what let
+      the pre-redesign implementation's mismatch check silently resolve a
+      live delegate instead of "no root" — see Bug MA-1 below).
+   2. **No surviving Critical/background/async delegate** is alive on the
+      session (`hasLiveCriticalDelegate`, `pkg/agent/steering.go`) — checked
+      even when the root IS still alive, covering the case where the root is
+      still running concurrently with an async delegate it just spawned.
+      `delegate async=true` unconditionally sets `Critical:true`
+      (`pkg/tools/delegate.go`'s `executeAsync`), so this single check covers
+      every name ADR-045 uses for the same `turnState.critical` flag.
+   3. Nobody has reconnected since arming — the gateway's `stillOrphaned`
+      closure re-checks its live `chatID -> sessionID` mappings at fire time,
+      closing the race between the timer firing and a reattach that landed
+      just before `Disarm` could run.
+
+   If ALL three hold: emit the `turn.orphan_timeout` audit event (attributed
+   to `system:orphan-watchdog`, distinguishing this from a real user cancel)
+   and call `reap("orphan_timeout")` exactly once. `RequestCancel` then
+   performs its full, uniform state machine — abuse-detection record,
+   `ClaimCancel` first-cancel-wins, `turn_cancel_attempt`/`turn_cancelled`
+   audit, transcript `MarkLastEntryTruncated` + `turn_canceled` entry,
+   approval auto-deny, background bash/exec session kill, session-status-
+   interrupted, and the 3s-graceful/5s-hard/detached escalation — identically
+   to every other cancel surface. Because condition 2 already guarantees no
+   live Critical delegate remains, `RequestCancel`'s session-wide escalation
+   cannot cascade into anything this mechanism needs to protect.
+
+   If ANY condition fails: no-op. There is no retry/reschedule — the watch
+   was single-shot and its map entry is already gone; only a fresh WS
+   teardown re-arms it.
 
 ### Configuration
 
@@ -154,12 +204,12 @@ the watchdog entirely (matches the `TimeoutSeconds: 0`-disabled convention).
 Read live (not restart-gated, matching `GatewayPreviewEnabled`'s precedent,
 `pkg/config/keys.go:36-38`) since each WS teardown reads current config fresh.
 
-The e2e harness sets `OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=5` (or
-similar) as a single env var on the gateway process the suite drives —
-achieving the harness-tuning goal of option (b) without inheriting its
-documented unreliability, because this timer only fires on genuine
-abandonment (no reconnect), not on every LLM call regardless of provider
-queuing.
+The e2e harness sets `OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20`
+(`.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`) as a single env var
+on the gateway process the suite drives — achieving the harness-tuning goal
+of option (b) without inheriting its documented unreliability, because this
+timer only fires on genuine abandonment (no reconnect), not on every LLM
+call regardless of provider queuing.
 
 ## Consequences
 
@@ -170,24 +220,28 @@ queuing.
   without weakening the production default or touching the documented
   "cancel only fires on explicit user action" contract for channels that
   have no WS at all.
-- Critical/background delegate turns are provably unaffected — the
-  hard-abort stage is turn-scoped, and PHASE A's graceful nudge alone
-  cannot terminate them (existing regression test already proves this).
-- Reuses proven primitives (`InterruptSession`, `GetActiveTurnHookForSession`,
-  the graceful→hard→detached staging shape) rather than inventing a new
-  cancellation state machine from scratch.
+- Critical/background delegate turns are provably unaffected — the watchdog
+  DEFERS reaping entirely (never calls `RequestCancel` at all) whenever one
+  is found alive, rather than relying on a bespoke escalation stage being
+  correctly scoped.
+- There is now only ONE cancellation state machine in the codebase, not two
+  similar-but-subtly-different ones — every cancel surface (web SPA, Tier A
+  `/cancel`, Tier B channels, CLI, and now the orphan watchdog) gets the
+  exact same audit trail, transcript writes, approval auto-deny, and
+  background-session-kill side effects for free, by construction.
 
 ### Negative
-- Adds a second, parallel escalation timer family (turn-scoped) alongside
-  `RequestCancel`'s existing session-scoped one — two similar-but-distinct
-  "3s then hard" patterns to reason about. Mitigated by keeping the new one
-  a thin, well-documented wrapper and cross-referencing both in code
-  comments.
 - The 300s default is a judgment call, not derived from a requirement —
   needs operator sign-off.
 - Multi-tab-on-one-session bookkeeping (checking "is any other connection
   still watching this session" before arming) adds a small amount of new
   state-scanning logic to the WS teardown path.
+- If a Critical/background delegate is still alive at fire time, the
+  watchdog gives up on that specific arm permanently (no retry/reschedule) —
+  a genuinely abandoned session with a long-running delegate keeps its root
+  turn running unwatched until the delegate finishes AND a fresh WS teardown
+  re-arms the watch. This trade (never risk a live delegate) is accepted as
+  strictly preferable to any design that could touch one.
 
 ### Neutral
 - This is being proposed independent of the v0.1/v0.2/v0.3 release-phase
@@ -219,26 +273,61 @@ queuing.
   (see Risk Analysis / Regression Tests below) since it further tightens
   e2e determinism independent of the new grace-period's exact value.
 
-### Reuse `RequestCancel`/`InterruptSessionHard` wholesale for the WS-close case
-- Pros: no new escalation-timer code at all.
-- Cons: `InterruptSessionHard`/`sessionTurnsStillAlive` are session-wide by
-  design (`pkg/agent/steering.go:493-599`) — would hard-abort a live
-  Critical/background delegate on the same session once the escalation
-  fires, directly violating the requirement that background/Critical turns
-  must survive their originating WS's closure indefinitely.
-- Why rejected: correctness violation, not a style preference.
+### Reuse `RequestCancel`/`InterruptSessionHard` wholesale for the WS-close case — ADOPTED (redesign), in a GUARDED form
+- Pros: no new escalation-timer code at all; every other cancel surface's
+  audit/transcript/approval/background-session side effects apply uniformly
+  and automatically; there is only one cancellation state machine in the
+  codebase to reason about, test, and review, ever.
+- Cons (the ORIGINAL objection, at the ORIGINAL decision time): calling
+  `RequestCancel` **unconditionally** on a WS-close timeout would be a
+  correctness violation — `InterruptSessionHard`/`sessionTurnsStillAlive`
+  are session-wide by design (`pkg/agent/steering.go`) and would hard-abort
+  a live Critical/background delegate on the same session once the
+  escalation fires, directly violating the requirement that background/
+  Critical turns survive their originating WS's closure indefinitely.
+- Why the original rejection no longer applies: the redesign does not call
+  `RequestCancel` unconditionally. `fireOrphanForegroundTurnWatch` checks,
+  BEFORE ever calling `reap`, that no live Critical/background delegate
+  exists on the session (`hasLiveCriticalDelegate`) — if one does, `RequestCancel`
+  is never invoked at all for that fire. The **guard** moved from "escalate,
+  but scope the escalation to just this turn" (the original, bug-prone
+  approach — a bespoke, turn-scoped hard-abort primitive that a 7-reviewer
+  gate found three sev-9 bugs in) to "check first, then either reuse the
+  existing session-wide primitive freely, or don't call it at all". This is
+  strictly safer: the invariant ("never touch a live Critical delegate") is
+  enforced by never reaching the session-wide escalation in the first place,
+  rather than by a second, parallel, turn-scoped-only escalation family that
+  has to be independently proven equivalent-but-narrower every time either
+  one changes.
+- Why adopted now: a 7-reviewer gate on the original bespoke implementation
+  found 8 real bugs, including three sev-9 correctness/safety issues, whose
+  common root cause was reimplementing cancellation instead of reusing
+  `RequestCancel`. Reusing it directly — with the pre-check above — dissolves
+  that entire class of bug by construction.
 
 ## Affected Components
 
-- Backend: `pkg/agent/loop.go` (new `orphanWatches` field on `AgentLoop`),
-  `pkg/agent/turn.go` (new `RequestHardAbort()` on `TurnCancelHook`), a new
-  `pkg/agent/orphan_turn.go` (Arm/Disarm/fire + escalation timers),
-  `pkg/gateway/websocket.go` (`ServeHTTP` teardown, `handleAttachSession`,
-  `handleChatMessage` wiring), `pkg/config/config.go` (`GatewayConfig` field),
-  `pkg/config/resolve.go` (`ResolveInt`), `pkg/config/keys.go` (new
-  `ConfigKey`), `pkg/audit/events.go` + `pkg/audit/audit.go` (two new event
-  kinds), `pkg/session` (optional new transcript entry type/fields for
-  orphan-timeout annotation).
+- Backend: `pkg/agent/loop.go` (`orphanWatches` field on `AgentLoop`),
+  `pkg/agent/turn.go` (`getActiveRootTurnStateForSession`, a root-ONLY
+  resolver — NOT `TurnCancelHook.RequestHardAbort`, which was added by the
+  original implementation and removed again by the redesign: nothing outside
+  `pkg/agent` needs to hard-abort a single turn anymore, since reaping now
+  goes through the ordinary `RequestCancel` entry point), `pkg/agent/steering.go`
+  (`hasLiveCriticalDelegate`), `pkg/agent/orphan_watch.go` (Arm/Disarm/fire —
+  a single grace timer plus the three-condition fire gate; no escalation
+  timers of its own), `pkg/gateway/websocket.go` (`ServeHTTP` teardown,
+  `handleAttachSession`, `handleChatMessage` wiring, `buildCancelHooks`
+  shared with `handleCancel`, `reapOrphanForegroundTurn`,
+  `sessionStillOrphaned`), `pkg/config/config.go` (`GatewayConfig` field),
+  `pkg/config/resolve.go` (`ResolveInt`), `pkg/config/keys.go` (`ConfigKey`),
+  `pkg/audit/events.go` + `pkg/audit/audit.go` (ONE event kind,
+  `turn.orphan_timeout` — the original implementation's second event,
+  `turn.orphan_hard_aborted`, is retired: the escalation itself is now
+  `RequestCancel`'s own `turn_cancelled` event, cancel_method `"hard"`, same
+  as every other cancel surface). No `pkg/session` changes — the redesign
+  writes no transcript entry of its own; `RequestCancel`'s existing
+  `onCancelFinish` callback already writes the `turn_canceled` transcript
+  entry for every cancel it performs, orphan-reaps included.
 - Frontend: none required (no new wire frame types needed — the existing
   `cancel_stage`-style frame can be reused for observability if desired, but
   is optional since the tab that abandoned the turn is, by definition, gone).
@@ -248,13 +337,12 @@ queuing.
 
 ## Integration Contract
 
-No new frontend-facing wire contract is required for the core mechanism.
-Optional (recommended) additions if transcript-annotation is implemented:
-
-- `session.TranscriptEntry` gains an entry usable for orphan-timeout
-  (either a new `EntryTypeTurnOrphanTimeout` or reuse
-  `EntryTypeTurnCancelled` with `CancelMethod: "orphan_timeout"` and
-  `CancelledByUser: "system"`) — a backend-internal persisted shape, not a
-  new REST/WS contract, so Constraint #8 (contract-first wire types) does
-  not apply unless a NEW field is added to an existing generated wire type
-  that crosses the gateway/SPA boundary.
+No new frontend-facing wire contract is required. No new persisted-shape
+addition either (post-redesign): the reaped turn's transcript entry is the
+SAME `EntryTypeTurnCancelled` entry `RequestCancel`'s `onCancelFinish`
+callback already writes for every cancel, with `CancelledByUser: "system"`
+and `CancelledByChannel: "orphan-watchdog"` (the `CancelCanceller` the
+gateway's `reapOrphanForegroundTurn` passes to `RequestCancel`) —
+distinguishing an orphan-reap from a real user cancel needs no new field,
+just the existing `CancelledByUser`/`CancelledByChannel` values a reader
+already knows how to interpret.
