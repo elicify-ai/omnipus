@@ -25,6 +25,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import type { Agent, Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { makeAgent } from '@/test/factories'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -52,11 +53,11 @@ function makeClient() {
 // tests — deliberately includes one of every exclusion category so each
 // test only needs to vary the workspace/core_team side of the equation.
 const mockAgents: Agent[] = [
-  { id: 'mia', name: 'Mia', type: 'core', status: 'active', description: 'Assistant' } as Agent,
-  { id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' } as Agent,
-  { id: 'ray-draft', name: 'Ray Draft', type: 'Main', status: 'draft', description: 'Not ready' } as Agent,
-  { id: 'sub1', name: 'Sub Worker', type: 'Subagent', status: 'active', description: 'Delegation-only' } as Agent,
-  { id: 'sub2', name: 'External Worker', type: 'subagent_3p', status: 'active', description: 'External CLI worker' } as Agent,
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', description: 'Assistant' }),
+  makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
+  makeAgent({ id: 'ray-draft', name: 'Ray Draft', type: 'Main', status: 'draft', description: 'Not ready' }),
+  makeAgent({ id: 'sub1', name: 'Sub Worker', type: 'Subagent', status: 'active', description: 'Delegation-only' }),
+  makeAgent({ id: 'sub2', name: 'External Worker', type: 'subagent_3p', status: 'active', description: 'External CLI worker' }),
 ]
 
 beforeEach(() => {
@@ -162,6 +163,69 @@ describe('useChatAgents — core_team scoping', () => {
 
     await waitFor(() => { expect(result.current.chatAgents).toHaveLength(2) })
     expect(result.current.chatAgents.map((a) => a.id).sort()).toEqual(['jim', 'mia'])
+  })
+
+  // Gap 11a: activeWorkspaceId points at an id the fetched workspaces list
+  // does not contain (e.g. a background refetch raced a workspace deletion,
+  // or the active workspace hasn't landed in the query cache yet).
+  // `activeWorkspace` resolves to `undefined`, so `teamIds` is `undefined`
+  // too — the `!teamIds` branch of the filter must apply, same as "no
+  // workspace set" at all, not silently zero out every agent.
+  it('activeWorkspaceId set but the workspace is missing from the fetched list: no team filtering applies', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue(mockAgents)
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-other', name: 'Some Other WS', status: 'active', core_team: ['mia'] } as unknown as Workspace,
+    ])
+    act(() => { useWorkspacesStore.setState({ activeWorkspaceId: 'ws-missing' }) })
+
+    const { result } = renderHook(() => useChatAgents(), { wrapper: makeWrapper(makeClient()) })
+
+    await waitFor(() => { expect(result.current.chatAgents).toHaveLength(2) })
+    expect(result.current.chatAgents.map((a) => a.id).sort()).toEqual(['jim', 'mia'])
+  })
+
+  // Gap 11b: a core_team that names ONLY agents already excluded by the
+  // status/worker filter (a draft agent + a worker) must leave chatAgents
+  // genuinely EMPTY — not silently fall back to "no team filtering" (which
+  // would be the bug if the `teamIds.length === 0` short-circuit ever fired
+  // for a non-empty-but-fully-excluded team).
+  it('core_team referencing only excluded agents (draft + worker) yields an empty chatAgents', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue(mockAgents)
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      { id: 'ws-4', name: 'Excluded-Only Team WS', status: 'active', core_team: ['ray-draft', 'sub1'] } as unknown as Workspace,
+    ])
+    act(() => { useWorkspacesStore.setState({ activeWorkspaceId: 'ws-4' }) })
+
+    const { result } = renderHook(() => useChatAgents(), { wrapper: makeWrapper(makeClient()) })
+
+    // Wait on the unfiltered `agents` list rather than chatAgents.length —
+    // the very thing under test is that chatAgents stays at 0, so it can't
+    // be the wait condition itself.
+    await waitFor(() => { expect(result.current.agents).toHaveLength(5) })
+    expect(result.current.chatAgents).toEqual([])
+  })
+})
+
+describe('useChatAgents — refetch passthrough', () => {
+  // Gap 11c: `refetch` on the hook's return value must be the underlying
+  // `['agents']` query's OWN refetch function, not a locally-defined no-op
+  // or a function that refetches some unrelated query. Proven by actually
+  // calling it and observing `fetchAgents` (the queryFn) get invoked again.
+  it('calling refetch() re-invokes fetchAgents — it is the query\'s own refetch, not a no-op', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue(mockAgents)
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+
+    const { result } = renderHook(() => useChatAgents(), { wrapper: makeWrapper(makeClient()) })
+
+    await waitFor(() => { expect(result.current.agents.length).toBeGreaterThan(0) })
+    const callsBefore = vi.mocked(fetchAgents).mock.calls.length
+    expect(callsBefore).toBeGreaterThan(0)
+
+    act(() => { result.current.refetch() })
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchAgents).mock.calls.length).toBeGreaterThan(callsBefore)
+    })
   })
 })
 

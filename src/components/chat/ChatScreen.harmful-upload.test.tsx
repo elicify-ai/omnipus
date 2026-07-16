@@ -120,6 +120,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
     fetchProviders: vi.fn().mockResolvedValue([]),
+    // Isolation hardening (gap 13, bugfixes3 QA hardening wave): the
+    // `importOriginal` spread above leaves the REAL fetchCommands/
+    // fetchSkills reachable — harmless today only because BASE_URL resolves
+    // to '' in this test environment. Explicit overrides close that gap.
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
   }
 })
 
