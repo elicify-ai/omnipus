@@ -389,18 +389,6 @@ type TurnCancelHook interface {
 	// MarkAbandoned sets the abandoned flag so the gateway can stop tracking
 	// a stuck goroutine (FR-19, FR-20, FR-21).
 	MarkAbandoned()
-	// RequestHardAbort hard-aborts ONLY this turn's own providerCancel/
-	// turnCancel — a thin exported wrapper around the unexported
-	// requestHardAbort (see that method below). Unlike InterruptSessionHard,
-	// it never walks transcriptSessionID matches, so a Critical/background
-	// descendant sub-turn (a separate turnState rooted on its own
-	// context.Background(), per ADR-032) is structurally unreachable through
-	// this call. Used exclusively by the orphan-foreground-turn watchdog
-	// (ADR-045, pkg/agent/orphan_watch.go) to escalate a single abandoned
-	// ROOT turn without ever touching a live delegate sharing its session.
-	// Returns true if this call actually set the abort flag (false if a
-	// concurrent caller — e.g. a real user Stop — already had).
-	RequestHardAbort() bool
 }
 
 // Compile-time check: *turnState implements TurnCancelHook.
@@ -458,6 +446,39 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 		return anyMatch
 	}
 	return nil
+}
+
+// getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
+// parentTurnID=="") matching sessionID's transcriptSessionID, or nil when no
+// root turn is currently active for the session — INCLUDING when the only
+// resolvable match is a non-root descendant. Unlike
+// GetActiveTurnHookForSession (which falls back to ANY match, root-preferring
+// but not root-EXCLUSIVE, as a defensive last resort for other callers), this
+// NEVER returns a delegate sub-turn.
+//
+// Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
+// pkg/agent/orphan_watch.go) to answer "is there still a genuine foreground
+// turn to reap" without ever mistaking a surviving Critical/background
+// delegate — whose parent root has already finished and been cleared from
+// activeTurnStates via clearActiveTurn (loop.go) — for one. Reusing
+// GetActiveTurnHookForSession's anyMatch fallback for that decision was the
+// root cause of MA-1: it would resolve the delegate as "the turn to reap",
+// and handing that to RequestCancel would trigger RequestCancel's
+// session-wide escalation against the exact turn ADR-045 exists to protect.
+func (al *AgentLoop) getActiveRootTurnStateForSession(sessionID string) *turnState {
+	var root *turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID != sessionID {
+			return true
+		}
+		if ts.depth == 0 || ts.parentTurnID == "" {
+			root = ts
+			return false
+		}
+		return true
+	})
+	return root
 }
 
 func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
@@ -798,16 +819,6 @@ func (ts *turnState) requestHardAbort() bool {
 		turnCancel()
 	}
 	return true
-}
-
-// RequestHardAbort is the exported TurnCancelHook wrapper around
-// requestHardAbort (ADR-045). See the interface doc comment for the full
-// rationale — it deliberately does NOT cascade to child/descendant turns
-// (unlike Finish(true) or InterruptSessionHard), so callers outside this
-// package can hard-abort exactly one turnState without any risk of reaching
-// a sibling delegate sub-turn.
-func (ts *turnState) RequestHardAbort() bool {
-	return ts.requestHardAbort()
 }
 
 func (ts *turnState) hardAbortRequested() bool {

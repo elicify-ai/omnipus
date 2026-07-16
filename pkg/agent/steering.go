@@ -598,6 +598,55 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 	return alive
 }
 
+// hasLiveCriticalDelegate reports whether any NON-ROOT turnState matching
+// sessionID (depth>0 / parentTurnID != "" — i.e. a delegate sub-turn, never
+// the root itself) that is marked Critical (SubTurnConfig.Critical,
+// subturn.go) is currently alive (turnState.IsAlive()). Async delegation
+// (`delegate async=true`) unconditionally sets Critical:true (see
+// pkg/tools/delegate.go's executeAsync), so this single predicate covers
+// both "Critical" and "background/async" as one and the same property —
+// ADR-045 uses all three names for what is, mechanically, the identical
+// turnState.critical flag.
+//
+// Mirrors sessionTurnsStillAlive's scan shape but additionally classifies
+// root vs. descendant and filters to Critical-only: a live NON-Critical
+// descendant's lifetime is bound to its parent's own goroutine (synchronous
+// delegation blocks the parent's own runTurn until the child returns, and
+// the child's activeTurnStates entry is removed via spawnSubTurn's own
+// `defer al.activeTurnStates.Delete(childID)` before spawnSubTurn itself
+// ever returns) — so it can only be observed alive here while the root
+// itself is ALSO still alive, a case the orphan watchdog's fire predicate
+// already requires (a live root) before this check is even consulted.
+//
+// Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
+// pkg/agent/orphan_watch.go) to decide whether reaping the session's root
+// turn via RequestCancel would risk cascading into wanted background work —
+// RequestCancel's own PHASE B/C escalation is session-wide by construction
+// and cannot be scoped to "the root only" from the outside, so the watchdog
+// defers reaping entirely rather than reusing it while a Critical delegate
+// survives.
+func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	found := false
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID != sessionID {
+			return true
+		}
+		if ts.depth == 0 || ts.parentTurnID == "" {
+			return true // root, not a delegate
+		}
+		if ts.critical && ts.IsAlive() {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // IsSubTurnActiveForSpawnCall reports whether a sub-turn spawned by the spawn
 // tool call identified by parentSpawnCallID is currently registered as an
 // active turn — meaning either not-yet-finished, OR finished but its

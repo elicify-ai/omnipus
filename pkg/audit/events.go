@@ -133,20 +133,23 @@ const (
 
 	// EventTurnOrphanTimeout — INFO. The orphan-foreground-turn watchdog
 	// (ADR-045) fired: a webchat session's grace period elapsed with no
-	// client reattaching, and the graceful session-wide interrupt cascade
-	// (InterruptSession) was sent to that turn. Distinct from
-	// EventTurnCancelAttempt/EventTurnCancelled — this path bypasses
-	// ClaimCancel/onCancelFinish entirely and is attributed to
-	// "system:orphan-watchdog", never to a real user/channel canceller.
+	// client reattaching, no surviving Critical/background delegate was found
+	// on the session, and nobody had reconnected — so the watchdog handed the
+	// session's root turn to al.RequestCancel (the SAME cancellation state
+	// machine every other cancel surface uses), attributed to
+	// "system:orphan-watchdog" via CancelCanceller rather than a real
+	// user/channel canceller. Emitted immediately BEFORE the RequestCancel
+	// call, so the audit trail always records WHY a cancel was triggered even
+	// if RequestCancel itself no-ops (turn already finished) or errors.
+	// Distinct from — and always followed by — RequestCancel's OWN
+	// EventTurnCancelAttempt/EventTurnCancelled events, which carry the full
+	// graceful->hard->detached escalation, approval auto-deny,
+	// background-session kill, and transcript writes uniformly with every
+	// other cancel surface. There is no separate turn.orphan_hard_aborted
+	// event (retired 2026-07 redesign) — RequestCancel's own turn_cancelled
+	// event (cancel_method: "hard") is the single source of truth for how a
+	// reaped orphan turn actually terminated.
 	EventTurnOrphanTimeout = "turn.orphan_timeout"
-
-	// EventTurnOrphanHardAborted — WARN. The orphan-foreground-turn watchdog's
-	// PHASE B fired (+3s after EventTurnOrphanTimeout): the ROOT turn was
-	// still alive, so a TURN-SCOPED hard abort (TurnCancelHook.RequestHardAbort)
-	// was applied to that turn only — never session-wide, so a live
-	// Critical/background delegate sharing the session is unaffected and
-	// unreachable by this event.
-	EventTurnOrphanHardAborted = "turn.orphan_hard_aborted"
 
 	// EventBrowserLiveControlTaken — INFO (Decision=allow) or WARN
 	// (Decision=deny). A /api/v1/browser/ws viewer requested interactive

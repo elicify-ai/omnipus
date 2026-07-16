@@ -232,3 +232,44 @@ func TestOrphanForegroundTurnWatch_Reattach_Disarms(t *testing.T) {
 	require.Eventually(t, func() bool { return !al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
 		"reattaching (handleAttachSession) must disarm the pending orphan-foreground-turn watchdog")
 }
+
+// TestOrphanForegroundTurnWatch_ChatMessageContinuation_Disarms covers a gap
+// flagged by pr-test-analyzer on the original ADR-045 gate: the
+// session-CONTINUATION branch of handleChatMessage (websocket.go, a message
+// frame carrying an EXISTING session_id) also calls
+// DisarmOrphanForegroundTurnWatch — a separate code path from
+// handleAttachSession's own disarm call, covered by
+// TestOrphanForegroundTurnWatch_Reattach_Disarms above. Only the
+// attach_session path had regression coverage; this test exercises the
+// OTHER disarm call site so a future refactor that drops one but not the
+// other is caught.
+func TestOrphanForegroundTurnWatch_ChatMessageContinuation_Disarms(t *testing.T) {
+	handler, al, bp := newOrphanForegroundTurnTestWSHandler(t, 30)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	t.Cleanup(handler.Wait)
+
+	conn1 := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn1.Close() }) // defensive: safe even after the explicit Close() below
+	sendWSAuthFrameDevMode(t, conn1)
+	sessionID := startOrphanTestTurn(t, conn1, bp)
+
+	require.NoError(t, conn1.Close())
+	require.Eventually(t, func() bool { return al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
+		"precondition: closing the last connection must arm the watchdog")
+
+	// Reconnect via a FRESH connection and send a "message" frame carrying
+	// the EXISTING session_id — this exercises handleChatMessage's session-
+	// CONTINUATION branch (not attach_session), which must ALSO disarm the
+	// pending watch.
+	conn2 := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn2.Close() })
+	sendWSAuthFrameDevMode(t, conn2)
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "continuing this session", SessionID: sessionID}
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, msgData))
+
+	require.Eventually(t, func() bool { return !al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
+		"sending a message with an existing session_id (handleChatMessage's continuation branch) must disarm the pending watchdog")
+}
