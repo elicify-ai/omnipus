@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { List, Tray } from '@phosphor-icons/react'
+import { List } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -9,7 +9,6 @@ import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
-import { cn } from '@/lib/utils'
 
 // React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -130,7 +129,6 @@ function WorkspaceTabContainerView({
   toggle: () => void
 }) {
   const location = useLocation()
-  const navigate = useNavigate()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
 
   return (
@@ -159,37 +157,9 @@ function WorkspaceTabContainerView({
             <List size={20} />
           </button>
 
-          {/* Workspace name — a proper menu item, styled exactly like the
-              tab-strip entries (same type, spacing, hover, gold-when-active).
-              Icon = Tray, the workspace glyph the sidebar uses. Clicking opens
-              workspace settings; on the settings route this item is the gold
-              one (with the same underline the tabs use). */}
-          <button
-            type="button"
-            onClick={() =>
-              navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId: workspace.id } })
-            }
-            title="Workspace settings"
-            role="tab"
-            aria-label={`${workspace.name} — workspace settings`}
-            aria-selected={activeSegment === 'settings'}
-            data-testid="workspace-name-button"
-            className={cn(
-              'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-sm font-headline whitespace-nowrap outline-none transition-colors',
-              'focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/50 rounded-t-sm',
-              activeSegment === 'settings'
-                ? 'text-[var(--color-accent)]'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-            )}
-          >
-            <Tray size={16} weight={activeSegment === 'settings' ? 'fill' : 'regular'} className="flex-shrink-0" />
-            <span className="truncate">{workspace.name}</span>
-            {activeSegment === 'settings' && (
-              <span className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]" aria-hidden="true" />
-            )}
-          </button>
-
-          <WorkspaceTabBar workspaceId={workspace.id} />
+          {/* The workspace name renders INSIDE WorkspaceTabBar as the first
+              tablist item (→ settings) — one menu component, no stray button. */}
+          <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
           {activeSegment === 'chat' && (
             <div className="flex-1 min-w-0 flex @6xl:justify-end px-3" data-testid="workspace-chat-controls">
