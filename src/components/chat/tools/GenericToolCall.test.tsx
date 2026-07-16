@@ -393,25 +393,56 @@ describe('GenericToolCall — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
   })
 
-  it('delegation-denied: indicator is an 8px warning-colored dot (local branch, shares statusDot)', () => {
-    // Fix 2 (2026-07-16, revised): a default-shape delegate call is hidden
-    // in the thread regardless of outcome now — verbose forced on so this
-    // purely tests the indicator's OWN color, not the (separately-tested)
-    // visibility gate.
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+  // (item 8e, 2026-07-16 fix wave): these two tests need verboseChatEnabled
+  // true to get past the visibility gate at all (toolName="delegate") —
+  // scoped to their own nested describe with a beforeEach/afterEach pair,
+  // matching the pattern the "delegation-denied result sentinel" describe
+  // above (lines 141-151) already uses, instead of each test managing its
+  // own inline act()/setState set-and-reset.
+  describe('delegation-denied variant (verbose forced on)', () => {
+    beforeEach(() => {
+      act(() => {
+        useChatPreferencesStore.setState({ verboseChatEnabled: true })
+      })
     })
-    const { container } = render(
-      <GenericToolCall
-        toolName="delegate"
-        result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
-      />
-    )
-    const indicator = getIndicatorEl(container)
-    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-warning)]')
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+
+    afterEach(() => {
+      act(() => {
+        useChatPreferencesStore.setState({ verboseChatEnabled: false })
+      })
+    })
+
+    it('delegation-denied: indicator is an 8px warning-colored dot (local branch, shares statusDot)', () => {
+      // Verbose is forced on by this describe's beforeEach so this purely
+      // tests the indicator's OWN color, not the (separately-tested)
+      // visibility gate.
+      const { container } = render(
+        <GenericToolCall
+          toolName="delegate"
+          result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
+          status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        />
+      )
+      const indicator = getIndicatorEl(container)
+      expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-warning)]')
+    })
+
+    it('the delegation-denied block uses a left accent, not a full bordered/backgrounded box', () => {
+      render(
+        <GenericToolCall
+          toolName="delegate"
+          result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
+          status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+        />
+      )
+      fireEvent.click(screen.getByRole('button'))
+      const block = screen.getByTestId('result-delegation-denied')
+      // Both assertions run BEFORE the afterEach resets verbose back off
+      // (item 8e fix — the prior version reset state mid-test, then
+      // asserted against `block`, a DOM node the reset re-render had
+      // already detached from the document).
+      expect(block.className).toContain('border-l-2')
+      expect(block.className).not.toContain('rounded')
     })
   })
 
@@ -457,29 +488,6 @@ describe('GenericToolCall — flat text-line status dot', () => {
     expect(banner.className).toContain('border-l-2')
     expect(banner.className).not.toContain('rounded')
     expect(banner.className).not.toContain('bg-[var(--color-error)]/10')
-  })
-
-  it('the delegation-denied block uses a left accent, not a full bordered/backgrounded box', () => {
-    // Fix 2 (2026-07-16, revised): verbose forced on — see the indicator
-    // test above for why (this test only cares about the block's OWN
-    // markup once rendered, not the visibility gate).
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: true })
-    })
-    render(
-      <GenericToolCall
-        toolName="delegate"
-        result={{ error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' }}
-        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
-      />
-    )
-    fireEvent.click(screen.getByRole('button'))
-    const block = screen.getByTestId('result-delegation-denied')
-    expect(block.className).toContain('border-l-2')
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: false })
-    })
-    expect(block.className).not.toContain('rounded')
   })
 
   it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
@@ -538,6 +546,33 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
+  // (item 8a, 2026-07-16 fix wave): pins the load_tool isError override at
+  // the COMPONENT level (not just toolVisibility.test.ts's unit-level
+  // shouldRenderToolCall coverage) — mutation-proofs the `isError` argument
+  // GenericToolCall actually threads through at render.tsx line ~309.
+  it('a load_tool call with an error status is VISIBLE even when verboseChatEnabled is false', () => {
+    render(
+      <GenericToolCall
+        toolName="load_tool"
+        args={{ name: 'web_search' }}
+        status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('a load_tool call that succeeded but whose result is a _marshal_error sentinel is VISIBLE even when verboseChatEnabled is false', () => {
+    render(
+      <GenericToolCall
+        toolName="load_tool"
+        args={{ name: 'web_search' }}
+        result={{ _marshal_error: 'json: unsupported type: chan int' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
   it('a background delegate call (default action=run, async=true) renders nothing when verboseChatEnabled is false', () => {
     render(
       <GenericToolCall
@@ -564,10 +599,12 @@ describe('GenericToolCall — verbose chat gate', () => {
   })
 
   // INVERTED 2026-07-16 (was: "... still renders regardless of verbose
-  // setting"): Fix 2 hides a 'run' delegation for BOTH sync and async — the
-  // SubagentBlock span card is now the thread's sole delegation surface, so
-  // this GenericToolCall row is redundant in every 'run' sub-case, blocking
-  // or not.
+  // setting"): Fix 2 hides a 'run' delegation for BOTH sync and async.
+  // Revised same day: the thread has NO default delegation surface at all
+  // anymore — SubagentBlock's span card is ALSO verbose-only now
+  // (shouldRenderSubagentSpan, toolVisibility.ts), so this isn't "redundant
+  // with the card", it's simply hidden, same as the card, until verbose
+  // chat is on.
   it('an explicit blocking delegate call (async: false) is ALSO hidden by default — no sync exception', () => {
     render(
       <GenericToolCall

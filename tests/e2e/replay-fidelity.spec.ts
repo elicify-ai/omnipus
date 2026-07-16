@@ -22,6 +22,7 @@ import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { expectA11yClean } from './fixtures/a11y'
 import { chatInput, sendButton } from './fixtures/selectors'
+import { enableVerboseChat } from './fixtures/verbose-chat'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -352,6 +353,19 @@ test(
   // Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 5; TDD row 24.
   // Unskipped after Sprint H SubagentBlock UI + Sprint I streamReplay landed on the same branch.
   async ({ page }) => {
+    // Delegation visuals (SubagentBlock cards) are verbose-only in the chat
+    // thread since commit 8e1bf1b9 (shouldRenderSubagentSpan gates on
+    // verboseChatEnabled, default false — src/store/chatPreferences.ts).
+    // This test asserts the sub-turn MECHANICS (replay round-trip: live
+    // step count survives a close/reopen) via
+    // [data-testid="subagent-collapsed"] as its thread-based signal, so it
+    // opts into verbose chat to keep that signal working across BOTH the
+    // initial open and the reopen navigation below — independent of the
+    // default (non-verbose) display policy, which is covered separately by
+    // delegation-hidden.spec.ts. addInitScript persists for the rest of
+    // this page's lifetime, so one call here covers the later `page.goto('/')`
+    // reopen too.
+    await enableVerboseChat(page)
     await page.goto('/')
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
 

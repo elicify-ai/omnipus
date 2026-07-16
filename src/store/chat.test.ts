@@ -1245,6 +1245,57 @@ describe('ChatStore_GroupsFramesBySpan', () => {
     expect(stepAfter?.kind === 'tool' ? stepAfter.tool.status : undefined).toBe('success')
     expect(stepAfter?.kind === 'tool' ? stepAfter.tool.result : undefined).toBe('still running')
   })
+
+  // (item 8d, 2026-07-16 fix wave): a `tool_call_result` can arrive for a
+  // call_id this span's index has NO existing step for — a genuine race
+  // where the result beat its own `tool_call_start` (as opposed to
+  // ChatStore_OrphanFrame_FallsBackFlat below, which covers the SPAN itself
+  // never having started at all). The span IS already open here
+  // (subagent_start already ran), so this hits the "no existingIdx" push
+  // branch (chat.ts ~2802-2807) rather than the orphan-buffer path. Pins:
+  // no crash, and the pushed step defaults to params:{} (there is no
+  // start-time params to inherit).
+  it('a tool_call_result with no prior tool_call_start, on an already-open span, pushes a step with params:{} and does not crash', () => {
+    seedAssistant()
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span_orphan_step',
+        parent_call_id: 'c_orphan_step',
+        task_label: 'race condition repro',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    expect(() => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result',
+          call_id: 't_orphan_step',
+          tool: 'fs.list',
+          result: '["a.txt"]',
+          status: 'success',
+          duration_ms: 12,
+          parent_call_id: 'c_orphan_step',
+          session_id: TEST_SESSION_ID,
+        })
+      })
+    }).not.toThrow()
+
+    const msgs = useChatStore.getState().messages
+    const span = msgs[msgs.length - 1].spans?.[0]
+    expect(span?.steps).toHaveLength(1)
+    const step = span?.steps[0]
+    expect(step?.kind).toBe('tool')
+    if (step?.kind === 'tool') {
+      expect(step.tool.call_id).toBe('t_orphan_step')
+      expect(step.tool.tool).toBe('fs.list')
+      expect(step.tool.params).toEqual({})
+      expect(step.tool.status).toBe('success')
+      expect(step.tool.result).toBe('["a.txt"]')
+    }
+  })
 })
 
 // TDD row 12: ChatStore_OrphanFrame_FallsBackFlat

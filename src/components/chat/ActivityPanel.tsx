@@ -24,7 +24,8 @@ import { ToolCallBadge } from './ToolCallBadge'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
-import { getSpanStatusDot } from '@/lib/toolStatusConfig'
+import { getSpanStatusDot, statusDot } from '@/lib/toolStatusConfig'
+import { formatInterruptReason } from '@/lib/subagentStatus'
 
 export interface ActivityPanelProps {
   open: boolean
@@ -41,7 +42,14 @@ function ActivityRow({ item }: { item: ActivityItem }) {
   // Narrowed inline (not via a stored boolean) so `steps` stays typed without a cast.
   const steps = item.kind === 'agent' && item.agentType !== '3p' ? item.steps : null
   const show3pNotice = item.kind === 'agent' && item.agentType === '3p'
-  const canExpand = steps != null && steps.length > 0
+  // Fix 2 (2026-07-16): the panel is now the durable surface for the final
+  // result / interrupt reason SubagentBlock's (now thread-hidden-by-default)
+  // card used to carry — see useRunningActivity.ts's AgentActivityItem.
+  const finalResult = item.kind === 'agent' ? item.finalResult : undefined
+  const interruptReason = item.kind === 'agent' ? item.interruptReason : undefined
+  // A span with zero steps but a final result (e.g. a very short delegation)
+  // must still be expandable, or the result would never be reachable.
+  const canExpand = steps != null && (steps.length > 0 || !!finalResult)
 
   return (
     <div
@@ -70,7 +78,19 @@ function ActivityRow({ item }: { item: ActivityItem }) {
           {label}
         </span>
         {config.indicator}
-        <span className={cn('text-[var(--color-muted)] shrink-0', config.textClass)}>{config.label}</span>
+        <span className={cn('text-[var(--color-muted)] shrink-0', config.textClass)}>
+          {config.label}
+          {/* W1-9, carried via Fix 2: interrupt reason appended to the
+              status text, matching SubagentBlock's own inline treatment. */}
+          {item.status === 'interrupted' && interruptReason && (
+            <span
+              className="font-sans"
+              title={`Interrupted: ${formatInterruptReason(interruptReason)}`}
+            >
+              {' '}({formatInterruptReason(interruptReason)})
+            </span>
+          )}
+        </span>
         {duration && <span className="text-[var(--color-muted)] shrink-0 tabular-nums">{duration}</span>}
         {canExpand && (
           <span className="text-[var(--color-muted)] shrink-0">
@@ -95,6 +115,21 @@ function ActivityRow({ item }: { item: ActivityItem }) {
                 {step.text}
               </p>
             ),
+          )}
+
+          {/* Final result — flat text block, no box/fill: a small success
+              dot + muted "Final result" label, matching SubagentBlock's own
+              treatment (the thread card this replaces at idle/default). */}
+          {finalResult && (
+            <div className="mt-1">
+              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide font-sans">
+                {statusDot('bg-[var(--color-success)]')}
+                Final result
+              </div>
+              <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">
+                {finalResult}
+              </pre>
+            </div>
           )}
         </div>
       )}

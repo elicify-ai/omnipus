@@ -609,11 +609,13 @@ describe('bash — verbose chat gate', () => {
   // inspectable in the ActivityPanel. Only verboseChatEnabled brings this
   // row back into the thread now (see the next test).
   it('a background bash run with an error status (incomplete) stays HIDDEN — no isError exception for background bash', () => {
-    if (!captured.bashRender) {
-      expect(BashOutputUI).toBeDefined()
-      return
-    }
-    const element = captured.bashRender({
+    // (item 8f, 2026-07-16 fix wave): hard-fail if the render fn was never
+    // captured, instead of soft-guarding into a vacuous pass — this is a
+    // NEW regression test added by the visibility-policy fix, so silently
+    // no-op'ing here would mean the test could report green while asserting
+    // nothing at all about the fix it exists to pin.
+    expect(captured.bashRender).toBeDefined()
+    const element = captured.bashRender!({
       args: { command: 'tail -f log', run_in_background: true },
       result: 'command not found',
       status: { type: 'incomplete' },
@@ -626,11 +628,9 @@ describe('bash — verbose chat gate', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
-    if (!captured.bashRender) {
-      expect(BashOutputUI).toBeDefined()
-      return
-    }
-    const element = captured.bashRender({
+    // (item 8f) same hard guard as the test above.
+    expect(captured.bashRender).toBeDefined()
+    const element = captured.bashRender!({
       args: { command: 'tail -f log', run_in_background: true },
       result: 'command not found',
       status: { type: 'incomplete' },

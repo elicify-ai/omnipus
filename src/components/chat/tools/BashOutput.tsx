@@ -85,12 +85,20 @@ function BashOutputBlock({
   // canonical `bash` tool name only — the five legacy aliases below
   // (`exec`, `workspace_shell`, `workspace_shell_bg`, and their dotted
   // forms) render OLD, already-persisted transcripts exactly as they were
-  // stored and must NEVER be hidden by this new gate. An error outcome
-  // (the `isError` prop, threaded from status.type === 'incomplete' by
-  // makeBashUI below) always overrides the hide decision — a failed
-  // background dispatch must never disappear just because it looks like
-  // ordinary background dispatch. Must sit after every hook above and
-  // before the JSX return (Rules of Hooks); the hook itself is called
+  // stored and must NEVER be hidden by this new gate. shouldRenderToolCall's
+  // outcome override is per-tool-class (toolVisibility.ts doc comment) and
+  // does NOT apply to bash's poll/read/background-dispatch cases — an error
+  // outcome does not force this row visible; that failure is left to the
+  // calling agent's own response text, with the raw output staying
+  // inspectable in the ActivityPanel slide-out. The `isError` argument
+  // below (threaded from status.type === 'incomplete' by makeBashUI below)
+  // is therefore currently a no-op for bash — kept only so this call site
+  // matches shouldRenderToolCall's uniform 4-argument gate signature, the
+  // same one GenericToolCall/ToolCallBadge call with their own outcome
+  // signal, so a future revision that DOES add a bash-specific exception
+  // (e.g. for `kill`) doesn't need to change this call site's shape, only
+  // toolVisibility.ts's switch. Must sit after every hook above and before
+  // the JSX return (Rules of Hooks); the hook itself is called
   // unconditionally — only the resulting early return is gated on toolName.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   if (

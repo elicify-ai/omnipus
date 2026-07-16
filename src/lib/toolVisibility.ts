@@ -1,4 +1,9 @@
-// Client-side render filter for tool-call chips in the chat transcript.
+// Client-side render filter, governing TWO chat surfaces via THREE exported
+// policies:
+//   - The chat THREAD (transcript) — shouldRenderToolCall (tool-call chips)
+//     and shouldRenderSubagentSpan (SubagentBlock delegation cards).
+//   - The ActivityPanel slide-out — shouldRenderToolCallInPanel (expanded
+//     native-agent step rows), whose default INVERTS the thread's.
 //
 // This is a PURE UI decision — it never touches the persisted session
 // transcript (JSONL on disk keeps every tool call untouched). It only
@@ -46,16 +51,30 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  * forces visibility is now a per-tool-class decision, not a single
  * short-circuit above the switch —
  *   - `load_tool`: an error still forces visibility. It has no calling
- *     agent's own turn to explain the failure in, so it must surface
- *     directly or the failure is invisible everywhere but the panel.
+ *     agent's own turn to explain the failure in, and the panel hides
+ *     load_tool by default too (shouldRenderToolCallInPanel below) — so
+ *     without this exception the failure would be invisible everywhere
+ *     except verbose chat.
  *   - `delegate` and the background-dispatch/poll/read sub-cases of `bash`:
  *     NO error exception. A failed/denied delegation or background shell
  *     command is returned to the CALLING agent's own turn as the tool
  *     result — that agent decides how (and whether) to explain the failure
- *     in its own response text — and the raw result stays fully transparent
- *     in the ActivityPanel slide-out (shouldRenderToolCallInPanel below
- *     shows everything except load_tool, precisely for this transparency).
- *     Only verbose chat brings these rows back into the thread.
+ *     in its own response text. The ActivityPanel slide-out is the durable
+ *     fallback for THIS case, but its coverage is narrower than "fully
+ *     transparent": it only ever shows subagent SPANS (running, plus a
+ *     recently-finished list capped at 8 — RECENTLY_FINISHED_CAP in
+ *     useRunningActivity.ts) and background bash SESSIONS, and (Fix 1,
+ *     2026-07-16) stays reachable at idle only while a failure is still
+ *     retained in that capped list (ActivityBar.tsx). A delegation DENIED
+ *     outright at dispatch time never opens a span, so it never reaches the
+ *     panel either — verbose chat (which reveals this row directly,
+ *     DelegationFailureDisplay included) is the only render surface for
+ *     that specific case; absent verbose chat, the calling agent's own
+ *     narration is the only place the denial surfaces. A delegation that
+ *     DOES dispatch (a span opens) has its own nested step-level failures
+ *     shown in the panel via shouldRenderToolCallInPanel below (shows
+ *     everything except load_tool). Only verbose chat brings any of these
+ *     rows back into the thread itself.
  *   - Every other case ignores `isError` entirely (they're either always
  *     visible or, for `bash`'s foreground/`kill` cases, don't depend on it).
  *

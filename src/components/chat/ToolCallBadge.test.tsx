@@ -425,6 +425,50 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
+  // (item 8a, 2026-07-16 fix wave): component-level pin of the load_tool
+  // isError override (mirrors the equivalent GenericToolCall.test.tsx pair)
+  // — mutation-proofs the `toolCall.status === 'error' || marshalErr ||
+  // !!delegationFailure` argument ToolCallBadge threads into
+  // shouldRenderToolCall.
+  it('a load_tool call with status "error" is VISIBLE even when verboseChatEnabled is false', () => {
+    render(<ToolCallBadge toolCall={makeToolCall({ tool: 'load_tool', status: 'error' })} />)
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('a load_tool call that succeeded but whose result is a _marshal_error sentinel is VISIBLE even when verboseChatEnabled is false', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'load_tool',
+          status: 'success',
+          result: { _marshal_error: 'json: unsupported type: chan int' },
+        })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  // (item 8c, 2026-07-16 fix wave): a LIVE toggle within a single render —
+  // proves the row reacts to the store subscription rather than only being
+  // correct at mount time (all the tests around this one render fresh per
+  // state instead).
+  it('a background delegate dispatch appears when verbose chat is toggled on live, and disappears when toggled back off — same render instance', () => {
+    render(
+      <ToolCallBadge toolCall={makeToolCall({ tool: 'delegate', params: {}, status: 'success' })} />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+  })
+
   it('hides a background delegate dispatch by default (action=run, async=true)', () => {
     render(
       <ToolCallBadge

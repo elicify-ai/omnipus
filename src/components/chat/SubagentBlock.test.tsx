@@ -135,6 +135,19 @@ describe('SubagentBlock_Expanded_NestedToolCallsInOrder', () => {
 // load_tool). This is deliberately unchanged by Fix 2's panel-inversion
 // policy, which only applies to ActivityPanel's own ToolCallBadge usage
 // (surface='panel') — see ActivityPanel.test.tsx for that side.
+//
+// Note (item 8h, 2026-07-16 fix wave): the first test below renders
+// SubagentBlock directly with verboseChatEnabled left at this file's
+// beforeEach default (false). In production that combination is currently
+// UNREACHABLE via the thread render path — SubagentBlock's card itself only
+// ever mounts in the thread when verbose chat is on at all
+// (shouldRenderSubagentSpan is verbose-only; gated one level up, at
+// ChatScreen.tsx's SubagentSpansRenderer / visibleSpans, not inside this
+// component). This test still pins the step-level gate as its OWN
+// independent invariant — defense-in-depth for SubagentBlock's internals,
+// not a state a real user can currently reach — so it stays even though the
+// exact prop combination it exercises can't happen through today's default
+// thread flow.
 
 describe('SubagentBlock — thread-surface step visibility (hidden-set gating)', () => {
   it('a bash {action:"poll"} step renders NO ToolCallBadge, while a sibling visible step still renders', () => {

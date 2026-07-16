@@ -17,13 +17,11 @@
 import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import { ToolCallBadge } from './ToolCallBadge'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
-import type { WsSubagentEndFrame } from '@/lib/ws'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
 import { getSpanStatusDot, statusDot } from '@/lib/toolStatusConfig'
-
-type SubagentEndReason = WsSubagentEndFrame['reason']
+import { formatInterruptReason } from '@/lib/subagentStatus'
 
 // ── Label truncation — grapheme-safe (FR-H-009, Scenario 14) ─────────────────
 
@@ -46,17 +44,8 @@ function stepCountText(count: number): string {
 }
 
 // ── SubagentBlock ─────────────────────────────────────────────────────────────
-
-/** Human-readable label for the interrupted reason field (W1-9). */
-function formatInterruptReason(reason: SubagentEndReason): string {
-  switch (reason) {
-    case 'parent_timeout': return 'parent timed out'
-    case 'parent_cancelled': return 'parent cancelled'
-    case 'parent_done_early': return 'parent completed early'
-    case 'unknown': return 'unknown reason'
-    default: return reason ?? ''
-  }
-}
+// formatInterruptReason (W1-9) now lives in @/lib/subagentStatus — shared
+// with ActivityPanel/useRunningActivity.ts (Fix 2, 2026-07-16).
 
 export interface SubagentBlockProps {
   span: SubagentSpan

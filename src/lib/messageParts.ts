@@ -20,12 +20,12 @@
 
 import type { PositionedToolCall } from '@/store/chat'
 
-export interface MessageTextPart {
+export interface MessageTextPart { // not-wire-format: render-layer interleaving part (text slice between tool calls) computed client-side; never serialized, never crosses the gateway boundary
   type: 'text'
   text: string
 }
 
-export interface MessageToolPart {
+export interface MessageToolPart { // not-wire-format: render-layer interleaving part derived client-side from PositionedToolCall; never serialized, never crosses the gateway boundary
   type: 'tool'
   call: PositionedToolCall
 }
