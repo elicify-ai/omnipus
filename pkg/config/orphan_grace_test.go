@@ -59,8 +59,14 @@ func TestResolveInt_ExplicitPositive_ReturnsPositiveVerbatim(t *testing.T) {
 
 func TestEffectiveOrphanedTurnGraceSeconds_NilMeansDefault(t *testing.T) {
 	cfg := &Config{}
+	// The shipped default is now 0 = watchdog DISABLED: an unset config must
+	// never auto-cancel an abandoned turn. Omnipus runs turns as background
+	// work — closing a tab keeps the turn running to completion; only an
+	// explicit user Stop cancels. Operators opt in with a positive value.
 	assert.Equal(t, DefaultOrphanedTurnGraceSeconds, cfg.EffectiveOrphanedTurnGraceSeconds(),
-		"unset OrphanedTurnGraceSeconds (nil) must resolve to the 300s/5min default")
+		"unset OrphanedTurnGraceSeconds (nil) must resolve to the default")
+	assert.Equal(t, 0, cfg.EffectiveOrphanedTurnGraceSeconds(),
+		"the shipped default must be 0 (watchdog disabled — tab-close never cancels)")
 }
 
 func TestEffectiveOrphanedTurnGraceSeconds_ExplicitZero_Disabled(t *testing.T) {
