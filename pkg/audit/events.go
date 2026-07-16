@@ -131,6 +131,23 @@ const (
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
 
+	// EventTurnOrphanTimeout — INFO. The orphan-foreground-turn watchdog
+	// (ADR-045) fired: a webchat session's grace period elapsed with no
+	// client reattaching, and the graceful session-wide interrupt cascade
+	// (InterruptSession) was sent to that turn. Distinct from
+	// EventTurnCancelAttempt/EventTurnCancelled — this path bypasses
+	// ClaimCancel/onCancelFinish entirely and is attributed to
+	// "system:orphan-watchdog", never to a real user/channel canceller.
+	EventTurnOrphanTimeout = "turn.orphan_timeout"
+
+	// EventTurnOrphanHardAborted — WARN. The orphan-foreground-turn watchdog's
+	// PHASE B fired (+3s after EventTurnOrphanTimeout): the ROOT turn was
+	// still alive, so a TURN-SCOPED hard abort (TurnCancelHook.RequestHardAbort)
+	// was applied to that turn only — never session-wide, so a live
+	// Critical/background delegate sharing the session is unaffected and
+	// unreachable by this event.
+	EventTurnOrphanHardAborted = "turn.orphan_hard_aborted"
+
 	// EventBrowserLiveControlTaken — INFO (Decision=allow) or WARN
 	// (Decision=deny). A /api/v1/browser/ws viewer requested interactive
 	// control of an agent's live browser (ADR-038 D6). Decision=allow means

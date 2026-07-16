@@ -215,8 +215,14 @@ EOF
   # 6. Start gateway in background, capture PID for cleanup. --allow-empty permits
   #    boot without a fully-configured provider (defensive; the e2e flow configures
   #    one above).
+  #
+  #    OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): mirrors the
+  #    same override in .github/workflows/pr.yml's "Start gateway" step — a
+  #    short grace here reaps a genuinely leaked (finished-tab) live turn
+  #    quickly, without touching an open-tab turn or a transcript-seeded
+  #    replay test. Production default (300s) is untouched.
   log "e2e: start gateway"
-  "$E2E_BIN" start --allow-empty > "$E2E_LOG" 2>&1 &
+  OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 "$E2E_BIN" start --allow-empty > "$E2E_LOG" 2>&1 &
   GATEWAY_PID=$!
   sleep 0.5
   if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then

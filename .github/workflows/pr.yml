@@ -645,8 +645,22 @@ jobs:
         # The PID is captured so the teardown step can kill it cleanly.
         # --allow-empty permits gateway boot without a fully configured provider,
         # which is needed in case the credential seed step is extended in future.
+        #
+        # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): the orphan-
+        # foreground-turn watchdog only arms when the LAST WebSocket watcher on
+        # a session disconnects, so a short 20s grace here reaps a genuinely
+        # leaked (finished-tab) live turn quickly without ever touching an
+        # open-tab turn or a transcript-seeded replay test (those have no live
+        # turn to begin with). This is the fix for the "Group-A variance"
+        # family of load-dependent failures: a Playwright test that navigates
+        # away mid-turn without clicking Stop used to leave a real agent loop
+        # running indefinitely, queuing against the shared OpenRouter
+        # rate-limit window and starving later tests' tool calls. Production
+        # default (300s) is untouched — this override applies only to the e2e
+        # gateway process.
         run: |
           OMNIPUS_MASTER_KEY=${{ secrets.OMNIPUS_MASTER_KEY_CI }} \
+            OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
             ./omnipus start --allow-empty > /tmp/omnipus.log 2>&1 &
           GATEWAY_PID=$!
           echo "${GATEWAY_PID}" > /tmp/omnipus.pid

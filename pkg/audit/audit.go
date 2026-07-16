@@ -148,6 +148,9 @@ func IsValidEventName(e EventName) bool {
 		EventTurnCancelled,
 		EventTurnCancelStuck,
 		EventCancelAbusePattern,
+		// Orphan-foreground-turn watchdog events (ADR-045).
+		EventTurnOrphanTimeout,
+		EventTurnOrphanHardAborted,
 		// Live interactive browser panel events (ADR-038 D6).
 		EventBrowserLiveControlTaken,
 		EventBrowserLiveControlReleased,

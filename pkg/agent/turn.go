@@ -389,6 +389,18 @@ type TurnCancelHook interface {
 	// MarkAbandoned sets the abandoned flag so the gateway can stop tracking
 	// a stuck goroutine (FR-19, FR-20, FR-21).
 	MarkAbandoned()
+	// RequestHardAbort hard-aborts ONLY this turn's own providerCancel/
+	// turnCancel — a thin exported wrapper around the unexported
+	// requestHardAbort (see that method below). Unlike InterruptSessionHard,
+	// it never walks transcriptSessionID matches, so a Critical/background
+	// descendant sub-turn (a separate turnState rooted on its own
+	// context.Background(), per ADR-032) is structurally unreachable through
+	// this call. Used exclusively by the orphan-foreground-turn watchdog
+	// (ADR-045, pkg/agent/orphan_watch.go) to escalate a single abandoned
+	// ROOT turn without ever touching a live delegate sharing its session.
+	// Returns true if this call actually set the abort flag (false if a
+	// concurrent caller — e.g. a real user Stop — already had).
+	RequestHardAbort() bool
 }
 
 // Compile-time check: *turnState implements TurnCancelHook.
@@ -786,6 +798,16 @@ func (ts *turnState) requestHardAbort() bool {
 		turnCancel()
 	}
 	return true
+}
+
+// RequestHardAbort is the exported TurnCancelHook wrapper around
+// requestHardAbort (ADR-045). See the interface doc comment for the full
+// rationale — it deliberately does NOT cascade to child/descendant turns
+// (unlike Finish(true) or InterruptSessionHard), so callers outside this
+// package can hard-abort exactly one turnState without any risk of reaching
+// a sibling delegate sub-turn.
+func (ts *turnState) RequestHardAbort() bool {
+	return ts.requestHardAbort()
 }
 
 func (ts *turnState) hardAbortRequested() bool {

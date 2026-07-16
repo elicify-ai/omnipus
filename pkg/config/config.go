@@ -2598,6 +2598,25 @@ type GatewayConfig struct {
 	// force-kill already-running dev servers (they idle-TTL out).
 	PreviewEnabled *bool `json:"preview_enabled,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_ENABLED"`
 
+	// OrphanedTurnGraceSeconds bounds an orphaned FOREGROUND (webchat) turn —
+	// one whose last watching WebSocket connection has closed and never
+	// reconnected — to at most this many seconds before the orphan watchdog
+	// (ADR-045, pkg/agent/orphan_watch.go) escalates it: graceful session-wide
+	// interrupt immediately, a turn-scoped hard abort +3s later if still
+	// alive, and a turn-scoped detach +5s after that. The watchdog is
+	// turn-scoped, NOT session-wide, so a Critical/background delegate
+	// sub-turn sharing the session survives indefinitely regardless of this
+	// value — see ADR-045 for the full mechanism and why a session-wide
+	// escalation would be wrong here.
+	//
+	// nil (unset) resolves to DefaultOrphanedTurnGraceSeconds (300s / 5min)
+	// via config.ResolveInt — `[INFERRED]`, no BRD-specified number exists.
+	// 0 or negative disables the watchdog entirely (matches the
+	// TimeoutSeconds: 0-disabled convention elsewhere in this file). Read
+	// live (NOT restart-gated, matching GatewayPreviewEnabled's precedent) —
+	// each WS teardown reads the current config fresh when arming.
+	OrphanedTurnGraceSeconds *int `json:"orphaned_turn_grace_seconds,omitempty" env:"OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS"`
+
 	// AuthMismatchLogLevel controls the log level emitted when the gateway
 	// detects an authentication mismatch (e.g. token supplied but does not
 	// match, or user not found). Valid values: "debug", "info", "warn"
@@ -3480,6 +3499,25 @@ func (c *Config) IsPreviewEnabled() bool {
 		return false
 	}
 	return ResolveBool(c.Gateway.PreviewEnabled, true)
+}
+
+// DefaultOrphanedTurnGraceSeconds is the semantic default (5 minutes) for
+// gateway.orphaned_turn_grace_seconds when unset (ADR-045). `[INFERRED]` —
+// no BRD-specified number exists; operators can override via config.json or
+// OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS.
+const DefaultOrphanedTurnGraceSeconds = 300
+
+// EffectiveOrphanedTurnGraceSeconds resolves gateway.orphaned_turn_grace_seconds
+// (ADR-045): nil resolves to DefaultOrphanedTurnGraceSeconds; 0 or negative is
+// returned as-is so callers (AgentLoop.ArmOrphanForegroundTurnWatch) can treat
+// it as "watchdog disabled". Read live on every call, matching
+// IsPreviewEnabled's precedent — a nil *Config returns 0 (disabled), the same
+// fail-closed posture as IsPreviewEnabled's fail-closed-false.
+func (c *Config) EffectiveOrphanedTurnGraceSeconds() int {
+	if c == nil {
+		return 0
+	}
+	return ResolveInt(c.Gateway.OrphanedTurnGraceSeconds, DefaultOrphanedTurnGraceSeconds)
 }
 
 // ApplyWarmupTimeoutDefault ensures the web_serve dev-mode warmup timeout
