@@ -1,0 +1,546 @@
+<title>Live Browser Display — Architecture Options</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    /* Sovereign Deep — light ground (chosen neutral: silver biased warm-neutral, not pure grey) */
+    --bg: #ECEDF0;
+    --panel: #F7F8FA;
+    --panel-2: #FFFFFF;
+    --ink: #1A1C22;
+    --ink-soft: #4A4F5C;
+    --muted: #737A8A;
+    --line: #D6D9E0;
+    --line-soft: #E4E6EC;
+    --accent: #9A7A16;          /* Forge Gold, darkened for contrast on light */
+    --accent-bg: #9a7a1618;
+    --good: #2F8F52;
+    --good-bg: #2f8f5216;
+    --warn: #A8760E;
+    --warn-bg: #a8760e16;
+    --bad: #C0424C;
+    --bad-bg: #c0424c16;
+    --shadow: 0 1px 2px rgba(20,22,30,.06), 0 8px 24px rgba(20,22,30,.06);
+    --mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0A0A0B;
+      --panel: #131316;
+      --panel-2: #191A1E;
+      --ink: #E2E8F0;
+      --ink-soft: #B4BCC9;
+      --muted: #7E8494;
+      --line: #26272C;
+      --line-soft: #1E1F23;
+      --accent: #D4AF37;
+      --accent-bg: #d4af3714;
+      --good: #5FB87A;
+      --good-bg: #5fb87a16;
+      --warn: #D4A03C;
+      --warn-bg: #d4a03c16;
+      --bad: #D4666E;
+      --bad-bg: #d4666e18;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 40px rgba(0,0,0,.35);
+    }
+  }
+  /* Explicit toggles win over the media query in both directions */
+  :root[data-theme="light"] {
+    --bg: #ECEDF0; --panel: #F7F8FA; --panel-2: #FFFFFF; --ink: #1A1C22;
+    --ink-soft: #4A4F5C; --muted: #737A8A; --line: #D6D9E0; --line-soft: #E4E6EC;
+    --accent: #9A7A16; --accent-bg: #9a7a1618; --good: #2F8F52; --good-bg: #2f8f5216;
+    --warn: #A8760E; --warn-bg: #a8760e16; --bad: #C0424C; --bad-bg: #c0424c16;
+    --shadow: 0 1px 2px rgba(20,22,30,.06), 0 8px 24px rgba(20,22,30,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0A0A0B; --panel: #131316; --panel-2: #191A1E; --ink: #E2E8F0;
+    --ink-soft: #B4BCC9; --muted: #7E8494; --line: #26272C; --line-soft: #1E1F23;
+    --accent: #D4AF37; --accent-bg: #d4af3714; --good: #5FB87A; --good-bg: #5fb87a16;
+    --warn: #D4A03C; --warn-bg: #d4a03c16; --bad: #D4666E; --bad-bg: #d4666e18;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 40px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px; }
+  .col { max-width: 760px; }
+
+  /* ── Typography ─────────────────────────────── */
+  h1, h2, h3 { text-wrap: balance; line-height: 1.15; margin: 0; font-weight: 680; letter-spacing: -.02em; }
+  h1 { font-size: clamp(2rem, 4.4vw, 3.1rem); letter-spacing: -.035em; }
+  h2 { font-size: clamp(1.4rem, 2.6vw, 1.85rem); letter-spacing: -.028em; }
+  h3 { font-size: 1.1rem; letter-spacing: -.02em; font-weight: 660; }
+  p { margin: 0; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); }
+  a:hover { border-bottom-color: var(--accent); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: .72rem; font-weight: 600;
+    letter-spacing: .22em; text-transform: uppercase; color: var(--accent);
+  }
+  .lede { font-size: 1.16rem; line-height: 1.6; color: var(--ink-soft); }
+  .small { font-size: .86rem; }
+  .muted { color: var(--muted); }
+  code { font-family: var(--mono); font-size: .84em; background: var(--accent-bg); color: var(--ink); padding: .1em .4em; border-radius: 4px; }
+
+  /* ── Header ─────────────────────────────── */
+  header.top {
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(120% 140% at 88% -10%, var(--accent-bg), transparent 55%),
+      var(--panel);
+  }
+  .top-inner { padding: 64px 0 52px; }
+  .kicker-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 26px; }
+  .octo { width: 30px; height: 30px; flex: none; color: var(--accent); }
+  .divider-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--muted); opacity: .6; }
+  header.top h1 { margin-top: 6px; }
+  header.top .lede { margin-top: 20px; max-width: 680px; }
+  .meta {
+    display: flex; gap: 28px; flex-wrap: wrap; margin-top: 34px;
+    font-family: var(--mono); font-size: .78rem; color: var(--muted);
+  }
+  .meta b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ── Sections ─────────────────────────────── */
+  section { padding: 56px 0; border-bottom: 1px solid var(--line-soft); }
+  .sec-head { margin-bottom: 30px; }
+  .sec-head h2 { margin-top: 10px; }
+  .sec-head p { margin-top: 14px; }
+
+  /* ── Bottom-line callout ─────────────────────────────── */
+  .bottomline {
+    display: grid; grid-template-columns: auto 1fr; gap: 20px 22px;
+    align-items: start;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 12px;
+    padding: 26px 28px;
+    box-shadow: var(--shadow);
+    margin-top: 36px;
+  }
+  .bottomline .num {
+    font-family: var(--mono); font-size: .74rem; font-weight: 600; letter-spacing: .12em;
+    color: var(--accent); padding-top: 3px; white-space: nowrap;
+  }
+  .bottomline h3 { margin-bottom: 6px; }
+  .bottomline p { color: var(--ink-soft); }
+  .bottomline > div:nth-child(odd) { grid-column: 1; }
+
+  /* ── Approach cards ─────────────────────────────── */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 24px 22px; display: flex; flex-direction: column; gap: 14px;
+    box-shadow: var(--shadow);
+  }
+  .card .tag {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .14em; text-transform: uppercase;
+    font-weight: 600; color: var(--muted);
+  }
+  .card h3 { line-height: 1.2; }
+  .card .where { font-size: .9rem; color: var(--ink-soft); }
+  .card .verdict-strip {
+    margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line-soft);
+    font-size: .84rem; color: var(--ink-soft); display: flex; align-items: baseline; gap: 8px;
+  }
+  .card ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 9px; }
+  .card li { position: relative; padding-left: 20px; font-size: .89rem; line-height: 1.45; color: var(--ink-soft); }
+  .card li::before {
+    content: ""; position: absolute; left: 0; top: .55em; width: 8px; height: 2px; border-radius: 2px;
+  }
+  .card li.pro::before { background: var(--good); }
+  .card li.con::before { background: var(--bad); }
+  .card li.mid::before { background: var(--warn); }
+
+  /* ── Chips ─────────────────────────────── */
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: .7rem; font-weight: 600; letter-spacing: .04em;
+    padding: 3px 9px; border-radius: 999px; border: 1px solid; white-space: nowrap; line-height: 1.5;
+  }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .chip.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); background: var(--good-bg); }
+  .chip.good::before { background: var(--good); }
+  .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-bg); }
+  .chip.warn::before { background: var(--warn); }
+  .chip.bad  { color: var(--bad);  border-color: color-mix(in srgb, var(--bad) 42%, transparent);  background: var(--bad-bg); }
+  .chip.bad::before  { background: var(--bad); }
+
+  /* ── Matrix ─────────────────────────────── */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; min-width: 820px; font-size: .9rem; }
+  thead th {
+    text-align: left; vertical-align: bottom; padding: 18px 18px 15px;
+    background: var(--panel-2); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 2;
+  }
+  thead th .colname { font-size: 1rem; font-weight: 660; letter-spacing: -.01em; display: block; color: var(--ink); }
+  thead th .colsub { font-family: var(--mono); font-size: .68rem; color: var(--muted); font-weight: 500; letter-spacing: .04em; display: block; margin-top: 3px; }
+  thead th:first-child { width: 220px; }
+  tbody th {
+    text-align: left; font-weight: 600; font-size: .88rem; color: var(--ink);
+    padding: 14px 18px; vertical-align: top; border-bottom: 1px solid var(--line-soft);
+    background: var(--panel);
+  }
+  tbody th small { display: block; font-weight: 400; color: var(--muted); font-size: .78rem; margin-top: 2px; letter-spacing: 0; font-family: var(--sans); }
+  tbody td {
+    padding: 14px 18px; vertical-align: top; border-bottom: 1px solid var(--line-soft);
+    border-left: 1px solid var(--line-soft); color: var(--ink-soft); font-size: .85rem; line-height: 1.5;
+  }
+  tbody td .chip { margin-bottom: 7px; }
+  tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
+  tbody tr.band th, tbody tr.band td { background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+  .crux th, .crux td { border-top: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); border-bottom: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); }
+
+  /* ── Evidence ─────────────────────────────── */
+  .ev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .ev {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 22px;
+    box-shadow: var(--shadow);
+  }
+  .ev h3 { margin-bottom: 10px; }
+  .ev p { font-size: .92rem; color: var(--ink-soft); }
+  .ev .src { margin-top: 12px; font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+  blockquote {
+    margin: 0; padding: 2px 0 2px 16px; border-left: 2px solid var(--accent);
+    font-style: italic; color: var(--ink); font-size: .92rem;
+  }
+
+  /* ── Recommendation ─────────────────────────────── */
+  .rec { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .rec .box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px; box-shadow: var(--shadow); }
+  .rec .box.primary { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: linear-gradient(180deg, var(--accent-bg), transparent 60%), var(--panel); }
+  .rec .box h3 { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .rec .box p { color: var(--ink-soft); font-size: .93rem; }
+  .rec .box p + p { margin-top: 12px; }
+  .stepnote { font-family: var(--mono); font-size: .78rem; color: var(--muted); margin-top: 40px; padding: 16px 20px; border: 1px dashed var(--line); border-radius: 10px; }
+  .stepnote b { color: var(--ink-soft); }
+
+  /* ── Sources ─────────────────────────────── */
+  .sources { columns: 2; column-gap: 32px; font-size: .82rem; }
+  .sources p { break-inside: avoid; margin-bottom: 10px; color: var(--muted); }
+  .sources b { color: var(--ink-soft); font-weight: 600; }
+
+  footer { padding: 40px 0 64px; color: var(--muted); font-size: .82rem; }
+
+  @media (max-width: 860px) {
+    .cards { grid-template-columns: 1fr; }
+    .ev-grid, .rec { grid-template-columns: 1fr; }
+    .sources { columns: 1; }
+    .bottomline { grid-template-columns: 1fr; gap: 6px 0; }
+    .bottomline .num { grid-column: 1 !important; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .card, .ev, .rec .box { transition: transform .18s ease, border-color .18s ease; }
+    .card:hover, .ev:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+  }
+</style>
+
+<header class="top">
+  <div class="wrap top-inner">
+    <div class="kicker-row">
+      <svg class="octo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2.6c-3.5 0-6.1 2.6-6.1 6 0 1.5.4 2.4.4 3.3 0 1.3-1 1.7-2 2.3-1 .6-1.7 1.3-1.7 2.3 0 1 .8 1.7 1.8 1.7.9 0 1.5-.6 2.2-.6.5 0 .8.4.8 1 0 .8-.5 1.2-.5 1.9 0 .7.6 1.2 1.3 1.2.8 0 1.2-.7 1.2-1.6 0-.6.3-1 .8-1s.8.4.8 1c0 .9.4 1.6 1.2 1.6.7 0 1.3-.5 1.3-1.2 0-.7-.5-1.1-.5-1.9 0-.6.3-1 .8-1 .7 0 1.3.6 2.2.6 1 0 1.8-.7 1.8-1.7 0-1-.7-1.7-1.7-2.3-1-.6-2-1-2-2.3 0-.9.4-1.8.4-3.3 0-3.4-2.6-6-6.1-6Z" fill="currentColor" opacity="0.9"/>
+        <circle cx="9.7" cy="8.4" r="1" fill="var(--panel)"/>
+        <circle cx="14.3" cy="8.4" r="1" fill="var(--panel)"/>
+      </svg>
+      <span class="eyebrow">Omnipus Architecture</span>
+      <span class="divider-dot"></span>
+      <span class="small muted" style="font-family:var(--mono)">Live-browser display · pre-ADR research</span>
+    </div>
+    <h1>How the live browser panel should reach your screen</h1>
+    <p class="lede">Three ways to show the agent's browser session to a human: <b style="color:var(--ink)">stream its pixels</b>, <b style="color:var(--ink)">mirror its DOM</b>, or <b style="color:var(--ink)">render a rewritten copy</b> in your own browser. This compares them on fidelity, responsiveness, auth, security, and — decisively — whether each can carry the agents' own browsing, not just the human view.</p>
+    <div class="meta">
+      <span><b>Question</b> · replace or augment the CDP screencast?</span>
+      <span><b>Amends</b> · ADR-038 · ADR-044 (draft)</span>
+      <span><b>Status</b> · decision open</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ── The one truth that frames everything ── -->
+<section>
+  <div class="wrap col">
+    <div class="sec-head">
+      <span class="eyebrow">Start here</span>
+      <h2>One fact settles the shape of the decision</h2>
+      <p class="lede">The agent must browse <b style="color:var(--ink)">autonomously</b> — scheduled runs, no human watching. So a real browser has to exist and execute JavaScript <b style="color:var(--ink)">server-side</b> no matter what. Client-side rendering (mirroring, proxy) runs the page in a <i>human's</i> browser; with no human attached, nothing executes.</p>
+    </div>
+
+    <div class="bottomline">
+      <div class="num">CONSEQUENCE</div>
+      <div>
+        <h3>Client-side rendering can never be the agents' browser — only an alternative <em>view</em> of it</h3>
+        <p>The server-side Chrome isn't shipped <i>for</i> the viewer; it's the agent's tool, and it stays. Every option below is a way to <b style="color:var(--ink)">observe and drive</b> that one server browser. None removes it. This is why every agent-platform vendor surveyed (OpenAI, Anthropic, Browserbase, Steel, AWS, Hyperbeam) keeps the authoritative browser server-side and treats the human display as a detachable window.</p>
+      </div>
+      <div class="num">SO THE REAL CHOICE IS</div>
+      <div>
+        <h3>Which display layer sits in front of the server browser</h3>
+        <p>Not "ship a browser vs. don't." The only thing any option changes about what we ship is the managed Chrome build (headless-shell → full) and how its frames reach the panel. Judge the three on <b style="color:var(--ink)">display quality, drive-ability, and cost</b> — not on whether they save us the browser. They don't.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── The three approaches ── -->
+<section>
+  <div class="wrap">
+    <div class="sec-head col">
+      <span class="eyebrow">The field</span>
+      <h2>Three families, honestly framed</h2>
+      <p>Each does something the others can't. The gold one is what we run today plus its planned upgrade; the other two are the "render it in the browser we're already in" ideas, in their two real forms.</p>
+    </div>
+
+    <div class="cards">
+      <!-- A -->
+      <article class="card">
+        <span class="tag">Option A · today + upgrade</span>
+        <h3>Pixel &amp; video streaming</h3>
+        <p class="where">The server browser's viewport is encoded to images (today: CDP JPEG screencast) or to real video (ADR-044: WebCodecs H.264/VP8 encoded <i>by</i> Chrome, relayed as binary over the existing WebSocket) and painted into the panel.</p>
+        <ul>
+          <li class="pro">Pixel-perfect on <b>every</b> page — canvas, WebGL, video, PDFs, cross-origin frames all just work</li>
+          <li class="pro">Shows the agent's <b>actual</b> session; take-the-wheel is native (CDP input)</li>
+          <li class="pro">It <b>is</b> already the agent runtime — zero new execution model</li>
+          <li class="mid">Bandwidth-heavy; today's JPEG path lags 100–500 ms/frame</li>
+          <li class="con">Audio needs the WebCodecs work; no native scrollbar feel</li>
+        </ul>
+        <div class="verdict-strip"><span class="chip good">market standard</span> the path with shipping evidence behind it</div>
+      </article>
+
+      <!-- B -->
+      <article class="card">
+        <span class="tag">Option B · the viable client-side one</span>
+        <h3>DOM mirroring</h3>
+        <p class="where">A tiny recorder (<code>rrweb</code>, MIT) is injected into the agent's page via CDP; it streams DOM mutations as JSON over the relay; the SPA <b>rebuilds the live DOM</b> in your browser — native scroll, crisp text, real fonts, near-zero bandwidth.</p>
+        <ul>
+          <li class="pro">Native scroll &amp; selectable text; tiny payloads; MIT-licensed</li>
+          <li class="pro">Sub-second–2 s latency; input maps back via CDP trusted events</li>
+          <li class="mid">Still needs the server browser (injection target) — an add-on, not a replacement</li>
+          <li class="con">Goes blank/wrong on canvas, WebGL, DRM video, closed shadow DOM, deep iframes</li>
+          <li class="con">Fragile on hostile/CSP pages; re-validate every version bump</li>
+        </ul>
+        <div class="verdict-strip"><span class="chip warn">promising add-on</span> great view — until the page fights it</div>
+      </article>
+
+      <!-- C -->
+      <article class="card">
+        <span class="tag">Option C · proxy / rewriting</span>
+        <h3>Client-side proxy render</h3>
+        <p class="where">A rewriting proxy (Surfly-style; open-source Ultraviolet / Scramjet) intercepts traffic, rewrites HTML/CSS/JS, and the <b>rewritten page runs in your browser</b>. Full native rendering with audio, no streaming at all.</p>
+        <ul>
+          <li class="pro">Full native fidelity <b>with audio</b>, rendered in the user's own engine</li>
+          <li class="con">Every mature engine is <b>AGPL or unlicensed</b> — incompatible with MIT Omnipus</li>
+          <li class="con">Single-origin collapse; security vendors fingerprint it as phishing tooling</li>
+          <li class="con">Perpetual compat treadmill — Google login, CAPTCHAs, banking break</li>
+          <li class="con">Cookie jar lives client-side → can't share the agent's session</li>
+        </ul>
+        <div class="verdict-strip"><span class="chip bad">wrong tool here</span> built for co-browsing, not autonomous agents</div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ── The matrix ── -->
+<section>
+  <div class="wrap">
+    <div class="sec-head col">
+      <span class="eyebrow">Head to head</span>
+      <h2>The comparison in full</h2>
+      <p>Same server browser behind all three. The gold band is the criterion that alone decides fitness for an agent platform; read it first.</p>
+    </div>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Criterion</th>
+            <th scope="col"><span class="colname">A · Pixel/video stream</span><span class="colsub">CDP screencast + ADR-044</span></th>
+            <th scope="col"><span class="colname">B · DOM mirroring</span><span class="colsub">rrweb-live + CDP input</span></th>
+            <th scope="col"><span class="colname">C · Proxy render</span><span class="colsub">Surfly / Ultraviolet class</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="crux">
+            <th scope="row">Can it BE the agents' runtime?<small>Autonomous, no human attached</small></th>
+            <td><span class="chip good">yes</span>The agent already runs in this server browser; the stream is just observation.</td>
+            <td><span class="chip good">yes*</span>Server browser is unchanged; rrweb is injected into it. *It only <i>displays</i> that browser — same as A.</td>
+            <td><span class="chip bad">no</span>Renders in a human's browser. No human on a scheduled run ⇒ nothing executes the page.</td>
+          </tr>
+          <tr>
+            <th scope="row">Shows the agent's real session?<small>Its cookies, logins, page state</small></th>
+            <td><span class="chip good">exact</span>Literal pixels of the agent's tab.</td>
+            <td><span class="chip good">exact</span>Mirror of the agent's live DOM.</td>
+            <td><span class="chip bad">no</span>A fresh proxied copy with the user's own cookies; not the agent's session.</td>
+          </tr>
+          <tr class="band">
+            <th scope="row">Fidelity on arbitrary pages<small>canvas · WebGL · video · iframes · shadow DOM</small></th>
+            <td><span class="chip good">complete</span>Pixels can't lie — everything the page draws shows up.</td>
+            <td><span class="chip bad">partial</span>Canvas/WebGL/DRM-video/closed-shadow/deep-iframe go blank or stale. Browserbase abandoned rrweb for this exact workload.</td>
+            <td><span class="chip warn">most</span>Native render, but rewriter misses break integrity-checked / WASM / worker-heavy sites.</td>
+          </tr>
+          <tr>
+            <th scope="row">Scroll &amp; text feel</th>
+            <td><span class="chip warn">streamed</span>Scroll is frames arriving; today laggy, smooth once ADR-044 lands. Text not selectable.</td>
+            <td><span class="chip good">native</span>Real browser scroll, selectable text, real fonts.</td>
+            <td><span class="chip good">native</span>Real scroll and text — it's a real page.</td>
+          </tr>
+          <tr>
+            <th scope="row">In-page video &amp; audio</th>
+            <td><span class="chip warn">via ADR-044</span>Video watchable once WebCodecs lands; audio = Opus phase 2.</td>
+            <td><span class="chip bad">weak</span>Video won't reconstruct from a DOM mirror; no audio path.</td>
+            <td><span class="chip good">native</span>Real <code>&lt;video&gt;</code> with sound, for free.</td>
+          </tr>
+          <tr>
+            <th scope="row">Bandwidth</th>
+            <td><span class="chip warn">high</span>Full frames/video; 1.5–4.5 MB/s today.</td>
+            <td><span class="chip good">tiny</span>JSON diffs — kilobytes on a static page.</td>
+            <td><span class="chip warn">page-weight</span>Whatever the site weighs, via the proxy.</td>
+          </tr>
+          <tr>
+            <th scope="row">Latency (glass-to-glass)</th>
+            <td><span class="chip warn">100–500 ms</span>Per frame today; ADR-044 targets well under.</td>
+            <td><span class="chip good">0.5–2 s</span>Buffer-dominated; feels live for reading.</td>
+            <td><span class="chip good">near-native</span>Direct page load through the proxy hop.</td>
+          </tr>
+          <tr>
+            <th scope="row">Take-the-wheel / input</th>
+            <td><span class="chip good">trusted</span>CDP <code>Input.dispatch</code> — real, coordinate-mapped.</td>
+            <td><span class="chip good">trusted</span>Node-id/coord map → CDP input. Slight "clicked where it was 0.8 s ago" drift.</td>
+            <td><span class="chip warn">shared</span>Co-browse input sync; native controls / file pickers partly restricted.</td>
+          </tr>
+          <tr>
+            <th scope="row">Auth &amp; session management<small>The operator's core question</small></th>
+            <td><span class="chip good">server-held</span>One credential store, the agent's own — nothing to reconcile.</td>
+            <td><span class="chip good">server-held</span>Same — the mirror is read-only of the agent's session.</td>
+            <td><span class="chip bad">client-held</span>Cookie jars live in the viewer; sharing with the agent's server jar is out-of-band custom work. Google login canonically breaks.</td>
+          </tr>
+          <tr class="band">
+            <th scope="row">Single Go binary · no CGo</th>
+            <td><span class="chip good">clean</span>Chrome encodes; Go relays bytes. Fits by construction.</td>
+            <td><span class="chip good">clean</span>Relay is dumb JSON forwarding. Pure-Go, ~few hundred lines.</td>
+            <td><span class="chip warn">transport only</span>Go can relay (Wisp spec is CC-BY); the rewriter can't be vendored — see licensing.</td>
+          </tr>
+          <tr>
+            <th scope="row">Licensing (MIT-compatible?)</th>
+            <td><span class="chip good">yes</span>Own code + Chrome. No new copyleft.</td>
+            <td><span class="chip good">yes</span>rrweb is MIT.</td>
+            <td><span class="chip bad">blocker</span>Ultraviolet &amp; Scramjet AGPL-3.0; Rammerhead unlicensed. Contaminates an MIT product.</td>
+          </tr>
+          <tr>
+            <th scope="row">Security / attack surface</th>
+            <td><span class="chip good">contained</span>Existing authed WS; no new origin or egress primitive.</td>
+            <td><span class="chip warn">moderate</span>Injected script tamperable by hostile pages; relay stays simple.</td>
+            <td><span class="chip bad">large</span>SSRF relay + single-origin collapse; needs isolated origin + egress filtering; AV/EDR-flagged.</td>
+          </tr>
+          <tr>
+            <th scope="row">Maintenance burden</th>
+            <td><span class="chip good">low</span>Codec lives in Chrome; upgrades ride Chrome.</td>
+            <td><span class="chip warn">ongoing</span>Re-validate rrweb vs. the wild web each bump; keep a pixel fallback.</td>
+            <td><span class="chip bad">unbounded</span>Adversarial, never-finished rewriting arms race.</td>
+          </tr>
+          <tr>
+            <th scope="row">Shipping evidence</th>
+            <td><span class="chip good">strong</span>Steel, Browserbase, Hyperbeam, AWS, Anthropic demos.</td>
+            <td><span class="chip warn">partial</span>rrweb-live real (syncit, LogRocket Live, OpenReplay); not for full-fidelity agent view.</td>
+            <td><span class="chip warn">niche</span>Surfly ships it — for co-browsing where a human is guaranteed present.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted" style="margin-top:14px;font-family:var(--mono)">Legend&nbsp;&nbsp;<span class="chip good">strength</span>&nbsp;<span class="chip warn">caveat / conditional</span>&nbsp;<span class="chip bad">blocker for this use case</span></p>
+  </div>
+</section>
+
+<!-- ── Field evidence ── -->
+<section>
+  <div class="wrap">
+    <div class="sec-head col">
+      <span class="eyebrow">What the market did</span>
+      <h2>Two data points worth more than opinion</h2>
+    </div>
+    <div class="ev-grid">
+      <article class="ev">
+        <h3>Browserbase tried DOM mirroring — and quit it</h3>
+        <p>Browserbase recorded its cloud <em>agent</em> browsers with rrweb, then publicly moved off it to CDP pixel capture. Their post-mortem is almost exactly Option B's risk list:</p>
+        <blockquote>"Nested iframes break this model almost immediately… Canvas, WebGL, video elements, shadow DOM — anything that isn't normal HTML becomes either flaky or invisible," and replays could silently show <i>current</i> rather than historical data.</blockquote>
+        <p class="src">browserbase.com/blog/session-recordings</p>
+      </article>
+      <article class="ev">
+        <h3>Every agent platform streams pixels; the exceptions prove the rule</h3>
+        <p>OpenAI Operator, Anthropic (VNC), Steel (CDP JPEG over WS — same as us), Hyperbeam &amp; neko (WebRTC), AWS AgentCore (DCV video): all stream a server browser. The one client-side-render product — <b>Surfly</b> — is co-browsing, where a human browser is <i>guaranteed present</i> and it funds a permanent rewriting proxy plus reverse-proxy cookie plumbing for logins.</p>
+        <p class="src">Convergence holds wherever the agent must act with no human attached.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ── Recommendation ── -->
+<section>
+  <div class="wrap">
+    <div class="sec-head col">
+      <span class="eyebrow">Reading of the evidence</span>
+      <h2>Where this points — your call</h2>
+      <p>The research doesn't crown a single winner; it separates a <b>base layer</b> that must exist from an <b>optional enhancement</b> that's genuinely attractive for the human view. These are not mutually exclusive.</p>
+    </div>
+    <div class="rec">
+      <article class="box primary">
+        <h3><span class="chip good">base</span> Pixel/video stream stays the substrate</h3>
+        <p>It's the only option that is simultaneously the agent runtime, universally faithful, drive-able, MIT-clean, and low-maintenance. ADR-044's WebCodecs relay fixes the two things people actually feel — scroll/video smoothness and (phase 2) audio — while keeping the Go binary a pure byte relay and the JPEG path as an automatic fallback.</p>
+        <p>This is the recommended target, and it's independent of what we decide about B.</p>
+      </article>
+      <article class="box">
+        <h3><span class="chip warn">option</span> DOM mirroring as a "reading mode"</h3>
+        <p>rrweb-live is MIT, tiny-bandwidth, sub-2-second, and gives native scroll and crisp text — a genuinely nicer <em>watch</em> for text-heavy pages, and a strong fit for low-bandwidth/mobile viewing. It rides the same relay and panel API.</p>
+        <p>The honest condition: it must fall back to pixels the moment the page uses canvas/WebGL/video/closed-shadow-DOM — which is common on the sites agents visit. Worth a spike; not worth betting the only display path on.</p>
+      </article>
+    </div>
+
+    <div class="stepnote">
+      <b>Not a decision yet.</b> ADR-044 stays in draft with its §6 recommendation suspended pending your read of this. Natural next steps: (1) keep ADR-044's WebCodecs spikes; (2) add one rrweb-live spike behind the same panel API to measure real fidelity fallback rate on agent-typical pages; then (3) <code>/grill-spec</code> the ADR. The proxy family (Option C) is documented as rejected on licensing + autonomy, so it won't resurface unanswered.
+    </div>
+  </div>
+</section>
+
+<!-- ── Sources ── -->
+<section style="border-bottom:none">
+  <div class="wrap">
+    <div class="sec-head col">
+      <span class="eyebrow">Grounding</span>
+      <h2>Primary sources</h2>
+      <p class="small muted">From three parallel web-research passes, July 2026. Vendor/product claims are cited; latency and bandwidth figures are the reported/measured values noted in each source, not guarantees.</p>
+    </div>
+    <div class="sources">
+      <p><b>Omnipus code</b> — pkg/tools/browser/live.go (JPEG Q60/1280×720/per-frame ack); browser_ws.go (drop-on-full relay); installer.go (chrome-headless-shell). ADR-038 / ADR-044.</p>
+      <p><b>rrweb</b> — github.com/rrweb-io/rrweb (MIT, 2.1.0, 2026-06); live-mode recipe; rrweb-io/syncit (co-browse + control); issue #538 (1–3 s live latency).</p>
+      <p><b>Browserbase</b> — browserbase.com/blog/session-recordings (rrweb → CDP screencast post-mortem); docs.browserbase.com/features/session-live-view.</p>
+      <p><b>Steel</b> — steel-dev/steel-browser casting.handler.ts (CDP JPEG q75 over WS + Input.dispatch).</p>
+      <p><b>Surfly</b> — surfly.com/glossary/interaction-middleware; session-continuation.md (HttpOnly cookie transfer via reverse proxy).</p>
+      <p><b>Ultraviolet / Scramjet</b> — github.com/titaniumnetwork-dev/Ultraviolet (AGPL, "not maintained, succeeded by Scramjet"); MercuryWorkshop/scramjet (AGPL, alpha); wisp-protocol (spec CC-BY-4.0).</p>
+      <p><b>urlscan.io</b> — "Proxying Trust" (2026-04): UV/Scramjet fingerprinted as phishing relays.</p>
+      <p><b>Agent vendors</b> — OpenAI CUA/Operator; Anthropic computer-use-demo (VNC); Hyperbeam (WebRTC); AWS AgentCore Browser (DCV); Lightpanda (DOM-only engine, Beta).</p>
+      <p><b>CDP</b> — Page.startScreencast / screencastFrameAck; Page.addScriptToEvaluateOnNewDocument; Input.dispatch*; DOMSnapshot (one-shot). crbug 781117 (no video-stream API).</p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    Omnipus internal architecture research · live-browser display layer · prepared 2026-07-16 · pairs with ADR-044 (draft) and the <code>browser-live-responsiveness</code> note.
+  </div>
+</footer>
