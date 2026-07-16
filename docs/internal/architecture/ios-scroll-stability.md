@@ -33,7 +33,7 @@ no overflow rule can prevent it. `position: fixed` on body is the
 battle-tested lock: the page itself physically cannot pan; only inner
 `overflow` containers scroll.
 
-### 2. Always-on visualViewport tracking (touch devices only)
+### 2. Focus-gated visualViewport tracking (touch devices only)
 
 `AppShell.tsx` publishes `--app-vh` / `--app-top` from `window.visualViewport`
 on every `resize`/`scroll` of the visual viewport, and the shell consumes them:
@@ -43,17 +43,20 @@ on every `resize`/`scroll` of the visual viewport, and the shell consumes them:
      style={{ top: 'var(--app-top, 0px)', height: 'var(--app-vh, 100dvh)' }}>
 ```
 
-- **Why always-on:** when the on-screen keyboard opens, iOS pans the visual
-  viewport to reveal the focused input. The shell must follow (`offsetTop`)
-  or the header slides off-screen.
-- **Why it doesn't cause drift anymore:** part 1 (body-fixed) means scroll
-  gestures can no longer move the visual viewport — only iOS itself (keyboard)
-  moves it, and following that is always correct.
-- **⚠️ Do NOT reintroduce a "keyboard-only" gate.** A gate comparing
-  `window.innerHeight` to `vv.height` was tried (commit `117553b8`) and never
-  fired on iOS — with `interactive-widget=resizes-content` those two values
-  track each other. The gate silently disabled tracking and the keyboard bug
-  returned (reverted in `0ebd1d2b`).
+- **The gate is FOCUS, not height math:** the vars are set only while an
+  editable element (`INPUT`/`TEXTAREA`/contentEditable) has focus — the
+  deterministic "keyboard is up" signal on iOS. `focusin`/`focusout`
+  listeners re-evaluate immediately. When nothing editable is focused the
+  vars are REMOVED so the CSS fallback (`100dvh @ 0`) rules.
+- **Why gated at all (regression `IMG_0616`):** always-on tracking could
+  latch a stale short `vv.height` after keyboard close (a missed final
+  resize event), permanently shortening the shell — sidebar and composer
+  ended ~140px above the screen bottom.
+- **Why focus and not height math (regression `117553b8`):** a gate comparing
+  `window.innerHeight` to `vv.height` never fired on iOS — with
+  `interactive-widget=resizes-content` those two values track each other —
+  so tracking was silently disabled and the header slid off under the
+  keyboard (reverted in `0ebd1d2b`).
 - **Desktop:** tracking is skipped entirely (`pointer: coarse` check) — the
   CSS fallback `100dvh @ 0px` is always correct there, and desktop
   `visualViewport.height` can disagree with the real viewport (scrollbars,
@@ -87,6 +90,7 @@ never chains the gesture upward. Belt-and-suspenders with part 1.
 | Header slides off-screen when keyboard opens | 2 | always-on vv tracking |
 | Header stable but overlay sidebar scrolls away | 3 | absolute-in-shell overlays |
 | Pinned sidebar cut off at bottom on desktop | 2's desktop skip | `(pointer: coarse)` gate |
+| Shell permanently shortened after keyboard close (stale vv.height) | 2's focus gate | focus-gated tracking |
 | Search modal taller than visible area on iPad | (adjacent) | `dvh` not `vh` for modal max-height |
 
 ## When adding new UI
