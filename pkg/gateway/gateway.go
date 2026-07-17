@@ -882,6 +882,12 @@ func browserInstallRoot(homePath string, cfg *config.Config) string {
 // download is still in flight in the background — so callers must still own
 // their teardown (services.displaySidecar/audioSidecar, Stop()'d at shutdown)
 // independent of the wiring outcome.
+// browserVideoWireTimeout bounds B4's wait for a full-Chrome build to be
+// installed before it gives up and leaves live video dormant. Generous: a
+// ~130MB Chrome-for-Testing download on a constrained self-host can take
+// minutes, and the wait is a cheap background poll that blocks nothing.
+const browserVideoWireTimeout = 15 * time.Minute
+
 func bootLiveBrowserVideo(
 	ctx context.Context,
 	cfg *config.Config,
@@ -940,40 +946,51 @@ func bootLiveBrowserVideo(
 		}
 	}
 
-	// B4: resolve/download the managed Chromium binary in the background so
-	// boot never blocks on a ~130MB download, then wire the coordinator ONLY
-	// once a full-Chrome build is confirmed installed under installRoot —
-	// never a headless-shell-only install (that would masquerade as
-	// video-capable while launchChrome would have nothing to actually capture
-	// from). EnsureChromium is idempotent (installMu) so racing the
-	// unconditional preprovision goroutines below is safe. This deliberately
-	// does NOT relaunch an already-running Chrome (CRIT-002) — wiring only
-	// takes effect on the next launch.
+	// B4: wait (in the background, boot never blocks) for a full-Chrome build to
+	// be installed under installRoot, then wire the coordinator so the NEXT
+	// managed Chrome launch goes headful. We wire ONLY once a full-Chrome build
+	// is confirmed — never a headless-shell-only install (that would masquerade
+	// as video-capable while launchChrome has nothing to actually capture from).
+	//
+	// This POLLS ClassifyVideoCapability (a cheap findInstalledBuild filesystem
+	// check, already gated on DisplaySidecarHealthyProbe = d.Healthy from B2) —
+	// it deliberately does NOT call EnsureChromium itself. The unconditional
+	// preprovision goroutines below (and lazy first-use resolution) perform the
+	// actual ~130MB download under installMu; if B4 also called EnsureChromium it
+	// would contend on that lock behind every preprovision goroutine and could
+	// block for the full download before wiring (observed on the CI worker: the
+	// wire never fired because B4 sat in EnsureChromium). Bounded by
+	// browserVideoWireTimeout so a host that never installs full Chrome logs a
+	// dormant outcome instead of a silent hang. Does NOT relaunch a running
+	// Chrome (CRIT-002) — wiring only takes effect on the next launch.
 	installRoot := browserInstallRoot(homePath, cfg)
 	go func() {
-		path, err := browser.EnsureChromium(ctx, installRoot)
-		if err != nil {
-			logger.WarnCF("browser", "live-browser video: managed chromium resolution failed — video stays dormant",
-				map[string]any{"error": err.Error()})
-			return
+		deadline := time.NewTimer(browserVideoWireTimeout)
+		defer deadline.Stop()
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			if browser.ClassifyVideoCapability(installRoot).Capable {
+				coordinator.SetDisplaySidecar(d)
+				coordinator.SetAudioSidecar(a)
+				logger.InfoCF("browser",
+					"live-browser video: display/audio sidecars wired — next managed Chrome launch goes headful",
+					map[string]any{"install_root": installRoot, "display": d.Display(), "audio_available": a != nil})
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-deadline.C:
+				logger.WarnCF(
+					"browser",
+					"live-browser video: full-Chrome build not installed within the wire timeout — video stays dormant (activates on a later boot once installed)",
+					map[string]any{"install_root": installRoot},
+				)
+				return
+			case <-ticker.C:
+			}
 		}
-		// Reuses ClassifyVideoCapability's own full-Chrome-installed check
-		// (findInstalledBuild(installRoot, platform, fullChromeBuild()) != "")
-		// rather than duplicating it — those helpers are unexported to
-		// pkg/tools/browser. Capable is also gated on DisplaySidecarHealthyProbe
-		// (already flipped to d.Healthy by B2 above), which is exactly the
-		// coordinator state this wiring is about to create.
-		if !browser.ClassifyVideoCapability(installRoot).Capable {
-			logger.WarnCF("browser",
-				"live-browser video: no full-Chrome build confirmed installed after resolution — video stays dormant",
-				map[string]any{"exec_path": path, "install_root": installRoot})
-			return
-		}
-		coordinator.SetDisplaySidecar(d)
-		coordinator.SetAudioSidecar(a)
-		logger.InfoCF("browser",
-			"live-browser video: display/audio sidecars wired — next managed Chrome launch goes headful",
-			map[string]any{"exec_path": path, "display": d.Display(), "audio_available": a != nil})
 	}()
 
 	return d, a
