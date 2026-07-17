@@ -298,6 +298,12 @@ func (s *xvfbSidecar) supervise(initialExit chan error) {
 		logger.InfoCF("browser", "xvfb sidecar: restarted", map[string]any{
 			"display": fmt.Sprintf(":%d", newDisp),
 		})
+		// FR-019 "Xvfb sidecar restart count" (Test 28, O-4): count only a
+		// CONFIRMED restart (ready again after the earlier successful
+		// Start) — supervise() only ever runs after that initial Start
+		// succeeded, so every completed pass through this loop is a real
+		// recovery, not the first bring-up.
+		activeBrowserMetricsRecorder.IncXvfbSidecarRestart()
 		curExit = newExit
 	}
 }

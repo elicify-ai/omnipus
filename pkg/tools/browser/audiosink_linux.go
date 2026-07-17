@@ -248,6 +248,11 @@ func (p *pulseSidecar) runAndSupervise() {
 		backoff = 500 * time.Millisecond
 	}
 
+	// FR-019 "PulseAudio sidecar restart count" (Test 28, O-4): only a
+	// bring-up that follows an EARLIER successful bring-up is a "restart" —
+	// the very first successful bring-up in this sidecar's lifetime is not.
+	everHealthy := false
+
 	for {
 		if p.isStopped() {
 			return
@@ -301,6 +306,10 @@ func (p *pulseSidecar) runAndSupervise() {
 			"sink":   p.cfg.SinkName,
 			"source": p.cfg.SourceName,
 		})
+		if everHealthy {
+			activeBrowserMetricsRecorder.IncPulseSidecarRestart()
+		}
+		everHealthy = true
 		backoff = p.cfg.RestartBackoff
 		if backoff <= 0 {
 			backoff = 500 * time.Millisecond

@@ -652,8 +652,11 @@ func (h *CaptureIngestHandler) audit(event string, sev audit.Severity, decision 
 }
 
 // auditReject records one ingest-auth rejection (FR-024). Every rejection path
-// funnels through here so no rejection is ever silent.
+// funnels through here so no rejection is ever silent. Also feeds FR-019's
+// "ingest-auth-reject count" metric (Test 28) — same single funnel point, so
+// no rejection reason is ever missed there either.
 func (h *CaptureIngestHandler) auditReject(streamID string, reason ingestRejectReason, remoteAddr string) {
+	globalBrowserVideoMetrics.IncIngestAuthReject(string(reason))
 	h.audit(eventIngestRejected, audit.SeverityWarn, "deny", map[string]any{
 		"stream_id":   streamID,
 		"reason":      string(reason),

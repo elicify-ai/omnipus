@@ -442,6 +442,10 @@ func deliverToViewer(v Viewer, st *relayViewerState, c EncodedChunk, wire []byte
 	if !c.Key && st.degraded.Load() && cachedKeyframe != nil {
 		if v.SendChunk(EncodeChunk(*cachedKeyframe)) {
 			st.degraded.Store(false)
+		} else {
+			// FR-019 "per-viewer drop rate": the recovery keyframe itself was
+			// dropped (queue still full) — still a real drop event.
+			activeBrowserMetricsRecorder.IncViewerDrop()
 		}
 		return
 	}
@@ -452,6 +456,9 @@ func deliverToViewer(v Viewer, st *relayViewerState, c EncodedChunk, wire []byte
 		return
 	}
 	st.degraded.Store(true)
+	// FR-019 "per-viewer drop rate" (Test 28): a full-queue viewer had this
+	// chunk dropped in isolation (FR-004) — count it.
+	activeBrowserMetricsRecorder.IncViewerDrop()
 }
 
 // appendToCacheLocked adds c to s's GOP cache (FR-003): a new keyframe

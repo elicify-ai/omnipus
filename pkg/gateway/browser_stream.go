@@ -350,6 +350,11 @@ func RegisterBrowserVideo(mux IngestMux, deps BrowserVideoDeps) *BrowserVideoOrc
 		Audit:    deps.Audit,
 		StepDown: o.StepDown,
 	})
+	// FR-019 (Test 28): wire pkg/tools/browser's relay-drop and
+	// Xvfb/PulseAudio-sidecar-restart hooks into the gateway's metrics
+	// singleton (browser_metrics.go) — mirrors tools.SetToolMetricsRecorder
+	// (FR-039/C4).
+	browser.SetBrowserMetricsRecorder(globalBrowserVideoMetrics)
 	return o
 }
 
@@ -385,6 +390,11 @@ func newOrchestrator(deps BrowserVideoDeps) *BrowserVideoOrchestrator {
 	if o.encoderServer == nil {
 		o.encoderServer = loopbackEncoderServer{}
 	}
+	// FR-019 "live-stream count" gauge: read straight from the relay's own
+	// StreamCount() (stream_relay.go already tracks this for exactly this
+	// purpose). Re-registering on every newOrchestrator call (including in
+	// tests) is harmless — it just points the gauge at the current relay.
+	globalBrowserVideoMetrics.setStreamCounter(o.relay.StreamCount)
 	enabled := true
 	if deps.Config.Enabled != nil {
 		enabled = *deps.Config.Enabled
@@ -679,6 +689,11 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 	}
 	go o.watchEncoder(streamID, st.stopCh, newTab)
 
+	// FR-019 "capture restart count" (Test 28): the CRIT-002 re-mint +
+	// relaunch path is one of the two recovery mechanisms this metric
+	// covers (the other is StepDown's capture-driver restart, below).
+	globalBrowserVideoMetrics.IncCaptureRestart()
+
 	o.auditStream("browser.live.video_stream_relaunched", audit.SeverityWarn, map[string]any{
 		"stream_id":  streamID,
 		"agent_id":   st.agentID,
@@ -755,6 +770,11 @@ func (o *BrowserVideoOrchestrator) StepDown(streamID string) {
 		if oldCapture != nil {
 			oldCapture.Stop()
 		}
+		// FR-019 "capture restart count" (Test 28): the capture driver was
+		// actually stopped and a new one started at reduced dimensions —
+		// the other of the two recovery mechanisms this metric covers (see
+		// handleEncoderDrop's CRIT-002 relaunch above).
+		globalBrowserVideoMetrics.IncCaptureRestart()
 		slog.Info("browser video: stepped down encode dimensions", "stream_id", streamID, "width", newW, "height", newH)
 	}()
 }
@@ -856,6 +876,10 @@ func (o *BrowserVideoOrchestrator) teardownStreamLocked(st *videoStream) {
 		st.serveStop()
 	}
 	o.ingest.EndStream(st.streamID)
+	// FR-019: drop this stream's fps/bitrate counters so cardinality tracks
+	// live streams, not total-streams-ever (browser_metrics.go's
+	// removeStream doc note).
+	globalBrowserVideoMetrics.removeStream(st.streamID)
 }
 
 // noteChunk resets the mid-stream liveness timer for streamID (called by the
@@ -1024,6 +1048,10 @@ type videoRelayAdapter struct {
 
 func (a *videoRelayAdapter) Ingest(streamID string, c EncodedChunk) {
 	a.orch.noteChunk(streamID)
+	// FR-019 "per-stream fps/bitrate": account this chunk's count + bytes
+	// (see writeBrowserVideoMetrics for the rate()-based fps/bitrate
+	// derivation).
+	globalBrowserVideoMetrics.recordChunk(streamID, c.Kind, len(c.Payload))
 	a.orch.relay.Ingest(streamID, browser.EncodedChunk{
 		Seq:     c.Seq,
 		TS:      c.TS,

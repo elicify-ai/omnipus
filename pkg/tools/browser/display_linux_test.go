@@ -61,6 +61,14 @@ func TestXvfbSidecar_SpawnSuperviseRestart(t *testing.T) {
 
 	t.Run("spawn, publish DISPLAY, survive a simulated crash via restart, clean Stop", func(t *testing.T) {
 		var launches int32
+		// FR-019 (Test 28/O-4): a real crash+restart cycle must fire
+		// IncXvfbSidecarRestart exactly once via the registered recorder —
+		// the end-to-end proof for the xvfb_sidecar_restart_total metric
+		// (see pkg/gateway/browser_metrics_test.go for the registry-level
+		// proof and why this specific hook is verified here instead).
+		metrics := &fakeSidecarMetricsRecorder{}
+		swapMetricsRecorder(t, metrics)
+
 		sc := newXvfbSidecar(DisplayConfig{Width: 800, Height: 600, Depth: 24})
 		sc.readyFunc = func(int) bool { return true } // hermetic: no real X11 socket to probe
 		sc.commandFunc = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
@@ -87,6 +95,8 @@ func TestXvfbSidecar_SpawnSuperviseRestart(t *testing.T) {
 			"expected a bounded-backoff restart after the simulated Xvfb crash")
 
 		require.NotEmpty(t, sc.Display(), "DISPLAY should be republished after the restart")
+		require.Equal(t, int64(1), metrics.xvfbRestarts.Load(),
+			"expected exactly one FR-019 xvfb sidecar restart metric increment for the one observed restart")
 
 		sc.Stop()
 		require.False(t, sc.Healthy())

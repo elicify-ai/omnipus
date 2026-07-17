@@ -184,6 +184,11 @@ func (a *restAPI) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	globalToolMetrics.collisionTotalMu.Unlock()
 
+	// FR-019 (live-browser video streaming observability) — see
+	// browser_metrics.go for the metric definitions and O-4 alert
+	// thresholds/runbook.
+	writeBrowserVideoMetrics(&sb)
+
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, sb.String())
 }

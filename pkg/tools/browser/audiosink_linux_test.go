@@ -314,6 +314,14 @@ func TestPulseSidecar_RestartReEnumeratesDevice(t *testing.T) {
 	cfg := testAudioConfig(t)
 	fixture := &fakePulseFixture{}
 
+	// FR-019 (Test 28/O-4): a real crash+restart cycle must fire
+	// IncPulseSidecarRestart exactly once via the registered recorder — the
+	// end-to-end proof for the pulse_sidecar_restart_total metric (see
+	// pkg/gateway/browser_metrics_test.go for the registry-level proof and
+	// why this specific hook is verified here instead).
+	metrics := &fakeSidecarMetricsRecorder{}
+	swapMetricsRecorder(t, metrics)
+
 	sidecar := NewAudioSidecar(cfg).(*pulseSidecar)
 	sidecar.spawnFn = fixture.spawn
 	defer sidecar.Stop()
@@ -366,6 +374,10 @@ func TestPulseSidecar_RestartReEnumeratesDevice(t *testing.T) {
 	// initial bring-up — this is the "device re-enumeration" the AC needs.
 	if calls[2].name != "module-null-sink" || calls[3].name != "module-remap-source" {
 		t.Fatalf("post-restart calls were not a fresh null-sink+remap-source load: %+v", calls[2:])
+	}
+
+	if got := metrics.pulseRestart.Load(); got != 1 {
+		t.Fatalf("expected exactly one FR-019 pulse sidecar restart metric increment, got %d", got)
 	}
 }
 
