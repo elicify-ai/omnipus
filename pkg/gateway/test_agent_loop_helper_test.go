@@ -52,6 +52,30 @@ func mustAgentLoop(
 	return al
 }
 
+// mustAgentLoopNoWorkspaceSeed is mustAgentLoop WITHOUT the ADR-046 P1
+// workspace-membership auto-seed. Use it ONLY in tests that manage workspace
+// membership themselves AND assert on the resolved working directory — e.g. the
+// executor smoke tests, which drive a FAKE runner (capturingFakeDriver) and so
+// never reach runTurn's/runExternalCLISubTurn's membership-refusal gate, but DO
+// assert exactly which workspace/agent-home dir the executor resolves to.
+// Auto-seeding a gateway-test-harness-default workspace would pollute that
+// resolution (adding a second, lexicographically-first CoreTeam membership), so
+// these tests must opt out.
+func mustAgentLoopNoWorkspaceSeed(
+	t *testing.T,
+	cfg *config.Config,
+	msgBus *bus.MessageBus,
+	provider providers.LLMProvider,
+) *agent.AgentLoop {
+	t.Helper()
+	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
+	if err != nil {
+		t.Fatalf("agent.NewAgentLoop: %v", err)
+	}
+	t.Cleanup(al.Close)
+	return al
+}
+
 // testHarnessWorkspaceMembershipID is the fixed workspace id the shared
 // harness seed file uses for pkg/gateway tests. Kept distinct from any id an
 // individual test creates itself (e.g. rest_workspaces_test.go's own

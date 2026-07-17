@@ -903,7 +903,10 @@ func newTestRestAPIWithWorkspaceAgent(t *testing.T) (api *restAPI, agentID, work
 	}
 
 	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	// No workspace-membership auto-seed: these executor smoke tests set up their
+	// OWN membership (none, or a specific workspace) and assert on the resolved
+	// work dir; the shared harness default would pollute that resolution.
+	al := mustAgentLoopNoWorkspaceSeed(t, cfg, msgBus, &restMockProvider{})
 	api = &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
