@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -141,8 +142,9 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 
 			before := sm.KilledBackgroundSessionsCount()
 
-			killed := sm.KillAllForSession(tt.killSessionID)
+			killed, failed := sm.KillAllForSession(tt.killSessionID)
 			require.Equal(t, tt.wantKilled, killed, "unexpected killed count")
+			require.Equal(t, 0, failed, "no kill should fail in this scenario")
 
 			after := sm.KilledBackgroundSessionsCount()
 			require.Equal(
@@ -186,8 +188,9 @@ func TestSessionManager_KillAllForSession_DoesNotAffectOtherOwners(t *testing.T)
 	sm.Add(sessA)
 	sm.Add(sessB)
 
-	killed := sm.KillAllForSession("session-A")
+	killed, failed := sm.KillAllForSession("session-A")
 	require.Equal(t, 1, killed)
+	require.Equal(t, 0, failed)
 
 	gotA, err := sm.Get("a1")
 	require.NoError(t, err)
@@ -263,8 +266,9 @@ func TestSessionManager_KillAllForSession_LogsSessionDetails(t *testing.T) {
 	}
 	sm.Add(sess)
 
-	killed := sm.KillAllForSession("owner-log-details")
+	killed, failed := sm.KillAllForSession("owner-log-details")
 	require.Equal(t, 1, killed)
+	require.Equal(t, 0, failed)
 
 	entry := findLogEntry(t, buf, "killed background session on cancel cascade")
 	require.NotNil(t, entry, "expected an INFO log line for the killed session; got log output: %s", buf.String())
@@ -283,4 +287,37 @@ func TestSessionManager_KillAllForSession_LogsSessionDetails(t *testing.T) {
 		"elapsed_seconds must reflect the REAL runtime (session started %ds ago)", wantElapsedMin)
 	assert.Less(t, gotElapsed, float64(wantElapsedMin+10),
 		"elapsed_seconds must not be wildly larger than the real elapsed time")
+}
+
+// TestSessionManager_KillAllForSession_KillFailure_CountsAsFailed forces the
+// Kill() failure branch via the killProcessGroupFn test seam — a real fake
+// PID (fakeUnusedPIDBase+N) always succeeds via ESRCH-as-success (see
+// killProcessGroup's own doc comment), so there is no way to reach the
+// failure branch with a real syscall in this sandbox. Asserts the failure is
+// counted in `failed` (not silently swallowed, 7-reviewer gate finding) and
+// that the session's status is left "running" — no relabel on a failed kill.
+func TestSessionManager_KillAllForSession_KillFailure_CountsAsFailed(t *testing.T) {
+	origKillFn := killProcessGroupFn
+	t.Cleanup(func() { killProcessGroupFn = origKillFn })
+	wantErr := errors.New("forced kill failure for test")
+	killProcessGroupFn = func(pid int) error { return wantErr }
+
+	sm := NewSessionManager()
+	sess := &ProcessSession{
+		ID:             "fail-1",
+		OwnerSessionID: "owner-fail",
+		Status:         "running",
+		PID:            fakeUnusedPIDBase + 900,
+		StartTime:      time.Now().Unix(),
+	}
+	sm.Add(sess)
+
+	killed, failed := sm.KillAllForSession("owner-fail")
+	require.Equal(t, 0, killed, "a failed kill must not be counted as killed")
+	require.Equal(t, 1, failed, "a failed kill must be counted as failed")
+
+	got, err := sm.Get("fail-1")
+	require.NoError(t, err)
+	require.Equal(t, "running", got.GetStatus(),
+		"status must stay running when the kill itself failed — no relabel on failure")
 }

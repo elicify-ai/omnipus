@@ -1439,11 +1439,14 @@ func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
 			}
 		},
-		KillBackgroundSessions: func(sid string) int {
+		KillBackgroundSessions: func(sid string) (killed, failed int) {
 			// Cascade the cancel to any detached background bash/exec
 			// sessions this chat session started (FR-B10/FR-B11, User Story 5).
-			// The returned count flows back through RequestCancel into the
-			// turn_canceled audit event's background_sessions_killed field.
+			// The returned counts flow back through RequestCancel into the
+			// turn_canceled audit event's background_sessions_killed/
+			// background_sessions_failed fields, and into CancelOutcome so
+			// handleCancel below can notify the client even when there was no
+			// active turn to cancel.
 			return tools.GetSharedSessionManager().KillAllForSession(sid)
 		},
 		SetSessionInterrupted: func(sid string) {
@@ -1495,6 +1498,28 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	}
 	if !outcome.Fired {
 		slog.Debug("ws: cancel — no active turn or already canceled", "session_id", sessionID)
+		// Observability fix: a cancel with no active turn is the COMMON case
+		// for a `bash run_in_background=true` job whose own turn already
+		// ended (see cancel.go's RequestCancel doc comment) — the background
+		// kill cascade above still ran and may have actually killed real
+		// work, but without this the user clicking Stop got ZERO feedback
+		// (no frame, no log) despite that. Reuse the existing "graceful"
+		// stage value rather than introducing a new CancelStageFrame.stage
+		// enum member: that field is a closed, SPA-validated enum
+		// ({graceful, hard, detached} — contracts/components/schemas/
+		// CancelStageFrame.yaml) and adding a value would require a
+		// contract + frontend change beyond this fix's scope; "graceful"'s
+		// documented meaning ("cancel request acknowledged") fits a
+		// background-only kill well enough to give the Stop button SOME
+		// visible response instead of silence.
+		if outcome.BackgroundSessionsKilled > 0 {
+			slog.Info("ws: cancel killed background session(s) with no active turn",
+				"session_id", sessionID,
+				"background_sessions_killed", outcome.BackgroundSessionsKilled,
+				"background_sessions_failed", outcome.BackgroundSessionsFailed,
+			)
+			sendCancelStageFrame(wc, sessionID, "graceful")
+		}
 	}
 }
 

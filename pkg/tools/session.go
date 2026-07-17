@@ -17,6 +17,45 @@ const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
 
 const outputTruncateMarker = "\n... [output truncated, exceeded 1MB]\n"
 
+// SessionStatus is the typed lifecycle status of a ProcessSession (a
+// background bash/exec session). Previously a bare string: a hand-maintained
+// switch over it (shell.go's backgroundCompletionResult) missed the
+// "canceled" case entirely when the RequestCancel kill cascade introduced it
+// — a canceled background job fell through to a generic default and was
+// misreported as a plain failure. Naming/pattern mirrors pkg/task.Status
+// (pkg/task/task.go). The serialized/wire string VALUES below are
+// unchanged — ProcessSession.Status is not a gateway wire-contract type
+// (nothing json-marshals *ProcessSession directly; ExecResponse.Status and
+// SessionInfo.Status remain plain `string` JSON fields, populated via an
+// explicit string(...) conversion at the tool-response boundary) — only the
+// Go type wrapping the values changed.
+type SessionStatus string
+
+const (
+	// StatusRunning is the initial/live state: the process is still executing.
+	StatusRunning SessionStatus = "running"
+	// StatusDone is the generic terminal state: a natural exit, or a kill/
+	// relabel path with no more specific label to apply (KillAll's shutdown
+	// reaper — see its own doc comment for why it intentionally does not
+	// relabel further).
+	StatusDone SessionStatus = "done"
+	// StatusKilled is set by an explicit bash action=kill call (shell.go's
+	// executeKill), distinguishing it from a natural exit or a timeout.
+	StatusKilled SessionStatus = "killed"
+	// StatusTimeout is set when the bash tool's timeout_seconds guard fires
+	// (shell.go's runBackground), distinguishing it from an explicit kill.
+	StatusTimeout SessionStatus = "timeout"
+	// StatusCanceled is set by SessionManager.KillAllForSession — the
+	// RequestCancel kill-cascade relabel (FR-B10/FR-B11/FR-B14) — so a poll
+	// after a session-level cancel is distinguishable from a natural exit, an
+	// explicit action=kill, or a timeout.
+	StatusCanceled SessionStatus = "canceled"
+	// StatusExited is a legacy terminal value predating ADR-036's
+	// kill/timeout/canceled relabels; IsDone() still recognizes it for
+	// back-compat, but no current code path sets it.
+	StatusExited SessionStatus = "exited"
+)
+
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
 // Programs send smkx/rmkx sequences to switch between CSI and SS3 modes.
 type PtyKeyMode uint8
@@ -44,7 +83,7 @@ type ProcessSession struct {
 	Background      bool
 	StartTime       int64
 	ExitCode        int
-	Status          string
+	Status          SessionStatus
 	stdinWriter     io.Writer
 	outputBuffer    *bytes.Buffer
 	outputTruncated bool
@@ -76,8 +115,12 @@ type ProcessSession struct {
 func (s *ProcessSession) IsDone() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Status == "done" || s.Status == "exited" || s.Status == "killed" ||
-		s.Status == "timeout" || s.Status == "canceled"
+	switch s.Status {
+	case StatusDone, StatusExited, StatusKilled, StatusTimeout, StatusCanceled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *ProcessSession) GetPtyKeyMode() PtyKeyMode {
@@ -92,13 +135,18 @@ func (s *ProcessSession) SetPtyKeyMode(mode PtyKeyMode) {
 	s.ptyKeyMode = mode
 }
 
+// GetStatus returns the session's current status as a plain string — the
+// external-facing type callers (ExecResponse/SessionInfo JSON fields, test
+// assertions) have always used. The internal Status field is SessionStatus;
+// this converts at the read boundary so existing callers/tests keep working
+// unchanged while internal code gets the typed-enum safety.
 func (s *ProcessSession) GetStatus() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Status
+	return string(s.Status)
 }
 
-func (s *ProcessSession) SetStatus(status string) {
+func (s *ProcessSession) SetStatus(status SessionStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Status = status
@@ -116,11 +164,31 @@ func (s *ProcessSession) SetExitCode(code int) {
 	s.ExitCode = code
 }
 
-func (s *ProcessSession) killProcess() error {
+// killProcessGroupFn indirects the OS-level process-group kill syscall
+// (killProcessGroup, session_process_unix.go/session_process_windows.go) so
+// tests can force a kill FAILURE deterministically. A real "fake" PID chosen
+// well outside any process range this sandbox will ever allocate always
+// SUCCEEDS via ESRCH-as-success (see killProcessGroup's own doc comment) —
+// there is no way to reach the failure branch in KillAndRelabel/
+// KillAllForSession/KillAll with a real syscall in a test environment, so
+// this seam exists solely to make that branch (and its failed-count/audit
+// wiring) testable. Production code never reassigns this var.
+var killProcessGroupFn = killProcessGroup
+
+// KillAndRelabel kills the session's process group and, ON SUCCESS ONLY,
+// atomically relabels its status to the given terminal status under the
+// SAME lock acquisition that performed the kill. This closes a race where a
+// caller previously called Kill() (which unconditionally set
+// Status=StatusDone) followed by a SEPARATE SetStatus(...) call: a
+// concurrent reader (action=poll/read, or another goroutine's
+// KillAllForSession/KillAll scan) could observe the generic "done" value in
+// the gap between the two calls instead of the more specific terminal status
+// the caller actually intended (canceled/killed/timeout).
+func (s *ProcessSession) KillAndRelabel(status SessionStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.Status != "running" {
+	if s.Status != StatusRunning {
 		return ErrSessionDone
 	}
 
@@ -129,24 +197,30 @@ func (s *ProcessSession) killProcess() error {
 		return ErrSessionNotFound
 	}
 
-	if err := killProcessGroup(pid); err != nil {
+	if err := killProcessGroupFn(pid); err != nil {
 		return err
 	}
 
-	s.Status = "done"
+	s.Status = status
 	s.ExitCode = -1
 	return nil
 }
 
+// Kill terminates the session and relabels it to the generic "done" status
+// — for a caller with no more specific label to apply (KillAll's
+// process-wide shutdown reaper). Callers that DO have a more specific
+// terminal status (an explicit action=kill, a timeout_seconds guard, or the
+// RequestCancel kill cascade) call KillAndRelabel directly instead so the
+// relabel is atomic with the kill (see that method's doc comment).
 func (s *ProcessSession) Kill() error {
-	return s.killProcess()
+	return s.KillAndRelabel(StatusDone)
 }
 
 func (s *ProcessSession) Write(data string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.Status != "running" {
+	if s.Status != StatusRunning {
 		return ErrSessionDone
 	}
 
@@ -183,7 +257,7 @@ func (s *ProcessSession) ToSessionInfo() SessionInfo {
 	return SessionInfo{
 		ID:        s.ID,
 		Command:   s.Command,
-		Status:    s.Status,
+		Status:    string(s.Status),
 		PID:       s.PID,
 		StartedAt: s.StartTime,
 	}
@@ -276,13 +350,26 @@ func (sm *SessionManager) cleanupOldSessions() {
 // A session that is not "running" by the time it's inspected (already done,
 // already killed by a race) is silently skipped — this is not an error, it's
 // the expected outcome of a no-op cascade (User Story 5, Acceptance
-// Scenario 2). A session whose Kill() call itself fails is logged at Warn and
-// does not abort the rest of the cascade (matches the "on failure" contract
-// for this hook: killing an individual background session that fails must not
-// abort RequestCancel's own turn-cancellation flow).
-func (sm *SessionManager) KillAllForSession(sessionID string) int {
+// Scenario 2). A session whose kill call itself loses the race against
+// another terminal-status writer (ErrSessionDone — e.g. the process exited
+// naturally, or another caller's explicit action=kill/timeout/cancel won
+// first) is likewise NOT counted as a failure and is not logged — it is the
+// same benign no-op case as the pre-check above, just observed a moment
+// later. Only a REAL kill failure (the underlying syscall itself failing,
+// not a lost race) is logged at Warn and counted in the returned failed
+// total; it does not abort the rest of the cascade (matches the "on
+// failure" contract for this hook: killing an individual background session
+// that fails must not abort RequestCancel's own turn-cancellation flow).
+//
+// Returns (killed, failed): killed is the count successfully terminated and
+// relabeled StatusCanceled (as before); failed is the count of REAL kill
+// failures (excluding the benign ErrSessionDone race above) — added so a
+// kill failure is visible to the caller (RequestCancel threads it into the
+// EventTurnCancelBackgroundKilled audit event as background_sessions_failed)
+// instead of being invisible outside a slog.Warn line.
+func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed int) {
 	if sessionID == "" {
-		return 0
+		return 0, 0
 	}
 
 	// Phase 1: collect candidate session IDs under the read lock.
@@ -296,7 +383,6 @@ func (sm *SessionManager) KillAllForSession(sessionID string) int {
 	sm.mu.RUnlock()
 
 	// Phase 2: re-fetch and act on each candidate without holding sm.mu.
-	killed := 0
 	for _, id := range candidates {
 		sm.mu.RLock()
 		s, ok := sm.sessions[id]
@@ -305,7 +391,7 @@ func (sm *SessionManager) KillAllForSession(sessionID string) int {
 			continue // removed between phase 1 and phase 2
 		}
 
-		if s.GetStatus() != "running" {
+		if s.GetStatus() != string(StatusRunning) {
 			continue // already done/killed — no-op for this candidate
 		}
 
@@ -315,7 +401,18 @@ func (sm *SessionManager) KillAllForSession(sessionID string) int {
 		pid := s.PID
 		startTime := s.StartTime
 
-		if err := s.Kill(); err != nil {
+		// KillAndRelabel kills AND relabels to StatusCanceled atomically under
+		// one lock acquisition (mirrors executeKill's "killed" relabel in
+		// shell.go for the analogous action=kill path) — no separate
+		// SetStatus call, no gap for a concurrent reader to observe "done".
+		if err := s.KillAndRelabel(StatusCanceled); err != nil {
+			if errors.Is(err, ErrSessionDone) {
+				// Benign: lost the race against another terminal-status
+				// writer between our GetStatus() check above and this call.
+				// Not a real failure — do not count or log it as one.
+				continue
+			}
+			failed++
 			slog.Warn("tools: SessionManager.KillAllForSession: failed to kill background session",
 				"owner_session_id", sessionID,
 				"session_id", id,
@@ -324,11 +421,6 @@ func (sm *SessionManager) KillAllForSession(sessionID string) int {
 			)
 			continue
 		}
-		// s.Kill() succeeded and set Status="done" atomically; relabel to
-		// "canceled" (mirrors executeKill's "killed" relabel in shell.go) so a
-		// poll after a RequestCancel cascade is distinguishable from a natural
-		// completion or an explicit action=kill call.
-		s.SetStatus("canceled")
 
 		elapsedSeconds := time.Now().Unix() - startTime
 		slog.Info("tools: SessionManager.KillAllForSession: killed background session on cancel cascade",
@@ -341,7 +433,7 @@ func (sm *SessionManager) KillAllForSession(sessionID string) int {
 		killed++
 	}
 
-	return killed
+	return killed, failed
 }
 
 // KilledBackgroundSessionsCount returns the running total of background
@@ -369,7 +461,25 @@ func (sm *SessionManager) KilledBackgroundSessionsCount() int64 {
 // IDs are collected under sm.mu.RLock, sm.mu is released, and only then is
 // each candidate's status checked and killed — avoiding a lock-order
 // inversion between SessionManager.mu and ProcessSession.mu.
-func (sm *SessionManager) KillAll() int {
+//
+// Intentionally asymmetric with KillAllForSession: a successful kill here
+// stays relabeled StatusDone (via the plain Kill() call below) rather than
+// being relabeled to a more specific terminal status. This is deliberate,
+// not an oversight — KillAll backs whole-process SHUTDOWN teardown
+// (AgentLoop.Close()), not a user-observable cancel cascade. By the time
+// this returns, the process hosting the very SessionManager these sessions
+// live in is itself exiting; nothing will ever poll/read one of these
+// sessions again to benefit from a more specific label, so there is no
+// observability upside to relabeling, and doing so would also silently
+// change this method's long-tested external contract (see
+// TestSessionManager_KillAll, which asserts pre-existing "done"/"killed"
+// sessions are left untouched — it does not pin the label a NEWLY killed
+// session receives, but "done" via the plain Kill() path is what every
+// caller has observed since before this comment existed).
+//
+// Returns (killed, failed) — see KillAllForSession's doc comment for the
+// same failed-count/ErrSessionDone-race distinction, mirrored here.
+func (sm *SessionManager) KillAll() (killed, failed int) {
 	// Phase 1: collect every session ID under the read lock.
 	sm.mu.RLock()
 	candidates := make([]string, 0, len(sm.sessions))
@@ -379,7 +489,6 @@ func (sm *SessionManager) KillAll() int {
 	sm.mu.RUnlock()
 
 	// Phase 2: re-fetch and act on each candidate without holding sm.mu.
-	killed := 0
 	for _, id := range candidates {
 		sm.mu.RLock()
 		s, ok := sm.sessions[id]
@@ -388,12 +497,21 @@ func (sm *SessionManager) KillAll() int {
 			continue // removed between phase 1 and phase 2
 		}
 
-		if s.GetStatus() != "running" {
+		if s.GetStatus() != string(StatusRunning) {
 			continue // already terminal — no-op for this candidate
 		}
 
 		pid := s.PID
 		if err := s.Kill(); err != nil {
+			if errors.Is(err, ErrSessionDone) {
+				// Benign: lost the race against another terminal-status
+				// writer (natural exit, an explicit action=kill/timeout, or
+				// a concurrent RequestCancel cascade) between our
+				// GetStatus() check above and this call. Not a real
+				// failure — do not count or log it as one.
+				continue
+			}
+			failed++
 			slog.Warn("tools: SessionManager.KillAll: failed to kill background session on shutdown",
 				"session_id", id,
 				"pid", pid,
@@ -409,7 +527,7 @@ func (sm *SessionManager) KillAll() int {
 		killed++
 	}
 
-	return killed
+	return killed, failed
 }
 
 func (sm *SessionManager) Add(session *ProcessSession) {
