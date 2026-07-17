@@ -1406,12 +1406,25 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   // Attach affordance gate — shared by the AddAttachment button AND the
   // drag-drop handlers/overlay below (same read-only conditions: agent
-  // removed, streaming, replaying, gateway unreachable, or gave up on
-  // reconnect). A single source of truth keeps the two from drifting: without
-  // this, a drag-drop in a read-only (agentRemoved / gave_up) session could
-  // attach a chip that can never be sent, even though the attach button
-  // itself was correctly disabled.
-  const attachDisabled = !isConnected || isStreaming || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
+  // removed, replaying, gateway unreachable, or gave up on reconnect). A
+  // single source of truth keeps the two from drifting: without this, a
+  // drag-drop in a read-only (agentRemoved / gave_up) session could attach a
+  // chip that can never be sent, even though the attach button itself was
+  // correctly disabled.
+  //
+  // Deliberately does NOT include isStreaming (bugfixes3 follow-up): pasted
+  // images already ride a mid-stream steer correctly end-to-end (paste ->
+  // useFileUpload's commitFiles -> composerRuntime.addAttachment ->
+  // BaseComposerRuntimeCore.send() -> onNew -> store sendMessage's steer
+  // branch, which threads opts.mediaRefs into the WS `media` field
+  // unconditionally on isStreaming — see src/store/chat.ts's `if
+  // (isStreaming)` steer branch). The AddAttachment button and drag-drop
+  // funnel into that exact same commitFiles -> addAttachment call (see
+  // useFileUpload.ts) — there is no separate mid-stream attachment code
+  // path to diverge from paste, so gating the button/drag-drop on
+  // isStreaming was just an inconsistent affordance (paste allowed it, the
+  // button forbade the identical action) rather than a real safety gate.
+  const attachDisabled = !isConnected || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
 
   // The 3 previously-tangled composer concerns (slash/skill palette, file
   // upload incl. harmful-file confirm, stop/cancel state machine) each own

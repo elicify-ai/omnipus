@@ -275,6 +275,87 @@ describe('sendMessage — mid-turn steering send (bucket-level)', () => {
   })
 })
 
+/**
+ * bugfixes3 follow-up: the Attach button (ComposerPrimitive.AddAttachment)
+ * and drag-drop were gated off mid-stream via `attachDisabled` in
+ * ChatScreen.tsx (`isStreaming` was one of its conditions) even though
+ * pasted images already rode a mid-turn steer correctly — an inconsistent
+ * affordance, since paste, the Attach button, and drag-drop all funnel
+ * through the exact same `composerRuntime.addAttachment()` call
+ * (src/hooks/useFileUpload.ts's `commitFiles`) and are therefore
+ * indistinguishable by the time they reach `sendMessage`. This describe
+ * block proves the STORE side already carries attachments correctly on the
+ * mid-turn steer branch — `opts.mediaRefs`/`opts.attachments` reach the WS
+ * `media` field and the locally-rendered user bubble's `media` field
+ * unconditionally on `isStreaming`, exactly like the already-covered
+ * plain-text steer above (no separate/divergent code path for attachments
+ * exists to fix).
+ */
+describe('sendMessage — mid-turn steering carries media attachments (bugfixes3: Attach button works mid-stream)', () => {
+  beforeEach(resetStores)
+
+  it('a mid-turn steering send with mediaRefs includes `media` in the WS steer payload', () => {
+    const send = connectWithSendSpy()
+    startTurn(send)
+
+    act(() => {
+      useChatStore.getState().sendMessage('see attached', {
+        mediaRefs: ['media://abc123'],
+        attachments: [
+          { type: 'image', url: '/api/v1/uploads/sess_mid_turn_test/abc.png', filename: 'abc.png', contentType: 'image/png' },
+        ],
+      })
+    })
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'message',
+        content: 'see attached',
+        session_id: TEST_SESSION_ID,
+        media: ['media://abc123'],
+      })
+    )
+  })
+
+  it('a mid-turn steering send with mediaRefs renders the attachment on the appended user bubble', () => {
+    const send = connectWithSendSpy()
+    startTurn(send)
+
+    act(() => {
+      useChatStore.getState().sendMessage('see attached', {
+        mediaRefs: ['media://abc123'],
+        attachments: [
+          { type: 'image', url: '/api/v1/uploads/sess_mid_turn_test/abc.png', filename: 'abc.png', contentType: 'image/png' },
+        ],
+      })
+    })
+
+    const { messages, isStreaming } = useChatStore.getState()
+    const steerMsg = messages.find((m) => m.content === 'see attached')
+    expect(steerMsg).toBeDefined()
+    expect(steerMsg?.media).toEqual([
+      expect.objectContaining({ type: 'image', filename: 'abc.png', url: '/api/v1/uploads/sess_mid_turn_test/abc.png' }),
+    ])
+    // The in-flight turn is unaffected — same contract as the plain-text
+    // steer case above.
+    expect(isStreaming).toBe(true)
+    expect(messages.filter((m) => m.role === 'assistant')).toHaveLength(1)
+  })
+
+  it('a mid-turn steering send with an empty mediaRefs array omits `media` from the WS frame (matches the no-attachment steer)', () => {
+    const send = connectWithSendSpy()
+    startTurn(send)
+
+    act(() => {
+      useChatStore.getState().sendMessage('no attachments here')
+    })
+
+    const frame = send.mock.calls[0]![0] as Record<string, unknown>
+    expect(frame).not.toHaveProperty('media')
+  })
+})
+
 describe('sendMessage — mid-turn steering respects offline buffering (does not bypass it)', () => {
   beforeEach(resetStores)
 
