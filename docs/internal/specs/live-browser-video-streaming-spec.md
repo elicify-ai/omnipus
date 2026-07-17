@@ -679,7 +679,7 @@ Feature: Live-browser video streaming (A2 — headful capture on a virtual displ
 | 10 | `TestIngest_OversizeKeyframe_RejectedNotFragmented` | Unit (Go) | Oversize keyframe rejected | Chunk > bound → rejected + step-down signalled; no reassembly (M-4). |
 | 11 | `TestWSFraming_BinaryChunks_TextControl` | Unit (Go) | (transport, FR-017) | Opcode-tagged send items: Binary for chunks, Text for JSON on one `sendCh`; preserves the nil-ping sentinel. |
 | 12 | `TestContracts_AttachCaps_IngestMessages` | Unit (Go, contract) | (all attach/ingest) | `browser_attach` (video_caps/audio_caps) + ingest messages round-trip; **`browser_screencast` removed**; `make verify-contracts` clean. |
-| 13 | `TestVideoChunk_BinaryEnvelope_RoundTrip` | Unit (Go, contract) | Warm paint; scrolling | `browser_video_chunk` envelope `{seq:u32, ts:u64, key:u8, len:u32, payload}` parses (no fragment field). |
+| 13 | `TestVideoChunk_BinaryEnvelope_RoundTrip` | Unit (Go, contract) | Warm paint; scrolling | `browser_video_chunk` **18-byte** envelope `{seq:u32, ts:u64, key:u8, kind:u8(0=video/1=audio), len:u32, payload}` parses byte-exact (kind@offset 13; no fragment field). |
 | 14 | `TestManagedLaunch_Headful_Display_OriginScopedCapture` | Integration (Go, scoped) | Xvfb wired; US-9/AC-3 | Launch is headful with DISPLAY set + origin-scoped consent (not global grant to agent pages) + CDP over --remote-debugging-pipe (no TCP surface). |
 | 15 | `TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity` | Unit (Go) | Full Chrome verified; missing-stack unavailable | Full-Chrome default + detection + hash check; no crash on shell; platform-matrix classify. |
 | 16 | `TestRegression_NormalBrowse_HeadfulEquivalence` | Integration (Go, scoped) | Normal browsing equivalent | Fixed 12-URL corpus vs headless-shell baseline; SSIM ≥ 0.95; excluded fields masked (§Equivalence Corpus). |
@@ -713,15 +713,16 @@ Order: security + relay + contract units (1–13, 27, 29–30, 32), launch/insta
 | none | `[]` | unavailable-state | US-5/AC-1 |
 | none | `[h264-baseline]` (encoder-unsupported) | unavailable-state | US-5/AC-1 |
 
-**DS-2 — Binary chunk / ingest bound** (Test 10, 13; realistic sizes, u32/u64)
-| seq (u32) | ts (u64) | key | len (u32) | note | Traces to |
-|---|---|---|---|---|---|
-| 0 | 0 | 1 | 153600 | 150 KB keyframe (typical, under bound) | US-1/AC-1 |
-| 1 | 33 | 0 | 4096 | typical delta | US-1/AC-2 |
-| 2 | 66 | 1 | 2097152 | 2 MB keyframe (at the default bound — accepted) | Edge |
-| 3 | 99 | 1 | 3145728 | 3 MB keyframe (> bound → **rejected + step-down**, NOT fragmented) | Edge oversize |
-| 4294967295 | 18446744073709551615 | 0 | 65535 | seq/ts max, small delta | US-1/AC-2 |
-| 5 | 132 | 0 | 0 | empty payload (reject) | Edge |
+**DS-2 — Binary chunk / ingest bound** (Test 10, 13; realistic sizes, u32/u64). Envelope = **18-byte** big-endian header `seq:u32(off 0) | ts:u64(off 4) | key:u8(off 12) | kind:u8(off 13, 0=video/1=audio) | len:u32(off 14) | payload(off 18+)` (ADR §6.3 + `contracts/components/schemas/BrowserChunkEnvelope.yaml`; **supersedes the earlier 17-byte no-`kind` layout** — the `kind` byte at offset 13 is what makes the header 18 bytes).
+| seq (u32) | ts (u64) | key | kind (u8) | len (u32) | note | Traces to |
+|---|---|---|---|---|---|---|
+| 0 | 0 | 1 | 0 | 153600 | 150 KB video keyframe (typical, under bound) | US-1/AC-1 |
+| 1 | 33 | 0 | 0 | 4096 | typical video delta | US-1/AC-2 |
+| 2 | 66 | 1 | 0 | 2097152 | 2 MB keyframe (at the default bound — accepted) | Edge |
+| 3 | 99 | 1 | 0 | 3145728 | 3 MB keyframe (> bound → **rejected + step-down**, NOT fragmented) | Edge oversize |
+| 4294967295 | 18446744073709551615 | 0 | 0 | 65535 | seq/ts max, small delta | US-1/AC-2 |
+| 6 | 150 | 0 | 1 | 2048 | audio (opus) chunk — `kind=1`, never keyframe, never GOP-cached | US-8/FR-011 |
+| 5 | 132 | 0 | 0 | 0 | empty payload (reject on **both** legs — backend ingest + SPA decode) | Edge |
 
 **DS-3 — Backpressure / aggregate memory** (Test 5, 6)
 | streams | condition | expected | Traces to |

@@ -56,9 +56,10 @@ type VideoCapability struct {
 	// {not capable, audio available} combination.
 	Level CapabilityLevel
 	// Capable is the overall DS-5 classification: linux + a full-Chrome
-	// build already installed + Xvfb available. Agent browsing is unaffected
-	// either way — only the live-view video path is gated on this. Derived
-	// from Level != NotCapableLevel.
+	// build already installed + a healthy virtual-display sidecar wired (see
+	// DisplaySidecarHealthyProbe). Agent browsing is unaffected either way —
+	// only the live-view video path is gated on this. Derived from Level !=
+	// NotCapableLevel.
 	Capable bool
 	// AudioAvailable reports whether PulseAudio is additionally available.
 	// Independent of Capable: DS-5's "full chrome + Xvfb up + PulseAudio
@@ -75,25 +76,52 @@ type VideoCapability struct {
 	AudioReason string
 }
 
-// XvfbAvailableProbe and PulseAudioAvailableProbe are the FR-021/FR-022
-// sidecar-availability seams ClassifyVideoCapability and selectDownloadBuild
-// consult. The defaults are light, side-effect-free checks (binary on PATH)
-// that correctly report "not available" before any sidecar has been wired
-// into the boot sequence. The Xvfb and PulseAudio sidecar packages (built
-// independently — see the live-browser-video-streaming implementation plan's
-// W1-B/W1-C) MAY replace these at gateway-boot init time with a
-// liveness-aware Healthy() hook once orchestration wires them in. Tests
-// override these directly — no live Xvfb/PulseAudio process is required to
-// exercise the classifier or the installer's build-selection logic.
-var (
-	XvfbAvailableProbe       = defaultXvfbAvailable
-	PulseAudioAvailableProbe = defaultPulseAudioAvailable
-)
+// DisplaySidecarHealthyProbe is the AR-C1/GC-1/GC-2 Option-B dormant gate:
+// ClassifyVideoCapability and selectDownloadBuild (installer.go) both consult
+// THIS signal — never an Xvfb-binary-on-PATH check — to decide whether
+// headful, video-capable Chrome is actually reachable on this host right now.
+//
+// It defaults to defaultDisplaySidecarHealthy, which always reports false.
+// This increment ships the Xvfb/PulseAudio sidecar packages (display.go,
+// audiosink*.go) but wires NEITHER into any boot sequence —
+// BrowserCoordinator.SetDisplaySidecar has zero callers today — so
+// classification and the installer's build-selection MUST stay dormant
+// (NotCapable / chrome-headless-shell) regardless of what happens to be
+// installed on the host's PATH. Gating on an Xvfb-binary-on-PATH probe
+// instead of the coordinator's real launch-time signal was exactly the
+// AR-C1/GC-1/GC-2 defect: a host with the xvfb/pulseaudio OS packages
+// present would download +120MB of full Chrome and get classified
+// "video-capable" while coordinator.videoLaunchMode kept launching
+// chrome-headless-shell (gated on a wired-and-Healthy() DisplaySidecar,
+// which nothing sets) — headless-grade video, no audio, all silent.
+//
+// THE SEAM FOR THE NEXT INCREMENT: once gateway boot actually starts an Xvfb
+// sidecar and wires it via BrowserCoordinator.SetDisplaySidecar, that same
+// change should point DisplaySidecarHealthyProbe at the live sidecar's own
+// Healthy() (e.g. boot stashes the sidecar reference somewhere this package
+// can read, or a coordinator-owned accessor) so classification and the
+// installer agree with the coordinator's actual videoLaunchMode decision
+// instead of drifting from it again. Until that day this MUST stay a
+// hardcoded false — never swap it back for a PATH probe or any other proxy
+// signal; there is no live sidecar behind it yet. Tests override it directly.
+var DisplaySidecarHealthyProbe = defaultDisplaySidecarHealthy
 
-func defaultXvfbAvailable() bool {
-	_, err := exec.LookPath("Xvfb")
-	return err == nil
+func defaultDisplaySidecarHealthy() bool {
+	return false
 }
+
+// PulseAudioAvailableProbe is the FR-022 audio-sidecar-availability seam
+// ClassifyVideoCapability consults for the AudioAvailable sub-classification
+// ONLY (never Capable/selectDownloadBuild — see DisplaySidecarHealthyProbe
+// for that gate). It is reached only once DisplaySidecarHealthyProbe already
+// reports true, which does not happen this increment, so this probe's
+// PATH-based default is harmless dead weight until the sidecar wiring lands.
+// The default is a light, side-effect-free check (binary on PATH); the
+// PulseAudio sidecar package (audiosink*.go, built independently — see the
+// live-browser-video-streaming implementation plan's W1-C) MAY replace it at
+// gateway-boot init time with a liveness-aware Healthy() hook once
+// orchestration wires it in. Tests override this directly.
+var PulseAudioAvailableProbe = defaultPulseAudioAvailable
 
 func defaultPulseAudioAvailable() bool {
 	_, err := exec.LookPath("pulseaudio")
@@ -111,11 +139,12 @@ var goosForCapability = runtime.GOOS
 
 // ClassifyVideoCapability implements the DS-5 decision table (Platform
 // Matrix, FR-007): linux + a full-Chrome build already installed under
-// installRoot + Xvfb available -> video-capable; PulseAudio availability is
-// checked independently and only affects AudioAvailable, never Capable.
-// installRoot is the same managed-Chromium install root EnsureChromium uses,
-// so classification never triggers a download — it only inspects what is
-// already on disk.
+// installRoot + a healthy virtual-display sidecar wired (see
+// DisplaySidecarHealthyProbe — NOT an Xvfb-binary-on-PATH check, AR-C1/GC-1/
+// GC-2) -> video-capable; PulseAudio availability is checked independently
+// and only affects AudioAvailable, never Capable. installRoot is the same
+// managed-Chromium install root EnsureChromium uses, so classification never
+// triggers a download — it only inspects what is already on disk.
 func ClassifyVideoCapability(installRoot string) VideoCapability {
 	if goosForCapability != "linux" {
 		return notCapable(fmt.Sprintf(
@@ -130,8 +159,10 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 	if findInstalledBuild(installRoot, platform, fullChromeBuild()) == "" {
 		return notCapable("full Chrome build not installed (chrome-headless-shell only, or nothing installed yet)")
 	}
-	if !XvfbAvailableProbe() {
-		return notCapable("Xvfb not available")
+	if !DisplaySidecarHealthyProbe() {
+		return notCapable(
+			"virtual-display sidecar not wired or not healthy — video capture requires a running Xvfb sidecar",
+		)
 	}
 	if !PulseAudioAvailableProbe() {
 		return videoOnly("PulseAudio not available — video-capable, audio silently absent")

@@ -83,11 +83,33 @@ const ingestChunkHeaderLen = 18
 // complete JPEG still).
 const ingestFrameFeedHeaderLen = 16
 
-// ingestFeedCap is the per-connection downstream (JPEG feed) buffer depth.
-// The JPEG feed is lossy repaint-driven traffic like the viewer screencast:
-// dropping a stale frame on a briefly-slow encoder is correct (the next
-// screencast frame supersedes it), so FeedFrame never blocks the capture driver.
+// ingestFeedCap is the per-connection downstream (JPEG feed + control frame)
+// buffer depth. The JPEG feed is lossy repaint-driven traffic like the
+// viewer screencast: dropping a stale frame on a briefly-slow encoder is
+// correct (the next screencast frame supersedes it), so FeedFrame never
+// blocks the capture driver. RequestKeyframe's control frame (SF-H2) shares
+// this same queue and the same lossy, never-blocking discipline — a dropped
+// force_keyframe request is a missed optimization, not a correctness bug
+// (the relay's own GOP-cache replay covers the gap either way).
 const ingestFeedCap = 64
+
+// forceKeyframeFrameJSON is the fixed JSON text control frame RequestKeyframe
+// sends DOWN the ingest connection (SF-H2): a best-effort request that the
+// encoder page force a real IDR on its next video encode, by resetting its
+// own framesSinceKeyframe counter to 0. See encoder.html's ingest-WS
+// onmessage handler for the receiving half.
+const forceKeyframeFrameJSON = `{"type":"force_keyframe"}`
+
+// ingestSendItem is one downstream queue entry on an ingestStream's sendCh:
+// binary tags the WS opcode writePump must use — true for a
+// browser_frame_feed JPEG frame (FeedFrame), false for a JSON text control
+// frame (e.g. RequestKeyframe's force_keyframe signal, SF-H2). Mirrors
+// browser_ws.go's wsSendItem, which plays the identical role on the
+// viewer-facing socket.
+type ingestSendItem struct {
+	binary bool
+	data   []byte
+}
 
 // ingestInitDeadline bounds how long the endpoint waits for the first
 // (browser_ingest_init) frame before giving up on a connection.
@@ -121,18 +143,19 @@ const (
 	chunkVideoKey   byte = 1
 )
 
-// Audit event names for the ingest lifecycle (FR-024). These follow the
-// existing browser.live.* namespace (see EventBrowserLiveControlTaken in
-// pkg/audit/events.go) and are emitted via audit.Emit. They are already
-// registered in pkg/audit's IsValidEventName catalog — EventBrowserLiveStreamStarted,
-// EventBrowserLiveStreamStopped, and EventBrowserLiveIngestRejected carry these
-// exact string values — so no follow-up registration is needed here; kept as
-// local string constants (rather than importing the audit package's typed
-// EventName constants) purely to keep this file's audit surface self-contained.
+// Audit event names for the ingest lifecycle (FR-024). Local aliases of the
+// pkg/audit typed constants — EventBrowserLiveStreamStarted,
+// EventBrowserLiveStreamStopped, EventBrowserLiveIngestRejected
+// (pkg/audit/events.go) — rather than independently-declared string
+// literals: C-F2 (review round 2) flagged the earlier direct-literal form as
+// a drift risk (a future rename on either side could silently diverge with
+// no compiler signal). Aliased here — not replaced call-site-by-call-site —
+// so this file's own eventIngestStreamStarted/Stopped/Rejected identifiers
+// (and the tests that reference them) stay stable.
 const (
-	eventIngestStreamStarted = "browser.live.stream_started"
-	eventIngestStreamStopped = "browser.live.stream_stopped"
-	eventIngestRejected      = "browser.live.ingest_rejected"
+	eventIngestStreamStarted = audit.EventBrowserLiveStreamStarted
+	eventIngestStreamStopped = audit.EventBrowserLiveStreamStopped
+	eventIngestRejected      = audit.EventBrowserLiveIngestRejected
 )
 
 // ingestRejectReason is the machine-readable `reason` recorded on every ingest
@@ -187,14 +210,16 @@ type Relay interface {
 	Ingest(streamID string, c EncodedChunk)
 }
 
-// IngestMux is the minimal HTTP-registration surface this component needs. The
-// gateway's channel manager (*channels.Manager) already satisfies it via
-// RegisterHTTPHandler — matching how browser_ws.go's handler is wired
-// (gateway.go:2091). Keeping it an interface keeps this file testable and
-// decoupled from the concrete mux.
-type IngestMux interface {
-	RegisterHTTPHandler(pattern string, handler http.Handler)
-}
+// IngestMux is the minimal HTTP-registration surface this component needs —
+// a type alias (not an independently-declared interface, iface lint
+// round-2 finding) of rest.go's httpHandlerRegistrar: both declare the exact
+// same single method (RegisterHTTPHandler(pattern string, handler
+// http.Handler)), so keeping them as two separately-declared identical
+// interfaces was redundant. The gateway's channel manager (*channels.Manager)
+// already satisfies it via RegisterHTTPHandler — matching how browser_ws.go's
+// handler is wired (gateway.go:2091). Keeping it an interface keeps this
+// file testable and decoupled from the concrete mux.
+type IngestMux = httpHandlerRegistrar
 
 // IngestDeps are the injected dependencies for the ingest endpoint.
 type IngestDeps struct {
@@ -214,6 +239,18 @@ type IngestDeps struct {
 	// an oversize chunk is rejected so the encoder can drop bitrate/resolution.
 	// nil is tolerated (reject-only, no step-down signal).
 	StepDown func(streamID string)
+
+	// ConnFailed is the SF-M3 proactive-recovery hook: invoked (best-effort,
+	// off its own goroutine — see writePump) when a downstream write to the
+	// encoder connection fails, meaning that connection is unreachable. In
+	// production this is wired to the SAME re-mint+relaunch recovery
+	// handleEncoderDrop already performs for a genuine CRIT-002 ingest drop
+	// (the encoder tab's CDP target dying) — a broken write path is just
+	// another way the encoder side has gone away, and previously the read
+	// loop kept running silently until the 15s liveness timeout eventually
+	// noticed. nil is tolerated (write failures still close the connection
+	// and log at Warn; recovery then waits on the liveness timeout as before).
+	ConnFailed func(streamID string)
 }
 
 // streamState is the token/connection lifecycle of one registered stream.
@@ -238,9 +275,9 @@ type ingestToken string
 type ingestStream struct {
 	token      ingestToken
 	state      streamState
-	conn       ingestConn    // the single live connection (nil when not connected)
-	sendCh     chan []byte   // downstream JPEG feed queue (nil when not connected)
-	doneCh     chan struct{} // closed to stop this connection's write pump
+	conn       ingestConn          // the single live connection (nil when not connected)
+	sendCh     chan ingestSendItem // downstream JPEG feed + control-frame queue (nil when not connected)
+	doneCh     chan struct{}       // closed to stop this connection's write pump
 	doneClosed bool
 	videoCodec string
 	audioCodec string
@@ -389,7 +426,7 @@ func (h *CaptureIngestHandler) EndStream(streamID string) {
 func (h *CaptureIngestHandler) FeedFrame(streamID string, jpeg []byte, seq uint32, ts uint64) {
 	h.mu.Lock()
 	s := h.streams[streamID]
-	var sendCh chan []byte
+	var sendCh chan ingestSendItem
 	var doneCh chan struct{}
 	if s != nil && s.state == streamConnected {
 		sendCh = s.sendCh
@@ -402,9 +439,39 @@ func (h *CaptureIngestHandler) FeedFrame(streamID string, jpeg []byte, seq uint3
 	}
 	data := encodeFrameFeed(seq, ts, jpeg)
 	select {
-	case sendCh <- data:
+	case sendCh <- ingestSendItem{binary: true, data: data}:
 	case <-doneCh:
 	default: // queue full → drop (lossy feed)
+	}
+}
+
+// RequestKeyframe sends a best-effort gateway→encoder-page control frame
+// (SF-H2) asking the encoder to force a real IDR on its next video encode —
+// the belt-and-suspenders half of the relay's degraded→recover fix
+// (stream_relay.go's deliverToViewer): the relay's own GOP-cache replay only
+// resends what the encoder ALREADY produced, which cannot repair actual
+// encoder-side drift; this asks the encoder itself to mint a new keyframe. A
+// no-op (dropped) if there is no live connection for streamID or its feed
+// queue is momentarily full — matching FeedFrame's lossy, never-blocking
+// discipline; the relay's cache-replay fallback covers the gap either way.
+func (h *CaptureIngestHandler) RequestKeyframe(streamID string) {
+	h.mu.Lock()
+	s := h.streams[streamID]
+	var sendCh chan ingestSendItem
+	var doneCh chan struct{}
+	if s != nil && s.state == streamConnected {
+		sendCh = s.sendCh
+		doneCh = s.doneCh
+	}
+	h.mu.Unlock()
+
+	if sendCh == nil {
+		return // no live encoder connection; drop
+	}
+	select {
+	case sendCh <- ingestSendItem{data: []byte(forceKeyframeFrameJSON)}:
+	case <-doneCh:
+	default: // queue full → drop (best-effort control signal)
 	}
 }
 
@@ -486,10 +553,14 @@ func (h *CaptureIngestHandler) serveConn(conn ingestConn, remoteAddr string) {
 		// connection, instead of handleChunk re-logging it on every single
 		// chunk (a 30fps stream would otherwise emit ~30 Error logs/sec for
 		// as long as the encoder keeps pushing chunks into a black hole).
-		slog.Error("browser-ingest: no relay configured; every chunk on this connection will be dropped", "stream_id", streamID)
+		slog.Error(
+			"browser-ingest: no relay configured; every chunk on this connection will be dropped",
+			"stream_id",
+			streamID,
+		)
 	}
 
-	go h.writePump(conn, s.sendCh, s.doneCh)
+	go h.writePump(streamID, conn, s.sendCh, s.doneCh)
 
 	// --- chunk relay loop ---
 	for {
@@ -523,7 +594,11 @@ func (h *CaptureIngestHandler) serveConn(conn ingestConn, remoteAddr string) {
 // claims the single-connection slot. On success it transitions the stream to
 // streamConnected, records the connection, and provisions the downstream feed
 // queue. Returns a non-empty reason on rejection (nothing is relayed).
-func (h *CaptureIngestHandler) claim(streamID string, conn ingestConn, init generated.BrowserIngestInitFrame) (*ingestStream, ingestRejectReason) {
+func (h *CaptureIngestHandler) claim(
+	streamID string,
+	conn ingestConn,
+	init generated.BrowserIngestInitFrame,
+) (*ingestStream, ingestRejectReason) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -559,7 +634,7 @@ func (h *CaptureIngestHandler) claim(streamID string, conn ingestConn, init gene
 		if init.AudioCodec != nil {
 			s.audioCodec = *init.AudioCodec
 		}
-		s.sendCh = make(chan []byte, ingestFeedCap)
+		s.sendCh = make(chan ingestSendItem, ingestFeedCap)
 		s.doneCh = make(chan struct{})
 		s.doneClosed = false
 		return s, ""
@@ -596,18 +671,50 @@ func (h *CaptureIngestHandler) releaseConn(streamID string, s *ingestStream) {
 	h.mu.Unlock()
 }
 
-// writePump is the single goroutine that writes downstream frame-feed messages
-// for one connection (gorilla requires all writes from one goroutine). It exits
-// when the feed queue is closed or the connection is torn down (doneCh).
-func (h *CaptureIngestHandler) writePump(conn ingestConn, sendCh chan []byte, doneCh chan struct{}) {
+// writePump is the single goroutine that writes downstream frame-feed and
+// control messages for one connection (gorilla requires all writes from one
+// goroutine). It exits when the feed queue is closed or the connection is
+// torn down (doneCh).
+//
+// SF-M3: a write failure means the encoder-side connection is unreachable —
+// previously this only logged at slog.Debug and returned, leaving the READ
+// loop (serveConn's chunk relay loop, a separate goroutine) running until
+// the 15s liveness timeout eventually noticed the encoder had gone silent,
+// starving it in the meantime. This now logs at Warn (a write-path failure
+// here is the write-side half of a genuine ingest drop, not routine churn)
+// and — like a real CRIT-002 ingest drop — proactively invokes ConnFailed
+// (deps.ConnFailed, wired in production to the SAME re-mint+relaunch
+// recovery handleEncoderDrop already performs when the encoder tab's CDP
+// target dies) instead of waiting out the liveness window. Invoked off its
+// own goroutine so a (potentially slow, CDP-driven) relaunch never blocks
+// this pump's own teardown.
+func (h *CaptureIngestHandler) writePump(
+	streamID string,
+	conn ingestConn,
+	sendCh chan ingestSendItem,
+	doneCh chan struct{},
+) {
 	for {
 		select {
-		case msg, ok := <-sendCh:
+		case item, ok := <-sendCh:
 			if !ok {
 				return
 			}
-			if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
-				slog.Debug("browser-ingest: frame-feed write error", "error", err)
+			opcode := websocket.BinaryMessage
+			if !item.binary {
+				opcode = websocket.TextMessage
+			}
+			if err := conn.WriteMessage(opcode, item.data); err != nil {
+				slog.Warn(
+					"browser-ingest: downstream write error; connection unreachable",
+					"stream_id",
+					streamID,
+					"error",
+					err,
+				)
+				if h.deps.ConnFailed != nil {
+					go h.deps.ConnFailed(streamID)
+				}
 				return
 			}
 		case <-doneCh:
@@ -689,7 +796,12 @@ func classifyChunkKind(kindByte, keyByte byte, s *ingestStream) (kind, codec str
 
 // audit emits one audit record (FR-024). No-op when audit is disabled (nil
 // logger). `decision` (allow|deny) is carried in fields for explainability.
-func (h *CaptureIngestHandler) audit(event string, sev audit.Severity, decision string, fields map[string]any) {
+func (h *CaptureIngestHandler) audit(
+	event string,
+	sev audit.Severity,
+	decision string,
+	fields map[string]any,
+) {
 	if h.deps.Audit == nil {
 		return
 	}
@@ -706,7 +818,11 @@ func (h *CaptureIngestHandler) audit(event string, sev audit.Severity, decision 
 // funnels through here so no rejection is ever silent. Also feeds FR-019's
 // "ingest-auth-reject count" metric (Test 28) — same single funnel point, so
 // no rejection reason is ever missed there either.
-func (h *CaptureIngestHandler) auditReject(streamID string, reason ingestRejectReason, remoteAddr string) {
+func (h *CaptureIngestHandler) auditReject(
+	streamID string,
+	reason ingestRejectReason,
+	remoteAddr string,
+) {
 	globalBrowserVideoMetrics().IncIngestAuthReject(string(reason))
 	h.audit(eventIngestRejected, audit.SeverityWarn, "deny", map[string]any{
 		"stream_id":   streamID,
@@ -732,7 +848,9 @@ func newIngestToken() ingestToken {
 // returns an error if the message is shorter than the header or the declared
 // len does not equal the actual payload length (framing corruption — never
 // relayed).
-func decodeChunkEnvelope(msg []byte) (seq uint32, ts uint64, keyByte byte, kindByte byte, payload []byte, err error) {
+func decodeChunkEnvelope(
+	msg []byte,
+) (seq uint32, ts uint64, keyByte byte, kindByte byte, payload []byte, err error) {
 	if len(msg) < ingestChunkHeaderLen {
 		return 0, 0, 0, 0, nil, errEnvelopeTooShort
 	}

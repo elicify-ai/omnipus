@@ -579,8 +579,26 @@ async function main() {
 
   ws.addEventListener('message', (event) => {
     if (typeof event.data === 'string') {
-      // JSON control/status frame from the gateway (e.g. auth rejection) —
-      // no media payload; nothing further to do on this build.
+      // JSON control/status frame from the gateway — no media payload.
+      // Recognized control message (SF-H2): force_keyframe, sent by the
+      // relay's degraded→recover recovery path (stream_relay.go's
+      // deliverToViewer via browser_ingest.go's RequestKeyframe) asking this
+      // page to force a genuine IDR on its NEXT video encode. Resetting
+      // framesSinceKeyframe to 0 is sufficient — handleFrameFeed's existing
+      // `video.framesSinceKeyframe === 0` check (see ensureVideoEncoder /
+      // handleFrameFeed above) already computes forceKeyframe from it on
+      // every encode call, so the very next frame fed to this page produces
+      // a real keyframe, not a stale replay of one already sent. Any other
+      // or malformed text frame (e.g. an auth rejection) is silently
+      // ignored — nothing else on this channel is actionable by this page.
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg && msg.type === 'force_keyframe') {
+          video.framesSinceKeyframe = 0;
+        }
+      } catch (_err) {
+        // Not JSON / not recognized — ignore.
+      }
       return;
     }
     handleFrameFeed(event.data).catch((err) => {

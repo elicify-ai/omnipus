@@ -78,6 +78,35 @@ describe('BrowserLiveView — unavailable state (FR-007/FR-018/FR-020)', () => {
     expect(message.textContent).not.toMatch(/decoder|configure|timeout|kill.switch/i)
   })
 
+  it('SF-H1: a mid-stream fatal video decode error (browserLiveWs.ts drops to onUnavailable(\'video-decode-error\')) shows the same generic unavailable banner rather than freezing the last painted frame forever', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      // A live stream was already up — proven by a screencast frame — before
+      // the fatal decode error arrives, unlike the other cases above which
+      // fire before any picture ever painted.
+      callbacksRef.current?.onScreencast?.({
+        type: 'browser_screencast',
+        session_id: 's1',
+        seq: 1,
+        data: 'AAAA',
+        width: 1280,
+        height: 720,
+      })
+    })
+    expect(screen.getByTestId('browser-live-frame')).toBeInTheDocument()
+
+    act(() => {
+      callbacksRef.current?.onUnavailable?.('video-decode-error')
+    })
+
+    const message = screen.getByTestId('browser-live-unavailable')
+    expect(message).toHaveTextContent('Live view needs a video-capable browser')
+    expect(message.textContent).not.toMatch(/decode|codec|closed/i)
+    // The prior live frame surface must be gone, not left frozen underneath.
+    expect(screen.queryByTestId('browser-live-frame')).not.toBeInTheDocument()
+  })
+
   it('never renders the live frame/canvas surface (no JPEG, no A1 fallback) while unavailable', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     act(() => {

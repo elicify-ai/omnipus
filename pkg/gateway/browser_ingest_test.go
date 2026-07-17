@@ -63,11 +63,12 @@ type fakeMsg struct {
 }
 
 type fakeConn struct {
-	incoming chan fakeMsg
-	mu       sync.Mutex
-	written  [][]byte
-	writeSig chan struct{}
-	closed   bool
+	incoming     chan fakeMsg
+	mu           sync.Mutex
+	written      [][]byte
+	writtenTypes []int // WriteMessage's messageType arg, parallel to written
+	writeSig     chan struct{}
+	closed       bool
 }
 
 func newFakeConn() *fakeConn {
@@ -80,6 +81,7 @@ func newFakeConn() *fakeConn {
 func (c *fakeConn) feedText(data []byte) {
 	c.incoming <- fakeMsg{mt: websocket.TextMessage, data: data}
 }
+
 func (c *fakeConn) feedBinary(data []byte) {
 	c.incoming <- fakeMsg{mt: websocket.BinaryMessage, data: data}
 }
@@ -105,7 +107,7 @@ func (c *fakeConn) ReadMessage() (int, []byte, error) {
 	return m.mt, m.data, nil
 }
 
-func (c *fakeConn) WriteMessage(_ int, data []byte) error {
+func (c *fakeConn) WriteMessage(messageType int, data []byte) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -114,6 +116,7 @@ func (c *fakeConn) WriteMessage(_ int, data []byte) error {
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	c.written = append(c.written, cp)
+	c.writtenTypes = append(c.writtenTypes, messageType)
 	c.mu.Unlock()
 	select {
 	case c.writeSig <- struct{}{}:
@@ -136,6 +139,14 @@ func (c *fakeConn) writes() [][]byte {
 	defer c.mu.Unlock()
 	out := make([][]byte, len(c.written))
 	copy(out, c.written)
+	return out
+}
+
+func (c *fakeConn) writeTypes() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]int, len(c.writtenTypes))
+	copy(out, c.writtenTypes)
 	return out
 }
 
@@ -325,7 +336,9 @@ func TestIngest_RejectsUnauthenticated(t *testing.T) {
 		h.MintIngestToken("streamA") // stream exists, but we present a wrong token
 		c := newFakeConn()
 		c.feedText(initFrameBytes("streamA", "totally-wrong-token", "vp8"))
-		c.feedBinary(chunkVideoBytes(0, 0, chunkVideoKey, []byte("keyframe"))) // must never be relayed
+		c.feedBinary(
+			chunkVideoBytes(0, 0, chunkVideoKey, []byte("keyframe")),
+		) // must never be relayed
 		c.closeIncoming()
 		waitDone(t, serveAsync(h, c))
 
@@ -424,7 +437,9 @@ func TestIngest_OversizeKeyframe_RejectedNotFragmented(t *testing.T) {
 	c.feedBinary(chunkVideoBytes(0, 0, chunkVideoKey, under))
 	c.feedBinary(chunkVideoBytes(1, 33, chunkVideoKey, atBound))
 	c.feedBinary(chunkVideoBytes(2, 66, chunkVideoKey, over))
-	c.feedBinary(chunkVideoBytes(3, 99, chunkVideoDelta, []byte{})) // empty payload → rejected (DS-2)
+	c.feedBinary(
+		chunkVideoBytes(3, 99, chunkVideoDelta, []byte{}),
+	) // empty payload → rejected (DS-2)
 	c.closeIncoming()
 	waitDone(t, serveAsync(h, c))
 
@@ -434,7 +449,10 @@ func TestIngest_OversizeKeyframe_RejectedNotFragmented(t *testing.T) {
 	}
 	for _, ch := range relay.snapshot() {
 		if len(ch.Payload) > 1024 {
-			t.Fatalf("relayed a chunk over the bound (%d bytes) — must never happen", len(ch.Payload))
+			t.Fatalf(
+				"relayed a chunk over the bound (%d bytes) — must never happen",
+				len(ch.Payload),
+			)
 		}
 		if len(ch.Payload) == 0 {
 			t.Fatal("relayed an empty chunk — must never happen")
@@ -710,7 +728,9 @@ func TestIngest_MaxSeqTsBoundary(t *testing.T) {
 
 	c := newFakeConn()
 	c.feedText(initFrameBytes("streamA", tok, "vp8"))
-	c.feedBinary(chunkVideoBytes(4294967295, 18446744073709551615, chunkVideoDelta, make([]byte, 65535)))
+	c.feedBinary(
+		chunkVideoBytes(4294967295, 18446744073709551615, chunkVideoDelta, make([]byte, 65535)),
+	)
 	c.closeIncoming()
 	waitDone(t, serveAsync(h, c))
 
@@ -739,7 +759,9 @@ func TestIngest_MalformedChunk_NotRelayed(t *testing.T) {
 	c.feedText(initFrameBytes("streamA", tok, "vp8"))
 	c.feedBinary(bad)
 	c.feedBinary(tooShort)
-	c.feedBinary(chunkVideoBytes(9, 9, chunkVideoKey, []byte("valid"))) // this one should still relay
+	c.feedBinary(
+		chunkVideoBytes(9, 9, chunkVideoKey, []byte("valid")),
+	) // this one should still relay
 	c.closeIncoming()
 	waitDone(t, serveAsync(h, c))
 
@@ -801,8 +823,16 @@ func TestChunkEnvelope_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode failed: %v", err)
 	}
-	if seq != 42 || ts != 9999 || keyByte != chunkVideoKey || kindByte != chunkKindVideo || string(got) != string(payload) {
-		t.Fatalf("round-trip mismatch: seq=%d ts=%d key=%d kind=%d payload=%q", seq, ts, keyByte, kindByte, got)
+	if seq != 42 || ts != 9999 || keyByte != chunkVideoKey || kindByte != chunkKindVideo ||
+		string(got) != string(payload) {
+		t.Fatalf(
+			"round-trip mismatch: seq=%d ts=%d key=%d kind=%d payload=%q",
+			seq,
+			ts,
+			keyByte,
+			kindByte,
+			got,
+		)
 	}
 
 	audioPayload := []byte("opus-bytes")
@@ -811,7 +841,8 @@ func TestChunkEnvelope_RoundTrip(t *testing.T) {
 	if aerr != nil {
 		t.Fatalf("audio decode failed: %v", aerr)
 	}
-	if akeyByte != chunkVideoDelta || akindByte != chunkKindAudio || string(agot) != string(audioPayload) {
+	if akeyByte != chunkVideoDelta || akindByte != chunkKindAudio ||
+		string(agot) != string(audioPayload) {
 		t.Fatalf("audio round-trip mismatch: key=%d kind=%d payload=%q", akeyByte, akindByte, agot)
 	}
 
@@ -886,4 +917,105 @@ func TestMintIngestToken_RemintInvalidatesOldToken(t *testing.T) {
 	if got := countEvent(recs, eventIngestStreamStarted); got != 1 {
 		t.Fatalf("expected exactly 1 stream_started across re-mint, got %d", got)
 	}
+}
+
+// --- SF-H2: RequestKeyframe sends the force_keyframe control frame --------
+
+// TestRequestKeyframe_SendsControlFrame proves the wire half of the relay's
+// degraded→recover fix (stream_relay.go's deliverToViewer): RequestKeyframe
+// sends the exact force_keyframe JSON text control frame down the ingest
+// connection — a Text opcode (distinguishing it from the Binary
+// browser_frame_feed traffic sharing the same connection), so encoder.html's
+// onmessage handler can tell it apart from a stray/malformed frame.
+func TestRequestKeyframe_SendsControlFrame(t *testing.T) {
+	relay := &spyRelay{}
+	h := NewCaptureIngestHandler(IngestDeps{Relay: relay})
+	tok := h.MintIngestToken("streamA")
+
+	c := newFakeConn()
+	c.feedText(initFrameBytes("streamA", tok, "vp8"))
+	done := serveAsync(h, c)
+	waitState(t, h, "streamA", streamConnected)
+
+	h.RequestKeyframe("streamA")
+
+	select {
+	case <-c.writeSig:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestKeyframe did not produce a downstream write")
+	}
+
+	w := c.writes()
+	types := c.writeTypes()
+	if len(w) != 1 || len(types) != 1 {
+		t.Fatalf(
+			"expected exactly 1 downstream write, got %d writes / %d types",
+			len(w),
+			len(types),
+		)
+	}
+	if types[0] != websocket.TextMessage {
+		t.Fatalf("expected the force_keyframe control frame as a Text opcode, got %d", types[0])
+	}
+	if string(w[0]) != forceKeyframeFrameJSON {
+		t.Fatalf("expected the force_keyframe control frame, got %q", w[0])
+	}
+
+	// A stream with no live connection is a silent no-op (matches FeedFrame).
+	h.RequestKeyframe("no-such-stream")
+
+	c.closeIncoming()
+	waitDone(t, done)
+}
+
+// --- SF-M3: a downstream write failure signals ConnFailed proactively -----
+
+// TestWritePump_WriteFailure_SignalsConnFailed proves writePump's SF-M3 fix:
+// a downstream write failure (the encoder-side connection is unreachable)
+// invokes deps.ConnFailed with the stream's id — in production this is wired
+// to the SAME re-mint+relaunch recovery a genuine CRIT-002 encoder-tab crash
+// triggers — rather than silently returning and leaving recovery to the 15s
+// liveness timeout alone.
+func TestWritePump_WriteFailure_SignalsConnFailed(t *testing.T) {
+	relay := &spyRelay{}
+	var mu sync.Mutex
+	var failedStreams []string
+	h := NewCaptureIngestHandler(IngestDeps{
+		Relay: relay,
+		ConnFailed: func(streamID string) {
+			mu.Lock()
+			failedStreams = append(failedStreams, streamID)
+			mu.Unlock()
+		},
+	})
+	tok := h.MintIngestToken("streamA")
+
+	c := newFakeConn()
+	c.feedText(initFrameBytes("streamA", tok, "vp8"))
+	done := serveAsync(h, c)
+	waitState(t, h, "streamA", streamConnected)
+
+	// Force the NEXT downstream write to fail, simulating an unreachable
+	// encoder connection, without tearing down the read side.
+	if err := c.Close(); err != nil {
+		t.Fatalf("fakeConn.Close: %v", err)
+	}
+	h.FeedFrame("streamA", []byte("jpeg"), 1, 1)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		got := append([]string(nil), failedStreams...)
+		mu.Unlock()
+		if len(got) == 1 && got[0] == "streamA" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected ConnFailed(streamA) exactly once after a write failure, got %v", got)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	c.closeIncoming()
+	waitDone(t, done)
 }

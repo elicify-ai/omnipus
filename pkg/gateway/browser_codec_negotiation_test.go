@@ -38,7 +38,11 @@ func TestNegotiateVideoCodec(t *testing.T) {
 	}{
 		// DS-1 row 1: [h264-main, vp8] -> h264-main (priority order picks the
 		// first producible codec the viewer's caps intersect).
-		{"viewer offers both -> h264-main wins priority", []string{"avc1.4D401E", "vp8"}, "avc1.4D4028"},
+		{
+			"viewer offers both -> h264-main wins priority",
+			[]string{"avc1.4D401E", "vp8"},
+			"avc1.4D4028",
+		},
 		// DS-1 row 2: [vp8] -> vp8 (h264-main isn't offered, falls through to
 		// the next producible codec).
 		{"viewer offers vp8 only -> vp8", []string{"vp8"}, "vp8"},
@@ -54,7 +58,11 @@ func TestNegotiateVideoCodec(t *testing.T) {
 		// A codec family neither H.264 nor VP8 (e.g. AV1) never intersects
 		// the v1 producible set (VP9/AV1 are "available but not
 		// v1-negotiated" per the spec's Encoder codecs note) -> unavailable.
-		{"viewer offers only av1 -> unavailable (no v1 producible match)", []string{"av01.0.04M.08"}, ""},
+		{
+			"viewer offers only av1 -> unavailable (no v1 producible match)",
+			[]string{"av01.0.04M.08"},
+			"",
+		},
 	}
 
 	o := newOrchestrator(BrowserVideoDeps{})
@@ -83,7 +91,10 @@ func TestNegotiateVideoCodec_H264Baseline(t *testing.T) {
 	o := newOrchestrator(BrowserVideoDeps{})
 	got := o.negotiateVideoCodec([]string{"avc1.42E01E"})
 	if got != "" {
-		t.Fatalf("negotiateVideoCodec([avc1.42E01E]) = %q, want \"\" (unavailable) per FR-006/DS-1 row 5", got)
+		t.Fatalf(
+			"negotiateVideoCodec([avc1.42E01E]) = %q, want \"\" (unavailable) per FR-006/DS-1 row 5",
+			got,
+		)
 	}
 }
 
@@ -98,9 +109,19 @@ func TestNegotiateAudio(t *testing.T) {
 		want            bool
 	}{
 		{"host has audio, viewer offers opus -> negotiated", true, []string{"opus"}, true},
-		{"host has audio, viewer offers a non-opus codec -> not negotiated", true, []string{"pcm"}, false},
+		{
+			"host has audio, viewer offers a non-opus codec -> not negotiated",
+			true,
+			[]string{"pcm"},
+			false,
+		},
 		{"host has audio, viewer offers nothing -> not negotiated", true, nil, false},
-		{"host has no audio, viewer offers opus -> not negotiated (host-gated, US-11/AC-2)", false, []string{"opus"}, false},
+		{
+			"host has no audio, viewer offers opus -> not negotiated (host-gated, US-11/AC-2)",
+			false,
+			[]string{"opus"},
+			false,
+		},
 		{"host has no audio, viewer offers nothing -> not negotiated", false, nil, false},
 	}
 
@@ -110,7 +131,13 @@ func TestNegotiateAudio(t *testing.T) {
 			capab := browser.VideoCapability{Capable: true, AudioAvailable: tc.audioAvailable}
 			got := o.negotiateAudio(capab, tc.viewerAudioCaps)
 			if got != tc.want {
-				t.Fatalf("negotiateAudio(AudioAvailable=%v, %v) = %v, want %v", tc.audioAvailable, tc.viewerAudioCaps, got, tc.want)
+				t.Fatalf(
+					"negotiateAudio(AudioAvailable=%v, %v) = %v, want %v",
+					tc.audioAvailable,
+					tc.viewerAudioCaps,
+					got,
+					tc.want,
+				)
 			}
 		})
 	}
@@ -126,9 +153,9 @@ func TestNegotiateAudio(t *testing.T) {
 func TestStream_SingleEncodeMismatch_NoSecondEncoderSpawned(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
-	o := newTestOrchestrator(capable(), ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(capable(), ing, launch.launch, capb.start, srv)
 
 	// First viewer negotiates h264 (default producible priority) and brings
 	// up the stream's one-and-only encoder for this agent tab.
@@ -167,10 +194,16 @@ func TestStream_SingleEncodeMismatch_NoSecondEncoderSpawned(t *testing.T) {
 		t.Fatal("expected a nil handle — a vp8-only viewer must not join an active h264 stream")
 	}
 	if got := launch.count(); got != 1 {
-		t.Fatalf("no second encoder may be spawned for the mismatched viewer (FR-006); launch count = %d, want 1", got)
+		t.Fatalf(
+			"no second encoder may be spawned for the mismatched viewer (FR-006); launch count = %d, want 1",
+			got,
+		)
 	}
 	if got := ing.mintCount(); got != 1 {
-		t.Fatalf("no second ingest token may be minted for the mismatched viewer; mint count = %d, want 1", got)
+		t.Fatalf(
+			"no second ingest token may be minted for the mismatched viewer; mint count = %d, want 1",
+			got,
+		)
 	}
 
 	f := findStatusError(t, wc2)
@@ -201,7 +234,7 @@ func TestStream_SingleEncodeMismatch_NoSecondEncoderSpawned(t *testing.T) {
 func TestAudioChunk_SuppressedWhenNotNegotiated(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
 	// Host has NO audio available (e.g. PulseAudio sidecar absent/failed —
 	// US-11/AC-2) even though the viewer itself advertises Opus support:
@@ -210,7 +243,7 @@ func TestAudioChunk_SuppressedWhenNotNegotiated(t *testing.T) {
 	noAudio := func(string) browser.VideoCapability {
 		return browser.VideoCapability{Capable: true, AudioAvailable: false}
 	}
-	o := newTestOrchestrator(noAudio, ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(noAudio, ing, launch.launch, capb.start, srv)
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
@@ -243,7 +276,17 @@ func TestAudioChunk_SuppressedWhenNotNegotiated(t *testing.T) {
 	// video) — a video chunk still reaches the viewer.
 	streamID := ing.mintCalls[0]
 	adapter := &videoRelayAdapter{orch: o}
-	adapter.Ingest(streamID, EncodedChunk{Seq: 0, TS: 0, Key: true, Codec: launch.cfgAt(0).VideoCodec, Kind: "video", Payload: []byte{9, 9}})
+	adapter.Ingest(
+		streamID,
+		EncodedChunk{
+			Seq:     0,
+			TS:      0,
+			Key:     true,
+			Codec:   launch.cfgAt(0).VideoCodec,
+			Kind:    "video",
+			Payload: []byte{9, 9},
+		},
+	)
 
 	chunk := nextBinaryChunk(t, wc, time.Second)
 	if chunk[13] != 0 { // wire kind byte: 0 == video (relayChunkEnvelopeHeaderBytes layout)

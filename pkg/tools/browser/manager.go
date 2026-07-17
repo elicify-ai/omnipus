@@ -1,7 +1,9 @@
-// Package browser implements browser automation tools using chromedp (pure Go CDP).
+// manager.go implements the browser automation tools' per-agent manager using
+// chromedp (pure Go CDP). See metadata.go for the package's canonical godoc.
 //
 // Implements US-4 (managed mode), US-6 (remote CDP mode), US-7 (resource limits)
 // from the Wave 4 spec. All navigations are SSRF-checked via pkg/security.SSRFChecker.
+
 package browser
 
 import (
@@ -102,9 +104,13 @@ type sessionEntry struct {
 	// browserCtx (chromedp.NewContext(se.browserCtx, ...)), never straight off
 	// m.allocCtx again; that reuse-off-the-allocator bug (adoptTarget/OpenTab
 	// each independently calling chromedp.NewContext(m.allocCtx, ...) for the
-	// 2nd+ tab) is exactly what made tab adoption try to launch a SECOND
-	// Chromium on the same fixed debug port and fail — the live-UAT-caught
-	// bug this field's introduction fixes.
+	// 2nd+ tab) is exactly what made tab adoption try to launch a second
+	// Chromium — in the pre-pipe world, on the same fixed debug port, which
+	// failed outright (loudly). Over today's CDP pipe (CRIT-001, no TCP debug
+	// port) the identical mistake instead SUCCEEDS at spawning a silent
+	// second Chrome process, which is worse, not better — the live-UAT-caught
+	// bug this field's introduction fixes, and the reason routing every tab
+	// through browserCtx remains required today.
 	//
 	// browserCtx owns an "implicit" initial target (the about:blank tab
 	// Chrome opens on launch, which the bootstrap Run attaches browserCtx's
@@ -610,11 +616,6 @@ func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	return m.execPath.resolve(ctx, m.cfg)
 }
 
-// cacheExecPath / cacheExecPathFailure remain as thin wrappers for any external
-// caller; the caching itself now lives in execPathCaches (exec_resolver.go).
-func (m *BrowserManager) cacheExecPath(path string)      { m.execPath.cacheSuccess(path) }
-func (m *BrowserManager) cacheExecPathFailure(err error) { m.execPath.cacheFailure(err) }
-
 // execPathNegativeCacheTTL bounds how long a failed resolution is remembered
 // (and returned verbatim, without re-probing) before resolveExecPath retries
 // the real PATH/managed resolution. Long enough that a dead host's repeated
@@ -746,10 +747,14 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 //   - sessionID's sessionEntry already exists but currently has zero tabs
 //     (CloseTab's last-tab-replacement clears se.tabs to nil before calling
 //     here): REUSES the existing, still-running se.browserCtx instead of
-//     bootstrapping a second one — bootstrapping a second browser here would
-//     try to bind Chrome's fixed debug port a second time and fail. This is
-//     the browserCtx lifetime fix: the browser (and its browserCtx) now
-//     outlives any single tab, including tab 0.
+//     bootstrapping a second one — in the pre-pipe world, bootstrapping a
+//     second browser here would try to bind Chrome's fixed debug port a
+//     second time and fail loudly. Over today's CDP pipe (CRIT-001) there
+//     is no port to collide on, so the same mistake would instead silently
+//     spawn a SECOND Chrome process — reuse via se.browserCtx remains
+//     required, not less so. This is the browserCtx lifetime fix: the
+//     browser (and its browserCtx) now outlives any single tab, including
+//     tab 0.
 //
 // No-op (nil error, no CDP call) if sessionID already has at least one tab
 // by the time this runs — including if a concurrent creator won the race
@@ -987,11 +992,16 @@ func (m *BrowserManager) lookupTabLocked(sessionID string, index int) (*sessionE
 // Browser is nil — which it always is for a context created straight from
 // the allocator, since the allocator's own stored chromedp.Context never
 // gets its Browser field populated — so a second chromedp.NewContext(
-// m.allocCtx, ...) + Run tries to launch a SECOND Chromium process (and,
-// with the fixed managed-mode debug port already held by the first one,
-// fails outright, even when WithTargetID names an existing target: the
-// browser-allocation step in Run's initContextBrowser happens before the
-// WithTargetID attach logic ever runs).
+// m.allocCtx, ...) + Run tries to launch a SECOND Chromium process. In the
+// pre-pipe world, with the fixed managed-mode debug port already held by the
+// first one, that launch failed outright, even when WithTargetID names an
+// existing target (the browser-allocation step in Run's initContextBrowser
+// happens before the WithTargetID attach logic ever runs). Over today's CDP
+// pipe (CRIT-001) there is no port for the second launch to collide on, so
+// the identical mistake instead SUCCEEDS at silently spawning a second
+// Chrome process — routing every tab through se.browserCtx (never
+// m.allocCtx past the first bootstrap) remains required, and the guard
+// matters MORE now: a loud bind failure became a silent double-Chrome.
 func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID) (*tabEntry, error) {
 	if m.createTabFn != nil {
 		return m.createTabFn(parentCtx, targetID)
@@ -1029,7 +1039,8 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 func refreshTabMeta(tabCtx context.Context, timeout time.Duration) (title, url string) {
 	ctx, cancel := context.WithTimeout(tabCtx, timeout)
 	defer cancel()
-	_ = chromedp.Run(ctx,
+	_ = chromedp.Run(
+		ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_ = chromedp.Title(&title).Do(ctx)
 			_ = chromedp.Location(&url).Do(ctx)
@@ -1157,8 +1168,11 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 		// ADR-041 D3 "never leaves zero tabs" invariant is restored by
 		// createFirstTab below, which REUSES this same browserCtx instead of
 		// tearing the whole browsing context down and relaunching a second
-		// Chromium on the fixed debug port (which would fail to bind — see
-		// bootstrapBrowserCtx's doc comment). A concurrent OpenTab/Session()
+		// Chromium — in the pre-pipe world that would fail to bind the fixed
+		// debug port (see bootstrapBrowserCtx's doc comment); over today's CDP
+		// pipe (CRIT-001) it would instead succeed at silently spawning a
+		// second Chrome process, so the reuse-via-browserCtx guard matters
+		// MORE, not less. A concurrent OpenTab/Session()
 		// call that observes se.tabs momentarily empty converges on the same
 		// createFirstTab pending-dedup gate (ADR-041 fix F1) instead of racing
 		// this replacement.
@@ -1452,9 +1466,15 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	// live-UAT fix) — NOT m.allocCtx. This is THE core fix: adopting a
 	// target="_blank"/window.open target used to reuse the raw allocator
 	// context here, which chromedp treats as "launch a brand new browser"
-	// (see createTab's and sessionEntry.browserCtx's doc comments), and with
-	// the managed-mode debug port already held by the running browser, that
-	// launch failed outright — the tab silently never got adopted.
+	// (see createTab's and sessionEntry.browserCtx's doc comments), and, in
+	// the pre-pipe world, with the managed-mode debug port already held by
+	// the running browser, that launch failed outright — the tab silently
+	// never got adopted. Over today's CDP pipe (CRIT-001) there is no port to
+	// collide on, so the identical raw-allocator mistake would instead
+	// succeed at silently spawning a SECOND Chrome process instead of
+	// adopting into the existing one — routing every adoption through
+	// se.browserCtx remains required, and matters more now that the failure
+	// mode is silent rather than loud.
 	browserCtx := se.browserCtx
 	m.mu.Unlock()
 
@@ -1776,7 +1796,8 @@ func applyStealth(tabCtx context.Context, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(tabCtx, timeout)
 	defer cancel()
 	var ua string
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(
+		ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_ = chromedp.Evaluate(`navigator.userAgent`, &ua).Do(ctx)
 			if clean := deHeadlessUA(ua); clean != "" && clean != ua {

@@ -23,18 +23,22 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
-// sendChunkTracked enqueues an encoded binary media chunk exactly like
-// browserWSConn.sendChunk (drop-on-full, latest-wins, FR-004/FR-017) but
-// REPORTS whether the chunk was actually enqueued (true) or dropped because the
-// outbound queue was full / the connection is closing (false). The relay needs
-// that signal to detect an isolated slow-viewer drop and force a fresh keyframe
-// on this viewer's next delivery (DS-3 row 3) instead of resuming on a delta it
-// has a decode gap before.
+// sendChunkTracked enqueues an encoded binary media chunk (video/audio,
+// FR-002/017) as a WS Binary frame — the binary analog of sendFrame, with the
+// identical drop-on-full, latest-wins discipline (FR-004: "a full-queue
+// viewer MUST have its chunks dropped in isolation"; a stale encoded chunk is
+// superseded by the next one, same rationale as the JPEG-era screencast
+// frame) — but REPORTS whether the chunk was actually enqueued (true) or
+// dropped because the outbound queue was full / the connection is closing
+// (false). The relay needs that signal to detect an isolated slow-viewer
+// drop and replay the full cached GOP on this viewer's next delivery (DS-3
+// row 3, SF-H2) instead of resuming on a delta it has a decode gap before.
 //
-// sendChunk (browser_ws.go) can't simply be changed to return a bool without
-// editing that component's file, so this method re-implements the same
-// non-blocking select here — same channel, same wsSendItem, same doneCh
-// sentinel — and returns the outcome.
+// This is the SOLE production send path for relayed video/audio chunks
+// (S-F1, review-round-2 cleanup): an earlier, non-tracked
+// browserWSConn.sendChunk with no production caller — this method already
+// re-implemented its exact non-blocking select, just with a bool return —
+// was removed.
 func (c *browserWSConn) sendChunkTracked(data []byte) bool {
 	select {
 	case c.sendCh <- &wsSendItem{Binary: true, Data: data}:
@@ -68,7 +72,10 @@ type wsVideoViewer struct {
 }
 
 // newWSVideoViewer builds the adapter bound to authorizedStreamID.
-func newWSVideoViewer(wc *browserWSConn, authorizedStreamID, sessionID, viewerID string) *wsVideoViewer {
+func newWSVideoViewer(
+	wc *browserWSConn,
+	authorizedStreamID, sessionID, viewerID string,
+) *wsVideoViewer {
 	return &wsVideoViewer{
 		wc:                 wc,
 		authorizedStreamID: authorizedStreamID,
@@ -96,17 +103,30 @@ func (v *wsVideoViewer) Authorized(streamID string) bool {
 // moves to the unavailable state (US-5) — never a frozen last frame. Signaled
 // as a browser_status(error) frame carrying the generic, install-agnostic
 // message (O-3): the specific cause is logged operator-side, never surfaced to
-// the end user. sendCriticalGen hands off to the connection's buffered send
-// channel, satisfying the relay's non-blocking-sink contract for Failed.
+// the end user.
+//
+// SF-L5: the relay's Viewer contract (stream_relay.go) requires Failed to be
+// non-blocking — MarkFailed invokes it synchronously, under the agent gate
+// (via failStreamLocked), for every attached viewer of a failed stream.
+// sendCriticalGen's underlying sendCritical can block up to 2s on a
+// backed-up connection before giving up and dropping; calling it
+// synchronously here would stall the agent gate — and therefore every OTHER
+// concurrent operation serialized behind it (a fresh attach, StepDown,
+// another stream's relaunch) — for up to that same 2s per slow viewer. Hand
+// off to a dedicated goroutine instead so Failed() itself always returns
+// immediately, matching the contract's actual, documented non-blocking
+// bound rather than the 2s one it previously carried in practice.
 func (v *wsVideoViewer) Failed(streamID string) {
-	msg := browserVideoUnavailableMessage
-	sid := v.sessionID
-	v.wc.sendCriticalGen(generated.BrowserStatusFrame{
-		Type:      string(generated.WsFrameTypeBrowserStatus),
-		State:     "error",
-		Message:   &msg,
-		SessionId: &sid,
-	}, dropContext(v.sessionID, v.viewerID, "video-stream-failed"))
+	go func() {
+		msg := browserVideoUnavailableMessage
+		sid := v.sessionID
+		v.wc.sendCriticalGen(generated.BrowserStatusFrame{
+			Type:      string(generated.WsFrameTypeBrowserStatus),
+			State:     "error",
+			Message:   &msg,
+			SessionId: &sid,
+		}, dropContext(v.sessionID, v.viewerID, "video-stream-failed"))
+	}()
 }
 
 // compile-time assertion: wsVideoViewer satisfies the relay's Viewer contract.

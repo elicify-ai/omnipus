@@ -325,7 +325,8 @@ func (r *LiveViewRegistry) attachSession(
 	if err != nil {
 		return false, fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
 	}
-	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus, onControl, onTabs, wantScreencast)
+	controlledByOther, err := r.view(sessionID).
+		attach(tabCtx, viewerID, onFrame, onStatus, onControl, onTabs, wantScreencast)
 	if err != nil {
 		return false, err
 	}
@@ -628,7 +629,8 @@ func (lv *LiveView) attach(
 	go lv.runAckWorker(ackCtx, listenCtx)
 
 	// No lock held here — see the deadlock postmortem above.
-	err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
+	err := lv.runCDP(
+		tabCtx, lv.mgr.PageTimeout(),
 		page.StartScreencast().
 			WithFormat(page.ScreencastFormatJpeg).
 			WithQuality(screencastQuality).
@@ -891,7 +893,8 @@ func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Contex
 	go lv.runAckWorker(ackCtx, listenCtx)
 
 	// No lock held here — see the deadlock postmortem above attach().
-	err := lv.runCDP(newCtx, lv.mgr.PageTimeout(),
+	err := lv.runCDP(
+		newCtx, lv.mgr.PageTimeout(),
 		page.StartScreencast().
 			WithFormat(page.ScreencastFormatJpeg).
 			WithQuality(screencastQuality).

@@ -5,20 +5,23 @@ import (
 	"testing"
 )
 
-// withCapabilitySeams overrides goosForCapability, XvfbAvailableProbe, and
-// PulseAudioAvailableProbe for the duration of the test, restoring the
+// withCapabilitySeams overrides goosForCapability, DisplaySidecarHealthyProbe,
+// and PulseAudioAvailableProbe for the duration of the test, restoring the
 // previous values on cleanup — lets the DS-5 table below exercise every
 // platform row (including macOS/Windows) regardless of the host actually
-// running the test.
-func withCapabilitySeams(t *testing.T, goos string, xvfb, pulse bool) {
+// running the test. sidecarHealthy stands in for DisplaySidecarHealthyProbe
+// (AR-C1/GC-1/GC-2's Option-B gate) — NOT an Xvfb-binary-on-PATH probe; the
+// table below seams it directly to exercise every DS-5 row without needing a
+// live, wired sidecar.
+func withCapabilitySeams(t *testing.T, goos string, sidecarHealthy, pulse bool) {
 	t.Helper()
-	prevGOOS, prevXvfb, prevPulse := goosForCapability, XvfbAvailableProbe, PulseAudioAvailableProbe
+	prevGOOS, prevSidecar, prevPulse := goosForCapability, DisplaySidecarHealthyProbe, PulseAudioAvailableProbe
 	goosForCapability = goos
-	XvfbAvailableProbe = func() bool { return xvfb }
+	DisplaySidecarHealthyProbe = func() bool { return sidecarHealthy }
 	PulseAudioAvailableProbe = func() bool { return pulse }
 	t.Cleanup(func() {
 		goosForCapability = prevGOOS
-		XvfbAvailableProbe = prevXvfb
+		DisplaySidecarHealthyProbe = prevSidecar
 		PulseAudioAvailableProbe = prevPulse
 	})
 }
@@ -42,7 +45,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 		goos            string
 		installFull     bool
 		installHeadless bool
-		xvfb            bool
+		sidecarHealthy  bool // seams DisplaySidecarHealthyProbe (AR-C1/GC-1/GC-2), not an Xvfb-on-PATH probe
 		pulse           bool
 		wantCapable     bool
 		wantAudio       bool
@@ -51,75 +54,75 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 
 	scenarios := []scenario{
 		{
-			name:        "linux full-chrome verified + Xvfb up + PulseAudio up -> video-capable, audio yes",
-			goos:        "linux",
-			installFull: true,
-			xvfb:        true,
-			pulse:       true,
-			wantCapable: true,
-			wantAudio:   true,
-			wantLevel:   VideoAndAudioLevel,
+			name:           "linux full-chrome verified + display sidecar healthy + PulseAudio up -> video-capable, audio yes",
+			goos:           "linux",
+			installFull:    true,
+			sidecarHealthy: true,
+			pulse:          true,
+			wantCapable:    true,
+			wantAudio:      true,
+			wantLevel:      VideoAndAudioLevel,
 		},
 		{
-			name:        "linux full-chrome ok + Xvfb up + PulseAudio absent -> video-capable, audio no (silent)",
-			goos:        "linux",
-			installFull: true,
-			xvfb:        true,
-			pulse:       false,
-			wantCapable: true,
-			wantAudio:   false,
-			wantLevel:   VideoOnlyLevel,
+			name:           "linux full-chrome ok + display sidecar healthy + PulseAudio absent -> video-capable, audio no (silent)",
+			goos:           "linux",
+			installFull:    true,
+			sidecarHealthy: true,
+			pulse:          false,
+			wantCapable:    true,
+			wantAudio:      false,
+			wantLevel:      VideoOnlyLevel,
 		},
 		{
-			name:        "linux full-chrome ok + Xvfb absent -> not capable",
-			goos:        "linux",
-			installFull: true,
-			xvfb:        false,
-			pulse:       true,
-			wantCapable: false,
-			wantLevel:   NotCapableLevel,
+			name:           "linux full-chrome ok + display sidecar NOT healthy -> not capable (Option-B dormant gate)",
+			goos:           "linux",
+			installFull:    true,
+			sidecarHealthy: false,
+			pulse:          true,
+			wantCapable:    false,
+			wantLevel:      NotCapableLevel,
 		},
 		{
 			name:            "linux headless-shell only (no full chrome) -> not capable",
 			goos:            "linux",
 			installHeadless: true,
-			xvfb:            true,
+			sidecarHealthy:  true,
 			pulse:           true,
 			wantCapable:     false,
 			wantLevel:       NotCapableLevel,
 		},
 		{
-			name:        "linux nothing installed -> not capable",
-			goos:        "linux",
-			xvfb:        true,
-			pulse:       true,
-			wantCapable: false,
-			wantLevel:   NotCapableLevel,
+			name:           "linux nothing installed -> not capable",
+			goos:           "linux",
+			sidecarHealthy: true,
+			pulse:          true,
+			wantCapable:    false,
+			wantLevel:      NotCapableLevel,
 		},
 		{
-			name:        "macOS -> not capable (M-3, Xvfb/PulseAudio are linux-only)",
-			goos:        "darwin",
-			installFull: true,
-			xvfb:        true,
-			pulse:       true,
-			wantCapable: false,
-			wantLevel:   NotCapableLevel,
+			name:           "macOS -> not capable (M-3, Xvfb/PulseAudio are linux-only)",
+			goos:           "darwin",
+			installFull:    true,
+			sidecarHealthy: true,
+			pulse:          true,
+			wantCapable:    false,
+			wantLevel:      NotCapableLevel,
 		},
 		{
-			name:        "windows -> not capable (M-3)",
-			goos:        "windows",
-			installFull: true,
-			xvfb:        true,
-			pulse:       true,
-			wantCapable: false,
-			wantLevel:   NotCapableLevel,
+			name:           "windows -> not capable (M-3)",
+			goos:           "windows",
+			installFull:    true,
+			sidecarHealthy: true,
+			pulse:          true,
+			wantCapable:    false,
+			wantLevel:      NotCapableLevel,
 		},
 		{
-			name:            "linux both cached (full + headless-shell) + Xvfb up + PulseAudio up -> video-capable (prefer full), F-08",
+			name:            "linux both cached (full + headless-shell) + display sidecar healthy + PulseAudio up -> video-capable (prefer full), F-08",
 			goos:            "linux",
 			installFull:     true,
 			installHeadless: true,
-			xvfb:            true,
+			sidecarHealthy:  true,
 			pulse:           true,
 			wantCapable:     true,
 			wantAudio:       true,
@@ -141,7 +144,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			if sc.installHeadless {
 				seedBuildBinary(t, root, "131.0.6778.108", platform, headlessShellBuild())
 			}
-			withCapabilitySeams(t, sc.goos, sc.xvfb, sc.pulse)
+			withCapabilitySeams(t, sc.goos, sc.sidecarHealthy, sc.pulse)
 
 			got := ClassifyVideoCapability(root)
 			if got.Capable != sc.wantCapable {
@@ -205,5 +208,47 @@ func TestVideoCapability_ReasonNeverEmptyOnNotCapable(t *testing.T) {
 	got := ClassifyVideoCapability(root)
 	if !got.Capable && got.Reason == "" {
 		t.Fatalf("Capable=false must always carry an operator-facing Reason (O-3); GOOS=%s", runtime.GOOS)
+	}
+}
+
+// TestVideoCapability_DormantByDefault_OptionB is the AR-C1/GC-1/GC-2
+// coherent-dormant regression guard: with DisplaySidecarHealthyProbe left
+// UNTOUCHED (the shipped default, defaultDisplaySidecarHealthy, which always
+// returns false), classification must stay NotCapable — even on a linux host
+// with a full Chrome build already installed. This proves the SHIPPED
+// DEFAULT is dormant, not just a seamed test override; it must never regress
+// back into reading an Xvfb-binary-on-PATH signal (a host merely having the
+// xvfb/pulseaudio OS packages installed must never flip this true on its
+// own).
+func TestVideoCapability_DormantByDefault_OptionB(t *testing.T) {
+	if _, err := cftPlatform(); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Fatalf("cftPlatform: %v", err)
+	}
+	root := t.TempDir()
+	seedBuildBinary(t, root, "131.0.6778.108", platform, fullChromeBuild())
+
+	// Force goos=linux (the real test host may not be linux) but deliberately
+	// leave DisplaySidecarHealthyProbe and PulseAudioAvailableProbe alone —
+	// the whole point is to exercise the package's REAL default, not a seam.
+	prevGOOS := goosForCapability
+	goosForCapability = "linux"
+	t.Cleanup(func() { goosForCapability = prevGOOS })
+
+	got := ClassifyVideoCapability(root)
+	if got.Capable {
+		t.Fatalf(
+			"expected NotCapable by default (Option-B dormant gate) even with full Chrome installed, got Capable=true (reason=%q)",
+			got.Reason,
+		)
+	}
+	if got.Level != NotCapableLevel {
+		t.Fatalf("expected NotCapableLevel by default, got %v", got.Level)
+	}
+	if got.Reason == "" {
+		t.Fatalf("expected a non-empty operator-facing Reason (O-3)")
 	}
 }

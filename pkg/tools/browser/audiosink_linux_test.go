@@ -473,7 +473,11 @@ func TestPulseSidecar_BoundedRestartAttempts_GivesUp(t *testing.T) {
 	stalled := atomic.LoadInt32(&attempts)
 	time.Sleep(100 * time.Millisecond)
 	if got := atomic.LoadInt32(&attempts); got != stalled {
-		t.Fatalf("expected spawn attempts to stop at %d once the bound is exceeded, got %d (retried forever)", stalled, got)
+		t.Fatalf(
+			"expected spawn attempts to stop at %d once the bound is exceeded, got %d (retried forever)",
+			stalled,
+			got,
+		)
 	}
 	if sidecar.Healthy() {
 		t.Fatal("expected Healthy() to stay false")

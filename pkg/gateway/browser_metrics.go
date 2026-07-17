@@ -89,6 +89,7 @@
 //     any volume of a reason other than duplicate_connection against a
 //     loopback-only endpoint is either a token-lifecycle bug or a probe
 //     attempt.
+
 package gateway
 
 import (
@@ -298,9 +299,13 @@ func writeBrowserVideoMetrics(sb *strings.Builder) {
 	sb.WriteString("# TYPE omnipus_browser_live_stream_count gauge\n")
 	fmt.Fprintf(sb, "omnipus_browser_live_stream_count %d\n", m.streamCount())
 
-	sb.WriteString("# HELP omnipus_browser_stream_chunks_total Encoded chunks relayed per stream and media kind (fps = rate() over this).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_stream_chunks_total Encoded chunks relayed per stream and media kind (fps = rate() over this).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_stream_chunks_total counter\n")
-	sb.WriteString("# HELP omnipus_browser_stream_bytes_total Encoded bytes relayed per stream and media kind (bitrate = rate()*8 over this).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_stream_bytes_total Encoded bytes relayed per stream and media kind (bitrate = rate()*8 over this).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_stream_bytes_total counter\n")
 	m.streamChunksMu.Lock()
 	streamIDs := make([]string, 0, len(m.streamChunks))
@@ -311,41 +316,81 @@ func writeBrowserVideoMetrics(sb *strings.Builder) {
 	for _, id := range streamIDs {
 		c := m.streamChunks[id]
 		if v := c.videoChunks.Load(); v > 0 {
-			fmt.Fprintf(sb, "omnipus_browser_stream_chunks_total{stream_id=%q,kind=\"video\"} %d\n", id, v)
+			fmt.Fprintf(
+				sb,
+				"omnipus_browser_stream_chunks_total{stream_id=%q,kind=\"video\"} %d\n",
+				id,
+				v,
+			)
 		}
 		if v := c.videoBytes.Load(); v > 0 {
-			fmt.Fprintf(sb, "omnipus_browser_stream_bytes_total{stream_id=%q,kind=\"video\"} %d\n", id, v)
+			fmt.Fprintf(
+				sb,
+				"omnipus_browser_stream_bytes_total{stream_id=%q,kind=\"video\"} %d\n",
+				id,
+				v,
+			)
 		}
 		if a := c.audioChunks.Load(); a > 0 {
-			fmt.Fprintf(sb, "omnipus_browser_stream_chunks_total{stream_id=%q,kind=\"audio\"} %d\n", id, a)
+			fmt.Fprintf(
+				sb,
+				"omnipus_browser_stream_chunks_total{stream_id=%q,kind=\"audio\"} %d\n",
+				id,
+				a,
+			)
 		}
 		if a := c.audioBytes.Load(); a > 0 {
-			fmt.Fprintf(sb, "omnipus_browser_stream_bytes_total{stream_id=%q,kind=\"audio\"} %d\n", id, a)
+			fmt.Fprintf(
+				sb,
+				"omnipus_browser_stream_bytes_total{stream_id=%q,kind=\"audio\"} %d\n",
+				id,
+				a,
+			)
 		}
 	}
 	m.streamChunksMu.Unlock()
 
-	sb.WriteString("# HELP omnipus_browser_viewer_drop_total Chunks dropped in isolation to a full-queue viewer (FR-004).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_viewer_drop_total Chunks dropped in isolation to a full-queue viewer (FR-004).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_viewer_drop_total counter\n")
 	fmt.Fprintf(sb, "omnipus_browser_viewer_drop_total %d\n", m.viewerDropTotal.Load())
 
-	sb.WriteString("# HELP omnipus_browser_decode_error_total Viewer-reported decode errors (no wire signal yet — see code comment).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_decode_error_total Viewer-reported decode errors (no wire signal yet — see code comment).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_decode_error_total counter\n")
 	fmt.Fprintf(sb, "omnipus_browser_decode_error_total %d\n", m.decodeErrorTotal.Load())
 
-	sb.WriteString("# HELP omnipus_browser_capture_restart_total Capture pipeline restarts (step-down + CRIT-002 encoder relaunch).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_capture_restart_total Capture pipeline restarts (step-down + CRIT-002 encoder relaunch).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_capture_restart_total counter\n")
 	fmt.Fprintf(sb, "omnipus_browser_capture_restart_total %d\n", m.captureRestartTotal.Load())
 
-	sb.WriteString("# HELP omnipus_browser_xvfb_sidecar_restart_total Xvfb sidecar bounded-backoff restarts (FR-021).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_xvfb_sidecar_restart_total Xvfb sidecar bounded-backoff restarts (FR-021).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_xvfb_sidecar_restart_total counter\n")
-	fmt.Fprintf(sb, "omnipus_browser_xvfb_sidecar_restart_total %d\n", m.xvfbSidecarRestartTotal.Load())
+	fmt.Fprintf(
+		sb,
+		"omnipus_browser_xvfb_sidecar_restart_total %d\n",
+		m.xvfbSidecarRestartTotal.Load(),
+	)
 
-	sb.WriteString("# HELP omnipus_browser_pulse_sidecar_restart_total PulseAudio sidecar bounded-backoff restarts (FR-022).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_pulse_sidecar_restart_total PulseAudio sidecar bounded-backoff restarts (FR-022).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_pulse_sidecar_restart_total counter\n")
-	fmt.Fprintf(sb, "omnipus_browser_pulse_sidecar_restart_total %d\n", m.pulseSidecarRestartTotal.Load())
+	fmt.Fprintf(
+		sb,
+		"omnipus_browser_pulse_sidecar_restart_total %d\n",
+		m.pulseSidecarRestartTotal.Load(),
+	)
 
-	sb.WriteString("# HELP omnipus_browser_ingest_auth_reject_total Capture-ingest auth rejections by reason (FR-013/FR-024).\n")
+	sb.WriteString(
+		"# HELP omnipus_browser_ingest_auth_reject_total Capture-ingest auth rejections by reason (FR-013/FR-024).\n",
+	)
 	sb.WriteString("# TYPE omnipus_browser_ingest_auth_reject_total counter\n")
 	m.ingestAuthRejectMu.Lock()
 	reasons := make([]string, 0, len(m.ingestAuthRejectTotal))
@@ -354,7 +399,12 @@ func writeBrowserVideoMetrics(sb *strings.Builder) {
 	}
 	sort.Strings(reasons)
 	for _, r := range reasons {
-		fmt.Fprintf(sb, "omnipus_browser_ingest_auth_reject_total{reason=%q} %d\n", r, m.ingestAuthRejectTotal[r])
+		fmt.Fprintf(
+			sb,
+			"omnipus_browser_ingest_auth_reject_total{reason=%q} %d\n",
+			r,
+			m.ingestAuthRejectTotal[r],
+		)
 	}
 	m.ingestAuthRejectMu.Unlock()
 }

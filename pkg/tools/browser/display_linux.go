@@ -229,9 +229,13 @@ func (s *xvfbSidecar) supervise(initialExit chan error) {
 
 		newCmd, newDisp, newExit, ok := s.restartWithBackoff()
 		if !ok {
-			logger.ErrorCF("browser", "xvfb sidecar: exceeded max restart attempts — giving up; install classifies not-video-capable", map[string]any{
-				"max_attempts": xvfbMaxRestartAttempts,
-			})
+			logger.ErrorCF(
+				"browser",
+				"xvfb sidecar: exceeded max restart attempts — giving up; install classifies not-video-capable",
+				map[string]any{
+					"max_attempts": xvfbMaxRestartAttempts,
+				},
+			)
 			return
 		}
 

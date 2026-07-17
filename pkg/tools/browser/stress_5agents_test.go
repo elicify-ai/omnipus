@@ -230,7 +230,8 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 			tabCtx, cancel := context.WithTimeout(tabCtx, 30*time.Second)
 			defer cancel()
 			var body string
-			if err := chromedp.Run(tabCtx,
+			if err := chromedp.Run(
+				tabCtx,
 				chromedp.Navigate(pages[i].URL),
 				chromedp.WaitVisible("h1", chromedp.ByQuery),
 				chromedp.Text("body", &body, chromedp.ByQuery),

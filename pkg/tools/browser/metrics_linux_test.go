@@ -32,7 +32,7 @@ func (f *fakeSidecarMetricsRecorder) IncPulseSidecarRestart() { f.pulseRestart.A
 // the calling test and restores the previous one (nopBrowserMetrics in
 // practice, since production wiring only happens at gateway boot) on
 // cleanup.
-func swapMetricsRecorder(t interface{ Cleanup(func()) }, f *fakeSidecarMetricsRecorder) {
+func swapMetricsRecorder(t interface{ Cleanup(fn func()) }, f *fakeSidecarMetricsRecorder) {
 	prev := activeBrowserMetricsRecorder
 	activeBrowserMetricsRecorder = f
 	t.Cleanup(func() { activeBrowserMetricsRecorder = prev })

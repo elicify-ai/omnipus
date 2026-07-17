@@ -104,7 +104,12 @@ type captureResult struct {
 	err    error
 }
 
-func startCaptureAsync(ctx context.Context, opts CaptureOptions, onFrame func(jpeg []byte, seq uint32, tsMillis uint64), fake *fakeCDP) <-chan captureResult {
+func startCaptureAsync(
+	ctx context.Context,
+	opts CaptureOptions,
+	onFrame func(jpeg []byte, seq uint32, tsMillis uint64),
+	fake *fakeCDP,
+) <-chan captureResult {
 	resultCh := make(chan captureResult, 1)
 	go func() {
 		d, err := startCapture(ctx, opts, onFrame, fake.run, fake.listen)
@@ -127,7 +132,10 @@ func waitForFrameNotify(t *testing.T, notify <-chan struct{}, what string) {
 	select {
 	case <-notify:
 	case <-time.After(2 * time.Second):
-		t.Fatalf("onFrame was not invoked for %s within the timeout — ackWorker may be stuck or not draining frameCh", what)
+		t.Fatalf(
+			"onFrame was not invoked for %s within the timeout — ackWorker may be stuck or not draining frameCh",
+			what,
+		)
 	}
 }
 
@@ -416,7 +424,9 @@ func TestCapture_AckFailureDoesNotForwardButDoesNotAbortCapture(t *testing.T) {
 
 	res := <-resultCh
 	if res.err == nil {
-		t.Fatal("expected the bring-up timeout error — the only frame's ack failed, so no frame should have been forwarded")
+		t.Fatal(
+			"expected the bring-up timeout error — the only frame's ack failed, so no frame should have been forwarded",
+		)
 	}
 	if res.driver != nil {
 		t.Fatal("expected a nil driver when the only frame's ack failed before bring-up timed out")

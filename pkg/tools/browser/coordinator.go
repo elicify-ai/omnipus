@@ -199,7 +199,11 @@ const defaultTotalTabs = 30
 // CDP handshake for seconds). Concurrent Register callers serialize on the
 // single-flight launch (c.launching / c.launchDone); the winner launches, the
 // losers wait and then observe c.launched.
-func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *BrowserManager) (rootCtx context.Context, browserCtxID cdp.BrowserContextID, err error) {
+func (c *BrowserCoordinator) Register(
+	ctx context.Context,
+	agentID string,
+	mgr *BrowserManager,
+) (rootCtx context.Context, browserCtxID cdp.BrowserContextID, err error) {
 	if agentID == "" {
 		return nil, "", fmt.Errorf("browser: coordinator.Register requires a non-empty agentID")
 	}
@@ -244,12 +248,19 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 	agentCtx, agentCancel := chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext())
 	if err := chromedp.Run(agentCtx); err != nil {
 		agentCancel()
-		return nil, "", fmt.Errorf("browser: coordinator: failed to create browser context for agent %q: %w", agentID, err)
+		return nil, "", fmt.Errorf(
+			"browser: coordinator: failed to create browser context for agent %q: %w",
+			agentID,
+			err,
+		)
 	}
 	bid := chromedp.FromContext(agentCtx).BrowserContextID
 	if bid == "" {
 		agentCancel()
-		return nil, "", fmt.Errorf("browser: coordinator: browser context for agent %q came back with an empty id", agentID)
+		return nil, "", fmt.Errorf(
+			"browser: coordinator: browser context for agent %q came back with an empty id",
+			agentID,
+		)
 	}
 
 	c.mu.Lock()
@@ -395,16 +406,28 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTota
 	oldCfg := c.cfg
 	c.mu.Unlock()
 	if oldCfg.Headless != newCfg.Headless {
-		logger.WarnCF("browser", "coordinator: tools.browser.headless changed on reload — applies after gateway restart (Chrome already running)", map[string]any{
-			"old": oldCfg.Headless,
-			"new": newCfg.Headless,
-		})
+		logger.WarnCF(
+			"browser",
+			"coordinator: tools.browser.headless changed on reload — applies after gateway restart (Chrome already running)",
+			map[string]any{
+				"old": oldCfg.Headless,
+				"new": newCfg.Headless,
+			},
+		)
 	}
 	if oldCfg.ExecPath != newCfg.ExecPath {
-		logger.WarnCF("browser", "coordinator: tools.browser.exec_path changed on reload — applies after gateway restart (Chrome already running)", nil)
+		logger.WarnCF(
+			"browser",
+			"coordinator: tools.browser.exec_path changed on reload — applies after gateway restart (Chrome already running)",
+			nil,
+		)
 	}
 	if oldCfg.ProfileDir != newCfg.ProfileDir {
-		logger.WarnCF("browser", "coordinator: tools.browser.profile_dir changed on reload — applies after gateway restart (Chrome already running)", nil)
+		logger.WarnCF(
+			"browser",
+			"coordinator: tools.browser.profile_dir changed on reload — applies after gateway restart (Chrome already running)",
+			nil,
+		)
 	}
 }
 
@@ -423,7 +446,8 @@ func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string) {
 	if c.totalOpenTabsLocked()+c.reservedTabs >= c.maxTotalTabs {
 		return false, fmt.Sprintf(
 			"global tab budget reached (tools.browser.max_total_tabs=%d); close a tab with browser_close_tab first",
-			c.maxTotalTabs)
+			c.maxTotalTabs,
+		)
 	}
 	c.reservedTabs++
 	return true, ""
@@ -542,9 +566,13 @@ func (c *BrowserCoordinator) Shutdown() {
 	}
 	// Release the single-launch lock so a fresh gateway can take it (CRIT-001).
 	releaseLaunchLock(lockFile)
-	logger.InfoCF("browser", "coordinator: shared Chrome shut down (process killed, launch lock released)", map[string]any{
-		"kill_count": c.killCount,
-	})
+	logger.InfoCF(
+		"browser",
+		"coordinator: shared Chrome shut down (process killed, launch lock released)",
+		map[string]any{
+			"kill_count": c.killCount,
+		},
+	)
 }
 
 // --- internals ------------------------------------------------------------
@@ -557,6 +585,7 @@ func (c *BrowserCoordinator) contextCount() int {
 	defer c.mu.Unlock()
 	return len(c.contexts)
 }
+
 func (c *BrowserCoordinator) managerCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -670,8 +699,8 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		}
 	}()
 
-	if err := os.MkdirAll(c.cfg.ProfileDir, 0o700); err != nil {
-		return fmt.Errorf("browser: coordinator: cannot create profile directory %s: %w", c.cfg.ProfileDir, err)
+	if mkdirErr := os.MkdirAll(c.cfg.ProfileDir, 0o700); mkdirErr != nil {
+		return fmt.Errorf("browser: coordinator: cannot create profile directory %s: %w", c.cfg.ProfileDir, mkdirErr)
 	}
 	cleanStaleSingletons(c.cfg.ProfileDir)
 
@@ -702,7 +731,11 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 			launchPath = dbusPath
 			launchArgs = append([]string{"--", execPath}, cmdline.Args...)
 		} else {
-			logger.WarnCF("browser", "coordinator: dbus-run-session not found — launching headful Chrome without a session bus", nil)
+			logger.WarnCF(
+				"browser",
+				"coordinator: dbus-run-session not found — launching headful Chrome without a session bus",
+				nil,
+			)
 		}
 	}
 
@@ -742,7 +775,11 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 			})
 		}
 	} else {
-		logger.WarnCF("browser", "coordinator: could not capture Chrome pid over the pipe — ownership marker NOT written", nil)
+		logger.WarnCF(
+			"browser",
+			"coordinator: could not capture Chrome pid over the pipe — ownership marker NOT written",
+			nil,
+		)
 	}
 
 	c.mu.Lock()
@@ -846,9 +883,13 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	relaunchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := c.ensureLaunched(relaunchCtx); err != nil {
-		logger.ErrorCF("browser", "coordinator: proactive relaunch after crash failed (next tool call will retry)", map[string]any{
-			"error": err.Error(),
-		})
+		logger.ErrorCF(
+			"browser",
+			"coordinator: proactive relaunch after crash failed (next tool call will retry)",
+			map[string]any{
+				"error": err.Error(),
+			},
+		)
 	}
 }
 
@@ -918,7 +959,9 @@ func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
 		return nil, fmt.Errorf(
 			"browser: the shared-Chrome launch lock %s is held by a prior omnipus gateway's Chrome (pid %d) still running — "+
 				"stop that gateway/process before starting a new one",
-			path, pid)
+			path,
+			pid,
+		)
 	}
 
 	// Marker missing or its pid is dead → a stale lockfile from a crashed process.
@@ -1018,7 +1061,9 @@ func (c *BrowserCoordinator) readOwnershipMarker() (pid int, owner string, err e
 
 // pidAlive reports whether the given pid is currently a running process. On
 // non-Unix platforms it conservatively reports true (the marker check is a
-// best-effort guard; the hard guarantee is the port-bind preflight).
+// best-effort guard; the hard guarantee is the single-launch lockfile —
+// flock on Unix (coordinator_lock_unix.go), O_EXCL on other platforms
+// (coordinator_lock_other.go) — not a port bind, which CRIT-001 removed).
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false

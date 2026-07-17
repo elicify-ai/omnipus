@@ -64,16 +64,16 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	}
 	sctx, cancel := context.WithTimeout(tabCtx, 30*time.Second)
 	defer cancel()
-	if err := chromedp.Run(sctx, chromedp.Navigate(srv.URL)); err != nil {
-		t.Fatalf("navigate 1: %v", err)
+	if navErr := chromedp.Run(sctx, chromedp.Navigate(srv.URL)); navErr != nil {
+		t.Fatalf("navigate 1: %v", navErr)
 	}
-	if err := chromedp.Run(sctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if setCookieErr := chromedp.Run(sctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		if serr := network.SetCookie("reload_marker", "AdoptedSurvives").WithURL(srv.URL).Do(ctx); serr != nil {
 			return serr
 		}
 		return nil
-	})); err != nil {
-		t.Fatalf("set cookie before reload: %v", err)
+	})); setCookieErr != nil {
+		t.Fatalf("set cookie before reload: %v", setCookieErr)
 	}
 	pid1 := coord.PID()
 	if pid1 == 0 {
@@ -127,7 +127,10 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 				return nil
 			}
 		}
-		return fmt.Errorf("cookie reload_marker=AdoptedSurvives not found in re-adopted context (got %d cookies)", len(cookies))
+		return fmt.Errorf(
+			"cookie reload_marker=AdoptedSurvives not found in re-adopted context (got %d cookies)",
+			len(cookies),
+		)
 	})); err != nil {
 		t.Fatalf("cookie did not survive reload (context not re-adopted): %v", err)
 	}
@@ -153,8 +156,8 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register 1: %v", err)
 	}
-	if _, err := mgrA.Session(defaultSessionID); err != nil {
-		t.Fatalf("Session 1: %v", err)
+	if _, sessErr := mgrA.Session(defaultSessionID); sessErr != nil {
+		t.Fatalf("Session 1: %v", sessErr)
 	}
 	pid1 := coord.PID()
 	if pid1 == 0 {
@@ -170,8 +173,8 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	if cmd == nil || cmd.Process == nil {
 		t.Fatal("no capturable Chrome cmd to kill")
 	}
-	if err := cmd.Process.Kill(); err != nil {
-		t.Fatalf("kill Chrome: %v", err)
+	if killErr := cmd.Process.Kill(); killErr != nil {
+		t.Fatalf("kill Chrome: %v", killErr)
 	}
 
 	// Wait for the crash detector to relaunch a FRESH Chrome (new pid, non-zero,
@@ -206,7 +209,10 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 		t.Fatal("expected a non-empty fresh browser context id after crash")
 	}
 	if ctxID1 == ctxID2 {
-		t.Fatalf("CRIT-001 VIOLATION: post-crash Register returned the STALE context id %q (expected a fresh one)", ctxID2)
+		t.Fatalf(
+			"CRIT-001 VIOLATION: post-crash Register returned the STALE context id %q (expected a fresh one)",
+			ctxID2,
+		)
 	}
 
 	// The relaunched Chrome is usable.

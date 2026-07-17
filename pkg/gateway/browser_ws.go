@@ -100,21 +100,6 @@ func (c *browserWSConn) sendFrame(data []byte) {
 	}
 }
 
-// sendChunk enqueues an encoded binary media chunk (video/audio, FR-002/017)
-// as a WS Binary frame — the binary analog of sendFrame, with the identical
-// drop-on-full, latest-wins discipline (FR-004: "a full-queue viewer MUST
-// have its chunks dropped in isolation"; a stale encoded chunk is superseded
-// by the next one, same rationale as the JPEG-era screencast frame). Called
-// by the relay path (component D) for every encoded chunk forwarded to this
-// viewer.
-func (c *browserWSConn) sendChunk(data []byte) {
-	select {
-	case c.sendCh <- &wsSendItem{Binary: true, Data: data}:
-	case <-c.doneCh:
-	default:
-	}
-}
-
 // sendFrameGen marshals and enqueues a screencast frame via sendFrame.
 func (c *browserWSConn) sendFrameGen(frame any) {
 	data, err := json.Marshal(frame)
@@ -166,7 +151,7 @@ func dropContext(sessionID, viewerID, label string) string {
 // currently holds. Mutated only from readLoop's goroutine — the screencast
 // FrameSink/StatusSink callbacks (a different goroutine, driven by chromedp's
 // CDP event dispatch) never touch it, only wc.sendFrame(Gen)/wc.sendCritical(Gen)/
-// wc.sendChunk, which are channel-safe.
+// wc.sendChunkTracked, which are channel-safe.
 type browserConnState struct { // not-wire-format: internal connection bookkeeping, never marshaled.
 	mgr *browser.BrowserManager
 	// sessionID is the CLIENT-supplied (chat) session id from the attach
@@ -238,7 +223,11 @@ type BrowserWSHandler struct {
 // sockets can never disagree on CORS/origin policy. browserVideo is
 // component M's stream orchestrator (nil is valid — see the field's doc
 // comment).
-func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string, browserVideo *BrowserVideoOrchestrator) *BrowserWSHandler {
+func newBrowserWSHandler(
+	agentLoop *agent.AgentLoop,
+	allowedOrigin string,
+	browserVideo *BrowserVideoOrchestrator,
+) *BrowserWSHandler {
 	return &BrowserWSHandler{
 		agentLoop:     agentLoop,
 		allowedOrigin: allowedOrigin,
@@ -490,8 +479,12 @@ func (h *BrowserWSHandler) readLoop(
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err,
-				websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+			if !websocket.IsCloseError(
+				err,
+				websocket.CloseNormalClosure,
+				websocket.CloseGoingAway,
+				websocket.CloseNoStatusReceived,
+			) {
 				slog.Debug("browser-ws: read error", "error", err)
 			}
 			return
@@ -526,7 +519,13 @@ func (h *BrowserWSHandler) readLoop(
 							"schema", schemaName, "frame_type", typ.Type, "error", errMsg)
 					}
 					wc.sendCriticalGen(
-						errorStatus(fmt.Sprintf("frame schema validation failed (%s): %s", schemaName, errMsg)),
+						errorStatus(
+							fmt.Sprintf(
+								"frame schema validation failed (%s): %s",
+								schemaName,
+								errMsg,
+							),
+						),
 						dropContext("", viewerID, "schema-invalid:"+typ.Type),
 					)
 					continue
@@ -622,7 +621,10 @@ func (h *BrowserWSHandler) handleAttach(
 ) {
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(errorStatus("browser_attach: invalid frame"), dropContext("", viewerID, "attach-invalid"))
+		wc.sendCriticalGen(
+			errorStatus("browser_attach: invalid frame"),
+			dropContext("", viewerID, "attach-invalid"),
+		)
 		return
 	}
 	if frame.AgentId == "" || frame.SessionId == "" {
@@ -711,64 +713,73 @@ func (h *BrowserWSHandler) handleAttach(
 	if videoCapable {
 		attachFn = mgr.Live().AttachWithoutScreencast
 	}
-	controlledByOther, err := attachFn(browser.DefaultSessionID, viewerID, onFrame, func(message string) {
-		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
-		// context died without an explicit browser_detach — e.g. this
-		// connection is still holding a reference to a BrowserManager that
-		// registerSharedTools has since Shutdown()'d on hot-reload. Tell the
-		// client so it can re-attach (which resolves the CURRENT manager via
-		// BrowserManagerForAgent) instead of silently watching a frozen frame
-		// forever.
-		wc.sendCriticalGen(
-			sessionErrorStatus(chatSessionID, message),
-			dropContext(chatSessionID, viewerID, "status-death"),
-		)
-	}, func(controlledByOther bool) {
-		// ADR-039 UAT BE-1: fan-out from LiveView.takeControl/releaseControl —
-		// some OTHER connection on this session just took or released
-		// control. state="idle" here (never "controlling"/"released", which
-		// describe THIS connection's own action) — see BrowserStatusFrame's
-		// enum and BrowserLiveView.tsx's pillConfig, where 'idle' already
-		// falls into the same "no human holds the lock" display bucket as
-		// 'attached'/'released' by default, so this is a safe no-op display
-		// change for a client that hasn't yet started reading
-		// controlled_by_other, and the correct signal for one that has.
-		cbo := controlledByOther
-		wc.sendCriticalGen(generated.BrowserStatusFrame{
-			Type:              string(generated.WsFrameTypeBrowserStatus),
-			State:             "idle",
-			SessionId:         &chatSessionID,
-			ControlledByOther: &cbo,
-			// ControlOnly (B1): this frame's SOLE purpose is to update
-			// control-ownership on this OTHER viewer — it carries no real
-			// lifecycle/error meaning. Without this flag it's
-			// indistinguishable on the wire from a genuine status
-			// transition, so the SPA was wiping any displayed error banner
-			// and resetting other state on every take/release/detach by a
-			// DIFFERENT viewer. Deliberately NOT set on the initial attach
-			// response below (state="attached") — that one is a real
-			// lifecycle frame that also happens to carry
-			// controlled_by_other.
-			ControlOnly: boolPtr(true),
-		}, dropContext(chatSessionID, viewerID, "control-broadcast"))
-	}, func(tabs []browser.Tab, activeIdx int) {
-		// ADR-041 D4: the tab set changed (open/close/switch/adopt, or a
-		// best-effort title/url update) — broadcast the current tab strip.
-		// Fired once immediately on attach (with the CURRENT tab set) and
-		// again on every subsequent change; delivered to every attached
-		// viewer, including the one that caused the change (unlike
-		// ControlSink, a tabs update carries no "who acted" distinction that
-		// needs excluding the actor).
-		wc.sendCriticalGen(generated.BrowserTabsFrame{
-			Type:        string(generated.WsFrameTypeBrowserTabs),
-			SessionId:   &chatSessionID,
-			ActiveIndex: activeIdx,
-			Tabs:        tabsToBrowserTabsWire(tabs),
-		}, dropContext(chatSessionID, viewerID, "tabs-broadcast"))
-	})
+	controlledByOther, err := attachFn(
+		browser.DefaultSessionID,
+		viewerID,
+		onFrame,
+		func(message string) {
+			// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
+			// context died without an explicit browser_detach — e.g. this
+			// connection is still holding a reference to a BrowserManager that
+			// registerSharedTools has since Shutdown()'d on hot-reload. Tell the
+			// client so it can re-attach (which resolves the CURRENT manager via
+			// BrowserManagerForAgent) instead of silently watching a frozen frame
+			// forever.
+			wc.sendCriticalGen(
+				sessionErrorStatus(chatSessionID, message),
+				dropContext(chatSessionID, viewerID, "status-death"),
+			)
+		},
+		func(controlledByOther bool) {
+			// ADR-039 UAT BE-1: fan-out from LiveView.takeControl/releaseControl —
+			// some OTHER connection on this session just took or released
+			// control. state="idle" here (never "controlling"/"released", which
+			// describe THIS connection's own action) — see BrowserStatusFrame's
+			// enum and BrowserLiveView.tsx's pillConfig, where 'idle' already
+			// falls into the same "no human holds the lock" display bucket as
+			// 'attached'/'released' by default, so this is a safe no-op display
+			// change for a client that hasn't yet started reading
+			// controlled_by_other, and the correct signal for one that has.
+			cbo := controlledByOther
+			wc.sendCriticalGen(generated.BrowserStatusFrame{
+				Type:              string(generated.WsFrameTypeBrowserStatus),
+				State:             "idle",
+				SessionId:         &chatSessionID,
+				ControlledByOther: &cbo,
+				// ControlOnly (B1): this frame's SOLE purpose is to update
+				// control-ownership on this OTHER viewer — it carries no real
+				// lifecycle/error meaning. Without this flag it's
+				// indistinguishable on the wire from a genuine status
+				// transition, so the SPA was wiping any displayed error banner
+				// and resetting other state on every take/release/detach by a
+				// DIFFERENT viewer. Deliberately NOT set on the initial attach
+				// response below (state="attached") — that one is a real
+				// lifecycle frame that also happens to carry
+				// controlled_by_other.
+				ControlOnly: boolPtr(true),
+			}, dropContext(chatSessionID, viewerID, "control-broadcast"))
+		},
+		func(tabs []browser.Tab, activeIdx int) {
+			// ADR-041 D4: the tab set changed (open/close/switch/adopt, or a
+			// best-effort title/url update) — broadcast the current tab strip.
+			// Fired once immediately on attach (with the CURRENT tab set) and
+			// again on every subsequent change; delivered to every attached
+			// viewer, including the one that caused the change (unlike
+			// ControlSink, a tabs update carries no "who acted" distinction that
+			// needs excluding the actor).
+			wc.sendCriticalGen(generated.BrowserTabsFrame{
+				Type:        string(generated.WsFrameTypeBrowserTabs),
+				SessionId:   &chatSessionID,
+				ActiveIndex: activeIdx,
+				Tabs:        tabsToBrowserTabsWire(tabs),
+			}, dropContext(chatSessionID, viewerID, "tabs-broadcast"))
+		},
+	)
 	if err != nil {
-		wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
-			dropContext(chatSessionID, viewerID, "attach-failed"))
+		wc.sendCriticalGen(
+			sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
+			dropContext(chatSessionID, viewerID, "attach-failed"),
+		)
 		return
 	}
 
@@ -814,7 +825,12 @@ func (h *BrowserWSHandler) handleAttach(
 	if sessErr != nil {
 		slog.Warn("browser-ws: video attach: resolve agent session failed",
 			"agent_id", frame.AgentId, "session_id", chatSessionID, "error", sessErr)
-		h.browserVideo.sendUnavailable(wc, chatSessionID, viewerID, "agent_session_failed:"+sessErr.Error())
+		h.browserVideo.sendUnavailable(
+			wc,
+			chatSessionID,
+			viewerID,
+			"agent_session_failed:"+sessErr.Error(),
+		)
 		return
 	}
 	rootCtx, rootOK := mgr.RootContext()
@@ -838,7 +854,15 @@ func (h *BrowserWSHandler) handleAttach(
 		// client its unavailable browser_status before returning — this
 		// error return is only the WC==nil guard, unreachable here since wc
 		// is always non-nil. Logged defensively; nothing further to send.
-		slog.Warn("browser-ws: video attach failed", "agent_id", frame.AgentId, "session_id", chatSessionID, "error", verr)
+		slog.Warn(
+			"browser-ws: video attach failed",
+			"agent_id",
+			frame.AgentId,
+			"session_id",
+			chatSessionID,
+			"error",
+			verr,
+		)
 		return
 	}
 	state.videoHandle = handle
@@ -867,7 +891,12 @@ func (h *BrowserWSHandler) handleAttach(
 // submit — so suppressing even a byte-identical repeat (e.g. resubmitting
 // the exact same blocked URL) would leave the user looking at no error at
 // all after their retry was refused again.
-func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+func (h *BrowserWSHandler) handleInput(
+	wc *browserWSConn,
+	state *browserConnState,
+	viewerID string,
+	data []byte,
+) {
 	if state.mgr == nil || state.sessionID == "" {
 		return
 	}
@@ -919,7 +948,13 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 
 	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
 		if browser.IsBenignLiveInputError(err) {
-			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
+			slog.Debug(
+				"browser-ws: input rejected (benign)",
+				"error",
+				err,
+				"session_id",
+				state.sessionID,
+			)
 			return
 		}
 		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
@@ -992,15 +1027,31 @@ func (h *BrowserWSHandler) handleControl(
 	switch frame.Action {
 	case "take":
 		if !cfg.Tools.Browser.TakeControlEnabled {
-			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "take_control_disabled")
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "take-control is disabled by the operator"),
-				dropContext(chatSessionID, viewerID, "control-take-disabled"))
+			h.auditControl(
+				userID,
+				chatSessionID,
+				viewerID,
+				audit.SeverityWarn,
+				"take_control_disabled",
+			)
+			wc.sendCriticalGen(
+				sessionErrorStatus(chatSessionID, "take-control is disabled by the operator"),
+				dropContext(chatSessionID, viewerID, "control-take-disabled"),
+			)
 			return
 		}
 		if !state.mgr.Live().TakeControl(browser.DefaultSessionID, viewerID) {
-			h.auditControl(userID, chatSessionID, viewerID, audit.SeverityWarn, "already_controlled")
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "another viewer already controls this browser"),
-				dropContext(chatSessionID, viewerID, "control-take-denied"))
+			h.auditControl(
+				userID,
+				chatSessionID,
+				viewerID,
+				audit.SeverityWarn,
+				"already_controlled",
+			)
+			wc.sendCriticalGen(
+				sessionErrorStatus(chatSessionID, "another viewer already controls this browser"),
+				dropContext(chatSessionID, viewerID, "control-take-denied"),
+			)
 			return
 		}
 		h.auditControl(userID, chatSessionID, viewerID, audit.SeverityInfo, "take")
@@ -1020,8 +1071,10 @@ func (h *BrowserWSHandler) handleControl(
 			SessionId: &chatSessionID,
 		}, dropContext(chatSessionID, viewerID, "control-release-ok"))
 	default:
-		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
-			dropContext(chatSessionID, viewerID, "control-unknown-action"))
+		wc.sendCriticalGen(
+			errorStatus(fmt.Sprintf("browser_control: unknown action %q", frame.Action)),
+			dropContext(chatSessionID, viewerID, "control-unknown-action"),
+		)
 	}
 }
 
@@ -1051,7 +1104,12 @@ func (h *BrowserWSHandler) handleControl(
 // The agent's own tab tools (browser_list_tabs/switch_tab/close_tab,
 // tabs.go) are UNAFFECTED — they call BrowserManager.SwitchTab/CloseTab/
 // OpenTab directly, never through this WS handler.
-func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConnState, viewerID string, data []byte) {
+func (h *BrowserWSHandler) handleTabAction(
+	wc *browserWSConn,
+	state *browserConnState,
+	viewerID string,
+	data []byte,
+) {
 	if state.mgr == nil || state.sessionID == "" {
 		wc.sendCriticalGen(errorStatus("browser_tab_action: attach before managing tabs"),
 			dropContext("", viewerID, "tab-action-not-attached"))
@@ -1069,9 +1127,13 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	// set (ADR-038 finding #1 / ADR-041) — see handleAttach's doc comment.
 	chatSessionID := state.sessionID
 
-	if controller := state.mgr.Live().Controller(browser.DefaultSessionID); controller != "" && controller != viewerID {
+	if controller := state.mgr.Live().Controller(browser.DefaultSessionID); controller != "" &&
+		controller != viewerID {
 		wc.sendCriticalGen(
-			sessionErrorStatus(chatSessionID, "another viewer is driving — take control first to manage tabs"),
+			sessionErrorStatus(
+				chatSessionID,
+				"another viewer is driving — take control first to manage tabs",
+			),
 			dropContext(chatSessionID, viewerID, "tab-action-not-controller"),
 		)
 		return
@@ -1080,32 +1142,50 @@ func (h *BrowserWSHandler) handleTabAction(wc *browserWSConn, state *browserConn
 	switch frame.Action {
 	case "switch":
 		if frame.Index == nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "browser_tab_action: index is required for switch"),
-				dropContext(chatSessionID, viewerID, "tab-switch-missing-index"))
+			wc.sendCriticalGen(
+				sessionErrorStatus(
+					chatSessionID,
+					"browser_tab_action: index is required for switch",
+				),
+				dropContext(chatSessionID, viewerID, "tab-switch-missing-index"),
+			)
 			return
 		}
 		if _, err := state.mgr.SwitchTab(browser.DefaultSessionID, *frame.Index); err != nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
-				dropContext(chatSessionID, viewerID, "tab-switch-failed"))
+			wc.sendCriticalGen(
+				sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+				dropContext(chatSessionID, viewerID, "tab-switch-failed"),
+			)
 		}
 	case "close":
 		if frame.Index == nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, "browser_tab_action: index is required for close"),
-				dropContext(chatSessionID, viewerID, "tab-close-missing-index"))
+			wc.sendCriticalGen(
+				sessionErrorStatus(
+					chatSessionID,
+					"browser_tab_action: index is required for close",
+				),
+				dropContext(chatSessionID, viewerID, "tab-close-missing-index"),
+			)
 			return
 		}
 		if _, _, err := state.mgr.CloseTab(browser.DefaultSessionID, *frame.Index); err != nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
-				dropContext(chatSessionID, viewerID, "tab-close-failed"))
+			wc.sendCriticalGen(
+				sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+				dropContext(chatSessionID, viewerID, "tab-close-failed"),
+			)
 		}
 	case "open":
 		if _, err := state.mgr.OpenTab(browser.DefaultSessionID); err != nil {
-			wc.sendCriticalGen(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
-				dropContext(chatSessionID, viewerID, "tab-open-failed"))
+			wc.sendCriticalGen(
+				sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
+				dropContext(chatSessionID, viewerID, "tab-open-failed"),
+			)
 		}
 	default:
-		wc.sendCriticalGen(errorStatus(fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
-			dropContext(chatSessionID, viewerID, "tab-action-unknown"))
+		wc.sendCriticalGen(
+			errorStatus(fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
+			dropContext(chatSessionID, viewerID, "tab-action-unknown"),
+		)
 	}
 }
 
@@ -1143,7 +1223,11 @@ func tabsToBrowserTabsWire(tabs []browser.Tab) []browserTabWire {
 }
 
 // handleDetach unbinds this connection from its current live view.
-func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnState, viewerID, userID string) {
+func (h *BrowserWSHandler) handleDetach(
+	wc *browserWSConn,
+	state *browserConnState,
+	viewerID, userID string,
+) {
 	if state.mgr == nil || state.sessionID == "" {
 		return
 	}
@@ -1166,7 +1250,10 @@ func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnSta
 // clean detach for audit and resource-cleanup purposes. chatSessionID is
 // used only for the audit entry / log context; the live-view call always
 // targets browser.DefaultSessionID (ADR-038 finding #1).
-func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, viewerID, userID string) {
+func (h *BrowserWSHandler) detach(
+	mgr *browser.BrowserManager,
+	chatSessionID, viewerID, userID string,
+) {
 	wasController := mgr.Live().Controller(browser.DefaultSessionID) == viewerID
 	mgr.Live().Detach(browser.DefaultSessionID, viewerID)
 	if wasController {
@@ -1182,7 +1269,11 @@ func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, vi
 // goes through Emit with the severity the comment always claimed: INFO for
 // an allowed take, WARN for a denied one — appropriate for a remote-control
 // security surface.
-func (h *BrowserWSHandler) auditControl(userID, sessionID, viewerID string, sev audit.Severity, reason string) {
+func (h *BrowserWSHandler) auditControl(
+	userID, sessionID, viewerID string,
+	sev audit.Severity,
+	reason string,
+) {
 	al := h.agentLoop.AuditLogger()
 	if al == nil {
 		return
@@ -1203,11 +1294,17 @@ func (h *BrowserWSHandler) auditRelease(userID, sessionID, viewerID string) {
 	if al == nil {
 		return
 	}
-	audit.Emit(context.Background(), al, audit.EventBrowserLiveControlReleased, audit.SeverityInfo, map[string]any{
-		"session_id": sessionID,
-		"user":       userID,
-		"viewer_id":  viewerID,
-	})
+	audit.Emit(
+		context.Background(),
+		al,
+		audit.EventBrowserLiveControlReleased,
+		audit.SeverityInfo,
+		map[string]any{
+			"session_id": sessionID,
+			"user":       userID,
+			"viewer_id":  viewerID,
+		},
+	)
 }
 
 // errorStatus builds a session-less browser_status(error) frame.

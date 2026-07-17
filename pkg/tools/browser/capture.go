@@ -43,7 +43,7 @@ const (
 	defaultBringupTimeout = 3 * time.Second
 
 	// captureFrameQueueDepth bounds the handoff queue between the CDP
-	// event-dispatch goroutine (handler, below) and runAckWorker's single
+	// event-dispatch goroutine (handler, below) and ackWorker's single
 	// consumer. Matches the chromedp cmdQueue depth documented in
 	// live.go's ADR-038 postmortem (32, buffered, one writer/reader loop)
 	// — deep enough that this driver's own queue is never the bottleneck
@@ -122,7 +122,11 @@ type CaptureDriver struct {
 // until the first frame arrives or opts.BringupTimeout elapses (FR-018),
 // returning an error in either failure case for the orchestrator to map to
 // the unavailable state.
-func StartCapture(ctx context.Context, opts CaptureOptions, onFrame func(jpeg []byte, seq uint32, tsMillis uint64)) (*CaptureDriver, error) {
+func StartCapture(
+	ctx context.Context,
+	opts CaptureOptions,
+	onFrame func(jpeg []byte, seq uint32, tsMillis uint64),
+) (*CaptureDriver, error) {
 	return startCapture(ctx, opts, onFrame, startCDPAction, chromedp.ListenTarget)
 }
 
@@ -144,7 +148,9 @@ func startCapture(
 		return nil, errors.New("browser capture: onFrame callback is required")
 	}
 	if runCDP == nil || listenTarget == nil {
-		return nil, errors.New("browser capture: CDP execution seam (runCDP, listenTarget) is required")
+		return nil, errors.New(
+			"browser capture: CDP execution seam (runCDP, listenTarget) is required",
+		)
 	}
 
 	format := opts.Format
@@ -152,7 +158,10 @@ func startCapture(
 		format = "jpeg"
 	}
 	if format != "jpeg" {
-		return nil, fmt.Errorf("browser capture: unsupported format %q (only jpeg is supported)", format)
+		return nil, fmt.Errorf(
+			"browser capture: unsupported format %q (only jpeg is supported)",
+			format,
+		)
 	}
 
 	everyNth := opts.EveryNthFrame
@@ -234,16 +243,16 @@ func startCapture(
 	// ackWorker is the single goroutine that acks, decodes, and forwards
 	// screencast frames for this capture session, draining frameCh
 	// strictly in the order the handler enqueued them — unlike live.go's
-	// runAckWorker (pkg/tools/browser/live.go:938-1004), which coalesces
-	// to the newest frame for a human-viewed JPEG preview and can safely
-	// drop stale acks, this driver feeds a video encoder that needs every
-	// frame acked and delivered in order, so frames are never coalesced
-	// or dropped here — a full frameCh instead applies backpressure on
-	// the handler (see its doc comment above). Bounded by captureCtx, so
-	// it exits on Stop(), a parent ctx cancellation, or the
-	// bring-up-timeout path below — captureCtx is always eventually
-	// canceled on every exit path (see the watcher goroutine above), so
-	// this goroutine is never leaked either.
+	// runAckWorker, which coalesces to the newest frame for a
+	// human-viewed JPEG preview and can safely drop stale acks, this
+	// driver feeds a video encoder that needs every frame acked and
+	// delivered in order, so frames are never coalesced or dropped here —
+	// a full frameCh instead applies backpressure on the handler (see its
+	// doc comment above). Bounded by captureCtx, so it exits on Stop(), a
+	// parent ctx cancellation, or the bring-up-timeout path below —
+	// captureCtx is always eventually canceled on every exit path (see
+	// the watcher goroutine above), so this goroutine is never leaked
+	// either.
 	//
 	// ADR-038 DEADLOCK POSTMORTEM: the previous implementation of this
 	// file ran page.ScreencastFrameAck synchronously INSIDE the
@@ -277,10 +286,14 @@ func startCapture(
 
 				jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
 				if err != nil {
-					logger.WarnCF("browser", "capture: frame payload was not valid base64 — dropping frame", map[string]any{
-						"error":      err.Error(),
-						"session_id": frame.SessionID,
-					})
+					logger.WarnCF(
+						"browser",
+						"capture: frame payload was not valid base64 — dropping frame",
+						map[string]any{
+							"error":      err.Error(),
+							"session_id": frame.SessionID,
+						},
+					)
 					continue
 				}
 
@@ -304,7 +317,8 @@ func startCapture(
 	// missed.
 	listenTarget(captureCtx, handler)
 
-	err := runCDP(captureCtx, actionTimeout,
+	err := runCDP(
+		captureCtx, actionTimeout,
 		page.StartScreencast().
 			WithFormat(page.ScreencastFormatJpeg).
 			WithQuality(int64(opts.Quality)).
@@ -326,15 +340,25 @@ func startCapture(
 		// still be trying to send frames) then tear down; the caller
 		// maps this error to the unavailable state.
 		if stopErr := runCDP(d.tabCtx, actionTimeout, page.StopScreencast()); stopErr != nil {
-			logger.WarnCF("browser", "capture: bring-up timeout — stop screencast also failed", map[string]any{
-				"error": stopErr.Error(),
-			})
+			logger.WarnCF(
+				"browser",
+				"capture: bring-up timeout — stop screencast also failed",
+				map[string]any{
+					"error": stopErr.Error(),
+				},
+			)
 		}
 		cancel()
-		return nil, fmt.Errorf("browser capture: no frame received within bring-up timeout (%s)", bringupTimeout)
+		return nil, fmt.Errorf(
+			"browser capture: no frame received within bring-up timeout (%s)",
+			bringupTimeout,
+		)
 	case <-captureCtx.Done():
 		cancel()
-		return nil, fmt.Errorf("browser capture: context canceled during bring-up: %w", captureCtx.Err())
+		return nil, fmt.Errorf(
+			"browser capture: context canceled during bring-up: %w",
+			captureCtx.Err(),
+		)
 	}
 }
 
@@ -356,9 +380,13 @@ func startCapture(
 func (d *CaptureDriver) Stop() {
 	d.stopOnce.Do(func() {
 		if err := d.runCDP(d.tabCtx, d.actionTimeout, page.StopScreencast()); err != nil {
-			logger.WarnCF("browser", "capture: stop screencast failed (target may already be closed)", map[string]any{
-				"error": err.Error(),
-			})
+			logger.WarnCF(
+				"browser",
+				"capture: stop screencast failed (target may already be closed)",
+				map[string]any{
+					"error": err.Error(),
+				},
+			)
 		}
 		d.cancel()
 	})

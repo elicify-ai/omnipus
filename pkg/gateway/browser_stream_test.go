@@ -31,12 +31,13 @@ import (
 // ---- fakes ----
 
 type fakeIngest struct {
-	mu        sync.Mutex
-	mintCalls []string
-	endCalls  []string
-	feedCalls int
-	tokenSeq  int
-	current   map[string]string // streamID -> current (live) token
+	mu               sync.Mutex
+	mintCalls        []string
+	endCalls         []string
+	feedCalls        int
+	keyframeRequests []string
+	tokenSeq         int
+	current          map[string]string // streamID -> current (live) token
 }
 
 func newFakeIngest() *fakeIngest { return &fakeIngest{current: map[string]string{}} }
@@ -62,6 +63,21 @@ func (f *fakeIngest) FeedFrame(streamID string, jpeg []byte, seq uint32, ts uint
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.feedCalls++
+}
+
+// RequestKeyframe satisfies ingestController's SF-H2 seam (browser_stream.go)
+// so this fake can stand in for the real *CaptureIngestHandler in every
+// orchestrator test in this package.
+func (f *fakeIngest) RequestKeyframe(streamID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keyframeRequests = append(f.keyframeRequests, streamID)
+}
+
+func (f *fakeIngest) keyframeRequestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.keyframeRequests)
 }
 
 func (f *fakeIngest) mintCount() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.mintCalls) }
@@ -106,6 +122,7 @@ func (f *fakeLauncher) cfgAt(i int) browser.EncoderLaunchCfg {
 	defer f.mu.Unlock()
 	return f.cfgs[i]
 }
+
 func (f *fakeLauncher) tabAt(i int) *fakeEncoderTab {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -124,7 +141,11 @@ type fakeCaptureStarter struct {
 	err     error
 }
 
-func (f *fakeCaptureStarter) start(_ context.Context, _ browser.CaptureOptions, onFrame func(jpeg []byte, seq uint32, tsMillis uint64)) (captureDriver, error) {
+func (f *fakeCaptureStarter) start(
+	_ context.Context,
+	_ browser.CaptureOptions,
+	onFrame func(jpeg []byte, seq uint32, tsMillis uint64),
+) (captureDriver, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -164,7 +185,13 @@ func newTestVideoConn() *browserWSConn {
 	return &browserWSConn{sendCh: make(chan *wsSendItem, 64), doneCh: make(chan struct{})}
 }
 
-func newTestOrchestrator(classify classifyFunc, ing ingestController, launch encoderLauncher, cap captureStarter, srv encoderPageServer) *BrowserVideoOrchestrator {
+func newTestOrchestrator(
+	classify classifyFunc,
+	ing ingestController,
+	launch encoderLauncher,
+	capb captureStarter,
+	srv encoderPageServer,
+) *BrowserVideoOrchestrator {
 	o := newOrchestrator(BrowserVideoDeps{
 		Config: BrowserVideoConfig{
 			IngestWSURL:     "ws://127.0.0.1:5000/api/v1/browser/capture-ingest",
@@ -172,7 +199,7 @@ func newTestOrchestrator(classify classifyFunc, ing ingestController, launch enc
 		},
 		Classify:      classify,
 		LaunchEncoder: launch,
-		StartCapture:  cap,
+		StartCapture:  capb,
 		EncoderServer: srv,
 	})
 	o.ingest = ing
@@ -184,7 +211,10 @@ func drainStreamInit(t *testing.T, wc *browserWSConn) generated.BrowserStreamIni
 	select {
 	case item := <-wc.sendCh:
 		if item == nil || item.Binary {
-			t.Fatalf("expected a text browser_stream_init frame first, got binary=%v", item != nil && item.Binary)
+			t.Fatalf(
+				"expected a text browser_stream_init frame first, got binary=%v",
+				item != nil && item.Binary,
+			)
 		}
 		var f generated.BrowserStreamInitFrame
 		if err := json.Unmarshal(item.Data, &f); err != nil {
@@ -215,10 +245,15 @@ func nextBinaryChunk(t *testing.T, wc *browserWSConn, within time.Duration) []by
 	}
 }
 
-// findStatusError drains up to `max` items looking for a browser_status(error)
+// findStatusError drains up to 16 items, waiting (bounded to 2s overall) for
+// each — some send paths deliver asynchronously off their own goroutine
+// (e.g. wsVideoViewer.Failed's SF-L5 non-blocking handoff) rather than
+// synchronously before the triggering call returns, so an immediate
+// no-frame-yet check would be racy — looking for a browser_status(error)
 // frame carrying the generic unavailable message.
 func findStatusError(t *testing.T, wc *browserWSConn) generated.BrowserStatusFrame {
 	t.Helper()
+	deadline := time.After(2 * time.Second)
 	for i := 0; i < 16; i++ {
 		select {
 		case item := <-wc.sendCh:
@@ -232,8 +267,8 @@ func findStatusError(t *testing.T, wc *browserWSConn) generated.BrowserStatusFra
 			if f.State == "error" {
 				return f
 			}
-		default:
-			t.Fatal("no browser_status(error) frame found")
+		case <-deadline:
+			t.Fatal("no browser_status(error) frame found within the deadline")
 		}
 	}
 	t.Fatal("no browser_status(error) frame found within drained frames")
@@ -257,9 +292,9 @@ func eventually(t *testing.T, timeout time.Duration, cond func() bool) {
 func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
-	o := newTestOrchestrator(capable(), ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(capable(), ing, launch.launch, capb.start, srv)
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
@@ -283,8 +318,8 @@ func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	if launch.count() != 1 {
 		t.Fatalf("expected 1 encoder launch, got %d", launch.count())
 	}
-	if cap.count() != 1 {
-		t.Fatalf("expected 1 capture start, got %d", cap.count())
+	if capb.count() != 1 {
+		t.Fatalf("expected 1 capture start, got %d", capb.count())
 	}
 	streamID := ing.mintCalls[0]
 
@@ -292,7 +327,11 @@ func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	// and the negotiated (H.264-first) codec.
 	cfg := launch.cfgAt(0)
 	if cfg.Token != ing.liveToken(streamID) {
-		t.Fatalf("encoder launched with token %q, live token is %q", cfg.Token, ing.liveToken(streamID))
+		t.Fatalf(
+			"encoder launched with token %q, live token is %q",
+			cfg.Token,
+			ing.liveToken(streamID),
+		)
 	}
 	if cfg.Origin != "http://127.0.0.1:12345" || cfg.EncoderURL == "" {
 		t.Fatalf("encoder cfg origin/url not wired: origin=%q url=%q", cfg.Origin, cfg.EncoderURL)
@@ -308,9 +347,9 @@ func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	}
 
 	// Capture frames are wired to the ingest FeedFrame path.
-	cap.mu.Lock()
-	onFrame := cap.onFrame
-	cap.mu.Unlock()
+	capb.mu.Lock()
+	onFrame := capb.onFrame
+	capb.mu.Unlock()
 	if onFrame == nil {
 		t.Fatal("capture onFrame callback was not captured")
 	}
@@ -323,7 +362,17 @@ func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	// adapter) must fan out to the attached viewer as a binary chunk.
 	adapter := &videoRelayAdapter{orch: o}
 	payload := []byte{1, 2, 3, 4}
-	adapter.Ingest(streamID, EncodedChunk{Seq: 0, TS: 7, Key: true, Codec: cfg.VideoCodec, Kind: "video", Payload: payload})
+	adapter.Ingest(
+		streamID,
+		EncodedChunk{
+			Seq:     0,
+			TS:      7,
+			Key:     true,
+			Codec:   cfg.VideoCodec,
+			Kind:    "video",
+			Payload: payload,
+		},
+	)
 
 	chunk := nextBinaryChunk(t, wc, time.Second)
 	if len(chunk) != 18+len(payload) {
@@ -338,17 +387,26 @@ func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	if string(chunk[18:]) != string(payload) {
 		t.Fatalf("chunk payload mismatch: got %v want %v", chunk[18:], payload)
 	}
+
+	// SF-H2 regression guard: a normal (never-degraded) viewer must never
+	// trigger a force-keyframe control request — that seam exists solely
+	// for the relay's degraded→recover path (see
+	// TestStreamRelay_DegradedRecovery_RequestsFreshKeyframeAndReplaysFullGOP
+	// in pkg/tools/browser/live_relay_test.go for the positive case).
+	if got := ing.keyframeRequestCount(); got != 0 {
+		t.Fatalf("expected no keyframe requests on a healthy delivery path, got %d", got)
+	}
 }
 
 func TestStream_NotCapable_Unavailable(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
 	notCapable := func(string) browser.VideoCapability {
 		return browser.VideoCapability{Capable: false, Reason: "Xvfb not available"}
 	}
-	o := newTestOrchestrator(notCapable, ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(notCapable, ing, launch.launch, capb.start, srv)
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
@@ -364,8 +422,13 @@ func TestStream_NotCapable_Unavailable(t *testing.T) {
 	}
 
 	// No stream machinery was engaged.
-	if ing.mintCount() != 0 || launch.count() != 0 || cap.count() != 0 {
-		t.Fatalf("expected no stream to start; mint=%d launch=%d capture=%d", ing.mintCount(), launch.count(), cap.count())
+	if ing.mintCount() != 0 || launch.count() != 0 || capb.count() != 0 {
+		t.Fatalf(
+			"expected no stream to start; mint=%d launch=%d capture=%d",
+			ing.mintCount(),
+			launch.count(),
+			capb.count(),
+		)
 	}
 
 	// The viewer got the generic unavailable state (never the specific cause).
@@ -378,9 +441,9 @@ func TestStream_NotCapable_Unavailable(t *testing.T) {
 func TestStream_KillSwitch_TearsDown(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
-	o := newTestOrchestrator(capable(), ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(capable(), ing, launch.launch, capb.start, srv)
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
@@ -393,7 +456,7 @@ func TestStream_KillSwitch_TearsDown(t *testing.T) {
 	}
 	streamID := ing.mintCalls[0]
 	tab := launch.tabAt(0)
-	drv := cap.drivers[0]
+	drv := capb.drivers[0]
 
 	// Flip the kill-switch OFF: active stream must be torn down.
 	o.SetVideoEnabled(false)
@@ -449,7 +512,13 @@ func TestNewOrchestrator_EnabledFromConfig(t *testing.T) {
 	falseVal := false
 	trueVal := true
 
-	unset := newTestOrchestrator(capable(), newFakeIngest(), (&fakeLauncher{}).launch, (&fakeCaptureStarter{}).start, &fakeEncoderServer{})
+	unset := newTestOrchestrator(
+		capable(),
+		newFakeIngest(),
+		(&fakeLauncher{}).launch,
+		(&fakeCaptureStarter{}).start,
+		&fakeEncoderServer{},
+	)
 	if !unset.Enabled() {
 		t.Fatal("an unset Config.Enabled must default to enabled (FR-020 default true)")
 	}
@@ -482,7 +551,9 @@ func TestNewOrchestrator_EnabledFromConfig(t *testing.T) {
 		t.Fatalf("AttachViewer error: %v", err)
 	}
 	if h != nil {
-		t.Fatal("expected nil handle — construction-time kill-switch-off must block the very first attach")
+		t.Fatal(
+			"expected nil handle — construction-time kill-switch-off must block the very first attach",
+		)
 	}
 	f := findStatusError(t, wc)
 	if f.Message == nil || *f.Message != browserVideoUnavailableMessage {
@@ -509,9 +580,9 @@ func TestNewOrchestrator_EnabledFromConfig(t *testing.T) {
 func TestStream_KillSwitch_ReEnable_AllowsNewAttach(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
-	o := newTestOrchestrator(capable(), ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(capable(), ing, launch.launch, capb.start, srv)
 
 	// Flip OFF with no active stream (simulates a reload landing while idle).
 	o.SetVideoEnabled(false)
@@ -532,7 +603,11 @@ func TestStream_KillSwitch_ReEnable_AllowsNewAttach(t *testing.T) {
 		t.Fatal("expected nil handle while kill-switch is off")
 	}
 	if ing.mintCount() != 0 || launch.count() != 0 {
-		t.Fatalf("kill-switch-off attach must start no stream machinery; mint=%d launch=%d", ing.mintCount(), launch.count())
+		t.Fatalf(
+			"kill-switch-off attach must start no stream machinery; mint=%d launch=%d",
+			ing.mintCount(),
+			launch.count(),
+		)
 	}
 
 	// Flip back ON (simulates a second reload restoring browser_video_enabled=true).
@@ -556,9 +631,13 @@ func TestStream_KillSwitch_ReEnable_AllowsNewAttach(t *testing.T) {
 	}
 	defer hOK.Detach()
 
-	if ing.mintCount() != 1 || launch.count() != 1 || cap.count() != 1 {
-		t.Fatalf("expected exactly one stream to start post-re-enable; mint=%d launch=%d capture=%d",
-			ing.mintCount(), launch.count(), cap.count())
+	if ing.mintCount() != 1 || launch.count() != 1 || capb.count() != 1 {
+		t.Fatalf(
+			"expected exactly one stream to start post-re-enable; mint=%d launch=%d capture=%d",
+			ing.mintCount(),
+			launch.count(),
+			capb.count(),
+		)
 	}
 	drainStreamInit(t, wcOK)
 }
@@ -566,9 +645,9 @@ func TestStream_KillSwitch_ReEnable_AllowsNewAttach(t *testing.T) {
 func TestStream_IngestDrop_Remints(t *testing.T) {
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
-	o := newTestOrchestrator(capable(), ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(capable(), ing, launch.launch, capb.start, srv)
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
@@ -600,7 +679,11 @@ func TestStream_IngestDrop_Remints(t *testing.T) {
 		t.Fatalf("relaunch reused the old token %q — must re-mint (CRIT-002)", firstToken)
 	}
 	if secondCfg.Token != ing.liveToken(streamID) {
-		t.Fatalf("relaunch token %q is not the live token %q", secondCfg.Token, ing.liveToken(streamID))
+		t.Fatalf(
+			"relaunch token %q is not the live token %q",
+			secondCfg.Token,
+			ing.liveToken(streamID),
+		)
 	}
 	if firstToken == ing.liveToken(streamID) {
 		t.Fatal("old token is still live — it must be superseded (dead) after re-mint")

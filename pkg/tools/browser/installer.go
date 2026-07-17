@@ -229,21 +229,35 @@ func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) stri
 
 // selectDownloadBuild decides which CfT build a fresh EnsureChromium download
 // (nothing of either flavor cached yet) should fetch — FR-009/F-08: the full
-// "chrome" build is the default once this host is actually positioned to run
-// it as a video-capable install (Linux + Xvfb reachable); every other host
-// (macOS/Windows self-host, Linux without Xvfb, or before the Xvfb sidecar /
-// Gate-0 rollout is live) keeps downloading chrome-headless-shell, preserving
-// pre-F-08 behavior byte for byte.
+// "chrome" build is the default only once this host is ACTUALLY positioned to
+// run it as a video-capable install (Linux + a healthy, wired virtual-display
+// sidecar); every other host (macOS/Windows self-host, Linux with no sidecar
+// wired, or before the Xvfb sidecar / Gate-0 rollout is live) keeps
+// downloading chrome-headless-shell, preserving pre-F-08 behavior byte for
+// byte.
 //
 // This is deliberately NOT gated behind a separate config flag: FR-009's
 // "flipped only after Gate 0" requirement is realized structurally — the
-// video-capable precondition (Xvfb reachable) does not hold on a host until
-// the Gate-0-gated Xvfb sidecar is actually wired into that host's boot
-// sequence, so this function keeps returning the pre-existing
-// chrome-headless-shell default until that day, with no additional wiring
-// required in this file. Once Xvfb is live, the default flips automatically.
+// video-capable precondition is DisplaySidecarHealthyProbe() (capability.go),
+// not an Xvfb-binary-on-PATH probe (AR-C1/GC-1/GC-2's Option-B dormant gate).
+// A host merely having the xvfb/pulseaudio OS packages installed must never,
+// by itself, flip this to the full-Chrome build — that decoupling (packages
+// on PATH vs. an actually-running, health-checked sidecar) was exactly the
+// coherence bug this gate fixes: a host with those packages present would
+// download +120MB of full Chrome and get classified "capable" while every
+// real launch stayed headless-shell, because coordinator.videoLaunchMode
+// gates the ACTUAL launch on a wired-and-Healthy() DisplaySidecar, which
+// nothing sets this increment.
+//
+// Because DisplaySidecarHealthyProbe defaults to a hardcoded false and no
+// boot path calls BrowserCoordinator.SetDisplaySidecar yet, this function is
+// TRUE BY CONSTRUCTION right now — it always returns headlessShellBuild(),
+// with no additional wiring required in this file. The seam for the next
+// increment is DisplaySidecarHealthyProbe itself (see its doc comment in
+// capability.go): once boot wires a real Xvfb sidecar there, this function
+// starts returning fullChromeBuild() automatically.
 func selectDownloadBuild() chromiumBuild {
-	if runtime.GOOS == "linux" && XvfbAvailableProbe() {
+	if runtime.GOOS == "linux" && DisplaySidecarHealthyProbe() {
 		return fullChromeBuild()
 	}
 	return headlessShellBuild()
@@ -464,7 +478,9 @@ func verifyGoogHashMD5(header http.Header, got []byte) error {
 		if allowHeaderlessDownloadForTesting {
 			return nil
 		}
-		return fmt.Errorf("response carried no X-Goog-Hash checksum header — refusing to trust an unverified chromium download")
+		return fmt.Errorf(
+			"response carried no X-Goog-Hash checksum header — refusing to trust an unverified chromium download",
+		)
 	}
 	var want []byte
 	for _, part := range strings.Split(raw, ",") {

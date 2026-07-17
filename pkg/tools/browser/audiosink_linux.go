@@ -135,7 +135,8 @@ func defaultSpawnPulseaudio(cfg AudioConfig) (process, error) {
 	}
 
 	cmd := exec.Command(execPath, "--exit-idle-time=-1", "--disable-shm=1")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(
+		os.Environ(),
 		"PULSE_RUNTIME_PATH="+cfg.SocketDir,
 		"XDG_RUNTIME_DIR="+cfg.SocketDir,
 		"PULSE_COOKIE="+cookiePathFor(cfg),
@@ -276,9 +277,11 @@ func (p *pulseSidecar) runAndSupervise() {
 				},
 			)
 			if consecutiveFailures >= pulseMaxRestartAttempts {
-				logger.ErrorCF("browser",
+				logger.ErrorCF(
+					"browser",
 					"audio sidecar: exceeded max consecutive spawn/bring-up failures — giving up; audio stays unavailable, video unaffected",
-					map[string]any{"max_attempts": pulseMaxRestartAttempts})
+					map[string]any{"max_attempts": pulseMaxRestartAttempts},
+				)
 				return
 			}
 			if !p.sleepOrStop(backoff) {
@@ -307,9 +310,11 @@ func (p *pulseSidecar) runAndSupervise() {
 				})
 			}
 			if consecutiveFailures >= pulseMaxRestartAttempts {
-				logger.ErrorCF("browser",
+				logger.ErrorCF(
+					"browser",
 					"audio sidecar: exceeded max consecutive spawn/bring-up failures — giving up; audio stays unavailable, video unaffected",
-					map[string]any{"max_attempts": pulseMaxRestartAttempts})
+					map[string]any{"max_attempts": pulseMaxRestartAttempts},
+				)
 				return
 			}
 			if !p.sleepOrStop(backoff) {

@@ -19,6 +19,7 @@
 // small interface + package-level var that the gateway registers itself
 // against at boot (RegisterBrowserVideo). This is the SAME existing
 // metrics/observability system, not a new one.
+
 package browser
 
 // browserMetricsRecorder is the minimal interface this package needs to emit

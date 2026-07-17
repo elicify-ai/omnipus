@@ -40,6 +40,8 @@ func TestEncoderPage_EmbedNonEmpty(t *testing.T) {
 		"realtime",
 		"CHUNK_KIND_VIDEO", // BrowserChunkEnvelope kind(u8) discriminator (video vs audio mux)
 		"CHUNK_KIND_AUDIO",
+		"force_keyframe",          // SF-H2: gateway->page force-fresh-keyframe control frame
+		"framesSinceKeyframe = 0", // SF-H2: force_keyframe handler resets it, forcing a real IDR next encode
 		"OMNIPUS_TESTABLE_LOGIC_START",
 		"OMNIPUS_TESTABLE_LOGIC_END",
 	}
@@ -61,7 +63,10 @@ func TestEncoderPage_EmbedNonEmpty(t *testing.T) {
 	}
 	for _, f := range forbiddenSubstrings {
 		if strings.Contains(s, f) {
-			t.Errorf("EncoderHTML() contains forbidden external reference %q — page must be fully self-contained", f)
+			t.Errorf(
+				"EncoderHTML() contains forbidden external reference %q — page must be fully self-contained",
+				f,
+			)
 		}
 	}
 }
@@ -112,7 +117,12 @@ func TestHandler_RejectsNonGetHead(t *testing.T) {
 		rec := httptest.NewRecorder()
 		Handler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
-			t.Errorf("method %s: status = %d, want %d", method, rec.Code, http.StatusMethodNotAllowed)
+			t.Errorf(
+				"method %s: status = %d, want %d",
+				method,
+				rec.Code,
+				http.StatusMethodNotAllowed,
+			)
 		}
 	}
 }

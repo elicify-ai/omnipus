@@ -109,43 +109,46 @@ func TestXvfbSidecar_SpawnSuperviseRestart(t *testing.T) {
 		sc.Stop()
 	})
 
-	t.Run("bounded restart attempts: a permanently-crashing Xvfb gives up, not-healthy, no infinite restart", func(t *testing.T) {
-		var launches int32
-		sc := newXvfbSidecar(DisplayConfig{})
-		// Only the very first launch ever becomes "ready" — every restart
-		// attempt after that fails to reach ready before its process exits,
-		// exactly like a real Xvfb that comes up once and then crash-loops
-		// (real xvfbDisplayReady would likewise never see the X11 socket
-		// appear for a process that dies instantly on every retry).
-		sc.readyFunc = func(int) bool {
-			return atomic.LoadInt32(&launches) == 1
-		}
-		sc.commandFunc = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
-			n := atomic.AddInt32(&launches, 1)
-			if n == 1 {
-				return exec.CommandContext(ctx, "sh", "-c", "sleep 0.05") // starts fine, then "crashes"
+	t.Run(
+		"bounded restart attempts: a permanently-crashing Xvfb gives up, not-healthy, no infinite restart",
+		func(t *testing.T) {
+			var launches int32
+			sc := newXvfbSidecar(DisplayConfig{})
+			// Only the very first launch ever becomes "ready" — every restart
+			// attempt after that fails to reach ready before its process exits,
+			// exactly like a real Xvfb that comes up once and then crash-loops
+			// (real xvfbDisplayReady would likewise never see the X11 socket
+			// appear for a process that dies instantly on every retry).
+			sc.readyFunc = func(int) bool {
+				return atomic.LoadInt32(&launches) == 1
 			}
-			return exec.CommandContext(ctx, "sh", "-c", "exit 1") // every restart attempt fails immediately
-		}
+			sc.commandFunc = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+				n := atomic.AddInt32(&launches, 1)
+				if n == 1 {
+					return exec.CommandContext(ctx, "sh", "-c", "sleep 0.05") // starts fine, then "crashes"
+				}
+				return exec.CommandContext(ctx, "sh", "-c", "exit 1") // every restart attempt fails immediately
+			}
 
-		require.NoError(t, sc.Start(context.Background()))
-		require.True(t, sc.Healthy())
+			require.NoError(t, sc.Start(context.Background()))
+			require.True(t, sc.Healthy())
 
-		// Eventually the supervisor exhausts xvfbMaxRestartAttempts and gives
-		// up; the launch count converges to (1 initial + xvfbMaxRestartAttempts)
-		// and stays there (proves the restart loop is bounded, not infinite).
-		require.Eventually(t, func() bool {
-			return atomic.LoadInt32(&launches) >= int32(1+xvfbMaxRestartAttempts) && !sc.Healthy()
-		}, 3*time.Second, 5*time.Millisecond, "expected the supervisor to exhaust its bounded restart attempts and give up")
+			// Eventually the supervisor exhausts xvfbMaxRestartAttempts and gives
+			// up; the launch count converges to (1 initial + xvfbMaxRestartAttempts)
+			// and stays there (proves the restart loop is bounded, not infinite).
+			require.Eventually(t, func() bool {
+				return atomic.LoadInt32(&launches) >= int32(1+xvfbMaxRestartAttempts) && !sc.Healthy()
+			}, 3*time.Second, 5*time.Millisecond, "expected the supervisor to exhaust its bounded restart attempts and give up")
 
-		stalled := atomic.LoadInt32(&launches)
-		time.Sleep(100 * time.Millisecond)
-		require.Equal(t, stalled, atomic.LoadInt32(&launches),
-			"restart attempts must stop once the bound is exceeded, not continue forever")
-		require.False(t, sc.Healthy())
+			stalled := atomic.LoadInt32(&launches)
+			time.Sleep(100 * time.Millisecond)
+			require.Equal(t, stalled, atomic.LoadInt32(&launches),
+				"restart attempts must stop once the bound is exceeded, not continue forever")
+			require.False(t, sc.Healthy())
 
-		sc.Stop() // must not hang even though the supervisor already gave up
-	})
+			sc.Stop() // must not hang even though the supervisor already gave up
+		},
+	)
 
 	t.Run("absent Xvfb binary classifies not-healthy/not-available, never hangs or panics", func(t *testing.T) {
 		sc := newXvfbSidecar(DisplayConfig{Width: 640, Height: 480, Depth: 24})

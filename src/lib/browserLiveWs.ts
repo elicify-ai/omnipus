@@ -27,10 +27,19 @@
 // WebCodecs VideoDecoder/AudioDecoder configured from the preceding
 // `browser_stream_init`; anything else is the existing JSON control-frame
 // path (validated via the generated Zod WsFrame schema, unchanged). The JSON
-// `browser_screencast` path is KEPT working unchanged — it remains, as of
-// this wave, the only transport the current backend actually emits; the
-// binary path is additive (FR-010/M-10/F-02: `browser_screencast` is
-// removed only in a later wave, once the video path is reachable).
+// `browser_screencast` path is KEPT working unchanged: on a video-enabled
+// install (the default), the gateway serves a video-capable viewer the
+// binary relay as its PRIMARY transport, and `browser_screencast` is the
+// FALLBACK for a viewer that isn't video-capable (no VideoDecoder, or an
+// empty `video_caps` in browser_attach) — not the other way around.
+// `browser_screencast` is not yet removed (FR-010/M-10/F-02: removal is a
+// later wave, once the video path is reachable end-to-end). Note: per the
+// operator's Option-B decision this feature ships DORMANT this increment —
+// the display/audio sidecars real headful video depends on aren't wired at
+// gateway boot yet, so every real install's managed launch is headless-shell
+// today regardless of this transport-selection logic; that's a separate,
+// server-side gate (see ADR-044) and doesn't change what this file's code
+// actually does once video IS negotiated.
 //
 // Binary envelope = 18-byte big-endian header `seq:u32 | ts:u64 | key:u8 |
 // kind:u8 (offset 13: 0=video/1=audio) | len:u32`, produced by
@@ -53,9 +62,15 @@
 //      case, distinct from the client simply lacking VideoDecoder (which
 //      empties video_caps in browser_attach and is expected to make the
 //      server never negotiate video in the first place).
-// A dedicated backend kill-switch/decline signal (FR-020's
-// gateway.browser_video_enabled teardown) isn't yet defined on the wire —
-// once it is (W2/W3), route it into the same onUnavailable callback here.
+// FR-020's backend kill-switch (gateway.browser_video_enabled) IS wired now,
+// but not as a dedicated decline message: disabling it server-side fails the
+// viewer's video relay (wsVideoViewer.Failed), which surfaces here as an
+// ordinary `browser_status{state:"error"}` frame — the ws.onmessage JSON
+// branch's existing `browser_status` case, routed to `callbacks.onStatus`
+// like any other status frame. It does NOT go through onUnavailable (there
+// is no separate wire signal for "video was declined" vs. any other
+// status-level error) — the caller's onStatus handler is responsible for
+// surfacing it via its own error-banner path.
 
 import { WsFrame as WsFrameSchema } from '@/lib/api/generated/schemas'
 import type {
@@ -182,10 +197,11 @@ export interface DecodedChunkEnvelope { // not-wire-format: local parsed shape o
 /**
  * Parses one binary WS message into a DecodedChunkEnvelope. Returns null
  * (never throws) on any malformed input: too short to hold a header, an
- * unrecognized kind byte at offset 13, or a declared `len` that doesn't match the
- * actual trailing byte count — mirrors the backend's own FR-014 "reject,
- * never fragment/partially-reassemble" posture on the client side. BigEndian
- * throughout, per the contract (DS-2).
+ * unrecognized kind byte at offset 13, a zero-length payload, or a declared
+ * `len` that doesn't match the actual trailing byte count — mirrors the
+ * backend's own FR-014 "reject, never fragment/partially-reassemble, never
+ * accept an empty chunk" posture on the client side. BigEndian throughout,
+ * per the contract (DS-2).
  */
 export function decodeChunkEnvelope(buffer: ArrayBuffer): DecodedChunkEnvelope | null {
   if (buffer.byteLength < ENVELOPE_HEADER_BYTES) return null
@@ -196,6 +212,7 @@ export function decodeChunkEnvelope(buffer: ArrayBuffer): DecodedChunkEnvelope |
   const kindByte = view.getUint8(13)
   if (kindByte !== CHUNK_KIND_VIDEO && kindByte !== CHUNK_KIND_AUDIO) return null
   const len = view.getUint32(14, false)
+  if (len === 0) return null
   const payloadOffset = ENVELOPE_HEADER_BYTES
   if (len !== buffer.byteLength - payloadOffset) return null
   return {
@@ -490,8 +507,14 @@ export class BrowserLiveWsConnection {
           frame.close()
         }
       },
+      // SF-H1 — WebCodecs only invokes this callback once the decoder has
+      // already transitioned to `state='closed'` (a fatal decode error, not
+      // a per-chunk warning): every decode() call after this point would
+      // just throw again. Route through `_handleVideoDecodeError` rather
+      // than only logging, or the canvas freezes on its last painted frame
+      // forever with zero production signal (see that method's doc comment).
       error: (err) => {
-        this.callbacks.onDecodeError?.('video', err.message)
+        this._handleVideoDecodeError(err.message)
       },
     })
     try {
@@ -530,6 +553,40 @@ export class BrowserLiveWsConnection {
     }
 
     return true
+  }
+
+  /**
+   * SF-H1 — the single handler for a fatal video decode failure, reached
+   * from both the VideoDecoder's own async `error` callback (the decoder has
+   * already closed itself) and a synchronous throw out of `decode()` in
+   * `_handleBinaryMessage` (e.g. a chunk fed in just as/after the decoder
+   * closed). Either way, this decoder can no longer be trusted: continuing
+   * to feed it would either keep throwing forever (async case: every later
+   * decode() call throws once `state==='closed'`) or risk decoding
+   * out-of-GOP data. Rather than silently freezing the canvas on its last
+   * painted frame with zero production signal, this:
+   *   1. reports the failure via onDecodeError (existing dev-toast plumbing
+   *      in the caller — unchanged),
+   *   2. re-gates: even if a decoder is configured again later, no delta
+   *      chunk is fed until a fresh keyframe is seen (mirrors the CR2 gate
+   *      `_configureDecoders` already applies on every stream_init),
+   *   3. tears the decoder down (`_closeDecoders` nulls `this.videoDecoder`,
+   *      so `_handleBinaryMessage` drops every subsequent video chunk before
+   *      it can reach `decode()` again — this call becomes a safe no-op if
+   *      it somehow fires twice for the same failure), and
+   *   4. transitions to the unavailable state via the existing onUnavailable
+   *      path — the same generic FR-007 "this client cannot render this
+   *      stream" banner every other unavailable trigger already uses, and
+   *      the simplest, most user-visible way out of a frozen picture (chosen
+   *      over a bare socket-teardown/reconnect: it reuses plumbing the SPA
+   *      already renders correctly, with no risk of a reconnect loop against
+   *      a server that keeps re-negotiating the same broken codec).
+   */
+  private _handleVideoDecodeError(message: string): void {
+    this.callbacks.onDecodeError?.('video', message)
+    this.seenKeyframe = false
+    this._closeDecoders()
+    this.callbacks.onUnavailable?.('video-decode-error')
   }
 
   private _handleBinaryMessage(buffer: ArrayBuffer): void {
@@ -583,8 +640,12 @@ export class BrowserLiveWsConnection {
         )
         if (decoded.key) this.seenKeyframe = true
       } catch (err) {
-        this.callbacks.onDecodeError?.('video', err instanceof Error ? err.message : String(err))
+        // SF-H1 — a synchronous throw out of decode() (e.g. this chunk
+        // arrived just as/after the decoder closed) is just as fatal as the
+        // decoder's own async `error` callback — see
+        // _handleVideoDecodeError's doc comment.
         void maybeDevToast('[browser-live] Video decode error', 'browser-live-video-decode', 'error')
+        this._handleVideoDecodeError(err instanceof Error ? err.message : String(err))
       }
       return
     }

@@ -115,7 +115,14 @@ type EncodedChunk struct {
 // a keyframe (the GOP cache's appendToCacheLocked / deliverToViewer's
 // recovery logic both depend on this flag being accurate).
 func NewVideoChunk(seq uint32, ts uint64, isKey bool, codec string, payload []byte) EncodedChunk {
-	return EncodedChunk{Seq: seq, TS: ts, Key: isKey, Codec: codec, Kind: KindVideo, Payload: payload}
+	return EncodedChunk{
+		Seq:     seq,
+		TS:      ts,
+		Key:     isKey,
+		Codec:   codec,
+		Kind:    KindVideo,
+		Payload: payload,
+	}
 }
 
 // NewAudioChunk constructs an audio EncodedChunk. There is deliberately NO
@@ -123,7 +130,14 @@ func NewVideoChunk(seq uint32, ts uint64, isKey bool, codec string, payload []by
 // (BrowserChunkEnvelope.yaml), so this constructor makes the illegal
 // audio+key=true combination (TD1/TD2) impossible to express through it.
 func NewAudioChunk(seq uint32, ts uint64, codec string, payload []byte) EncodedChunk {
-	return EncodedChunk{Seq: seq, TS: ts, Key: false, Codec: codec, Kind: KindAudio, Payload: payload}
+	return EncodedChunk{
+		Seq:     seq,
+		TS:      ts,
+		Key:     false,
+		Codec:   codec,
+		Kind:    KindAudio,
+		Payload: payload,
+	}
 }
 
 // Viewer is the relay's view of one attached WS viewer connection —
@@ -159,16 +173,66 @@ type Viewer interface {
 	Failed(streamID string)
 }
 
+// keyframeRequester is the minimal seam deliverToViewer uses to ask the
+// gateway's ingest layer (component E) to request a fresh, genuine encoder
+// keyframe on a viewer's degraded→recover transition (SF-H2): the interim
+// GOP-cache replay below only resends chunks the encoder ALREADY produced,
+// which cannot repair actual encoder-side drift or a cache that's gone stale
+// relative to the live source — asking the encoder itself to mint a new IDR
+// closes that gap. Registered by the gateway at boot (RegisterBrowserVideo),
+// mirroring browserMetricsRecorder's package-level-var pattern in
+// metrics.go — kept as its own tiny interface here rather than folded into
+// browserMetricsRecorder so this file's SF-H2 fix stays self-contained.
+type keyframeRequester interface {
+	// RequestKeyframe asks the encoder currently producing streamID to force
+	// a real IDR on its next video encode. Best-effort: MUST be safe to call
+	// with no live encoder connection for streamID (a no-op), and MUST NOT
+	// block the caller (deliverToViewer runs with no relay/stream lock held,
+	// but on the hot Ingest fan-out path all the same).
+	RequestKeyframe(streamID string)
+}
+
+// nopKeyframeRequester satisfies keyframeRequester when no gateway has
+// registered a real requester yet (e.g. package-level unit tests that
+// construct a StreamRelay directly and never call SetKeyframeRequester).
+type nopKeyframeRequester struct{}
+
+func (nopKeyframeRequester) RequestKeyframe(string) {}
+
+// activeKeyframeRequester is swapped at gateway boot (RegisterBrowserVideo in
+// pkg/gateway/browser_stream.go).
+var activeKeyframeRequester keyframeRequester = nopKeyframeRequester{}
+
+// SetKeyframeRequester registers the gateway-level SF-H2 keyframe-request
+// hook. Called once at gateway boot, mirroring SetBrowserMetricsRecorder
+// (metrics.go).
+func SetKeyframeRequester(r keyframeRequester) {
+	if r != nil {
+		activeKeyframeRequester = r
+	}
+}
+
 // relayViewerState is the relay's per-(stream, viewer) bookkeeping. degraded
 // tracks whether the last chunk offered to this viewer was dropped (SendChunk
 // returned false) — see deliverToViewer's doc comment for how this drives the
-// DS-3 row 3 "force a fresh keyframe on recovery" rule. Uses atomic.Bool
-// rather than the stream's mutex because it is read/written only from
-// deliverToViewer, which already runs with no relay/stream lock held (the
-// viewer fan-out snapshot in Ingest releases the stream lock first — mirrors
-// LiveView.deliver's "snapshot under lock, invoke without" convention above).
+// DS-3 row 3 "replay the full cached GOP on recovery" rule. Both fields use
+// atomic.Bool rather than the stream's mutex because they are read/written
+// only from Ingest (to decide whether a GOP-replay snapshot is worth
+// building at all) and deliverToViewer, neither of which holds the
+// relay/stream lock at that point (the viewer fan-out snapshot in Ingest
+// releases the stream lock first — mirrors LiveView.deliver's "snapshot
+// under lock, invoke without" convention above).
 type relayViewerState struct {
 	degraded atomic.Bool
+	// keyframeRequested tracks whether a force-keyframe control request
+	// (SF-H2) has already been sent to the encoder for the CURRENT degraded
+	// episode — set the first time deliverToViewer attempts recovery for
+	// this viewer, cleared the moment recovery actually succeeds (degraded
+	// flips back to false). Prevents re-requesting a fresh IDR on every
+	// single still-degraded delivery attempt while a viewer's queue stays
+	// full; the interim GOP-cache replay still runs on every attempt
+	// regardless.
+	keyframeRequested atomic.Bool
 }
 
 // relayStream holds one stream's GOP cache, attached viewers, and eviction
@@ -224,7 +288,11 @@ type StreamRelay struct {
 // relayMaxAggregateCacheBytes aggregate GOP-cache ceiling, relayGOPMaxDeltas
 // deltas retained per stream after its keyframe.
 func NewStreamRelay() *StreamRelay {
-	return newStreamRelayWithLimits(relayMaxConcurrentStreams, relayMaxAggregateCacheBytes, relayGOPMaxDeltas)
+	return newStreamRelayWithLimits(
+		relayMaxConcurrentStreams,
+		relayMaxAggregateCacheBytes,
+		relayGOPMaxDeltas,
+	)
 }
 
 // newStreamRelayWithLimits is NewStreamRelay with caller-supplied caps —
@@ -357,9 +425,13 @@ func (r *StreamRelay) evictLocked(maxStreams, maxBytes int) {
 			return
 		}
 		delete(r.streams, victim)
-		logger.DebugCF("browser", "stream relay: evicted idle stream under cache pressure", map[string]any{
-			"stream_id": victim,
-		})
+		logger.DebugCF(
+			"browser",
+			"stream relay: evicted idle stream under cache pressure",
+			map[string]any{
+				"stream_id": victim,
+			},
+		)
 	}
 }
 
@@ -485,7 +557,6 @@ func (r *StreamRelay) Ingest(streamID string, c EncodedChunk) {
 		return
 	}
 	s.appendToCacheLocked(c)
-	cachedKeyframe := s.keyframe
 	viewers := make(map[Viewer]*relayViewerState, len(s.viewers))
 	for v, st := range s.viewers {
 		viewers[v] = st
@@ -493,11 +564,35 @@ func (r *StreamRelay) Ingest(streamID string, c EncodedChunk) {
 	if len(viewers) > 0 {
 		s.lastViewed = time.Now()
 	}
+	// SF-H2: only build the full-GOP replay snapshot (keyframe + every
+	// retained delta) when at least one attached viewer is actually
+	// degraded — the common case is nobody is, and re-encoding the whole
+	// cache on every single ingested chunk (up to relayGOPMaxDeltas+1 items,
+	// 30fps) would be pure waste. Captured under s.mu exactly like Attach's
+	// own replayLocked flush (the "s.mu discipline used by Attach").
+	anyDegraded := false
+	for _, st := range viewers {
+		if st.degraded.Load() {
+			anyDegraded = true
+			break
+		}
+	}
+	var replaySnapshot []EncodedChunk
+	if anyDegraded {
+		replaySnapshot = s.replayLocked()
+	}
 	s.mu.Unlock()
 
 	wire := EncodeChunk(c)
+	var replayWire [][]byte
+	if len(replaySnapshot) > 0 {
+		replayWire = make([][]byte, len(replaySnapshot))
+		for i, rc := range replaySnapshot {
+			replayWire[i] = EncodeChunk(rc)
+		}
+	}
 	for v, st := range viewers {
-		deliverToViewer(v, st, c, wire, cachedKeyframe)
+		deliverToViewer(streamID, v, st, c, wire, replayWire)
 	}
 
 	// Re-check the aggregate ceilings after every ingest — a long-running
@@ -512,30 +607,66 @@ func (r *StreamRelay) Ingest(streamID string, c EncodedChunk) {
 // deliverToViewer sends chunk c (already wire-encoded as wire) to v, applying
 // the DS-3 row 3 "keyframe-on-recover" rule: once a chunk to v has been
 // dropped (SendChunk returned false, tracked via st.degraded), the NEXT
-// delivery attempt sends the CACHED keyframe instead of whatever delta
-// happens to be next in line — a viewer that missed a chunk cannot correctly
-// decode a later delta anyway (every delta depends on its keyframe), so
-// resuming on the next delta would only extend the corruption, while a fresh
-// keyframe recovers it immediately. A successfully delivered keyframe always
-// clears degraded, whether it arrived this way (recovery) or as the next
-// real chunk from the encoder. If the viewer is degraded but nothing is
-// cached yet (cachedKeyframe == nil — shouldn't happen once any keyframe has
-// been ingested), falls through and delivers c normally rather than
-// delivering nothing.
-func deliverToViewer(v Viewer, st *relayViewerState, c EncodedChunk, wire []byte, cachedKeyframe *EncodedChunk) {
-	if !c.Key && st.degraded.Load() && cachedKeyframe != nil {
-		if v.SendChunk(EncodeChunk(*cachedKeyframe)) {
+// delivery attempt REPLAYS THE FULL CACHED GOP — the cached keyframe followed
+// by every currently-retained delta (replayWire, precomputed by Ingest under
+// s.mu exactly like Attach's own replayLocked flush) — instead of the
+// keyframe alone (SF-H2). A viewer that missed one or more chunks cannot
+// correctly decode a later delta anyway (every delta depends on its
+// keyframe, and each delta commonly depends on the ones before it too), so a
+// keyframe-only resend — the PRIOR behavior this comment used to describe as
+// "recovers it immediately" — still left a decode gap the very next live
+// delta could not bridge; that claim was never actually true. The full-GOP
+// replay closes the gap outright, and because Ingest already merged the
+// chunk that triggered this call into the cache before computing the replay
+// snapshot, that chunk rides along in replayWire too — nothing is dropped.
+//
+// As belt-and-suspenders alongside the replay, the FIRST recovery attempt
+// for a given degraded episode also asks the encoder itself (via the ingest
+// control channel — see browser_ingest.go's RequestKeyframe) to force a
+// genuinely fresh IDR on its next encode, so the stream's own bits catch up
+// too, not just this one viewer's replay; keyframeRequested prevents
+// re-asking on every subsequent attempt while the viewer's queue stays full.
+//
+// Recovery is only considered complete — degraded/keyframeRequested cleared
+// — once EVERY chunk in the replay was actually enqueued; a partial send
+// (the queue fills again mid-loop) leaves the viewer degraded so the next
+// ingested chunk retries the full replay again. A successfully delivered
+// live keyframe (the normal, non-degraded path) always clears
+// degraded/keyframeRequested too, exactly like a recovery replay completing.
+// If the viewer is degraded but nothing is cached yet (replayWire empty —
+// shouldn't happen once any keyframe has been ingested), falls through and
+// delivers c normally rather than delivering nothing.
+func deliverToViewer(
+	streamID string,
+	v Viewer,
+	st *relayViewerState,
+	c EncodedChunk,
+	wire []byte,
+	replayWire [][]byte,
+) {
+	if !c.Key && st.degraded.Load() && len(replayWire) > 0 {
+		if !st.keyframeRequested.Swap(true) {
+			activeKeyframeRequester.RequestKeyframe(streamID)
+		}
+		delivered := true
+		for _, w := range replayWire {
+			if !v.SendChunk(w) {
+				delivered = false
+				// FR-019 "per-viewer drop rate": each dropped replay chunk is
+				// still a real drop event.
+				activeBrowserMetricsRecorder.IncViewerDrop()
+			}
+		}
+		if delivered {
 			st.degraded.Store(false)
-		} else {
-			// FR-019 "per-viewer drop rate": the recovery keyframe itself was
-			// dropped (queue still full) — still a real drop event.
-			activeBrowserMetricsRecorder.IncViewerDrop()
+			st.keyframeRequested.Store(false)
 		}
 		return
 	}
 	if v.SendChunk(wire) {
 		if c.Key {
 			st.degraded.Store(false)
+			st.keyframeRequested.Store(false)
 		}
 		return
 	}
@@ -638,7 +769,10 @@ func EncodeChunk(c EncodedChunk) []byte {
 		buf[12] = 0
 	}
 	buf[13] = byte(c.Kind)
-	binary.BigEndian.PutUint32(buf[14:18], uint32(len(c.Payload))) //nolint:gosec // payload length is bound-checked well below 2^32 by the ingest endpoint's max-message-bytes gate (FR-014)
+	binary.BigEndian.PutUint32(
+		buf[14:18],
+		uint32(len(c.Payload)),
+	) //nolint:gosec // payload length is bound-checked well below 2^32 by the ingest endpoint's max-message-bytes gate (FR-014)
 	copy(buf[18:], c.Payload)
 	return buf
 }

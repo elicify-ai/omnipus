@@ -55,7 +55,8 @@ func TestPipeAllocator_RealChrome_Smoke(t *testing.T) {
 
 	// Page.navigate + Runtime.evaluate + addScriptToEvaluateOnNewDocument.
 	var sum int
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(
+		ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, err := page.AddScriptToEvaluateOnNewDocument("window.__omnipus=1").Do(ctx)
 			return err
@@ -83,7 +84,8 @@ func TestPipeAllocator_RealChrome_Smoke(t *testing.T) {
 	childCtx, childCancel := chromedp.NewContext(ctx)
 	defer childCancel()
 	var title string
-	if err := chromedp.Run(childCtx,
+	if err := chromedp.Run(
+		childCtx,
 		chromedp.Navigate("about:blank"),
 		chromedp.Evaluate(`document.title || "blank"`, &title),
 	); err != nil {

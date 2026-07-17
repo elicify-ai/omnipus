@@ -177,7 +177,11 @@ type captureDriver interface{ Stop() }
 // captureStarter starts a screencast capture on the agent tab (component L).
 type captureStarter func(ctx context.Context, opts browser.CaptureOptions, onFrame func(jpeg []byte, seq uint32, tsMillis uint64)) (captureDriver, error)
 
-func defaultCaptureStarter(ctx context.Context, opts browser.CaptureOptions, onFrame func(jpeg []byte, seq uint32, tsMillis uint64)) (captureDriver, error) {
+func defaultCaptureStarter(
+	ctx context.Context,
+	opts browser.CaptureOptions,
+	onFrame func(jpeg []byte, seq uint32, tsMillis uint64),
+) (captureDriver, error) {
 	return browser.StartCapture(ctx, opts, onFrame)
 }
 
@@ -190,7 +194,10 @@ type encoderTab interface {
 // encoderLauncher launches the encoder page (component M / encoder_launch.go).
 type encoderLauncher func(rootCtx context.Context, cfg browser.EncoderLaunchCfg) (encoderTab, error)
 
-func defaultEncoderLauncher(rootCtx context.Context, cfg browser.EncoderLaunchCfg) (encoderTab, error) {
+func defaultEncoderLauncher(
+	rootCtx context.Context,
+	cfg browser.EncoderLaunchCfg,
+) (encoderTab, error) {
 	return browser.LaunchEncoderPage(rootCtx, cfg)
 }
 
@@ -200,6 +207,10 @@ type ingestController interface {
 	MintIngestToken(streamID string) ingestToken
 	EndStream(streamID string)
 	FeedFrame(streamID string, jpeg []byte, seq uint32, ts uint64)
+	// RequestKeyframe (SF-H2) is also the exact shape browser.keyframeRequester
+	// requires, so o.ingest can be handed straight to
+	// browser.SetKeyframeRequester in RegisterBrowserVideo with no adapter.
+	RequestKeyframe(streamID string)
 }
 
 // classifyFunc is the video-capability classifier (component K).
@@ -289,6 +300,13 @@ type videoStream struct {
 	liveness *time.Timer
 
 	lastStepDown time.Time
+
+	// lastChunkAt is the arrival time of the most recently ingested chunk for
+	// this stream (SF-L4), set by noteChunk under the agent gate. Read by
+	// onLivenessTimeout to re-validate against a genuine stall rather than
+	// trusting Timer.Reset alone, which cannot cancel an already-fired (now
+	// running) timer callback invocation — see both methods' doc comments.
+	lastChunkAt time.Time
 }
 
 func (s *videoStream) stop() {
@@ -347,13 +365,25 @@ type BrowserVideoOrchestrator struct {
 func RegisterBrowserVideo(mux IngestMux, deps BrowserVideoDeps) *BrowserVideoOrchestrator {
 	o := newOrchestrator(deps)
 	// Register the loopback ingest endpoint (component E) with a relay adapter
-	// (bridges gateway.EncodedChunk -> browser.EncodedChunk + resets liveness)
-	// and the orchestrator's StepDown hook.
+	// (bridges gateway.EncodedChunk -> browser.EncodedChunk + resets liveness),
+	// the orchestrator's StepDown hook, and its ConnFailed hook (SF-M3: a
+	// downstream write failure on the ingest connection proactively triggers
+	// the SAME re-mint+relaunch recovery a genuine CRIT-002 encoder-tab crash
+	// does, instead of waiting out the liveness timeout).
 	o.ingest = RegisterCaptureIngest(mux, IngestDeps{
 		Relay:    &videoRelayAdapter{orch: o},
 		Audit:    deps.Audit,
 		StepDown: o.StepDown,
+		ConnFailed: func(streamID string) {
+			// No specific tab handle from the ingest layer — see
+			// handleEncoderDrop's doc comment on deadTab==nil.
+			o.handleEncoderDrop(streamID, nil)
+		},
 	})
+	// SF-H2: wire the ingest handler as the relay's keyframe-request seam —
+	// o.ingest already satisfies browser.keyframeRequester (RequestKeyframe is
+	// part of ingestController), so no adapter is needed.
+	browser.SetKeyframeRequester(o.ingest)
 	// FR-019 (Test 28): wire pkg/tools/browser's relay-drop and
 	// Xvfb/PulseAudio-sidecar-restart hooks into the gateway's metrics
 	// singleton (browser_metrics.go) — mirrors tools.SetToolMetricsRecorder
@@ -510,7 +540,10 @@ func (o *BrowserVideoOrchestrator) AttachViewer(p AttachParams) (*VideoViewerHan
 // with the codec negotiated against this viewer's caps. Returns ok=false (after
 // sending the unavailable state) on any negotiation or bring-up failure. The
 // caller MUST hold the agent gate.
-func (o *BrowserVideoOrchestrator) ensureStreamLocked(p AttachParams, capab browser.VideoCapability) (*videoStream, string, bool) {
+func (o *BrowserVideoOrchestrator) ensureStreamLocked(
+	p AttachParams,
+	capab browser.VideoCapability,
+) (*videoStream, string, bool) {
 	if st := o.lookupAgentStream(p.AgentID); st != nil && !o.streamFailed(st) {
 		// Existing stream: v1 is single-encode-per-source, so this viewer must
 		// support the ALREADY-ACTIVE codec (US-6/AC-2) or it gets the
@@ -544,7 +577,11 @@ func (o *BrowserVideoOrchestrator) ensureStreamLocked(p AttachParams, capab brow
 // error. The caller MUST hold the agent gate. Blocking CDP work runs with the
 // agent gate held (serializing only this agent's cold-start) but NOT the
 // orchestrator mu.
-func (o *BrowserVideoOrchestrator) startStreamLocked(p AttachParams, codec string, hasAudio bool) (*videoStream, error) {
+func (o *BrowserVideoOrchestrator) startStreamLocked(
+	p AttachParams,
+	codec string,
+	hasAudio bool,
+) (*videoStream, error) {
 	streamID := randHex(16)
 	token := o.ingest.MintIngestToken(streamID)
 
@@ -556,33 +593,17 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(p AttachParams, codec strin
 
 	width, height := o.cfg.panelWidth, o.cfg.panelHeight
 
-	encTab, err := o.launchEncoder(p.RootCtx, browser.EncoderLaunchCfg{
-		Token:            string(token),
-		WSURL:            o.cfg.ingestWSURL,
-		StreamID:         streamID,
-		VideoCodec:       codec,
-		HasAudio:         hasAudio,
-		AudioCodec:       "opus",
-		EncoderURL:       pageURL,
-		Origin:           origin,
-		Framerate:        o.cfg.framerate,
-		KeyframeInterval: o.cfg.keyframe,
-	})
+	encTab, err := o.launchEncoder(
+		p.RootCtx,
+		o.encoderLaunchCfg(string(token), streamID, codec, pageURL, origin, hasAudio),
+	)
 	if err != nil {
 		serveStop()
 		o.ingest.EndStream(streamID)
 		return nil, fmt.Errorf("launch encoder page: %w", err)
 	}
 
-	capture, err := o.startCapture(p.AgentCtx, browser.CaptureOptions{
-		Format:        "jpeg",
-		Quality:       o.cfg.jpegQuality,
-		MaxWidth:      width,
-		MaxHeight:     height,
-		EveryNthFrame: 1,
-	}, func(jpeg []byte, seq uint32, tsMillis uint64) {
-		o.ingest.FeedFrame(streamID, jpeg, seq, tsMillis)
-	})
+	capture, err := o.startCaptureAt(p.AgentCtx, streamID, width, height)
 	if err != nil {
 		_ = encTab.Close()
 		serveStop()
@@ -617,7 +638,7 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(p AttachParams, codec strin
 
 	go o.watchEncoder(streamID, st.stopCh, encTab)
 
-	o.auditStream("browser.live.video_stream_started", audit.SeverityInfo, map[string]any{
+	o.auditStream(audit.EventBrowserLiveVideoStreamStarted, audit.SeverityInfo, map[string]any{
 		"stream_id": streamID,
 		"agent_id":  p.AgentID,
 		"codec":     codec,
@@ -626,10 +647,67 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(p AttachParams, codec strin
 	return st, nil
 }
 
+// encoderLaunchCfg builds the browser.EncoderLaunchCfg used for BOTH a
+// stream's initial cold-start (startStreamLocked) and its CRIT-002 relaunch
+// (handleEncoderDrop) — the two call sites previously repeated this literal
+// verbatim, differing only in token/streamID/codec/pageURL/origin/hasAudio
+// (S-F3, review-round-2 dedup); every other field is always sourced from
+// o.cfg the same way in both places.
+func (o *BrowserVideoOrchestrator) encoderLaunchCfg(
+	token, streamID, codec, pageURL, origin string,
+	hasAudio bool,
+) browser.EncoderLaunchCfg {
+	return browser.EncoderLaunchCfg{
+		Token:            token,
+		WSURL:            o.cfg.ingestWSURL,
+		StreamID:         streamID,
+		VideoCodec:       codec,
+		HasAudio:         hasAudio,
+		AudioCodec:       "opus",
+		EncoderURL:       pageURL,
+		Origin:           origin,
+		Framerate:        o.cfg.framerate,
+		KeyframeInterval: o.cfg.keyframe,
+	}
+}
+
+// startCaptureAt starts (or restarts) screencast capture at width×height for
+// streamID, wiring its JPEG output straight into the ingest feed (component
+// E's FeedFrame) — the exact CaptureOptions/onFrame shape previously
+// repeated verbatim at a stream's cold-start (startStreamLocked) and
+// StepDown's reduced-size restart (S-F4, review-round-2 dedup).
+func (o *BrowserVideoOrchestrator) startCaptureAt(
+	ctx context.Context,
+	streamID string,
+	width, height int,
+) (captureDriver, error) {
+	return o.startCapture(ctx, browser.CaptureOptions{
+		Format:        "jpeg",
+		Quality:       o.cfg.jpegQuality,
+		MaxWidth:      width,
+		MaxHeight:     height,
+		EveryNthFrame: 1,
+	}, func(jpeg []byte, seq uint32, tsMillis uint64) {
+		o.ingest.FeedFrame(streamID, jpeg, seq, tsMillis)
+	})
+}
+
 // watchEncoder waits for the encoder tab to die (crash == "ingest drop",
 // CRIT-002) or the stream to be torn down, and on a genuine crash triggers the
-// re-mint + relaunch. One watcher per live tab.
-func (o *BrowserVideoOrchestrator) watchEncoder(streamID string, stopCh chan struct{}, tab encoderTab) {
+// re-mint + relaunch. One watcher per live tab. tab is passed through to
+// handleEncoderDrop so it can tell a genuine crash of the CURRENTLY-active
+// tab apart from this watcher's own stale re-fire: EncoderTab.Done()
+// documents that it also closes when Close is called, and
+// handleEncoderDrop's own tail (`oldTab.Close()`, right below) intentionally
+// closes the tab THIS exact watcher is watching once it has already been
+// superseded — without the tab-identity check that fire would otherwise
+// re-enter handleEncoderDrop a second time for a drop that was already
+// handled.
+func (o *BrowserVideoOrchestrator) watchEncoder(
+	streamID string,
+	stopCh chan struct{},
+	tab encoderTab,
+) {
 	select {
 	case <-tab.Done():
 		select {
@@ -637,7 +715,7 @@ func (o *BrowserVideoOrchestrator) watchEncoder(streamID string, stopCh chan str
 			return // torn down / relaunched by us — nothing to recover
 		default:
 		}
-		o.handleEncoderDrop(streamID)
+		o.handleEncoderDrop(streamID, tab)
 	case <-stopCh:
 		return
 	}
@@ -648,7 +726,16 @@ func (o *BrowserVideoOrchestrator) watchEncoder(streamID string, stopCh chan str
 // stale connection in place — there is NO same-token reconnect), then relaunch
 // the encoder page (re-granting audio). Bounded by MaxRelaunches; exceeding it
 // fails the stream to the unavailable state (FR-018). Runs under the agent gate.
-func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
+//
+// deadTab is the SPECIFIC encoder tab the caller observed die, when known:
+// watchEncoder always supplies it (see its doc comment above); the SF-M3
+// ConnFailed hook wired in RegisterBrowserVideo (browser_ingest.go's
+// writePump, on a downstream write failure) has no tab handle to offer and
+// passes nil, deliberately skipping the identity check below — a write
+// failure is itself a single, non-repeating signal (writePump returns
+// immediately after triggering it), so it needs no self-refire guard the way
+// watchEncoder's Close()-triggers-Done() re-entry does.
+func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string, deadTab encoderTab) {
 	st := o.streamByID(streamID)
 	if st == nil {
 		return
@@ -659,6 +746,13 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 
 	// Re-check under the gate — a concurrent teardown may have removed it.
 	if cur := o.streamByID(streamID); cur != st || o.streamFailed(st) || o.stopped(st) {
+		return
+	}
+	// A stale signal for a tab this stream has already moved past (this
+	// watcher's own trigger, superseded by a concurrent relaunch that won
+	// the race for the gate first) — nothing to recover, it was already
+	// recovered.
+	if deadTab != nil && st.encoderTab != deadTab {
 		return
 	}
 
@@ -674,18 +768,17 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 	newToken := o.ingest.MintIngestToken(streamID)
 	oldTab := st.encoderTab
 
-	newTab, err := o.launchEncoder(st.rootCtx, browser.EncoderLaunchCfg{
-		Token:            string(newToken),
-		WSURL:            o.cfg.ingestWSURL,
-		StreamID:         streamID,
-		VideoCodec:       st.codec,
-		HasAudio:         st.hasAudio,
-		AudioCodec:       "opus",
-		EncoderURL:       st.pageURL,
-		Origin:           st.origin,
-		Framerate:        o.cfg.framerate,
-		KeyframeInterval: o.cfg.keyframe,
-	})
+	newTab, err := o.launchEncoder(
+		st.rootCtx,
+		o.encoderLaunchCfg(
+			string(newToken),
+			streamID,
+			st.codec,
+			st.pageURL,
+			st.origin,
+			st.hasAudio,
+		),
+	)
 	if err != nil {
 		slog.Warn("browser video: encoder relaunch failed; failing stream",
 			"stream_id", streamID, "error", err)
@@ -704,7 +797,7 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 	// covers (the other is StepDown's capture-driver restart, below).
 	globalBrowserVideoMetrics().IncCaptureRestart()
 
-	o.auditStream("browser.live.video_stream_relaunched", audit.SeverityWarn, map[string]any{
+	o.auditStream(audit.EventBrowserLiveVideoStreamRelaunched, audit.SeverityWarn, map[string]any{
 		"stream_id":  streamID,
 		"agent_id":   st.agentID,
 		"relaunches": st.relaunches,
@@ -714,6 +807,15 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 // onLivenessTimeout fires when no chunk has been relayed within LivenessTimeout.
 // If the stream still exists and has viewers, that is a mid-stream stall
 // (FR-018) ⇒ fail it to the unavailable state (never an infinite spinner).
+//
+// SF-L4: noteChunk's Timer.Reset races this callback — Reset only reschedules
+// FUTURE firings, it cannot cancel an invocation that has already started
+// running (Go's time.AfterFunc semantics), so a chunk that legitimately
+// arrived in the narrow window between this timer firing and this goroutine
+// acquiring the agent gate would otherwise still get failed here even though
+// the stream just proved itself live. Guard against that spurious failure by
+// re-validating against st.lastChunkAt (written by noteChunk under the SAME
+// agent gate) before declaring a genuine stall.
 func (o *BrowserVideoOrchestrator) onLivenessTimeout(streamID string) {
 	st := o.streamByID(streamID)
 	if st == nil {
@@ -728,6 +830,12 @@ func (o *BrowserVideoOrchestrator) onLivenessTimeout(streamID string) {
 	}
 	if len(st.viewers) == 0 {
 		return // no one watching; teardown handles idle streams
+	}
+	if !st.lastChunkAt.IsZero() && time.Since(st.lastChunkAt) < o.cfg.livenessTimeout {
+		// A chunk arrived (and reset the timer) just before this callback
+		// acquired the gate — the timer's own Reset already re-armed it for
+		// the next real stall, so there's nothing further to do here.
+		return
 	}
 	slog.Warn("browser video: mid-stream liveness timeout; failing stream",
 		"stream_id", streamID, "timeout", o.cfg.livenessTimeout)
@@ -760,17 +868,15 @@ func (o *BrowserVideoOrchestrator) StepDown(streamID string) {
 			return // already at the floor — nothing more to give
 		}
 
-		newCapture, err := o.startCapture(st.agentCtx, browser.CaptureOptions{
-			Format:        "jpeg",
-			Quality:       o.cfg.jpegQuality,
-			MaxWidth:      newW,
-			MaxHeight:     newH,
-			EveryNthFrame: 1,
-		}, func(jpeg []byte, seq uint32, tsMillis uint64) {
-			o.ingest.FeedFrame(streamID, jpeg, seq, tsMillis)
-		})
+		newCapture, err := o.startCaptureAt(st.agentCtx, streamID, newW, newH)
 		if err != nil {
-			slog.Warn("browser video: step-down capture restart failed", "stream_id", streamID, "error", err)
+			slog.Warn(
+				"browser video: step-down capture restart failed",
+				"stream_id",
+				streamID,
+				"error",
+				err,
+			)
 			return
 		}
 		oldCapture := st.capture
@@ -785,7 +891,15 @@ func (o *BrowserVideoOrchestrator) StepDown(streamID string) {
 		// the other of the two recovery mechanisms this metric covers (see
 		// handleEncoderDrop's CRIT-002 relaunch above).
 		globalBrowserVideoMetrics().IncCaptureRestart()
-		slog.Info("browser video: stepped down encode dimensions", "stream_id", streamID, "width", newW, "height", newH)
+		slog.Info(
+			"browser video: stepped down encode dimensions",
+			"stream_id",
+			streamID,
+			"width",
+			newW,
+			"height",
+			newH,
+		)
 	}()
 }
 
@@ -813,7 +927,7 @@ func (o *BrowserVideoOrchestrator) SetVideoEnabled(enabled bool) {
 		}
 		gate.Unlock()
 	}
-	o.auditStream("browser.live.video_kill_switch", audit.SeverityWarn, map[string]any{
+	o.auditStream(audit.EventBrowserLiveVideoKillSwitch, audit.SeverityWarn, map[string]any{
 		"enabled":   false,
 		"torn_down": len(agents),
 	})
@@ -849,7 +963,7 @@ func (o *BrowserVideoOrchestrator) failStreamLocked(st *videoStream) {
 	// viewer moves to the unavailable state rather than freezing.
 	o.relay.MarkFailed(st.streamID)
 	o.teardownStreamLocked(st)
-	o.auditStream("browser.live.video_stream_failed", audit.SeverityWarn, map[string]any{
+	o.auditStream(audit.EventBrowserLiveVideoStreamFailed, audit.SeverityWarn, map[string]any{
 		"stream_id": st.streamID,
 		"agent_id":  st.agentID,
 	})
@@ -893,13 +1007,21 @@ func (o *BrowserVideoOrchestrator) teardownStreamLocked(st *videoStream) {
 }
 
 // noteChunk resets the mid-stream liveness timer for streamID (called by the
-// relay adapter on every ingested chunk).
+// relay adapter on every ingested chunk) and records the chunk's arrival
+// time under the agent gate (SF-L4) so onLivenessTimeout can re-validate
+// against a genuinely fresh chunk rather than trusting Timer.Reset alone —
+// see onLivenessTimeout's doc comment for why Reset by itself isn't enough
+// to close that race.
 func (o *BrowserVideoOrchestrator) noteChunk(streamID string) {
 	st := o.streamByID(streamID)
 	if st == nil || st.liveness == nil {
 		return
 	}
+	gate := o.agentGate(st.agentID)
+	gate.Lock()
+	st.lastChunkAt = time.Now()
 	st.liveness.Reset(o.cfg.livenessTimeout)
+	gate.Unlock()
 }
 
 // ---- small helpers ----
@@ -946,7 +1068,12 @@ func (o *BrowserVideoOrchestrator) stopped(st *videoStream) bool {
 	}
 }
 
-func (o *BrowserVideoOrchestrator) sendStreamInit(wc *browserWSConn, sessionID, viewerID string, st *videoStream, codec string) {
+func (o *BrowserVideoOrchestrator) sendStreamInit(
+	wc *browserWSConn,
+	sessionID, viewerID string,
+	st *videoStream,
+	codec string,
+) {
 	sid := sessionID
 	wc.sendCriticalGen(generated.BrowserStreamInitFrame{
 		Type:             string(generated.WsFrameTypeBrowserStreamInit),
@@ -961,7 +1088,10 @@ func (o *BrowserVideoOrchestrator) sendStreamInit(wc *browserWSConn, sessionID, 
 
 // sendUnavailable moves a viewer to the generic unavailable state (US-5) and
 // logs the SPECIFIC cause operator-side only (O-3).
-func (o *BrowserVideoOrchestrator) sendUnavailable(wc *browserWSConn, sessionID, viewerID, cause string) {
+func (o *BrowserVideoOrchestrator) sendUnavailable(
+	wc *browserWSConn,
+	sessionID, viewerID, cause string,
+) {
 	slog.Info("browser video: unavailable state", "session_id", sessionID, "cause", cause)
 	msg := browserVideoUnavailableMessage
 	sid := sessionID
@@ -973,7 +1103,11 @@ func (o *BrowserVideoOrchestrator) sendUnavailable(wc *browserWSConn, sessionID,
 	}, dropContext(sessionID, viewerID, "video-unavailable"))
 }
 
-func (o *BrowserVideoOrchestrator) auditStream(event string, sev audit.Severity, fields map[string]any) {
+func (o *BrowserVideoOrchestrator) auditStream(
+	event string,
+	sev audit.Severity,
+	fields map[string]any,
+) {
 	if o.audit == nil {
 		return
 	}
@@ -993,7 +1127,10 @@ func (o *BrowserVideoOrchestrator) negotiateVideoCodec(viewerCaps []string) stri
 
 // negotiateAudio reports whether audio should stream: the host must have audio
 // available (component K) AND the viewer must advertise Opus.
-func (o *BrowserVideoOrchestrator) negotiateAudio(capab browser.VideoCapability, audioCaps []string) bool {
+func (o *BrowserVideoOrchestrator) negotiateAudio(
+	capab browser.VideoCapability,
+	audioCaps []string,
+) bool {
 	if !capab.AudioAvailable {
 		return false
 	}
@@ -1034,7 +1171,9 @@ func codecFamily(c string) string {
 			return "h264-" + lc[5:7]
 		}
 		return "h264"
-	case strings.HasPrefix(lc, "avc1"), strings.HasPrefix(lc, "avc3"), strings.HasPrefix(lc, "h264"):
+	case strings.HasPrefix(lc, "avc1"),
+		strings.HasPrefix(lc, "avc3"),
+		strings.HasPrefix(lc, "h264"):
 		return "h264"
 	case strings.HasPrefix(lc, "vp8"):
 		return "vp8"

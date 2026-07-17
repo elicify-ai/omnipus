@@ -1,6 +1,9 @@
 package browser
 
 import (
+	"bytes"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"testing"
@@ -66,15 +69,6 @@ func (f *fakeViewer) chunkCount() int {
 	return len(f.received)
 }
 
-func (f *fakeViewer) lastChunk() []byte {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.received) == 0 {
-		return nil
-	}
-	return f.received[len(f.received)-1]
-}
-
 // allReceived returns a defensive copy of every chunk this viewer has
 // received so far, in delivery order — used by tests to inspect the CR2
 // replay Attach now flushes internally (Attach no longer returns the replay
@@ -107,9 +101,39 @@ func TestStreamRelay_GOPCache_ReplaysKeyframeFirst(t *testing.T) {
 	r := NewStreamRelay()
 	const streamID = "s1"
 
-	r.Ingest(streamID, EncodedChunk{Seq: 0, TS: 0, Key: true, Codec: "vp8", Kind: KindVideo, Payload: []byte("keyframe")})
-	r.Ingest(streamID, EncodedChunk{Seq: 1, TS: 33, Key: false, Codec: "vp8", Kind: KindVideo, Payload: []byte("delta1")})
-	r.Ingest(streamID, EncodedChunk{Seq: 2, TS: 66, Key: false, Codec: "vp8", Kind: KindVideo, Payload: []byte("delta2")})
+	r.Ingest(
+		streamID,
+		EncodedChunk{
+			Seq:     0,
+			TS:      0,
+			Key:     true,
+			Codec:   "vp8",
+			Kind:    KindVideo,
+			Payload: []byte("keyframe"),
+		},
+	)
+	r.Ingest(
+		streamID,
+		EncodedChunk{
+			Seq:     1,
+			TS:      33,
+			Key:     false,
+			Codec:   "vp8",
+			Kind:    KindVideo,
+			Payload: []byte("delta1"),
+		},
+	)
+	r.Ingest(
+		streamID,
+		EncodedChunk{
+			Seq:     2,
+			TS:      66,
+			Key:     false,
+			Codec:   "vp8",
+			Kind:    KindVideo,
+			Payload: []byte("delta2"),
+		},
+	)
 
 	v := newFakeViewer("v1")
 	if _, err := r.Attach(streamID, v); err != nil {
@@ -117,7 +141,11 @@ func TestStreamRelay_GOPCache_ReplaysKeyframeFirst(t *testing.T) {
 	}
 	replay := v.allReceived()
 	if len(replay) != 3 {
-		t.Fatalf("expected 3 replayed chunks (keyframe + 2 deltas), got %d: %+v", len(replay), replay)
+		t.Fatalf(
+			"expected 3 replayed chunks (keyframe + 2 deltas), got %d: %+v",
+			len(replay),
+			replay,
+		)
 	}
 	if replay[0][12] != 1 || string(replay[0][18:]) != "keyframe" {
 		t.Fatalf("expected the keyframe first, got %+v", replay[0])
@@ -143,7 +171,11 @@ func TestStreamRelay_GOPCache_NewKeyframeResetsDeltas(t *testing.T) {
 	}
 	replay := v.allReceived()
 	if len(replay) != 1 {
-		t.Fatalf("expected only the latest keyframe cached (deltas reset), got %d entries: %+v", len(replay), replay)
+		t.Fatalf(
+			"expected only the latest keyframe cached (deltas reset), got %d entries: %+v",
+			len(replay),
+			replay,
+		)
 	}
 	if string(replay[0][18:]) != "kf2" {
 		t.Fatalf("expected the LATEST keyframe (kf2), got %q", replay[0][18:])
@@ -157,7 +189,10 @@ func TestStreamRelay_GOPCache_DeltaListBoundedToN(t *testing.T) {
 
 	r.Ingest(streamID, EncodedChunk{Seq: 0, Key: true, Payload: []byte("kf")})
 	for i := 1; i <= 5; i++ {
-		r.Ingest(streamID, EncodedChunk{Seq: uint32(i), Key: false, Payload: []byte(fmt.Sprintf("d%d", i))})
+		r.Ingest(
+			streamID,
+			EncodedChunk{Seq: uint32(i), Key: false, Payload: []byte(fmt.Sprintf("d%d", i))},
+		)
 	}
 
 	v := newFakeViewer("v1")
@@ -195,7 +230,11 @@ func TestStreamRelay_GOPCache_AudioChunksNeverCached(t *testing.T) {
 	}
 	replay := v.allReceived()
 	if len(replay) != 2 { // keyframe + 1 video delta only — audio excluded
-		t.Fatalf("expected replay of keyframe + 1 video delta only (audio excluded from GOP cache), got %d: %+v", len(replay), replay)
+		t.Fatalf(
+			"expected replay of keyframe + 1 video delta only (audio excluded from GOP cache), got %d: %+v",
+			len(replay),
+			replay,
+		)
 	}
 	if string(replay[0][18:]) != "kf" || string(replay[1][18:]) != "d1" {
 		t.Fatalf("unexpected replay contents: %q, %q", replay[0][18:], replay[1][18:])
@@ -290,7 +329,10 @@ func TestStreamRelay_AggregateCacheCeiling_NeverEvictsViewedOrAttaching(t *testi
 
 	// Pressure both the count and byte ceilings with plainly idle streams.
 	for i := 0; i < 5; i++ {
-		r.Ingest(fmt.Sprintf("idle-%d", i), EncodedChunk{Seq: 0, Key: true, Payload: []byte("kf-idle")})
+		r.Ingest(
+			fmt.Sprintf("idle-%d", i),
+			EncodedChunk{Seq: 0, Key: true, Payload: []byte("kf-idle")},
+		)
 	}
 
 	if !r.streamExists("viewed") {
@@ -322,35 +364,175 @@ func TestStreamRelay_SlowViewerDropsIsolated(t *testing.T) {
 	// CR2: Attach itself flushes the cached keyframe replay to both viewers
 	// before returning.
 	if fast.chunkCount() != 1 || slow.chunkCount() != 1 {
-		t.Fatalf("expected both viewers to receive the keyframe replay on Attach, got fast=%d slow=%d", fast.chunkCount(), slow.chunkCount())
+		t.Fatalf(
+			"expected both viewers to receive the keyframe replay on Attach, got fast=%d slow=%d",
+			fast.chunkCount(),
+			slow.chunkCount(),
+		)
 	}
 
 	slow.setFull(true)
 	r.Ingest(streamID, EncodedChunk{Seq: 1, Key: false, Payload: []byte("delta")})
 
 	if fast.chunkCount() != 2 {
-		t.Fatalf("expected the fast viewer to receive the delta chunk (replay + delta), got %d chunks", fast.chunkCount())
+		t.Fatalf(
+			"expected the fast viewer to receive the delta chunk (replay + delta), got %d chunks",
+			fast.chunkCount(),
+		)
 	}
 	if slow.chunkCount() != 1 {
-		t.Fatalf("expected the slow viewer's delta to be dropped in isolation (still just the replay), got %d chunks", slow.chunkCount())
+		t.Fatalf(
+			"expected the slow viewer's delta to be dropped in isolation (still just the replay), got %d chunks",
+			slow.chunkCount(),
+		)
 	}
 
-	// Recovery: the slow viewer's queue drains. Its NEXT delivered chunk
-	// must be a fresh keyframe (DS-3 row 3), not the plain delta that just
-	// arrived — it may have a gap before it.
+	// Recovery: the slow viewer's queue drains. Its NEXT delivery must
+	// replay the FULL cached GOP — keyframe followed by every retained
+	// delta (SF-H2) — not just the stale cached keyframe alone, so the
+	// viewer catches up on every delta it missed instead of resuming on a
+	// live delta it has a decode gap before.
 	slow.setFull(false)
 	r.Ingest(streamID, EncodedChunk{Seq: 2, Key: false, Payload: []byte("delta2")})
 
 	if fast.chunkCount() != 3 {
-		t.Fatalf("expected the fast viewer to keep receiving normally, got %d chunks", fast.chunkCount())
+		t.Fatalf(
+			"expected the fast viewer to keep receiving normally, got %d chunks",
+			fast.chunkCount(),
+		)
 	}
-	if slow.chunkCount() != 2 {
-		t.Fatalf("expected the slow viewer to receive exactly 1 more chunk on recovery, got %d", slow.chunkCount())
+	recovered := slow.allReceived()
+	if len(recovered) != 4 { // initial Attach replay (kf) + recovery replay (kf, delta, delta2)
+		t.Fatalf(
+			"expected the slow viewer to receive 3 more chunks on recovery (keyframe+2 deltas), got %d total: %+v",
+			len(recovered),
+			recovered,
+		)
 	}
-	got := slow.lastChunk()
-	if len(got) < 13 || got[12] != 1 {
-		t.Fatalf("expected the slow viewer's recovery chunk to be a keyframe (header key byte=1), got %v", got)
+	if recovered[1][12] != 1 || string(recovered[1][18:]) != "kf" {
+		t.Fatalf(
+			"expected the recovery replay to start with a fresh keyframe, got %v",
+			recovered[1],
+		)
 	}
+	if string(recovered[2][18:]) != "delta" || string(recovered[3][18:]) != "delta2" {
+		t.Fatalf(
+			"expected the recovery replay to include every cached delta in order, got %+v",
+			recovered[2:],
+		)
+	}
+}
+
+// SF-H2: the degraded→recover transition asks the encoder (via the injected
+// keyframeRequester seam) for a genuinely fresh IDR exactly once per degraded
+// episode — not on every still-full retry — and the relay's interim replay
+// ALWAYS carries the full cached GOP (keyframe + every retained delta), not
+// just the stale keyframe alone.
+func TestStreamRelay_DegradedRecovery_RequestsFreshKeyframeAndReplaysFullGOP(t *testing.T) {
+	fkr := &fakeKeyframeRequester{}
+	prev := activeKeyframeRequester
+	SetKeyframeRequester(fkr)
+	t.Cleanup(func() { activeKeyframeRequester = prev })
+
+	r := NewStreamRelay()
+	const streamID = "s1"
+
+	slow := newFakeViewer("slow")
+	r.Ingest(streamID, EncodedChunk{Seq: 0, Key: true, Payload: []byte("kf")})
+	if _, err := r.Attach(streamID, slow); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	slow.setFull(true)
+	r.Ingest(streamID, EncodedChunk{Seq: 1, Key: false, Payload: []byte("d1")})
+	if got := fkr.count(); got != 0 {
+		t.Fatalf(
+			"expected no keyframe request yet (this is the drop itself, not a recovery attempt), got %d",
+			got,
+		)
+	}
+
+	// Still full: a recovery ATTEMPT happens (degraded==true) but doesn't
+	// succeed — the keyframe request must fire exactly once, on the FIRST
+	// such attempt, not again on a second still-failing attempt.
+	r.Ingest(streamID, EncodedChunk{Seq: 2, Key: false, Payload: []byte("d2")})
+	if got := fkr.count(); got != 1 {
+		t.Fatalf(
+			"expected exactly 1 keyframe request after the first recovery attempt, got %d",
+			got,
+		)
+	}
+	r.Ingest(streamID, EncodedChunk{Seq: 3, Key: false, Payload: []byte("d3")})
+	if got := fkr.count(); got != 1 {
+		t.Fatalf(
+			"expected still exactly 1 keyframe request while the viewer stays degraded, got %d",
+			got,
+		)
+	}
+	if got := fkr.requestedStream(); got != streamID {
+		t.Fatalf("expected the keyframe request to name streamID %q, got %q", streamID, got)
+	}
+
+	// Recovery succeeds: the FULL cached GOP (keyframe + every retained
+	// delta) is replayed in one delivery, not just the keyframe.
+	slow.setFull(false)
+	r.Ingest(streamID, EncodedChunk{Seq: 4, Key: false, Payload: []byte("d4")})
+
+	recovered := slow.allReceived()
+	// [0]=initial Attach replay (kf). [1:]=recovery replay: kf, d1, d2, d3, d4.
+	if len(recovered) != 6 {
+		t.Fatalf(
+			"expected initial replay + full 5-chunk GOP recovery replay (kf,d1,d2,d3,d4), got %d chunks",
+			len(recovered),
+		)
+	}
+	if string(recovered[1][18:]) != "kf" {
+		t.Fatalf("expected recovery replay to start with the keyframe, got %q", recovered[1][18:])
+	}
+	wantDeltas := []string{"d1", "d2", "d3", "d4"}
+	for i, want := range wantDeltas {
+		if got := string(recovered[2+i][18:]); got != want {
+			t.Fatalf("recovery delta[%d]: want %q, got %q", i, want, got)
+		}
+	}
+
+	// A subsequent, later degradation must be able to request again — the
+	// once-per-episode guard resets on successful recovery.
+	slow.setFull(true)
+	r.Ingest(streamID, EncodedChunk{Seq: 5, Key: false, Payload: []byte("d5")})
+	r.Ingest(streamID, EncodedChunk{Seq: 6, Key: false, Payload: []byte("d6")})
+	if got := fkr.count(); got != 2 {
+		t.Fatalf("expected a second keyframe request on a NEW degraded episode, got %d", got)
+	}
+}
+
+// fakeKeyframeRequester is a hermetic browser.keyframeRequester (SF-H2) —
+// records every streamID RequestKeyframe was called for, in order.
+type fakeKeyframeRequester struct {
+	mu        sync.Mutex
+	requested []string
+}
+
+func (f *fakeKeyframeRequester) RequestKeyframe(streamID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requested = append(f.requested, streamID)
+}
+
+func (f *fakeKeyframeRequester) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requested)
+}
+
+// requestedStream returns the LAST requested streamID, or "" if none yet.
+func (f *fakeKeyframeRequester) requestedStream() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requested) == 0 {
+		return ""
+	}
+	return f.requested[len(f.requested)-1]
 }
 
 // Test 7 (FR-018): when the ingest side signals the stream failed/closed,
@@ -367,7 +549,10 @@ func TestStreamRelay_CaptureExit_MarksFailed(t *testing.T) {
 	}
 	// CR2: Attach already flushed the keyframe replay to v.
 	if v.chunkCount() != 1 {
-		t.Fatalf("expected the keyframe replay to be delivered on Attach, got %d chunks", v.chunkCount())
+		t.Fatalf(
+			"expected the keyframe replay to be delivered on Attach, got %d chunks",
+			v.chunkCount(),
+		)
 	}
 
 	r.MarkFailed(streamID)
@@ -409,7 +594,10 @@ func TestViewerAttach_Unauthorized_RejectedBeforeGOPReplay(t *testing.T) {
 		t.Fatalf("expected Attach to reject an unauthorized viewer")
 	}
 	if v.chunkCount() != 0 {
-		t.Fatalf("expected NO replay chunks for a rejected/unauthorized attach, got %d", v.chunkCount())
+		t.Fatalf(
+			"expected NO replay chunks for a rejected/unauthorized attach, got %d",
+			v.chunkCount(),
+		)
 	}
 
 	s, ok := r.lookupStream(streamID)
@@ -428,7 +616,14 @@ func TestViewerAttach_Unauthorized_RejectedBeforeGOPReplay(t *testing.T) {
 // followed by the raw payload, with no fragment field and no extra tag byte
 // inside the payload.
 func TestEncodeChunk_MatchesBrowserChunkEnvelopeLayout(t *testing.T) {
-	c := EncodedChunk{Seq: 42, TS: 1234567890, Key: true, Codec: "vp8", Kind: KindVideo, Payload: []byte("hello")}
+	c := EncodedChunk{
+		Seq:     42,
+		TS:      1234567890,
+		Key:     true,
+		Codec:   "vp8",
+		Kind:    KindVideo,
+		Payload: []byte("hello"),
+	}
 	buf := EncodeChunk(c)
 
 	if len(buf) != 18+len(c.Payload) {
@@ -456,7 +651,14 @@ func TestEncodeChunk_MatchesBrowserChunkEnvelopeLayout(t *testing.T) {
 // chunks must never carry the key=1 keyframe flag (Opus packets are never
 // classified key/delta — BrowserChunkEnvelope.yaml).
 func TestEncodeChunk_AudioKindByte(t *testing.T) {
-	c := EncodedChunk{Seq: 7, TS: 99, Key: false, Codec: "opus", Kind: KindAudio, Payload: []byte("opusframe")}
+	c := EncodedChunk{
+		Seq:     7,
+		TS:      99,
+		Key:     false,
+		Codec:   "opus",
+		Kind:    KindAudio,
+		Payload: []byte("opusframe"),
+	}
 	buf := EncodeChunk(c)
 
 	if len(buf) != 18+len(c.Payload) {
@@ -470,6 +672,82 @@ func TestEncodeChunk_AudioKindByte(t *testing.T) {
 	}
 	if string(buf[18:]) != "opusframe" {
 		t.Fatalf("payload: want %q, got %q", "opusframe", buf[18:])
+	}
+}
+
+// T-F1/C-F1 (golden fixture, drift guard): pins the 18-byte
+// BrowserChunkEnvelope header layout — seq@0(u32), ts@4(u64), key@12(u8),
+// kind@13(u8), len@14(u32), payload@18 — as a committed hex vector, produced
+// by THIS package's EncodeChunk and independently decoded field-by-field via
+// encoding/binary at those exact pinned offsets (not by round-tripping
+// through EncodeChunk's own logic again — a self-referential encode/decode
+// pair could stay internally consistent while silently drifting from the
+// wire contract every OTHER hand-packed producer/consumer of this exact
+// layout independently implements: encoder.html's encodeChunkEnvelope,
+// browserLiveWs.ts's decodeChunkEnvelope, and browser_ingest.go's
+// decodeChunkEnvelope). A future accidental offset/width change to
+// EncodeChunk — or to relayChunkEnvelopeHeaderBytes — fails this test loudly
+// instead of silently drifting from those other sites.
+func TestEncodeChunk_GoldenFixtureEnvelopeLayout(t *testing.T) {
+	const wantHex = "000000010000000000000002010000000002aabb"
+	want, err := hex.DecodeString(wantHex)
+	if err != nil {
+		t.Fatalf("bad golden hex fixture: %v", err)
+	}
+
+	c := EncodedChunk{
+		Seq:     1,
+		TS:      2,
+		Key:     true,
+		Codec:   "vp8",
+		Kind:    KindVideo,
+		Payload: []byte{0xAA, 0xBB},
+	}
+	got := EncodeChunk(c)
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf(
+			"EncodeChunk output drifted from the committed golden fixture:\n got  = %x\n want = %x",
+			got,
+			want,
+		)
+	}
+
+	// Decode field-by-field at the pinned offsets, independent of EncodeChunk.
+	const (
+		seqOff    = 0
+		tsOff     = 4
+		keyOff    = 12
+		kindOff   = 13
+		lenOff    = 14
+		headerLen = 18
+	)
+	if headerLen != relayChunkEnvelopeHeaderBytes {
+		t.Fatalf(
+			"relayChunkEnvelopeHeaderBytes drifted from the pinned headerLen=18: got %d",
+			relayChunkEnvelopeHeaderBytes,
+		)
+	}
+	if len(got) != headerLen+len(c.Payload) {
+		t.Fatalf("total length: want %d, got %d", headerLen+len(c.Payload), len(got))
+	}
+	if seq := binary.BigEndian.Uint32(got[seqOff : seqOff+4]); seq != c.Seq {
+		t.Errorf("seq@%d: want %d, got %d", seqOff, c.Seq, seq)
+	}
+	if ts := binary.BigEndian.Uint64(got[tsOff : tsOff+8]); ts != c.TS {
+		t.Errorf("ts@%d: want %d, got %d", tsOff, c.TS, ts)
+	}
+	if key := got[keyOff]; (key != 0) != c.Key {
+		t.Errorf("key@%d: want %v, got byte %d", keyOff, c.Key, key)
+	}
+	if kind := got[kindOff]; ChunkKind(kind) != c.Kind {
+		t.Errorf("kind@%d: want %d, got %d", kindOff, c.Kind, kind)
+	}
+	if l := binary.BigEndian.Uint32(got[lenOff : lenOff+4]); l != uint32(len(c.Payload)) {
+		t.Errorf("len@%d: want %d, got %d", lenOff, len(c.Payload), l)
+	}
+	if !bytes.Equal(got[headerLen:], c.Payload) {
+		t.Fatalf("payload@%d: want %x, got %x", headerLen, c.Payload, got[headerLen:])
 	}
 }
 

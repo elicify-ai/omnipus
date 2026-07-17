@@ -110,7 +110,10 @@ type browserFrameDecoder struct { // not-wire-format: decode-only test assertion
 // socket. mutate, when non-nil, is applied to the config before the
 // AgentLoop is constructed. LiveViewEnabled/TakeControlEnabled default to
 // true (the ADR-038 operator defaults) unless mutate overrides them.
-func newBrowserWSTestHandler(t *testing.T, mutate func(cfg *config.Config)) (*BrowserWSHandler, *agent.AgentLoop) {
+func newBrowserWSTestHandler(
+	t *testing.T,
+	mutate func(cfg *config.Config),
+) (*BrowserWSHandler, *agent.AgentLoop) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
@@ -154,13 +157,19 @@ func dialBrowserTestWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
 // connection's first frame.
 func writeBrowserAuthFrame(t *testing.T, conn *websocket.Conn, token string) {
 	t.Helper()
-	data, err := json.Marshal(generated.AuthFrame{Type: string(generated.WsFrameTypeAuth), Token: token})
+	data, err := json.Marshal(
+		generated.AuthFrame{Type: string(generated.WsFrameTypeAuth), Token: token},
+	)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 }
 
 // readBrowserFrame reads one frame off conn and decodes it.
-func readBrowserFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) browserFrameDecoder {
+func readBrowserFrame(
+	t *testing.T,
+	conn *websocket.Conn,
+	timeout time.Duration,
+) browserFrameDecoder {
 	t.Helper()
 	conn.SetReadDeadline(time.Now().Add(timeout)) //nolint:errcheck
 	_, raw, err := conn.ReadMessage()
@@ -178,7 +187,11 @@ func readBrowserFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration)
 // (ADR-038 D3), so a browser_screencast frame interleaving ahead of the
 // browser_status frame a test is actually asserting on is a normal, expected
 // race — not a bug — and a naive single readBrowserFrame call would flake.
-func readBrowserStatusFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) browserFrameDecoder {
+func readBrowserStatusFrame(
+	t *testing.T,
+	conn *websocket.Conn,
+	timeout time.Duration,
+) browserFrameDecoder {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
@@ -212,7 +225,12 @@ func assertBrowserConnProceeds(t *testing.T, conn *websocket.Conn) {
 
 	resp := readBrowserFrame(t, conn, 3*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
-	assert.Equal(t, "error", resp.State, "probe agent has no registered manager, so attach must fail cleanly")
+	assert.Equal(
+		t,
+		"error",
+		resp.State,
+		"probe agent has no registered manager, so attach must fail cleanly",
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +270,10 @@ func TestBrowserWS_Auth_ValidUserToken_ConnectionProceeds(t *testing.T) {
 
 	handler, _ := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Gateway.Users = []config.UserConfig{
-			{Username: "browser-ws-user", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash)}}},
+			{
+				Username: "browser-ws-user",
+				Tokens:   []config.TokenEntry{{Hash: config.BcryptHash(hash)}},
+			},
 		}
 	})
 	t.Cleanup(handler.Wait)
@@ -307,7 +328,10 @@ func TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation(t *testing.T) {
 
 	handler, _ := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Gateway.Users = []config.UserConfig{
-			{Username: "browser-ws-user", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash)}}},
+			{
+				Username: "browser-ws-user",
+				Tokens:   []config.TokenEntry{{Hash: config.BcryptHash(hash)}},
+			},
 		}
 	})
 	t.Cleanup(handler.Wait)
@@ -402,7 +426,11 @@ func TestBrowserWS_LiveViewDisabled_SendsErrorAndCloses(t *testing.T) {
 
 	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	_, _, err := conn.ReadMessage()
-	assert.Error(t, err, "connection must be closed when live view is disabled — no attach is possible")
+	assert.Error(
+		t,
+		err,
+		"connection must be closed when live view is disabled — no attach is possible",
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -540,7 +568,11 @@ func TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame(t *testing.T) {
 			// the previous subtest's error.
 			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) //nolint:errcheck
 			_, _, readErr := conn.ReadMessage()
-			assert.Error(t, readErr, "no frame should arrive when validate_inbound=false and no live view is attached")
+			assert.Error(
+				t,
+				readErr,
+				"no frame should arrive when validate_inbound=false and no live view is attached",
+			)
 		},
 	)
 }
@@ -808,13 +840,22 @@ func TestBrowserWS_HandleTabAction_ControlGate_OtherViewerControls_Rejected(t *t
 	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "controlling-viewer"),
 		"test setup: first take must succeed on an uncontrolled session")
 
-	handler.handleTabAction(wc, state, "other-viewer", marshalTabActionFrame(t, "switch", intPtr(0)))
+	handler.handleTabAction(
+		wc,
+		state,
+		"other-viewer",
+		marshalTabActionFrame(t, "switch", intPtr(0)),
+	)
 
 	resp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
 	assert.Equal(t, "error", resp.State)
-	assert.Contains(t, resp.Message, "take control first",
-		"a non-controller's tab action must be rejected by the gate itself, never reach the manager")
+	assert.Contains(
+		t,
+		resp.Message,
+		"take control first",
+		"a non-controller's tab action must be rejected by the gate itself, never reach the manager",
+	)
 	assert.NotContains(t, resp.Message, "no active session",
 		"the manager's own error must never appear — the gate must block before dispatch")
 
@@ -830,7 +871,11 @@ func TestBrowserWS_HandleTabAction_ControlGate_IdleAllowsDispatch(t *testing.T) 
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
 
-	require.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID), "precondition: uncontrolled")
+	require.False(
+		t,
+		state.mgr.Live().IsControlled(browser.DefaultSessionID),
+		"precondition: uncontrolled",
+	)
 
 	handler.handleTabAction(wc, state, "any-viewer", marshalTabActionFrame(t, "switch", intPtr(0)))
 
@@ -851,7 +896,12 @@ func TestBrowserWS_HandleTabAction_ControlGate_SelfControllerAllowsDispatch(t *t
 	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "driving-viewer"),
 		"test setup: take control must succeed on an uncontrolled session")
 
-	handler.handleTabAction(wc, state, "driving-viewer", marshalTabActionFrame(t, "close", intPtr(0)))
+	handler.handleTabAction(
+		wc,
+		state,
+		"driving-viewer",
+		marshalTabActionFrame(t, "close", intPtr(0)),
+	)
 
 	resp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
@@ -917,7 +967,14 @@ func TestBrowserWS_HandleControl_NotAttached_Rejected(t *testing.T) {
 	wc := &browserWSConn{sendCh: make(chan *wsSendItem, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
 
-	handler.handleControl(wc, state, "viewer1", "user1", marshalControlFrame(t, "take"), al.GetConfig())
+	handler.handleControl(
+		wc,
+		state,
+		"viewer1",
+		"user1",
+		marshalControlFrame(t, "take"),
+		al.GetConfig(),
+	)
 
 	resp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
@@ -941,7 +998,14 @@ func TestBrowserWS_HandleControl_TakeControlDisabled_DeniedAndAudited(t *testing
 
 	wc, state := newControlTestFixtures(t)
 
-	handler.handleControl(wc, state, "viewer-disabled", "user-a", marshalControlFrame(t, "take"), al.GetConfig())
+	handler.handleControl(
+		wc,
+		state,
+		"viewer-disabled",
+		"user-a",
+		marshalControlFrame(t, "take"),
+		al.GetConfig(),
+	)
 
 	resp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
@@ -970,7 +1034,14 @@ func TestBrowserWS_HandleControl_AlreadyControlled_DeniedAndAudited(t *testing.T
 	require.True(t, state.mgr.Live().TakeControl(browser.DefaultSessionID, "other-viewer"),
 		"test setup: first take must succeed on an uncontrolled session")
 
-	handler.handleControl(wc, state, "viewer-latecomer", "user-b", marshalControlFrame(t, "take"), al.GetConfig())
+	handler.handleControl(
+		wc,
+		state,
+		"viewer-latecomer",
+		"user-b",
+		marshalControlFrame(t, "take"),
+		al.GetConfig(),
+	)
 
 	resp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
@@ -994,9 +1065,20 @@ func TestBrowserWS_HandleControl_TakeThenRelease_AllowedAndAudited(t *testing.T)
 	handler, al, auditDir := newBrowserWSHandlerWithAudit(t)
 	wc, state := newControlTestFixtures(t)
 
-	require.False(t, state.mgr.Live().IsControlled(browser.DefaultSessionID), "precondition: uncontrolled")
+	require.False(
+		t,
+		state.mgr.Live().IsControlled(browser.DefaultSessionID),
+		"precondition: uncontrolled",
+	)
 
-	handler.handleControl(wc, state, "viewer-ok", "user-c", marshalControlFrame(t, "take"), al.GetConfig())
+	handler.handleControl(
+		wc,
+		state,
+		"viewer-ok",
+		"user-c",
+		marshalControlFrame(t, "take"),
+		al.GetConfig(),
+	)
 
 	takeResp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", takeResp.Type)
@@ -1010,7 +1092,14 @@ func TestBrowserWS_HandleControl_TakeThenRelease_AllowedAndAudited(t *testing.T)
 	assert.Equal(t, audit.SeverityInfo, takeRec.Severity)
 	assert.Equal(t, "take", takeRec.Fields["reason"])
 
-	handler.handleControl(wc, state, "viewer-ok", "user-c", marshalControlFrame(t, "release"), al.GetConfig())
+	handler.handleControl(
+		wc,
+		state,
+		"viewer-ok",
+		"user-c",
+		marshalControlFrame(t, "release"),
+		al.GetConfig(),
+	)
 
 	releaseResp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", releaseResp.Type)
@@ -1031,7 +1120,14 @@ func TestBrowserWS_HandleControl_UnknownAction_Rejected(t *testing.T) {
 	handler, al, _ := newBrowserWSHandlerWithAudit(t)
 	wc, state := newControlTestFixtures(t)
 
-	handler.handleControl(wc, state, "viewer1", "user1", marshalControlFrame(t, "bogus-action"), al.GetConfig())
+	handler.handleControl(
+		wc,
+		state,
+		"viewer1",
+		"user1",
+		marshalControlFrame(t, "bogus-action"),
+		al.GetConfig(),
+	)
 
 	resp := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
@@ -1092,7 +1188,10 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 	handler.handleInput(wc, state, "viewer1", moveFrame)
 	select {
 	case f := <-wc.sendCh:
-		t.Fatalf("an identical repeated error must still be throttled inside minInputErrorInterval, got: %s", f.Data)
+		t.Fatalf(
+			"an identical repeated error must still be throttled inside minInputErrorInterval, got: %s",
+			f.Data,
+		)
 	case <-time.After(300 * time.Millisecond):
 		// expected: nothing sent
 	}
@@ -1153,8 +1252,12 @@ func TestBrowserWS_HandleInput_Navigate_AlwaysBypassesThrottle(t *testing.T) {
 	second := readWCFrame(t, wc, 2*time.Second)
 	assert.Equal(t, "browser_status", second.Type)
 	assert.Equal(t, "error", second.State)
-	assert.Equal(t, first.Message, second.Message,
-		"both calls dispatch the identical failing navigate — the message content is expected to match")
+	assert.Equal(
+		t,
+		first.Message,
+		second.Message,
+		"both calls dispatch the identical failing navigate — the message content is expected to match",
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,7 +1306,11 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
 	mgr, ok := al.BrowserManagerForAgent(agentID)
-	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	require.True(
+		t,
+		ok,
+		"registerSharedTools must have registered a browser manager for the default agent",
+	)
 	t.Cleanup(mgr.Shutdown)
 
 	srv := httptest.NewServer(handler)
@@ -1229,7 +1336,10 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	require.Equal(t, "attached", attachResp.State,
 		"attach must succeed against a real headless Chromium: %+v", attachResp)
 
-	control := generated.BrowserControlFrame{Type: string(generated.WsFrameTypeBrowserControl), Action: "take"}
+	control := generated.BrowserControlFrame{
+		Type:   string(generated.WsFrameTypeBrowserControl),
+		Action: "take",
+	}
 	controlData, err := json.Marshal(control)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, controlData))
@@ -1293,7 +1403,11 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
 	mgr, ok := al.BrowserManagerForAgent(agentID)
-	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	require.True(
+		t,
+		ok,
+		"registerSharedTools must have registered a browser manager for the default agent",
+	)
 	t.Cleanup(mgr.Shutdown)
 
 	srv := httptest.NewServer(handler)
@@ -1311,13 +1425,18 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 
 	attachFrame := func(sessionID string) []byte {
 		data, err := json.Marshal(generated.BrowserAttachFrame{
-			Type: string(generated.WsFrameTypeBrowserAttach), AgentId: agentID, SessionId: sessionID,
+			Type: string(
+				generated.WsFrameTypeBrowserAttach,
+			), AgentId: agentID, SessionId: sessionID,
 		})
 		require.NoError(t, err)
 		return data
 	}
 
-	require.NoError(t, connA.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")))
+	require.NoError(
+		t,
+		connA.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")),
+	)
 	attachRespA := readBrowserStatusFrame(t, connA, 20*time.Second)
 	require.Equal(
 		t,
@@ -1334,7 +1453,10 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 		"the initial attach response is a real lifecycle frame — control_only must not be set (B1)",
 	)
 
-	require.NoError(t, connB.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")))
+	require.NoError(
+		t,
+		connB.WriteMessage(websocket.TextMessage, attachFrame("controlled-by-other-session")),
+	)
 	attachRespB := readBrowserStatusFrame(t, connB, 20*time.Second)
 	require.Equal(
 		t,
@@ -1353,7 +1475,10 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 
 	control := func(action string) []byte {
 		data, err := json.Marshal(
-			generated.BrowserControlFrame{Type: string(generated.WsFrameTypeBrowserControl), Action: action},
+			generated.BrowserControlFrame{
+				Type:   string(generated.WsFrameTypeBrowserControl),
+				Action: action,
+			},
 		)
 		require.NoError(t, err)
 		return data
@@ -1370,7 +1495,11 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 		"conn B must receive an unprompted controlled_by_other broadcast: %+v",
 		broadcastToB,
 	)
-	assert.True(t, *broadcastToB.ControlledByOther, "conn B never took control — it must be told someone else did")
+	assert.True(
+		t,
+		*broadcastToB.ControlledByOther,
+		"conn B never took control — it must be told someone else did",
+	)
 	require.NotNil(
 		t,
 		broadcastToB.ControlOnly,
@@ -1385,7 +1514,13 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 
 	require.NoError(t, connA.WriteMessage(websocket.TextMessage, control("release")))
 	releaseRespA := readBrowserStatusFrame(t, connA, 5*time.Second)
-	require.Equal(t, "released", releaseRespA.State, "conn A's own release response: %+v", releaseRespA)
+	require.Equal(
+		t,
+		"released",
+		releaseRespA.State,
+		"conn A's own release response: %+v",
+		releaseRespA,
+	)
 	assert.Nil(
 		t,
 		releaseRespA.ControlOnly,
@@ -1494,9 +1629,9 @@ func TestWSFraming_BinaryChunks_TextControl(t *testing.T) {
 		State: "ready",
 	}, "test11-status")
 
-	// 2. A binary encoded chunk via the new sendChunk (FR-017).
+	// 2. A binary encoded chunk via sendChunkTracked (FR-017).
 	chunkData := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0x10}
-	wc.sendChunk(chunkData)
+	wc.sendChunkTracked(chunkData)
 
 	// 3. Another JSON frame via the screencast-style sendFrameGen sender —
 	// proves existing Text senders keep working alongside binary traffic.
@@ -1512,8 +1647,13 @@ func TestWSFraming_BinaryChunks_TextControl(t *testing.T) {
 		t.Fatal("could not enqueue the nil ping sentinel")
 	}
 
-	require.Eventually(t, func() bool { return fw.count() >= 4 }, 2*time.Second, 10*time.Millisecond,
-		"writePump must have processed all four queued items")
+	require.Eventually(
+		t,
+		func() bool { return fw.count() >= 4 },
+		2*time.Second,
+		10*time.Millisecond,
+		"writePump must have processed all four queued items",
+	)
 
 	msgs := fw.snapshot()
 	require.Len(t, msgs, 4)
@@ -1531,14 +1671,24 @@ func TestWSFraming_BinaryChunks_TextControl(t *testing.T) {
 
 	// Item 3: Text again, valid JSON, the browser_tabs frame — proves Text
 	// senders are unaffected by binary traffic interleaved on the same queue.
-	assert.Equal(t, websocket.TextMessage, msgs[2].Opcode, "JSON browser_tabs frame must go out as Text")
+	assert.Equal(
+		t,
+		websocket.TextMessage,
+		msgs[2].Opcode,
+		"JSON browser_tabs frame must go out as Text",
+	)
 	var tabs browserFrameDecoder
 	require.NoError(t, json.Unmarshal(msgs[2].Data, &tabs))
 	assert.Equal(t, "browser_tabs", tabs.Type)
 
 	// Item 4: the nil sentinel must still produce a real ping write — proof
 	// the ping mechanism survived the chan []byte -> chan *wsSendItem change.
-	assert.Equal(t, websocket.PingMessage, msgs[3].Opcode, "nil sentinel must trigger a PingMessage write")
+	assert.Equal(
+		t,
+		websocket.PingMessage,
+		msgs[3].Opcode,
+		"nil sentinel must trigger a PingMessage write",
+	)
 	assert.Empty(t, msgs[3].Data, "a ping frame carries no payload")
 
 	wc.close()

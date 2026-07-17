@@ -44,7 +44,10 @@ func TestLaunchStart_ModifyCmdCannotOverrideStderr(t *testing.T) {
 	}
 	lw, ok := l.cmd.Stderr.(*lineWriter)
 	if !ok {
-		t.Fatalf("expected cmd.Stderr to be cdppipe's lineWriter (winning over ModifyCmd's nil assignment), got %#v", l.cmd.Stderr)
+		t.Fatalf(
+			"expected cmd.Stderr to be cdppipe's lineWriter (winning over ModifyCmd's nil assignment), got %#v",
+			l.cmd.Stderr,
+		)
 	}
 	if lw.prefix != "cdppipe: chrome: " {
 		t.Fatalf("unexpected lineWriter prefix: %q", lw.prefix)

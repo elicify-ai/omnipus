@@ -24,6 +24,7 @@
 // those two metrics directly (register + increment), which is what "every
 // FR-019 counter/gauge registered and increments" requires at this test's
 // altitude.
+
 package gateway
 
 import (
@@ -58,9 +59,9 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	// via a real orchestrator + fakes (same apparatus as browser_stream_test.go).
 	ing := newFakeIngest()
 	launch := &fakeLauncher{}
-	cap := &fakeCaptureStarter{}
+	capb := &fakeCaptureStarter{}
 	srv := &fakeEncoderServer{}
-	o := newTestOrchestrator(capable(), ing, launch.launch, cap.start, srv)
+	o := newTestOrchestrator(capable(), ing, launch.launch, capb.start, srv)
 	// newOrchestrator already registered m.setStreamCounter(o.relay.StreamCount);
 	// RegisterBrowserVideo (not called by newTestOrchestrator) is what wires
 	// browser.SetBrowserMetricsRecorder in production, so wire it explicitly
@@ -85,9 +86,18 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 
 	// ---- per-stream fps/bitrate (chunk/byte counters) ----
 	adapter := &videoRelayAdapter{orch: o}
-	adapter.Ingest(streamID, EncodedChunk{Seq: 0, TS: 0, Key: true, Kind: "video", Payload: make([]byte, 100)})
-	adapter.Ingest(streamID, EncodedChunk{Seq: 1, TS: 33, Key: false, Kind: "video", Payload: make([]byte, 40)})
-	adapter.Ingest(streamID, EncodedChunk{Seq: 0, TS: 0, Key: false, Kind: "audio", Payload: make([]byte, 20)})
+	adapter.Ingest(
+		streamID,
+		EncodedChunk{Seq: 0, TS: 0, Key: true, Kind: "video", Payload: make([]byte, 100)},
+	)
+	adapter.Ingest(
+		streamID,
+		EncodedChunk{Seq: 1, TS: 33, Key: false, Kind: "video", Payload: make([]byte, 40)},
+	)
+	adapter.Ingest(
+		streamID,
+		EncodedChunk{Seq: 0, TS: 0, Key: false, Kind: "audio", Payload: make([]byte, 20)},
+	)
 
 	m.streamChunksMu.Lock()
 	c := m.streamChunks[streamID]
@@ -130,16 +140,25 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	}
 	// The GOP replay (2 chunks) must have been fully absorbed with no drop.
 	if got := m.viewerDropTotal.Load(); got != 0 {
-		t.Fatalf("viewer drop total = %d after Attach's GOP replay, want 0 (queue depth sized to absorb it)", got)
+		t.Fatalf(
+			"viewer drop total = %d after Attach's GOP replay, want 0 (queue depth sized to absorb it)",
+			got,
+		)
 	}
 	// First delta fills the queue (2 replay chunks + this one = 3/3; nobody
 	// drains smallWC.sendCh).
-	adapter.Ingest(streamID, EncodedChunk{Seq: 2, TS: 66, Key: false, Kind: "video", Payload: []byte{1}})
+	adapter.Ingest(
+		streamID,
+		EncodedChunk{Seq: 2, TS: 66, Key: false, Kind: "video", Payload: []byte{1}},
+	)
 	if got := m.viewerDropTotal.Load(); got != 0 {
 		t.Fatalf("viewer drop total = %d before the queue is full, want 0", got)
 	}
 	// Second delta finds the queue still full -> dropped in isolation.
-	adapter.Ingest(streamID, EncodedChunk{Seq: 3, TS: 99, Key: false, Kind: "video", Payload: []byte{2}})
+	adapter.Ingest(
+		streamID,
+		EncodedChunk{Seq: 3, TS: 99, Key: false, Kind: "video", Payload: []byte{2}},
+	)
 	if got := m.viewerDropTotal.Load(); got != 1 {
 		t.Fatalf("viewer drop total = %d, want 1", got)
 	}
@@ -147,18 +166,21 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	// ---- capture restart count (counter): StepDown path ----
 	// PT-FLAKY fix: poll the ACTUAL metric under test, not a proxy signal.
 	// StepDown (browser_stream.go:~787) starts the new capture driver (which
-	// bumps cap.count()) BEFORE it calls IncCaptureRestart() — waiting on the
-	// proxy (cap.count()==2) leaves a race window where this goroutine can
+	// bumps capb.count()) BEFORE it calls IncCaptureRestart() — waiting on the
+	// proxy (capb.count()==2) leaves a race window where this goroutine can
 	// observe the proxy flip yet still read captureRestartTotal==0 an
 	// instant later, which is exactly the intermittent "want 1" flake under
 	// `-p` load. Polling captureRestartTotal directly closes that window
 	// deterministically.
 	o.StepDown(streamID)
 	if !eventuallyTrue(2*time.Second, func() bool { return m.captureRestartTotal.Load() == 1 }) {
-		t.Fatalf("capture restart total after StepDown = %d, want 1 within the deadline", m.captureRestartTotal.Load())
+		t.Fatalf(
+			"capture restart total after StepDown = %d, want 1 within the deadline",
+			m.captureRestartTotal.Load(),
+		)
 	}
-	if got := cap.count(); got != 2 {
-		t.Fatalf("expected StepDown to restart capture, cap.count() = %d, want 2", got)
+	if got := capb.count(); got != 2 {
+		t.Fatalf("expected StepDown to restart capture, capb.count() = %d, want 2", got)
 	}
 
 	// ---- capture restart count (counter): CRIT-002 re-mint+relaunch path ----
@@ -168,13 +190,22 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	firstTab := launch.tabAt(0)
 	close(firstTab.done) // simulate the ingest drop (encoder tab crash)
 	if !eventuallyTrue(2*time.Second, func() bool { return m.captureRestartTotal.Load() == 2 }) {
-		t.Fatalf("capture restart total after encoder-drop relaunch = %d, want 2 (StepDown + relaunch) within the deadline", m.captureRestartTotal.Load())
+		t.Fatalf(
+			"capture restart total after encoder-drop relaunch = %d, want 2 (StepDown + relaunch) within the deadline",
+			m.captureRestartTotal.Load(),
+		)
 	}
 	if got := launch.count(); got != 2 {
-		t.Fatalf("expected the orchestrator to relaunch after the simulated encoder drop; launch count = %d, want 2", got)
+		t.Fatalf(
+			"expected the orchestrator to relaunch after the simulated encoder drop; launch count = %d, want 2",
+			got,
+		)
 	}
 	if got := ing.mintCount(); got != 2 {
-		t.Fatalf("expected the orchestrator to re-mint after the simulated encoder drop; mint count = %d, want 2", got)
+		t.Fatalf(
+			"expected the orchestrator to re-mint after the simulated encoder drop; mint count = %d, want 2",
+			got,
+		)
 	}
 
 	// ---- ingest-auth-reject count (counter), labeled by reason ----

@@ -2121,7 +2121,9 @@ func setupAndStartServices(
 	if browserProfileDir == "" {
 		browserProfileDir = filepath.Join(homePath, "browser", "profiles", "default")
 	}
-	browserInstallRoot := filepath.Clean(filepath.Join(filepath.Dir(filepath.Clean(browserProfileDir)), "..", "chromium"))
+	browserInstallRoot := filepath.Clean(
+		filepath.Join(filepath.Dir(filepath.Clean(browserProfileDir)), "..", "chromium"),
+	)
 
 	// Live-browser video streaming (component M, ADR-044): the WebCodecs
 	// relay orchestrator + its loopback capture-ingest endpoint

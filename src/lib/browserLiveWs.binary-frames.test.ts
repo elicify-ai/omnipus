@@ -285,10 +285,14 @@ describe('decodeChunkEnvelope', () => {
     expect(decoded?.ts).toBe(18446744073709551615n)
   })
 
-  it('parses a zero-length payload without error (client-side; ingest-side rejection is a backend concern, FR-014)', () => {
+  it('rejects a zero-length payload (GC-5 — mirrors the backend FR-014 zero-length reject)', () => {
     const buf = buildEnvelope({ kind: 0, seq: 5, ts: 132n, key: false, payload: new Uint8Array(0) })
-    const decoded = decodeChunkEnvelope(buf)
-    expect(decoded).toEqual({ kind: 'video', seq: 5, ts: 132n, key: false, payload: new Uint8Array(0) })
+    expect(decodeChunkEnvelope(buf)).toBeNull()
+  })
+
+  it('rejects a zero-length audio payload too (GC-5, kind-agnostic)', () => {
+    const buf = buildEnvelope({ kind: 1, seq: 6, ts: 140n, key: false, payload: new Uint8Array(0) })
+    expect(decodeChunkEnvelope(buf)).toBeNull()
   })
 
   it('rejects a buffer too short to hold the header', () => {
@@ -462,7 +466,7 @@ describe('BrowserLiveWsConnection — binary transport wiring', () => {
     expect(fakeFrame.close).toHaveBeenCalledTimes(1)
   })
 
-  it('routes a VideoDecoder error callback to onDecodeError', async () => {
+  it('routes a VideoDecoder error callback to onDecodeError AND drops to the unavailable state (SF-H1 — no silent freeze)', async () => {
     const callbacks = makeCallbacks()
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
     conn.connect()
@@ -481,6 +485,55 @@ describe('BrowserLiveWsConnection — binary transport wiring', () => {
 
     lastVideoDecoderInstance?.error(new DOMException('boom', 'EncodingError'))
     expect(callbacks.onDecodeError).toHaveBeenCalledWith('video', 'boom')
+    // SF-H1: a fatal decode error must not leave the canvas frozen on its
+    // last painted frame with zero production signal — it drops to the same
+    // generic unavailable state every other "this client cannot render this
+    // stream" trigger already uses.
+    expect(callbacks.onUnavailable).toHaveBeenCalledWith('video-decode-error')
+
+    // The decoder is torn down: even a fresh keyframe chunk must never reach
+    // a closed decoder again — it's dropped instead of thrown at forever.
+    const before = getDroppedBinaryChunkCount()
+    const buf = buildEnvelope({ kind: 0, seq: 9, ts: 1n, key: true, payload: new Uint8Array([1]) })
+    lastWsInstance.onmessage?.({ data: buf })
+    expect(getDroppedBinaryChunkCount()).toBe(before + 1)
+    expect(lastVideoDecoderInstance?.decode).not.toHaveBeenCalled()
+  })
+
+  it('a synchronous throw out of VideoDecoder.decode() is treated as fatal too (SF-H1) — onUnavailable fires and further chunks are dropped', async () => {
+    const callbacks = makeCallbacks()
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
+    conn.connect()
+    openSocket()
+    await flushMicrotasks()
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({
+        type: 'browser_stream_init',
+        codec: 'avc1.4D4028',
+        width: 640,
+        height: 480,
+        keyframe_interval: 60,
+        has_audio: false,
+      }),
+    })
+
+    // Simulate decode() throwing synchronously (e.g. the decoder is already
+    // closed/errored) rather than reporting via the async `error` callback.
+    lastVideoDecoderInstance!.decode = vi.fn(() => {
+      throw new DOMException('decoder is closed', 'InvalidStateError')
+    })
+
+    const keyBuf = buildEnvelope({ kind: 0, seq: 1, ts: 1n, key: true, payload: new Uint8Array([1]) })
+    lastWsInstance.onmessage?.({ data: keyBuf })
+
+    expect(callbacks.onDecodeError).toHaveBeenCalledWith('video', expect.stringContaining('decoder is closed'))
+    expect(callbacks.onUnavailable).toHaveBeenCalledWith('video-decode-error')
+
+    // A further chunk must be dropped, not attempted against the torn-down decoder.
+    const before = getDroppedBinaryChunkCount()
+    const nextBuf = buildEnvelope({ kind: 0, seq: 2, ts: 2n, key: true, payload: new Uint8Array([2]) })
+    lastWsInstance.onmessage?.({ data: nextBuf })
+    expect(getDroppedBinaryChunkCount()).toBe(before + 1)
   })
 
   it('drops a malformed binary message, counts it, and never calls decode', async () => {

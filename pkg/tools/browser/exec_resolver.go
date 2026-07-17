@@ -229,13 +229,15 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 		}
 		if info.IsDir() {
 			return "", fmt.Errorf(
-				"configured exec_path %s is a directory, not an executable file", cfg.ExecPath)
+				"configured exec_path %s is a directory, not an executable file", cfg.ExecPath,
+			)
 		}
 		// Exec-bit check is POSIX-only: on Windows os.FileMode does not carry
 		// Unix execute bits, so this guard would wrongly reject every .exe.
 		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 			return "", fmt.Errorf(
-				"configured exec_path %s is not executable (check its file mode)", cfg.ExecPath)
+				"configured exec_path %s is not executable (check its file mode)", cfg.ExecPath,
+			)
 		}
 		return cfg.ExecPath, nil
 	}

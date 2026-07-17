@@ -271,10 +271,6 @@ export function BrowserLiveView({
   // crop math work identically whether the picture came from the legacy
   // screencast or the new video-chunk path.
   const activeDimsRef = useRef<LiveDims | null>(null)
-  // Counts decode failures (malformed/JPEG/WebCodecs) for observability —
-  // never surfaced as a hard error to the end user (FR-007 posture: drop the
-  // frame, dev-mode toast, keep going).
-  const decodeErrorCountRef = useRef(0)
   // Web Audio playback state for onAudioData (FR-011) — a fresh AudioContext
   // per mount, and a monotonic "next scheduled start" clock so consecutive
   // decoded chunks play back-to-back instead of overlapping/racing.
@@ -790,11 +786,15 @@ export function BrowserLiveView({
         }
       },
       // A binary chunk failed to parse/decode, or a configured decoder
-      // reported an error — count it and surface a throttled dev-mode toast
-      // (never a prod crash, never a user-facing error banner: FR-007's
-      // "drop the frame and keep going" posture).
+      // reported an error — surface a throttled dev-mode toast (never a prod
+      // crash, never a user-facing error banner: FR-007's "drop the frame
+      // and keep going" posture). SF-H1: a FATAL video decode error also
+      // drives this connection to onUnavailable (browserLiveWs.ts's
+      // _handleVideoDecodeError) — that's a separate callback, handled below
+      // — so a frozen decoder always ends in the generic unavailable banner
+      // rather than a canvas stuck on its last frame with only this toast as
+      // (dev-only) evidence anything went wrong.
       onDecodeError: (kind, message) => {
-        decodeErrorCountRef.current += 1
         void maybeDevToast(`[browser-live] ${kind} decode error: ${message}`, `browser-live-decode-${kind}`, 'warning')
       },
       // FR-007/FR-018/FR-020 — this viewer cannot/will not get video. `reason`
@@ -941,7 +941,6 @@ export function BrowserLiveView({
     }
     img.onerror = () => {
       if (cancelled || jpegDrawSeqRef.current !== seq) return
-      decodeErrorCountRef.current += 1
       void maybeDevToast('[browser-live] JPEG decode error', 'browser-live-jpeg-decode', 'warning')
     }
     img.src = `data:image/jpeg;base64,${frame.data}`

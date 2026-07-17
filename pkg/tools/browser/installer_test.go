@@ -102,13 +102,15 @@ func withManifestURL(t *testing.T, url string) {
 	t.Cleanup(func() { globalManifestURLForTesting = prev })
 }
 
-// withXvfbProbe forces XvfbAvailableProbe to return want for the duration of
-// the test, restoring the previous probe on cleanup.
-func withXvfbProbe(t *testing.T, want bool) {
+// withDisplaySidecarHealthy forces DisplaySidecarHealthyProbe (the AR-C1/
+// GC-1/GC-2 Option-B dormant gate — NOT an Xvfb-binary-on-PATH probe) to
+// return want for the duration of the test, restoring the previous probe on
+// cleanup.
+func withDisplaySidecarHealthy(t *testing.T, want bool) {
 	t.Helper()
-	prev := XvfbAvailableProbe
-	XvfbAvailableProbe = func() bool { return want }
-	t.Cleanup(func() { XvfbAvailableProbe = prev })
+	prev := DisplaySidecarHealthyProbe
+	DisplaySidecarHealthyProbe = func() bool { return want }
+	t.Cleanup(func() { DisplaySidecarHealthyProbe = prev })
 }
 
 // --- tests -------------------------------------------------------------
@@ -164,11 +166,12 @@ func TestInstaller_DetectsEither_PrefersFullChromeWhenBothCached(t *testing.T) {
 	}
 }
 
-// TestInstaller_HeadlessShellDefault_WhenXvfbUnavailable is the F-08
-// regression case: with Xvfb unavailable (the pre-Gate-0 / non-video-capable
-// default posture), a fresh EnsureChromium download must still fetch
+// TestInstaller_HeadlessShellDefault_WhenDisplaySidecarNotHealthy is the F-08
+// regression case: with no healthy display sidecar wired (the pre-Gate-0 /
+// non-video-capable default posture — AR-C1/GC-1/GC-2's Option-B dormant
+// gate), a fresh EnsureChromium download must still fetch
 // chrome-headless-shell, matching pre-dual-download behavior byte for byte.
-func TestInstaller_HeadlessShellDefault_WhenXvfbUnavailable(t *testing.T) {
+func TestInstaller_HeadlessShellDefault_WhenDisplaySidecarNotHealthy(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix-only path layout")
 	}
@@ -176,7 +179,7 @@ func TestInstaller_HeadlessShellDefault_WhenXvfbUnavailable(t *testing.T) {
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withXvfbProbe(t, false)
+	withDisplaySidecarHealthy(t, false)
 
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
@@ -216,9 +219,9 @@ func TestInstaller_HeadlessShellDefault_WhenXvfbUnavailable(t *testing.T) {
 
 // TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity is the F-08
 // / FR-009 / Test 15 / DS-5 centerpiece: it proves, in one flow —
-//  1. a fresh install with Xvfb available downloads the full "chrome" build
-//     (not chrome-headless-shell) — its own download key, binary name, and
-//     on-disk layout;
+//  1. a fresh install with a healthy display sidecar wired downloads the full
+//     "chrome" build (not chrome-headless-shell) — its own download key,
+//     binary name, and on-disk layout;
 //  2. the downloaded archive's integrity is verified against the
 //     GCS-published X-Goog-Hash checksum before the binary is trusted;
 //  3. a second EnsureChromium call against the same install root detects the
@@ -234,7 +237,7 @@ func TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity(t *testing.
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withXvfbProbe(t, true)
+	withDisplaySidecarHealthy(t, true)
 
 	fullBuild := fullChromeBuild()
 	content := []byte("#!/bin/sh\nexit 0\n# full chrome fixture\n")
@@ -361,7 +364,7 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withXvfbProbe(t, false) // exercise the headless-shell download path
+	withDisplaySidecarHealthy(t, false) // exercise the headless-shell download path
 
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
@@ -413,7 +416,7 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withXvfbProbe(t, false)
+	withDisplaySidecarHealthy(t, false)
 
 	prev := allowHeaderlessDownloadForTesting
 	allowHeaderlessDownloadForTesting = true
@@ -443,5 +446,28 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	}
 	if _, statErr := os.Stat(got); statErr != nil {
 		t.Fatalf("expected the installed binary to exist: %v", statErr)
+	}
+}
+
+// TestInstaller_SelectDownloadBuild_DormantByDefault_OptionB is the AR-C1/
+// GC-1/GC-2 coherent-dormant regression guard for the installer side of the
+// same defect capability_test.go's TestVideoCapability_DormantByDefault_
+// OptionB guards on the classifier side: with DisplaySidecarHealthyProbe left
+// UNTOUCHED (the shipped default, always false), selectDownloadBuild must
+// choose chrome-headless-shell on linux regardless of what's on PATH — it
+// must never regress into reading an Xvfb-binary-on-PATH signal.
+func TestInstaller_SelectDownloadBuild_DormantByDefault_OptionB(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip(
+			"this guard only matters on linux — selectDownloadBuild's only branch that could ever pick the full chrome build",
+		)
+	}
+	got := selectDownloadBuild()
+	if got.downloadID != cftDownloadID {
+		t.Fatalf(
+			"expected selectDownloadBuild to default to chrome-headless-shell (downloadID %q) with no display sidecar wired, got %q",
+			cftDownloadID,
+			got.downloadID,
+		)
 	}
 }
