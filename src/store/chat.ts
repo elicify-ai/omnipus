@@ -1748,6 +1748,34 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // steering message — it was sent while that assistant turn was still
         // producing output.
         if (isStreaming) {
+          // Mid-turn steering during the '__pending' session window: the
+          // FIRST message of a brand new chat streams under the optimistic
+          // placeholder sid '__pending' (see the no-active-session branch
+          // below) until the server's session_started frame supplies the
+          // real session_id. A steer sent in that window would send
+          // session_id:'__pending' on the wire — a protocol violation the
+          // gateway answers with a terminal "session not found" error frame,
+          // which the SPA's error handler then (incorrectly) attributes to
+          // the legitimate first turn, erroring it out and losing the steer
+          // text. There is no real session to steer INTO yet, so degrade to
+          // the existing offline-style buffering instead: enqueue the steer
+          // text and let it go out as an ordinary FOLLOW-UP message once
+          // session_started resolves the real session_id (which now also
+          // calls drainOutboundQueue() — see that handler) and the first
+          // turn's own done/error frame calls maybeDrainNext(). That drain
+          // already gates on `!isStreaming` (see maybeDrainNext's doc
+          // comment), so this cannot race the in-flight first turn — it
+          // simply becomes the next queued message once turn 1 completes.
+          if (activeSessionId === '__pending') {
+            const enqueued = get().enqueueOutboundMessage(content)
+            if (!enqueued) {
+              useConnectionStore.getState().setConnectionError(
+                'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
+              )
+            }
+            return
+          }
+
           withBucket(activeSessionId, (b) => {
             const allMsgs = [...getMessages(b), userMsg]
             return { ...applyMessageArray(allMsgs, b), lastUserMessageAt: Date.now() }
@@ -2271,6 +2299,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // Invalidate sessions list so the session lists (SearchModal, sidebar
           // accordion) re-fetch and show the new session.
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
+          // A steer sent while this turn was still under the '__pending'
+          // placeholder sid (see sendMessage's isStreaming branch) was
+          // buffered into outboundQueue instead of sent — drainOutboundQueue
+          // was previously only invoked on WS reconnect (OmnipusRuntimeProvider),
+          // so without this call that buffered steer would sit inert until
+          // the NEXT disconnect/reconnect cycle, which may never happen in a
+          // healthy session. Draining here moves it into pendingDrainQueue;
+          // maybeDrainNext() (called inside drainOutboundQueue) reads
+          // isStreaming fresh via get() — which bucketToForeground above just
+          // set to true for this brand-new turn — so it correctly no-ops now
+          // and the buffered message goes out automatically as an ordinary
+          // next-turn message once THIS turn's own done/error frame calls
+          // maybeDrainNext() again. A no-op (queue empty) the vast majority
+          // of the time, so unconditional here is cheap and safe.
+          get().drainOutboundQueue()
           break
         }
 
@@ -2509,17 +2552,37 @@ export const useChatStore = create<ChatStore>((set, get) => {
             withBucket(sid, (b) => {
               return produce(b, (draft) => {
                 const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
-                if (lastMsgId) {
+                // Sweep the UNION of {the last assistant message} (unchanged
+                // — always normalized exactly as before, even when it isn't
+                // flagged "streaming" at all, e.g. a replay-reconstructed
+                // bubble whose `isStreaming` is `undefined` rather than
+                // `true`/`false` — see the 'replay_message' case's own doc
+                // comment on why replay bubbles are finalized the instant
+                // they're created) ∪ {every OTHER still-streaming assistant
+                // message in the bucket} (defense-in-depth addition —
+                // mirrors clearStreamingState's own sweep, used on a hard
+                // WS-drop, see the identical backward-scan loop there). A
+                // mid-turn steer (sendMessage's `isStreaming` branch) appends
+                // the steering text as a new USER message AFTER the
+                // still-open assistant bubble, so that bubble is no longer
+                // "the last message" by the time `done` arrives — finalizing
+                // only the last assistant message would leave the ORIGINAL
+                // bubble permanently stuck at isStreaming:true (permanent
+                // shimmer, Copy bar suppressed) even though the turn is over.
+                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                  const id = draft.messageOrder[i]
+                  const m = draft.messagesById[id]
+                  if (m?.role !== 'assistant') continue
+                  if (id !== lastMsgId && !m.isStreaming && m.status !== 'streaming') continue
                   // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
-                  const msg = draft.messagesById[lastMsgId]
-                  msg.isStreaming = false
-                  msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
+                  m.isStreaming = false
+                  m.status = m.status === 'interrupted' ? 'interrupted' : 'done'
                   // Clear the tool-call text-boundary marker on finalize. If the
                   // turn's last event was a tool call with no trailing narration
                   // token before `done`, pendingTextBoundary would otherwise be
                   // left `true` on a message with no next token coming — a
                   // representable-but-meaningless state for a finalized bubble.
-                  msg.pendingTextBoundary = false
+                  m.pendingTextBoundary = false
                 }
                 // Bake any pending tool calls into the last assistant message so
                 // VirtualAssistantMessageRow can render them from message.tool_calls.
@@ -2614,31 +2677,58 @@ export const useChatStore = create<ChatStore>((set, get) => {
               }
             }
             withBucket(targetSid, (b) => {
+              const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
               const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-              if (lastMsgId) {
-                const prevMsg = b.messagesById[lastMsgId]
-                const prevStatus = prevMsg.status
-                // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
-                const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
-                const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
-                  ? 'interrupted'
-                  : 'error'
+              // C8 defense-in-depth: close the UNION of {the last assistant
+              // message} (unchanged — always closed exactly as before, even
+              // when it isn't flagged "streaming" at all, e.g. a
+              // replay-reconstructed bubble whose `isStreaming` is
+              // `undefined` — mirrors the matching `done`-handler fix above)
+              // ∪ {every OTHER still-streaming assistant message in the
+              // bucket} — mirrors clearStreamingState's own sweep (used on a
+              // hard WS-drop). A mid-turn steer (sendMessage's `isStreaming`
+              // branch) appends the steering text as a new USER message
+              // AFTER the still-open assistant bubble, so that bubble is no
+              // longer "the last message" by the time `error` arrives —
+              // closing only the last assistant message here would leave the
+              // ORIGINAL bubble permanently stuck at isStreaming:true even
+              // though the turn just errored out.
+              const streamingIds: string[] = []
+              for (let i = b.messageOrder.length - 1; i >= 0; i--) {
+                const id = b.messageOrder[i]
+                const m = b.messagesById[id]
+                if (m?.role !== 'assistant') continue
+                if (id === lastMsgId || m.isStreaming || m.status === 'streaming') {
+                  streamingIds.push(id)
+                }
+              }
+              if (streamingIds.length > 0) {
                 return produce(b, (draft) => {
-                  const msg = draft.messagesById[lastMsgId!]
-                  msg.content = (resolvedStatus === 'interrupted')
-                    ? msg.content
-                    : (msg.content || frame.message)
-                  msg.isStreaming = false
-                  msg.status = resolvedStatus
-                  msg.pendingTextBoundary = false
+                  for (const id of streamingIds) {
+                    const msg = draft.messagesById[id]
+                    const prevStatus = msg.status
+                    // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
+                    const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
+                      ? 'interrupted'
+                      : 'error'
+                    msg.content = (resolvedStatus === 'interrupted')
+                      ? msg.content
+                      : (msg.content || frame.message)
+                    msg.isStreaming = false
+                    msg.status = resolvedStatus
+                    msg.pendingTextBoundary = false
+                  }
                   draft.isStreaming = false
                   if (clearReplayingNow) {
                     draft.isReplaying = false
                   }
                 }) as Partial<SessionChatState>
               }
-              // No assistant message — push one. Only show an error toast for non-cancel errors.
-              const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
+              // streamingIds is empty here only when there is NO assistant
+              // message in the bucket at all (lastMsgId, unconditionally
+              // included above whenever it exists, would otherwise have made
+              // it non-empty) — push one below so the error isn't silently
+              // dropped. Only show an error toast for non-cancel errors.
               if (!isCancelAck) {
                 useConnectionStore.getState().setConnectionError(frame.message)
               }
@@ -2732,8 +2822,51 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
           } else {
             withBucket(targetSid, (b) => {
-              const lastMsgId = b.messageOrder[b.messageOrder.length - 1]
-              const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
+              // Anchor resolution. Default: the raw message-order tail, same
+              // as before — this is REPLAY-SAFE and must stay unconditional
+              // on role alone (NOT isStreaming): replay-reconstructed
+              // assistant bubbles (see the 'replay_message' case) are
+              // finalized (isStreaming:false) the INSTANT they're created —
+              // that's by design, not a live "closed segment" — and
+              // tool_call_start frames replayed right after them must still
+              // reuse that same bubble (mirrors the 'replay_message' case's
+              // own doc comment on why isStreaming can't serve as the
+              // open/closed signal during replay).
+              //
+              // Fallback ONLY when the raw tail is NOT an assistant message:
+              // this is the mid-turn-steer case (sendMessage's `isStreaming`
+              // branch appends the steer text as a new USER message AFTER
+              // the still-open assistant bubble, so the raw tail is no
+              // longer assistant by the time this frame arrives) — anchor
+              // instead on the last assistant message further back, but
+              // ONLY if it is still genuinely STREAMING (never a
+              // replay-finalized or turn-closed one — reusing a closed
+              // bubble here would be the "text-then-image-at-bottom"
+              // reconnect-bug class of mistake the 'token' handler's own
+              // still-streaming check already guards against). Without this
+              // fallback, tool_call_start would wrongly mint a brand-new
+              // assistant placeholder while the ORIGINAL bubble is left
+              // behind still marked isStreaming:true — nothing else ever
+              // finalizes an abandoned bubble like that (the done/error
+              // handlers below now sweep every still-streaming assistant
+              // message, but only once a terminal frame actually arrives),
+              // so it would render a permanent shimmer/spinner (Copy bar
+              // suppressed) until a manual reload replayed history.
+              const rawTailId = b.messageOrder[b.messageOrder.length - 1]
+              const rawTail = rawTailId ? b.messagesById[rawTailId] : undefined
+              let lastMsgId: string | undefined
+              let lastMsg: ChatMessage | undefined
+              if (rawTail?.role === 'assistant') {
+                lastMsgId = rawTailId
+                lastMsg = rawTail
+              } else {
+                const lastAssistantId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
+                const lastAssistantMsg = lastAssistantId ? b.messagesById[lastAssistantId] : undefined
+                if (lastAssistantMsg?.isStreaming) {
+                  lastMsgId = lastAssistantId ?? undefined
+                  lastMsg = lastAssistantMsg
+                }
+              }
               const textSnapshot = (lastMsg?.role === 'assistant' ? lastMsg.content : '') ?? ''
               // Reconnect/replay safety: if this call_id is already recorded
               // (we have a textAtToolCallStart snapshot for it), keep the

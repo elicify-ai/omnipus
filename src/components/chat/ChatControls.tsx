@@ -109,11 +109,21 @@ export function ChatControls({ className }: ChatControlsProps) {
         // point back here): skip-link=1 (AppShell.tsx) → chat input=2
         // (ChatScreen.tsx) → agent=3 (composer/AgentPicker.tsx) → model=4
         // (composer/ModelPicker.tsx) → attach=5 (ChatScreen.tsx) → send=6
-        // (ChatScreen.tsx; the Stop button that replaces Send mid-stream
-        // shares this SAME slot 6, not its own — see ChatScreen.tsx's Stop
-        // button) → browser=7 (this button), then natural DOM order (the
-        // header tab menu). Deliberate positive tabIndex on this closed
+        // (ChatScreen.tsx) → browser=7 (this button), then natural DOM order
+        // (the header tab menu). Deliberate positive tabIndex on this closed
         // 7-control set per operator direction.
+        //
+        // Slot 6 has THREE possible occupants in ChatScreen.tsx, mutually
+        // exclusive by render condition so only one is ever mounted at a
+        // time: (1) idle — ComposerPrimitive.Send (`chat-send`); (2)
+        // streaming — the Stop button (`stop-btn`), which replaces Send in
+        // this exact slot rather than defaulting to 0, so cancel is never
+        // silently dropped from the ring while a turn runs; (3) mid-turn
+        // steering (bugfixes3) — once Stop has swapped in, a SECOND slot-6
+        // control, the plain mid-stream Send button (`chat-send-mid-stream`),
+        // renders next to it (only once there's text to steer — see that
+        // button's own doc comment) so cancel stays reachable in exactly one
+        // keystroke even when steering is also available.
         tabIndex={7}
         aria-label="Open browser"
         aria-busy={creatingBrowserSession}

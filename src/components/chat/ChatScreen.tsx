@@ -1646,13 +1646,26 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // into the running turn as chat text.
     if (slashMenu.interceptClientCommand()) return
     // BaseComposerRuntimeCore.send() no-ops on its own `canSend` check
-    // (empty composer / isSendDisabled) — no separate emptiness guard is
-    // needed here, matching the native Enter/click-Send behavior when idle.
+    // (empty composer / isSendDisabled, which trims) — no separate emptiness
+    // guard is needed before calling it, matching the native Enter/click-Send
+    // behavior when idle. But that means a whitespace-only composer makes
+    // `.send()` below a no-op too, leaving the composer's actual text
+    // untouched — so the mirror-clear must be gated the same way: read
+    // whether there's real (non-whitespace) text BEFORE sending, and only
+    // clear the slash-menu mirror when there was something to actually send.
+    // Unconditionally clearing it here would desync the mirror from the
+    // real, unchanged composer text (still whitespace) — hasComposerText
+    // (which reads the mirror) would wrongly flip false, hiding the
+    // mid-stream Send button/hint even though the composer visually still
+    // holds that whitespace.
+    const hadSendableText = slashMenu.inputValue.trim().length > 0
     composerRuntime.send()
-    // Fix-4 mirror resync — see the identical call + comment in onSubmit
-    // below; the runtime clears its own text on a successful send without
-    // firing the textarea's onChange.
-    slashMenu.onInputChange('')
+    if (hadSendableText) {
+      // Fix-4 mirror resync — see the identical call + comment in onSubmit
+      // below; the runtime clears its own text on a successful send without
+      // firing the textarea's onChange.
+      slashMenu.onInputChange('')
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -1691,7 +1704,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // handling below via `slashMenu.handleKeyDown(e)` (a no-op when the menu
     // isn't open) and, past that, the internal ComposerPrimitive.Input
     // handling, which inserts the newline.
-    if (e.key === 'Enter' && isStreaming && !e.shiftKey && !(slashMenu.slashOpen && slashMenu.shouldShowSlash)) {
+    //
+    // Explicit `inputEnabled` check (defense-in-depth): the textarea's own
+    // native `disabled` attribute (set from `!inputEnabled`, see the
+    // ComposerPrimitive.Input below) already stops a real browser from ever
+    // dispatching a keydown into a read-only composer, but that native
+    // attribute is the ONLY thing currently gating this branch against
+    // replay / agentRemoved / gave_up-reconnect — none of which clear
+    // `isStreaming`. Guarding here too means this branch stays correct even
+    // if the textarea is ever rendered without `disabled` wired up (e.g. a
+    // future refactor, or a test that dispatches the event directly against
+    // the element), instead of relying solely on the DOM to enforce it.
+    if (e.key === 'Enter' && isStreaming && inputEnabled && !e.shiftKey && !(slashMenu.slashOpen && slashMenu.shouldShowSlash)) {
       e.preventDefault()
       submitMidStreamMessage()
       return
@@ -2326,8 +2350,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                       ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)]'
                       : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
                   )}
-                  aria-label="Send into running response"
-                  title="Send — steers into the running response"
+                  aria-label="Send into the running response"
+                  title="Send into the running response"
+                  aria-describedby="mid-stream-send-hint"
                 >
                   <PaperPlaneRight size={15} weight="bold" />
                 </button>
@@ -2408,13 +2433,21 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             invisible right when the affordance matters most. This small,
             muted line (tokens only, no emoji) fills that gap: it appears
             only once there's live text to steer with, right where the Send
-            button next to Stop just appeared. */}
+            button next to Stop just appeared. Microcopy unified with that
+            button's own title/aria-label (one phrase, three surfaces); `id`
+            is targeted by the button's `aria-describedby` above so a
+            screen-reader user gets the same explanation the sighted hint
+            line provides. Safe to reference unconditionally from the button
+            (no dangling id): the button only renders when hasComposerText is
+            also true (its own parent condition additionally requires
+            isStreaming), which is exactly this line's render condition too. */}
         {isStreaming && hasComposerText && (
           <div
+            id="mid-stream-send-hint"
             data-testid="mid-stream-send-hint"
             className="px-3 pb-1.5 -mt-1 text-[10px] text-[var(--color-muted)]"
           >
-            Sends into the running response
+            Send into the running response
           </div>
         )}
 
