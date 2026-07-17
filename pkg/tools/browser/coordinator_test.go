@@ -37,8 +37,15 @@ func resolveTestBinary(t *testing.T) string {
 				return
 			}
 		}
-		// Else download once into a shared temp dir.
-		sharedTestBin, errSharedTestBin = EnsureChromium(context.Background(), filepath.Join(t.TempDir(), "chromium"))
+		// Else download once into a STABLE shared dir. Deliberately NOT
+		// t.TempDir(): that dir is removed when the FIRST test to hit this
+		// sync.Once finishes, leaving every later test with a dangling
+		// exec_path ("no such file or directory" — seen on the ci-omnipus
+		// worker, where Chrome downloads succeed and these tests really
+		// run). A fixed os.TempDir() path also lets repeat CI runs reuse
+		// the ~130 MB install instead of re-downloading each run.
+		sharedTestBin, errSharedTestBin = EnsureChromium(
+			context.Background(), filepath.Join(os.TempDir(), "omnipus-shared-test-chromium"))
 	})
 	if errSharedTestBin != nil {
 		t.Skipf("no managed Chrome for coordinator test: %v", errSharedTestBin)
