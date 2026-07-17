@@ -5687,44 +5687,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// lexicographic guess. This refusal deliberately runs AFTER the
 	// tools.WithWorkspaceID injection above (memory routing, FR-030) so that
 	// separate signal is completely unaffected by this gate either way.
-	wsID, found := workspace.FindForAgentPreferring(omnipusHome(), ts.agent.ID, ts.opts.WorkspaceID)
-	if !found {
-		logger.WarnCF(
-			"agent",
-			"turn refused: agent is not a member of any workspace",
-			map[string]any{"agent_id": ts.agent.ID},
-		)
-		return turnResult{}, fmt.Errorf("%w: agent_id=%s", ErrAgentNotWorkspaceMember, ts.agent.ID)
-	}
-	// Derive the re-root dir from the SAME canonical home ($OMNIPUS_HOME)
-	// the rest of the feature uses — buildWorkspaceInstructionsNote, the
-	// REST handlers, and ResolveDefaultID/FindForAgent — so the agent's
-	// work files, its injected instructions, and the shared memory room
-	// all live under one workspaces/<id>/ tree (work/ as a dedicated
-	// sibling of AGENT.md and .omnipus/, not their container).
-	// SafeWorkDir validates the id against traversal before it becomes a
-	// filesystem root. Since execution is now unconditionally
-	// workspace-scoped, a failure here (unsafe id, or the work dir cannot be
-	// created) REFUSES the turn rather than silently falling back to the
-	// agent's own directory — the same no-fallthrough guarantee FR-007/008
-	// requires for the not-a-member case applies equally to a member whose
-	// work/ dir cannot be resolved.
-	wsDir, idErr := workspace.SafeWorkDir(omnipusHome(), wsID)
-	if idErr != nil {
-		logger.WarnCF(
-			"agent",
-			"turn refused: invalid workspace id resolving work dir",
-			map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "error": idErr.Error()},
-		)
-		return turnResult{}, fmt.Errorf("workspace work dir unavailable for agent_id=%s workspace_id=%s: %w", ts.agent.ID, wsID, idErr)
-	}
-	if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
-		logger.WarnCF(
-			"agent",
-			"turn refused: could not create workspace work dir",
-			map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
-		)
-		return turnResult{}, fmt.Errorf("workspace work dir unavailable for agent_id=%s workspace_id=%s: %w", ts.agent.ID, wsID, mkErr)
+	//
+	// resolveTurnWorkDirOrRefuse (workspace_reroot.go) is the SHARED gate —
+	// external_dispatch.go's runExternalCLISubTurn calls the exact same
+	// function so the membership refusal cannot diverge between the native
+	// and external-cli dispatch paths again (a prior review found
+	// runExternalCLISubTurn had its own, weaker copy that fell through to the
+	// agent's private home directory instead of refusing).
+	wsDir, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	if wsErr != nil {
+		return turnResult{}, wsErr
 	}
 	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
 

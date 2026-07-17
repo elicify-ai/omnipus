@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1209,4 +1210,64 @@ func TestHandleWorkspaces_RepositorySchemeValidation_PUT(t *testing.T) {
 	api.HandleWorkspaces(wBad, rBad)
 	assert.Equal(t, http.StatusBadRequest, wBad.Code,
 		"PUT with javascript: URL must return 400; body=%s", wBad.Body.String())
+}
+
+// TestLogWorkspacelessAgents_WarnsOnlyForNonMembers (ADR-046 P1, FR-007/008)
+// proves the boot-time diagnostic: given three configured agents — one a
+// member of a real on-disk workspace, two members of nothing — exactly one
+// WARN log line is emitted naming both non-member IDs (sorted), and the
+// member is never mentioned. Also proves it is a genuine no-op (no warning
+// at all) when every configured agent already has a workspace.
+func TestLogWorkspacelessAgents_WarnsOnlyForNonMembers(t *testing.T) {
+	home := t.TempDir()
+
+	wsDir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	wsJSON := `{"id":"ws-1","core_team":["member-agent"]}`
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "ws-1.json"), []byte(wsJSON), 0o644))
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "member-agent"},
+				{ID: "orphan-b"},
+				{ID: "orphan-a"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	logWorkspacelessAgents(home, cfg)
+
+	var found map[string]any
+	var lines int
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		lines++
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &entry), "parse log line %q", line)
+		found = entry
+	}
+	require.Equal(t, 1, lines, "expected exactly one log line; got:\n%s", buf.String())
+	require.NotNil(t, found)
+	assert.Equal(t, "orphan-a,orphan-b", found["agent_ids"],
+		"must name both non-member agents, sorted, and never the member")
+	assert.NotContains(t, fmt.Sprint(found["agent_ids"]), "member-agent")
+	assert.EqualValues(t, 2, found["count"])
+
+	// No configured agent is workspace-less: must be a silent no-op.
+	buf.Reset()
+	cfg2 := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{{ID: "member-agent"}},
+		},
+	}
+	logWorkspacelessAgents(home, cfg2)
+	assert.Empty(t, buf.String(), "must not log anything when every configured agent has a workspace")
 }
