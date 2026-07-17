@@ -45,7 +45,7 @@ func newWave5bTestAgentLoop(t *testing.T, provider providers.LLMProvider) *Agent
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

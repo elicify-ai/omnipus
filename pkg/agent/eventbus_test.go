@@ -146,7 +146,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -271,7 +271,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -406,7 +406,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -496,7 +496,7 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:                 tmpDir,
+				Home:                      tmpDir,
 				ModelName:                 "test-model",
 				MaxTokens:                 4096,
 				MaxToolIterations:         10,
@@ -581,7 +581,7 @@ func TestAgentLoop_EmitsSessionSummarizeEvent_DegradedOnSummarizationFailure(t *
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:                 tmpDir,
+				Home:                      tmpDir,
 				ModelName:                 "test-model",
 				MaxTokens:                 4096,
 				MaxToolIterations:         10,
@@ -676,7 +676,7 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

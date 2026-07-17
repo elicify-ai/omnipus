@@ -90,7 +90,7 @@ func newHookDenyFixture(t *testing.T) (al *AgentLoop, agentID, auditDir string, 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

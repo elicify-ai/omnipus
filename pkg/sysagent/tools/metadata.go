@@ -128,7 +128,7 @@ func (t *AgentReadMetadataTool) Execute(ctx context.Context, args map[string]any
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
 	}
 
-	wsPath := datamodel.AgentWorkspacePath(t.deps.Home, agentID)
+	wsPath := datamodel.AgentHomePath(t.deps.Home, agentID)
 	filePath := wsPath + "/" + filename
 
 	data, err := os.ReadFile(filePath)
@@ -225,7 +225,7 @@ func (t *AgentWriteMetadataTool) Execute(ctx context.Context, args map[string]an
 		}
 	}
 
-	wsPath := datamodel.AgentWorkspacePath(t.deps.Home, agentID)
+	wsPath := datamodel.AgentHomePath(t.deps.Home, agentID)
 	filePath := wsPath + "/" + filename
 
 	// Ensure workspace directory exists (agent may not have been initialized yet).

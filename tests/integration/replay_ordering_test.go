@@ -592,9 +592,9 @@ func seedTwoTurnTranscript(t *testing.T, gw *testutil.TestGateway, sessionID str
 // Path: <SessionsBaseDir>/sessions/<sessionID>/transcript.jsonl
 //
 // The agent loop derives its session store root from
-// filepath.Dir(cfg.WorkspacePath()), NOT from cfg.WorkspacePath() itself.
-// In the test harness, cfg.Agents.Defaults.Workspace = gw.HomeDir(), so:
-//   - cfg.WorkspacePath() = gw.HomeDir()
+// filepath.Dir(cfg.AgentHomeBasePath()), NOT from cfg.AgentHomeBasePath() itself.
+// In the test harness, cfg.Agents.Defaults.Home = gw.HomeDir(), so:
+//   - cfg.AgentHomeBasePath() = gw.HomeDir()
 //   - sharedSessionDir   = filepath.Dir(gw.HomeDir()) + "/sessions"
 //
 // This means sessions live one level ABOVE gw.HomeDir(), in the parent of
@@ -604,7 +604,7 @@ func writeTranscriptEntries(t *testing.T, gw *testutil.TestGateway, sessionID st
 	t.Helper()
 
 	// Sessions are stored at parent(workspace)/sessions/, matching loop.go:340:
-	//   homePath := filepath.Dir(cfg.WorkspacePath())
+	//   homePath := filepath.Dir(cfg.AgentHomeBasePath())
 	//   sharedDir := filepath.Join(homePath, "sessions")
 	sessionsBase := filepath.Join(filepath.Dir(gw.HomeDir()), "sessions")
 	sessionDir := filepath.Join(sessionsBase, sessionID)

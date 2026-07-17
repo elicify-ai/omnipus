@@ -28,7 +28,7 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -81,7 +81,7 @@ func TestRateLimiter_ZeroCapMeansNoCap(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},

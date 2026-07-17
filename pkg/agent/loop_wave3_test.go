@@ -52,7 +52,7 @@ func TestPromptGuard_InitializedFromConfig(t *testing.T) {
 			cfg := &config.Config{
 				Agents: config.AgentsConfig{
 					Defaults: config.AgentDefaults{
-						Workspace:         tmpDir,
+						Home:              tmpDir,
 						ModelName:         "test-model",
 						MaxTokens:         4096,
 						MaxToolIterations: 10,
@@ -173,7 +173,7 @@ func TestExecProxy_StartedWhenEnabled(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -202,7 +202,7 @@ func TestExecProxy_NilWhenDisabled(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -313,7 +313,7 @@ func TestAgentLoopClose_StopsExecProxy(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -359,7 +359,7 @@ func TestAgentLoop_PromptGuardAuditTrail(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         filepath.Join(tmpDir, "workspace"),
+				Home:              filepath.Join(tmpDir, "workspace"),
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -371,7 +371,7 @@ func TestAgentLoop_PromptGuardAuditTrail(t *testing.T) {
 		},
 	}
 	// Workspace path derives the audit dir as its sibling.
-	if err := os.MkdirAll(cfg.Agents.Defaults.Workspace, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.Agents.Defaults.Home, 0o755); err != nil {
 		t.Fatal(err)
 	}
 

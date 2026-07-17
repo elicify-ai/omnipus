@@ -118,7 +118,7 @@ func newBrowserWSTestHandler(t *testing.T, mutate func(cfg *config.Config)) (*Br
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -567,7 +567,7 @@ func newBrowserWSHandlerWithAudit(t *testing.T) (*BrowserWSHandler, *agent.Agent
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: workspaceDir,
+				Home:      workspaceDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},

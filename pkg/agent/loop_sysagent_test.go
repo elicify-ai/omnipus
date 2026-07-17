@@ -29,7 +29,7 @@ func TestCustomAgent_HasNoSystemToolsRegistered(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = tmpDir
+	cfg.Agents.Defaults.Home = tmpDir
 	cfg.Agents.Defaults.ModelName = "test-model"
 	// Add a custom agent.
 	cfg.Agents.List = []config.AgentConfig{

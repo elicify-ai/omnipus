@@ -35,15 +35,15 @@ func TestListAllSessions_PartialErrors(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "agent-good",
-					Name:      "Good Agent",
-					Workspace: tmpDir,
+					ID:   "agent-good",
+					Name: "Good Agent",
+					Home: tmpDir,
 				},
 			},
 		},

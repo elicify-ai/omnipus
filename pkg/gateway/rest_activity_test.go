@@ -33,7 +33,7 @@ func TestHandleActivity_ReturnsWrappedResponseNoWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -72,9 +72,9 @@ func TestHandleActivity_PartialFailure_SurfacesWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "agent-broken", Name: "Broken Agent", Workspace: tmpDir},
+				{ID: "agent-broken", Name: "Broken Agent", Home: tmpDir},
 			},
 		},
 	}

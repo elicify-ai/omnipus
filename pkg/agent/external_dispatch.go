@@ -167,7 +167,7 @@ func runExternalCLISubTurn(
 	//    through to FindForAgent's existing behavior; kept for symmetry with
 	//    the native path (pkg/agent/loop.go's runTurn) and in case that
 	//    assumption changes.
-	workDir := strings.TrimSpace(agent.Workspace)
+	workDir := strings.TrimSpace(agent.Home)
 	if wsID, found := workspace.FindForAgentPreferring(omnipusHome(), agent.ID, childTS.opts.WorkspaceID); found {
 		if wsDir, wsErr := workspace.SafeWorkDir(omnipusHome(), wsID); wsErr != nil {
 			slog.Warn(

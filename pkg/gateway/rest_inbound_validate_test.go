@@ -48,7 +48,7 @@ func newTestRestAPIWithValidation(t *testing.T) *restAPI {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -450,7 +450,7 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
