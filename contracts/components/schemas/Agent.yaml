@@ -15,7 +15,6 @@ required:
   - soul
   - timeout_seconds
   - max_tool_iterations
-  - steering_mode
 properties:
   id:
     type: string
@@ -125,15 +124,6 @@ properties:
       Maximum number of tool calls allowed per turn.
       Inherited from agents.defaults.max_tool_iterations when not overridden.
     example: 50
-  steering_mode:
-    type: string
-    enum:
-      - one-at-a-time
-      - queue-and-process
-    description: >
-      Tool execution steering strategy. "one-at-a-time" = approve each tool call
-      individually. Workers always use "one-at-a-time" (server-set).
-    example: "one-at-a-time"
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
   shell_policy:

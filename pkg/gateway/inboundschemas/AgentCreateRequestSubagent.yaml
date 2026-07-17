@@ -3,9 +3,8 @@ title: AgentCreateRequestSubagent
 description: >
   Create a Subagent — a user-defined delegation-only worker on the Omnipus
   engine. Field set per the agent-types field matrix: no voice (no chat/TTS
-  surface), no steering_mode (workers are forced one-at-a-time server-side),
-  no executor (native is derived server-side — never sent by the client).
-  Description is enforced non-empty-after-trim by the handler (the
+  surface), no executor (native is derived server-side — never sent by the
+  client). Description is enforced non-empty-after-trim by the handler (the
   orchestrator delegates based on it).
 required:
   - type

@@ -1345,7 +1345,7 @@ paths:
     put:
       operationId: updateAgent
       summary: Update agent configuration
-      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
 
         '
       tags:

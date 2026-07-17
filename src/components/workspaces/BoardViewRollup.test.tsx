@@ -81,7 +81,6 @@ const agentRay: Agent = {
   icon: 'MagnifyingGlass',
   timeout_seconds: 300,
   max_tool_iterations: 50,
-  steering_mode: 'one-at-a-time',
 }
 
 const milestones: Milestone[] = []

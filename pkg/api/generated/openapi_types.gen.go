@@ -104,24 +104,6 @@ func (e AgentStatus) Valid() bool {
 	}
 }
 
-// Defines values for AgentSteeringMode.
-const (
-	AgentSteeringModeOneAtATime      AgentSteeringMode = "one-at-a-time"
-	AgentSteeringModeQueueAndProcess AgentSteeringMode = "queue-and-process"
-)
-
-// Valid indicates whether the value is a known member of the AgentSteeringMode enum.
-func (e AgentSteeringMode) Valid() bool {
-	switch e {
-	case AgentSteeringModeOneAtATime:
-		return true
-	case AgentSteeringModeQueueAndProcess:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentToolsCfgBuiltinPolicies.
 const (
 	AgentToolsCfgBuiltinPoliciesAllow AgentToolsCfgBuiltinPolicies = "allow"
@@ -164,24 +146,6 @@ func (e AgentType) Valid() bool {
 	case AgentTypeSubagent3p:
 		return true
 	case AgentTypeSystem:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentCreateRequestMainSteeringMode.
-const (
-	AgentCreateRequestMainSteeringModeOneAtATime      AgentCreateRequestMainSteeringMode = "one-at-a-time"
-	AgentCreateRequestMainSteeringModeQueueAndProcess AgentCreateRequestMainSteeringMode = "queue-and-process"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestMainSteeringMode enum.
-func (e AgentCreateRequestMainSteeringMode) Valid() bool {
-	switch e {
-	case AgentCreateRequestMainSteeringModeOneAtATime:
-		return true
-	case AgentCreateRequestMainSteeringModeQueueAndProcess:
 		return true
 	default:
 		return false
@@ -524,24 +488,6 @@ func (e AgentUpdateRequestExecutorKind) Valid() bool {
 	case AgentUpdateRequestExecutorKindNative:
 		return true
 	case AgentUpdateRequestExecutorKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestSteeringMode.
-const (
-	OneAtATime      AgentUpdateRequestSteeringMode = "one-at-a-time"
-	QueueAndProcess AgentUpdateRequestSteeringMode = "queue-and-process"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestSteeringMode enum.
-func (e AgentUpdateRequestSteeringMode) Valid() bool {
-	switch e {
-	case OneAtATime:
-		return true
-	case QueueAndProcess:
 		return true
 	default:
 		return false
@@ -3527,9 +3473,6 @@ type Agent struct {
 	// Status Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 	Status AgentStatus `json:"status"`
 
-	// SteeringMode Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Workers always use "one-at-a-time" (server-set).
-	SteeringMode AgentSteeringMode `json:"steering_mode"`
-
 	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted. Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
 	TimeoutSeconds int `json:"timeout_seconds"`
 
@@ -3573,9 +3516,6 @@ type AgentExecutorKind string
 // AgentStatus Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 type AgentStatus string
 
-// AgentSteeringMode Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Workers always use "one-at-a-time" (server-set).
-type AgentSteeringMode string
-
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
@@ -3587,7 +3527,7 @@ type AgentCreateRequest struct {
 	union json.RawMessage
 }
 
-// AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice and steering_mode are Main-only; executor is absent (Main never has one).
+// AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
 type AgentCreateRequestMain struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
@@ -3656,9 +3596,6 @@ type AgentCreateRequestMain struct {
 	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
 	Soul string `json:"soul"`
 
-	// SteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
-	SteeringMode *AgentCreateRequestMainSteeringMode `json:"steering_mode,omitempty"`
-
 	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 
@@ -3690,16 +3627,13 @@ type AgentCreateRequestMain struct {
 	Voice *string `json:"voice,omitempty"`
 }
 
-// AgentCreateRequestMainSteeringMode Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
-type AgentCreateRequestMainSteeringMode string
-
 // AgentCreateRequestMainToolsCfgBuiltinPolicies defines model for AgentCreateRequestMain.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestMainToolsCfgBuiltinPolicies string
 
 // AgentCreateRequestMainType Discriminator. Must be exactly "Main" for this variant.
 type AgentCreateRequestMainType string
 
-// AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no steering_mode (workers are forced one-at-a-time server-side), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
+// AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
 type AgentCreateRequestSubagent struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
@@ -3802,7 +3736,7 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 // AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
 type AgentCreateRequestSubagentType string
 
-// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
 type AgentCreateRequestSubagent3p struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
@@ -4111,7 +4045,7 @@ type AgentToolsUpdateRequestBuiltinMode string
 // AgentToolsUpdateRequestBuiltinPolicies defines model for AgentToolsUpdateRequest.Builtin.Policies.
 type AgentToolsUpdateRequestBuiltinPolicies string
 
-// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, max_tool_iterations, and steering_mode may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
+// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
 type AgentUpdateRequest struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
@@ -4214,9 +4148,6 @@ type AgentUpdateRequest struct {
 	// Soul New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
 	Soul *string `json:"soul,omitempty"`
 
-	// SteeringMode New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
-	SteeringMode *AgentUpdateRequestSteeringMode `json:"steering_mode,omitempty"`
-
 	// TimeoutSeconds New timeout in seconds per turn. Allowed on all agents.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 
@@ -4250,9 +4181,6 @@ type AgentUpdateRequest struct {
 
 // AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentUpdateRequestExecutorKind string
-
-// AgentUpdateRequestSteeringMode New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
-type AgentUpdateRequestSteeringMode string
 
 // AgentUpdateRequestToolsCfgBuiltinPolicies defines model for AgentUpdateRequest.ToolsCfg.Builtin.Policies.
 type AgentUpdateRequestToolsCfgBuiltinPolicies string

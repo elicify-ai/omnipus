@@ -39,7 +39,6 @@ const agentDefaults = {
   heartbeat: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
-  steering_mode: 'one-at-a-time' as const,
   heartbeat_enabled: false,
   heartbeat_interval: 300,
 }

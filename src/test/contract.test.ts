@@ -67,7 +67,6 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       soul: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
-      steering_mode: 'one-at-a-time',
     } satisfies Agent
 
     expect(mock.id).toBe('mia')
@@ -88,7 +87,6 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       soul: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
-      steering_mode: 'one-at-a-time',
     } satisfies Agent
 
     expect(mock.type).toBe('Main')

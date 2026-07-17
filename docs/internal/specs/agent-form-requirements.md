@@ -397,6 +397,15 @@ For Subagent (External), `timeout_seconds` bounds the Omnipus wait for
 the CLI process.
 
 ### 4.24 `steering_mode` (row 29)
+
+> **2026-07-17 — per-agent `steering_mode` removed entirely (dead config):**
+> create silently dropped it, PUT persisted it to a config location
+> `config.AgentConfig` never loads, and GET always echoed the global default
+> regardless of any per-agent value — the field never actually worked.
+> Steering is now global-only and always-on via `agents.defaults.steering_mode`
+> (`pkg/agent/steering.go` / `pkg/config/config.go`), unaffected by this
+> removal. The description below is historical.
+
 **Main only** — controls how a Main agent handles a new human message
 arriving while a previous turn is still running.
 
