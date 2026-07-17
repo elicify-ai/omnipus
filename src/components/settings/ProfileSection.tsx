@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { ArrowsClockwise, LockKey } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
@@ -84,7 +84,15 @@ export function ProfileSection() {
     queryFn: fetchUserContext,
   })
 
+  // Draft-ownership rule (see useAutoSave's `onSaved` doc comment): a dirty
+  // field is never overwritten by server data. Set on every onChange below;
+  // cleared only when `onSaved` confirms the save snapshot still equals the
+  // live draft. The hydration effect skips entirely while dirty.
+  const contextDirtyRef = useRef(false)
+  const markContextDirty = () => { contextDirtyRef.current = true }
+
   useEffect(() => {
+    if (contextDirtyRef.current) return
     if (userContextData) {
       setUserContent(userContextData.content)
     }
@@ -96,7 +104,21 @@ export function ProfileSection() {
       await updateUserContext(content)
       queryClient.invalidateQueries({ queryKey: ['user-context'] })
     },
-    { disabled: userContextError },
+    {
+      disabled: userContextError,
+      // Long-form surface — raised from the 500ms default so a normal
+      // typing cadence doesn't fire a save (and its own invalidate/refetch
+      // echo) on nearly every pause.
+      debounceMs: 1500,
+      onSaved: (_saved, isCurrent) => {
+        // Only clear dirty when the save snapshot still equals the live
+        // draft — if the operator kept typing during the PUT round-trip,
+        // `isCurrent` is false and the flag stays armed so the hydration
+        // guard above keeps rejecting the stale echo until the queued
+        // re-save (useAutoSave's own serialization) persists the newer text.
+        if (isCurrent) contextDirtyRef.current = false
+      },
+    },
   )
 
   const { mutate: submitPasswordChange, isPending: isChangingPassword } = useMutation({
@@ -350,7 +372,7 @@ export function ProfileSection() {
               aria-labelledby="workspace-context-heading"
               aria-describedby="workspace-context-desc"
               value={userContent}
-              onChange={(e) => setUserContent(e.target.value)}
+              onChange={(e) => { markContextDirty(); setUserContent(e.target.value) }}
               placeholder={"# About Me\n\nDescribe your role, expertise, and preferences..."}
               rows={8}
               className="text-xs font-mono resize-none"

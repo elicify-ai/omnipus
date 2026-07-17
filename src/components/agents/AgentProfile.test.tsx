@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
@@ -28,6 +28,16 @@ if (typeof Element !== 'undefined' && !Element.prototype.hasPointerCapture) {
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent profile renders with type-appropriate sections
 //             wave5a-wire-ui-spec.md — US-7 AC2: core agent sections
 //             wave5a-wire-ui-spec.md — US-7 AC3: locked core agent read-only sections
+//
+// Timing note (echo-race fix, P2 'Text input Auto save'): AgentProfile's
+// main useAutoSave call was raised from the 500ms default to 1500ms (see
+// AgentProfile.tsx). Deliberately widened every REAL-TIMER `waitFor(...,
+// { timeout: 3000 })` in this file that gates on the debounced autosave
+// actually firing (fireEvent.change → updateAgent/testAgentRunner called) to
+// `{ timeout: 6000 }`, preserving roughly the original ~6x margin over the
+// debounce interval. `{ timeout: 5000 }` sites already had enough headroom
+// and were left as-is. Sites NOT gated on the autosave debounce (explicit
+// mutation buttons, error-state renders) were left untouched.
 
 const mockNavigate = vi.fn()
 
@@ -467,7 +477,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
         expect(lastCall[0]).toBe('web-researcher')
         expect(lastCall[1].executor).toEqual({ kind: 'external-cli', cli: 'claude-code' })
       },
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
   })
 
@@ -503,9 +513,9 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     pickExecutorKind(/External CLI/i)
     await waitFor(() => {
       expect(testAgentRunner).toHaveBeenCalledWith('web-researcher')
-    }, { timeout: 3000 })
+    }, { timeout: 6000 })
     // And the save still commits (test returned ok).
-    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 3000 })
+    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })
   })
 
   it('I12: blocks updateAgent when the runner test fails (missing-binary)', async () => {
@@ -523,7 +533,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     }
     await screen.findByTestId('executor-kind-select')
     pickExecutorKind(/External CLI/i)
-    await waitFor(() => expect(testAgentRunner).toHaveBeenCalled(), { timeout: 3000 })
+    await waitFor(() => expect(testAgentRunner).toHaveBeenCalled(), { timeout: 6000 })
     // Give the auto-save a chance to attempt the save.
     await new Promise((r) => setTimeout(r, 800))
     expect(updateAgent).not.toHaveBeenCalled()
@@ -755,7 +765,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         const calls = vi.mocked(updateAgent).mock.calls
         expect(calls.length).toBeGreaterThan(0)
       },
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
     // Filter to calls for THIS agent id only — other tests in the file
     // (e.g. the worker tier-branched test) call updateAgent with a
@@ -836,7 +846,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     // The first (and — this test asserts — ONLY) debounced save.
     await waitFor(
       () => expect(vi.mocked(updateAgent).mock.calls.length).toBeGreaterThan(0),
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
     const firstCallCount = vi.mocked(updateAgent).mock.calls.length
     expect(firstCallCount).toBe(1)
@@ -944,7 +954,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         )
         expect(calls.length).toBeGreaterThan(0)
       },
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
     const calls = vi.mocked(updateAgent).mock.calls.filter(
       ([id]) => id === mockCoreAgent.id,
@@ -998,7 +1008,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         )
         expect(calls.length).toBeGreaterThan(0)
       },
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
     const calls = vi.mocked(updateAgent).mock.calls.filter(
       ([id]) => id === mockCoreAgent.id,
@@ -1146,7 +1156,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         )
         expect(calls.length).toBeGreaterThan(0)
       },
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
     const calls = vi.mocked(updateAgent).mock.calls.filter(
       ([id]) => id === mockCoreAgent.id,
@@ -1218,7 +1228,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         )
         expect(calls.length).toBeGreaterThan(0)
       },
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
     const calls = vi.mocked(updateAgent).mock.calls.filter(
       ([id]) => id === mockCoreAgent.id,
@@ -1494,14 +1504,33 @@ describe('AgentProfile — 409 conflict handling', () => {
   })
 
   it('surfaces a toast with Refresh action on 409 conflict', async () => {
-    vi.mocked(updateAgent).mockRejectedValueOnce(new ApiError(409, 'conflict'))
+    // `mockRejectedValue` (persistent), not `...Once`: a 409 leaves
+    // useAutoSave's `hasPendingChanges()` true (a failed save never
+    // advances `lastSavedJsonRef`), so unmounting this component (via this
+    // file's global `cleanup()` in `afterEach`) fires an extra, fire-and-
+    // forget flush call into the SAME shared `updateAgent` mock — see
+    // useAutoSave.ts's unmount-cleanup effect. That extra call can land
+    // asynchronously in a LATER test's window and, with a "...Once" queue,
+    // consume ITS queued value instead of this test's own edit. Persistent
+    // rejection makes this test robust to that extra call regardless of
+    // how many times `updateAgent` actually fires during its run.
+    vi.mocked(updateAgent).mockRejectedValue(new ApiError(409, 'conflict'))
 
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
 
     // Capture toasts via the store's subscribe mechanism
     const { useUiStore } = await import('@/store/ui')
-    const toastsBefore = useUiStore.getState().toasts.length
+    // Track EXISTING toast ids (not just a count) before triggering our own
+    // conflict. A plain `toasts.length` snapshot is racy here: toasts
+    // auto-dismiss after 4000ms (see `addToast` in store/ui.ts), and this
+    // file's earlier tests can leave "changed elsewhere" toasts behind that
+    // auto-dismiss WHILE this test's own debounced save (now 1500ms) is
+    // still in flight — an old toast disappearing at the same moment a new
+    // one appears keeps the raw count identical, so a `length > before`
+    // check can miss a genuinely-added toast entirely. Identity (id) is not
+    // subject to that race.
+    const idsBefore = new Set(useUiStore.getState().toasts.map((t) => t.id))
 
     // Trigger a save by changing a field
     const nameInputs = screen.getAllByDisplayValue('General Assistant')
@@ -1512,16 +1541,18 @@ describe('AgentProfile — 409 conflict handling', () => {
       expect(vi.mocked(updateAgent)).toHaveBeenCalled()
     }, { timeout: 5000 })
 
-    // Wait for the 409 catch block to add a toast
+    // Wait for the 409 catch block to add a toast — identified by NOT being
+    // in `idsBefore`, so a concurrently-auto-dismissing stale toast can
+    // never mask it.
     await waitFor(() => {
       const toasts = useUiStore.getState().toasts
-      expect(toasts.length).toBeGreaterThan(toastsBefore)
-      expect(toasts.some((t: { message: string }) => /changed elsewhere/i.test(t.message))).toBe(true)
-    }, { timeout: 3000 })
+      const newOnes = toasts.filter((t) => !idsBefore.has(t.id))
+      expect(newOnes.some((t) => /changed elsewhere/i.test(t.message))).toBe(true)
+    }, { timeout: 6000 })
 
     // Verify the Refresh action is attached
     const state = useUiStore.getState()
-    const conflictToast = state.toasts.find((t: { message: string }) => /changed elsewhere/i.test(t.message))
+    const conflictToast = state.toasts.find((t) => !idsBefore.has(t.id) && /changed elsewhere/i.test(t.message))
     expect(conflictToast?.action?.label).toBe('Refresh')
   })
 
@@ -1545,18 +1576,30 @@ describe('AgentProfile — 409 conflict handling', () => {
     vi.mocked(fetchAgent).mockReset()
       .mockResolvedValueOnce({ ...mockCoreAgent, updated_at: t0 })
       .mockResolvedValue({ ...mockCoreAgent, updated_at: t1, description: 'Changed elsewhere by another operator' })
-    vi.mocked(updateAgent).mockReset().mockRejectedValueOnce(new ApiError(409, 'conflict'))
+    // `mockRejectedValue` (persistent), not `...Once` — see the sibling 409
+    // test's comment above: a failed save leaves useAutoSave's
+    // `hasPendingChanges()` true, so this component's unmount (cleanup()
+    // in afterEach) fires an extra flush call into this SAME shared mock.
+    // Persistent rejection keeps this test correct regardless of how many
+    // times `updateAgent` actually fires.
+    vi.mocked(updateAgent).mockReset().mockRejectedValue(new ApiError(409, 'conflict'))
 
     const { useUiStore } = await import('@/store/ui')
     // Toasts live in a module-level zustand store that persists across
     // tests in this file (the preceding 409 test in this same describe
     // block leaves its own "changed elsewhere" toast behind, un-dismissed).
-    // Snapshot the count BEFORE triggering our own conflict so we only ever
-    // act on a toast this test itself produced — grabbing a stale toast
+    // Track EXISTING toast ids (not just a count) before triggering our own
+    // conflict — see the sibling 409 test's comment above: a raw
+    // `toasts.length` snapshot is racy against the 4000ms auto-dismiss
+    // timer once the debounce (now 1500ms) pushes the whole edit-to-toast
+    // chain far enough into real wall-clock time that an OLD leftover toast
+    // can auto-dismiss at roughly the same moment this test's own toast
+    // appears, keeping the raw count identical. Identity (id) sidesteps
+    // that race, and also keeps the original intent: grabbing a stale toast
     // object from an earlier test's (unmounted) component would invoke a
     // `refetchAgent` closure bound to that OTHER test's query client, which
     // would never touch the component instance under test here.
-    const toastsBefore = useUiStore.getState().toasts.length
+    const idsBefore = new Set(useUiStore.getState().toasts.map((t) => t.id))
 
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
@@ -1571,10 +1614,11 @@ describe('AgentProfile — 409 conflict handling', () => {
     }, { timeout: 5000 })
 
     await waitFor(() => {
-      expect(useUiStore.getState().toasts.length).toBeGreaterThan(toastsBefore)
-    }, { timeout: 3000 })
+      const newOnes = useUiStore.getState().toasts.filter((t) => !idsBefore.has(t.id))
+      expect(newOnes.some((t) => /changed elsewhere/i.test(t.message))).toBe(true)
+    }, { timeout: 6000 })
 
-    const newToasts = useUiStore.getState().toasts.slice(toastsBefore)
+    const newToasts = useUiStore.getState().toasts.filter((t) => !idsBefore.has(t.id))
     const conflictToast = newToasts.find((t) => /changed elsewhere/i.test(t.message))
     expect(conflictToast?.action?.label).toBe('Refresh')
     conflictToast?.action?.onClick()
@@ -1585,7 +1629,7 @@ describe('AgentProfile — 409 conflict handling', () => {
     // local edit.
     await waitFor(() => {
       expect(screen.getAllByTestId('agent-description-input')[0]).toHaveValue('Changed elsewhere by another operator')
-    }, { timeout: 3000 })
+    }, { timeout: 6000 })
     expect(screen.getAllByTestId('agent-name-input')[0]).not.toHaveValue('My Rejected Local Edit')
   })
 })
@@ -1636,7 +1680,7 @@ describe('AgentProfile — updated_at staleness guard', () => {
         'agentProfile.updatedAtGuardRejectedHydration',
         expect.objectContaining({ agentId: 'general-assistant' }),
       )
-    }, { timeout: 3000 })
+    }, { timeout: 6000 })
   })
 
   it('fails CLOSED (rejects the hydration, does not silently adopt it) and warns when updated_at cannot be parsed', async () => {
@@ -1678,7 +1722,7 @@ describe('AgentProfile — updated_at staleness guard', () => {
         'agentProfile.updatedAtGuardUnparseable',
         expect.objectContaining({ agentId: 'general-assistant' }),
       )
-    }, { timeout: 3000 })
+    }, { timeout: 6000 })
 
     // The fresher-but-unorderable snapshot's description must NOT have
     // silently replaced what's in the form — proves fail-CLOSED, not
@@ -1686,6 +1730,122 @@ describe('AgentProfile — updated_at staleness guard', () => {
     // description, never touched by this edit.)
     expect(screen.getAllByTestId('agent-description-input')[0]).not.toHaveValue('Fresher description from elsewhere')
     expect(screen.getAllByTestId('agent-description-input')[0]).toHaveValue('Original description')
+  })
+})
+
+// ── SOUL echo-race regression (P2 'Text input Auto save') ──────────────────
+//
+// Root cause: the hydration effect (guarded by isDirtyRef + the updated_at
+// monotonic check) is sound, but the OLD saveFn cleared `isDirtyRef.current
+// = false` UNCONDITIONALLY on every successful save — BEFORE its own
+// (un-awaited) `invalidateQueries` refetch landed. If the operator typed
+// into SOUL again while the PUT was still in flight, that unconditional
+// clear let a LATER refetch — one that still carries the OLD (pre-second-
+// edit) soul text but a genuinely newer `updated_at` (so the separate
+// monotonic guard alone does not reject it) — revert the newer keystrokes.
+// Fixed via useAutoSave's `onSaved(saved, isCurrent)`: dirty now clears
+// only when the save snapshot still equals the live draft.
+describe('AgentProfile — SOUL echo-race (autosave hydration must never revert an in-flight draft)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchAgent).mockReset()
+    vi.mocked(updateAgent).mockReset()
+    vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
+  })
+
+  it('typing into SOUL during the save round-trip is never reverted by the invalidate-refetch echo (stale text + newer updated_at), and the newer text still persists', async () => {
+    const t0 = '2026-04-01T00:00:00.000Z'
+    const t1 = '2026-04-01T00:00:05.000Z' // save #1's own PUT response
+    const t2 = '2026-04-01T00:00:10.000Z' // save #1's invalidate-refetch echo: STALE soul, but a strictly NEWER updated_at (passes the monotonic guard on its own — isDirtyRef must be what stops it)
+    const t3 = '2026-04-01T00:00:15.000Z' // save #2's own PUT response
+    const t4 = '2026-04-01T00:00:20.000Z' // save #2's invalidate-refetch: fresh, matching
+
+    vi.mocked(fetchAgent)
+      .mockResolvedValueOnce({ ...mockCoreAgent, soul: '', updated_at: t0 })
+      .mockResolvedValueOnce({ ...mockCoreAgent, soul: 'First soul text', updated_at: t2 })
+      .mockResolvedValue({ ...mockCoreAgent, soul: 'First soul text Second soul text', updated_at: t4 })
+
+    // Both PUTs are manually controlled so the test can inspect the exact
+    // moment save #1's stale echo lands WHILE save #2 is still queued/in
+    // flight — the precise race window this fix closes.
+    let resolvePut1!: (v: Agent) => void
+    const putPromise1 = new Promise<Agent>((r) => { resolvePut1 = r })
+    let resolvePut2!: (v: Agent) => void
+    const putPromise2 = new Promise<Agent>((r) => { resolvePut2 = r })
+    vi.mocked(updateAgent)
+      .mockReturnValueOnce(putPromise1)
+      .mockReturnValueOnce(putPromise2)
+
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+
+    vi.useFakeTimers()
+
+    // First edit — debounce fires (1500ms, raised from the 500ms default —
+    // see AgentProfile.tsx's main useAutoSave call), PUT #1 goes out and
+    // stays in flight.
+    fireEvent.change(soulTextarea, { target: { value: 'First soul text' } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    expect(updateAgent).toHaveBeenCalledTimes(1)
+
+    // Second edit — the operator keeps typing while PUT #1 is still
+    // unresolved. This debounce cycle fires too, but useAutoSave's own
+    // serialization (isSavingRef) queues it (rerunPendingRef) instead of
+    // dispatching a second, concurrent PUT.
+    fireEvent.change(soulTextarea, { target: { value: 'First soul text Second soul text' } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    expect(updateAgent).toHaveBeenCalledTimes(1)
+    expect(soulTextarea).toHaveValue('First soul text Second soul text')
+
+    vi.useRealTimers()
+
+    // Resolve PUT #1. Its own `setQueryData(['agent', agentId], resp)`
+    // synchronously seeds the cache with (soul: 'First soul text',
+    // updated_at: t1); the subsequent (un-awaited) `invalidateQueries`
+    // refetch (mocked above) then resolves with the STALE soul but a
+    // strictly NEWER updated_at (t2) — passing the updated_at monotonic
+    // guard on its own. Save #2 (the queued rerun) starts right behind it
+    // and immediately blocks on the still-unresolved `putPromise2`, giving
+    // a clean checkpoint to inspect the draft mid-race.
+    await act(async () => {
+      resolvePut1({ ...mockCoreAgent, soul: 'First soul text', updated_at: t1 })
+    })
+
+    await waitFor(() => {
+      expect(fetchAgent).toHaveBeenCalledTimes(2)
+    })
+    // Save #2 must already be in flight (queued via useAutoSave's own
+    // serialization) by the time save #1's echo has landed.
+    await waitFor(() => {
+      expect(updateAgent).toHaveBeenCalledTimes(2)
+    })
+
+    // THE regression assertion: even though the (updated_at-guard-passing)
+    // refetch echo just landed, the textarea must still show the NEWEST
+    // typed text — isDirtyRef stayed armed because useAutoSave's onSaved
+    // reported isCurrent=false for save #1 (the live draft had already
+    // moved on when it resolved).
+    expect(soulTextarea).toHaveValue('First soul text Second soul text')
+
+    // Resolve PUT #2 — the queued re-save persists the newer text, and its
+    // own invalidate-refetch (mocked to return the now-genuinely-current
+    // value) settles cleanly.
+    await act(async () => {
+      resolvePut2({ ...mockCoreAgent, soul: 'First soul text Second soul text', updated_at: t3 })
+    })
+
+    await waitFor(() => {
+      expect(fetchAgent).toHaveBeenCalledTimes(3)
+    })
+    expect(updateAgent).toHaveBeenNthCalledWith(
+      1, 'general-assistant', expect.objectContaining({ soul: 'First soul text' }),
+    )
+    expect(updateAgent).toHaveBeenNthCalledWith(
+      2, 'general-assistant', expect.objectContaining({ soul: 'First soul text Second soul text' }),
+    )
+    expect(soulTextarea).toHaveValue('First soul text Second soul text')
   })
 })
 
@@ -1994,7 +2154,7 @@ describe('AgentProfile — max tool calls per turn (zero-clobber P0 fix)', () =>
       () => {
         expect(updateAgent).toHaveBeenCalled()
       },
-      { timeout: 3000 },
+      { timeout: 6000 },
     )
     // NO call may ever carry 0 — and the final persisted value is 350.
     for (const call of vi.mocked(updateAgent).mock.calls) {
@@ -2224,7 +2384,7 @@ describe('AgentProfile — locked core agent Sampling/Execution: editable (W2c)'
     fireEvent.change(tempSliders[0], { target: { value: '1.5' } })
     await waitFor(() => {
       expect(vi.mocked(updateAgent)).toHaveBeenCalled()
-    }, { timeout: 3000 })
+    }, { timeout: 6000 })
     const last = vi.mocked(updateAgent).mock.calls.at(-1)!
     expect((last[1] as Record<string, unknown>).model_params).toMatchObject({ temperature: 1.5 })
   })
