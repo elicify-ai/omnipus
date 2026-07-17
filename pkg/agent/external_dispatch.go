@@ -231,6 +231,31 @@ func runExternalCLISubTurn(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// FIX 1 (cancel propagation): register this run's cancel func on childTS the
+	// SAME way al.runTurn does for the native path (loop.go's ts.setTurnCancel /
+	// ts.setProviderCancel — the ONLY other call sites, grep-verified). Without
+	// this, childTS.providerCancel/turnCancel stay nil, so the session-wide
+	// cancel cascade (InterruptSession/InterruptSessionHard, steering.go —
+	// which fires those two turnState fields directly, never through context
+	// inheritance) is a silent no-op for an external-CLI sub-turn: childCtx is
+	// deliberately detached from the parent's ctx tree (context.Background() in
+	// spawnSubTurn), so nothing else can ever cancel runCtx. Worst case: a
+	// SYNCHRONOUS delegate (`delegate(async=false)`) deadlocks the parent inside
+	// this call for up to the full run timeout while the UI shows
+	// graceful→hard→detached as if cancel worked.
+	//
+	// One cancel func for both slots is the correct behavior here (not a
+	// simplification): runner.ExternalAgentRunner exposes no distinct graceful
+	// stop — its doc says "canceling [ctx] is equivalent to calling Cancel"
+	// (immediate termination), and all three drivers (claude/codex/opencode)
+	// bind the OS child via exec.CommandContext(runCtx, ...), so canceling
+	// runCtx already kills the subprocess outright. Firing the graceful stage
+	// (InterruptSession → providerCancel) is therefore already sufficient to
+	// end the run; the hard stage (InterruptSessionHard → providerCancel +
+	// turnCancel) re-fires the same (idempotent) cancel func defensively.
+	childTS.setTurnCancel(cancel)
+	childTS.setProviderCancel(cancel)
+
 	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
 	// (previously done independently for the transcript model stamp below
 	// and again for RunOptions.Model further down) into a single local.
