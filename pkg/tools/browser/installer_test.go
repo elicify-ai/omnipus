@@ -69,6 +69,54 @@ func googHashMD5Header(content []byte) string {
 	return "md5=" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
+// TestVerifyGoogHashMD5_MultipleHeaderLines is the regression for the real GCS
+// response shape: storage.googleapis.com sends the checksums as TWO SEPARATE
+// X-Goog-Hash header lines, "crc32c=..." FIRST and "md5=..." second. An earlier
+// verifier read only header.Get("X-Goog-Hash") (the first value), saw crc32c,
+// found no md5, and HARD-REJECTED every legitimate Chrome-for-Testing download —
+// silently breaking browser installation on every fresh install. The verifier
+// must scan every X-Goog-Hash value.
+func TestVerifyGoogHashMD5_MultipleHeaderLines(t *testing.T) {
+	content := []byte("chrome-headless-shell.zip contents")
+	sum := md5.Sum(content) //nolint:gosec // test fixture — mirrors the server's published md5.
+	md5Hdr := googHashMD5Header(content)
+
+	t.Run("crc32c line first then md5 line (real GCS order) -> accepted", func(t *testing.T) {
+		h := http.Header{}
+		h.Add("X-Goog-Hash", "crc32c=XqmS2Q==")
+		h.Add("X-Goog-Hash", md5Hdr)
+		if err := verifyGoogHashMD5(h, sum[:]); err != nil {
+			t.Fatalf("md5 on the second X-Goog-Hash line must be found; got: %v", err)
+		}
+	})
+
+	t.Run("md5 folded into one comma-joined line -> accepted", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("X-Goog-Hash", "crc32c=XqmS2Q==,"+md5Hdr)
+		if err := verifyGoogHashMD5(h, sum[:]); err != nil {
+			t.Fatalf("md5 in the comma-joined line must be found; got: %v", err)
+		}
+	})
+
+	t.Run("only crc32c present (no md5 anywhere) -> rejected", func(t *testing.T) {
+		h := http.Header{}
+		h.Add("X-Goog-Hash", "crc32c=XqmS2Q==")
+		if err := verifyGoogHashMD5(h, sum[:]); err == nil {
+			t.Fatal("expected rejection when no X-Goog-Hash line carries an md5 checksum")
+		}
+	})
+
+	t.Run("crc32c first + md5 second but content mismatches -> rejected", func(t *testing.T) {
+		h := http.Header{}
+		h.Add("X-Goog-Hash", "crc32c=XqmS2Q==")
+		h.Add("X-Goog-Hash", md5Hdr)
+		wrong := md5.Sum([]byte("different content")) //nolint:gosec // test fixture.
+		if err := verifyGoogHashMD5(h, wrong[:]); err == nil {
+			t.Fatal("expected a checksum-mismatch rejection")
+		}
+	})
+}
+
 // manifestFor builds a cftManifest JSON body with the given per-build zip
 // URLs for platform, mirroring the real CfT feed's shape (both "chrome" and
 // "chrome-headless-shell" keys can coexist under one channel).

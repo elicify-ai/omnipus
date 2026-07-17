@@ -473,8 +473,15 @@ var allowHeaderlessDownloadForTesting = false
 // fail open. If a headerless mirror must ever be tolerated, that requires an
 // explicit opt-in (allowHeaderlessDownloadForTesting), never the default.
 func verifyGoogHashMD5(header http.Header, got []byte) error {
-	raw := header.Get("X-Goog-Hash")
-	if raw == "" {
+	// GCS publishes the checksum(s) via X-Goog-Hash. A single object commonly
+	// carries TWO SEPARATE header lines — "crc32c=..." AND "md5=..." — and for
+	// real Chrome-for-Testing objects crc32c is listed FIRST. Go's Header.Get
+	// returns only the first value, so reading it alone finds crc32c and misses
+	// the md5, hard-rejecting a legitimate download. Read EVERY X-Goog-Hash
+	// value via Header.Values (and split each on ',' in case a proxy folds them
+	// into one comma-joined line) and search all of them for the md5 checksum.
+	values := header.Values("X-Goog-Hash")
+	if len(values) == 0 {
 		if allowHeaderlessDownloadForTesting {
 			return nil
 		}
@@ -483,21 +490,26 @@ func verifyGoogHashMD5(header http.Header, got []byte) error {
 		)
 	}
 	var want []byte
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		v, ok := strings.CutPrefix(part, "md5=")
-		if !ok {
-			continue
+	for _, raw := range values {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			v, ok := strings.CutPrefix(part, "md5=")
+			if !ok {
+				continue
+			}
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return fmt.Errorf("malformed X-Goog-Hash md5 value %q: %w", v, err)
+			}
+			want = decoded
+			break
 		}
-		decoded, err := base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			return fmt.Errorf("malformed X-Goog-Hash md5 value %q: %w", v, err)
+		if want != nil {
+			break
 		}
-		want = decoded
-		break
 	}
 	if want == nil {
-		return fmt.Errorf("X-Goog-Hash header present but carries no md5 checksum: %q", raw)
+		return fmt.Errorf("X-Goog-Hash header(s) present but carry no md5 checksum: %q", values)
 	}
 	if !bytes.Equal(want, got) {
 		return fmt.Errorf("checksum mismatch: server declared md5 %x, downloaded content hashes to %x", want, got)
