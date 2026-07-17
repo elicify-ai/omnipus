@@ -119,8 +119,8 @@ func cloneWithWorkspace(src *config.ModelConfig, workspace string) *config.Model
 		return nil
 	}
 	clone := *src
-	if clone.Workspace == "" {
-		clone.Workspace = workspace
+	if clone.Home == "" {
+		clone.Home = workspace
 	}
 	return &clone
 }

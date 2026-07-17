@@ -114,7 +114,7 @@ func schedTestLoop(t *testing.T) (*AgentLoop, string) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
@@ -142,8 +142,8 @@ func registerAgent(
 		&config.AgentConfig{ID: id, Name: id, Default: isDefault},
 		&cfg.Agents.Defaults, cfg, provider,
 	)
-	ag.Workspace = filepath.Join(home, "agents", id)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(id, id)
+	ag.Home = filepath.Join(home, "agents", id)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
 	al.registry.mu.Lock()
 	al.registry.agents[id] = ag
 	al.registry.mu.Unlock()
@@ -385,7 +385,7 @@ func schedTestLoopWithAudit(t *testing.T) (*AgentLoop, string, string) {
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = workspaceDir
+	cfg.Agents.Defaults.Home = workspaceDir
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10

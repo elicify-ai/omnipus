@@ -37,7 +37,7 @@ func TestCreateProviderReturnsCodexCliProviderForCodexCode(t *testing.T) {
 		{
 			ModelName: "test-codex",
 			Model:     "codex-cli/codex-model",
-			Workspace: "/tmp/workspace",
+			Home:      "/tmp/workspace",
 		},
 	}
 
@@ -58,7 +58,7 @@ func TestCreateProviderReturnsClaudeCliProviderForClaudeCli(t *testing.T) {
 		{
 			ModelName: "test-claude-cli",
 			Model:     "claude-cli/claude-sonnet",
-			Workspace: "/tmp/workspace",
+			Home:      "/tmp/workspace",
 		},
 	}
 

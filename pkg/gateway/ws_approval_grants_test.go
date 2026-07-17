@@ -89,7 +89,7 @@ func minimalAgentLoopCfg(t *testing.T, extra ...config.AgentConfig) *config.Conf
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: t.TempDir(),
+				Home:      t.TempDir(),
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},

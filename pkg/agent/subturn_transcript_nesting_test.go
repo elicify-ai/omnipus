@@ -73,7 +73,7 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:          "mock",
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

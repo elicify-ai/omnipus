@@ -304,7 +304,7 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		}
 	}
 	wsPath := omnipusHome + "/agents/" + finalID
-	if err := datamodel.InitAgentWorkspace(omnipusHome, finalID); err != nil {
+	if err := datamodel.InitAgentHome(omnipusHome, finalID); err != nil {
 		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR",
 			"could not create agent workspace: "+err.Error(),
 			"Check disk space and permissions"))
@@ -567,7 +567,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		))
 	}
 	// Remove workspace directory (best-effort; failure is non-fatal but logged).
-	wsPath := datamodel.AgentWorkspacePath(t.deps.Home, id)
+	wsPath := datamodel.AgentHomePath(t.deps.Home, id)
 	if err := os.RemoveAll(wsPath); err != nil {
 		slog.Warn("sysagent: workspace cleanup incomplete",
 			"agent_id", id, "path", wsPath, "error", err)

@@ -557,7 +557,7 @@ func NewAgentLoop(
 	defaultAgent := registry.GetDefaultAgent()
 	var stateManager *state.Manager
 	if defaultAgent != nil {
-		stateManager = state.NewManager(defaultAgent.Workspace)
+		stateManager = state.NewManager(defaultAgent.Home)
 	}
 
 	eventBus := NewEventBus()
@@ -581,7 +581,7 @@ func NewAgentLoop(
 
 	// Initialize the unified task store at ~/.omnipus/tasks/ (the single store —
 	// the legacy GTD tasks/ and workflow-tasks/ split was removed in Sprint 2).
-	homePath := filepath.Dir(cfg.WorkspacePath())
+	homePath := filepath.Dir(cfg.AgentHomeBasePath())
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
 
@@ -1129,7 +1129,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		}
 
 		restrict := cfg.Agents.Defaults.RestrictToWorkspace
-		execTool, err := tools.NewExecToolWithDeps(agent.Workspace, restrict, cfg, deps, allowReadPaths)
+		execTool, err := tools.NewExecToolWithDeps(agent.Home, restrict, cfg, deps, allowReadPaths)
 		if err != nil {
 			// Fail closed: if security wiring fails, remove the bash tool from the
 			// registry entirely. The agent will lose bash capability but
@@ -1216,7 +1216,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 			// gateway.preview_enabled live — no restart, no re-wiring on hot
 			// reload required for the toggle to take effect.
 			webServeTool := tools.NewWebServeTool(
-				ag.Workspace,
+				ag.Home,
 				ag.ID,
 				al.GetConfig,
 				deps.ServedSubdirs,
@@ -1454,7 +1454,7 @@ func registerSharedTools(
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore).
 		sendFileTool := tools.NewSendFileTool(
-			agent.Workspace,
+			agent.Home,
 			cfg.Agents.Defaults.RestrictToWorkspace,
 			cfg.Agents.Defaults.GetMaxMediaSize(),
 			nil,
@@ -1474,7 +1474,7 @@ func registerSharedTools(
 			// shape carries no workspace field).
 			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
 				Marketplaces: skills.MarketplacesFromConfig(
-					cfg, os.Getenv, nil /* SSRF handled per-registry at the gateway */, agent.Workspace,
+					cfg, os.Getenv, nil /* SSRF handled per-registry at the gateway */, agent.Home,
 				),
 				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
 			})
@@ -1484,7 +1484,7 @@ func registerSharedTools(
 				time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
 			)
 			agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
-			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
+			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Home))
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,
@@ -1562,7 +1562,7 @@ func registerSharedTools(
 			// Resolve the real default workspace (is_default ULID) when a
 			// chat-delegated task has no workspace bound to the turn — never the
 			// literal "default" (which would land it in an invisible workspace).
-			taskCreate.SetHome(filepath.Dir(cfg.WorkspacePath()))
+			taskCreate.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
 			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
 			// backed by config.ResolveDelegationTo) is retired — the field it
 			// read no longer exists. The graph-based deny checker below is the
@@ -1631,7 +1631,7 @@ func registerSharedTools(
 			agent.Tools.Register(taskUpdate)
 
 			setTodos := tools.NewSetTodosTool(al.taskStore)
-			setTodos.SetHome(filepath.Dir(cfg.WorkspacePath()))
+			setTodos.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
 			agent.Tools.Register(setTodos)
 			agent.Tools.Register(tools.NewTaskDeleteTool(al.taskStore))
 			agent.Tools.Register(tools.NewAgentListTool(func() []tools.AgentInfo {
@@ -3655,7 +3655,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	cfg := al.cfg
 	al.mu.RUnlock()
 
-	modelCfg, err := resolvedModelConfig(cfg, model, agent.Workspace)
+	modelCfg, err := resolvedModelConfig(cfg, model, agent.Home)
 	if err != nil {
 		return "", err
 	}
@@ -5031,7 +5031,7 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
 					"agent_id":   explicitID,
 					"session_id": msg.SessionID,
-					"workspace":  agent.Workspace,
+					"workspace":  agent.Home,
 				})
 				sk := agentSessionKey(explicitID, msg)
 				return routing.ResolvedRoute{AgentID: explicitID, SessionKey: sk}, agent, nil
@@ -8790,7 +8790,7 @@ func (al *AgentLoop) handleModelSwitch(
 		// resolve error at WARN with the requested model + agent id gives
 		// operators a breadcrumb to spot the typo at the switch site rather
 		// than several stack frames later.
-		if _, resolveErr := ResolveModelCfg(cfg, newModel, agent.Workspace); resolveErr != nil {
+		if _, resolveErr := ResolveModelCfg(cfg, newModel, agent.Home); resolveErr != nil {
 			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; falling back to agent defaults",
 				map[string]any{
 					"requested_model": newModel,

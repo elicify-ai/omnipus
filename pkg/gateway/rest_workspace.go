@@ -236,7 +236,7 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 	// its authorization needs to be reconsidered from scratch at that time.
 
 	// Resolve workspace path for this agent.
-	agentWorkspace, err := agentWorkspacePath(cfg, agentCfg.ID, agentCfg.Workspace, a.homePath)
+	agentWorkspace, err := agentWorkspacePath(cfg, agentCfg.ID, agentCfg.Home, a.homePath)
 	if err != nil {
 		slog.Error("rest: HandleWorkspace: agentWorkspacePath failed",
 			"agent_id", agentID, "error", err)

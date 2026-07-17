@@ -50,15 +50,15 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "ext-worker",
-					Type:      config.AgentTypeWorker,
-					Workspace: workerWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
+					ID:    "ext-worker",
+					Type:  config.AgentTypeWorker,
+					Home:  workerWorkspace,
+					Model: &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},
@@ -150,16 +150,16 @@ func TestSpawnSubTurn_TargetIdentity_PropagatesFullTargetConfig(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "ext-worker-full",
-					Name:      "Worker Full Identity",
-					Type:      config.AgentTypeWorker,
-					Workspace: workerWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
+					ID:    "ext-worker-full",
+					Name:  "Worker Full Identity",
+					Type:  config.AgentTypeWorker,
+					Home:  workerWorkspace,
+					Model: &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{
 							Kind:         config.ExecutorKindExternalCLI,
@@ -273,7 +273,7 @@ func TestSpawnSubTurn_TargetIdentity_PropagatesFullTargetConfig(t *testing.T) {
 }
 
 // identityCapturingProvider is a minimal providers.LLMProvider stub that
-// records the model string and the calling turn's agent.Workspace/agent.ID
+// records the model string and the calling turn's agent.Home/agent.ID
 // observed at Chat() call time — pulled from ctx via turnStateFromContext,
 // the same way runTurn's own providerCtx carries the turn state (loop.go:
 // providerCtx := context.WithCancel(turnCtx), and turnCtx already has ts
@@ -300,7 +300,7 @@ func (p *identityCapturingProvider) Chat(
 	defer p.mu.Unlock()
 	p.sawModel = model
 	if ts := turnStateFromContext(ctx); ts != nil && ts.agent != nil {
-		p.sawWorkspace = ts.agent.Workspace
+		p.sawWorkspace = ts.agent.Home
 		p.sawAgentID = ts.agent.ID
 	}
 	p.calls++
@@ -341,15 +341,15 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-native-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "native-target",
-					Type:      config.AgentTypeWorker,
-					Workspace: targetWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "target-model-must-not-leak"},
+					ID:    "native-target",
+					Type:  config.AgentTypeWorker,
+					Home:  targetWorkspace,
+					Model: &config.AgentModelConfig{Primary: "target-model-must-not-leak"},
 					// No Subagents.Executor at all — resolves native (the
 					// zero value of ExecutorConfig.Kind).
 				},
@@ -367,7 +367,7 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 	if !ok {
 		t.Fatal("test setup: target agent not registered")
 	}
-	if target.Workspace == parent.Workspace || target.Model == parent.Model {
+	if target.Home == parent.Home || target.Model == parent.Model {
 		t.Fatalf(
 			"test setup invariant broken: target and parent must have distinct Workspace/Model, got target=%+v parent=%+v",
 			target,
@@ -417,11 +417,11 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 	// Workspace comes from the TARGET too — the identity fix's whole point is
 	// that the sub-turn's file/bash cwd and ContextBuilder-resolved context
 	// (SOUL.md, memory, skills) are the delegate's own, not the parent's.
-	if sawWorkspace != target.Workspace {
+	if sawWorkspace != target.Home {
 		t.Errorf(
-			"childTS.agent.Workspace = %q, want the TARGET's workspace %q (native dispatch must adopt the target's full identity)",
+			"childTS.agent.Home = %q, want the TARGET's workspace %q (native dispatch must adopt the target's full identity)",
 			sawWorkspace,
-			target.Workspace,
+			target.Home,
 		)
 	}
 	// ID DOES come from the TARGET too — this is what tools.WithAgentID
@@ -513,15 +513,15 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "parent-allow-policy",
-					Type:      config.AgentTypeCore,
-					Default:   true,
-					Workspace: parentWorkspace,
+					ID:      "parent-allow-policy",
+					Type:    config.AgentTypeCore,
+					Default: true,
+					Home:    parentWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{probeTool: config.ToolPolicyAllow},
@@ -529,9 +529,9 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 					},
 				},
 				{
-					ID:        "native-target-policy",
-					Type:      config.AgentTypeWorker,
-					Workspace: targetWorkspace,
+					ID:   "native-target-policy",
+					Type: config.AgentTypeWorker,
+					Home: targetWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{probeTool: config.ToolPolicyDeny},
@@ -618,7 +618,7 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 // call 1 emits a read_file tool call, call 2 returns a plain-text answer. It
 // captures the "tool" role message injected before call 2 — the ACTUAL result
 // the read_file tool produced — so the test can assert on real file content,
-// not just an AgentInstance.Workspace string field.
+// not just an AgentInstance.Home string field.
 type filesystemScopedToolProvider struct {
 	mu             sync.Mutex
 	calls          int
@@ -662,7 +662,7 @@ func (p *filesystemScopedToolProvider) snapshot() (toolContent string, calls int
 
 // TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools proves the
 // fix's file/bash confinement claim actually holds, not just the
-// AgentInstance.Workspace STRING field: workspace-scoped tools
+// AgentInstance.Home STRING field: workspace-scoped tools
 // (read_file/write_file/edit_file/bash/...) bind their root directory ONCE,
 // at NewAgentInstance construction time (tools.NewReadFileTool(workspace,
 // ...)) — CloneExcept is a shallow filter that copies the SAME underlying
@@ -673,7 +673,7 @@ func (p *filesystemScopedToolProvider) snapshot() (toolContent string, calls int
 // swapped. Both the parent's and target's workspace contain a file with the
 // SAME NAME but DIFFERENT CONTENT — the sub-turn's own read_file call must
 // return the TARGET's content, proving the underlying tool object (not just
-// the AgentInstance.Workspace string) is the target's own.
+// the AgentInstance.Home string) is the target's own.
 func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testing.T) {
 	const relPath = "identity.txt"
 	const parentContent = "I am the PARENT's file"
@@ -695,16 +695,16 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:            "mock",
-				Workspace:           parentWorkspace,
+				Home:                parentWorkspace,
 				ModelName:           "parent-model",
 				RestrictToWorkspace: true, // required for read_file to actually root relative paths at Workspace, not the raw host fs (buildFs: !restrict -> hostFs{})
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "parent-fs-scope",
-					Type:      config.AgentTypeCore,
-					Default:   true,
-					Workspace: parentWorkspace,
+					ID:      "parent-fs-scope",
+					Type:    config.AgentTypeCore,
+					Default: true,
+					Home:    parentWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{"read_file": config.ToolPolicyAllow},
@@ -712,9 +712,9 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 					},
 				},
 				{
-					ID:        "native-target-fs-scope",
-					Type:      config.AgentTypeWorker,
-					Workspace: targetWorkspace,
+					ID:   "native-target-fs-scope",
+					Type: config.AgentTypeWorker,
+					Home: targetWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{"read_file": config.ToolPolicyAllow},
@@ -853,7 +853,7 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         parentWorkspace,
+				Home:              parentWorkspace,
 				Provider:          "openrouter",
 				ModelName:         "openrouter-default",
 				MaxTokens:         4096,
@@ -961,15 +961,15 @@ func TestSpawnSubTurn_TargetIdentity_ConcurrentModelSwitchRace(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "ext-worker-race",
-					Type:      config.AgentTypeWorker,
-					Workspace: workerWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "model-a"},
+					ID:    "ext-worker-race",
+					Type:  config.AgentTypeWorker,
+					Home:  workerWorkspace,
+					Model: &config.AgentModelConfig{Primary: "model-a"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},

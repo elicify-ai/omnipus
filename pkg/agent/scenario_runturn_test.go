@@ -101,7 +101,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	//
 	// Layout:
 	//   tmpHome/
-	//     workspace/    ← cfg.Agents.Defaults.Workspace
+	//     workspace/    ← cfg.Agents.Defaults.Home
 	//     system/       ← audit dir (derived from filepath.Dir(workspace) = tmpHome)
 	//     sessions/     ← shared session store
 	tmpHome := t.TempDir()
@@ -117,7 +117,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -182,7 +182,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	// Assert (b): audit log contains a tool.policy.deny.attempted entry.
 	//
 	// The audit dir is tmpHome/system (derived in NewAgentLoop as
-	// filepath.Dir(cfg.WorkspacePath()) + "/system").
+	// filepath.Dir(cfg.AgentHomeBasePath()) + "/system").
 	// -----------------------------------------------------------------------
 	auditPath := filepath.Join(tmpHome, "system", "audit.jsonl")
 

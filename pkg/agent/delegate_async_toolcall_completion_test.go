@@ -193,7 +193,7 @@ func TestDelegateAsyncCompletion_ToolCallThenFinalAnswer_SurvivesParentFinish(t 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "content-routed-mock",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

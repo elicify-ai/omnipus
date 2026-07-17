@@ -36,7 +36,7 @@ func newAsyncNotifierTestLoop(t *testing.T) (*AgentLoop, *bus.MessageBus) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -315,7 +315,7 @@ func TestAsyncNotifier_NotificationGrantsNoCapability(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpHome,
+				Home:              tmpHome,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

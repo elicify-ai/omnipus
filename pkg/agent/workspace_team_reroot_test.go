@@ -61,7 +61,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         agentWorkspaceDir,
+				Home:              agentWorkspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -143,7 +143,7 @@ func TestRunTurn_NotCoreTeamMember_WritesToOwnDir(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         agentWorkspaceDir,
+				Home:              agentWorkspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -215,7 +215,7 @@ func TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:           agentWorkspaceDir,
+				Home:                agentWorkspaceDir,
 				ModelName:           "scripted-model",
 				MaxTokens:           4096,
 				MaxToolIterations:   10,

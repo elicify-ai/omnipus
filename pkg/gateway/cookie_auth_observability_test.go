@@ -261,7 +261,7 @@ func TestAuthenticateWS_LogsInvalidSessionCookie(t *testing.T) {
 			AuthMismatchLogLevel: "warn",
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()

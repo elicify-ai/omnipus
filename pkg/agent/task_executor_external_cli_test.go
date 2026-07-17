@@ -32,13 +32,13 @@ func newExternalCLITaskTestLoop(t *testing.T, provider providers.LLMProvider) (a
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: t.TempDir(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{Home: t.TempDir(), ModelName: "test-model"},
 			List: []config.AgentConfig{
 				{
-					ID:        "ext-agent",
-					Name:      "External Agent",
-					Type:      config.AgentTypeWorker,
-					Workspace: workspace,
+					ID:   "ext-agent",
+					Name: "External Agent",
+					Type: config.AgentTypeWorker,
+					Home: workspace,
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},

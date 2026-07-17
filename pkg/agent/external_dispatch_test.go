@@ -55,9 +55,9 @@ func newExternalTestLoop(t *testing.T, cli, workspace string) (*AgentLoop, *turn
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 	agent := &AgentInstance{
-		ID:        "ext-agent",
-		Name:      "External Agent",
-		Workspace: workspace,
+		ID:   "ext-agent",
+		Name: "External Agent",
+		Home: workspace,
 		Subagents: &config.SubagentsConfig{
 			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: cli},
 		},
@@ -161,9 +161,9 @@ func TestExternalDispatch_EmptyWorkspace_HardError(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 	agent := &AgentInstance{
-		ID:        "ext-agent-empty-ws",
-		Name:      "External Agent Empty Workspace",
-		Workspace: "", // explicit empty — the case under test
+		ID:   "ext-agent-empty-ws",
+		Name: "External Agent Empty Workspace",
+		Home: "", // explicit empty — the case under test
 		Subagents: &config.SubagentsConfig{
 			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 		},
@@ -450,7 +450,7 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 // per-agent one. When the dispatching agent's ID is a member of a real,
 // on-disk workspace's core_team, RunOptions.WorkDir must be that workspace's
 // work/ directory ($OMNIPUS_HOME/workspaces/<id>/work/) instead of
-// agent.Workspace — deliberately not the workspace's own root directory,
+// agent.Home — deliberately not the workspace's own root directory,
 // which also holds AGENT.md and the shared memory room.
 func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) {
 	home := t.TempDir()
@@ -514,7 +514,7 @@ func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) 
 
 // TestExternalDispatch_NotCoreTeamMember_FallsBackToAgentWorkspace confirms the
 // fallback path: when the dispatching agent's ID is NOT a member of any
-// on-disk workspace's core_team, RunOptions.WorkDir remains agent.Workspace —
+// on-disk workspace's core_team, RunOptions.WorkDir remains agent.Home —
 // unchanged from the pre-CoreTeam-override behavior that
 // TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir and
 // TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly already pin

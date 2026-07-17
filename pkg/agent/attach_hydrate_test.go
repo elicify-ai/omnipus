@@ -38,8 +38,8 @@ func TestHydrateAgentHistoryFromTranscript_RestoresPriorTurns(t *testing.T) {
 	if ag == nil {
 		t.Fatal("NewAgentInstance returned nil")
 	}
-	ag.Workspace = filepath.Join(home, "agents", agentID)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(agentID, "Hydrate")
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, "Hydrate")
 	al.registry.mu.Lock()
 	al.registry.agents[agentID] = ag
 	al.registry.mu.Unlock()
@@ -108,8 +108,8 @@ func TestHydrateAgentHistoryFromTranscript_HandoffBriefReachesTarget(t *testing.
 	for _, id := range []string{"mia", "ray"} {
 		ag := NewAgentInstance(&config.AgentConfig{ID: id, Name: id},
 			&cfg.Agents.Defaults, cfg, &mockProvider{})
-		ag.Workspace = filepath.Join(home, "agents", id)
-		ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(id, id)
+		ag.Home = filepath.Join(home, "agents", id)
+		ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
 		al.registry.mu.Lock()
 		al.registry.agents[id] = ag
 		al.registry.mu.Unlock()

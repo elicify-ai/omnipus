@@ -123,24 +123,24 @@ func newGrantChainAgentLoop(t *testing.T) *AgentLoop {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "child-agent",
-					Type:      config.AgentTypeWorker,
-					Workspace: tmpDir,
-					Model:     &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
+					ID:    "child-agent",
+					Type:  config.AgentTypeWorker,
+					Home:  tmpDir,
+					Model: &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},
 				},
 				{
-					ID:        "grandchild-agent",
-					Type:      config.AgentTypeWorker,
-					Workspace: tmpDir,
-					Model:     &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
+					ID:    "grandchild-agent",
+					Type:  config.AgentTypeWorker,
+					Home:  tmpDir,
+					Model: &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},

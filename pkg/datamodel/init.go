@@ -143,7 +143,7 @@ func Init(home string) error {
 	return nil
 }
 
-// InitAgentWorkspace creates the workspace directory tree for an agent.
+// InitAgentHome creates the workspace directory tree for an agent.
 //
 // Layout per Appendix E §E.3 (agent subtree):
 //
@@ -154,7 +154,7 @@ func Init(home string) error {
 //	└── skills/
 //
 // Implements US-7 acceptance criteria.
-func InitAgentWorkspace(home, agentID string) error {
+func InitAgentHome(home, agentID string) error {
 	if agentID == "" {
 		return fmt.Errorf("datamodel: agentID must not be empty")
 	}
@@ -177,7 +177,7 @@ func InitAgentWorkspace(home, agentID string) error {
 	return nil
 }
 
-// AgentWorkspacePath returns the canonical workspace path for agentID.
-func AgentWorkspacePath(home, agentID string) string {
+// AgentHomePath returns the canonical workspace path for agentID.
+func AgentHomePath(home, agentID string) string {
 	return filepath.Join(home, "agents", agentID)
 }

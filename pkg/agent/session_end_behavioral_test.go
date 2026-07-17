@@ -97,8 +97,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	}
 	// Point the agent's workspace at a dedicated dir so its MemoryStore
 	// paths are deterministic and scoped to this test.
-	ag.Workspace = filepath.Join(home, "agents", "recap-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("recap-agent", "Recap")
+	ag.Home = filepath.Join(home, "agents", "recap-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("recap-agent", "Recap")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -125,7 +125,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
 		// Spec-5: last-session.md is now in <workspace>/.omnipus/last-session.md
-		data, readErr := os.ReadFile(filepath.Join(ag.Workspace, ".omnipus", "last-session.md"))
+		data, readErr := os.ReadFile(filepath.Join(ag.Home, ".omnipus", "last-session.md"))
 		if readErr == nil {
 			lastSessionBytes = data
 			break
@@ -180,7 +180,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	// AppendRetro. Calling t.Fatalf on ENOENT causes a spurious failure under
 	// parallel-sibling load (the goroutine has less CPU time between the two
 	// sequential writes). Only non-"not found" errors are fatal.
-	sessionsDir := filepath.Join(ag.Workspace, ".omnipus", "retros")
+	sessionsDir := filepath.Join(ag.Home, ".omnipus", "retros")
 	var foundRetro bool
 	var retroBytes []byte
 	retroDeadline := time.Now().Add(5 * time.Second)
@@ -247,8 +247,8 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "parse-agent", Name: "Parse"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, script)
-	ag.Workspace = filepath.Join(home, "agents", "parse-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("parse-agent", "Parse")
+	ag.Home = filepath.Join(home, "agents", "parse-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("parse-agent", "Parse")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -269,7 +269,7 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var retroPath string
 	for time.Now().Before(deadline) {
-		sessionsDir := filepath.Join(ag.Workspace, ".omnipus", "retros")
+		sessionsDir := filepath.Join(ag.Home, ".omnipus", "retros")
 		dateDirs, _ := os.ReadDir(sessionsDir)
 		for _, d := range dateDirs {
 			if !d.IsDir() {
@@ -407,8 +407,8 @@ func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "reasoning-agent", Name: "Reasoning"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, reasoningScript)
-	ag.Workspace = filepath.Join(home, "agents", "reasoning-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("reasoning-agent", "Reasoning")
+	ag.Home = filepath.Join(home, "agents", "reasoning-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("reasoning-agent", "Reasoning")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -429,7 +429,7 @@ func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {
 	// Wait for last-session.md — the reasoning-extraction path must succeed.
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
-	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	for time.Now().Before(deadline) {
 		data, readErr := os.ReadFile(lastSessionPath)
 		if readErr == nil {
@@ -499,8 +499,8 @@ func TestRunRecap_FencedContent(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "fenced-agent", Name: "Fenced"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
-	ag.Workspace = filepath.Join(home, "agents", "fenced-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("fenced-agent", "Fenced")
+	ag.Home = filepath.Join(home, "agents", "fenced-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("fenced-agent", "Fenced")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -520,7 +520,7 @@ func TestRunRecap_FencedContent(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
-	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	for time.Now().Before(deadline) {
 		if data, readErr := os.ReadFile(lastSessionPath); readErr == nil {
 			lastSessionBytes = data
@@ -656,8 +656,8 @@ func TestBootstrapRecapPass_OneIterationPerSession(t *testing.T) {
 	for _, id := range []string{"alpha", "beta", "gamma"} {
 		ac := &config.AgentConfig{ID: id, Name: id}
 		ag := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, script)
-		ag.Workspace = filepath.Join(home, "agents", id)
-		ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(id, id)
+		ag.Home = filepath.Join(home, "agents", id)
+		ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
 		al.registry.mu.Lock()
 		al.registry.agents[id] = ag
 		al.registry.mu.Unlock()
@@ -823,8 +823,8 @@ func TestRunRecap_FallbackChain_PrimaryFails(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "fallback-agent", Name: "Fallback"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
-	ag.Workspace = filepath.Join(home, "agents", "fallback-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("fallback-agent", "Fallback")
+	ag.Home = filepath.Join(home, "agents", "fallback-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("fallback-agent", "Fallback")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -845,13 +845,13 @@ func TestRunRecap_FallbackChain_PrimaryFails(t *testing.T) {
 	// Wait for the recap goroutine to complete.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+		if countRetrosFor(t, ag.Home, meta.ID) > 0 {
 			break
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
 
-	if countRetrosFor(t, ag.Workspace, meta.ID) == 0 {
+	if countRetrosFor(t, ag.Home, meta.ID) == 0 {
 		t.Fatal("expected a retro to be written via fallback model; none found")
 	}
 
@@ -901,8 +901,8 @@ func TestRunRecap_ModelResolution_UsesRecapModelField(t *testing.T) {
 	agentCfg := &config.AgentConfig{ID: "model-res-agent", Name: "ModelRes"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, script)
 	ag.Model = "agent-own-model" // must NOT be used when RecapModel is set
-	ag.Workspace = filepath.Join(home, "agents", "model-res-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("model-res-agent", "ModelRes")
+	ag.Home = filepath.Join(home, "agents", "model-res-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("model-res-agent", "ModelRes")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -922,7 +922,7 @@ func TestRunRecap_ModelResolution_UsesRecapModelField(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+		if countRetrosFor(t, ag.Home, meta.ID) > 0 {
 			break
 		}
 		time.Sleep(30 * time.Millisecond)

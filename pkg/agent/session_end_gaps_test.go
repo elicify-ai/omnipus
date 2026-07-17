@@ -80,8 +80,8 @@ func TestRunRecap_AllCandidatesFail(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "gap1-agent", Name: "Gap1"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
-	ag.Workspace = filepath.Join(home, "agents", "gap1-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("gap1-agent", "Gap1")
+	ag.Home = filepath.Join(home, "agents", "gap1-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("gap1-agent", "Gap1")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -104,14 +104,14 @@ func TestRunRecap_AllCandidatesFail(t *testing.T) {
 	// Wait for the fallback retro to land.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+		if countRetrosFor(t, ag.Home, meta.ID) > 0 {
 			break
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
 
 	// A retro must exist (heuristic fallback).
-	if countRetrosFor(t, ag.Workspace, meta.ID) == 0 {
+	if countRetrosFor(t, ag.Home, meta.ID) == 0 {
 		t.Fatal("expected a heuristic fallback retro when all candidates fail; none found")
 	}
 
@@ -221,8 +221,8 @@ func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultMo
 	agentCfg := &config.AgentConfig{ID: agentID, Name: agentName}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, script)
 	ag.Model = "agent-own-model" // must NOT be used when a stricter tier resolves first
-	ag.Workspace = filepath.Join(home, "agents", agentID)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(agentID, agentName)
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, agentName)
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -242,7 +242,7 @@ func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultMo
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+		if countRetrosFor(t, ag.Home, meta.ID) > 0 {
 			break
 		}
 		time.Sleep(30 * time.Millisecond)
@@ -415,8 +415,8 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "imp3-agent", Name: "Imp3"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, primaryProv)
-	ag.Workspace = filepath.Join(home, "agents", "imp3-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("imp3-agent", "Imp3")
+	ag.Home = filepath.Join(home, "agents", "imp3-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("imp3-agent", "Imp3")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -436,14 +436,14 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+		if countRetrosFor(t, ag.Home, meta.ID) > 0 {
 			break
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
 
 	// A retro must be written (either LLM success via alt path, or heuristic fallback).
-	if countRetrosFor(t, ag.Workspace, meta.ID) == 0 {
+	if countRetrosFor(t, ag.Home, meta.ID) == 0 {
 		t.Fatal("IMP-3: no retro written after primary fails + fallback tried; panic or missing write?")
 	}
 
@@ -504,8 +504,8 @@ func TestRunRecap_FallbackDistinctProvider_NoPoolEntryFallsBack(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "imp3b-agent", Name: "Imp3b"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
-	ag.Workspace = filepath.Join(home, "agents", "imp3b-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("imp3b-agent", "Imp3b")
+	ag.Home = filepath.Join(home, "agents", "imp3b-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("imp3b-agent", "Imp3b")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -525,13 +525,13 @@ func TestRunRecap_FallbackDistinctProvider_NoPoolEntryFallsBack(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if countRetrosFor(t, ag.Workspace, meta.ID) > 0 {
+		if countRetrosFor(t, ag.Home, meta.ID) > 0 {
 			break
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
 
-	if countRetrosFor(t, ag.Workspace, meta.ID) == 0 {
+	if countRetrosFor(t, ag.Home, meta.ID) == 0 {
 		t.Fatal("pool-miss: retro must be written via graceful primary-pool degradation")
 	}
 

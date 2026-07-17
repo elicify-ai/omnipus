@@ -34,7 +34,7 @@ func TestHandleClearSessions_NoSessions_ReturnsContractShapeNoWarnings(t *testin
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -72,9 +72,9 @@ func TestHandleClearSessions_RemovesSessionsAndReportsAccurateCount(t *testing.T
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "agent-a", Name: "Agent A", Workspace: tmpDir},
+				{ID: "agent-a", Name: "Agent A", Home: tmpDir},
 			},
 		},
 	}
@@ -120,7 +120,7 @@ func TestHandleClearSessions_WrongMethod_Returns405(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()

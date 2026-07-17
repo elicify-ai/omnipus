@@ -120,7 +120,7 @@ func TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledChannelCredenti
 
 	baseCfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19989},
 	}
@@ -181,7 +181,7 @@ func TestRefreshConfigAndRewireServices_RejectsOnMissingEnabledChannelCredential
 
 	baseCfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19990},
 	}
@@ -262,7 +262,7 @@ func TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledMailboxCredenti
 
 	baseCfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19991},
 	}
@@ -332,7 +332,7 @@ func TestHandleProviders_CorruptedCredential_IsErrorStatus(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "claude-sonnet-4-6", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "claude-sonnet-4-6", MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
 			{
