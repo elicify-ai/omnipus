@@ -10,15 +10,22 @@ package browser
 // watchForCrash/ensureLaunched: block on process exit, mark unhealthy,
 // restart, never silently give up).
 //
-// One deliberate deviation from the literal spike recipe
-// (`pulseaudio -D --exit-idle-time=-1 --disable-shm=1`): this sidecar drops
-// `-D` (daemonize). `-D` forks PulseAudio to the background and the process
-// we spawned exits immediately — which would throw away the one thing a
-// supervised sidecar needs, a live child whose exit IS the crash signal.
-// Running PulseAudio in the foreground under our own *exec.Cmd means
-// cmd.Wait() is a reliable, race-free crash detector (exactly the property
-// BrowserCoordinator.watchForCrash relies on for Chrome). `--exit-idle-time=-1`
-// and `--disable-shm=1` are kept as-is from the proven recipe.
+// Two deliberate deviations from the literal spike recipe
+// (`pulseaudio -D --exit-idle-time=-1 --disable-shm=1`):
+//
+//  1. Drop `-D` (daemonize). `-D` forks PulseAudio to the background and the
+//     process we spawned exits immediately — which would throw away the one
+//     thing a supervised sidecar needs, a live child whose exit IS the crash
+//     signal. Running PulseAudio in the foreground under our own *exec.Cmd
+//     means cmd.Wait() is a reliable, race-free crash detector (exactly the
+//     property BrowserCoordinator.watchForCrash relies on for Chrome).
+//  2. Add `-n` and load module-native-protocol-unix explicitly (see the spawn
+//     site). The default `/etc/pulse/default.pa` hardware-probe modules hang
+//     for many seconds on a headless VM with no sound card, so the native
+//     socket does not appear before startTimeout — the bring-up failure seen
+//     on the CI worker. `-n` skips default.pa; we load only what we need.
+//
+// `--exit-idle-time=-1` and `--disable-shm=1` are kept as-is from the recipe.
 //
 // Non-blocking guarantee (FR-022 "MUST NEVER block the Chrome launch"): Start
 // performs only fast, synchronous preflight (creating the socket directory)
@@ -134,7 +141,23 @@ func defaultSpawnPulseaudio(cfg AudioConfig) (process, error) {
 		execPath = resolved
 	}
 
-	cmd := exec.Command(execPath, "--exit-idle-time=-1", "--disable-shm=1")
+	// -n skips /etc/pulse/default.pa. Its hardware-probe modules (module-udev-detect,
+	// module-alsa-card, …) block for many seconds in a headless VM with no sound card
+	// before module-native-protocol-unix ever runs, so the socket does not appear
+	// before startTimeout and bring-up fails ("socket+cookie: context deadline
+	// exceeded"). Load ONLY the native-protocol socket here, with EXPLICIT socket +
+	// auth-cookie paths — under -n, PulseAudio does not consult PULSE_RUNTIME_PATH/
+	// PULSE_COOKIE for these (it falls back to ~/.config/pulse), so they must be
+	// passed as module args. null-sink + remap-source are loaded post-connect in
+	// bringUp over the native protocol; the socket+cookie appearing is all that gates
+	// startup. (Verified on a headless Debian 12 VM: both files appear in <1s.)
+	cmd := exec.Command(
+		execPath,
+		"-n",
+		"--exit-idle-time=-1",
+		"--disable-shm=1",
+		"--load=module-native-protocol-unix socket="+socketPathFor(cfg)+" auth-cookie="+cookiePathFor(cfg),
+	)
 	cmd.Env = append(
 		os.Environ(),
 		"PULSE_RUNTIME_PATH="+cfg.SocketDir,
