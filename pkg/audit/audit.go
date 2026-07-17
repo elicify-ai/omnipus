@@ -148,6 +148,10 @@ func IsValidEventName(e EventName) bool {
 		EventTurnCancelled,
 		EventTurnCancelStuck,
 		EventCancelAbusePattern,
+		// Background-session kill cascade, decoupled from the active-turn
+		// gate (see cancel.go's RequestCancel doc comment for the root-cause
+		// writeup this closes).
+		EventTurnCancelBackgroundKilled,
 		// Orphan-foreground-turn watchdog events (ADR-045). The escalation
 		// itself is RequestCancel's own turn_canceled event (cancel_method:
 		// "hard") — there is no separate turn.orphan_hard_aborted event since

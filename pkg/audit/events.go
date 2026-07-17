@@ -126,6 +126,20 @@ const (
 	// (FR-19, FR-20, FR-21).
 	EventTurnCancelStuck = "turn.cancel.stuck"
 
+	// EventTurnCancelBackgroundKilled — INFO. RequestCancel invoked
+	// hooks.KillBackgroundSessions for a resolvable sessionID and records the
+	// count killed (may be 0 — a session with no background work). Emitted
+	// UNCONDITIONALLY whenever the hook fires, independent of whether an
+	// active turn was found/claimed (ClaimCancel's wasFired) — this is
+	// deliberately decoupled from EventTurnCancelAttempt/EventTurnCancelled
+	// because a `bash run_in_background=true` call's own turn ends
+	// immediately, well before a user later cancels the still-running
+	// background job; by then there is no active turn to claim, so this is
+	// the ONLY audit record of that cancel's background-kill cascade. See
+	// pkg/agent/cancel.go's RequestCancel doc comment for the full root-cause
+	// writeup.
+	EventTurnCancelBackgroundKilled = "turn.cancel.background_killed"
+
 	// EventCancelAbusePattern — WARN. A single canceller (user + channel)
 	// sent >= 10 cancel requests within 60 seconds, suggesting runaway client
 	// logic or intentional abuse (FR-25a).

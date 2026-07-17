@@ -69,16 +69,25 @@ type CancelHooks struct {
 	// KillBackgroundSessions cascades the cancel to every detached background
 	// bash/exec session owned by sessionID (FR-B10/FR-B11, User Story 5:
 	// "Canceling a session also stops any background bash work it started").
-	// Called once at graceful stage, alongside CancelPendingApprovals. A
-	// session with no background work sees no behavior change — this hook is
-	// a no-op in that case, not an error.
+	//
+	// Called ONCE, unconditionally, for any resolvable (non-empty) sessionID
+	// — deliberately NOT gated on whether an active turn exists or
+	// ClaimCancel succeeds (wasFired). A `bash run_in_background=true` call's
+	// own turn ends immediately, so by the time a user cancels the
+	// still-running background job there is typically no active turn left
+	// to claim; gating this hook on wasFired would silently no-op the entire
+	// cascade in exactly that (the most common) case. A session with no
+	// background work sees no behavior change — this hook is a no-op in that
+	// case, not an error.
 	//
 	// Returns the count of background sessions actually killed so
-	// RequestCancel can thread it into the turn_canceled audit event's
-	// fields map (background_sessions_killed). Before this, the cascade had
-	// no audit trail of its own — a kill failure surfaced only as a
-	// slog.Warn deep in pkg/tools/session.go, uncorrelated with the
-	// turn_canceled event a security reviewer would actually go looking at.
+	// RequestCancel can (a) emit its own turn.cancel.background_killed audit
+	// event unconditionally, and (b) thread the count into the turn_canceled
+	// audit event's fields map (background_sessions_killed) on the
+	// ClaimCancel-gated path. Before this, the cascade had no audit trail of
+	// its own — a kill failure surfaced only as a slog.Warn deep in
+	// pkg/tools/session.go, uncorrelated with any audit event a security
+	// reviewer would actually go looking at.
 	KillBackgroundSessions func(sessionID string) int
 }
 
@@ -87,12 +96,17 @@ type CancelHooks struct {
 // this method.
 //
 // It performs the entire cancel state machine:
+//   - background bash/exec session kill cascade (via hooks.KillBackgroundSessions) —
+//     fires UNCONDITIONALLY for any resolvable sessionID, deliberately NOT
+//     gated on ClaimCancel/wasFired below (see the inline comment at the call
+//     site for the root-cause this closes: a `bash run_in_background=true`
+//     call's turn ends immediately, so by the time a user cancels the still-
+//     running background job there is no active turn left to claim)
 //   - abuse-detection record
 //   - ClaimCancel atomic first-cancel-wins check
 //   - turn_cancel_attempt audit emission (always, even for no-op cancels)
 //   - graceful cascade via InterruptSession / providerCancel
 //   - approval auto-deny (via hooks.CancelPendingApprovals)
-//   - background bash/exec session kill cascade (via hooks.KillBackgroundSessions)
 //   - cancel_stage frame emission (via hooks.SendStageFrame)
 //   - session status → interrupted (via hooks.SetSessionInterrupted)
 //   - transcript MarkLastEntryTruncated + turn_canceled entry on Finish
@@ -153,6 +167,36 @@ func (al *AgentLoop) RequestCancel(
 		}
 	}
 
+	// --- Background-session kill cascade (FR-B10/FR-B11, User Story 5) —
+	// decoupled from the active-turn gate ---
+	//
+	// This MUST NOT be gated behind wasFired/ClaimCancel below. A `bash
+	// run_in_background=true` call returns immediately, so its turn — and
+	// its activeTurnStates entry — is gone within the same LLM round-trip,
+	// well before a user later clicks Cancel to stop the still-running
+	// background job. GetActiveTurnHookForSession then finds nothing,
+	// wasFired is false, and the old code path early-returned BEFORE ever
+	// reaching hooks.KillBackgroundSessions — a silent no-op that left the
+	// background process (and its process group) running forever. Root
+	// cause confirmed; fix: fire the kill cascade here, unconditionally,
+	// whenever sessionID resolved to something non-empty, independent of
+	// whether any active turn was found or claimed. Audited under its own
+	// event (turn.cancel.background_killed) rather than folded into
+	// turn_cancel_attempt/turn_canceled, since those only fire on the
+	// ClaimCancel-gated path below and a background-only cancel (no active
+	// turn at all) would otherwise leave no audit trail whatsoever.
+	var backgroundSessionsKilled int64
+	if sessionID != "" && hooks.KillBackgroundSessions != nil {
+		killed := hooks.KillBackgroundSessions(sessionID)
+		atomic.StoreInt64(&backgroundSessionsKilled, int64(killed))
+		audit.Emit(ctx, auditLogger, audit.EventTurnCancelBackgroundKilled, audit.SeverityInfo, map[string]any{
+			"session_id":                 sessionID,
+			"canceller_user":             canceller.UserID,
+			"canceller_channel":          canceller.Channel,
+			"background_sessions_killed": killed,
+		})
+	}
+
 	// --- Abuse detection (always, before ClaimCancel) ---
 	if al.cancelAbuse != nil {
 		al.cancelAbuse.recordAttempt(ctx, canceller.UserID, canceller.Channel, at, auditLogger)
@@ -198,21 +242,13 @@ func (al *AgentLoop) RequestCancel(
 	turnID := activeTurn.TurnID()
 	descendants := al.collectDescendantTurnIDs(sessionID)
 
-	// backgroundSessionsKilled carries the count returned by
-	// hooks.KillBackgroundSessions (set further below, in PHASE A) into the
-	// turn_canceled audit event emitted by the onCancelFinish callback
-	// registered immediately below. Unlike descendants above, this value
-	// cannot be precomputed before InterruptSession — KillBackgroundSessions
-	// must run after the graceful cascade per this function's documented
-	// step order — so the write (in PHASE A) and the read (inside the
-	// callback) can occur on different goroutines. It is therefore accessed
-	// only via atomic to avoid a data race; in the narrow window where the
-	// callback fires before PHASE A reaches the hook call, the audit field
-	// reads 0 even though a kill may complete moments later — the same class
-	// of already-tolerated race as the "descendants list mismatch" WARN
-	// below, not a regression this fix introduces.
-	var backgroundSessionsKilled int64
-
+	// backgroundSessionsKilled was already computed above (independent of
+	// wasFired, before this function's ClaimCancel gate) and is read here via
+	// atomic — the write happened earlier in this same goroutine, but the
+	// read below occurs inside a closure that may run on a DIFFERENT
+	// goroutine (via Finish() called from the turn-processing goroutine), so
+	// atomic access is required for correct cross-goroutine visibility even
+	// though there is no write/write or write-after-read race to resolve.
 	activeTurn.SetOnCancelFinish(func(cancelMethod string) {
 		// Mark the last transcript entry as truncated.
 		if store != nil {
@@ -248,7 +284,10 @@ func (al *AgentLoop) RequestCancel(
 		})
 	})
 
-	// --- PHASE A: graceful cascade + approval auto-deny + background-session kill ---
+	// --- PHASE A: graceful cascade + approval auto-deny ---
+	//
+	// (The background-session kill cascade already fired above, independent
+	// of wasFired — see the comment at that call site.)
 	//
 	// Now that the callback is registered, fire InterruptSession. The ordering
 	// guarantee: SetOnCancelFinish (above) stores the callback under ts.mu before
@@ -269,10 +308,6 @@ func (al *AgentLoop) RequestCancel(
 
 	if hooks.CancelPendingApprovals != nil {
 		hooks.CancelPendingApprovals(sessionID, "session canceled")
-	}
-	if hooks.KillBackgroundSessions != nil {
-		killed := hooks.KillBackgroundSessions(sessionID)
-		atomic.StoreInt64(&backgroundSessionsKilled, int64(killed))
 	}
 	if hooks.SendStageFrame != nil {
 		hooks.SendStageFrame(sessionID, "graceful")
