@@ -48,28 +48,47 @@ func buildCarveOuts(omnipusHome string) []string {
 // the agent's own home stays exactly as unreachable as anyone else's during
 // a workspace turn, matching today's re-root behavior.
 //
+// BLOCK #2 (ADR-046 P1 review): the own-tree exception is scoped PER-ROOT —
+// it only exempts a path matched against carve-out root R when WorkDir is a
+// PROPER DESCENDANT of that SAME root R (WorkDir != R, WorkDir strictly
+// under R). A naive "cleanPath is within-or-equal WorkDir" check (with no
+// relationship required between WorkDir and R) is defeatable by a
+// misconfigured WorkDir: if WorkDir == $OMNIPUS_HOME itself, every one of
+// policy.CarveOuts (all direct children of $OMNIPUS_HOME) would sit "within
+// WorkDir" simultaneously, exempting master.key/credentials.json/agents/
+// workspaces all at once — the exact bypass this fix closes.
+// FSPolicy.Validate (policy.go) independently refuses to construct a policy
+// shaped that way, but IsCarveOut stays correct here too, in depth, since
+// callers besides ResolvePath may invoke it directly.
+//
 // Prefix checks use a trailing-separator guard (matching isCrossAgentPath's
 // existing precedent) so e.g. "/a/bc" is never mistaken for a descendant of
 // "/a/b".
 func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 	cleanPath := filepath.Clean(resolvedAbsPath)
+	cleanWorkDir := filepath.Clean(policy.WorkDir)
 
-	underCarveOut := false
 	for _, root := range policy.CarveOuts {
-		if isWithinOrEqual(cleanPath, filepath.Clean(root)) {
-			underCarveOut = true
-			break
+		cleanRoot := filepath.Clean(root)
+		if !isWithinOrEqual(cleanPath, cleanRoot) {
+			continue
 		}
-	}
-	if !underCarveOut {
-		return false
+
+		// cleanPath falls on or under this carve-out root. The own-tree
+		// exception applies only when WorkDir is a proper descendant of
+		// THIS SAME root (never when WorkDir is at or above it) AND
+		// cleanPath itself falls within that WorkDir.
+		if policy.WorkDir != "" &&
+			cleanWorkDir != cleanRoot &&
+			isWithinOrEqual(cleanWorkDir, cleanRoot) &&
+			isWithinOrEqual(cleanPath, cleanWorkDir) {
+			return false
+		}
+
+		return true
 	}
 
-	if policy.WorkDir != "" && isWithinOrEqual(cleanPath, filepath.Clean(policy.WorkDir)) {
-		return false
-	}
-
-	return true
+	return false
 }
 
 // isWithinOrEqual reports whether candidate is root itself or lives strictly

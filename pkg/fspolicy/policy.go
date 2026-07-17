@@ -5,10 +5,11 @@
 // Landlock ruleset builder (P3) — so the two enforcement backends can never
 // drift apart.
 //
-// This package is intentionally a leaf: it imports only pkg/config. It must
-// NOT import pkg/tools — pkg/tools already imports pkg/sandbox, and P3 wires
-// pkg/sandbox -> fspolicy, so importing pkg/tools here would create an
-// import cycle.
+// This package is intentionally a leaf: stdlib only (no internal imports).
+// It must NOT import pkg/config or pkg/tools — pkg/tools already imports
+// pkg/sandbox, and P3 wires pkg/sandbox -> fspolicy, so importing either
+// here would risk an import cycle; every $OMNIPUS_HOME-shaped value this
+// package needs is passed in by the caller instead.
 package fspolicy
 
 import (
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FSScope is the resolved filesystem-access posture for a turn.
@@ -67,6 +69,65 @@ type FSPolicy struct {
 	AllowedRoots []string
 }
 
+// Validate asserts the structural invariants ResolvePath depends on before
+// consulting p for any access decision (BLOCK #1, ADR-046 P1 review — a
+// zero-value or otherwise malformed FSPolicy must never reach a decision
+// point silently).
+//
+// It is exported (rather than the lowercase "validate" a first pass at this
+// review named) because the sole caller, tools.ResolvePath, lives in a
+// different package — an unexported method cannot be called across a
+// package boundary, so exporting it is required for the call to compile at
+// all, not a scope expansion.
+//
+// Checks, in order:
+//
+//  1. WorkDir is non-empty (after TrimSpace) and absolute. A zero-value
+//     FSPolicy{} (WorkDir=="") fails here.
+//  2. WorkDir must never be at or above ANY of p.CarveOuts' roots — i.e. no
+//     carve-out root may be within-or-equal to WorkDir. Every carve-out root
+//     buildCarveOuts produces is a direct child of $OMNIPUS_HOME
+//     (master.key, credentials.json, agents/, workspaces/), so a WorkDir
+//     that contains one of them (WorkDir == $OMNIPUS_HOME, or an ancestor of
+//     it) would put every carve-out inside IsCarveOut's own-tree exception,
+//     silently disabling FR-017 (BLOCK #2 in this same review). A P1
+//     policy's WorkDir is always a proper descendant of exactly one carve-
+//     out root (agents/<id> or workspaces/<id>/work) — this check permits
+//     that shape, and also permits P2's future "external dir" WorkDir (one
+//     with no carve-out-root ancestry relationship at all — vacuously true
+//     when p.CarveOuts is empty, e.g. the direct-construction shape several
+//     resolver-level unit tests use).
+//  3. Scope is one of the four known FSScope constants — never a stray or
+//     typo'd value silently treated as some implicit default.
+func (p FSPolicy) Validate() error {
+	workDir := strings.TrimSpace(p.WorkDir)
+	if workDir == "" {
+		return fmt.Errorf("fspolicy: WorkDir is empty")
+	}
+	if !filepath.IsAbs(p.WorkDir) {
+		return fmt.Errorf("fspolicy: WorkDir %q is not absolute", p.WorkDir)
+	}
+
+	cleanWorkDir := filepath.Clean(p.WorkDir)
+	for _, root := range p.CarveOuts {
+		cleanRoot := filepath.Clean(root)
+		if isWithinOrEqual(cleanRoot, cleanWorkDir) {
+			return fmt.Errorf(
+				"fspolicy: WorkDir %q is at or above the carve-out root %q — this would defeat FR-017's carve-out protection",
+				p.WorkDir, root,
+			)
+		}
+	}
+
+	switch p.Scope {
+	case FSScopeConfined, FSScopeUnrestricted, FSScopeAsk, FSScopeAllow:
+	default:
+		return fmt.Errorf("fspolicy: unknown Scope %q", p.Scope)
+	}
+
+	return nil
+}
+
 // EffectiveFSPolicy computes the single, authoritative FSPolicy for a turn
 // (FR-036).
 //
@@ -106,6 +167,16 @@ func EffectiveFSPolicy(
 	if effectiveWorkDir == "" {
 		effectiveWorkDir = agentHome
 	}
+	// BLOCK #1 (ADR-046 P1 review): filepath.Abs("") resolves to the
+	// process's own current working directory rather than erroring, so
+	// without this explicit check an agent/turn with no home AND no
+	// TurnWorkspaceDir would silently fail OPEN — confining the "turn" to
+	// wherever the omnipus process itself happens to be running from,
+	// rather than refusing to produce a policy at all. Fail closed instead:
+	// no working directory is a misconfiguration, never a valid policy.
+	if strings.TrimSpace(effectiveWorkDir) == "" {
+		return FSPolicy{}, fmt.Errorf("fspolicy: no working directory (agentHome and turnWorkDir both empty)")
+	}
 	resolvedWorkDir, err := realpath(effectiveWorkDir)
 	if err != nil {
 		return FSPolicy{}, fmt.Errorf("fspolicy: resolve working dir %q: %w", effectiveWorkDir, err)
@@ -128,16 +199,25 @@ func EffectiveFSPolicy(
 // leaf (and possibly some parent components) do not yet exist on disk, it
 // resolves the deepest existing ancestor through symlinks and re-attaches
 // the not-yet-created remainder — the same walk-up-until-found strategy as
-// resolveExistingAncestor in pkg/tools/filesystem.go, extended to preserve
-// the intended suffix so a not-yet-materialized work/ dir still yields the
-// intended path rather than collapsing to its existing parent.
+// resolvePathAgainstExistingAncestor in pkg/tools/filesystem.go, extended to
+// preserve the intended suffix so a not-yet-materialized work/ dir still
+// yields the intended path rather than collapsing to its existing parent.
 //
 // Fails closed: returns a non-nil error if path cannot be made absolute, or
 // if resolution hits a non-"not exist" error at any point in the walk (e.g.
 // a permission error, or an invalid path such as one containing an embedded
 // NUL byte) — it never falls back to returning an unresolved or
-// partially-resolved path.
+// partially-resolved path. An empty (or all-whitespace) path is refused
+// outright rather than being handed to filepath.Abs, which would otherwise
+// silently resolve "" to the process's own current working directory
+// (BLOCK #1, ADR-046 P1 review) — this is the same fail-closed guard
+// EffectiveFSPolicy already applies to its own effectiveWorkDir computation,
+// duplicated here so realpath is safe to call directly with any caller-
+// supplied string, not just the ones EffectiveFSPolicy happens to pre-check.
 func realpath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("empty path")
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute path: %w", err)

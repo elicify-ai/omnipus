@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -64,15 +65,56 @@ const (
 // check and the actual I/O call cannot escape the root — the kernel/runtime
 // re-resolves and re-enforces containment at the moment of the syscall, not
 // merely at a prior string check (FR-006's TOCTOU-hardness).
+//
+// policy is carried on the handle so the root==nil (host-fs) branch of every
+// I/O method below can re-verify FR-017's carve-out protection AT I/O TIME,
+// not merely at the earlier ResolvePath resolve — see
+// recheckUnrestrictedCarveOut (HIGH #3, ADR-046 P1 review). The root!=nil
+// (confined) branch never consults it — os.Root's own re-resolution already
+// closes that TOCTOU gap for the confined case, and IsCarveOut was already
+// checked unconditionally by ResolvePath before the handle was constructed.
 type PathHandle struct {
-	root *os.Root
-	rel  string
-	abs  string
+	root   *os.Root
+	rel    string
+	abs    string
+	policy fspolicy.FSPolicy
+}
+
+// recheckUnrestrictedCarveOut re-resolves h.abs (following any symlink that
+// may have been swapped in since ResolvePath first resolved it) and re-runs
+// fspolicy.IsCarveOut against it, refusing with ErrCarveOut if the target now
+// falls under a carve-out root. Only meaningful — and only called — on a
+// host-fs (root==nil) handle: os.Root-backed (confined) I/O already
+// re-resolves and re-enforces containment at the syscall boundary on every
+// call, but a root==nil handle's methods do raw os.* I/O directly against
+// h.abs, a string that was resolved once, at ResolvePath time, and never
+// re-checked again before this fix (HIGH #3, ADR-046 P1 review) — exactly
+// the CWE-357 TOCTOU shape ResolvePath's package doc otherwise claims to
+// close. This does not close the general host-fs TOCTOU (a swap between
+// this re-check and the os.* call immediately below it is still possible;
+// that residual is inherent to string-based host filesystem I/O and is
+// P3's job, via a per-child Landlock ruleset, to close for real) — it
+// specifically re-verifies the ONE property FR-017 requires unconditionally
+// regardless of scope: an agent must never reach master.key/
+// credentials.json/another agent's home/another workspace, even under
+// FSScopeUnrestricted.
+func (h *PathHandle) recheckUnrestrictedCarveOut() error {
+	current, err := resolveRealpathUnderWorkDir(h.abs, "")
+	if err != nil {
+		return fmt.Errorf("resolvepath: re-resolve %q at I/O time: %w", h.abs, err)
+	}
+	if fspolicy.IsCarveOut(current, h.policy) {
+		return ErrCarveOut
+	}
+	return nil
 }
 
 // ReadFile reads the handle's target in full.
 func (h *PathHandle) ReadFile() ([]byte, error) {
 	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return nil, err
+		}
 		content, err := os.ReadFile(h.abs)
 		if err != nil {
 			return nil, wrapReadErr(err)
@@ -92,6 +134,9 @@ func (h *PathHandle) ReadFile() ([]byte, error) {
 // fileutil.WriteFileAtomic's contract for the unrestricted (host) case.
 func (h *PathHandle) WriteFile(data []byte) error {
 	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return err
+		}
 		return writeFileAtomicHost(h.abs, data)
 	}
 	return writeFileAtomicRoot(h.root, h.rel, data)
@@ -100,6 +145,9 @@ func (h *PathHandle) WriteFile(data []byte) error {
 // ReadDir lists the handle's target directory.
 func (h *PathHandle) ReadDir() ([]os.DirEntry, error) {
 	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return nil, err
+		}
 		entries, err := os.ReadDir(h.abs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read directory: %w", err)
@@ -119,6 +167,9 @@ func (h *PathHandle) ReadDir() ([]os.DirEntry, error) {
 // `defer handle.Close()` alongside `defer file.Close()` in either order.
 func (h *PathHandle) Open() (fs.File, error) {
 	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return nil, err
+		}
 		f, err := os.Open(h.abs)
 		if err != nil {
 			return nil, wrapOpenErr(err)
@@ -135,6 +186,9 @@ func (h *PathHandle) Open() (fs.File, error) {
 // MkdirAll creates the handle's target directory (and any missing parents).
 func (h *PathHandle) MkdirAll(perm os.FileMode) error {
 	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(h.abs, perm); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
@@ -149,6 +203,9 @@ func (h *PathHandle) MkdirAll(perm os.FileMode) error {
 // Stat returns the handle's target FileInfo.
 func (h *PathHandle) Stat() (os.FileInfo, error) {
 	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return nil, err
+		}
 		info, err := os.Stat(h.abs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to stat: %w", err)
@@ -195,6 +252,10 @@ func (h *PathHandle) Close() error {
 // FR-035 audit dimension but drive NO decision in this P1 implementation.
 //
 // Resolution order:
+//  0. Validate policy's own structural invariants (BLOCK #1, ADR-046 P1
+//     review) — a zero-value or otherwise malformed FSPolicy (e.g. an empty
+//     WorkDir, or a WorkDir sitting at/above one of its own CarveOuts) is
+//     refused with ErrPathInvalid before any access decision is made.
 //  1. Reject an embedded NUL byte or any hard (non-"not exist") resolution
 //     failure with ErrPathInvalid — before any policy decision.
 //  2. Check fspolicy.IsCarveOut on the resolved realpath, UNCONDITIONALLY —
@@ -203,10 +264,13 @@ func (h *PathHandle) Close() error {
 //     (FR-017).
 //  3. If the resolved realpath falls outside policy.WorkDir (a leading ".."
 //     escape, a mid-string ".." reentry, an absolute path elsewhere, or a
-//     symlink that resolves outside), the operation needs
-//     fspolicy.FSScopeUnrestricted to proceed — in which case a legacy
-//     host-fs PathHandle (root==nil) is returned; under any other scope it
-//     is refused with ErrOutsideScope.
+//     symlink that resolves outside), dispatch on the effective scope: under
+//     fspolicy.FSScopeUnrestricted a legacy host-fs PathHandle (root==nil) is
+//     returned; under fspolicy.FSScopeConfined it is refused with
+//     ErrOutsideScope; fspolicy.FSScopeAsk/FSScopeAllow are P2 seams this
+//     package does not implement yet, so they are refused with
+//     ErrPathInvalid rather than silently falling through to some invented
+//     default (Constraint #6).
 //  4. Otherwise (the realpath falls within policy.WorkDir — including an
 //     absolute path that simply happens to resolve inside it, matching the
 //     pre-ADR-046 sandboxFs/getSafeRelPath contract every existing
@@ -228,6 +292,10 @@ func ResolvePath(
 	_ = callID
 	_ = op
 
+	if err := policy.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
+	}
+
 	realAbs, err := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
@@ -238,11 +306,18 @@ func ResolvePath(
 	}
 
 	if !isWithinWorkspace(realAbs, policy.WorkDir) {
-		if policy.Scope == fspolicy.FSScopeUnrestricted {
-			return &PathHandle{abs: realAbs}, nil
+		switch policy.Scope {
+		case fspolicy.FSScopeConfined:
+			return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
+				ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+		case fspolicy.FSScopeUnrestricted:
+			return &PathHandle{abs: realAbs, policy: policy}, nil
+		case fspolicy.FSScopeAsk, fspolicy.FSScopeAllow:
+			return nil, fmt.Errorf("%w: filesystem_scope %q is not yet supported by ResolvePath (P2)",
+				ErrPathInvalid, policy.Scope)
+		default:
+			return nil, fmt.Errorf("resolvepath: internal error: unknown filesystem scope %q", policy.Scope)
 		}
-		return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
-			ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
 	}
 
 	rel, err := safeRelPath(policy.WorkDir, rawPath)
@@ -255,7 +330,23 @@ func ResolvePath(
 		return nil, fmt.Errorf("resolvepath: open working directory root %q: %w", policy.WorkDir, err)
 	}
 
-	return &PathHandle{root: root, rel: rel, abs: realAbs}, nil
+	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: policy}, nil
+}
+
+// ResolveTurnFSPolicy resolves the single, authoritative FSPolicy for a turn
+// (FR-036), using the exact parameter shape every generic path-taking tool's
+// Execute method previously assembled by hand (MEDIUM #7, ADR-046 P1
+// review): WorkDir prefers the per-turn Workspace re-root (TurnWorkspaceDir)
+// when the agent is a Workspace CoreTeam member, else falls back to
+// agentHome; agent/workspace identity and $OMNIPUS_HOME come from ctx and
+// config.OmnipusHomeDir() respectively. Centralizing this removes what were
+// 9 hand-duplicated call sites (filesystem.go x3, edit.go x2, send_file.go,
+// web_serve.go x2, browser/tools.go) — each a chance for the shape to drift.
+func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (fspolicy.FSPolicy, error) {
+	return fspolicy.EffectiveFSPolicy(
+		ctx, agentHome, TurnWorkspaceDir(ctx), restrict,
+		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
+	)
 }
 
 // ResolvePathAllowingPatterns bridges the operator-configured AllowRead/
@@ -374,31 +465,33 @@ func safeRelPath(workDir, rawPath string) (string, error) {
 	return rel, nil
 }
 
-// wrapReadErr normalizes a ReadFile-family error the same way the
+// wrapFSErr normalizes a ReadFile/Open-family error the same way the
 // pre-ADR-046 hostFs/sandboxFs implementations did, so existing callers'
-// substring checks ("file not found", "access denied") keep matching.
-func wrapReadErr(err error) error {
+// substring checks ("file not found", "access denied") keep matching. verb
+// is the human-readable action ("read" or "open") that appears in the
+// message (MEDIUM #8, ADR-046 P1 review: wrapReadErr and wrapOpenErr were
+// byte-identical apart from this one word — consolidated into a single
+// implementation with the two original names kept as one-line delegators
+// below so every existing call site's behavior is unchanged).
+func wrapFSErr(verb string, err error) error {
 	if os.IsNotExist(err) {
-		return fmt.Errorf("failed to read file: file not found: %w", err)
+		return fmt.Errorf("failed to %s file: file not found: %w", verb, err)
 	}
 	if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") ||
 		strings.Contains(err.Error(), "permission denied") {
-		return fmt.Errorf("failed to read file: access denied: %w", err)
+		return fmt.Errorf("failed to %s file: access denied: %w", verb, err)
 	}
-	return fmt.Errorf("failed to read file: %w", err)
+	return fmt.Errorf("failed to %s file: %w", verb, err)
 }
 
-// wrapOpenErr normalizes an Open-family error, mirroring wrapReadErr's
-// classification for the "open" verb.
+// wrapReadErr normalizes a ReadFile-family error. Delegates to wrapFSErr.
+func wrapReadErr(err error) error {
+	return wrapFSErr("read", err)
+}
+
+// wrapOpenErr normalizes an Open-family error. Delegates to wrapFSErr.
 func wrapOpenErr(err error) error {
-	if os.IsNotExist(err) {
-		return fmt.Errorf("failed to open file: file not found: %w", err)
-	}
-	if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") ||
-		strings.Contains(err.Error(), "permission denied") {
-		return fmt.Errorf("failed to open file: access denied: %w", err)
-	}
-	return fmt.Errorf("failed to open file: %w", err)
+	return wrapFSErr("open", err)
 }
 
 // writeFileAtomicHost writes data to abs directly on the host filesystem

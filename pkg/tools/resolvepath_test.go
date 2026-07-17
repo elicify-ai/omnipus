@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -256,5 +257,257 @@ func TestCarveOut_AnchoredOnOmnipusHome_NotWorkingDir(t *testing.T) {
 	}
 	if !errors.Is(err, ErrCarveOut) {
 		t.Errorf("expected ErrCarveOut for master.key, got: %v", err)
+	}
+}
+
+// TestResolvePath_ZeroValuePolicyRefused is the BLOCK #1 regression (ADR-046
+// P1 review): ResolvePath now calls policy.Validate() as its FIRST step, so
+// a hand-built zero-value fspolicy.FSPolicy{} (WorkDir=="", Scope=="") is
+// refused with a wrapped ErrPathInvalid rather than reaching any resolution
+// logic at all (which, pre-fix, could fall through to unpredictable
+// behavior depending on what filepath.Join/EvalSymlinks did with an empty
+// WorkDir).
+func TestResolvePath_ZeroValuePolicyRefused(t *testing.T) {
+	_, err := ResolvePath(context.Background(), fspolicy.FSPolicy{}, "read_file", "", FSOpRead, "x")
+	if err == nil {
+		t.Fatalf("expected a zero-value FSPolicy{} to be refused")
+	}
+	if !errors.Is(err, ErrPathInvalid) {
+		t.Errorf("expected ErrPathInvalid, got: %v", err)
+	}
+}
+
+// TestResolvePath_UnrestrictedScope_CarveOutHoldsUnderRace is the HIGH #3
+// regression (ADR-046 P1 review): under FSScopeUnrestricted, ResolvePath
+// returns a host-mode (root==nil) PathHandle whose I/O methods do raw os.*
+// calls against h.abs — a path resolved ONCE, at ResolvePath time. Before
+// this fix, nothing re-verified FR-017's carve-out protection between that
+// resolve and the actual I/O call, so an attacker who could swap the
+// resolved target into a symlink pointing at a carve-out (master.key here)
+// in that window would have the read served straight through. This pins
+// PathHandle.ReadFile's recheckUnrestrictedCarveOut re-check: it must catch
+// the swapped-in carve-out and refuse with ErrCarveOut, even though the
+// FIRST resolution (before the swap) legitimately succeeded.
+func TestResolvePath_UnrestrictedScope_CarveOutHoldsUnderRace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink races are POSIX-specific")
+	}
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	agentHome := filepath.Join(home, "agents", "self")
+	if err := os.MkdirAll(agentHome, 0o755); err != nil {
+		t.Fatalf("mkdir agentHome: %v", err)
+	}
+	masterKey := filepath.Join(home, "master.key")
+	if err := os.WriteFile(masterKey, []byte("key-material"), 0o600); err != nil {
+		t.Fatalf("seed master.key: %v", err)
+	}
+
+	// A decoy file OUTSIDE any carve-out root and outside WorkDir — the
+	// host-mode branch is reached because it is out-of-scope but the
+	// effective scope is Unrestricted.
+	decoyDir := t.TempDir()
+	decoyPath := filepath.Join(decoyDir, "decoy.txt")
+	if err := os.WriteFile(decoyPath, []byte("innocuous"), 0o644); err != nil {
+		t.Fatalf("seed decoy: %v", err)
+	}
+
+	policy, err := fspolicy.EffectiveFSPolicy(
+		context.Background(), agentHome, "", false, /* restrict=false -> Unrestricted */
+		config.OmnipusHomeDir(), "self", "",
+	)
+	if err != nil {
+		t.Fatalf("EffectiveFSPolicy: %v", err)
+	}
+	if policy.Scope != fspolicy.FSScopeUnrestricted {
+		t.Fatalf("expected FSScopeUnrestricted, got %v", policy.Scope)
+	}
+
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, decoyPath)
+	if err != nil {
+		t.Fatalf("initial ResolvePath (decoy, not yet swapped) should succeed: %v", err)
+	}
+	defer handle.Close()
+
+	// TOCTOU: swap the already-resolved host-mode target itself into a
+	// symlink pointing at master.key, AFTER ResolvePath has already
+	// resolved and returned the handle.
+	if err := os.Remove(decoyPath); err != nil {
+		t.Fatalf("remove decoy: %v", err)
+	}
+	if err := os.Symlink(masterKey, decoyPath); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	data, err := handle.ReadFile()
+	if err == nil {
+		t.Fatalf("expected the swapped-in carve-out to be refused at I/O time, got content: %q", data)
+	}
+	if !errors.Is(err, ErrCarveOut) {
+		t.Errorf("expected ErrCarveOut from the I/O-time re-check, got: %v", err)
+	}
+	if string(data) == "key-material" {
+		t.Fatalf("TOCTOU BREACH: read master.key content through the swapped decoy path: %q", data)
+	}
+}
+
+// TestResolvePath_UnicodePathResolvesCorrectly — item #10 (ADR-046 P1
+// review): a relative path containing multi-script Unicode components lands
+// under WorkDir exactly like an ASCII one, with no lossy normalization.
+func TestResolvePath_UnicodePathResolvesCorrectly(t *testing.T) {
+	workDir := t.TempDir()
+	rel := filepath.Join("工作", "データ", "файл.txt")
+	full := filepath.Join(workDir, rel)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("mkdir unicode dir: %v", err)
+	}
+	if err := os.WriteFile(full, []byte("unicode ok"), 0o644); err != nil {
+		t.Fatalf("seed unicode file: %v", err)
+	}
+
+	policy := confinedPolicy(t, workDir)
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, rel)
+	if err != nil {
+		t.Fatalf("ResolvePath: %v", err)
+	}
+	defer handle.Close()
+
+	data, err := handle.ReadFile()
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "unicode ok" {
+		t.Errorf("content = %q, want %q", data, "unicode ok")
+	}
+}
+
+// TestResolvePath_EmptyPathDefaultsToWorkDir — item #10 (ADR-046 P1
+// review): an empty rawPath resolves to WorkDir itself (list_directory's
+// documented "." default), not an error.
+func TestResolvePath_EmptyPathDefaultsToWorkDir(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "marker.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed marker: %v", err)
+	}
+
+	policy := confinedPolicy(t, workDir)
+	handle, err := ResolvePath(context.Background(), policy, "list_dir", "", FSOpList, "")
+	if err != nil {
+		t.Fatalf("ResolvePath with empty rawPath: %v", err)
+	}
+	defer handle.Close()
+
+	entries, err := handle.ReadDir()
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Name() == "marker.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected marker.txt in the WorkDir listing when rawPath defaults to WorkDir, got entries: %v", entries)
+	}
+}
+
+// TestResolvePath_LeadingDotDotEscape — item #10 (ADR-046 P1 review): a
+// rawPath that starts with ".." (escaping WorkDir from the very first
+// component) is refused under Confined scope.
+func TestResolvePath_LeadingDotDotEscape(t *testing.T) {
+	workDir := t.TempDir()
+	policy := confinedPolicy(t, workDir)
+
+	_, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead, filepath.Join("..", "outside.txt"))
+	if err == nil {
+		t.Fatalf("expected a leading '..' escape to be refused")
+	}
+	if !errors.Is(err, ErrOutsideScope) {
+		t.Errorf("expected ErrOutsideScope, got: %v", err)
+	}
+}
+
+// TestResolvePath_MidStringDotDotReentry — item #10 (ADR-046 P1 review): a
+// rawPath that dips into a subdirectory before ".."-ing back out past
+// WorkDir (rather than starting with ".." immediately) is refused too — a
+// lexically distinct shape from TestResolvePath_LeadingDotDotEscape and from
+// the symlink-based escape tests above (no symlink involved here at all,
+// pure ".." reentry).
+func TestResolvePath_MidStringDotDotReentry(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	policy := confinedPolicy(t, workDir)
+
+	_, err := ResolvePath(context.Background(), policy, "read_file", "", FSOpRead,
+		filepath.Join("sub", "..", "..", "outside.txt"))
+	if err == nil {
+		t.Fatalf("expected a mid-string '..' reentry escape to be refused")
+	}
+	if !errors.Is(err, ErrOutsideScope) {
+		t.Errorf("expected ErrOutsideScope, got: %v", err)
+	}
+}
+
+// TestGenericTools_PassDocumentedFSOp is item #12 (ADR-046 P1 review): pins
+// each known production ResolvePath/ResolvePathAllowingPatterns call site's
+// FSOp argument to its documented value. FSOp is a P2 seam ResolvePath does
+// not yet consult for any decision (see FSOp's doc comment) and is not
+// stored on the returned handle for post-hoc inspection, so a runtime spy
+// can't observe it — this is a source-text assertion instead, reusing the
+// runtime.Caller(0)-relative-directory technique resolvepath_lint_test.go's
+// AST walk already established for this package. A future refactor that
+// silently changes read_file's FSOp from FSOpRead to something else (or
+// merges two call sites incorrectly) fails this test immediately rather
+// than only surfacing once the P2 ask-flow starts keying off op for real.
+func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	toolsDir := filepath.Dir(thisFile)
+	browserDir := filepath.Join(toolsDir, "browser")
+	gatewayDir := filepath.Join(filepath.Dir(toolsDir), "gateway")
+
+	cases := []struct {
+		dir     string
+		file    string
+		tool    string
+		snippet string
+	}{
+		{toolsDir, "filesystem.go", "read_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)`},
+		{toolsDir, "filesystem.go", "write_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`},
+		{toolsDir, "filesystem.go", "list_directory",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)`},
+		{toolsDir, "edit.go", "edit_file / append_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`},
+		{toolsDir, "send_file.go", "send_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.allowPaths)`},
+		{toolsDir, "web_serve.go", "web_serve (static + dev)",
+			`ResolvePath(ctx, policy, ToolNameWebServe, "", FSOpServe, rawPath)`},
+		{toolsDir, "shell.go", "bash (cwd resolution)",
+			`ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)`},
+		{browserDir, "tools.go", "browser_screenshot",
+			`tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)`},
+		{gatewayDir, "rest_workspace.go", "workspace_read (REST handler)",
+			`tools.ResolvePath(r.Context(), policy, "workspace_read", "", tools.FSOpRead, filePath)`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(tc.dir, tc.file))
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.file, err)
+			}
+			if !strings.Contains(string(data), tc.snippet) {
+				t.Errorf("%s: expected call site for %q not found (FSOp drifted from its documented value):\n  %s",
+					tc.file, tc.tool, tc.snippet)
+			}
+		})
 	}
 }

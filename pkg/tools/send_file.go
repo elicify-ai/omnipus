@@ -11,7 +11,6 @@ import (
 	"github.com/h2non/filetype"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
@@ -114,10 +113,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// Resolve the single, authoritative filesystem policy for this turn
 	// (FR-036), mirroring the generic file tools (ReadFileTool et al.).
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}

@@ -14,9 +14,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/docextract"
-	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -389,10 +387,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// (FR-036): WorkDir prefers the per-turn workspace re-root
 	// (TurnWorkspaceDir) when the agent is a Workspace CoreTeam member,
 	// else falls back to the agent's own home.
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}
@@ -774,10 +769,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("path is required")
 	}
 
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}
@@ -894,10 +886,7 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		path = "."
 	}
 
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}

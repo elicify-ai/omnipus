@@ -10,8 +10,6 @@ import (
 
 	"github.com/chromedp/chromedp"
 
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -487,10 +485,7 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	// than a process-wide shared temp directory no per-agent/per-turn
 	// confinement ever covered.
 	filename := fmt.Sprintf("omnipus-screenshot-%d.jpg", time.Now().UnixMilli())
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, tools.TurnWorkspaceDir(ctx), t.restrict,
-		config.OmnipusHomeDir(), tools.ToolAgentID(ctx), tools.ToolWorkspaceID(ctx),
-	)
+	policy, err := tools.ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve filesystem policy: %s", err))
 	}

@@ -224,7 +224,7 @@ func TestEditTool_AppendFile_Success(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("Initial content"), 0o644)
 
-	tool := NewAppendFileTool("", false)
+	tool := NewAppendFileTool(tmpDir, false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path":    testFile,
