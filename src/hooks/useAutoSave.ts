@@ -4,7 +4,7 @@ import { isReAuthCancelled } from '@/components/settings/useReAuthGate'
 
 export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
-interface UseAutoSaveOptions {
+interface UseAutoSaveOptions<T> {
   /** Debounce delay in ms. Default: 500 */
   debounceMs?: number
   /** If true, auto-save is disabled (e.g., for locked agents) */
@@ -44,6 +44,35 @@ interface UseAutoSaveOptions {
    * `hasPendingChanges()` is true).
    */
   beaconFlush?: () => void
+  /**
+   * Called once per successful save, after this hook's own bookkeeping
+   * (`lastSavedJsonRef`, `status`, `lastSavedAt`) has already been updated.
+   * `saved` is the exact payload that was just persisted (the `data` this
+   * save actually sent, not necessarily today's live `data`); `isCurrent`
+   * is true only when the live `data` — read now, AFTER the save's network
+   * round-trip completed, not when it started — is still deep-equal to
+   * `saved`.
+   *
+   * DRAFT-OWNERSHIP RULE this callback exists to let callers enforce: a
+   * dirty field is never hydrated from the server, and dirty clears ONLY
+   * when the save snapshot equals the live draft. A caller that hand-rolls
+   * an `isDirtyRef` (cleared elsewhere to unblock a hydration-guarded
+   * effect) must clear it here — `if (isCurrent) isDirtyRef.current =
+   * false` — and NOT unconditionally on every successful save. If the
+   * operator edited `data` again while this save's request was still in
+   * flight, `isCurrent` is false: the dirty flag must stay armed, because
+   * this hook's own serialization (FIX 3 above) has already queued a
+   * re-run that will persist the newer draft the moment this save's
+   * `finally` releases the guard. Clearing dirty unconditionally is exactly
+   * the bug this callback exists to prevent — it lets a same-tick (or
+   * refetch-driven) hydration effect revert keystrokes the operator typed
+   * during the round-trip.
+   *
+   * Not called on a failed save, and not called when the save was a no-op
+   * because the user cancelled a re-auth gate (see FIX 1 below) — there is
+   * nothing "saved" to report in either case.
+   */
+  onSaved?: (saved: T, isCurrent: boolean) => void
 }
 
 interface UseAutoSaveResult {
@@ -68,9 +97,9 @@ interface UseAutoSaveResult {
 export function useAutoSave<T>(
   data: T,
   saveFn: (data: T) => Promise<unknown>,
-  options?: UseAutoSaveOptions,
+  options?: UseAutoSaveOptions<T>,
 ): UseAutoSaveResult {
-  const { debounceMs = 500, disabled = false, flushUrl, flushAuthToken, beaconFlush } = options ?? {}
+  const { debounceMs = 500, disabled = false, flushUrl, flushAuthToken, beaconFlush, onSaved } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
   const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
@@ -117,6 +146,11 @@ export function useAutoSave<T>(
   const saveFnRef = useRef(saveFn)
   saveFnRef.current = saveFn
   latestDataRef.current = data
+  // Always-fresh ref for the optional `onSaved` callback — same pattern as
+  // `saveFnRef` above, so a caller's inline arrow function doesn't need to
+  // be a stable identity across renders.
+  const onSavedRef = useRef(onSaved)
+  onSavedRef.current = onSaved
 
   const hasPendingChanges = useCallback(() => {
     return JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current
@@ -138,14 +172,22 @@ export function useAutoSave<T>(
     setError(undefined)
     // Snapshot what we're about to persist so success marks exactly that JSON
     // saved (data may change again while the request is in flight).
-    const inFlightJson = JSON.stringify(latestDataRef.current)
+    const inFlightData = latestDataRef.current
+    const inFlightJson = JSON.stringify(inFlightData)
     try {
-      await saveFnRef.current(latestDataRef.current)
+      await saveFnRef.current(inFlightData)
       // Only NOW is the data durable — advance the saved marker so
       // hasPendingChanges() flips false for this exact payload.
       lastSavedJsonRef.current = inFlightJson
       setStatus('saved')
       setLastSavedAt(new Date())
+      // Draft-ownership rule (see `onSaved`'s doc comment): report whether
+      // the LIVE draft — read now, after the round-trip — is still the
+      // exact payload we just persisted. Comparing `latestDataRef.current`
+      // (not `inFlightData`) here is the whole point: if the operator typed
+      // more while this save was in flight, they differ and `isCurrent` is
+      // false, so a caller-owned dirty flag must stay armed.
+      onSavedRef.current?.(inFlightData, JSON.stringify(latestDataRef.current) === inFlightJson)
       // Fade back to idle after 2s. Cancel any previous fade timer first to
       // avoid leaking setTimeouts when saves happen in quick succession.
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)

@@ -140,7 +140,11 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
   /**
    * Test 2 — Save on edit
    * After the data loads, changing the textarea triggers updateWorkspaceInstructions
-   * once the useAutoSave debounce (500 ms default) fires.
+   * once the useAutoSave debounce fires. Deliberately updated (echo-race fix,
+   * P2 'Text input Auto save'): the instructions instance's debounce was
+   * raised from the 500ms default to 1500ms (long-form surface — see
+   * WorkspaceSettingsTab.tsx's `useAutoSave` call for the instructions
+   * field), so the advance below and its comment were updated to match.
    */
   it('calls updateWorkspaceInstructions after typing into the textarea', async () => {
     vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'initial text' })
@@ -163,9 +167,9 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     // Before the debounce fires the PUT must not have been sent.
     expect(api.updateWorkspaceInstructions).not.toHaveBeenCalled()
 
-    // Advance past the 500 ms debounce.
+    // Advance past the 1500 ms debounce (deliberately raised from 500ms).
     await act(async () => {
-      vi.advanceTimersByTime(600)
+      vi.advanceTimersByTime(1600)
     })
 
     // Switch back so waitFor can poll.
@@ -240,9 +244,10 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     const textarea = screen.getByRole('textbox', { name: /workspace \/ project instructions/i })
     fireEvent.change(textarea, { target: { value: '' } })
 
-    // Advance past the debounce.
+    // Advance past the 1500 ms debounce (deliberately raised from 500ms —
+    // see Test 2's comment above).
     await act(async () => {
-      vi.advanceTimersByTime(600)
+      vi.advanceTimersByTime(1600)
     })
 
     vi.useRealTimers()
@@ -250,6 +255,108 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     await waitFor(() => {
       expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, '')
     })
+  })
+})
+
+// ── Echo-race regression (P2 'Text input Auto save') ────────────────────────
+//
+// Root cause: the instructions hydration effect (`useEffect(() => {
+// if (instructionsData !== undefined) setInstructionsContent(...) }, [instructionsData])`)
+// had NO dirty guard at all — a save's own `invalidateQueries` refetch
+// landing while the operator kept typing would silently overwrite the
+// textarea with the stale pre-edit content mid-keystroke. Fixed by adding
+// `instructionsDirtyRef` (set on every onChange, cleared only when
+// useAutoSave's `onSaved` reports the save snapshot is still current).
+describe('WorkspaceSettingsTab — instructions echo-race (autosave hydration must never revert an in-flight draft)', () => {
+  it('typing during the save round-trip is never reverted by the invalidate-refetch echo, and the newer text still persists', async () => {
+    // Three GETs: the initial hydration, the invalidate-refetch fired by
+    // save #1 (server genuinely has 'first edit' at that point — but the
+    // operator has ALREADY typed more locally, so this is a stale echo
+    // relative to the live draft), and the invalidate-refetch fired by
+    // save #2 (server now genuinely has the newest text).
+    vi.mocked(api.fetchWorkspaceInstructions).mockReset()
+      .mockResolvedValueOnce({ content: 'initial text' })
+      .mockResolvedValueOnce({ content: 'first edit' })
+      .mockResolvedValue({ content: 'first edit second edit' })
+
+    // Both PUTs are manually controlled so the test can inspect the exact
+    // moment save #1's stale echo lands WHILE save #2 is still queued/in
+    // flight — the precise race window this fix closes.
+    let resolvePut1!: (v: { content: string }) => void
+    const putPromise1 = new Promise<{ content: string }>((r) => { resolvePut1 = r })
+    let resolvePut2!: (v: { content: string }) => void
+    const putPromise2 = new Promise<{ content: string }>((r) => { resolvePut2 = r })
+    vi.mocked(api.updateWorkspaceInstructions).mockReset()
+      .mockReturnValueOnce(putPromise1)
+      .mockReturnValueOnce(putPromise2)
+
+    renderTab()
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('textbox', { name: /workspace \/ project instructions/i }),
+      ).toHaveValue('initial text')
+    })
+
+    vi.useFakeTimers()
+    const textarea = screen.getByRole('textbox', { name: /workspace \/ project instructions/i })
+
+    // First edit — debounce fires, the PUT goes out and stays in flight.
+    fireEvent.change(textarea, { target: { value: 'first edit' } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+
+    // Second edit — the operator keeps typing while the first PUT is still
+    // unresolved. This debounce cycle fires too, but useAutoSave's own
+    // serialization (isSavingRef) queues it (rerunPendingRef) instead of
+    // dispatching a second, concurrent PUT.
+    fireEvent.change(textarea, { target: { value: 'first edit second edit' } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+    expect(textarea).toHaveValue('first edit second edit')
+
+    // Switch to real timers for the async settle/refetch chain below.
+    vi.useRealTimers()
+
+    // Resolve PUT #1. saveFn #1 then awaits its own `invalidateQueries`,
+    // whose refetch resolves with the STALE ("first edit") content — the
+    // server echo of save #1's own payload, landing after the operator
+    // typed more. Save #2 (the queued rerun) starts right behind it and
+    // immediately blocks on the still-unresolved `putPromise2`, giving a
+    // clean checkpoint to inspect the draft mid-race.
+    await act(async () => {
+      resolvePut1({ content: 'first edit' })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchWorkspaceInstructions).toHaveBeenCalledTimes(2)
+    })
+    // Save #2 must already be in flight (queued via useAutoSave's own
+    // serialization) by the time save #1's echo has landed.
+    await waitFor(() => {
+      expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(2)
+    })
+
+    // THE regression assertion: even though the query cache just updated
+    // with the stale "first edit" echo, the textarea must still show the
+    // NEWEST typed text — instructionsDirtyRef stayed armed because
+    // useAutoSave's onSaved reported isCurrent=false for save #1 (the live
+    // draft had already moved on when it resolved).
+    expect(textarea).toHaveValue('first edit second edit')
+
+    // Resolve PUT #2 — the queued re-save persists the newer text, and its
+    // own invalidate-refetch (mocked to return the now-genuinely-current
+    // value) settles cleanly.
+    await act(async () => {
+      resolvePut2({ content: 'first edit second edit' })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchWorkspaceInstructions).toHaveBeenCalledTimes(3)
+    })
+    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(1, WORKSPACE_ID, 'first edit')
+    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(2, WORKSPACE_ID, 'first edit second edit')
+    expect(textarea).toHaveValue('first edit second edit')
   })
 })
 

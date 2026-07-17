@@ -84,6 +84,24 @@ import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
 
+/**
+ * Echo-race fix, item 3 (belt-and-braces): true when the currently focused
+ * element is a text input/textarea inside THIS profile's own slide-over
+ * (marked by `data-testid="agent-profile-sheet"` on its SheetContent — see
+ * `ProfileSheet` below). Used only to add a second, independent line of
+ * defense around the hydration effect's primary `isDirtyRef` guard — a
+ * hydration must never clobber text the operator is actively typing into
+ * right now, even in a hypothetical gap where `isDirtyRef` was not (yet)
+ * set for the field being typed into.
+ */
+function isFocusedInAgentProfileForm(): boolean {
+  if (typeof document === 'undefined') return false
+  const active = document.activeElement
+  if (!active || (active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA')) return false
+  const sheet = document.querySelector('[data-testid="agent-profile-sheet"]')
+  return !!sheet && sheet.contains(active)
+}
+
 interface AgentProfileProps {
   /**
    * Explicit agent id (wins over the store-driven `editAgentId`). Used by
@@ -349,6 +367,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   useEffect(() => {
     if (!agent) return
+    // Echo-race fix, item 3 (belt-and-braces): never let a hydration reset
+    // text the operator is actively typing into RIGHT NOW while our own
+    // save cycle is what triggered it. Independent of (and checked ahead
+    // of) the isDirtyRef guard immediately below — also covers a save that
+    // is still in flight (`saveStatusRef.current === 'saving'`), where a
+    // field the operator hasn't touched yet could otherwise still be
+    // clobbered mid-keystroke by a same-tick cache patch from a DIFFERENT
+    // field's save. Keep this ahead of, not instead of, the isDirtyRef
+    // check — it deliberately duplicates `isDirtyRef.current` in its own
+    // condition so it stays correct even if the primary guard below is
+    // ever refactored.
+    if (isFocusedInAgentProfileForm() && (isDirtyRef.current || saveStatusRef.current === 'saving')) return
     // isDirtyRef prevents background refetch from overwriting unsaved user edits.
     // We depend on the stable agentId prop (not agent?.id which can be undefined
     // during loading) so the effect re-runs reliably on agent navigation.
@@ -754,12 +784,50 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         }
         throw err
       }
-      isDirtyRef.current = false
+      // Draft-ownership rule: dirty clears via useAutoSave's `onSaved`
+      // callback below (only when the save snapshot still equals the live
+      // draft), NOT unconditionally here — see that callback for why.
       queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
     },
     // Locked agents can still save model and tool changes — do not disable auto-save
     {
+      // Long-form surface (SOUL and other multi-line fields live on this
+      // form) — raised from the 500ms default so a normal typing cadence
+      // doesn't fire a save (and its own invalidateQueries echo) on nearly
+      // every pause. Small-field edits (e.g. the Default toggle) still
+      // reach the server promptly via blur/unmount flush.
+      debounceMs: 1500,
+      // Echo-race fix (P2 'Text input Auto save'): the saveFn above used to
+      // clear `isDirtyRef.current` unconditionally right after a successful
+      // PUT — BEFORE the `invalidateQueries` refetch it triggers has landed.
+      // If the operator typed more (e.g. into SOUL) during the PUT's
+      // round-trip, that unconditional clear let the hydration effect
+      // above (whose PRIMARY guard is `isDirtyRef.current`) accept the
+      // refetch's echo of the OLD text and revert the newer keystrokes out
+      // from under the operator's cursor.
+      //
+      // Draft-ownership rule: a dirty field is never hydrated from the
+      // server; dirty clears ONLY when the save snapshot still equals the
+      // live draft. `isCurrent` (computed by useAutoSave itself, reading
+      // the live `data` AFTER the round-trip) is false exactly when the
+      // operator edited the form again while this save was in flight — in
+      // that case `isDirtyRef` stays armed, so the hydration guard keeps
+      // rejecting the stale echo until the queued re-save (useAutoSave's
+      // own FIX-3 serialization) persists the newer draft.
+      onSaved: (_saved, isCurrent) => {
+        // Mirror the saveFn's own no-op early-returns above (not hydrated
+        // yet / no agent selected / a 409 conflict refetch still pending):
+        // none of those paths actually persisted anything, so a resolved
+        // (non-throwing) saveFn call in any of those states must not touch
+        // the dirty flag — clearing it here would let an UNRELATED
+        // hydration open back up while local edits are still genuinely
+        // unsaved (most importantly during an active 409 conflict, where
+        // the debounce keeps firing no-op saves until the operator clicks
+        // "Refresh").
+        if (!hasHydrated.current || agentId === null || conflictRef.current) return
+        if (isCurrent) isDirtyRef.current = false
+      },
       // I13: best-effort flush of pending edits on tab close / page hide /
       // unload. The gateway validates every PUT against the account's
       // bearer token, so the flush must carry Authorization (sendBeacon
@@ -777,9 +845,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     },
   )
 
+  // Always-fresh mirror of `saveStatus` for effects that must read the
+  // CURRENT save status without depending on it as a re-render trigger —
+  // used by the hydration effect's focused-field belt-and-braces check
+  // below (item 3 of the echo-race fix). Plain per-render assignment (not a
+  // `useEffect`) so it is guaranteed up to date before ANY effect in this
+  // commit runs, regardless of declaration order.
+  const saveStatusRef = useRef(saveStatus)
+  saveStatusRef.current = saveStatus
+
   // W6-B4 / G3 fix: the "Default agent" toggle used to fire its success
   // toast (and invalidate ['agents']) the instant the Switch was flipped —
-  // BEFORE the debounced (500ms) autosave had actually persisted the flag.
+  // BEFORE the debounced autosave had actually persisted the flag.
   // A slow network or a failed save left the toast lying: the operator saw
   // "X is now the default agent" while the server still had the old value.
   // This ref records the pending default-flag change; the effect below only
@@ -2458,6 +2535,11 @@ function ProfileSheet({
         side="right"
         className="flex flex-col gap-0 p-0"
         onOpenAutoFocus={onOpenAutoFocus}
+        // Echo-race fix, item 3: stable selector so the hydration effect's
+        // `isFocusedInAgentProfileForm()` belt-and-braces check can scope
+        // "is the operator's cursor inside THIS profile's own inputs"
+        // without threading a ref through this local wrapper.
+        data-testid="agent-profile-sheet"
       >
         <SheetTitle className="sr-only">{title}</SheetTitle>
         {children}
