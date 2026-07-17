@@ -75,6 +75,20 @@ func nthToken(input string, n int) string {
 	return parts[n]
 }
 
+// CommandArgs returns the free-text remainder of a slash-command input after
+// the leading "/name" (or "!name") token, with internal whitespace normalized
+// (consistent with how applyExplicitSkillCommand extracts the trailing
+// message in pkg/agent/loop.go). Returns "" when no argument text follows the
+// command token, e.g. CommandArgs("/remember buy milk") == "buy milk" and
+// CommandArgs("/remember") == "".
+func CommandArgs(input string) string {
+	parts := strings.Fields(strings.TrimSpace(input))
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(parts[1:], " "))
+}
+
 func normalizeCommandName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
