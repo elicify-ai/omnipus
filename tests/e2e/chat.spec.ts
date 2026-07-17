@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, newChatButton } from './fixtures/selectors';
+import { chatInput, agentPicker, assistantMessages, startNewChat, tokenCounter } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -49,8 +49,13 @@ test(
 
     await expect(assistantMessages(page)).toHaveCount(msgsBefore + 1, { timeout: 60_000 });
 
-    const sessionBar = page.locator('header');
-    await expect(sessionBar).toContainText(/\d+/, { timeout: 10_000 });
+    // Token/cost UI moved out of the header banner into the composer's
+    // context row (src/components/chat/composer/TokenCounter.tsx) — see
+    // ChatControls.tsx's doc comment. The header banner is now solely the
+    // workspace top-bar (hamburger + tab strip + "Open browser").
+    const tokens = tokenCounter(page);
+    await expect(tokens).toBeVisible({ timeout: 10_000 });
+    await expect(tokens).toContainText(/\d+/, { timeout: 10_000 });
 
     await expectA11yClean(page);
   },
@@ -99,10 +104,10 @@ test(
 
     // Start a fresh session to avoid stale messages from prior tests.
     // After goto('/') the app may restore the last active session with messages.
-    // Clicking New Chat resets to an empty thread so assistantMessages count starts at 0.
-    const newChat = newChatButton(page);
-    await expect(newChat).toBeVisible({ timeout: 10_000 });
-    await newChat.click();
+    // The header "New Chat" button was removed from the redesign (see
+    // startNewChat's doc comment) — "/new" + Enter resets to an empty
+    // thread so assistantMessages count starts at 0.
+    await startNewChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     // Switch to Jim: Mia has "no long enumerations" guardrails and may handoff to
@@ -197,9 +202,9 @@ test(
 
     const urlBefore = page.url();
 
-    const newChat = newChatButton(page);
-    await expect(newChat).toBeVisible({ timeout: 10_000 });
-    await newChat.click();
+    // Header "New Chat" button was removed (see startNewChat's doc comment
+    // in fixtures/selectors.ts) — "/new" + Enter is the replacement.
+    await startNewChat(page);
 
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 

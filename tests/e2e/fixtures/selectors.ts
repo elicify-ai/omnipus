@@ -71,9 +71,48 @@ export const agentCards = (page: Page) =>
 /**
  * New-chat button — rendered in the header banner with accessible name "New Chat".
  * Ground truth confirmed via Playwright MCP: button "New Chat" (not title="New chat").
+ *
+ * STALE as of the workspace top-bar redesign — kept only so existing callers
+ * that already defensively guard on `.isVisible().catch(() => false)` keep
+ * compiling. The header no longer has a "New Chat" button at all
+ * (src/components/chat/ChatControls.tsx: "New Chat was removed from the
+ * header — three paths for one action was redundant... It lives where the
+ * user already is: the sidebar's per-workspace 'New chat' row and the /new
+ * slash command."). For new code, use `startNewChat` below instead — it
+ * drives the actual replacement mechanism.
  */
 export const newChatButton = (page: Page) =>
   page.getByRole('banner').getByRole('button', { name: 'New Chat' });
+
+/**
+ * Start a new chat via the "/new" client-delivery slash command — the
+ * replacement for the removed header "New Chat" button (see `newChatButton`
+ * doc comment above for the ground truth citation).
+ *
+ * Typing "/new" then Enter is intercepted client-side before it ever reaches
+ * the backend (src/hooks/useSlashMenu.ts: `interceptClientCommand` /
+ * `runClientCommand('new')` both call `startNewSession()`), converging with
+ * selecting "/new" from the slash palette. This is the most direct
+ * E2E-reachable equivalent of the old header button — no need to navigate
+ * the sidebar's per-workspace accordion to reach its own "New chat" row.
+ */
+export const startNewChat = async (page: Page) => {
+  const input = chatInput(page);
+  await input.fill('/new');
+  await input.press('Enter');
+};
+
+/**
+ * Session token/cost counter — moved out of the header banner into the
+ * composer's context row (src/components/chat/composer/TokenCounter.tsx),
+ * per ChatControls.tsx: "The Agent picker, Model selector, and Token counter
+ * used to live here but moved into the composer's context row... so they sit
+ * next to the input they scope." Rendered unconditionally but hidden below
+ * the composer's own `@2xl` container-query breakpoint (~42rem/672px) — the
+ * default Playwright viewport (1280×720) is wide enough for it to show.
+ */
+export const tokenCounter = (page: Page) =>
+  page.locator('[data-testid="session-token-counter"]');
 
 /**
  * Switch the active chat agent via the composer's agent picker.

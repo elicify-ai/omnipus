@@ -47,6 +47,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import { startNewChat } from './fixtures/selectors';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -402,9 +403,21 @@ test(
     );
 
     // Start a fresh session so we control the message count exactly.
-    const newChatBtn = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
-    await expect(newChatBtn).toBeVisible({ timeout: 10_000 });
-    await newChatBtn.click();
+    //
+    // TEST BUG (fixed): this used to click a "New Chat" button scoped inside
+    // `getByRole('banner')`. That button was removed from the header in the
+    // workspace top-bar redesign (src/components/chat/ChatControls.tsx: "New
+    // Chat was removed from the header — three paths for one action was
+    // redundant... It lives where the user already is: the sidebar's
+    // per-workspace 'New chat' row and the /new slash command."). The banner
+    // no longer contains any element with that accessible name, so the old
+    // `toBeVisible` assertion always failed — not LLM nondeterminism, not a
+    // slash-command regression, just a stale selector. `startNewChat`
+    // (tests/e2e/fixtures/selectors.ts) is the sanctioned replacement — it
+    // drives the actual current mechanism ("/new" + Enter, intercepted
+    // client-side by useSlashMenu's `runClientCommand('new')`) and is already
+    // used by chat.spec.ts for the same purpose.
+    await startNewChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     const input = chatInput(page);
@@ -422,9 +435,18 @@ test(
     //
     // Prompt strategy (glm-class): single imperative sentence, tool name
     // spelled out exactly, no wiggle room for prose-only reply.
+    //
+    // SPEC BUG (fixed): the category instructed here used to be "test", which
+    // is not one of the `remember` tool's three enum values (pkg/tools/memory.go:159
+    // — `key_decision` | `reference` | `lesson_learned`). glm-5.2 correctly
+    // refused to call the tool with an invalid category and asked a
+    // clarifying question instead ("'test' isn't a valid option. Which of
+    // those three would you like me to use?"), so no memory file was ever
+    // written — not LLM flakiness, a genuinely invalid instruction. "reference"
+    // is the closest semantic fit for an arbitrary stored fact/nonce.
     await input.fill(
       `Call the remember tool NOW. Store exactly this fact as the memory content: "${NONCE}". ` +
-        `Use category "test". Do not write anything else. Call remember immediately.`,
+        `Use category "reference". Do not write anything else. Call remember immediately.`,
     );
     await input.press('Enter');
 

@@ -290,7 +290,17 @@ test(
     await expect(slashMenu.first()).toBeVisible({ timeout: 5_000 })
 
     // The entire menu should be visible.
-    const cancelMenuItem = page.getByRole('button', { name: /\/cancel/ })
+    // Rows are `role="option"` (not the native implicit "button" role),
+    // per the W3C APG combobox-with-listbox-popup pattern (ChatScreen.tsx —
+    // the listbox container carries `role="listbox"`, rows carry
+    // `role="option"` + `aria-selected`, and the textarea points at the
+    // highlighted row via `aria-activedescendant`). This is a deliberate,
+    // documented a11y redesign, not a regression — `getByRole('button', …)`
+    // predates it and no longer matches anything. Matches the same
+    // `getByRole('option', …)` convention already used for listbox rows
+    // elsewhere in this suite (e.g. channel-routing.spec.ts,
+    // channel-instance-crud.spec.ts).
+    const cancelMenuItem = page.getByRole('option', { name: /\/cancel/ })
     await expect(cancelMenuItem.first()).toBeVisible({ timeout: 5_000 })
 
     // Click /cancel.
@@ -387,10 +397,21 @@ async function assertCancelCascadesToSubagent(
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
 
-  // Use the SPA's own "New Chat" button to create a fresh session and bind
-  // the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
+  // Use the `/new` client-delivery slash command to create a fresh session
+  // and bind the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
   // does NOT bind the SPA — the input falls back to creating a new session
   // on first message, leaving us reading the wrong transcript file.
+  //
+  // The header "New Chat" button this test used to click was REMOVED from
+  // the workspace top-bar banner (ChatControls.tsx: "New Chat was removed
+  // from the header — three paths for one action was redundant (Hick's
+  // Law). It lives where the user already is: the sidebar's per-workspace
+  // 'New chat' row and the /new slash command.") — a deliberate, documented
+  // product redesign, not a regression. `/new` drives the exact same
+  // `startNewSession()` store action the old button called (see
+  // useSlashMenu.ts's runClientCommand, name === 'new'), including the same
+  // "only nullifies activeSessionId, does not mint a new session" contract
+  // the comment below still describes — so this swap is behavior-preserving.
   //
   // Route to Jim (Planner & Orchestrator), NOT the default agent Mia. CI
   // investigation (run 27296266639) found Mia's "guide" persona makes the model
@@ -400,14 +421,13 @@ async function assertCancelCascadesToSubagent(
   // from the SUBAGENT running long enough (it streams a multi-hundred-word inline
   // essay), so the parent agent's prose behaviour is irrelevant — only that it
   // delegates.
-  // Clicking "New Chat" only nullifies activeSessionId — it does NOT mint a new
+  // `/new` only nullifies activeSessionId — it does NOT mint a new
   // session. The SPA creates the session lazily on the first sent message. The
   // workspace-scoped chat IA keeps the page at /#/workspaces/<id>/chat (no
   // session id in the URL), so we discover the new session by diffing the
   // OMNIPUS_HOME/sessions directory before vs. after the turn (below).
-  const newChatBtn = page.getByRole('banner').getByRole('button', { name: 'New Chat' })
-  await expect(newChatBtn).toBeVisible({ timeout: 10_000 })
-  await newChatBtn.click()
+  await input.fill('/new')
+  await input.press('Enter')
   await expect(input).toBeEnabled({ timeout: 20_000 })
 
   // Switch to Jim so the parent turn will actually delegate.
