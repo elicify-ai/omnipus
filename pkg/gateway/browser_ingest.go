@@ -60,6 +60,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
@@ -251,6 +252,23 @@ type IngestDeps struct {
 	// noticed. nil is tolerated (write failures still close the connection
 	// and log at Warn; recovery then waits on the liveness timeout as before).
 	ConnFailed func(streamID string)
+
+	// InitReceived is invoked SYNCHRONOUSLY from the ingest connection's read
+	// goroutine after a successful claim, BEFORE the first chunk is read —
+	// carrying the codec(s) the encoder page reported it will ACTUALLY
+	// produce (BrowserIngestInitFrame). The encoder independently re-probes
+	// WebCodecs and may legitimately land on a different codec than the one
+	// the orchestrator negotiated from the viewer's caps (e.g. h264-main
+	// falls back to vp8); every relayed chunk is stamped with the actual
+	// codec, but the viewer-facing browser_stream_init would otherwise still
+	// announce the stale negotiated intent — making the SPA configure a
+	// decoder for the wrong codec and fail on every chunk. The orchestrator
+	// wires this to re-announce browser_stream_init with the actual codec to
+	// already-attached viewers (the wire contract explicitly allows a fresh
+	// stream_init superseding the prior one). The synchronous, pre-first-chunk
+	// call site guarantees the corrected init reaches attached viewers before
+	// chunk #1 relays. nil is tolerated (no re-announce).
+	InitReceived func(streamID, videoCodec, audioCodec string)
 }
 
 // streamState is the token/connection lifecycle of one registered stream.
@@ -281,6 +299,23 @@ type ingestStream struct {
 	doneClosed bool
 	videoCodec string
 	audioCodec string
+
+	// firstFrameFedOnce / firstFrameDroppedOnce / firstChunkOnce: diagnostic
+	// instrumentation (live-browser-video-streaming bring-up debugging) —
+	// logs, once per stream rather than per-frame (which would spam at
+	// capture framerate), the first time a captured frame is actually handed
+	// to a live encoder connection (FeedFrame), the first time one is dropped
+	// because no live encoder connection exists yet, and the first decoded
+	// chunk received back from the encoder (handleChunk). Together with
+	// startCaptureAt's own logging (browser_stream.go) these mark every hop
+	// of the capture->feed->encode->chunk chain so a stalled bring-up shows
+	// exactly where it broke. sync.Once is safe for concurrent use, so no
+	// extra locking is needed even though FeedFrame and handleChunk run on
+	// different goroutines (the capture driver's ackWorker vs. this
+	// connection's serveConn read loop).
+	firstFrameFedOnce     sync.Once
+	firstFrameDroppedOnce sync.Once
+	firstChunkOnce        sync.Once
 }
 
 // stopPump closes doneCh exactly once. Caller MUST hold CaptureIngestHandler.mu.
@@ -435,11 +470,24 @@ func (h *CaptureIngestHandler) FeedFrame(streamID string, jpeg []byte, seq uint3
 	h.mu.Unlock()
 
 	if sendCh == nil {
+		// Diagnostic instrumentation: logged once (never per-frame) so a
+		// bring-up where the encoder connection isn't up yet when the first
+		// captured frames arrive is visible without spamming the log.
+		if s != nil {
+			s.firstFrameDroppedOnce.Do(func() {
+				slog.Info("browser video: frame dropped, no live encoder connection yet",
+					"stream_id", streamID, "seq", seq)
+			})
+		}
 		return // no live encoder connection; drop
 	}
 	data := encodeFrameFeed(seq, ts, jpeg)
 	select {
 	case sendCh <- ingestSendItem{binary: true, data: data}:
+		s.firstFrameFedOnce.Do(func() {
+			slog.Info("browser video: first captured frame handed to encoder connection",
+				"stream_id", streamID, "seq", seq)
+		})
 	case <-doneCh:
 	default: // queue full → drop (lossy feed)
 	}
@@ -546,6 +594,19 @@ func (h *CaptureIngestHandler) serveConn(conn ingestConn, remoteAddr string) {
 	// the write pump.
 	defer h.releaseConn(streamID, s)
 
+	// The encoder's self-reported ACTUAL codec(s) — see IngestDeps.InitReceived.
+	// Logged via the omnipus logger (raw slog does not reach the runtime log on
+	// every install) so a codec fallback is always visible operator-side.
+	logger.InfoCF("browser", "browser-ingest: init claimed",
+		map[string]any{
+			"stream_id":   streamID,
+			"video_codec": init.VideoCodec,
+			"has_audio":   init.HasAudio,
+		})
+	if h.deps.InitReceived != nil {
+		h.deps.InitReceived(streamID, init.VideoCodec, s.audioCodec)
+	}
+
 	if h.deps.Relay == nil {
 		// SF6: Relay is a boot-time wiring dependency — for this handler's
 		// entire lifetime it is either always nil or never nil, never a
@@ -584,6 +645,13 @@ func (h *CaptureIngestHandler) serveConn(conn ingestConn, remoteAddr string) {
 			return // drop; orchestration (W2-M) re-mints + relaunches
 		}
 		if mt != websocket.BinaryMessage {
+			if mt == websocket.TextMessage {
+				// TEMP DIAG (removed after root-causing the decode failure).
+				// Via the omnipus logger — raw slog does not reach the
+				// runtime log on every install.
+				logger.InfoCF("browser", "DIAG browser-ingest: text status frame from encoder",
+					map[string]any{"stream_id": streamID, "text": string(msg)})
+			}
 			continue // ignore stray text frames after init
 		}
 		h.handleChunk(streamID, s, msg)
@@ -760,6 +828,15 @@ func (h *CaptureIngestHandler) handleChunk(streamID string, s *ingestStream, msg
 		// drop silently here to avoid re-logging on every chunk.
 		return
 	}
+
+	// Diagnostic instrumentation: the first chunk actually decoded off the
+	// encoder's WS connection — the final hop in the capture->feed->encode
+	// chain (see startCaptureAt's doc comment, browser_stream.go). Logged
+	// once per stream, before the relay hand-off below.
+	s.firstChunkOnce.Do(func() {
+		slog.Info("browser video: first encoded chunk received from encoder",
+			"stream_id", streamID, "seq", seq, "bytes", len(payload))
+	})
 
 	kind, codec, key := classifyChunkKind(kindByte, keyByte, s)
 	// Copy the payload off the read buffer — the relay's GOP cache retains

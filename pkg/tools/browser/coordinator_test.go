@@ -420,13 +420,17 @@ func TestManager_NoCoordinator_ManagedPipeLaunch(t *testing.T) {
 	}
 }
 
-// TestManagedExecOpts_HeadlessShellNoPortNoDisplay proves the agent launch
-// path (ADR-044 Option A) stays headless-shell unconditionally: --headless is
-// always present, and NEITHER --remote-debugging-port (CDP is over the pipe)
-// NOR DISPLAY (no virtual-display sidecar in this path anymore) ever appear.
-// Replaces the pre-Option-A TestManagedExecOpts_HeadfulPipeForVideoCapable,
-// which asserted the now-removed video-capable/headful branch.
-func TestManagedExecOpts_HeadlessShellNoPortNoDisplay(t *testing.T) {
+// TestManagedExecOpts_FullChromeAgentNoPortNoDisplay proves the agent launch
+// path (ADR-044 amendment: single full-Chrome, encoder-as-tab) renders
+// full-Chrome flags unconditionally: --headless is always present, and
+// NEITHER --remote-debugging-port (CDP is over the pipe) NOR DISPLAY (no
+// virtual-display sidecar in this path) ever appear. The coordinator's Chrome
+// is now the full-Chrome build (installer.go's selectDownloadBuild) and also
+// hosts the WebCodecs encoder tab in its default context — this test only
+// covers the launch-flag contract, which is unchanged by that shift. Replaces
+// the pre-amendment TestManagedExecOpts_HeadlessShellNoPortNoDisplay (itself
+// a replacement for the earlier TestManagedExecOpts_HeadfulPipeForVideoCapable).
+func TestManagedExecOpts_FullChromeAgentNoPortNoDisplay(t *testing.T) {
 	cfg := BrowserConfig{ProfileDir: filepath.Join(t.TempDir(), "profile")}
 
 	hasFlag := func(args []string, want string) bool {
@@ -448,7 +452,7 @@ func TestManagedExecOpts_HeadlessShellNoPortNoDisplay(t *testing.T) {
 
 	headless := managedExecAllocatorOpts(cfg, managedLaunchParams{})
 	if !hasFlag(headless.Args, "--headless") {
-		t.Errorf("agent launch must stay headless-shell (--headless); got %v", headless.Args)
+		t.Errorf("agent launch must render --headless; got %v", headless.Args)
 	}
 	if !hasFlag(headless.Args, "--mute-audio") {
 		t.Errorf("agent launch must mute audio (no audio sidecar in this path); got %v", headless.Args)
@@ -469,53 +473,10 @@ func TestManagedExecOpts_HeadlessShellNoPortNoDisplay(t *testing.T) {
 	}
 }
 
-// TestEncoderChromeCmdline_HeadlessFullChromeNoDisplayNoPulse proves the
-// dedicated encoder browser's cmdline (ADR-044 Option A / Task B's
-// encoderBrowser): full Chrome in new-headless mode with SwiftShader, sharing
-// the agent's hardening base, but with neither DISPLAY nor PULSE_SERVER nor
-// --user-data-dir (cdppipe supplies the latter from PipeOptions.UserDataDir).
-func TestEncoderChromeCmdline_HeadlessFullChromeNoDisplayNoPulse(t *testing.T) {
-	cfg := BrowserConfig{ProfileDir: filepath.Join(t.TempDir(), "profile", "encoder")}
-
-	hasFlag := func(args []string, want string) bool {
-		for _, a := range args {
-			if a == want {
-				return true
-			}
-		}
-		return false
-	}
-	hasPrefix := func(args []string, prefix string) bool {
-		for _, a := range args {
-			if strings.HasPrefix(a, prefix) {
-				return true
-			}
-		}
-		return false
-	}
-
-	encoder := EncoderChromeCmdline(cfg)
-	if !hasFlag(encoder.Args, "--headless") {
-		t.Errorf("encoder launch must run new-headless full Chrome; got %v", encoder.Args)
-	}
-	if !hasFlag(encoder.Args, "--enable-unsafe-swiftshader") {
-		t.Errorf("encoder launch must enable SwiftShader software rendering; got %v", encoder.Args)
-	}
-	if hasFlag(encoder.Args, "--mute-audio") {
-		t.Errorf("encoder launch must NOT carry the agent-only --mute-audio flag; got %v", encoder.Args)
-	}
-	if hasPrefix(encoder.Args, "--remote-debugging-port") {
-		t.Errorf("encoder launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v", encoder.Args)
-	}
-	if hasPrefix(encoder.Args, "--user-data-dir") {
-		t.Errorf("encoder launch must NOT set --user-data-dir itself (cdppipe supplies it); got %v", encoder.Args)
-	}
-	for _, e := range encoder.Env {
-		if strings.HasPrefix(e, "DISPLAY=") {
-			t.Errorf("encoder launch must NOT set DISPLAY (new-headless renders offscreen); got %v", encoder.Env)
-		}
-		if strings.HasPrefix(e, "PULSE_SERVER=") {
-			t.Errorf("encoder launch must NOT set PULSE_SERVER (audio deferred to phase 2); got %v", encoder.Env)
-		}
-	}
-}
+// NOTE: the former TestEncoderChromeCmdline_HeadlessFullChromeNoDisplayNoPulse
+// (which asserted EncoderChromeCmdline's rendered flags) was removed under the
+// ADR-044 amendment (single full-Chrome, encoder-as-tab, blueprint §1.5): there
+// is no separate encoder Chrome process/cmdline anymore — the encoder tab runs
+// inside the coordinator's own Chrome, launched via managedExecAllocatorOpts,
+// which TestManagedExecOpts_FullChromeAgentNoPortNoDisplay above already
+// covers. EncoderChromeCmdline itself is deleted in exec_resolver.go.

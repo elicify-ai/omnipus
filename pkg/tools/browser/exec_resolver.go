@@ -25,13 +25,14 @@ import (
 )
 
 // managedLaunchParams is reserved for future per-launch agent-Chrome options.
-// ADR-044 Option A rearchitecture moved video capture off the agent launch
-// entirely, onto a dedicated encoder browser the orchestrator owns
-// (EncoderChromeCmdline below) — the agent launch path is unconditionally
-// headless-shell now, so this struct carries no fields today. Kept as a named
-// type (rather than dropping the parameter) so managedExecAllocatorOpts's
-// signature stays stable for its callers (coordinator.go, manager.go), which
-// pass the zero value.
+// The ADR-044 Amendment (single full-Chrome, encoder-as-tab) collapsed the
+// dedicated encoder browser process into a tab hosted by this same
+// coordinator Chrome (see pkg/gateway/browser_stream.go's coordinatorRoot
+// seam) — there is no separate encoder process or cmdline anymore, and this
+// struct still carries no fields today. Kept as a named type (rather than
+// dropping the parameter) so managedExecAllocatorOpts's signature stays
+// stable for its callers (coordinator.go, manager.go), which pass the zero
+// value.
 type managedLaunchParams struct{}
 
 // managedChromeCmdline is the rendered command line + environment for a managed
@@ -48,12 +49,14 @@ type managedChromeCmdline struct {
 }
 
 // chromeHardeningBaseFlags returns the hardening flag set shared by EVERY
-// managed Chrome process this package launches: the agent's headless-shell
-// (managedExecAllocatorOpts) and the dedicated encoder browser
-// (EncoderChromeCmdline, ADR-044 Option A). Keeping the base in one place
-// means the two processes can never diverge on security posture — only their
-// render-surface flags differ (the agent adds --hide-scrollbars/--mute-audio;
-// the encoder adds only --headless).
+// managed Chrome process this package launches. Under the ADR-044 Amendment
+// (single full-Chrome, encoder-as-tab) there is only ONE such process per
+// agent: the coordinator's full-Chrome launch (managedExecAllocatorOpts),
+// which now also hosts the WebCodecs encoder tab in its default browser
+// context (a tab launched via pkg/gateway/browser_stream.go's coordinatorRoot
+// seam — see encoder_launch.go's LaunchEncoderPage). Keeping the base in one
+// place means the single agent+encoder Chrome has one security posture to
+// audit, not two that could drift apart.
 //
 // The flag set mirrors chromedp.DefaultExecAllocatorOptions (the Puppeteer
 // hardening set) rendered as raw flags, PLUS the pre-video omnipus additions
@@ -92,8 +95,9 @@ func chromeHardeningBaseFlags() []string {
 		"--password-store=basic",
 		"--use-mock-keychain",
 		// chromedp.DisableGPU: force software rendering (+ SwiftShader fallback,
-		// required on Chromium 139+ and for the encoder's full-quality WebCodecs
-		// path — neither process has a real GPU available).
+		// required on Chromium 139+ and for the encoder tab's full-quality
+		// WebCodecs path hosted in this same process — it has no real GPU
+		// available).
 		"--disable-gpu",
 		"--enable-unsafe-swiftshader",
 		// omnipus additions (pre-video managedExecAllocatorOpts).
@@ -106,7 +110,7 @@ func chromeHardeningBaseFlags() []string {
 	// Chromium's zygote sandbox depends on new user namespaces, which the
 	// gateway's Landlock+PR_SET_NO_NEW_PRIVS policy blocks. The gateway already
 	// enforces an outer sandbox, so Chrome's inner sandbox is redundant. Applies
-	// to both the agent and encoder processes.
+	// to the single agent+encoder Chrome process.
 	if os.Getenv("OMNIPUS_BROWSER_NO_SANDBOX") != "0" {
 		args = append(args, "--no-sandbox")
 	}
@@ -119,12 +123,17 @@ func chromeHardeningBaseFlags() []string {
 // managed-mode) so the two never diverge — the MAJ-001 "every managed launch
 // rides one transport" invariant.
 //
-// ADR-044 Option A: the agent launch is UNCONDITIONALLY chrome-headless-shell
-// now — video capture moved entirely to the dedicated encoder browser
-// (EncoderChromeCmdline), which is owned and launched separately by the
-// orchestrator. There is no video-capable branch here anymore, no DISPLAY, and
-// no PULSE_SERVER: agent Chrome never renders into a virtual display or wires
-// audio.
+// ADR-044 Amendment (single full-Chrome, encoder-as-tab): the binary this
+// launches is now full Chrome (see installer.go's selectDownloadBuild), not
+// chrome-headless-shell — full Chrome is required because this SAME process
+// now also hosts the WebCodecs encoder tab (a default-context tab launched
+// via pkg/gateway/browser_stream.go's coordinatorRoot seam; see
+// encoder_launch.go's LaunchEncoderPage). The flags below are UNCHANGED by
+// this amendment — there is still no video-capable branch here, no DISPLAY,
+// and no PULSE_SERVER: this process renders offscreen and (phase 1) never
+// wires audio. chromeHardeningBaseFlags already carries the --disable-gpu
+// --enable-unsafe-swiftshader pair the encoder tab's software WebCodecs path
+// needs, so no new flags were required to add video capability.
 func managedExecAllocatorOpts(cfg BrowserConfig, params managedLaunchParams) managedChromeCmdline {
 	_ = params // reserved for future per-launch agent options; none exist today
 
@@ -135,46 +144,6 @@ func managedExecAllocatorOpts(cfg BrowserConfig, params managedLaunchParams) man
 
 	args := chromeHardeningBaseFlags()
 	args = append(args, "--headless", "--hide-scrollbars", "--mute-audio")
-
-	env := []string{
-		"HOME=" + chromeHome,
-		"XDG_CONFIG_HOME=" + filepath.Join(chromeHome, "config"),
-		"XDG_CACHE_HOME=" + filepath.Join(chromeHome, "cache"),
-	}
-	return managedChromeCmdline{Args: args, Env: env}
-}
-
-// EncoderChromeCmdline renders the command line + environment for the
-// dedicated encoder browser (ADR-044 Option A / Task B's encoderBrowser): a
-// SEPARATE, full-Chrome-build process — never chrome-headless-shell — whose
-// sole purpose is hosting the WebCodecs VideoEncoder page that drains each
-// agent tab's video stream. It exists because chrome-headless-shell has no
-// WebCodecs VideoEncoder (GROUNDED FACTS), so the agent's own Chrome can never
-// serve this role.
-//
-// Runs full Chrome in new-headless mode (plain --headless — verified over the
-// CDP pipe; --headless=new returns "no browser is open (-32000)" on
-// Target.createTarget) with SwiftShader software rendering for full-quality
-// encoding, exactly like Playwright's own headless-video approach. Shares the
-// SAME hardening base as the agent launch (chromeHardeningBaseFlags) so the
-// two processes never diverge on security posture; the only addition is
-// --headless itself.
-//
-// Deliberately does NOT set DISPLAY (new-headless renders offscreen — no X
-// server involved) or PULSE_SERVER (audio is deferred to phase 2 — GROUNDED
-// FACTS) or --user-data-dir (cdppipe.PipeOptions.UserDataDir supplies it from
-// the caller's own profileDir).
-//
-// cfg.ProfileDir MUST be the encoder's own DISTINCT profile directory (Task B:
-// <home>/browser/profiles/encoder) — it is used only to jail HOME/XDG_*
-// writes, exactly like the agent path, and must never be the agent's own
-// profile dir so the two Chrome processes' on-disk state stays fully
-// partitioned.
-func EncoderChromeCmdline(cfg BrowserConfig) managedChromeCmdline {
-	chromeHome := cfg.ProfileDir
-
-	args := chromeHardeningBaseFlags()
-	args = append(args, "--headless")
 
 	env := []string{
 		"HOME=" + chromeHome,

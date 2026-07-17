@@ -4,15 +4,18 @@
 //
 // encoder_launch.go — Wave 2 component M (live-browser video streaming, ADR-044;
 // docs/internal/specs/live-browser-video-streaming-spec.md R7). This file owns
-// the CDP-driven launch of the controlled WebCodecs *encoder page* inside a
-// DEDICATED full-Chrome browser process (rootCtx here) reserved exclusively
-// for encoder pages — see pkg/gateway/browser_stream.go, which owns and boots
-// that process; no agent code ever runs in it. LaunchEncoderPage opens a new
-// tab in that browser's DEFAULT browser context, injects the per-stream
-// ingest capability token out-of-band (never via URL), grants audio-capture
-// consent SCOPED TO THE ENCODER-PAGE ORIGIN ONLY (when audio is requested),
-// and navigates the tab to the loopback encoder-page URL served by the stream
-// orchestrator (pkg/gateway/browser_stream.go).
+// the CDP-driven launch of the controlled WebCodecs *encoder page* as a tab in
+// the coordinator's SHARED full-Chrome process (rootCtx here is the coordinator
+// root context — pkg/tools/browser/coordinator.go RootContext(), fed in by the
+// stream orchestrator in pkg/gateway/browser_stream.go). That single Chrome
+// ALSO hosts the per-agent browsing tabs, each in its OWN named browser context
+// (ADR-043 isolation); the encoder tab lands in the process's DEFAULT browser
+// context, which no agent uses. LaunchEncoderPage opens that default-context
+// tab, injects the per-stream ingest capability token out-of-band (never via
+// URL), grants audio-capture consent SCOPED TO THE ENCODER-PAGE ORIGIN ONLY
+// (when audio is requested — phase 2 only), and navigates the tab to the
+// loopback encoder-page URL served by the stream orchestrator
+// (pkg/gateway/browser_stream.go).
 //
 // SECURITY POSTURE (FR-016 / MAJ-003 — why the origin must be unguessable):
 //
@@ -24,30 +27,35 @@
 //     CreateTarget to one returns CDP -32000 "no browser is open"; the
 //     DEFAULT context — the one owning the window Chrome opens at process
 //     launch — has no such problem and is what this file uses.
-//   - The original FR-016 threat model ("the agent could navigate its own
-//     tab to the encoder origin and inherit the audio-capture grant") is now
-//     STRUCTURALLY IMPOSSIBLE rather than merely mitigated by an isolated
-//     browser context: rootCtx here is a browser process dedicated solely to
-//     encoder pages, so there is no agent-controlled tab anywhere in this
-//     browser that could ever navigate to the encoder origin. Agent-driven
-//     browsing runs in a wholly separate managed-Chrome process
-//     (pkg/tools/browser/coordinator.go) that this file never touches.
-//   - The audio-capture grant is still applied with Browser.setPermission
-//     scoped to the encoder-page ORIGIN, as defense in depth for the (phase-2)
-//     audio case — see the HasAudio branch in LaunchEncoderPage for what
-//     changes there once audio ships. The orchestrator still serves the
-//     encoder page on an UNGUESSABLE loopback origin — an OS-assigned random
-//     port on 127.0.0.1 PLUS a random secret path — so an agent-navigated
-//     page (in the OTHER, agent-owned browser) can neither guess the origin
-//     nor the resource. This file relies on the orchestrator having minted
-//     that unguessable Origin/EncoderURL; it does not itself pick the origin.
+//   - PRIMARY DEFENSE = the unguessable encoder-page origin, NOT process
+//     isolation. rootCtx here is the coordinator's SHARED Chrome (ADR-044
+//     single-Chrome amendment, 2026-07-17): the encoder tab lives in that
+//     process's DEFAULT browser context while every per-agent browsing tab
+//     runs in its OWN named browser context (ADR-043) in the SAME process. So
+//     the original FR-016 threat ("an agent tab navigates to the encoder
+//     origin and inherits the audio-capture grant") is NO LONGER structurally
+//     impossible — an agent tab now shares this process and could reach the
+//     origin IF it learned it. It is re-secured by the orchestrator serving
+//     the encoder page on an UNGUESSABLE loopback origin — an OS-assigned
+//     random port on 127.0.0.1 PLUS a random secret path — which an agent tab
+//     can neither guess nor enumerate. This file relies on the orchestrator
+//     having minted that unguessable Origin/EncoderURL; it does not itself
+//     pick the origin.
+//   - PHASE 1 HAS NO GRANT TO INHERIT. Phase 1 is video-only (cfg.HasAudio is
+//     always false — ClassifyVideoCapability returns video-only; capture is
+//     server-driven CDP Page.startScreencast with no page-callable API), so NO
+//     media permission is granted at all — there is no consent surface for any
+//     tab, agent or encoder, to inherit. The audio grant is a phase-2 concern
+//     only; when it ships it MUST be scoped to the encoder tab's DEFAULT
+//     browser context (see the HasAudio branch in LaunchEncoderPage), PRECISELY
+//     because agent tabs now share the process.
 //   - The per-stream token is injected via Page.addScriptToEvaluateOnNewDocument
 //     so it runs BEFORE the encoder page's own script and is never present in
 //     the URL, query string, or the embedded page bytes (FR-013).
 //   - No process-global media flag is used: --use-fake-ui-for-media-stream is
 //     FORBIDDEN (C-2/P-6). Video capture is CDP Page.startScreencast (component
 //     L) which has no page-callable API at all; the ONLY consent surface is
-//     this per-origin audio grant, and only when audio is requested.
+//     the phase-2 per-origin audio grant, and only when audio is requested.
 
 package browser
 
@@ -174,18 +182,21 @@ func (t *EncoderTab) Close() error {
 }
 
 // LaunchEncoderPage opens the controlled encoder page for one stream inside
-// rootCtx — the dedicated encoder-only full-Chrome browser process (NOT the
-// agent's managed Chrome; rootCtx here is that encoder browser's own root
-// context — see pkg/gateway/browser_stream.go, which owns and boots it). It:
+// rootCtx — the coordinator's SHARED full-Chrome process (rootCtx here is the
+// coordinator root context — see pkg/tools/browser/coordinator.go RootContext(),
+// fed in by the stream orchestrator in pkg/gateway/browser_stream.go). That
+// same Chrome also hosts the per-agent browsing tabs in their own named browser
+// contexts; the encoder tab lands in the DEFAULT context, which no agent uses.
+// It:
 //
 //  1. opens a new tab in rootCtx's DEFAULT browser context via a raw
 //     target.CreateTarget with no browserContextId (see the SECURITY POSTURE
 //     note above for why an isolated per-tab browser context does not work
 //     against full-Chrome --headless),
-//  2. (only when cfg.HasAudio) grants audio-capture consent scoped to
-//     cfg.Origin — the unguessable encoder-page origin — as defense in depth
-//     (FR-016); the original "agent inherits the grant" threat cannot occur
-//     here since no agent code runs in this browser at all,
+//  2. (only when cfg.HasAudio — phase 2) grants audio-capture consent scoped to
+//     cfg.Origin, the unguessable encoder-page origin, AND to the encoder tab's
+//     DEFAULT browser context (FR-016); the context scoping is required because
+//     agent tabs now share this Chrome process — see the HasAudio branch,
 //  3. injects window.__OMNIPUS_INGEST__ (token/wsURL/streamId/…) via
 //     Page.addScriptToEvaluateOnNewDocument so it runs before the page's own
 //     script and the token is never in the URL (FR-013),
@@ -209,15 +220,42 @@ func LaunchEncoderPage(rootCtx context.Context, cfg EncoderLaunchCfg) (*EncoderT
 	// windows, so that call returns CDP -32000 "no browser is open". A raw
 	// CreateTarget with no browserContextId instead lands in the DEFAULT
 	// context — the one owning the window Chrome opened at process launch —
-	// which works. Per-tab isolation from agent code is unnecessary here: it
-	// is structural, because rootCtx is a browser process dedicated solely to
-	// encoder pages (see SECURITY POSTURE above), so there is no agent tab in
-	// this browser to isolate the encoder page from.
+	// which works. The DEFAULT context is also the one no agent uses: the
+	// coordinator gives each agent its OWN named browser context (ADR-043) in
+	// this SAME shared Chrome, so the encoder tab is separated from agent tabs
+	// by browser context, not by process. Confidentiality of the encoder origin
+	// (see SECURITY POSTURE above), not process isolation, is what keeps an
+	// agent tab away from it — and phase 1 is video-only, so there is no grant
+	// to inherit anyway.
 	c := chromedp.FromContext(rootCtx)
 	if c == nil || c.Browser == nil {
 		return nil, errors.New("encoder launch: rootCtx has no live browser")
 	}
-	tid, err := target.CreateTarget("about:blank").Do(cdp.WithExecutor(rootCtx, c.Browser))
+	// WithBackground(true) is REQUIRED here (single-Chrome collapse regression
+	// fix): Target.createTarget defaults background=false ("not supported by
+	// headless shell" per cdproto — i.e. it DOES take effect on full Chrome,
+	// which every process in this topology now is). A foreground-created
+	// target steals the "active"/visible slot from whatever target currently
+	// holds it. Before the single-Chrome collapse this was harmless — the
+	// encoder lived in its OWN dedicated Chrome process (ADR-044 Option A),
+	// so its activation could never affect an agent tab in a DIFFERENT
+	// process. Now the encoder tab and every agent tab share ONE Chrome
+	// process, and startStreamLocked always creates the encoder tab BEFORE
+	// calling StartCapture on the agent tab (browser_stream.go), so an
+	// encoder tab created in the foreground backgrounds the agent tab at the
+	// exact moment its screencast bring-up begins. A backgrounded target's
+	// compositor is throttled/suspended even with
+	// --disable-backgrounding-occluded-windows/--disable-renderer-backgrounding
+	// set (those flags only cover JS timer throttling and occluded-window
+	// renderer priority, not this activation-driven visibility change), so
+	// Page.startScreencast never emits a single frame and StartCapture always
+	// hits its bring-up timeout. The encoder page itself has no need to be
+	// foreground — WebCodecs encoding operates on ImageBitmap/VideoFrame data
+	// pushed to it programmatically, not on its own rendered/composited
+	// pixels — so creating it in the background is fully correct.
+	tid, err := target.CreateTarget("about:blank").
+		WithBackground(true).
+		Do(cdp.WithExecutor(rootCtx, c.Browser))
 	if err != nil {
 		return nil, fmt.Errorf("encoder launch: create default-context target: %w", err)
 	}
@@ -240,7 +278,7 @@ func LaunchEncoderPage(rootCtx context.Context, cfg EncoderLaunchCfg) (*EncoderT
 	// via WithTargetID to a target chromedp did not mint itself, so chromedp
 	// never populates BrowserContextID for it (that field is only set when
 	// this context creates a new browser context, or inherits one from a
-	// parent that has one — rootCtx, the dedicated encoder browser's root,
+	// parent that has one — rootCtx, the coordinator's shared-Chrome root,
 	// has neither). See the phase-2 note in the HasAudio branch below for why
 	// that is fine today and what must change once audio ships.
 	bid := chromedp.FromContext(tabCtx).BrowserContextID
@@ -255,18 +293,25 @@ func LaunchEncoderPage(rootCtx context.Context, cfg EncoderLaunchCfg) (*EncoderT
 	if cfg.HasAudio {
 		// Origin-scoped audio-capture grant (FR-016). Unreachable in phase 1:
 		// cfg.HasAudio is always false (ClassifyVideoCapability returns
-		// video-only; see EncoderLaunchCfg.HasAudio). PHASE-2 NOTE: bid above
-		// is empty/ambiguous — the encoder tab lives in rootCtx's DEFAULT
-		// browser context now, not a dedicated per-tab context, so
-		// WithBrowserContextID(bid) below no longer scopes to anything
-		// meaningful. When audio capture ships, this must become a
-		// browser-level origin grant — browser.SetPermission(...).
-		// WithOrigin(cfg.Origin) WITHOUT .WithBrowserContextID — because the
-		// FR-016 agent-inheritance threat this originally scoped against is
-		// now structurally impossible: the encoder browser is a process
-		// dedicated to encoder pages with no agent-controlled tab in it at
-		// all, so there is no "agent's own tab" that could ever navigate to
-		// cfg.Origin and inherit the grant.
+		// video-only; see EncoderLaunchCfg.HasAudio). PHASE-2 NOTE (ADR-044
+		// single-Chrome amendment, 2026-07-17): the encoder tab shares its
+		// Chrome process with the per-agent browsing tabs, which run in their
+		// OWN named browser contexts (ADR-043). An agent tab is therefore a
+		// DIFFERENT browser context in the SAME process and CAN navigate to
+		// cfg.Origin if it ever learns it — so when audio capture ships, the
+		// grant MUST stay scoped to the encoder tab's own (DEFAULT) browser
+		// context via .WithBrowserContextID; it MUST NOT become a browser-wide
+		// grant, which every context — including an agent's — would inherit.
+		// (This INVERTS the earlier note, which called for dropping
+		// .WithBrowserContextID on the now-false premise that no agent tab
+		// could ever share this process.) Implementation caveat: bid above is
+		// empty because tabCtx was adopted via WithTargetID (see the
+		// BrowserContextID note above); for Browser.setPermission an
+		// empty/omitted browserContextId targets the DEFAULT browser context —
+		// the encoder tab's context — so an empty bid still scopes to the right
+		// place, but a phase-2 implementer MUST verify the grant lands on the
+		// default context ONLY and confirm an agent (named-context) tab cannot
+		// obtain the audio stream. Do NOT widen this to a browser-global grant.
 		actions = append(actions,
 			browser.SetPermission(
 				&browser.PermissionDescriptor{Name: audioPermissionName},

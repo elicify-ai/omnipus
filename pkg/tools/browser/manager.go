@@ -1006,15 +1006,53 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	if m.createTabFn != nil {
 		return m.createTabFn(parentCtx, targetID)
 	}
-	var opts []chromedp.ContextOption
-	if targetID != "" {
-		opts = append(opts, chromedp.WithTargetID(targetID))
-	}
-	ctx, cancel := chromedp.NewContext(parentCtx, opts...)
 
-	if err := chromedp.Run(ctx); err != nil {
-		cancel()
-		return nil, err
+	// Chrome 151+ hidden-tab regression fix (live-browser-video-streaming
+	// bring-up bug): when targetID == "" (creating a BRAND NEW tab — the
+	// path createFirstTab and OpenTab both funnel through), letting
+	// chromedp's own automatic newTarget() issue the CreateTarget call would
+	// omit WithNewWindow, landing the new tab as a SECOND, NON-ACTIVE tab in
+	// whatever window already exists for this browser context (the
+	// coordinator's anchor tab's window in coordinator mode — see
+	// coordinator.go's Register). On Chrome 150 that tab still reported
+	// document.visibilityState=visible and streamed screencast frames
+	// normally; on Chrome 151 it reports visibilityState=hidden, requestAnimationFrame
+	// never fires, and Page.startScreencast NEVER emits a single frame —
+	// browser.StartCapture always hits its bring-up timeout (confirmed via
+	// isolated probes against both Chrome versions: identical code, T1
+	// (own-window) streams continuously on both versions, T2 (chromedp's
+	// window-less CreateTarget) streams fine on 150 and gets zero frames on
+	// 151). Fix: mint the target via raw CDP with WithNewWindow(true) — the
+	// SAME pattern coordinator.go's Register already uses for the anchor
+	// tab — so every tab this manager creates gets its OWN window and is
+	// never a background/hidden sibling, regardless of Chrome version. The
+	// targetID != "" path (adopting an EXISTING target — ADR-041 D2) is
+	// unchanged: nothing is created, so there is no window to control.
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if targetID != "" {
+		ctx, cancel = chromedp.NewContext(parentCtx, chromedp.WithTargetID(targetID))
+		if err := chromedp.Run(ctx); err != nil {
+			cancel()
+			return nil, err
+		}
+	} else {
+		rc := chromedp.FromContext(parentCtx)
+		if rc == nil || rc.Browser == nil {
+			return nil, fmt.Errorf("browser: createTab: no live browser on parent context")
+		}
+		newID, err := target.CreateTarget("about:blank").
+			WithBrowserContextID(rc.BrowserContextID).
+			WithNewWindow(true).
+			Do(cdp.WithExecutor(parentCtx, rc.Browser))
+		if err != nil {
+			return nil, fmt.Errorf("browser: create tab target: %w", err)
+		}
+		ctx, cancel = chromedp.NewContext(parentCtx, chromedp.WithTargetID(newID))
+		if err := chromedp.Run(ctx); err != nil {
+			cancel()
+			return nil, err
+		}
 	}
 
 	// Best-effort stealth on a bounded timeout CHILD of ctx — safe because
@@ -1760,14 +1798,17 @@ func targetInfoFromEvent(ev any) (*target.Info, bool) {
 // and webdriver is also deleted off the prototype as a fallback for builds
 // where the accessor lives there.
 //
-// Effectiveness caveat: the webdriver override lands on full-Chrome
-// --headless=new, but NOT on the bundled chrome-headless-shell (--headless=old,
-// what the installer fetches) — there navigator.webdriver is set
-// non-overridably by the shell, so it still reads true regardless of this
-// script or --disable-blink-features=AutomationControlled. Verified in the wild
-// that Google still loads without a CAPTCHA anyway (UA + IP dominate); a
-// hardcore detector could still flag the webdriver bit. Fully closing it would
-// require shipping full Chrome new-headless instead of chrome-headless-shell.
+// Effectiveness caveat: the agent now runs on full-Chrome --headless=new
+// (the installer no longer fetches chrome-headless-shell for agent tabs),
+// so the webdriver override above lands cleanly — full Chrome honors it,
+// unlike the old bundled chrome-headless-shell (--headless=old), where
+// navigator.webdriver was set non-overridably by the shell and still read
+// true regardless of this script or --disable-blink-features=AutomationControlled.
+// Combined with deHeadlessUA's User-Agent rewrite below, BOTH stealth axes now
+// take effect together, closing the two biggest automation giveaways — this is
+// what fixes the Google CAPTCHA regression the old shell-based UA-only posture
+// still hit. Residual caveat: datacenter-IP reputation can still trigger a
+// challenge independent of UA/webdriver spoofing.
 const stealthInitScript = `(function(){` +
 	`try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined},configurable:true})}catch(e){}` +
 	`try{delete Navigator.prototype.webdriver}catch(e){}` +

@@ -49,6 +49,7 @@ import (
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -238,22 +239,53 @@ func (c *BrowserCoordinator) Register(
 	// context. WithNewBrowserContext panics if c.first is true — rootCtx is the
 	// first context (binds the *Browser), so a child created from it is NOT
 	// first, which is the safe case (mirrors the D2 spike test exactly).
-	agentCtx, agentCancel := chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext())
+	// Create the agent's browser context + its first target via RAW CDP rather
+	// than chromedp.WithNewBrowserContext(): on full-Chrome new-headless over the
+	// CDP pipe, chromedp's WithNewBrowserContext path fails createTarget with
+	// -32000 "no browser is open", whereas a raw createBrowserContext +
+	// createTarget{browserContextId} succeeds (verified against Chrome 151). The
+	// target is then adopted into a chromedp context via WithTargetID, mirroring
+	// the encoder page (encoder_launch.go). ADR-044 single-Chrome amendment.
+	rc := chromedp.FromContext(rootCtx)
+	if rc == nil || rc.Browser == nil {
+		return nil, "", fmt.Errorf(
+			"browser: coordinator: shared Chrome not ready while registering agent %q", agentID)
+	}
+	bid, bcErr := target.CreateBrowserContext().Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	if bcErr != nil {
+		return nil, "", fmt.Errorf(
+			"browser: coordinator: failed to create browser context for agent %q: %w", agentID, bcErr)
+	}
+	// WithNewWindow(true) is REQUIRED here: a freshly-created browser context has
+	// no window, so createTarget without it fails "-32000 no browser is open" on
+	// full-Chrome new-headless (the default context has a window, which is why the
+	// encoder tab does not need this). Verified against Chrome 151 over the pipe.
+	//
+	// WithBackground(true) avoids the SAME foreground-steal bug fixed in
+	// encoder_launch.go's LaunchEncoderPage (see its doc comment for the full
+	// mechanism): Target.createTarget defaults background=false, so without
+	// this, registering agent B (or B reconnecting after a reload) would steal
+	// the active/visible slot from agent A's tab in this SAME shared Chrome —
+	// silently breaking any video stream A has in progress. Harmless for the
+	// window itself (WithNewWindow(true) already gives this target its own
+	// window; WithBackground(true) only controls whether creating it also
+	// activates that window).
+	tid, ctErr := target.CreateTarget("about:blank").
+		WithBrowserContextID(bid).
+		WithNewWindow(true).
+		WithBackground(true).
+		Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	if ctErr != nil {
+		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
+		return nil, "", fmt.Errorf(
+			"browser: coordinator: failed to open first tab for agent %q: %w", agentID, ctErr)
+	}
+	agentCtx, agentCancel := chromedp.NewContext(rootCtx, chromedp.WithTargetID(tid))
 	if err := chromedp.Run(agentCtx); err != nil {
 		agentCancel()
+		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
 		return nil, "", fmt.Errorf(
-			"browser: coordinator: failed to create browser context for agent %q: %w",
-			agentID,
-			err,
-		)
-	}
-	bid := chromedp.FromContext(agentCtx).BrowserContextID
-	if bid == "" {
-		agentCancel()
-		return nil, "", fmt.Errorf(
-			"browser: coordinator: browser context for agent %q came back with an empty id",
-			agentID,
-		)
+			"browser: coordinator: failed to attach browser context for agent %q: %w", agentID, err)
 	}
 
 	c.mu.Lock()
@@ -481,11 +513,12 @@ func (c *BrowserCoordinator) totalOpenTabsLocked() int {
 // Used by callers that only hold a *BrowserManager (not the coordinator
 // itself), e.g. the no-coordinator managed-pipe fallback (manager.go).
 //
-// ADR-044 Option A: the dedicated encoder browser (browser_stream.go's
-// encoderBrowser) is NOT a sibling context of this rootCtx — it is a wholly
-// separate Chrome process the orchestrator launches itself (its own pipe,
-// its own rootCtx), because chrome-headless-shell (what this coordinator's
-// Chrome always is now) has no WebCodecs VideoEncoder.
+// ADR-044 amendment (single full-Chrome, encoder-as-tab): the encoder tab IS
+// a default-context tab of this rootCtx; this method is the single source of
+// the encoder's root (consumed by the video orchestrator's coordinatorRoot
+// seam in pkg/gateway/browser_stream.go). There is no separate encoder Chrome
+// process — the coordinator's one full-Chrome process hosts both the
+// per-agent browser contexts and the encoder's default-context tab.
 //
 // ok is false when no Chrome is currently live — never launched yet, or torn
 // down by Shutdown/a crash awaiting relaunch. Callers MUST treat ok=false as
@@ -703,11 +736,11 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		return fmt.Errorf("browser: coordinator: cannot locate chromium: %w", err)
 	}
 
-	// ADR-044 Option A: the agent's shared Chrome is unconditionally
-	// headless-shell now (managedExecAllocatorOpts collapsed the video-capable
-	// branch entirely — video capture lives on a separate encoder browser the
-	// orchestrator owns and launches via EncoderChromeCmdline). Nothing left to
-	// compute here; pass the zero-value params.
+	// ADR-044 amendment (single full-Chrome, encoder-as-tab): the agent's
+	// shared Chrome is full Chrome; it hosts the WebCodecs encoder tab in its
+	// default browser context (see RootContext's doc). managedExecAllocatorOpts
+	// resolves the same binary/flags for both roles — nothing left to compute
+	// here; pass the zero-value params.
 	cmdline := managedExecAllocatorOpts(c.cfg, managedLaunchParams{})
 
 	// Launch over the pipe (fail closed — err reports launch + CDP connectivity

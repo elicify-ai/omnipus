@@ -161,7 +161,14 @@ func TestInstaller_PrefersInstalledBinary(t *testing.T) {
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	binPath := seedBuildBinary(t, root, "131.0.6778.108", platform, headlessShellBuild())
+	// EnsureChromium resolves selectDownloadBuild() (full chrome) via a
+	// per-build lookup, not detect-either — seed the build it actually
+	// requests so the cache hit short-circuits before any network call. Also
+	// point the manifest at an unreachable local URL so a cache MISS would
+	// fail fast with a connection error rather than silently (and slowly)
+	// reaching the real chrome-for-testing endpoint over the network.
+	withManifestURL(t, "http://127.0.0.1:1/unreachable-manifest")
+	binPath := seedBuildBinary(t, root, "131.0.6778.108", platform, fullChromeBuild())
 
 	got, err := EnsureChromium(context.Background(), root)
 	if err != nil {
@@ -226,12 +233,14 @@ func TestInstaller_EnsureChromiumBuild_ResolvesTheSpecificallyRequestedBuild(t *
 	}
 }
 
-// TestInstaller_HeadlessShellDefault_Always is the Option-A (ADR-044)
-// regression case: the agent's own browser is always chrome-headless-shell
-// (the dedicated full-Chrome build is only ever fetched via
-// EnsureChromiumFullBuild for the live-view encoder), so a fresh
-// EnsureChromium download must always fetch chrome-headless-shell.
-func TestInstaller_HeadlessShellDefault_Always(t *testing.T) {
+// TestInstaller_FullChromeDefault_Always is the single-Chrome collapse
+// (ADR-044 Amendment) regression case: the agent's own browser is now the
+// full "chrome" build, since it also hosts the live-view WebCodecs encoder
+// tab in its default browser context, so a fresh EnsureChromium download
+// must always fetch full chrome — never chrome-headless-shell (that build
+// is only ever reached via the F-08 fallback when full chrome can't be
+// resolved, exercised separately).
+func TestInstaller_FullChromeDefault_Always(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix-only path layout")
 	}
@@ -240,7 +249,7 @@ func TestInstaller_HeadlessShellDefault_Always(t *testing.T) {
 		t.Skipf("unsupported platform: %v", err)
 	}
 
-	build := headlessShellBuild()
+	build := fullChromeBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
 
@@ -253,8 +262,8 @@ func TestInstaller_HeadlessShellDefault_Always(t *testing.T) {
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
-			cftDownloadID:           srv.URL + "/zip",
-			cftFullChromeDownloadID: srv.URL + "/should-not-be-fetched",
+			cftFullChromeDownloadID: srv.URL + "/zip",
+			cftDownloadID:           srv.URL + "/should-not-be-fetched",
 		}))
 	})
 	withManifestURL(t, srv.URL+"/manifest")
@@ -264,8 +273,8 @@ func TestInstaller_HeadlessShellDefault_Always(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureChromium download path: %v", err)
 	}
-	if !strings.HasSuffix(got, headlessShellBinaryName()) {
-		t.Fatalf("expected chrome-headless-shell binary path, got %q", got)
+	if !strings.HasSuffix(got, fullChromeBinaryRelPath()) {
+		t.Fatalf("expected full chrome binary path, got %q", got)
 	}
 	info, err := os.Stat(got)
 	if err != nil {
@@ -273,6 +282,56 @@ func TestInstaller_HeadlessShellDefault_Always(t *testing.T) {
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatalf("expected executable bit on %s", got)
+	}
+}
+
+// TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessShell
+// is the F-08 graceful-degradation regression: when the manifest carries no
+// "chrome" (full build) entry at all — e.g. a feed that only ships
+// chrome-headless-shell — EnsureChromiumBuild(fullChromeBuild()) (what
+// EnsureChromium now requests via selectDownloadBuild) must fall back to
+// chrome-headless-shell rather than failing the install outright. Under the
+// single-Chrome collapse this fallback is no longer an encoder-only nicety —
+// it's the path that keeps a fresh install browsing at all when the full
+// build can't be resolved (Constraint #4).
+func TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only path layout")
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	shellBuild := headlessShellBuild()
+	content := []byte("#!/bin/sh\nexit 0\n")
+	zipBytes := buildZipFixture(t, shellBuild, platform, content)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zip", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Goog-Hash", googHashMD5Header(zipBytes))
+		_, _ = w.Write(zipBytes)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
+		// Deliberately no cftFullChromeDownloadID key at all.
+		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+			cftDownloadID: srv.URL + "/zip",
+		}))
+	})
+	withManifestURL(t, srv.URL+"/manifest")
+
+	root := t.TempDir()
+	got, err := EnsureChromiumBuild(context.Background(), root, selectDownloadBuild())
+	if err != nil {
+		t.Fatalf("expected fallback to chrome-headless-shell to succeed, got: %v", err)
+	}
+	if !strings.HasSuffix(got, headlessShellBinaryName()) {
+		t.Fatalf("expected the fallback chrome-headless-shell binary path, got %q", got)
+	}
+	if _, statErr := os.Stat(got); statErr != nil {
+		t.Fatalf("expected the fallback binary to exist on disk: %v", statErr)
 	}
 }
 
@@ -422,7 +481,12 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 		t.Skipf("unsupported platform: %v", err)
 	}
 
-	build := headlessShellBuild() // EnsureChromium's own default build (Option A)
+	// The manifest below deliberately carries no full-chrome (cftFullChromeDownloadID)
+	// entry, so EnsureChromium's selectDownloadBuild()==fullChromeBuild() request
+	// takes the F-08 "missing from manifest" fallback to chrome-headless-shell —
+	// exercising the integrity check on whichever build is actually resolved,
+	// same as production.
+	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
 
@@ -477,6 +541,8 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	allowHeaderlessDownloadForTesting = true
 	t.Cleanup(func() { allowHeaderlessDownloadForTesting = prev })
 
+	// No full-chrome manifest entry below -> EnsureChromium's
+	// selectDownloadBuild() request falls back (F-08) to chrome-headless-shell.
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
@@ -504,18 +570,21 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	}
 }
 
-// TestInstaller_SelectDownloadBuild_AlwaysHeadlessShell is the Option-A
-// (ADR-044) regression guard: the agent's own browser is always
-// chrome-headless-shell — selectDownloadBuild must return it unconditionally
-// on every platform. The dedicated full-Chrome build for the live-view
-// encoder is fetched exclusively via EnsureChromiumFullBuild, never through
-// this path.
-func TestInstaller_SelectDownloadBuild_AlwaysHeadlessShell(t *testing.T) {
+// TestInstaller_SelectDownloadBuild_AlwaysFullChrome is the single-Chrome
+// collapse (ADR-044 Amendment) regression guard: the agent's own browser is
+// now the full "chrome" build, since it also hosts the live-view WebCodecs
+// encoder tab in its default browser context — selectDownloadBuild must
+// return it unconditionally on every platform. EnsureChromiumBuild's own
+// F-08 fallback (exercised separately by
+// TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessShell)
+// still drops to chrome-headless-shell when the full build can't be
+// resolved — that's the graceful-degradation path, not this selector.
+func TestInstaller_SelectDownloadBuild_AlwaysFullChrome(t *testing.T) {
 	got := selectDownloadBuild()
-	if got.downloadID != cftDownloadID {
+	if got.downloadID != cftFullChromeDownloadID {
 		t.Fatalf(
-			"expected selectDownloadBuild to always default to chrome-headless-shell (downloadID %q), got %q",
-			cftDownloadID,
+			"expected selectDownloadBuild to always default to full chrome (downloadID %q), got %q",
+			cftFullChromeDownloadID,
 			got.downloadID,
 		)
 	}

@@ -149,19 +149,16 @@ func TestStream_BringupFailure_EmitsAuditEvent(t *testing.T) {
 		LaunchEncoder: launch.launch,
 		StartCapture:  capb.start,
 		EncoderServer: srv,
+		// Single-Chrome collapse (ADR-044 Amendment): launchEncoderTab now
+		// resolves its root ctx via o.rootSource() (the Coordinator seam)
+		// instead of the deleted encoderBrowser.ensureRoot. A live-root fake
+		// (mirrors newTestOrchestrator, browser_stream_test.go) keeps this
+		// test hermetic (no real Chrome download/launch) so its injected
+		// capture-start failure — not an encoder-launch failure — is what
+		// actually fails bring-up.
+		Coordinator: func() (context.Context, bool) { return context.Background(), true },
 	})
 	o.ingest = ing
-	// ADR-044 Option A / Task B: launchEncoderTab now calls o.encoder.ensureRoot
-	// BEFORE the LaunchEncoder seam faked above ever runs — fake ITS launch
-	// seams too (mirrors newTestOrchestrator, browser_stream_test.go) so this
-	// test stays hermetic (no real Chrome download/launch) and its injected
-	// capture-start failure is what actually fails bring-up.
-	o.encoder.resolveExecPath = func(context.Context, string) (string, error) {
-		return "fake-encoder-chrome", nil
-	}
-	o.encoder.pipeLauncher = func(context.Context, string, string) (encoderPipeLaunch, error) {
-		return encoderPipeLaunch{rootCtx: context.Background()}, nil
-	}
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
@@ -258,18 +255,14 @@ func TestStream_MidStreamStall_LivenessTimeoutFailsStream(t *testing.T) {
 		LaunchEncoder: launch.launch,
 		StartCapture:  capb.start,
 		EncoderServer: srv,
+		// Single-Chrome collapse (ADR-044 Amendment): same hermeticity fix as
+		// TestStream_BringupFailure_EmitsAuditEvent above — a live-root
+		// Coordinator fake keeps launchEncoderTab from ever touching the
+		// network or a real Chrome process; the genuine failure this test
+		// drives is the mid-stream liveness timeout, not the encoder launch.
+		Coordinator: func() (context.Context, bool) { return context.Background(), true },
 	})
 	o.ingest = ing
-	// ADR-044 Option A / Task B: same hermeticity fix as
-	// TestStream_BringupFailure_EmitsAuditEvent above — fake o.encoder's own
-	// launch seams so ensureRoot never touches the network or spawns a real
-	// Chrome process.
-	o.encoder.resolveExecPath = func(context.Context, string) (string, error) {
-		return "fake-encoder-chrome", nil
-	}
-	o.encoder.pipeLauncher = func(context.Context, string, string) (encoderPipeLaunch, error) {
-		return encoderPipeLaunch{rootCtx: context.Background()}, nil
-	}
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{

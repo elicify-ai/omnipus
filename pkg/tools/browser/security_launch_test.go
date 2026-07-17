@@ -35,11 +35,12 @@ import (
 // auto-grant getUserMedia to EVERY page in a managed Chrome instance,
 // including a page the agent itself navigates to — defeating the whole
 // origin-scoped-audio-grant design in encoder_launch.go (LaunchEncoderPage's
-// doc comment explicitly forbids it, C-2/P-6). Table-driven over BOTH managed
-// Chrome processes this package launches under ADR-044 Option A — the agent's
-// own chrome-headless-shell (managedExecAllocatorOpts) and the dedicated
-// full-Chrome encoder browser (EncoderChromeCmdline) — so a regression in
-// EITHER path is caught.
+// doc comment explicitly forbids it, C-2/P-6). Table-driven (single entry)
+// over the one managed Chrome process this package launches under the
+// ADR-044 Amendment (single full-Chrome, encoder-as-tab) —
+// managedExecAllocatorOpts, which now also hosts the WebCodecs encoder tab in
+// its default browser context. There is no longer a separate dedicated
+// encoder-browser cmdline to assert against.
 //
 // Traces to: docs/internal/specs/live-browser-video-streaming-spec.md FR-016 / Test 3.
 func TestManagedExecOpts_ForbiddenFakeUIMediaStreamFlag_NeverPresent(t *testing.T) {
@@ -49,8 +50,7 @@ func TestManagedExecOpts_ForbiddenFakeUIMediaStreamFlag_NeverPresent(t *testing.
 		name    string
 		cmdline managedChromeCmdline
 	}{
-		{name: "agent headless-shell launch", cmdline: managedExecAllocatorOpts(cfg, managedLaunchParams{})},
-		{name: "encoder full-Chrome launch", cmdline: EncoderChromeCmdline(cfg)},
+		{name: "agent+encoder full-Chrome launch", cmdline: managedExecAllocatorOpts(cfg, managedLaunchParams{})},
 	}
 
 	for _, tc := range tests {
@@ -69,27 +69,25 @@ func TestManagedExecOpts_ForbiddenFakeUIMediaStreamFlag_NeverPresent(t *testing.
 
 // ---- SC-017 / EC-3 / TC-G5: no fixed CDP TCP port ----
 
-// TestManagedExecOpts_NoRemoteDebuggingPort_EitherLaunchMode complements the
-// MAJ-001 launch-args contract tests in coordinator_test.go
-// (TestManagedExecOpts_HeadlessShellNoPortNoDisplay,
-// TestEncoderChromeCmdline_HeadlessFullChromeNoDisplayNoPulse) with a
-// security-framed, standalone assertion: NEITHER managed Chrome process this
-// package launches — the agent's chrome-headless-shell nor the dedicated
-// full-Chrome encoder browser — may ever emit --remote-debugging-port. A
-// fixed TCP CDP port would be a locally-reachable, unauthenticated control
-// surface for a managed Chrome process (SC-017/EC-3). CDP flows exclusively
-// over the cdppipe fd 3/4 pipe.
+// TestManagedExecOpts_NoRemoteDebuggingPort complements the MAJ-001
+// launch-args contract test in coordinator_test.go
+// (TestManagedExecOpts_HeadlessShellNoPortNoDisplay) with a security-framed,
+// standalone assertion: the single managed Chrome process this package
+// launches — the agent's full-Chrome launch, which under the ADR-044
+// Amendment also hosts the WebCodecs encoder tab — may never emit
+// --remote-debugging-port. A fixed TCP CDP port would be a
+// locally-reachable, unauthenticated control surface for a managed Chrome
+// process (SC-017/EC-3). CDP flows exclusively over the cdppipe fd 3/4 pipe.
 //
 // Traces to: docs/internal/specs/live-browser-video-streaming-spec.md SC-017 / EC-3.
-func TestManagedExecOpts_NoRemoteDebuggingPort_EitherLaunchMode(t *testing.T) {
+func TestManagedExecOpts_NoRemoteDebuggingPort(t *testing.T) {
 	cfg := BrowserConfig{ProfileDir: t.TempDir()}
 
 	tests := []struct {
 		name    string
 		cmdline managedChromeCmdline
 	}{
-		{name: "agent headless-shell launch", cmdline: managedExecAllocatorOpts(cfg, managedLaunchParams{})},
-		{name: "encoder full-Chrome launch", cmdline: EncoderChromeCmdline(cfg)},
+		{name: "agent+encoder full-Chrome launch", cmdline: managedExecAllocatorOpts(cfg, managedLaunchParams{})},
 	}
 
 	for _, tc := range tests {

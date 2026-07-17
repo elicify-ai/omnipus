@@ -56,12 +56,12 @@ type VideoCapability struct {
 	// Capable/AudioAvailable in new code — it cannot represent the illegal
 	// {not capable, audio available} combination.
 	Level CapabilityLevel
-	// Capable is the overall classification (Option A / ADR-044): linux + a
-	// full-Chrome build already installed under installRoot for the
-	// dedicated live-view encoder browser. Agent browsing is unaffected
-	// either way — the agent's own browser is always chrome-headless-shell;
-	// only the live-view video path (a SEPARATE, dedicated encoder browser
-	// process) is gated on this. Derived from Level != NotCapableLevel.
+	// Capable is the overall classification (ADR-044 amendment: single
+	// full-Chrome, encoder-as-tab): linux + a full-Chrome build already
+	// installed under installRoot. The single agent+encoder Chrome IS that
+	// full-Chrome build — this field gates whether it is installed, which in
+	// turn gates whether the live-view video path (the encoder tab hosted in
+	// that same Chrome) is available. Derived from Level != NotCapableLevel.
 	Capable bool
 	// AudioAvailable reports whether audio capture is additionally
 	// available. Always false in phase 1 — audio capture is deferred to
@@ -87,18 +87,19 @@ type VideoCapability struct {
 // process, which must never be faked.
 var goosForCapability = runtime.GOOS
 
-// ClassifyVideoCapability implements the Option-A (ADR-044) video-capability
-// decision: video-capable now means linux + a full-Chrome build already
-// installed under installRoot for the dedicated live-view encoder browser —
-// the agent's own browser stays chrome-headless-shell regardless of this
-// classification (Option A dedicates a SEPARATE full-Chrome browser process
-// to encoding; it never runs agent code, so no virtual-display or audio
-// sidecar is required to reach it). installRoot is the same managed-Chromium
-// install root EnsureChromium/EnsureChromiumFullBuild use, so classification
-// never triggers a download — it only inspects what is already on disk.
-// Audio capture is deferred to phase 2 (ADR-044): a video-capable host
-// always classifies VideoOnlyLevel via videoOnly, never VideoAndAudioLevel,
-// until phase 2 lands.
+// ClassifyVideoCapability implements the ADR-044-amendment (single
+// full-Chrome, encoder-as-tab) video-capability decision: video-capable means
+// linux + a full-Chrome build already installed under installRoot. That build
+// IS the agent's own browser now (installer.go's selectDownloadBuild), and
+// the encoder tab runs inside that same coordinator Chrome's default browser
+// context — there is no separate encoder process to provision, so this
+// classification really means "is the (only) Chrome build installed yet."
+// installRoot is the same managed-Chromium install root
+// EnsureChromium/EnsureChromiumFullBuild use, so classification never
+// triggers a download — it only inspects what is already on disk. Audio
+// capture is deferred to phase 2 (ADR-044): a video-capable host always
+// classifies VideoOnlyLevel via videoOnly, never VideoAndAudioLevel, until
+// phase 2 lands.
 func ClassifyVideoCapability(installRoot string) VideoCapability {
 	if goosForCapability != "linux" {
 		return notCapable(fmt.Sprintf(
@@ -111,7 +112,7 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 		return notCapable("unsupported platform for managed chromium: " + err.Error())
 	}
 	if findInstalledBuild(installRoot, platform, fullChromeBuild()) == "" {
-		return notCapable("full-Chrome encoder build not installed yet (download pending or unavailable)")
+		return notCapable("full-Chrome build not installed yet (download pending or unavailable)")
 	}
 	return videoOnly("audio deferred to phase 2")
 }
@@ -122,7 +123,7 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 // AudioReason carries the video-only audio-absent explanation — de-overloading
 // what a single Reason field used to carry. There is deliberately no
 // videoAndAudio constructor yet: audio capture is a phase-2 increment (the
-// dedicated encoder browser is video-only for now), so phase 1 never reaches
+// encoder tab is video-only for now), so phase 1 never reaches
 // VideoAndAudioLevel. It will be re-added with the audio increment.
 func notCapable(reason string) VideoCapability {
 	return VideoCapability{Level: NotCapableLevel, Capable: false, AudioAvailable: false, Reason: reason}

@@ -315,3 +315,88 @@ Direction (A over B/C/D): **High** — settled by the operator and by the constr
 2. **Red-team this decision record:** `/grill-spec docs/internal/architecture/ADR-044-live-browser-video-streaming.md`
 3. **Spec the implementation:** `/plan-spec docs/internal/architecture/ADR-044-live-browser-video-streaming.md` — the capture page, relay + GOP cache, AsyncAPI messages (§6.3), installer detection, per-attach fallback negotiation (§6.4), and SPA decode path, with the FR/NFR targets from §2 as acceptance anchors. Sequence Phase 1 → 2 per §6.5.
 4. File the v0.3 tracking epic referencing this ADR, the comparison document, and the `browser-live-responsiveness` note (interim tuning explicitly not pursued per operator direction).
+
+---
+
+## Amendment (2026-07-17): Single full-Chrome, encoder-as-tab — supersedes the two-Chrome split
+
+**Status:** Accepted 2026-07-17 (operator: Daniel Piatkowski). **Authoritative over the "Option A / two-Chrome" shape described in §6.5, in the current code comments (`browser_stream.go`'s `encoderBrowser`, `exec_resolver.go`'s `EncoderChromeCmdline`, `capability.go`, `installer.go`), and in `ADR-044-spike-results.md` wherever they describe two Chrome processes.** The WebCodecs-relay-over-gateway-WS decision (§6.0–6.4, wire contract, GOP cache, ingest token, unavailable-state degradation) is UNCHANGED — only the *process topology that hosts the encoder* changes. Ratifying mode: this records an operator decision already made; it is not a re-litigation of §5/§6.
+
+### Decision
+
+Run **exactly ONE full-Chrome-headless process** (the ADR-043 `BrowserCoordinator`'s shared Chrome), not two. That single process hosts BOTH:
+
+1. **Agent tabs**, each in its own per-agent CDP browser context (ADR-043 isolation, unchanged — it works on full Chrome), and
+2. **The WebCodecs encoder tab**, created in the coordinator Chrome's **default** browser context (the one no agent uses), navigated to the gateway's unguessable `http://127.0.0.1:<random>/enc/<secret>` loopback page (127.0.0.1 = secure context, the precondition `VideoEncoder` requires).
+
+The agent binary switches from `chrome-headless-shell` to the **full `chrome` Chrome-for-Testing build**. `chrome-headless-shell` is dropped as the agent binary; the dedicated encoder-Chrome process (`encoderBrowser` and `EncoderChromeCmdline`) is deleted. The encoder becomes a **tab in the coordinator's own Chrome**, reached through the coordinator's existing `RootContext()`.
+
+### Why the two-Chrome split existed, and why it is gone
+
+The split was forced by two beliefs that the operator's probes (below) falsify:
+- *"chrome-headless-shell has no WebCodecs `VideoEncoder`, so the encoder needs a separate full-Chrome process."* — True about headless-shell, but the fix is to make the **agent** binary full Chrome, not to run a second process.
+- *"A new browser context on full-Chrome `--headless` returns `-32000 'no browser is open'`, so agent-context isolation can't coexist with the encoder."* — This `-32000` is specific to `--headless=new`; **plain `--headless` (old mode) does not have it** (`[FACT-1]`).
+
+### Grounding evidence (operator probes, 2026-07-17 — reproducible in `scratchpad/{one_chrome_probe.mjs,encoder_secure_probe.mjs}`)
+
+- `[FACT-1]` full-chrome-151 **plain `--headless`**: `Target.createBrowserContext` → `Target.createTarget{browserContextId}` → `Page.navigate https://example.com` all succeed. The `-32000 "no browser is open"` that originally forced the split is a `--headless=new`-only defect; plain `--headless` supports per-agent browser contexts AND default-context targets in the same process.
+- `[FACT-2]` full-chrome-151 plain `--headless`, page served from `http://127.0.0.1:<port>`: `isSecureContext:true`, `VideoEncoder:function`, `VideoEncoder.isConfigSupported({codec:'avc1.4D4028',…}).supported===true`, and a real encode produced `{type:'key', byteLength:783}`. (`about:blank` reports `VideoEncoder:undefined` because it is not a secure context — a red herring; the real encoder page is loopback-served.)
+- `[FACT-3]` The `HeadlessChrome/151…` UA is the CAPTCHA trigger; `manager.go` already de-Headlesses the UA (`deHeadlessUA`) and installs `stealthInitScript`/`applyStealth`. The existing caveat comment notes the `navigator.webdriver` override **lands on full-Chrome `--headless` but NOT on chrome-headless-shell** — so switching the agent to full Chrome strengthens stealth on BOTH the UA and the `navigator.webdriver` axes.
+
+### Rejected alternatives (one line each)
+
+- **(a) Two-Chrome Option A (current code):** a dedicated encoder-Chrome process beside the agent's headless-shell — rejected by the operator ("two chromes can not be the solution"); `[FACT-1/2]` show one full-Chrome process serves both roles, so the second process is pure overhead (a second ~120 MB binary, a second profile, a second crash/idle lifecycle).
+- **(b) Pure-Go H.264/VP8 encoder:** rejected — no mature pure-Go H.264/VP8 **encoder** exists, and a CGo binding to x264/libvpx violates Constraint #2 (pure Go, no CGo). Encoding must stay in the browser's WebCodecs.
+- **(c) ffmpeg sidecar:** rejected — an external ffmpeg process violates the single-binary Constraint #1 and the "no shelling out for the media path" spirit of Constraint #2 / NFR-2 (zero per-install media configuration).
+- **(d) iframe-embed the server-side page in the client:** rejected — the agent's server-side Chrome cannot be framed by the client browser, and cross-origin target sites set `X-Frame-Options`/`frame-ancestors` that block framing; this is Option D (§5), already rejected on requirements.
+
+### What stays identical (explicitly not re-opened)
+
+The gateway relay + GOP cache (`browser_stream.go`), the loopback capture-ingest endpoint + per-stream token (component E), `Page.startScreencast` capture on the agent tab (component L), the `browser_stream_init` / `browser_video_chunk` wire contract (§6.3, `contracts/asyncapi.yaml`), the H.264-first codec policy (`avc1.4D4028`), and the "video-capable browser required" unavailable-state degradation (no JPEG/A1 tier). The encoder-**target-creation** mechanic in `LaunchEncoderPage` is also unchanged (raw `target.CreateTarget` in the default context → `NewContext(rootCtx, WithTargetID(tid))`); only the `rootCtx` it receives changes from "the dedicated encoder browser's root" to "the coordinator's root".
+
+### Security note (FR-016) — re-scoped, not weakened
+
+Under two-Chrome, FR-016 (agent must not navigate to the encoder origin and inherit the audio grant) was "structurally impossible" because no agent tab existed in the encoder's process. Under single-Chrome that structural argument no longer holds, so FR-016 is re-secured by: **(i)** the unguessable loopback origin (OS-random port on 127.0.0.1) + random secret path — an agent cannot guess the URL; **(ii)** phase-1 is video-only (`ClassifyVideoCapability` → `VideoOnlyLevel`, `HasAudio` always false), so there is **no media-consent surface to inherit at all** today; **(iii)** when phase-2 audio ships, the `Browser.setPermission` grant MUST be scoped to the encoder tab's **default** browser context (`WithBrowserContextID` of that context), NOT a browser-level origin grant — the reverse of the current phase-2 note in `encoder_launch.go`, which assumed a dedicated process. Video capture itself (`Page.startScreencast`) has no page-callable API and no consent surface (C-2/P-6 `--use-fake-ui-for-media-stream` stays forbidden).
+
+### Constraint & ADR compliance
+
+Single pure-Go binary (#1/#2) — no new process, one fewer Chrome, no CGo, no ffmpeg. Footprint (#3/NFR-3) — one full Chrome instead of headless-shell + a second full Chrome (net **less** RAM and disk than Option A). Graceful degradation (#4/NFR-4) — non-linux/no-full-build hosts classify not-capable → unavailable state (unchanged); the installer's headless-shell fallback is retained as a safety net (agent still browses, video reports not-capable). Contract-first (#8) — **no `contracts/*.yaml` change**: the SPA decode path and all wire frames are byte-identical. ADR-043 per-agent isolation — preserved (`[FACT-1]`: per-agent browser contexts work on plain `--headless` full Chrome).
+
+### Per-decision confidence
+
+```
+CONFIDENCE (single full-Chrome, encoder-as-tab over two-Chrome): High
+  Basis         : Operator decision + three direct probes on full-chrome-151.
+  Evidence      : [FACT-1] createBrowserContext/createTarget/navigate OK on plain
+                  --headless; [FACT-2] real avc1.4D4028 encode from a 127.0.0.1
+                  loopback page; [FACT-3] webdriver + UA stealth improve on full Chrome.
+  Missing       : One integration UAT that the coordinator's OWN full-Chrome launch
+                  hosts N per-agent contexts + a default-context encoder tab
+                  concurrently (the probes ran a bespoke Chrome, not the coordinator).
+  Would improve : That UAT (wave's final gate).
+```
+
+```
+CONFIDENCE (agent binary = full Chrome by default; headless-shell retired): High
+  Basis         : selectDownloadBuild() is a one-line switch to fullChromeBuild();
+                  the dual-build installer + F-08 fallback already exist.
+  Evidence      : installer.go EnsureChromiumBuild is already build-aware; full build
+                  already downloaded/verified for the encoder under Option A.
+  Missing       : Footprint delta re-measure of full-Chrome-as-agent vs prior
+                  headless-shell-agent (G-5 was measured for the encoder, not the agent).
+  Would improve : One RSS/disk measurement on the pod (non-blocking; net is still
+                  less than Option A's two binaries).
+```
+
+```
+CONFIDENCE (FR-016 re-scoping for phase-2 audio): Medium-High
+  Basis         : Unguessable origin + secret path is the primary defense and is
+                  unchanged; phase-1 has zero media grant.
+  Evidence      : loopbackEncoderServer mints an OS-random port + 24-byte secret path
+                  per stream (browser_stream.go).
+  Missing       : Phase-2 audio is not built yet; the default-context-scoped grant is a
+                  design note to honor when it is.
+  Would improve : Implementing + testing the phase-2 grant against a hostile agent tab.
+```
+
+**Implementation blueprint:** `docs/internal/specs/single-chrome-video-blueprint.md` (dev-wave execution plan; disjoint file ownership, DoD per unit, review/fix/UAT waves).

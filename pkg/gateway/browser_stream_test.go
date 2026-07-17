@@ -201,23 +201,17 @@ func newTestOrchestrator(
 		LaunchEncoder: launch,
 		StartCapture:  capb,
 		EncoderServer: srv,
+		// Single-Chrome collapse (ADR-044 Amendment): every AttachViewer
+		// cold-start/relaunch now routes the encoder-page launch through
+		// launchEncoderTab, which resolves its root ctx via o.rootSource()
+		// (the Coordinator seam) instead of a dedicated encoder-browser
+		// process. A fake that always reports a live root keeps every
+		// existing test's full attach flow working exactly as before — the
+		// LaunchEncoder fake above still receives every encoder-page-launch
+		// call unchanged.
+		Coordinator: func() (context.Context, bool) { return context.Background(), true },
 	})
 	o.ingest = ing
-	// ADR-044 Option A / Task B: every AttachViewer cold-start/relaunch now
-	// routes the encoder-page launch through launchEncoderTab, which first
-	// calls o.encoder.ensureRoot to bring up the dedicated encoder browser.
-	// Fake ITS launch seams too (separate from the LaunchEncoder fake above,
-	// which still receives every encoder-page-launch call exactly as
-	// before) so ensureRoot never touches the network or spawns a real
-	// Chrome process — context.Background()'s Done() never fires, so this
-	// also gives every test a permanently "warm" encoder root (no real
-	// relaunch-budget interaction).
-	o.encoder.resolveExecPath = func(context.Context, string) (string, error) {
-		return "fake-encoder-chrome", nil
-	}
-	o.encoder.pipeLauncher = func(context.Context, string, string) (encoderPipeLaunch, error) {
-		return encoderPipeLaunch{rootCtx: context.Background()}, nil
-	}
 	return o
 }
 
@@ -303,6 +297,72 @@ func eventually(t *testing.T, timeout time.Duration, cond func() bool) {
 }
 
 // ---- tests ----
+
+// TestLaunchEncoderTab_UsesCoordinatorRoot proves the single-Chrome-collapse
+// seam (ADR-044 Amendment): launchEncoderTab must call o.launchEncoder with
+// EXACTLY the context o.rootSource() (the Coordinator seam) hands back —
+// there is no other source of the encoder tab's root anymore.
+func TestLaunchEncoderTab_UsesCoordinatorRoot(t *testing.T) {
+	type rootKey struct{}
+	wantRoot := context.WithValue(context.Background(), rootKey{}, "coordinator-root")
+
+	var gotRoot context.Context
+	launch := func(root context.Context, cfg browser.EncoderLaunchCfg) (encoderTab, error) {
+		gotRoot = root
+		return &fakeEncoderTab{done: make(chan struct{})}, nil
+	}
+
+	o := newOrchestrator(BrowserVideoDeps{
+		Config:        BrowserVideoConfig{IngestWSURL: "ws://127.0.0.1:5000/api/v1/browser/capture-ingest"},
+		Classify:      capable(),
+		LaunchEncoder: launch,
+		StartCapture:  (&fakeCaptureStarter{}).start,
+		EncoderServer: &fakeEncoderServer{},
+		Coordinator:   func() (context.Context, bool) { return wantRoot, true },
+	})
+	o.ingest = newFakeIngest()
+
+	tab, err := o.launchEncoderTab(browser.EncoderLaunchCfg{StreamID: "s1"})
+	if err != nil {
+		t.Fatalf("launchEncoderTab error: %v", err)
+	}
+	if tab == nil {
+		t.Fatal("expected a non-nil encoder tab")
+	}
+	if gotRoot != wantRoot {
+		t.Fatal("launchEncoderTab must call o.launchEncoder with the coordinator's root context")
+	}
+}
+
+// TestLaunchEncoderTab_NilCoordinator_FailsClosed proves the hermetic
+// default — no Coordinator injected (e.g. a gateway boot before the
+// coordinator's first browse, or any test that never wires one) — fails a
+// launch closed rather than panicking or silently no-op'ing: newOrchestrator
+// defaults o.rootSource to a seam that always reports ok=false, and
+// launchEncoderTab must never call o.launchEncoder in that case.
+func TestLaunchEncoderTab_NilCoordinator_FailsClosed(t *testing.T) {
+	launch := &fakeLauncher{}
+	o := newOrchestrator(BrowserVideoDeps{
+		Config:        BrowserVideoConfig{IngestWSURL: "ws://127.0.0.1:5000/api/v1/browser/capture-ingest"},
+		Classify:      capable(),
+		LaunchEncoder: launch.launch,
+		StartCapture:  (&fakeCaptureStarter{}).start,
+		EncoderServer: &fakeEncoderServer{},
+		// Coordinator deliberately left nil.
+	})
+	o.ingest = newFakeIngest()
+
+	_, err := o.launchEncoderTab(browser.EncoderLaunchCfg{StreamID: "s1"})
+	if err == nil {
+		t.Fatal("expected an error when no coordinator chrome is live")
+	}
+	if launch.count() != 0 {
+		t.Fatalf(
+			"o.launchEncoder must never be called when the coordinator root is unavailable, got %d calls",
+			launch.count(),
+		)
+	}
+}
 
 func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	ing := newFakeIngest()

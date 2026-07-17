@@ -2167,6 +2167,20 @@ func setupAndStartServices(
 	browserVideo := RegisterBrowserVideo(runningServices.ChannelManager, BrowserVideoDeps{
 		Audit:       agentLoop.AuditLogger(),
 		InstallRoot: installRoot,
+		// Coordinator resolves the shared coordinator Chrome's live root
+		// context on every encoder-tab launch (single-Chrome collapse,
+		// ADR-044 Amendment §1.4) — never cached here, so a coordinator
+		// crash/relaunch is observed correctly. agentLoop.BrowserCoordinator()
+		// is constructed lazily (nil pre-first-browse); the orchestrator
+		// treats ok=false as "coordinator chrome unavailable" and fails the
+		// stream closed to the FR-018 unavailable state.
+		Coordinator: func() (context.Context, bool) {
+			c := agentLoop.BrowserCoordinator() // may be nil pre-first-browse
+			if c == nil {
+				return nil, false
+			}
+			return c.RootContext()
+		},
 		Config: BrowserVideoConfig{
 			IngestWSURL: fmt.Sprintf("ws://127.0.0.1:%d/api/v1/browser/capture-ingest", cfg.Gateway.Port),
 			Enabled:     boolPtr(cfg.Gateway.IsBrowserVideoEnabled()),
@@ -2175,6 +2189,41 @@ func setupAndStartServices(
 	runningServices.browserVideo = browserVideo
 	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin, browserVideo)
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
+
+	// Boot-time full-Chrome binary prefetch (ADR-044 Amendment, single-Chrome
+	// collapse §1.6): the coordinator's shared Chrome (component M) now hosts
+	// both agent tabs AND the live-view WebCodecs encoder tab from the SAME
+	// full "chrome" build (installer.go's selectDownloadBuild() ==
+	// fullChromeBuild() post-collapse). Warm that managed-install-root copy
+	// here, in the background, so ClassifyVideoCapability (capability.go,
+	// gates on findInstalledBuild under installRoot specifically) and the
+	// first live-view attach's cold start don't have to wait on a ~120MB
+	// download. Deliberately independent of the generic per-agent browser
+	// preprovisioning above ("Boot-time browser provisioning" /
+	// agentLoop.BrowserManagers()/Preprovision): that loop's resolve() prefers
+	// a system Chrome on $PATH when present and would skip populating the
+	// managed install root in that case — fine for ordinary browsing, but it
+	// would leave ClassifyVideoCapability reporting not-capable even though a
+	// usable full Chrome exists. EnsureChromiumFullBuild always ensures the
+	// managed copy specifically, closing that gap. Optimization only, never
+	// correctness: the lazy download on first browser-tool use or first
+	// live-view attach still works if this prefetch is skipped or fails (F-08
+	// fallback to chrome-headless-shell applies when unavailable). Linux-only:
+	// video capture is gated to linux (ClassifyVideoCapability); other
+	// platforms have no encoder-tab need for the full build ahead of time.
+	if runtime.GOOS == "linux" {
+		go func() {
+			prefetchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if _, err := browser.EnsureChromiumFullBuild(prefetchCtx, installRoot); err != nil {
+				logger.WarnCF(
+					"browser",
+					"boot-time full-Chrome prefetch failed — will retry lazily on first browse/live-view attach",
+					map[string]any{"error": err.Error()},
+				)
+			}
+		}()
+	}
 
 	// Build the in-process tool-approval registry (FR-016, FR-070, M10).
 	// policy.ValidateSaturationCap enforces FR-016 semantics:

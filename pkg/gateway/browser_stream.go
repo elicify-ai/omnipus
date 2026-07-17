@@ -49,23 +49,18 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+
+	omnilog "github.com/elicify-ai/omnipus/pkg/logger"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/chromedp/chromedp"
-
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
-	"github.com/elicify-ai/omnipus/pkg/tools/browser/cdppipe"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/encoderpage"
 )
 
@@ -271,6 +266,11 @@ type BrowserVideoDeps struct {
 	LaunchEncoder encoderLauncher
 	StartCapture  captureStarter
 	EncoderServer encoderPageServer
+	// Coordinator resolves the shared coordinator Chrome's live root context
+	// for the encoder tab (single-Chrome collapse, ADR-044 Amendment). Nil
+	// defaults to a seam that always reports ok=false (hermetic tests / no
+	// coordinator yet).
+	Coordinator coordinatorRoot
 }
 
 // videoStream is one active stream's orchestration state (one per agent tab;
@@ -285,11 +285,10 @@ type videoStream struct {
 	hasAudio  bool
 
 	// agentCtx is the agent tab's own CDP context, used for StartCapture.
-	// There is no rootCtx here anymore (ADR-044 Option A / Task B): the
-	// encoder page no longer launches into any per-stream/per-agent root —
-	// it launches into the dedicated encoderBrowser's own shared root,
-	// sourced fresh on every launch via launchEncoderTab, never cached on
-	// the stream itself.
+	// There is no rootCtx here (single-Chrome collapse, ADR-044 Amendment):
+	// the encoder tab is a default-context tab of the coordinator's shared
+	// Chrome; its root comes from o.rootSource() fresh on every launch via
+	// launchEncoderTab, never cached on the stream itself.
 	agentCtx context.Context
 
 	origin    string
@@ -325,335 +324,22 @@ func (s *videoStream) stop() {
 	s.stopOnce.Do(func() { close(s.stopCh) })
 }
 
-// ---- dedicated encoder browser (ADR-044 Option A / Task B) ----
+// ---- coordinator-root seam (single-Chrome collapse, ADR-044 Amendment) ----
 //
-// Pre-Option-A, the encoder page launched as an isolated sibling browser
-// context of the coordinator's SHARED Chrome (the same process every agent
-// tab runs in). That Chrome is chrome-headless-shell (agent isolation, low
-// footprint) — which has NO WebCodecs VideoEncoder (GROUNDED FACTS,
-// verified). Option A moves the encoder page into a SEPARATE, dedicated,
-// full-Chrome-build headless process that the orchestrator itself owns and
-// launches, entirely independent of the coordinator/agent Chrome. This
-// section owns that process's lifecycle: lazy launch on first use, warm
-// reuse across streams, crash recovery bounded by its own relaunch budget,
-// and idle teardown when no encoder tab is live.
+// The encoder page no longer launches into a dedicated, orchestrator-owned
+// Chrome process. It launches as a tab in the coordinator's SHARED Chrome
+// (the same full-Chrome process every agent tab runs in, one per-agent
+// browser context each), landing in that Chrome's DEFAULT browser context
+// (no agent uses the default context, so isolation — ADR-043 — is
+// preserved). The orchestrator no longer owns any Chrome process lifecycle
+// at all; it only needs a live root context to launch a tab into.
 
-// defaultEncoderMaxRelaunches / defaultEncoderIdleTeardown tune the
-// dedicated encoder browser. maxRelaunches is a SEPARATE budget from
-// resolvedConfig.maxRelaunches (which bounds a single STREAM's own tab
-// relaunches, defaultMaxRelaunches above): a crash of the shared encoder
-// PROCESS fires handleEncoderDrop for every stream that had a tab open in
-// it, and each of those streams already correctly consumes one unit of ITS
-// OWN per-tab budget for that one event — this is the encoder BROWSER's own,
-// independent cap on how many times the underlying Chrome process itself may
-// be relaunched, so a genuinely crash-looping encoder Chrome fails closed
-// (new cold-starts get "stream_bringup_failed" → unavailable) instead of
-// spinning forever.
-const (
-	defaultEncoderMaxRelaunches = 3
-	defaultEncoderIdleTeardown  = 60 * time.Second
-)
-
-// encoderBrowser owns the SINGLE dedicated full-Chrome-headless instance
-// every encoder page launches into. One instance per BrowserVideoOrchestrator
-// (constructed in newOrchestrator), shared by every stream.
-//
-// Locking discipline — deliberately DIFFERENT from BrowserCoordinator's
-// ADR-038 "never hold the bookkeeping lock across a blocking CDP/exec call"
-// rule (coordinator.go's file doc): ensureRoot holds mu for its ENTIRE body,
-// including the blocking launch (chrome-for-testing download + CDP pipe
-// handshake). That coordinator serves MANY concurrent per-agent operations
-// (open tab, etc.) that must stay responsive while one Register's launch is
-// in flight elsewhere — a genuinely different concurrency shape from this
-// struct, which exists for exactly one purpose (hand back a live root ctx
-// for an encoder-tab launch) with no other operation that needs to interleave
-// with that. Holding mu the whole way is what gives the "thundering herd"
-// case — N streams' encoder tabs die in the same encoder-process crash, so N
-// goroutines call ensureRoot concurrently — its "relaunch exactly once"
-// guarantee for free: the first caller through the lock does the real
-// launch; every other caller blocks on mu and, once unblocked, observes the
-// freshly-relaunched live rootCtx and returns it immediately. No separate
-// single-flight latch/Cond (coordinator.go's launching/launchDone pattern)
-// is needed.
-type encoderBrowser struct {
-	mu sync.Mutex
-
-	// installRoot is the managed-Chromium install root — the SAME root
-	// ClassifyVideoCapability inspects and the agent's own Chrome resolves
-	// under (deps.InstallRoot). Both Chrome flavors (chrome-headless-shell
-	// for the agent, full "chrome" for the encoder) are detect-either/
-	// prefer-full within this one tree (browser.EnsureChromiumFullBuild).
-	installRoot string
-	// profileDir is the encoder's OWN, DISTINCT profile directory
-	// (<home>/browser/profiles/encoder, derived by encoderProfileDir) — never
-	// the agent's profile dir, so the two Chrome processes never collide on a
-	// profile lockfile/singleton socket.
-	profileDir string
-
-	rootCtx context.Context
-	cancel  context.CancelFunc
-	cmd     *exec.Cmd // captured via cdppipe ModifyCmd — chromedp.Browser.Process() is nil over the pipe
-	browser *chromedp.Browser
-
-	tabs      int
-	idleTimer *time.Timer
-
-	// launched is true once the first successful launch has happened; it
-	// gates whether a fresh launch counts against relaunches (the very first
-	// cold start is not a "relaunch").
-	launched      bool
-	relaunches    int
-	maxRelaunches int
-	idleAfter     time.Duration
-
-	// resolveExecPath / pipeLauncher are the real-Chrome seams: production
-	// defaults to defaultEncoderExecPath / defaultEncoderPipeLaunch; hermetic
-	// tests overwrite these fields directly (same package) so ensureRoot
-	// never touches the network or spawns a real process.
-	resolveExecPath func(ctx context.Context, installRoot string) (string, error)
-	pipeLauncher    func(ctx context.Context, execPath, profileDir string) (encoderPipeLaunch, error)
-}
-
-// newEncoderBrowser constructs the dedicated encoder browser's bookkeeping
-// state with the real (production) launch seams. installRoot is
-// deps.InstallRoot (newOrchestrator) — the same tree the classifier and the
-// agent's own Chrome resolve under.
-func newEncoderBrowser(installRoot string) *encoderBrowser {
-	return &encoderBrowser{
-		installRoot:     installRoot,
-		profileDir:      encoderProfileDir(installRoot),
-		maxRelaunches:   defaultEncoderMaxRelaunches,
-		idleAfter:       defaultEncoderIdleTeardown,
-		resolveExecPath: defaultEncoderExecPath,
-		pipeLauncher:    defaultEncoderPipeLaunch,
-	}
-}
-
-// encoderProfileDir derives the dedicated encoder browser's profile
-// directory from installRoot. gateway.go's browserInstallRoot computes
-// installRoot as <profileDir's parent>/../chromium — i.e.
-// <home>/browser/chromium when the agent profile dir is the default
-// <home>/browser/profiles/default — so filepath.Dir(installRoot) is
-// <home>/browser, and this returns <home>/browser/profiles/encoder: a
-// SIBLING of, and always DISTINCT from, the agent's own profile dir.
-func encoderProfileDir(installRoot string) string {
-	return filepath.Join(filepath.Dir(installRoot), "profiles", "encoder")
-}
-
-// encoderPipeLaunch is what a successful dedicated-encoder-Chrome launch
-// hands back. Mirrors pkg/tools/browser's own pipeLaunchResult shape
-// (unexported there, so unusable across the package boundary) — this
-// package drives cdppipe directly for the encoder browser, since Task B owns
-// this launch independently of the coordinator's separate agent-Chrome
-// launch.
-type encoderPipeLaunch struct {
-	rootCtx context.Context
-	cancel  context.CancelFunc
-	cmd     *exec.Cmd
-	browser *chromedp.Browser
-}
-
-// defaultEncoderExecPath resolves (downloading via Chrome-for-Testing if
-// necessary) the dedicated encoder browser's full-Chrome binary. Real
-// default for encoderBrowser.resolveExecPath.
-func defaultEncoderExecPath(ctx context.Context, installRoot string) (string, error) {
-	return browser.EnsureChromiumFullBuild(ctx, installRoot)
-}
-
-// defaultEncoderPipeLaunch starts the dedicated encoder Chrome process over
-// the CDP pipe transport (cdppipe — no TCP port, mirrors every other managed
-// Chrome launch in this codebase) using browser.EncoderChromeCmdline's
-// rendered argv/env. Real default for encoderBrowser.pipeLauncher.
-//
-// ctx is accepted for seam symmetry but the browser's lifetime is bound to
-// context.Background() — mirrors pkg/tools/browser's launchManagedPipe
-// exactly (the dedicated encoder browser is a shared, orchestrator-lifetime
-// resource, not scoped to any one launch call's context).
-func defaultEncoderPipeLaunch(ctx context.Context, execPath, profileDir string) (encoderPipeLaunch, error) {
-	_ = ctx
-	// Mirrors coordinator.go's launchChrome: create the profile dir up front
-	// (cdppipe does NOT create UserDataDir itself when non-empty — see
-	// cdppipe.launch.buildArgs — it just passes --user-data-dir=<dir> through
-	// to Chrome). Deliberately done HERE, in the real launcher, rather than
-	// in ensureRoot: a faked pipeLauncher (every hermetic unit test in this
-	// package) must never touch the filesystem.
-	if err := os.MkdirAll(profileDir, 0o700); err != nil {
-		return encoderPipeLaunch{}, fmt.Errorf("browser video: create encoder profile dir: %w", err)
-	}
-	cmdline := browser.EncoderChromeCmdline(browser.BrowserConfig{ProfileDir: profileDir})
-	var cmd *exec.Cmd
-	rootCtx, cancel, err := cdppipe.NewPipeAllocator(context.Background(), execPath, cdppipe.PipeOptions{
-		Args:        cmdline.Args,
-		Env:         cmdline.Env,
-		UserDataDir: profileDir,
-		// Capture the *exec.Cmd — the only PID/crash handle under the pipe
-		// allocator (chromedp.Browser.Process() is nil here).
-		ModifyCmd: func(c *exec.Cmd) { cmd = c },
-		Logf: func(f string, a ...any) {
-			slog.Debug("browser video: encoder chrome", "detail", fmt.Sprintf(f, a...))
-		},
-		Errf: func(f string, a ...any) {
-			slog.Warn("browser video: encoder chrome", "detail", fmt.Sprintf(f, a...))
-		},
-	})
-	if err != nil {
-		return encoderPipeLaunch{}, err
-	}
-	var br *chromedp.Browser
-	if cc := chromedp.FromContext(rootCtx); cc != nil {
-		br = cc.Browser
-	}
-	return encoderPipeLaunch{rootCtx: rootCtx, cancel: cancel, cmd: cmd, browser: br}, nil
-}
-
-// ensureRoot returns the encoder browser's shared root chromedp context and
-// *chromedp.Browser, launching the dedicated encoder Chrome if none is
-// currently live (first use, or the prior one crashed/idled out). See the
-// type doc for why this holds mu across the blocking launch. On
-// resolveExecPath/pipeLauncher failure, or a relaunch-budget exhaustion,
-// returns the error — the caller (launchEncoderTab) surfaces it exactly like
-// any other encoder-launch failure: the stream fails closed to the generic
-// unavailable state (FR-018), never a silent/partial stream.
-func (e *encoderBrowser) ensureRoot(ctx context.Context) (context.Context, *chromedp.Browser, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.rootCtx != nil {
-		select {
-		case <-e.rootCtx.Done():
-			// Dead (should already have been cleared by watchForCrash, but a
-			// stale reference is handled identically to "not live").
-			e.clearLocked()
-		default:
-			return e.rootCtx, e.browser, nil // warm reuse
-		}
-	}
-
-	if e.launched {
-		e.relaunches++
-		if e.relaunches > e.maxRelaunches {
-			return nil, nil, fmt.Errorf(
-				"browser video: encoder browser relaunch budget exhausted (%d/%d) — "+
-					"a crash-looping encoder chrome is disabling live video until gateway restart",
-				e.relaunches, e.maxRelaunches,
-			)
-		}
-	}
-
-	execPath, err := e.resolveExecPath(ctx, e.installRoot)
-	if err != nil {
-		return nil, nil, fmt.Errorf("browser video: resolve encoder chrome binary: %w", err)
-	}
-
-	res, err := e.pipeLauncher(ctx, execPath, e.profileDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("browser video: launch encoder chrome: %w", err)
-	}
-
-	e.launched = true
-	e.rootCtx = res.rootCtx
-	e.cancel = res.cancel
-	e.cmd = res.cmd
-	e.browser = res.browser
-
-	if e.browser != nil {
-		go e.watchForCrash(e.browser, e.rootCtx)
-	}
-	return e.rootCtx, e.browser, nil
-}
-
-// watchForCrash blocks until the encoder browser's CDP transport drops
-// (LostConnection — the canonical, race-free process-death signal, mirrors
-// coordinator.go's own watchForCrash) or its root ctx is canceled (idle
-// teardown / Shutdown), then clears the cached root so the NEXT ensureRoot
-// call relaunches. own/ownRootCtx identify the launch THIS watcher was armed
-// for — if a newer launch has already superseded it by the time this fires
-// (e.g. Shutdown or idle-teardown already cleared it), the identity check
-// makes the clear a stale no-op, mirroring watchEncoder's tab-identity guard
-// on videoStream.
-func (e *encoderBrowser) watchForCrash(own *chromedp.Browser, ownRootCtx context.Context) {
-	select {
-	case <-own.LostConnection:
-	case <-ownRootCtx.Done():
-	}
-	e.mu.Lock()
-	if e.browser == own {
-		e.clearLocked()
-	}
-	e.mu.Unlock()
-}
-
-// clearLocked drops the cached (dead or superseded) root state so the next
-// ensureRoot call relaunches. Caller holds e.mu.
-func (e *encoderBrowser) clearLocked() {
-	if e.idleTimer != nil {
-		e.idleTimer.Stop()
-		e.idleTimer = nil
-	}
-	e.rootCtx = nil
-	e.cancel = nil
-	e.cmd = nil
-	e.browser = nil
-}
-
-// tabOpened records a newly-launched encoder tab (called by launchEncoderTab
-// after a successful o.launchEncoder). Cancels any pending idle-teardown
-// timer — a tab was just successfully brought up, so the encoder browser is
-// back in active use.
-func (e *encoderBrowser) tabOpened() {
-	e.mu.Lock()
-	e.tabs++
-	if e.idleTimer != nil {
-		e.idleTimer.Stop()
-		e.idleTimer = nil
-	}
-	e.mu.Unlock()
-}
-
-// tabClosed records an encoder tab's teardown (paired with tabOpened via
-// closeEncoderTab). When this was the LAST live tab, arms the idle-teardown
-// timer: idleAfter after the last tab closes with no new one opened, the
-// dedicated encoder Chrome process is torn down (lazy relaunch on the next
-// stream's cold start) rather than kept warm indefinitely for a feature
-// nobody is currently using.
-func (e *encoderBrowser) tabClosed() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.tabs > 0 {
-		e.tabs--
-	}
-	if e.tabs != 0 || e.rootCtx == nil {
-		return
-	}
-	e.idleTimer = time.AfterFunc(e.idleAfter, func() {
-		e.mu.Lock()
-		var cancel context.CancelFunc
-		// Re-check under the lock: a new tab may have opened (tabOpened
-		// stops+nils idleTimer) in the window between this firing and it
-		// acquiring the lock, or a crash may already have cleared it.
-		if e.tabs == 0 && e.idleTimer != nil {
-			cancel = e.cancel
-			e.clearLocked()
-		}
-		e.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-	})
-}
-
-// close tears down the dedicated encoder Chrome process, if one is live.
-// Idempotent (cdppipe's CancelFunc is idempotent; a nil cancel is a no-op).
-// Called by BrowserVideoOrchestrator.Shutdown.
-func (e *encoderBrowser) close() {
-	e.mu.Lock()
-	cancel := e.cancel
-	e.clearLocked()
-	e.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
+// coordinatorRoot returns the shared coordinator Chrome's live root context, or
+// ok=false when no Chrome is currently live (never launched, mid-relaunch, or
+// shut down). Resolved fresh on every encoder-tab launch — never cached — so a
+// coordinator crash/relaunch is observed correctly. *browser.BrowserCoordinator
+// satisfies the RootContext() shape; a nil source (hermetic tests) yields ok=false.
+type coordinatorRoot func() (context.Context, bool)
 
 // BrowserVideoOrchestrator is component M. Safe for concurrent use.
 type BrowserVideoOrchestrator struct {
@@ -668,11 +354,10 @@ type BrowserVideoOrchestrator struct {
 	encoderServer encoderPageServer
 	ingest        ingestController
 
-	// encoder is the dedicated full-Chrome-headless instance every encoder
-	// page launches into (ADR-044 Option A / Task B) — separate from the
-	// coordinator's shared, headless-shell agent Chrome. See the type doc
-	// above.
-	encoder *encoderBrowser
+	// rootSource resolves the coordinator's shared Chrome root context that
+	// the encoder tab launches into (single-Chrome collapse, ADR-044
+	// Amendment). See the coordinatorRoot type doc above.
+	rootSource coordinatorRoot
 
 	enabled atomic.Bool
 
@@ -727,6 +412,11 @@ func RegisterBrowserVideo(mux IngestMux, deps BrowserVideoDeps) *BrowserVideoOrc
 			// handleEncoderDrop's doc comment on deadTab==nil.
 			o.handleEncoderDrop(streamID, nil)
 		},
+		// The encoder's self-reported ACTUAL codec may differ from the
+		// negotiated intent (legitimate WebCodecs fallback, e.g. h264-main →
+		// vp8) — re-announce browser_stream_init so viewers decode what is
+		// actually on the wire. See onIngestInit.
+		InitReceived: o.onIngestInit,
 	})
 	// SF-H2: wire the ingest handler as the relay's keyframe-request seam —
 	// o.ingest already satisfies browser.keyframeRequester (RequestKeyframe is
@@ -737,48 +427,8 @@ func RegisterBrowserVideo(mux IngestMux, deps BrowserVideoDeps) *BrowserVideoOrc
 	// tools.SetToolMetricsRecorder (FR-039/C4).
 	browser.SetBrowserMetricsRecorder(globalBrowserVideoMetrics())
 
-	// Background full-Chrome prefetch (ADR-044 Option A / Task B): proactively
-	// resolve (downloading via Chrome-for-Testing if needed) the dedicated
-	// encoder browser's binary in the background, so the FIRST real attach's
-	// cold-start does not have to block an end user on a large download. The
-	// Chrome PROCESS itself still launches lazily — this only warms the
-	// on-disk binary via the same resolveExecPath seam ensureRoot uses (never
-	// a bare browser.EnsureChromiumFullBuild call, so a test that ever wires
-	// a fake here — none does today — would stay hermetic too). This replaces
-	// the retired bootLiveBrowserVideo B4 Xvfb/PulseAudio-sidecar poll
-	// (gateway.go) with a straight binary-prefetch: video capture requires
-	// linux (GROUNDED FACTS), and the initial kill-switch value is read once
-	// at boot — a LATER SetVideoEnabled(true) does not retroactively kick a
-	// prefetch, so an install that boots with the feature off never spends
-	// bandwidth on it unprompted.
-	//
-	// Deliberately placed here — NOT in newOrchestrator — because
-	// newOrchestrator is also the direct construction path every hermetic
-	// unit test in this package uses (with a zero/dummy InstallRoot); a
-	// prefetch goroutine started there would race those tests' fake-seam
-	// wiring and attempt a real network call. RegisterBrowserVideo is the
-	// production-only entry point (gateway.go), so this goroutine never runs
-	// in a test.
-	if runtime.GOOS == "linux" && o.enabled.Load() {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), encoderPrefetchTimeout)
-			defer cancel()
-			if _, err := o.encoder.resolveExecPath(ctx, o.encoder.installRoot); err != nil {
-				slog.Warn(
-					"browser video: background encoder-chrome prefetch failed — will retry lazily on first attach",
-					"error", err,
-				)
-			}
-		}()
-	}
 	return o
 }
-
-// encoderPrefetchTimeout bounds RegisterBrowserVideo's background encoder-
-// Chrome binary prefetch. Generous — a cold Chrome-for-Testing download can
-// take a while on a slow connection — but bounded so a truly wedged network
-// doesn't leak the goroutine forever.
-const encoderPrefetchTimeout = 5 * time.Minute
 
 // newOrchestrator builds the orchestrator with all seams resolved (real
 // defaults unless injected). Tests call this directly with fakes and set
@@ -793,7 +443,7 @@ func newOrchestrator(deps BrowserVideoDeps) *BrowserVideoOrchestrator {
 		launchEncoder: deps.LaunchEncoder,
 		startCapture:  deps.StartCapture,
 		encoderServer: deps.EncoderServer,
-		encoder:       newEncoderBrowser(deps.InstallRoot),
+		rootSource:    deps.Coordinator,
 		streams:       make(map[string]*videoStream),
 		agentStreamID: make(map[string]string),
 		agentGates:    make(map[string]*sync.Mutex),
@@ -813,6 +463,9 @@ func newOrchestrator(deps BrowserVideoDeps) *BrowserVideoOrchestrator {
 	if o.encoderServer == nil {
 		o.encoderServer = loopbackEncoderServer{}
 	}
+	if o.rootSource == nil {
+		o.rootSource = func() (context.Context, bool) { return nil, false }
+	}
 	// FR-019 "live-stream count" gauge: read straight from the relay's own
 	// StreamCount() (stream_relay.go already tracks this for exactly this
 	// purpose). Re-registering on every newOrchestrator call (including in
@@ -829,16 +482,11 @@ func newOrchestrator(deps BrowserVideoDeps) *BrowserVideoOrchestrator {
 // AttachParams is what the WS attach path supplies to AttachViewer. AgentCtx
 // is the agent tab's own CDP context, used for StartCapture.
 //
-// PINNED CONTRACT (i), ADR-044 Option A / Task B: there is no RootCtx field
-// here anymore. Pre-Option-A, the encoder page launched as a sibling browser
-// context of the coordinator's SHARED (agent-tab) Chrome, so AttachViewer
-// needed that root threaded through from the WS attach path
-// (coordinator.Register's return). Now the encoder page launches into a
-// DEDICATED full-Chrome-headless instance the orchestrator owns outright
-// (encoderBrowser, see launchEncoderTab) — headless-shell (the agent's own
-// Chrome) has no WebCodecs VideoEncoder, so the two were always going to be
-// separate processes; the orchestrator sources the encoder's root itself and
-// no longer needs the caller to supply one.
+// PINNED CONTRACT (i), single-Chrome collapse (ADR-044 Amendment): there is
+// no RootCtx field here. The encoder tab is a default-context tab of the
+// coordinator's shared Chrome; its root comes from o.rootSource(), resolved
+// fresh on every launch (see launchEncoderTab) — the orchestrator sources it
+// itself and no longer needs the caller to supply one.
 type AttachParams struct {
 	WC        *browserWSConn
 	AgentID   string
@@ -980,6 +628,13 @@ func (o *BrowserVideoOrchestrator) ensureStreamLocked(
 // failure or a kill-switch teardown (FR-024). The manual unwind paths in
 // startStreamLocked can't use failStreamLocked — no *videoStream exists yet.
 func (o *BrowserVideoOrchestrator) auditBringupFailed(streamID, agentID, codec, stage string, err error) {
+	// Diagnostic instrumentation: bring-up failures were previously visible
+	// ONLY in the audit trail (auditStream below), never in the runtime log —
+	// a stream that failed cold-start left zero trace in gateway.log, making
+	// this class of failure silent-by-default from an operator's viewpoint.
+	slog.Warn("browser video: stream bring-up failed",
+		"stream_id", streamID, "agent_id", agentID, "codec", codec,
+		"stage", stage, "error", err)
 	o.auditStream(audit.EventBrowserLiveVideoStreamFailed, audit.SeverityWarn, map[string]any{
 		"stream_id": streamID,
 		"agent_id":  agentID,
@@ -1007,15 +662,15 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(
 
 	width, height := o.cfg.panelWidth, o.cfg.panelHeight
 
-	// ADR-044 Option A / Task B: the encoder page launches into the dedicated
-	// encoder browser (launchEncoderTab), never any per-agent/per-attach
-	// context — see AttachParams' doc comment. context.Background() is
-	// deliberate (not p.AgentCtx): the dedicated encoder browser is a shared,
-	// orchestrator-lifetime resource, so this cold-start's own bring-up must
-	// not be coupled to THIS agent's tab context — a concurrent, unrelated
-	// tab teardown must never abort another stream's encoder-browser launch.
+	// Single-Chrome collapse (ADR-044 Amendment): the encoder page launches
+	// as a default-context tab of the coordinator's shared Chrome
+	// (launchEncoderTab), never any per-agent/per-attach context — see
+	// AttachParams' doc comment. launchEncoderTab takes no ctx of its own
+	// (it re-reads o.rootSource() fresh on every call), so this cold-start's
+	// own bring-up is never coupled to THIS agent's tab context — a
+	// concurrent, unrelated tab teardown must never abort another stream's
+	// encoder-tab launch.
 	encTab, err := o.launchEncoderTab(
-		context.Background(),
 		o.encoderLaunchCfg(string(token), streamID, codec, pageURL, origin, hasAudio),
 	)
 	if err != nil {
@@ -1093,54 +748,42 @@ func (o *BrowserVideoOrchestrator) encoderLaunchCfg(
 	}
 }
 
-// launchEncoderTab is the ADR-044 Option A / Task B entry point every
-// encoder-page launch goes through — both a stream's cold-start
+// launchEncoderTab is the single-Chrome-collapse (ADR-044 Amendment) entry
+// point every encoder-page launch goes through — both a stream's cold-start
 // (startStreamLocked) and its CRIT-002 relaunch (handleEncoderDrop). It
-// ensures the dedicated encoder browser's root context is live
-// (o.encoder.ensureRoot — launching the process if this is the first call,
-// or if the prior one crashed/idled out), then launches the encoder page as
-// a tab of THAT root via the existing o.launchEncoder seam (unchanged —
-// hermetic tests fake this exactly as before; ensureRoot's own seams keep
-// the encoder-browser launch itself hermetic too, see encoderBrowser).
+// resolves the coordinator's shared Chrome root context fresh via
+// o.rootSource() — never cached — then launches the encoder page as a
+// default-context tab of that root via the existing o.launchEncoder seam
+// (unchanged — hermetic tests fake this exactly as before).
 //
-// On success, records the new tab against the encoder browser's live-tab
-// count (o.encoder.tabOpened) — every Close() of a tab returned from here
-// MUST go through closeEncoderTab, never a bare tab.Close(), or the
-// idle-teardown accounting drifts.
-//
-// ctx bounds ensureRoot's own resolve/launch step only (see ensureRoot's doc
-// comment); every call site in this file passes context.Background()
-// deliberately — the dedicated encoder browser is a shared,
-// orchestrator-lifetime resource, not scoped to any one attach/stream/agent-
-// tab's own context.
+// o.rootSource() returning ok=false (no coordinator Chrome currently live:
+// never launched, mid-relaunch, or shut down) fails the launch closed with an
+// error — the caller already maps a launch error to the FR-018 unavailable
+// state (startStreamLocked, handleEncoderDrop). This IS the crash-recovery
+// contract: when the coordinator Chrome crashes, the encoder tab's Done()
+// fires like any other tab death, handleEncoderDrop runs, and this function
+// re-reads o.rootSource() — if the coordinator is mid-relaunch it observes
+// ok=false and the stream fails closed (correct; the agent capture tab died
+// in the same crash anyway). No separate lifecycle/relaunch bookkeeping is
+// needed here.
 func (o *BrowserVideoOrchestrator) launchEncoderTab(
-	ctx context.Context,
 	cfg browser.EncoderLaunchCfg,
 ) (encoderTab, error) {
-	root, _, err := o.encoder.ensureRoot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("dedicated encoder browser unavailable: %w", err)
+	root, ok := o.rootSource()
+	if !ok {
+		return nil, fmt.Errorf("coordinator chrome unavailable")
 	}
-	tab, err := o.launchEncoder(root, cfg)
-	if err != nil {
-		return nil, err
-	}
-	o.encoder.tabOpened()
-	return tab, nil
+	return o.launchEncoder(root, cfg)
 }
 
-// closeEncoderTab closes an encoder tab returned by launchEncoderTab and
-// releases its slot against the encoder browser's live-tab count
-// (o.encoder.tabClosed) — the pairing tabOpened's idle-teardown timer
-// depends on. Every Close() call site for such a tab (bring-up unwind,
-// stream teardown, and the superseded old tab on a CRIT-002 relaunch) goes
-// through this.
+// closeEncoderTab closes an encoder tab returned by launchEncoderTab. Every
+// Close() call site for such a tab (bring-up unwind, stream teardown, and
+// the superseded old tab on a CRIT-002 relaunch) goes through this.
 func (o *BrowserVideoOrchestrator) closeEncoderTab(tab encoderTab) {
 	if tab == nil {
 		return
 	}
 	_ = tab.Close() // EncoderTab.Close is documented to always return nil (idempotent)
-	o.encoder.tabClosed()
 }
 
 // startCaptureAt starts (or restarts) screencast capture at width×height for
@@ -1153,15 +796,40 @@ func (o *BrowserVideoOrchestrator) startCaptureAt(
 	streamID string,
 	width, height int,
 ) (captureDriver, error) {
-	return o.startCapture(ctx, browser.CaptureOptions{
+	// Diagnostic instrumentation (live-browser-video-streaming bring-up
+	// debugging): these three log lines mark the three points in the
+	// capture->feed->encode chain this function itself can observe —
+	// invocation, the first captured screencast frame (or its absence, via
+	// the bring-up-timeout error below), and the hand-off of that frame to
+	// the encoder connection (component E's FeedFrame). The encoder's own
+	// receipt of a chunk back is logged separately in browser_ingest.go's
+	// handleChunk/FeedFrame. firstFrameOnce ensures this never spams the log
+	// at capture framerate — only the FIRST frame of this capture session is
+	// logged.
+	omnilog.InfoCF("browser", "DIAG start_capture invoked",
+		map[string]any{"stream_id": streamID, "width": width, "height": height})
+
+	var firstFrameOnce sync.Once
+	drv, err := o.startCapture(ctx, browser.CaptureOptions{
 		Format:        "jpeg",
 		Quality:       o.cfg.jpegQuality,
 		MaxWidth:      width,
 		MaxHeight:     height,
 		EveryNthFrame: 1,
 	}, func(jpeg []byte, seq uint32, tsMillis uint64) {
+		firstFrameOnce.Do(func() {
+			omnilog.InfoCF("browser", "DIAG first captured frame received, forwarding to encoder",
+				map[string]any{"stream_id": streamID, "seq": seq, "bytes": len(jpeg)})
+		})
 		o.ingest.FeedFrame(streamID, jpeg, seq, tsMillis)
 	})
+	if err != nil {
+		omnilog.WarnCF("browser", "DIAG start_capture failed",
+			map[string]any{"stream_id": streamID, "error": err.Error()})
+		return nil, err
+	}
+	omnilog.InfoCF("browser", "DIAG start_capture succeeded", map[string]any{"stream_id": streamID})
+	return drv, nil
 }
 
 // watchEncoder waits for the encoder tab to die (crash == "ingest drop",
@@ -1240,17 +908,15 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string, deadTab en
 	newToken := o.ingest.MintIngestToken(streamID)
 	oldTab := st.encoderTab
 
-	// ADR-044 Option A / Task B: relaunch into the dedicated encoder browser
-	// via launchEncoderTab (context.Background() — see its doc comment; no
-	// per-stream rootCtx exists anymore). ensureRoot's own mutex + live-check
-	// is what gives the thundering-herd case (an encoder-PROCESS crash fires
-	// handleEncoderDrop for every stream that had a tab in it, so N of these
-	// goroutines call launchEncoderTab concurrently) its "relaunch the
-	// encoder Chrome process exactly once" guarantee — this per-stream
-	// relaunch budget (o.cfg.maxRelaunches, checked above) is independent of
-	// that and always governs only THIS stream's own tab.
+	// Single-Chrome collapse (ADR-044 Amendment): relaunch into a fresh
+	// default-context tab of the coordinator's shared Chrome via
+	// launchEncoderTab (no per-stream rootCtx exists — see its doc comment).
+	// If the coordinator Chrome itself is mid-relaunch (e.g. this drop was
+	// caused by a coordinator crash that took down every agent tab and the
+	// encoder tab together), o.rootSource() reports ok=false and this fails
+	// the launch — this per-stream relaunch budget (o.cfg.maxRelaunches,
+	// checked above) always governs only THIS stream's own tab regardless.
 	newTab, err := o.launchEncoderTab(
-		context.Background(),
 		o.encoderLaunchCfg(
 			string(newToken),
 			streamID,
@@ -1419,13 +1085,12 @@ func (o *BrowserVideoOrchestrator) Enabled() bool { return o.enabled.Load() }
 
 // Shutdown is PINNED CONTRACT (ii): it tears down every active stream (same
 // per-stream teardown path SetVideoEnabled(false) uses, run under each
-// stream's own agent gate) and then the dedicated encoder browser itself
-// (encoderBrowser.close — kills the process if one is live). Called from
-// gateway.go's shutdown path (omnipusGracefulShutdown) in place of the
-// retired display/audio sidecar teardown. Idempotent: teardownStreamLocked
-// is already a no-op for a stream that is not (or no longer) in o.streams,
-// and encoderBrowser.close is safe to call with nothing live (a nil cancel
-// is a no-op).
+// stream's own agent gate). Called from gateway.go's shutdown path
+// (omnipusGracefulShutdown) in place of the retired display/audio sidecar
+// teardown. Idempotent: teardownStreamLocked is already a no-op for a stream
+// that is not (or no longer) in o.streams. The orchestrator no longer owns
+// any Chrome process (single-Chrome collapse, ADR-044 Amendment) — the
+// coordinator's own Shutdown kills the single shared Chrome.
 func (o *BrowserVideoOrchestrator) Shutdown() {
 	o.mu.Lock()
 	streams := make([]*videoStream, 0, len(o.streams))
@@ -1440,8 +1105,6 @@ func (o *BrowserVideoOrchestrator) Shutdown() {
 		o.teardownStreamLocked(st)
 		gate.Unlock()
 	}
-
-	o.encoder.close()
 }
 
 // detachViewer unbinds one viewer; when it was the last viewer of its stream,
@@ -1590,6 +1253,56 @@ func (o *BrowserVideoOrchestrator) sendStreamInit(
 		KeyframeInterval: o.cfg.keyframe,
 		SessionId:        &sid,
 	}, dropContext(sessionID, viewerID, "stream-init"))
+}
+
+// onIngestInit is the IngestDeps.InitReceived hook (see its doc comment in
+// browser_ingest.go): the encoder page has reported the codec it will
+// ACTUALLY produce. When that differs from the codec announced to viewers
+// (the intent negotiated from viewer caps before the encoder existed), update
+// the stream's codec and re-send browser_stream_init to every attached viewer
+// — the wire contract explicitly allows a fresh stream_init whose values
+// supersede the prior one, and the SPA rebuilds its decoder on every
+// stream_init it receives (_configureDecoders). Without this, a legitimate
+// encoder-side fallback (e.g. h264-main → vp8) leaves the viewer decoding the
+// wrong codec: every chunk fails and the panel lands on the unavailable state.
+//
+// Runs synchronously on the ingest connection's read goroutine BEFORE the
+// first chunk is read (serveConn), so the corrected init always precedes
+// chunk #1. Taking the agent gate here is deadlock-free: the cold-start path
+// (AttachViewer) holds the gate while launching the encoder tab but never
+// waits on the encoder's ingest connection — worst case this hook briefly
+// blocks the ingest read loop until that attach completes. Late-attaching
+// viewers are covered by ensureStreamLocked reading the updated st.codec.
+func (o *BrowserVideoOrchestrator) onIngestInit(streamID, videoCodec, _ string) {
+	if videoCodec == "" {
+		return
+	}
+	st := o.streamByID(streamID)
+	if st == nil {
+		return
+	}
+	gate := o.agentGate(st.agentID)
+	gate.Lock()
+	defer gate.Unlock()
+	if o.streamFailed(st) || st.codec == videoCodec {
+		return
+	}
+	prior := st.codec
+	st.codec = videoCodec
+	omnilog.InfoCF("browser", "browser video: encoder reported a different codec — re-announcing stream_init",
+		map[string]any{
+			"stream_id":    streamID,
+			"negotiated":   prior,
+			"actual_codec": videoCodec,
+			"viewer_count": len(st.viewers),
+		})
+	for vv := range st.viewers {
+		// A viewer whose advertised caps exclude the actual codec will fail
+		// decoder configure client-side and land on the unavailable state —
+		// honest, and strictly better than silently feeding its old decoder
+		// chunks of a different codec.
+		o.sendStreamInit(vv.wc, vv.sessionID, vv.viewerID, st, videoCodec)
+	}
 }
 
 // sendUnavailable moves a viewer to the generic unavailable state (US-5) and

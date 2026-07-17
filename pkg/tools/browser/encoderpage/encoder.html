@@ -297,6 +297,22 @@ const statusEl = document.getElementById('status');
 const PLACEHOLDER_PROBE_WIDTH = 1280;
 const PLACEHOLDER_PROBE_HEIGHT = 720;
 
+// Static-page keepalive (live-browser-video-streaming bring-up follow-up):
+// CDP Page.startScreencast only fires Page.screencastFrame on actual
+// compositor damage — a settled page (an article, a search results page, a
+// form: the overwhelming majority of real agent browsing) paints ONCE and
+// then emits nothing further. Without this keepalive, handleFrameFeed below
+// would only ever run once, this page would send exactly one encoded chunk,
+// and the gateway's mid-stream liveness timer (browser_stream.go's
+// noteChunk/onLivenessTimeout, default 15s) would fail the stream 15s after
+// the page settles even though the encoder, its ingest connection, and the
+// capture driver are all perfectly healthy — the source is just idle.
+// KEEPALIVE_INTERVAL_MS is well under both Go-side timers this needs to
+// satisfy: browser_stream.go's 15s chunk-driven liveness timeout AND
+// browser_ingest.go's independent 120s ingestReadDeadline (silence on the
+// WS read side) — comfortable headroom for jitter/backpressure on either.
+const KEEPALIVE_INTERVAL_MS = 3000;
+
 function setStatus(text) {
   if (statusEl) {
     statusEl.textContent = text;
@@ -377,6 +393,14 @@ async function main() {
   // `seq` is documented as monotonic "for this stream connection", not per kind).
   let chunkSeq = 0;
 
+  // Idle-page keepalive state (KEEPALIVE_INTERVAL_MS's doc comment above) —
+  // lastRealFramePayload/lastRealFrameAt track the most recent REAL
+  // browser_frame_feed message; keepaliveHandle is the setInterval id
+  // (started once streaming begins, cleared on ws close).
+  let lastRealFramePayload = null;
+  let lastRealFrameAt = 0;
+  let keepaliveHandle = null;
+
   const video = {
     encoder: null,
     label: initialCodec.label,
@@ -404,16 +428,35 @@ async function main() {
     if (!selected) {
       throw new Error('no supported video codec (h264-main / vp8) at the real capture resolution');
     }
+    if (selected.label !== initialCodec.label) {
+      // Should be structurally impossible now that encodeAndSendFrame crops
+      // frames to even dims (both probe sites see even dims, same candidate
+      // list ⇒ same selection) — but if a Chrome build ever drifts anyway,
+      // make it loudly visible operator-side instead of silently producing a
+      // codec the viewer wasn't told about.
+      reportStatus(ws, 'error', 'codec-drift',
+        'announced ' + initialCodec.config.codec + ' (' + initialCodec.label + ') but real-resolution probe selected ' +
+        selected.config.codec + ' (' + selected.label + ') at ' + width + 'x' + height);
+    }
     video.label = selected.label;
     video.width = width;
     video.height = height;
     video.framesSinceKeyframe = 0;
 
     video.encoder = new VideoEncoder({
-      output: (chunk) => {
+      output: (chunk, metadata) => {
         try {
           const raw = new Uint8Array(chunk.byteLength);
           chunk.copyTo(raw);
+          if (chunkSeq === 0) {
+            var __desc = metadata && metadata.decoderConfig && metadata.decoderConfig.description;
+            var __descLen = __desc ? (__desc.byteLength !== undefined ? __desc.byteLength : (__desc.length || 0)) : 0;
+            var __hex = Array.from(raw.slice(0, 16)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join(' ');
+            reportStatus(ws, 'diag', 'first-chunk-metadata',
+              'label=' + video.label + ' dims=' + video.width + 'x' + video.height +
+              ' hasDescription=' + (!!__desc) + ' descLen=' + __descLen + ' type=' + chunk.type +
+              ' byteLength=' + chunk.byteLength + ' rawFirst16=[' + __hex + ']');
+          }
           const envelope = encodeChunkEnvelope(
             chunkSeq++,
             msFromMicros(chunk.timestamp),
@@ -435,15 +478,18 @@ async function main() {
     video.encoder.configure(selected.config);
   }
 
-  async function handleFrameFeed(buf) {
-    let tsMillis;
-    let payload;
-    try {
-      ({ tsMillis, payload } = decodeFrameFeed(buf));
-    } catch (err) {
-      reportError(ws, 'frame-feed-decode', err);
-      return;
-    }
+  // encodeAndSendFrame is the decode->encode->(implicitly send via the
+  // encoder's own `output` callback, wired in ensureVideoEncoder) core, used
+  // by BOTH a real browser_frame_feed message (handleFrameFeed below) and
+  // the idle-page keepalive tick (scheduleKeepalive below), so a keepalive
+  // frame is produced through the EXACT same WebCodecs path as a real one —
+  // no separate/parallel encode logic to drift out of sync. forceKeyframe is
+  // true for every keepalive tick (never depends on video.framesSinceKeyframe
+  // reaching 0 on its own): a late-joining viewer during a long static period
+  // must not wait out the full keyframeInterval for a fresh keyframe, and the
+  // relay's GOP cache (pkg/tools/browser/stream_relay.go) resets to just that
+  // keyframe on receipt, keeping its own memory bounded too.
+  async function encodeAndSendFrame(tsMillis, payload, forceKeyframe) {
     if (payload.byteLength === 0) {
       return;
     }
@@ -455,12 +501,34 @@ async function main() {
       reportError(ws, 'bitmap-decode', err);
       return;
     }
+    // H.264 4:2:0 requires EVEN dimensions, and CDP screencast frames scale to
+    // fit maxWidth/maxHeight so the real capture size is frequently odd (e.g.
+    // 1280x577). An odd dimension makes ensureVideoEncoder's re-probe reject
+    // h264-main and silently fall back to vp8 — while the ingest init (probed
+    // at the even placeholder size) already announced H.264, so viewers would
+    // configure the wrong decoder. Crop a single row/column of pixels
+    // (visually invisible) so BOTH probe sites see even dims and the selected
+    // codec always matches the announced one.
+    const evenW = bitmap.width & ~1;
+    const evenH = bitmap.height & ~1;
+    if ((evenW !== bitmap.width || evenH !== bitmap.height) && evenW > 0 && evenH > 0) {
+      try {
+        const cropped = await createImageBitmap(bitmap, 0, 0, evenW, evenH);
+        bitmap.close();
+        bitmap = cropped;
+      } catch (err) {
+        // Cropping is best-effort — an odd-dim frame still encodes via the
+        // vp8 fallback path, which the gateway's InitReceived re-announce
+        // handles. Never drop the frame over it.
+        reportError(ws, 'bitmap-crop', err);
+      }
+    }
     try {
       await ensureVideoEncoder(bitmap.width, bitmap.height);
       const frame = new VideoFrame(bitmap, { timestamp: microsFromMs(tsMillis) });
       try {
-        const forceKeyframe = video.framesSinceKeyframe === 0;
-        video.encoder.encode(frame, { keyFrame: forceKeyframe });
+        const wantKeyframe = forceKeyframe || video.framesSinceKeyframe === 0;
+        video.encoder.encode(frame, { keyFrame: wantKeyframe });
         video.framesSinceKeyframe = (video.framesSinceKeyframe + 1) % keyframeInterval;
       } finally {
         frame.close();
@@ -469,6 +537,61 @@ async function main() {
       reportError(ws, 'video-encode', err);
     } finally {
       bitmap.close();
+    }
+  }
+
+  async function handleFrameFeed(buf) {
+    let tsMillis;
+    let payload;
+    try {
+      ({ tsMillis, payload } = decodeFrameFeed(buf));
+    } catch (err) {
+      reportError(ws, 'frame-feed-decode', err);
+      return;
+    }
+    // Cache the raw JPEG bytes (cheap — a few KB to a couple hundred KB,
+    // nowhere near the ImageBitmap/VideoFrame GPU-resource footprint that
+    // keeping a decoded bitmap alive indefinitely would cost) of the most
+    // recent REAL frame for scheduleKeepalive to re-feed through
+    // encodeAndSendFrame while the page is idle. Recorded even for a
+    // zero-length payload's early return above having already happened
+    // (nothing to cache in that case) — see the payload.byteLength guard.
+    if (payload.byteLength > 0) {
+      lastRealFramePayload = payload;
+      lastRealFrameAt = Date.now();
+    }
+    await encodeAndSendFrame(tsMillis, payload, /* forceKeyframe */ false);
+  }
+
+  // scheduleKeepalive starts the idle-page keepalive interval (see
+  // KEEPALIVE_INTERVAL_MS's doc comment above). Each tick is a no-op unless
+  // BOTH a real frame has ever arrived (lastRealFramePayload set) AND at
+  // least KEEPALIVE_INTERVAL_MS has elapsed since the last REAL frame (a
+  // busy/animated page's real frames already keep the gateway's liveness
+  // timer satisfied on their own — this only fires the gaps a settled page
+  // would otherwise leave). lastRealFrameAt is advanced on every keepalive
+  // send too, so consecutive idle ticks fire at a steady
+  // KEEPALIVE_INTERVAL_MS cadence rather than every single interval tick
+  // once the threshold is first crossed.
+  function scheduleKeepalive() {
+    keepaliveHandle = setInterval(() => {
+      if (!lastRealFramePayload || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (Date.now() - lastRealFrameAt < KEEPALIVE_INTERVAL_MS) {
+        return;
+      }
+      lastRealFrameAt = Date.now();
+      encodeAndSendFrame(Date.now(), lastRealFramePayload, /* forceKeyframe */ true).catch((err) => {
+        reportError(ws, 'keepalive', err);
+      });
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  function stopKeepalive() {
+    if (keepaliveHandle !== null) {
+      clearInterval(keepaliveHandle);
+      keepaliveHandle = null;
     }
   }
 
@@ -575,6 +698,7 @@ async function main() {
         reportError(ws, 'audio-capture-start', err);
       });
     }
+    scheduleKeepalive();
   });
 
   ws.addEventListener('message', (event) => {
@@ -609,6 +733,7 @@ async function main() {
 
   ws.addEventListener('close', () => {
     setStatus('ingest connection closed');
+    stopKeepalive();
     stopAudioCapture();
     if (video.encoder && video.encoder.state !== 'closed') {
       try { video.encoder.close(); } catch (_err) { /* ignore */ }
