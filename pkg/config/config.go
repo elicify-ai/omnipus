@@ -2369,7 +2369,7 @@ type ModelConfig struct {
 
 	// Special providers (CLI-based, OAuth, etc.)
 	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
-	Home       string `json:"workspace,omitempty"`   // Workspace path for CLI-based providers
+	Home       string `json:"workspace,omitempty"`   // Home path (working directory) for CLI-based providers
 
 	// Optional optimizations
 	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
