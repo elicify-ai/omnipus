@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/cdppipe"
 )
@@ -54,19 +56,54 @@ func TestDiag_NewBrowserContext_HeadlessNew(t *testing.T) {
 		cxl()
 	}
 
-	// B) NEW browser context (WithNewBrowserContext) — exactly what the
-	// coordinator's Session()/createAgentContext does, and what fails with
-	// "no browser is open -32000".
+	// C) Raw Target.createTarget WITHOUT newWindow (what chromedp does today).
 	{
-		ctx, cxl := chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext())
-		rctx, rcxl := context.WithTimeout(ctx, 15*time.Second)
-		err := chromedp.Run(rctx, chromedp.Navigate("about:blank"))
-		t.Logf("B) NEW-BROWSER-CONTEXT Navigate: err=%v", err)
+		rctx, rcxl := context.WithTimeout(rootCtx, 15*time.Second)
+		err := chromedp.Run(rctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			_, e := target.CreateTarget("about:blank").Do(ctx)
+			return e
+		}))
+		t.Logf("C) createTarget NO newWindow: err=%v", err)
+		rcxl()
+	}
+
+	// D) Raw Target.createTarget WITH newWindow=true — the hypothesized fix for
+	// new headless (each target needs its own window; new-headless has no
+	// persistent one).
+	{
+		rctx, rcxl := context.WithTimeout(rootCtx, 15*time.Second)
+		var tid target.ID
+		err := chromedp.Run(rctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			var e error
+			tid, e = target.CreateTarget("about:blank").WithNewWindow(true).Do(ctx)
+			return e
+		}))
+		t.Logf("D) createTarget WITH newWindow=true: tid=%s err=%v", tid, err)
 		if err != nil {
-			t.Errorf("NEW-BROWSER-CONTEXT failed (this is the coordinator's failing op): %v", err)
+			t.Errorf("newWindow=true did NOT fix it: %v", err)
 		}
 		rcxl()
-		cxl()
+	}
+
+	// E) NEW browser context WITH a new window created explicitly — the shape the
+	// coordinator's per-agent isolated context needs.
+	{
+		rctx, rcxl := context.WithTimeout(rootCtx, 15*time.Second)
+		var bid cdp.BrowserContextID
+		err := chromedp.Run(rctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			id, e := target.CreateBrowserContext().Do(ctx)
+			if e != nil {
+				return e
+			}
+			bid = id
+			_, e = target.CreateTarget("about:blank").WithBrowserContextID(id).WithNewWindow(true).Do(ctx)
+			return e
+		}))
+		t.Logf("E) NEW browser context + createTarget(newWindow=true, bid): bid=%s err=%v", bid, err)
+		if err != nil {
+			t.Errorf("new-context + newWindow did NOT work: %v", err)
+		}
+		rcxl()
 	}
 }
 
