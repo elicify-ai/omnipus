@@ -736,31 +736,19 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		PulseServer:  pulseServer,
 	})
 
-	// dbus-run-session wrapping for the headful video path (the coordinator "sets
-	// this up"): headful Chrome wants a session bus. When video-capable and
-	// dbus-run-session is on PATH, run Chrome under `dbus-run-session -- <chrome>
-	// <args>` via cdppipe's LauncherPrefix — which wraps the WHOLE command so
-	// cdppipe's own --remote-debugging-pipe flag lands after the "--" (belonging
-	// to Chrome), not to dbus-run-session. (An earlier attempt swapped the exec to
-	// dbus-run-session and prepended "-- chrome" to the args; cdppipe then
-	// prepended --remote-debugging-pipe to the front, before the "--", and
-	// dbus-run-session died with "option '--remote-debugging-pipe' is unknown" —
-	// the headful path never launched. LauncherPrefix fixes the ordering.) The CDP
-	// pipe fds (3/4) inherit through the wrapper's exec (dbus-run-session preserves
-	// them). Falls back to launching Chrome directly (warn) when unavailable.
-	var launcherPrefix []string
-	if videoCapable {
-		if dbusPath, derr := exec.LookPath("dbus-run-session"); derr == nil {
-			launcherPrefix = []string{dbusPath, "--"}
-		} else {
-			logger.WarnCF(
-				"browser",
-				"coordinator: dbus-run-session not found — launching headful Chrome without a session bus",
-				nil,
-			)
-		}
-	}
-
+	// Headful Chrome launches DIRECTLY over the CDP pipe (DISPLAY set via
+	// managedExecAllocatorOpts, no --headless), exactly like the headless path —
+	// no dbus-run-session wrapper. An earlier version wrapped the headful launch
+	// in `dbus-run-session -- <chrome>` ("headful wants a session bus"), but real-
+	// hardware testing (ci-omnipus) showed that breaks the launch: Chrome's
+	// bidirectional NUL pipe on fd 3/4 does not survive dbus-run-session's exec, so
+	// the CDP pipe drops immediately ("Connection terminated while reading from
+	// pipe" → Target.createTarget "no browser is open -32000"). dbus-run-session
+	// only provides a SESSION bus anyway — it does not silence the (harmless)
+	// SYSTEM-bus / UPower errors headful Chrome logs — so it was pure downside.
+	// Headful Chrome runs fine on Xvfb without any session bus (verified: it stays
+	// alive and drives screencast); the session-bus warnings are non-fatal.
+	//
 	// Launch over the pipe (fail closed — err reports launch + CDP connectivity
 	// failure directly). The launcher is a seam so tests never spawn real Chrome.
 	launch := c.pipeLauncher
@@ -768,10 +756,9 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		launch = launchManagedPipe
 	}
 	res, err := launch(ctx, execPath, pipeLaunchConfig{
-		args:           cmdline.Args,
-		env:            cmdline.Env,
-		userDataDir:    c.cfg.ProfileDir,
-		launcherPrefix: launcherPrefix,
+		args:        cmdline.Args,
+		env:         cmdline.Env,
+		userDataDir: c.cfg.ProfileDir,
 	})
 	if err != nil {
 		c.mu.Lock()
