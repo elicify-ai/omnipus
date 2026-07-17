@@ -2,7 +2,7 @@ type: object
 description: >
   Body for PUT /agents/{id}. All fields are optional — only provided fields are updated.
   Locked (core) agents reject mutations to name, description, and soul.
-  model, timeout_seconds, max_tool_iterations, and steering_mode may be updated on locked agents.
+  model, timeout_seconds, and max_tool_iterations may be updated on locked agents.
   heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents
   (heartbeat is workspace-scoped, ADR-027).
   At least one field must be present (minProperties: 1) — empty patches are rejected 400.
@@ -62,13 +62,6 @@ properties:
     type: integer
     description: New maximum tool calls per turn. Allowed on all agents.
     example: 100
-  steering_mode:
-    type: string
-    enum:
-      - one-at-a-time
-      - queue-and-process
-    description: New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
-    example: "one-at-a-time"
   heartbeat_enabled:
     type: boolean
     description: >

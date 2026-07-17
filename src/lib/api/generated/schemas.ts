@@ -123,7 +123,6 @@ type Agent = {
   warning?: string | undefined;
   timeout_seconds: number;
   max_tool_iterations: number;
-  steering_mode: "one-at-a-time" | "queue-and-process";
   tools_cfg?: AgentToolsCfg | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
@@ -215,7 +214,6 @@ type AgentCreateRequestMain = {
   shell_policy?: AgentShellPolicy | undefined;
   timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
-  steering_mode?: ("one-at-a-time" | "queue-and-process") | undefined;
 };
 type AgentCreateRequestSubagent = {
   type: "Subagent";
@@ -278,7 +276,6 @@ type AgentUpdateRequest = Partial<{
   heartbeat: string;
   timeout_seconds: number;
   max_tool_iterations: number;
-  steering_mode: "one-at-a-time" | "queue-and-process";
   heartbeat_enabled: boolean;
   heartbeat_interval: number;
   shell_policy: Partial<{
@@ -1182,7 +1179,6 @@ export const Agent: z.ZodType<Agent> = z
     warning: z.string().optional(),
     timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(0),
-    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     tools_cfg: AgentToolsCfg.optional(),
     shell_policy: AgentShellPolicy.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
@@ -1235,7 +1231,6 @@ export const AgentCreateRequestMain =
     shell_policy: AgentShellPolicy.optional(),
     timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
-    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
   z.object({
@@ -1319,7 +1314,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     heartbeat: z.string(),
     timeout_seconds: z.number().int(),
     max_tool_iterations: z.number().int(),
-    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     heartbeat_enabled: z.boolean(),
     heartbeat_interval: z.number().int(),
     shell_policy: z
@@ -2607,7 +2601,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
 `,
     requestFormat: "json",
     parameters: [

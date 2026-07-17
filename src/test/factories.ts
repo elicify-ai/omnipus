@@ -13,7 +13,7 @@
 // happily typecheck even if a genuinely-required field were missing.
 //
 // `makeAgent` fills every schema-required field (id, name, type, locked,
-// status, soul, timeout_seconds, max_tool_iterations, steering_mode) with a
+// status, soul, timeout_seconds, max_tool_iterations) with a
 // realistic default so a test only has to specify what actually varies for
 // its scenario — the rest can't silently go missing from the fixture.
 //
@@ -34,7 +34,6 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     soul: '',
     timeout_seconds: 300,
     max_tool_iterations: 50,
-    steering_mode: 'one-at-a-time',
     ...overrides,
   }
 }

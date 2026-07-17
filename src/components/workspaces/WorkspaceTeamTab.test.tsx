@@ -48,7 +48,6 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
     instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 10,
-    steering_mode: 'one-at-a-time',
     heartbeat_enabled: false,
     heartbeat_interval: 0,
     ...over,

@@ -1491,15 +1491,6 @@ func readAgentFiles(workspace string) (soul, heartbeat string) {
 	return soul, heartbeat
 }
 
-// steeringModeOrDefault returns the steering mode string, defaulting to "one-at-a-time"
-// when the configured value is empty.
-func steeringModeOrDefault(mode string) string {
-	if mode == "" {
-		return "one-at-a-time"
-	}
-	return mode
-}
-
 // activeAgentIDSet returns a set of agent IDs that currently have an active turn.
 func (a *restAPI) activeAgentIDSet() map[string]bool {
 	ids := a.agentLoop.GetActiveAgentIDs()
@@ -1576,7 +1567,6 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
-	sm := gen.AgentSteeringMode(steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode))
 	// Effective per-turn tool-round cap: mirror the runtime resolution
 	// (pkg/agent/instance.go) — defaults value when set, else 200 — so the
 	// wire never reports a meaningless 0 (a zeroed default was the visible
@@ -1588,7 +1578,6 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 	return gen.Agent{
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
 		MaxToolIterations: maxIter,
-		SteeringMode:      sm,
 		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul: "",
 	}
@@ -2097,7 +2086,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// and copies out only the fields that variant actually carries.
 	// AgentCreateRequestSubagent has no Executor field at all;
 	// AgentCreateRequestSubagent3p has no ToolsCfg/Skills/FallbackModels/
-	// ShellPolicy/Voice/SteeringMode/MaxToolIterations
+	// ShellPolicy/Voice/MaxToolIterations
 	// fields — a subagent_3p create supplying any of those is rejected at
 	// decode time, both because the Go type has no matching field and
 	// because the strict decoder refuses to silently drop it.
@@ -2840,13 +2829,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 
-	// W2 spec §9.2 row 14: PUT worker with steering_mode=queue-and-process
-	// returns 200 but server forces steering_mode="one-at-a-time". Workers
-	// never queue (they run only via delegation; no concurrent inbound).
-	// Implementation: if the caller sent a non-nil steering_mode and the agent
-	// is a worker, ignore the caller's value and force the stored value to
-	// "one-at-a-time" via the persist block below.
-
 	// W2 spec §3.1 row 16 / §9.2 row 11+15: fallback_models is capped at 2
 	// entries (maxItems: 2). Server-enforced on every PUT/CREATE so a direct
 	// REST caller (not the SPA) cannot smuggle a 3rd entry past the schema.
@@ -3059,7 +3041,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				return fmt.Errorf("agents section not found in config")
 			}
 			// Per-agent fields: name, model, timeout_seconds, max_tool_iterations,
-			// steering_mode, tool_feedback — stored under agents.list[*].
+			// tool_feedback — stored under agents.list[*].
 			list, _ := agents["list"].([]any)
 			agentFound := false
 			for _, entry := range list {
@@ -3126,19 +3108,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 					if req.MaxToolIterations != nil {
 						agentMap["max_tool_iterations"] = *req.MaxToolIterations
-					}
-					if req.SteeringMode != nil {
-						// W2 spec §4.24 / §9.2 row 14: workers are forced to
-						// "one-at-a-time" server-side regardless of the caller's
-						// value. Workers run only via delegation (no concurrent
-						// inbound), so queueing is meaningless. This is a silent
-						// override, not a 400 — the spec calls for 200 with the
-						// stored value forced to one-at-a-time.
-						sm := string(*req.SteeringMode)
-						if foundAgent.IsWorker() {
-							sm = "one-at-a-time"
-						}
-						agentMap["steering_mode"] = sm
 					}
 					// tool_feedback was removed from the wire in W1 (it's now per-channel
 					// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
@@ -3527,10 +3496,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	if req.MaxToolIterations != nil {
 		ag.MaxToolIterations = *req.MaxToolIterations
-	}
-	if req.SteeringMode != nil {
-		sm := gen.AgentSteeringMode(steeringModeOrDefault(string(*req.SteeringMode)))
-		ag.SteeringMode = sm
 	}
 	jsonOK(w, ag)
 }

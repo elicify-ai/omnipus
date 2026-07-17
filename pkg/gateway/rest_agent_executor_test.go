@@ -849,22 +849,27 @@ func TestCreateAgent_Subagent3p_ForbiddenFieldFixture_RejectedByDefault(t *testi
 	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent3p")
 }
 
-// TestCreateAgent_Subagent_SteeringModeFieldRejected proves the unconditional
-// strict-decode rejection for steering_mode on a Subagent create:
-// steering_mode is Main-only — AgentCreateRequestSubagent has no
-// steering_mode property at all — so with a DEFAULT config (ValidateInbound
-// off), sending it is now a 400 (strict decode), not a silently-dropped
-// field.
-func TestCreateAgent_Subagent_SteeringModeFieldRejected(t *testing.T) {
+// TestCreateAgent_SteeringModeFieldRetiredFromWire proves steering_mode is
+// retired from the wire entirely (2026-07-17, dead config removal): it is no
+// longer a property on ANY create variant — not even Main, which used to be
+// the one variant that carried it. Sending it on a Main create is now
+// rejected 400 (strict decode, additionalProperties: false) rather than
+// silently accepted-and-dropped. Mirrors
+// TestCreateAgent_Subagent3p_DelegationPolicyRejected's "retired from the
+// wire entirely" pattern (ADR-037), except steering_mode's runtime steering
+// engine (pkg/agent/steering.go) stays global-only, driven exclusively by
+// agents.defaults.steering_mode — there was never a per-agent override to
+// preserve.
+func TestCreateAgent_SteeringModeFieldRetiredFromWire(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-	body := `{"name":"W","type":"Subagent","description":"d","soul":"s","steering_mode":"one-at-a-time"}`
+	body := `{"name":"W","type":"Main","soul":"s","steering_mode":"one-at-a-time"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "steering_mode")
-	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
+	assert.Contains(t, w.Body.String(), "AgentCreateRequestMain")
 }
 
 // TestCreateAgent_Subagent3p_DelegationPolicyRejected proves the ADR-037
