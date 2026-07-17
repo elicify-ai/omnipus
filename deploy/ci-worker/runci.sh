@@ -77,10 +77,19 @@ run_lint() {
   CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS"
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
-# re-run isolated (-p 1) is a timing flake (shared vCPUs) → not a real failure. Fails both = real.
+# re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.
+#
+# Contention control (2026-07-17): the worker is performance-8x (8 vCPUs). Plain `-p 4` runs 4
+# test binaries EACH defaulting to GOMAXPROCS=8 → ~32 scheduler threads oversubscribing 8 cores
+# 4:1, which starves wall-clock-deadline timing tests (they complete, just late → intermittent
+# flake-filter noise, a shifting random subset each run). Pinning GOMAXPROCS=2 on the -p4 run
+# makes 4 × 2 = 8 threads ≈ 8 cores (no oversubscription) while KEEPING package throughput —
+# far better than halving -p (which would still oversubscribe 2×8=16 AND double wall-clock). The
+# isolated re-run below is a single process, so it deliberately keeps the default (full)
+# GOMAXPROCS to give a flagged package maximum CPU when proving pass-vs-real-failure.
 run_gotest() {
   ensure_spa_stub
-  local out; out=$(CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 4 ./... 2>&1)
+  local out; out=$(GOMAXPROCS=2 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 4 ./... 2>&1)
   local code=$?
   echo "$out"
   [ $code -eq 0 ] && return 0
