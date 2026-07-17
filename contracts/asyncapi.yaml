@@ -40,14 +40,6 @@ servers:
       are governed by gateway.port in config.json (default 6060). For TLS
       deployments behind a reverse proxy, this becomes wss:// at the public
       hostname.
-  gateway-preview:
-    host: localhost:6061
-    pathname: /ws
-    protocol: ws
-    description: >
-      Preview-port WebSocket endpoint (gateway.preview_port, default 6061).
-      Serves the iframe-preview channel. The same frame protocol applies.
-      Only active when gateway.preview_listener_enabled is true (default).
 
 defaultContentType: application/json
 

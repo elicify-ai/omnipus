@@ -122,9 +122,25 @@ test.afterAll(async () => {
  * renders per spec FR-001 / SC-001.
  */
 async function navigateToCalendar(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto(`/#/workspaces/${workspaceId}/calendar`);
-  // Wait for the FullCalendar root element — always rendered even with 0 events (FR-001)
-  await expect(page.locator('.fc')).toBeVisible({ timeout: 30_000 });
+  const fc = page.locator('.fc');
+  const loadError = page.getByText('Failed to load workspace');
+  // The workspace is created in beforeAll, so a "Failed to load workspace" banner
+  // is a transient workspace-GET failure (observed under CI load), not a missing
+  // workspace. Reload and retry instead of timing out 30s on a missing .fc. Up to
+  // 3 attempts; a persistent failure still fails clearly on the final assertion.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto(`/#/workspaces/${workspaceId}/calendar`);
+    // Resolve as soon as EITHER the calendar mounts OR the error banner appears.
+    await Promise.race([
+      expect(fc).toBeVisible({ timeout: 15_000 }).catch(() => {}),
+      expect(loadError).toBeVisible({ timeout: 15_000 }).catch(() => {}),
+    ]);
+    if (await fc.isVisible()) return;
+    // Brief backoff so a transient gateway/SPA hiccup can clear before retrying.
+    await page.waitForTimeout(1_500);
+  }
+  // Persistent failure — surface a clear, final assertion.
+  await expect(fc).toBeVisible({ timeout: 30_000 });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -486,8 +486,12 @@ function AgentsLibraryView({
 
 export function AgentListScreen() {
   const { openCreateAgentModal, addToast } = useUiStore()
-  // MIN-9: defer authed fetches (including cli-detect) until the auth token is present.
-  const authToken = useAuthStore((s) => s.token)
+  // MIN-9: defer authed fetches (including cli-detect) until we know who's
+  // logged in. Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010) —
+  // there is no JS-visible token to gate on anymore, so this uses the
+  // display-only `username` (set at the same point login/onboarding used to
+  // set the token) as the "we've completed sign-in" signal instead.
+  const username = useAuthStore((s) => s.username)
   const queryClient = useQueryClient()
 
   const { data: agents = [], isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useQuery({
@@ -520,11 +524,12 @@ export function AgentListScreen() {
   const [cliDetectFailed, setCliDetectFailed] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (!authToken) return
+    if (!username) return
     let cancelled = false
     // UAT fix: go through the authed `fetchCliDetect()` (request() wrapper)
-    // so the bearer token is sent. The previous raw fetch had no auth header
-    // and 401'd, producing a false "Could not detect installed CLIs" banner.
+    // so the omnipus-session cookie is sent (credentials:'include'). The
+    // previous raw fetch had no credentials and 401'd, producing a false
+    // "Could not detect installed CLIs" banner.
     fetchCliDetect()
       .then((d) => {
         if (!cancelled) setHostClis(d)
@@ -538,7 +543,7 @@ export function AgentListScreen() {
     return () => {
       cancelled = true
     }
-  }, [authToken])
+  }, [username])
 
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agent: Agent) =>

@@ -122,16 +122,10 @@ export function ProfileSection() {
         // when isCurrent.
         if (isCurrent) contextDirtyRef.current = false
       },
-      // Item 4: best-effort flush on tab close / page hide / backgrounding,
-      // mirroring AgentProfile's flushUrl usage (same auth-token read; the
-      // gateway validates every state-changing call against the bearer
-      // token, so the flush must carry Authorization — sendBeacon can't,
-      // which is why the hook uses keepalive fetch instead).
+      // Item 4: best-effort flush on tab close / page hide / backgrounding.
+      // The hook's keepalive fetch carries the CSRF double-submit header
+      // (hotfix/v0.1.1 retired the flushAuthToken bearer mechanism).
       flushUrl: '/api/v1/user-context',
-      flushAuthToken:
-        typeof sessionStorage !== 'undefined'
-          ? (sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')) ?? undefined
-          : undefined,
     },
   )
 

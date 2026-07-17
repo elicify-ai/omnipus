@@ -12,7 +12,12 @@
  *
  * This test verifies the B1.3e guard in WebServeBlock.tsx: when isWebServeResult()
  * rejects the result and the tool is no longer running, MalformedResultBlock is
- * rendered instead of crashing or silently showing nothing.
+ * rendered instead of crashing or silently showing nothing. This guard fires
+ * BEFORE IframePreview ever mounts, so it is unaffected by ADR-044's
+ * embedded-iframe-to-link-only rewrite — no assertions here changed on that
+ * account. The only update in this file is the `/api/v1/about` mock: the
+ * retired `preview_port`/`preview_listener_enabled` fields are replaced by the
+ * current `preview_enabled` field (AboutResponse contract, ADR-044 US-8).
  *
  * Test drives against the real embedded SPA (Go binary + Playwright).
  */
@@ -22,7 +27,6 @@ import { test } from './fixtures/console-errors'
 import { seedAndOpenSession } from './fixtures/session-setup'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const PREVIEW_PORT = parseInt(process.env.OMNIPUS_PREVIEW_PORT || '6061', 10)
 const SYNTHETIC_AGENT_ID = 'main'
 
 // ── T1.19 ─────────────────────────────────────────────────────────────────────
@@ -53,8 +57,7 @@ test(
         contentType: 'application/json',
         body: JSON.stringify({
           ...base,
-          preview_listener_enabled: true,
-          preview_port: PREVIEW_PORT,
+          preview_enabled: true,
         }),
       })
     })
@@ -172,8 +175,7 @@ test(
         contentType: 'application/json',
         body: JSON.stringify({
           ...base,
-          preview_listener_enabled: true,
-          preview_port: PREVIEW_PORT,
+          preview_enabled: true,
         }),
       })
     })

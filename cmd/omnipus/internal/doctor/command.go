@@ -9,7 +9,6 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -67,80 +66,6 @@ func checkConfig(cfg *config.Config) []warning {
 	warnings := make([]warning, 0, 8)
 	warnings = append(warnings, checkDMPolicies(cfg)...)
 	warnings = append(warnings, checkExecEgress(cfg)...)
-	warnings = append(warnings, checkPreviewPort(cfg)...)
-	return warnings
-}
-
-// checkPreviewPort implements the three FR-026 doctor checks:
-// (a) warn if preview_port < 1024 (privileged port, needs root),
-// (b) warn if preview_port collides with a known channel port,
-// (c) info when host=0.0.0.0 and public_url is unset (frame-ancestors fallback).
-func checkPreviewPort(cfg *config.Config) []warning {
-	var warnings []warning
-
-	// Only check when the preview listener is enabled.
-	if !cfg.Gateway.IsPreviewListenerEnabled() {
-		return nil
-	}
-
-	// Resolve effective preview port (may not be computed yet if ValidateAndApplyPreviewDefaults
-	// hasn't been called — doctor runs pre-boot, so derive it here for display purposes).
-	previewPort := int(cfg.Gateway.PreviewPort)
-	if previewPort == 0 {
-		previewPort = cfg.Gateway.Port + 1
-	}
-
-	// (a) Privileged port check.
-	if previewPort > 0 && previewPort < 1024 {
-		// Only warn if we're not running as root. On Windows and Android, skip.
-		isRoot := false
-		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
-			isRoot = (os.Getuid() == 0)
-		}
-		if !isRoot {
-			warnings = append(warnings, warning{
-				code: "WARN-PREVIEW-001",
-				message: fmt.Sprintf(
-					"gateway.preview_port %d is a privileged port (<1024). Binding it requires root on Linux/macOS. "+
-						"Set gateway.preview_port to a port ≥1024 or run as root.",
-					previewPort,
-				),
-			})
-		}
-	}
-
-	// (b) Channel port collision check.
-	type channelPort struct {
-		name string
-		port int
-	}
-	knownPorts := []channelPort{
-		{"channels.line.webhook_port", cfg.Channels["line"].WebhookPort},
-	}
-	for _, cp := range knownPorts {
-		if cp.port > 0 && cp.port == previewPort {
-			warnings = append(warnings, warning{
-				code: "WARN-PREVIEW-002",
-				message: fmt.Sprintf(
-					"gateway.preview_port %d collides with %s=%d. "+
-						"Set gateway.preview_port to a different port to avoid binding conflict.",
-					previewPort, cp.name, cp.port,
-				),
-			})
-		}
-	}
-
-	// (c) Public URL advisory — frame-ancestors fallback.
-	h := cfg.Gateway.Host
-	if (h == "0.0.0.0" || h == "::" || h == "[::]") && cfg.Gateway.PublicURL == "" {
-		warnings = append(warnings, warning{
-			code: "INFO-PREVIEW-003",
-			message: "gateway.host = " + h + " and gateway.public_url is unset. " +
-				"frame-ancestors will fall back to '*' on /serve/ and /dev/. " +
-				"Set gateway.public_url for strict embedding control.",
-		})
-	}
-
 	return warnings
 }
 

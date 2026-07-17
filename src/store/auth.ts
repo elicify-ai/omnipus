@@ -1,32 +1,36 @@
 import { create } from 'zustand'
 
+// Auth is browser-managed via the `omnipus-session` HttpOnly cookie (US-5 /
+// FR-010) — the SPA never reads or writes a JS-visible auth token. This store
+// only tracks the display-only `username` (e.g. the Sidebar profile row's
+// "logged in as X"); the real session lives exclusively in the browser's
+// cookie jar and is validated server-side on every request (credentials:
+// 'include' in src/lib/api.ts) and, on route transitions, via
+// src/routes/authValidation.ts + src/routes/_app.tsx.
+//
+// username stays in localStorage (not sessionStorage) — it is not a secret,
+// and persisting it cross-tab/cross-restart lets the UI show "logged in as X"
+// immediately on load without waiting on a round trip. If the cookie is
+// actually missing/expired, the first authenticated request 401s and the
+// existing forceLogout() path (src/lib/authLogout.ts) clears this too.
 interface AuthStore {
-  token: string | null
   username: string | null
-  setToken: (token: string, username: string) => void
+  setUsername: (username: string) => void
   clearAuth: () => void
 }
 
-// Retrieves auth state from storage.
-// Token prefers sessionStorage (XSS protection); falls back to localStorage.
-// username remains in localStorage (less sensitive).
-function getStoredAuth() {
-  return {
-    token: sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token'),
-    username: localStorage.getItem('omnipus_auth_username'),
-  }
+function getStoredUsername(): string | null {
+  return localStorage.getItem('omnipus_auth_username')
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
-  ...getStoredAuth(),
-  setToken: (token, username) => {
-    sessionStorage.setItem('omnipus_auth_token', token) // sessionStorage for token (XSS protection)
+  username: getStoredUsername(),
+  setUsername: (username) => {
     localStorage.setItem('omnipus_auth_username', username)
-    set({ token, username })
+    set({ username })
   },
   clearAuth: () => {
-    sessionStorage.removeItem('omnipus_auth_token')
     localStorage.removeItem('omnipus_auth_username')
-    set({ token: null, username: null })
+    set({ username: null })
   },
 }))

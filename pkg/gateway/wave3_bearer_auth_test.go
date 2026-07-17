@@ -24,6 +24,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
 // TestBearerTokenConstantTimeComparison verifies that checkBearerAuth uses
@@ -454,4 +455,417 @@ func TestWithOptionalAuth_SecondAccountAuthenticates(t *testing.T) {
 		"a valid second-account token must be recognized, not silently downgraded to anonymous")
 	assert.Equal(t, "opt-account-two", gotUser.Username,
 		"resolved identity must be the SECOND account, not the first")
+}
+
+// ---------------------------------------------------------------------------
+// FR-009 — omnipus-session cookie fallback (Wave 2, preview-on-main-listener)
+//
+// The SPA no longer sends a bearer token at all (Wave 1 cutover) — it relies
+// on the browser auto-attaching the HttpOnly omnipus-session cookie.
+// checkBearerAuth (and therefore withAuth/withAuthAndBodyLimit, which call it
+// unconditionally) must authenticate that cookie when no Bearer header is
+// present; the Authorization: Bearer path must remain intact for
+// programmatic/CLI clients; a request with neither credential must still
+// fail closed with 401. authenticateWS (websocket.go) gets the same
+// treatment on the WS handshake.
+// Traces to: docs/internal/specs/preview-on-main-listener-spec.md FR-009,
+// S9, S10.
+// ---------------------------------------------------------------------------
+
+// TestWithAuthAcceptsSessionCookie proves a cookie-only request (no
+// Authorization header at all) authenticates through the REAL withAuth
+// middleware chain — the exact code path every withAuth-wrapped REST route
+// runs (withAuthAndBodyLimit → checkBearerAuth), not just checkBearerAuth
+// called in isolation.
+// BDD (S9): Given a logged-in browser with only the omnipus-session cookie,
+// When GET /api/v1/state arrives with no Authorization header,
+// Then the request authenticates (200) and the resolved user is injected
+// into the request context.
+func TestWithAuthAcceptsSessionCookie(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	plaintext, hash, err := middleware.MintSessionToken()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "cookie-user", SessionTokenHash: config.BcryptHash(hash)},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	var gotUser *config.UserConfig
+	handler := api.withAuth(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, _ = r.Context().Value(UserContextKey{}).(*config.UserConfig)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	r.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: plaintext})
+	// Deliberately no Authorization header at all.
+	handler(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "cookie-only request must authenticate, not 401")
+	require.NotNil(t, gotUser, "resolved user must be injected into the request context")
+	assert.Equal(t, "cookie-user", gotUser.Username)
+}
+
+// TestWithAuthBearerStillWorks proves the pre-existing Authorization: Bearer
+// path is untouched by the FR-009 cookie fallback — a bearer-only request
+// (no cookie at all) still authenticates through withAuth exactly as before.
+// BDD (S10): Given Authorization: Bearer <valid> and no cookie,
+// When calling /api/v1/*, Then it authenticates.
+func TestWithAuthBearerStillWorks(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	token := "omnipus_" + strings.Repeat("7", 64)
+	hash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "bearer-user", Tokens: []config.TokenEntry{{Hash: config.BcryptHash(hash)}}},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	var gotUser *config.UserConfig
+	handler := api.withAuth(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, _ = r.Context().Value(UserContextKey{}).(*config.UserConfig)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	// No cookie at all — proves the Bearer path alone still authenticates.
+	handler(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "bearer-only request must still authenticate")
+	require.NotNil(t, gotUser)
+	assert.Equal(t, "bearer-user", gotUser.Username)
+}
+
+// TestNoCredentialReturns401 proves a request carrying NEITHER a Bearer
+// header NOR a valid omnipus-session cookie is rejected with 401 (and never
+// reaches the wrapped handler) — the fail-closed half of FR-009/S9. Also
+// covers a garbage/unmatched cookie value, which must fail exactly the same
+// way as no cookie at all rather than crashing or falling through.
+// BDD (S9): Given neither credential is present, When calling /api/v1/*,
+// Then 401.
+func TestNoCredentialReturns401(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{
+					Username: "someone",
+					Tokens: []config.TokenEntry{
+						{
+							Hash: config.BcryptHash(
+								"$2a$10$notarealbcrypthashvalueXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+							),
+						},
+					},
+				},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	called := false
+	handler := api.withAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("no Authorization header, no cookie", func(t *testing.T) {
+		called = false
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+		handler(w, r)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.False(t, called, "the wrapped handler must never run when neither credential is present")
+	})
+
+	t.Run("garbage cookie value does not authenticate", func(t *testing.T) {
+		called = false
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+		r.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: "not-a-real-session-token"})
+		handler(w, r)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.False(t, called)
+	})
+}
+
+// TestWithOptionalAuthAcceptsSessionCookie is the withOptionalAuth counterpart
+// to TestWithAuthAcceptsSessionCookie above — code-review finding C1
+// (preview-on-main-listener, ADR-044). Before this fix, withOptionalAuth
+// (rest_auth.go) checked ONLY the Authorization: Bearer header and the legacy
+// OMNIPUS_BEARER_TOKEN env var before falling through to anonymous
+// pass-through — it never consulted the omnipus-session cookie at all. Once
+// the SPA stopped sending a bearer token (Wave 1 cutover), every
+// withOptionalAuth route whose handler upgrades behavior for a logged-in user
+// (e.g. PUT /providers/{id}, POST /providers/{id}/test and /refresh-models,
+// which 401 when UserContextKey is nil) silently downgraded a cookie-only
+// browser session to anonymous. The fix adds a
+// middleware.ResolveUserFromCookie fallback (mirroring withAuth's), which
+// this test exercises through the real withOptionalAuth method — not a
+// reimplementation of its branching.
+// BDD: Given a logged-in browser with only the omnipus-session cookie (no
+// Authorization header at all), When a withOptionalAuth-wrapped route is
+// called, Then the handler observes the resolved user in context, not
+// anonymous; and given neither a cookie nor a bearer token, the request must
+// still pass through anonymously (UserContextKey nil), not be rejected.
+// Traces to: preview-on-main-listener-spec.md FR-009; pr-review C1.
+func TestWithOptionalAuthAcceptsSessionCookie(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	plaintext, hash, err := middleware.MintSessionToken()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "opt-cookie-user", SessionTokenHash: config.BcryptHash(hash)},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	var gotUser *config.UserConfig
+	handler := api.withOptionalAuth(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, _ = r.Context().Value(UserContextKey{}).(*config.UserConfig)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("valid session cookie resolves the user, not anonymous", func(t *testing.T) {
+		gotUser = nil
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/providers/openai", nil)
+		r.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: plaintext})
+		// Deliberately no Authorization header — the SPA no longer sends one
+		// (Wave 1 cutover).
+		handler(w, r)
+
+		require.Equal(t, http.StatusOK, w.Code, "the wrapped handler must still run")
+		require.NotNil(t, gotUser,
+			"C1: a valid omnipus-session cookie must resolve a user in context through "+
+				"withOptionalAuth, not fall through to anonymous")
+		assert.Equal(t, "opt-cookie-user", gotUser.Username,
+			"resolved identity must be the cookie's matching user")
+	})
+
+	t.Run("no cookie and no bearer still passes through anonymously", func(t *testing.T) {
+		// Poison gotUser first so a no-op handler run couldn't produce a false pass.
+		gotUser = &config.UserConfig{Username: "sentinel-must-be-cleared"}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+		// Neither an Authorization header nor a cookie.
+		handler(w, r)
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"withOptionalAuth must still pass an unauthenticated request through, not reject it")
+		assert.Nil(t, gotUser,
+			"no credential at all must resolve to anonymous (nil user in context), not error "+
+				"and not leak a stale/sentinel identity")
+	})
+}
+
+// TestWithOptionalAuthInvalidCookie_FallsThroughToAnonymous is the PTA-3
+// negative-case regression companion to TestWithOptionalAuthAcceptsSessionCookie
+// above: a request carrying an omnipus-session cookie whose VALUE does NOT
+// bcrypt-match any configured user (a stale, forged, or replayed cookie) must
+// fall through to anonymous pass-through exactly like "no cookie at all" —
+// never panic, never 500, and never resolve to some other/stale identity.
+// BDD: Given a request with an omnipus-session cookie present but invalid
+// (bcrypt-matches no configured user), When a withOptionalAuth-wrapped route
+// is called, Then the wrapped handler still runs (200) and the context user
+// is nil (anonymous) — not an error response and not a crash.
+// Traces to: preview-on-main-listener-spec.md FR-009; pr-review PTA-3
+// (pass-2 fix round).
+//
+// Note on scope: SFH-1 (same fix round) wires
+// middleware.LogInvalidSessionCookiePresent into the three LIVE
+// cookie-fallback sites that are fail-CLOSED on a cookie miss —
+// checkBearerAuth (auth.go), authenticateWS (websocket.go), and
+// BrowserWSHandler.authenticate (browser_ws.go). withOptionalAuth's own
+// cookie fallback is deliberately NOT one of those three: it is fail-OPEN by
+// design (this is the *optional*-auth path — see withOptionalAuth's doc in
+// rest_auth.go), so an unmatched cookie here is an expected, routine
+// anonymous fallback rather than a probe/replay signal worth flagging. This
+// test therefore only asserts the outcome (anonymous, no panic/500) — it
+// does not require a log line, since withOptionalAuth is not wired to the
+// new helper.
+func TestWithOptionalAuthInvalidCookie_FallsThroughToAnonymous(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	_, hash, err := middleware.MintSessionToken()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Users: []config.UserConfig{
+				{Username: "real-cookie-user", SessionTokenHash: config.BcryptHash(hash)},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	api := &restAPI{
+		agentLoop:     mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{}),
+		allowedOrigin: "http://localhost:3000",
+	}
+
+	var gotUser *config.UserConfig
+	called := false
+	handler := api.withOptionalAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		gotUser, _ = r.Context().Value(UserContextKey{}).(*config.UserConfig)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Poison gotUser first so a no-op handler run couldn't produce a false pass.
+	gotUser = &config.UserConfig{Username: "sentinel-must-be-cleared"}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	r.AddCookie(&http.Cookie{
+		Name:  middleware.SessionCookieName,
+		Value: "this-cookie-value-bcrypt-matches-no-configured-user-at-all",
+	})
+	// Deliberately no Authorization header — isolating the cookie-fallback path.
+
+	require.NotPanics(t, func() { handler(w, r) },
+		"a present-but-invalid session cookie must never panic withOptionalAuth")
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"a present-but-invalid cookie must fall through to anonymous pass-through (200), not 401/500")
+	assert.True(t, called, "the wrapped handler must still run — optional auth never rejects")
+	assert.Nil(t, gotUser,
+		"a cookie that bcrypt-matches no configured user must resolve to anonymous (nil), not error "+
+			"and not leak a stale/sentinel identity")
+}
+
+// dialTestWSWithCookie dials the chat WebSocket endpoint carrying the given
+// omnipus-session cookie value on the upgrade request itself (the browser's
+// automatic same-origin cookie attachment during the WS handshake). Proves
+// FR-009's cookie-based WS auth: no {"type":"auth"} frame is sent at all,
+// matching the Wave-1 SPA which no longer holds a bearer token to send.
+func dialTestWSWithCookie(t *testing.T, srv *httptest.Server, sessionToken string) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/chat/ws"
+	header := http.Header{}
+	header.Set("Cookie", middleware.SessionCookieName+"="+sessionToken)
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	conn, httpResp, err := dialer.Dial(wsURL, header)
+	if httpResp != nil {
+		httpResp.Body.Close()
+	}
+	require.NoError(t, err, "WebSocket dial carrying the session cookie must succeed")
+	return conn
+}
+
+// TestWSAuthAcceptsSessionCookie proves the WS handshake authenticates via
+// the omnipus-session cookie alone — the client sends NO {"type":"auth"}
+// frame at all. authenticateWS must resolve identity from the cookie on the
+// upgrade request BEFORE blocking on the first frame read, or a cookie-only
+// client (which sends no frame) would hang forever waiting on one.
+// BDD (S9): Given a logged-in browser with only the cookie, When the WS
+// handshake occurs, Then it authenticates.
+func TestWSAuthAcceptsSessionCookie(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	plaintext, hash, err := middleware.MintSessionToken()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Host: "127.0.0.1", Port: 8080,
+			Users: []config.UserConfig{
+				{Username: "ws-cookie-user", SessionTokenHash: config.BcryptHash(hash)},
+			},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	handler := newWSHandler(msgBus, al, "")
+	t.Cleanup(handler.Wait)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWSWithCookie(t, srv, plaintext)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+
+	// Listen on the bus before sending the message.
+	received := make(chan bus.InboundMessage, 1)
+	go func() {
+		select {
+		case msg := <-msgBus.InboundChan():
+			received <- msg
+		case <-time.After(3 * time.Second):
+		}
+	}()
+
+	// Deliberately send a "message" frame FIRST with no preceding auth frame
+	// — proving the connection is already authenticated via the cookie at
+	// handshake time (a pre-Wave-2 server would have rejected this as "first
+	// message must be {\"type\":\"auth\"...}").
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello via cookie auth"}
+	msgData, err := json.Marshal(msgFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData),
+		"message send must succeed immediately — no auth frame required when the "+
+			"omnipus-session cookie authenticates the handshake")
+
+	select {
+	case msg := <-received:
+		assert.Equal(t, "ws-cookie-user", msg.GatewayUserID,
+			"authenticateWS must resolve identity from the cookie, not silently drop it")
+	case <-time.After(3 * time.Second):
+		t.Fatal("message was not published to bus within 3 seconds — cookie-based WS auth did not succeed")
+	}
 }

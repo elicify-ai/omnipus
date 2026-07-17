@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -99,6 +100,13 @@ type AgentLoop struct {
 	activeTurnStates   sync.Map     // key: sessionKey (string), value: *turnState
 	subTurnCounter     atomic.Int64 // Counter for generating unique SubTurn IDs
 	sessionActiveAgent sync.Map     // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
+
+	// orphanWatches holds the orphan-foreground-turn watchdog's pending grace
+	// timer per session (ADR-045): key sessionID (string), value *orphanWatch.
+	// Populated by ArmOrphanForegroundTurnWatch, removed by
+	// DisarmOrphanForegroundTurnWatch or once the grace timer fires. See
+	// pkg/agent/orphan_watch.go.
+	orphanWatches sync.Map
 
 	// Turn tracking
 	turnSeq        atomic.Uint64
@@ -432,6 +440,20 @@ type processOptions struct {
 	// otherwise starts a fresh turn at depth 0. Interactive/chat turns leave
 	// this 0.
 	InitialDelegationDepth int
+
+	// IsTaskRun marks a turn as a native task-dispatch run (set by
+	// processTaskDirect's runAgentLoop call; false for interactive chat,
+	// heartbeat, and the external-CLI task path, which never reaches
+	// assembleMessages at all). assembleMessages reads it to decide whether to
+	// append a terse TASK_STATUS/TASK_SUMMARY marker reminder to the
+	// breadcrumb block (review B3): a task's marker instruction lives only in
+	// its first user turn (buildPrompt, task_executor.go), and windowTrim
+	// (ADR-028) can evict that turn on a long, tool-heavy task run — this flag
+	// is what lets the reminder re-surface exactly when (and only when) that
+	// eviction has actually happened, piggybacking on the breadcrumb's own
+	// eviction-survives-everything delivery mechanism rather than adding a
+	// second, parallel injection path.
+	IsTaskRun bool
 }
 
 // gatewayPrincipal returns the WS-authenticated gateway principal that an
@@ -1197,7 +1219,6 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		// Registered whenever ServedSubdirs is available; dev mode is gated to
 		// Linux at runtime inside the tool itself (Tier3UnsupportedMessage).
 		if deps.ServedSubdirs != nil {
-			previewURL := deps.GatewayPreviewBaseURL
 			portRange := cfg.Sandbox.DevServerPortRange
 			webServeCfg := tools.WebServeDevConfig{
 				Tier3Commands:   cfg.Sandbox.Tier3Commands,
@@ -1206,10 +1227,16 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				EgressAllowList: cfg.Sandbox.EgressAllowList,
 				AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 			}
+			// preview-on-main-listener v5 (FR-005/FR-006): web_serve no longer
+			// takes a constructor-frozen preview base URL. It gets al.GetConfig
+			// (thread-safe, RLock-protected) so every serve_web call builds its
+			// URL from the LIVE canonical gateway origin and reads
+			// gateway.preview_enabled live — no restart, no re-wiring on hot
+			// reload required for the toggle to take effect.
 			webServeTool := tools.NewWebServeTool(
 				ag.Workspace,
 				ag.ID,
-				previewURL,
+				al.GetConfig,
 				deps.ServedSubdirs,
 				deps.DevServerRegistry, // nil on non-Linux; tool guards internally
 				webServeCfg,
@@ -1231,7 +1258,8 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 	}
 
 	logger.InfoCF("agent", "Tier 1/3 tools wired into agent registry", map[string]any{
-		"preview_base_url":          deps.GatewayPreviewBaseURL,
+		// preview-on-main-listener v5: no more boot-frozen preview_base_url —
+		// web_serve now derives its URL live from al.GetConfig on every call.
 		"served_subdirs_ready":      deps.ServedSubdirs != nil,
 		"dev_server_registry_ready": deps.DevServerRegistry != nil,
 		"egress_proxy_ready":        deps.EgressProxy != nil,
@@ -1573,13 +1601,14 @@ func registerSharedTools(
 			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
 			// seeding); this hard ceiling closes that gap.
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
-			// subagent_3p task-assignment guard: TaskExecutor.processTaskDirect
-			// always runs a task on the native engine — there is no executor-kind
-			// branch to dispatch an external-CLI worker's own runner — so a task
-			// assigned to one would silently mis-execute with system-level tool
-			// access instead of the configured external CLI. Mirrors the same
-			// check on the REST path (rest_tasks.go's validateTaskAgentID).
-			taskCreate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
+			// subagent_3p (external-CLI) worker task assignment is no longer
+			// guarded here: processTaskDirect (this file) now branches on
+			// runner.ResolveDispatch and routes an external-CLI worker's task
+			// run through runExternalCLISubTurn instead of the native engine —
+			// see its doc comment for the dispatch design. The former
+			// SetExternalCLIWorkerChecker rejection (mirrored on the REST path's
+			// validateTaskAgentID) is retired now that the engine gap it
+			// papered over is closed.
 			taskCreate.SetOnCreate(func(entity *task.Task) {
 				al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 					TaskID:    entity.ID,
@@ -1614,8 +1643,9 @@ func registerSharedTools(
 					config.DelegationModeTask,
 				),
 			)
-			// Same subagent_3p reassignment guard as taskCreate above.
-			taskUpdate.SetExternalCLIWorkerChecker(cfg.IsExternalCLIWorkerID)
+			// Same rationale as taskCreate above: the subagent_3p reassignment
+			// guard is retired now that processTaskDirect dispatches an
+			// external-CLI worker's task run through runExternalCLISubTurn.
 			agent.Tools.Register(taskUpdate)
 
 			setTodos := tools.NewSetTodosTool(al.taskStore)
@@ -1677,14 +1707,36 @@ func registerSharedTools(
 				// There is no supported way to run non-headless today.
 				browserCfg.PersistSession = cfg.Tools.Browser.PersistSession
 
-				// Use the singleton SSRF checker (built from config, honors
-				// allow_internal). Fall back to a default checker (no allowlist)
-				// when SSRF is not explicitly enabled — browser tools always
-				// require a non-nil SSRFChecker (see browser.NewBrowserManager).
-				browserSSRF := al.ssrfChecker
-				if browserSSRF == nil {
+				// preview-on-main-listener v5 (FR-018/US-10, S21): let the agent's
+				// built-in browser reach the gateway's OWN preview origin.
+				// serve_web mints http://localhost:<gateway.port>/preview/...
+				// when gateway.public_url is unset (US-1 AS-2); CheckHost/CheckIP
+				// are otherwise port-blind, so without a scoped exception the
+				// gateway's own preview would either need a blanket loopback
+				// allow (rejected by the ADR — opens every local dev port) or
+				// stay blocked entirely. The exception scopes to exactly this
+				// host:port pair — passing "localhost" (its documented expected
+				// caller usage) also accepts the resolved "127.0.0.1"/"::1"
+				// loopback forms for the SAME port, per r4 OBS-003.
+				//
+				// CRITICAL (code-review M2): the exception MUST live on a checker
+				// dedicated to the browser tool, NOT on al.ssrfChecker. That
+				// singleton is shared with provider base_url and skill-installer
+				// URL validation (rest.go/rest_onboarding.go/gateway.go CheckURL
+				// callers); mutating it in place would silently allow
+				// localhost:<gateway.port> there too — the blanket-loopback
+				// widening the ADR rejected. CloneWithGatewayOrigin returns an
+				// independent checker sharing the singleton's block-lists/allowlist
+				// but carrying its own exception. The SSRF-disabled branch already
+				// mints a fresh per-agent checker, so it takes the exception directly.
+				var browserSSRF *security.SSRFChecker
+				if al.ssrfChecker != nil {
+					browserSSRF = al.ssrfChecker.CloneWithGatewayOrigin("localhost", cfg.Gateway.Port)
+				} else {
 					browserSSRF = security.NewSSRFChecker(nil)
+					browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
 				}
+
 				// browser.evaluate registration: always register the tool so the
 				// LLM sees it in its tool list. The live safety floor (deny by
 				// default, SEC-04/SEC-06) is the tool's own executeEnabled gate —
@@ -2911,6 +2963,52 @@ func (al *AgentLoop) Close() {
 		al.browserCoordinator = nil
 	}
 
+	// Shutdown reaper: kill every still-running background bash/exec session
+	// (run_in_background=true) process-wide. These children have their
+	// Pdeathsig deliberately CLEARED at spawn time (they must outlive a
+	// crashed gateway, not be torn down by one — see
+	// pkg/sandbox/spawn_bg_pdeath_linux.go), so nothing else reaps them on
+	// process exit. Without this, a full gateway restart orphans every
+	// still-running background child to PID 1 forever. This complements (but
+	// is distinct from) RequestCancel's owner-scoped KillAllForSession
+	// cascade — that fires per-session on an explicit user cancel; this fires
+	// unconditionally, process-wide, on whole-process teardown.
+	//
+	// LOAD-BEARING PRECONDITION: tools.GetSharedSessionManager() returns a
+	// PROCESS-WIDE singleton (a package-level var in pkg/tools) — it is NOT
+	// scoped to this *AgentLoop. This reaper is only correct under the
+	// assumption that a process hosts AT MOST ONE live *AgentLoop at a time,
+	// which holds for the omnipus gateway/CLI binary (every real entry
+	// point constructs exactly one). It does NOT hold inside this package's
+	// own test suite, where many tests each construct their own *AgentLoop
+	// and Close() it independently (often in parallel) — every one of those
+	// Close() calls reaps the SAME shared manager. This is harmless (a
+	// session already killed by another test's Close() is silently skipped
+	// — see KillAll's two-phase locking) but means "killed" here can never
+	// be read as "sessions THIS AgentLoop's own agents started" in a test
+	// context; only in the single-AgentLoop production process is that
+	// reading correct.
+	//
+	// Panic-guarded (mirrors cancel.go's PHASE B/C timer recover pattern):
+	// the shared SessionManager is reached via a package boundary this
+	// method does not otherwise control, so a panic inside it must not skip
+	// the teardown steps that follow (MCP manager close, agent memory
+	// stores, registry close, hooks, event bus, exec proxy, idle tickers,
+	// orphan watches) — a torn-down AgentLoop that leaked those would be
+	// worse than a background-kill step that failed loudly and moved on.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.ErrorCF("agent", "Close: panic recovered while killing background sessions",
+					map[string]any{"panic": fmt.Sprintf("%v", r), "stack": string(debug.Stack())})
+			}
+		}()
+		if killed, failed := tools.GetSharedSessionManager().KillAll(); killed > 0 || failed > 0 {
+			logger.InfoCF("agent", "Close: killed background sessions on shutdown",
+				map[string]any{"killed": killed, "failed": failed})
+		}
+	}()
+
 	mcpManager := al.mcp.takeManager()
 
 	if mcpManager != nil {
@@ -2949,6 +3047,18 @@ func (al *AgentLoop) Close() {
 	al.idleTickers.Range(func(k, v any) bool {
 		v.(context.CancelFunc)()
 		al.idleTickers.Delete(k)
+		return true
+	})
+
+	// ADR-045: stop every pending orphan-foreground-turn watchdog timer so
+	// none of them fire against a torn-down AgentLoop after Close() returns
+	// (tests in particular construct/close many AgentLoops in quick
+	// succession; a leaked timer firing later would touch a stale al).
+	al.orphanWatches.Range(func(k, v any) bool {
+		if ow, ok := v.(*orphanWatch); ok {
+			ow.cancel()
+		}
+		al.orphanWatches.Delete(k)
 		return true
 	})
 
@@ -4057,6 +4167,24 @@ func (al *AgentLoop) processTaskDirect(
 		taskChatID = "task:" + sessionKey
 	}
 
+	// Fix C: a task assigned to a subagent_3p (external-CLI) worker must
+	// dispatch through the SAME external-CLI machinery the agent-to-agent
+	// delegation path uses (runner.ResolveDispatch / runExternalCLISubTurn —
+	// see subturn.go's identical gate ahead of spawnSubTurn's native/external
+	// branch) rather than unconditionally falling into runAgentLoop below.
+	// Running a subagent_3p's task on the native engine would silently
+	// mis-execute it with full system-level Omnipus tool access instead of the
+	// configured external CLI — exactly the gap the assignment-time guards in
+	// rest_tasks.go / pkg/tools/task.go / pkg/sysagent/tools/task.go existed to
+	// paper over. This dispatch branch is what lets those guards be relaxed.
+	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(ag))
+	if dispatchErr != nil {
+		return "", fmt.Errorf("processTaskDirect: %w", dispatchErr)
+	}
+	if dispatchKind == runner.DispatchKindExternalCLI {
+		return al.processTaskDirectExternalCLI(taskCtx, ag, prompt, sessionKey, taskChatID, delegationDepth)
+	}
+
 	return al.runAgentLoop(taskCtx, ag, processOptions{
 		SessionKey:             sessionKey,
 		Channel:                "webchat",
@@ -4069,7 +4197,223 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptSessionID:    taskChatID,
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
+		IsTaskRun:              true,
 	})
+}
+
+// processTaskDirectExternalCLI runs a task assigned to a subagent_3p
+// (external-CLI) worker through runExternalCLISubTurn — the same dispatch
+// machinery spawnSubTurn uses for agent-to-agent delegation (subturn.go). A
+// task run has no parent turnState to derive a child from (unlike a delegated
+// sub-turn), so this builds a minimal turnState directly for the target agent
+// via newTurnState, wiring the agent snapshot, the task's transcript session
+// (so the run is replayable on reload, same as the native task path), and the
+// task's WorkspaceID (so workspace.FindForAgentPreferring can route the run
+// into the workspace's shared work/ directory when the agent is a workspace
+// CoreTeam member — mirrors the native runTurn resolution). Channel/ChatID/
+// SenderID/UserMessage are ALSO set on opts — not inert: since FIX 5 (below)
+// registers this turnState in al.activeTurnStates, turnState.snapshot() (via
+// GetActiveTurn/GetActiveTurnBySession) now surfaces them for the duration of
+// the run, exactly like a native turn's.
+//
+// An external-CLI worker's tool registry is its OWN CLI's, never Omnipus's —
+// it has no task_update tool wired at all — so buildPrompt's ADR-043
+// TASK_STATUS/TASK_SUMMARY marker instruction (task_executor.go) is this
+// dispatch kind's ONLY possible completion signal. The caller
+// (TaskExecutor.finishTaskRun) parses the aggregated CLI output (ForUser,
+// falling back to ForLLM) for that marker: a found "success"/"failure" line
+// lands the task Done/Failed with the marker's own reported words as Result;
+// no parseable marker at all fails the task closed (StatusFailed) — it is
+// NEVER auto-completed to Done on unverified prose alone. This replaced the
+// former "auto-complete to Done, WARN-only" default (ADR-042 §3's finding);
+// see ADR-043 for the full contract and finishTaskRun's own WarnCF log on the
+// fail-closed path.
+//
+// Delegation-depth bounding: the dispatched CLI child runs as a separate OS
+// process with its own tool registry — it has no delegate/create_task tools
+// wired to Omnipus at all — so it structurally cannot recurse into another
+// Omnipus delegation or task chain regardless of depth. ts.depth is still
+// seeded from the caller's delegationDepth for observability/symmetry with
+// the native branch's opts.InitialDelegationDepth.
+//
+// FIX 5 (7-reviewer gate, visibility): this turnState IS now registered in
+// al.activeTurnStates for the run's duration (register/defer-clear below,
+// mirroring native runTurn's registerActiveTurn/clearActiveTurn pair and
+// spawnSubTurn's childTS registration, subturn.go:880-881) — ts.depth is read
+// by cancel.go's activeTurnStates.Range-based readers now that the turn is
+// reachable there (it previously was not: an unregistered turnState made
+// ts.depth dead for every purpose except this function's own local seeding).
+// Registering also means:
+//   - writeTurnCancelledRestartForActiveTurns' FR-048 graceful-shutdown scan
+//     now covers an in-flight external-CLI task run (previously it silently
+//     vanished from the transcript on a mid-run restart).
+//   - GetActiveTurn/GetActiveAgentIDs now report this run like any other.
+//   - A RequestCancel against this session (transcriptSessionID == taskChatID)
+//     can reach and ClaimCancel this turnState. STALE-COMMENT CORRECTION
+//     (doc-only, cancel-propagation FIX 1): this used to say ts.cancelFunc/
+//     ts.providerCancel stay nil for this dispatch path — that is no longer
+//     true. runExternalCLISubTurn (external_dispatch.go) now calls
+//     childTS.setTurnCancel(cancel) / childTS.setProviderCancel(cancel) on
+//     THIS SAME ts (it is passed in as runExternalCLISubTurn's childTS
+//     argument below), wiring both fields to the context.CancelFunc that
+//     actually tears down the dispatched external-CLI subprocess (every
+//     driver binds the OS child via exec.CommandContext(runCtx, ...), so
+//     canceling that func kills the subprocess outright — see FIX 1's own
+//     doc comment at that call site for the full rationale). So a
+//     RequestCancel reaching this turnState now does more than update
+//     transcript/audit bookkeeping: it ALSO cancels the real external-CLI
+//     process, the same as the native delegation path. The remaining true
+//     part of the original claim: this dispatch still has no
+//     delegate/create_task tools that could populate ts.childTurnIDs, so the
+//     hard-abort child-cascade branch is still unreachable here — that part
+//     of the "no-panic" reasoning is unaffected.
+func (al *AgentLoop) processTaskDirectExternalCLI(
+	ctx context.Context,
+	liveAgent *AgentInstance,
+	prompt, sessionKey, taskChatID string,
+	delegationDepth int,
+) (string, error) {
+	// FIX 1 (7-reviewer gate, data race): liveAgent is the LIVE registry
+	// *AgentInstance (registry.GetAgent, in processTaskDirect above) —
+	// SwitchModel/ApplyAgentModel may concurrently rewrite its
+	// Model/Provider/Candidates/ThinkingLevel tuple (+ providerPool) while
+	// this run is in flight (AgentInstance.mu's doc, instance.go:28-30), and
+	// runExternalCLISubTurn reads agent.Model unlocked (transcript
+	// attribution + RunOptions.Model) — a read/write race with SwitchModel.
+	// snapshotForExternalDispatch takes a single RLock and copies the whole
+	// mutex-protected quad together into a private AgentInstance value
+	// nothing else can mutate, mirroring spawnSubTurn's execSource-snapshot
+	// pattern (subturn.go ~603-662, which the native delegation path already
+	// relies on for the identical reason). Every field below (opts,
+	// newTurnState, composeDelegateInput) reads from this snapshot, never
+	// liveAgent directly.
+	agent := liveAgent.snapshotForExternalDispatch()
+
+	opts := processOptions{
+		SessionKey:          sessionKey,
+		Channel:             "webchat",
+		ChatID:              taskChatID,
+		SenderID:            "task-executor",
+		UserMessage:         prompt,
+		TranscriptSessionID: taskChatID,
+		TranscriptStore:     al.GetAgentStore(agent.ID),
+		// WorkspaceID is already on ctx via tools.WithWorkspaceID (set by the
+		// task executor before calling processTaskDirect); thread it through
+		// processOptions explicitly too so runExternalCLISubTurn's
+		// workspace.FindForAgentPreferring(..., childTS.opts.WorkspaceID) call
+		// sees it — that field reads ts.opts, not the context.
+		WorkspaceID: tools.ToolWorkspaceID(ctx),
+	}
+	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
+	ts.depth = delegationDepth
+	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors subturn.go:831)
+
+	// FIX 5: register for the run's duration — see this function's doc
+	// comment for the full reachability analysis.
+	al.registerActiveTurn(ts)
+	// FINAL-GATE FIX (2026-07-13, cancel audit-trail gap): FIX 5 registered
+	// this turnState so a RequestCancel could reach and ClaimCancel it, but
+	// nothing on this path ever called ts.Finish — the ONE place that fires
+	// the onCancelFinish callback RequestCancel installs via
+	// SetOnCancelFinish (pkg/agent/cancel.go). Without it, a cancel here
+	// claimed cancelFired (CancelOutcome{Fired: true}) but produced NO
+	// turn_canceled transcript entry, NO MarkLastEntryTruncated, and NO
+	// audit.EventTurnCancelled — silently contradicting this function's own
+	// doc comment above, which already (incorrectly, until this fix)
+	// described the callback as firing.
+	//
+	// Finish(false) is safe to add here: at THIS point (construction, right
+	// before registerActiveTurn ran above) ts.cancelFunc/ts.providerCancel
+	// are still nil — cancel-propagation FIX 1 (external_dispatch.go's
+	// runExternalCLISubTurn) only wires them once dispatch actually starts,
+	// below. By the time this function returns and the deferred Finish(false)
+	// below actually RUNS, those fields are typically non-nil (set to the
+	// dispatch's own context.CancelFunc) — see this function's top doc
+	// comment's STALE-COMMENT CORRECTION note for the full explanation. That
+	// does not change this safety argument: Finish's cancelFunc branch
+	// (`if ts.cancelFunc != nil { ts.cancelFunc() }`) simply invokes it,
+	// which is exactly what dispatchCancel's own `defer dispatchCancel()`
+	// below already guarantees happens — canceling an already-canceled
+	// context is a no-op, so calling it twice (once via that defer, once via
+	// Finish) is harmless. isHardAbort is false so the child-cascade branch
+	// is unreachable, and Finish's closeOnce.Do + the
+	// cancelFired-swap-then-nil-check around onCancelFinish make a second
+	// Finish call (e.g. a concurrent InterruptSessionHard elsewhere calling
+	// Finish(true) on this same ts via steering.go) idempotent — the
+	// identical safety runTurn's own `defer ts.Finish(false)` already relies
+	// on for the hard-abort-then-graceful-defer sequence (loop.go, "closeOnce.Do
+	// inside Finish makes repeated Finish calls safe" comment).
+	//
+	// Ordering matches runTurn's LIFO defer pattern (loop.go, "Execution
+	// order (LIFO defer...)" comment): clearActiveTurn must run BEFORE
+	// Finish, so a cancel racing the tail end of this dispatch cannot find a
+	// since-finished turnState still reachable via
+	// GetActiveTurnHookForSession and register a callback that can now never
+	// fire — the same class of race that ordering guards against in
+	// runTurn. Defers execute LIFO, so writing Finish's defer first and
+	// clearActiveTurn's defer second makes clearActiveTurn run FIRST and
+	// Finish run LAST, exactly like runTurn's `defer ts.Finish(false)` /
+	// `defer al.clearActiveTurn(ts)` pair.
+	defer ts.Finish(false)
+	defer al.clearActiveTurn(ts)
+
+	rtCfg := al.getSubTurnConfig()
+
+	// ADDITIONAL FINDING (surfaced while writing pr-test-analyzer's T2, not
+	// one of the 11 numbered fixes): runExternalCLISubTurn never wraps its
+	// own ctx with a deadline — it derives runCtx via plain
+	// context.WithCancel(ctx) (external_dispatch.go) and only forwards
+	// rtCfg.defaultTimeout to the DRIVER as RunOptions.TimeoutSeconds, a hint
+	// each real driver applies itself (driver_claude.go/driver_codex.go/
+	// driver_opencode.go all do `context.WithTimeout(runCtx,
+	// TimeoutSeconds*time.Second)` internally). spawnSubTurn's native
+	// delegation path already has its OWN Go-level safety-net timeout
+	// (subturn.go ~458-473: `context.WithTimeout(context.Background(),
+	// timeout)`) precisely so a driver that never honors/emits an end event
+	// cannot hang the dispatch forever; this task-mode dispatch had no
+	// equivalent — a stuck external CLI would tie up a dispatch-semaphore
+	// slot indefinitely with nothing to notice. Unlike spawnSubTurn's
+	// Background()-rooted child (deliberately independent so a Critical
+	// sub-turn survives its parent's graceful finish), this derives the
+	// deadline FROM the incoming ctx — consistent with the native task path,
+	// where runTurn's own turnTimeout is likewise derived from the given ctx
+	// (loop.go) — so a TaskExecutor-level cancel (te.running[taskID].cancel(),
+	// ExecuteTask/StartTaskNow) still takes effect immediately in addition to
+	// this deadline.
+	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, rtCfg.defaultTimeout)
+	defer dispatchCancel()
+
+	// FIX 2 (7-reviewer gate, persona dropped): compose the same (soul, task)
+	// pair the native delegation path uses ahead of its own
+	// runExternalCLISubTurn call (subturn.go composeDelegateInput call site)
+	// so the target's own soul/persona travels with a TASK-mode dispatch too,
+	// not just an agent-to-agent delegate call. An empty soul (the worker
+	// case, where a soul is OPTIONAL) yields task-only input, identical to
+	// the pre-fix behavior.
+	externalInput := composeDelegateInput(al, prompt, "", agent.ID)
+
+	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, rtCfg.defaultTimeout)
+	if err != nil {
+		return "", fmt.Errorf("processTaskDirect: external-cli dispatch: %w", err)
+	}
+	// FIX 6 (7-reviewer gate, dead defensive branch): runExternalCLISubTurn's
+	// only two return statements are `return nil, fmt.Errorf(...)` (already
+	// handled by the err != nil check above — a non-nil err is ALWAYS paired
+	// with a nil result on that path) and the terminal `return result,
+	// result.Err` (drainExternalRun always returns a non-nil *tools.ToolResult,
+	// so result.Err is nil exactly when err here is nil). So once err == nil,
+	// result == nil and result.Err != nil are BOTH unreachable. The old `if
+	// result == nil { return "", nil }` silently reported task SUCCESS for a
+	// broken invariant instead of surfacing it — fail loudly so a future
+	// change that breaks the invariant is caught immediately, not masked as
+	// an empty-but-successful task result.
+	if result == nil {
+		return "", fmt.Errorf("processTaskDirect: external-cli dispatch: nil result with no error")
+	}
+	if result.ForUser != "" {
+		return result.ForUser, nil
+	}
+	return result.ForLLM, nil
 }
 
 // ExecuteBoardTask dispatches a GTD board task to the agent loop in a background
@@ -8260,6 +8604,22 @@ func (al *AgentLoop) assembleMessages(
 			"Use the recall_conversation tool with a turn_range to retrieve them."
 	} else {
 		breadcrumb = buildBreadcrumb(archive, history, breadcrumbTokenCap)
+	}
+	// Review B3: a task's TASK_STATUS/TASK_SUMMARY marker instruction
+	// (buildPrompt, task_executor.go) lives only in the task's first user
+	// turn — a long, tool-heavy task run can trip windowTrim (ADR-028) and
+	// evict that turn entirely, silently dropping the instruction for the
+	// rest of the run. Piggyback a terse reminder onto the SAME breadcrumb
+	// block that already fires exactly when (and only when) something has
+	// been evicted (breadcrumb != ""), scoped to task runs only
+	// (ts.opts.IsTaskRun) — this re-surfaces the instruction precisely when
+	// it risks having been evicted, at near-zero token cost, without a
+	// second parallel injection mechanism.
+	if ts.opts.IsTaskRun && breadcrumb != "" {
+		breadcrumb += fmt.Sprintf(
+			"\n\nReminder (task run): end your final message with `%s: success` or `%s: failure` (ADR-043).",
+			taskStatusLabel, taskStatusLabel,
+		)
 	}
 	spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
 	return ts.agent.ContextBuilder.BuildMessages(

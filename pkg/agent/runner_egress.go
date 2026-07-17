@@ -26,7 +26,16 @@ import (
 // Graceful degradation: if the proxy cannot start, returns "" and logs a warning.
 // The dispatch path treats an empty address as "no proxy injection" and proceeds
 // — the run is not aborted (FR-5.3 egress control is defense-in-depth on top of
-// the CLI's own sandbox + the git-worktree FS boundary, not a hard gate).
+// the CLI's own sandbox, not a hard gate).
+//
+// CORRECTED (FIX 9, 7-reviewer gate): this comment used to also cite "the
+// git-worktree FS boundary" as a second layer here. ADR-032
+// (docs/internal/architecture/ADR-032-external-agent-workspace-execution.md)
+// removed worktree isolation for external-CLI runs — they now execute
+// directly in the delegate's own persistent workspace directory
+// (RunOptions.WorkDir), not a disposable copy — so there is no FS-boundary
+// layer to stack egress control on top of anymore; the CLI's own sandbox is
+// the only other layer in play.
 //
 // The proxy is cached for the AgentLoop's lifetime (one loopback listener). It
 // is intentionally NOT closed on dispatch completion; closing would force a

@@ -1,20 +1,25 @@
 /**
- * markdown-text.tsx — tests for rewriteLegacyURL integration in the `a` renderer
+ * markdown-text.tsx — tests for the `a` renderer + rewriteLegacyURL (ADR-044)
  *
- * MarkdownText uses rewriteLegacyURL on every link href before rendering.
- * These tests verify that the `a` renderer correctly rewrites legacy
- * bind-all hosts in link hrefs (FR-016 / FR-017).
+ * Since ADR-044 (preview-on-main-listener), `/preview/` shares the SPA's own
+ * origin — there is no operator-configured preview host/port left to fetch
+ * from /api/v1/about, so MarkdownText's `a` renderer is now a static,
+ * module-level `createLinkRenderer(null)` (the shared "no rewrite" case in
+ * markdown-shared.tsx): links render exactly as the backend returned them.
+ * MarkdownText no longer calls useQuery/fetchAboutInfo at all.
+ *
+ * rewriteLegacyURL itself is retained in preview-url.ts (old-transcript
+ * replay safety) and is still exercised here directly as a pure-function
+ * regression suite — it is no longer wired into MarkdownText's live render
+ * path, but stays correct for any caller that does pass a non-null
+ * effectivePreview (see preview-url.test.ts for the primary coverage).
  *
  * Since MarkdownText reads from MessagePrimitive context (AssistantUI-specific),
- * we test the rewriteLegacyURL function directly here for the markdown-text
- * integration scenario. The component's `a` renderer logic is a one-liner
- * delegating entirely to rewriteLegacyURL, which is already parameterized-tested
- * in preview-url.test.ts.
+ * we test rewriteLegacyURL directly here rather than rendering the component.
  *
  * We also verify the module exports MarkdownText (existence + type check).
  *
- * Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md
- * FR-016 / FR-017: Legacy URL rewrite in markdown link renderer
+ * Traces to: docs/internal/specs/preview-on-main-listener-spec.md — FR-016/FR-017.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -37,12 +42,6 @@ vi.mock('remark-gfm', () => ({ default: () => {} }))
 vi.mock('remark-math', () => ({ default: () => {} }))
 vi.mock('rehype-katex', () => ({ default: () => {} }))
 vi.mock('katex/dist/katex.min.css', () => ({}))
-vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({ data: { preview_port: 5001 } }),
-}))
-vi.mock('@/lib/api', () => ({
-  fetchAboutInfo: vi.fn().mockResolvedValue({}),
-}))
 vi.mock('./shiki-highlighter', () => ({
   SyntaxHighlighter: () => null,
   CopyCodeHeader: () => null,
@@ -65,17 +64,19 @@ describe('markdown-text — module exports MarkdownText', () => {
   })
 })
 
-// ── rewriteLegacyURL integration for markdown `a` renderer ───────────────────
+// ── rewriteLegacyURL pure-function regression (no longer wired into the live
+//    render path — see the file header comment) ──────────────────────────────
 
-describe('markdown-text — a renderer uses rewriteLegacyURL (FR-016 / FR-017)', () => {
-  // Traces to: chat-served-iframe-preview-spec.md — Scenario: Legacy URL rewrite in markdown links
+describe('markdown-text — rewriteLegacyURL regression coverage (preview-on-main-listener FR-016/FR-017)', () => {
+  // Traces to: docs/internal/specs/preview-on-main-listener-spec.md
+  //
+  // MarkdownText's `a` renderer is now the static `createLinkRenderer(null)`
+  // (no rewrite — see markdown-text.tsx). rewriteLegacyURL stays correct as a
+  // pure function for old-transcript replay (any caller that DOES pass a
+  // non-null effectivePreview) and is regression-tested directly here.
 
-  // The `a` renderer in MarkdownTextImpl calls:
-  //   rewriteLegacyURL(href ?? '', window.location.hostname, previewPort)
-  // We verify the pure function's behavior matches what the renderer will produce.
-
-  it('rewrites 0.0.0.0 serve path to actual hostname with preview port', () => {
-    // Traces to: chat-served-iframe-preview-spec.md — FR-016/017 spec row 1
+  it('rewrites 0.0.0.0 serve path to actual hostname with the given port', () => {
+    // Traces to: preview-on-main-listener-spec.md — FR-016/017 spec row 1
     const result = rewriteLegacyURL(
       'http://0.0.0.0:5000/serve/m/t/',
       '10.0.0.5',
@@ -84,8 +85,8 @@ describe('markdown-text — a renderer uses rewriteLegacyURL (FR-016 / FR-017)',
     expect(result).toBe('http://10.0.0.5:5001/serve/m/t/')
   })
 
-  it('rewrites 0.0.0.0 dev path to localhost with preview port', () => {
-    // Traces to: chat-served-iframe-preview-spec.md — FR-016/017 spec row 2
+  it('rewrites 0.0.0.0 dev path to localhost with the given port', () => {
+    // Traces to: preview-on-main-listener-spec.md — FR-016/017 spec row 2
     const result = rewriteLegacyURL(
       'http://0.0.0.0:5000/dev/m/t/',
       'localhost',

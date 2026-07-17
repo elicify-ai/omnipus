@@ -75,11 +75,24 @@ var claudeBinName = "claude"
 // Omnipus can answer. A tool_use event is surfaced as a PermissionRequestEvent
 // for observability, but by the time Omnipus sees it the CLI has already begun
 // the call. A DENY therefore cannot veto the individual call — it can only
-// CANCEL the whole run (kill the process). Consent here is best-effort post-hoc
-// cancellation; the CLI's own sandbox plus the isolated worktree are the real
-// security boundary. external-cli is ACTIVE/wired in v0.1.0 (dispatch site:
-// pkg/agent/external_dispatch.go, driven from pkg/agent/subturn.go); only the
-// remote-a2a executor kind stays reserved (see runner/dispatch.go).
+// CANCEL the whole run (kill the process). Consent here is best-effort
+// post-hoc cancellation. external-cli is ACTIVE/wired in v0.1.0 (dispatch
+// site: pkg/agent/external_dispatch.go, driven from pkg/agent/subturn.go);
+// only the remote-a2a executor kind stays reserved (see runner/dispatch.go).
+//
+// CORRECTED (FIX 9, 7-reviewer gate): this comment used to name "the CLI's
+// own sandbox plus the isolated worktree" as the real security boundary here.
+// Neither holds for THIS driver anymore. (1) ADR-032 removed worktree
+// isolation for external-CLI runs generally — they execute directly in the
+// delegate's own persistent workspace directory now, not a disposable copy.
+// (2) Specific to claude: this driver passes --dangerously-skip-permissions
+// unconditionally (see buildArgs below), so it has no enforced tool-level
+// gate of its own either — unlike codex, which still enforces a real
+// OS-level sandbox (--sandbox workspace-write, Landlock/seccomp). See
+// consent.go's own 2026-07-05 (issue #488) amendment for the full history;
+// this driver's real-world boundary today is FR-5.3's egress-proxy control
+// (runner_egress.go) plus whatever the operator's own OS provides — nothing
+// path- or worktree-scoped.
 type ClaudeDriver struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd

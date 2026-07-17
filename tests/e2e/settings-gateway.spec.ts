@@ -149,7 +149,7 @@ test(
     // in the Gateway panel is the god-mode toggle (S5/O14 danger zone), so assert
     // no switch OTHER than god-mode exists (the hot-reload toggle is gone).
     await expect(
-      activePanel.locator('[role="switch"]:not([data-testid="god-mode-toggle"])'),
+      activePanel.locator('[role="switch"]:not([data-testid="god-mode-toggle"]):not([data-testid="preview-server-toggle"])'),
     ).not.toBeAttached()
 
     // ── Core assertion B: no "Hot reload" label text anywhere on the page.
@@ -200,7 +200,7 @@ test(
     // ── Negative assertion (hot-reload): no switch (other than the legitimate
     // god-mode toggle) and no label.
     await expect(
-      activePanel.locator('[role="switch"]:not([data-testid="god-mode-toggle"])'),
+      activePanel.locator('[role="switch"]:not([data-testid="god-mode-toggle"]):not([data-testid="preview-server-toggle"])'),
     ).not.toBeAttached()
     await expect(page.getByText(/hot reload/i)).not.toBeAttached()
   },

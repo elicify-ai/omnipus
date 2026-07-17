@@ -59,9 +59,40 @@ test(
 test(
   '(b) multi-turn retention: turn 3 references content from turn 1',
   async ({ page }) => {
-    // Budget: newchat(5) + agentswitch(15) + turn1(300) + gap(10) + turn2(300) + gap(10)
-    //         + turn3(300) = 940s. 1200s gives a 260s margin for LLM variance.
-    test.setTimeout(1_200_000);
+    // Budget (WORST-CASE ceiling, not a "typical" duration — test.setTimeout is a
+    // hard governor: if it's smaller than the sum of every step's own declared
+    // timeout, the outer timeout kills the test mid-flight before an inner
+    // assertion ever gets to legitimately time out or succeed, which is exactly
+    // what produced a 21.8-min real hang under the old budget below).
+    //
+    // Fixed overhead (sum of each step's own timeout, chatInput/newChat/picker
+    // visibility + count=0 + contains-Jim checks):
+    //   15_000 + 10_000 + 10_000 + 15_000 + 5_000 = 55s
+    //
+    // Per turn (×3 — fill/press/toHaveCount/waitForTurnFullyDone):
+    //   toHaveCount ceiling ................................ 300s
+    //   waitForTurnFullyDone ceiling: this helper (defined above, ~L24-34) first
+    //   waits up to `gapMs` (8s, the value passed at every call site below) for
+    //   the stop button to reappear, and if it does, waits up to a FURTHER 180s
+    //   for it to vanish again (a legitimate tool-call follow-up LLM turn) ... 8 + 180 = 188s
+    //   => per-turn ceiling: 300 + 188 = 488s
+    // 3 turns: 3 * 488 = 1464s
+    //
+    // Worst-case total: 55 + 1464 = 1519s (~25.3 min).
+    //
+    // The PREVIOUS budget ("940s expected + 260s margin" -> 1200s) undercounted
+    // this badly in two ways: (1) it modeled each waitForTurnFullyDone call as a
+    // flat "gap(10)" 10s placeholder instead of the helper's own documented
+    // up-to-188s worst case, and (2) it only budgeted 2 gaps, omitting the THIRD
+    // waitForTurnFullyDone call entirely (the third call, immediately before
+    // the `serialMsgs` assertion). Three turns each legitimately hitting the 188s
+    // follow-up-call ceiling alone sums to 564s — already more than double the
+    // old 260s margin, before even counting the toHaveCount ceilings.
+    //
+    // New budget: 1519s worst-case ceiling + ~281s margin (~19%) for CI
+    // scheduling/runner jitter beyond each step's own declared timeout = 1800s
+    // (30 min), a round number with real headroom over the computed ceiling.
+    test.setTimeout(1_800_000);
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });

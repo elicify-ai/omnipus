@@ -25,7 +25,8 @@ import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents } from '@/lib/api'
+import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
+import { logError } from '@/lib/telemetry'
 import type { Workspace } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 import { useSelectSession } from '@/components/chat/useSelectSession'
@@ -122,8 +123,20 @@ export function Sidebar() {
   const wasOverlayOpenRef = useRef(false)
 
   const handleLogout = useCallback(() => {
-    useAuthStore.getState().clearAuth()
-    navigate({ to: '/login' })
+    // FR-020 (grafted from hotfix/v0.1.1): revoke the session server-side
+    // BEFORE clearing local state — client-side clearing alone would leave
+    // the omnipus-session cookie valid and replayable. Best-effort: proceed
+    // to local teardown even if the network call fails (e.g. offline), so
+    // the user is never stuck.
+    void logout().catch((err) => {
+      // The user is signing out regardless (see comment above) — but a
+      // server-side revoke failure must not vanish silently. Log it so an
+      // operator can spot a cookie that stayed valid server-side.
+      logError({ event: 'logoutRevokeFailed', error: String(err) })
+    }).finally(() => {
+      useAuthStore.getState().clearAuth()
+      navigate({ to: '/login' })
+    })
   }, [navigate])
 
   // Workspaces query — refetch every 30s

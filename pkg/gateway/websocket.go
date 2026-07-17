@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -574,7 +575,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		doneCh: make(chan struct{}),
 	}
 
-	if !h.authenticateWS(conn, wc) {
+	if !h.authenticateWS(conn, wc, r) {
 		return
 	}
 
@@ -605,6 +606,11 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.agentLoop.UnsubscribeEvents(eventSub.ID)
 		<-eventDone // wait for forwarder goroutine to exit
 		h.mu.Lock()
+		// ADR-045: capture this connection's own session mapping BEFORE the
+		// deletes below — needed both to arm the watchdog for the right
+		// session and so the multi-tab-safety scan just after reflects state
+		// with THIS connection already removed.
+		sid := h.sessionIDs[chatID]
 		if tid, ok := h.taskChatIDs[chatID]; ok {
 			// sessions is never keyed by tid (only by chatID); clean up only sessionIDs.
 			delete(h.sessionIDs, tid)
@@ -612,8 +618,31 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(h.sessions, chatID)
 		delete(h.sessionIDs, chatID)
+		// ADR-045 multi-tab safety: only arm the orphan-foreground-turn
+		// watchdog when no OTHER connection is still watching this same
+		// session — a second open tab on the same chat must never have its
+		// live turn interrupted just because a sibling tab closed.
+		armOrphanWatch := false
+		if sid != "" {
+			armOrphanWatch = true
+			for _, otherSID := range h.sessionIDs {
+				if otherSID == sid {
+					armOrphanWatch = false
+					break
+				}
+			}
+		}
 		h.mu.Unlock()
 		wc.close()
+
+		if armOrphanWatch {
+			grace := h.agentLoop.GetConfig().EffectiveOrphanedTurnGraceSeconds()
+			sidCopy := sid
+			h.agentLoop.ArmOrphanForegroundTurnWatch(sidCopy, grace,
+				func(reason string) { h.reapOrphanForegroundTurn(sidCopy, reason) },
+				func() bool { return h.sessionStillOrphaned(sidCopy) },
+			)
+		}
 
 		// Emit observability counters at connection teardown so operators can
 		// act on them (e.g. alert when a client is sending many invalid refs).
@@ -641,16 +670,40 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.readLoop(r.Context(), conn, wc, chatID)
 }
 
-// authenticateWS reads the first frame and validates the token.
-// Loops every account in Gateway.Users first (bcrypt; the single-user model
-// normally holds exactly one, but a pre-single-user-model install may still
-// carry leftover extra accounts — config.warnAboutExtraUsers flags that at
-// load time as an advisory; every configured account still authenticates
-// here, same as checkBearerAuth), then the CLI's dedicated Gateway.CLIToken,
-// then falls back to OMNIPUS_BEARER_TOKEN env var for backward
-// compatibility. Sets wc.userID to the resolved identity on success, and
-// wc.isCLIToken when that identity came from the CLIToken branch.
-func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
+// authenticateWS authenticates the WS handshake via EITHER the omnipus-session
+// cookie (checked first, synchronously, against the upgrade request r) OR the
+// legacy first-message {"type":"auth","token":...} frame (FR-009). The SPA no
+// longer sends an auth frame at all post-Wave-1 cutover — the browser
+// auto-attaches the cookie on the upgrade request (same-origin) — so the
+// cookie check MUST happen before blocking on the first frame read, or a
+// cookie-only client would hang waiting for a frame that will never arrive.
+// Programmatic/CLI clients that don't carry the cookie still authenticate via
+// the frame path below, unaffected.
+//
+// The frame path loops every account in Gateway.Users first (bcrypt; the
+// single-user model normally holds exactly one, but a pre-single-user-model
+// install may still carry leftover extra accounts — config.warnAboutExtraUsers
+// flags that at load time as an advisory; every configured account still
+// authenticates here, same as checkBearerAuth), then the CLI's dedicated
+// Gateway.CLIToken, then falls back to OMNIPUS_BEARER_TOKEN env var for
+// backward compatibility. Sets wc.userID to the resolved identity on success,
+// and wc.isCLIToken when that identity came from the CLIToken branch (the
+// cookie path never sets isCLIToken — a cookie always identifies a real human
+// Gateway.Users account, never the synthetic CLI identity).
+func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Request) bool {
+	cfg := h.agentLoop.GetConfig()
+
+	if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
+		wc.userID = user.Username // FR-073: needed for session_state user scoping
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return true
+	}
+	// SFH-1: surface "cookie present but invalid" (replay/probe/stale
+	// cookie) as a log line — silent for the routine "no cookie at all"
+	// case (see LogInvalidSessionCookiePresent's doc). Log-only: falling
+	// through to the frame-based auth path below is unchanged either way.
+	middleware.LogInvalidSessionCookiePresent(r, cfg)
+
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
@@ -670,7 +723,6 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		return false
 	}
 
-	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
 	// 1 & 2. Configured identities — human Gateway.Users accounts, then the
@@ -1220,6 +1272,11 @@ func (h *WSHandler) handleChatMessage(
 				h.sessionIDs[chatID] = sessionID
 			}
 			h.mu.Unlock()
+
+			// ADR-045: this connection just confirmed itself live on an
+			// EXISTING session (continuation, not a brand-new one) — cancel
+			// any pending orphan-foreground-turn watchdog for it.
+			h.agentLoop.DisarmOrphanForegroundTurnWatch(sessionID)
 		}
 
 		if sessionID != "" {
@@ -1361,6 +1418,50 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 	// existed in the old inline implementation.
 }
 
+// buildCancelHooks constructs the transport-specific agent.CancelHooks for a
+// web-SPA-originated cancel. wc is the live connection to notify via
+// cancel_stage frames — nil when there is no live connection to notify.
+//
+// The nil case is exactly the orphan-foreground-turn watchdog's reap path
+// (ADR-045, reapOrphanForegroundTurn below): it fires precisely because
+// nobody is watching the session anymore, so there is no wc to send a
+// cancel_stage frame to. sendCancelStageFrame already no-ops safely on a nil
+// wc, so the SAME hook set handleCancel builds for a real Stop-click also
+// works, unmodified, for the orphan-reap path — there is only one place in
+// this file that knows how to build a web-cancel's side effects.
+func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
+	return agent.CancelHooks{
+		SendStageFrame: func(sid, stage string) {
+			sendCancelStageFrame(wc, sid, stage)
+		},
+		CancelPendingApprovals: func(sid, reason string) {
+			if h.approvalRegV2 != nil {
+				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
+			}
+		},
+		KillBackgroundSessions: func(sid string) (killed, failed int) {
+			// Cascade the cancel to any detached background bash/exec
+			// sessions this chat session started (FR-B10/FR-B11, User Story 5).
+			// The returned counts flow back through RequestCancel into the
+			// turn_canceled audit event's background_sessions_killed/
+			// background_sessions_failed fields, and into CancelOutcome so
+			// handleCancel below can notify the client even when there was no
+			// active turn to cancel.
+			return tools.GetSharedSessionManager().KillAllForSession(sid)
+		},
+		SetSessionInterrupted: func(sid string) {
+			store := h.resolveSessionStore(sid)
+			if store != nil {
+				status := session.StatusInterrupted
+				if err := store.SetMeta(sid, session.MetaPatch{Status: &status}); err != nil {
+					slog.Warn("ws: could not mark session interrupted",
+						"session_id", sid, "error", err)
+				}
+			}
+		},
+	}
+}
+
 // handleCancel delegates to agentLoop.RequestCancel — the canonical cancel
 // state machine that provides uniform audit, transcript, abuse-detection, and
 // 2-stage timer behavior across all four cancel entry points (web SPA,
@@ -1383,33 +1484,7 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		UserID:  wc.userID,
 		Channel: "web",
 	}
-	hooks := agent.CancelHooks{
-		SendStageFrame: func(sid, stage string) {
-			sendCancelStageFrame(wc, sid, stage)
-		},
-		CancelPendingApprovals: func(sid, reason string) {
-			if h.approvalRegV2 != nil {
-				h.approvalRegV2.cancelAllPendingForSession(sid, reason)
-			}
-		},
-		KillBackgroundSessions: func(sid string) int {
-			// Cascade the web SPA cancel to any detached background bash/exec
-			// sessions this chat session started (FR-B10/FR-B11, User Story 5).
-			// The returned count flows back through RequestCancel into the
-			// turn_canceled audit event's background_sessions_killed field.
-			return tools.GetSharedSessionManager().KillAllForSession(sid)
-		},
-		SetSessionInterrupted: func(sid string) {
-			store := h.resolveSessionStore(sid)
-			if store != nil {
-				status := session.StatusInterrupted
-				if err := store.SetMeta(sid, session.MetaPatch{Status: &status}); err != nil {
-					slog.Warn("ws: could not mark session interrupted",
-						"session_id", sid, "error", err)
-				}
-			}
-		},
-	}
+	hooks := h.buildCancelHooks(wc)
 
 	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
 	if err != nil {
@@ -1423,7 +1498,81 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	}
 	if !outcome.Fired {
 		slog.Debug("ws: cancel — no active turn or already canceled", "session_id", sessionID)
+		// Observability fix: a cancel with no active turn is the COMMON case
+		// for a `bash run_in_background=true` job whose own turn already
+		// ended (see cancel.go's RequestCancel doc comment) — the background
+		// kill cascade above still ran and may have actually killed real
+		// work, but without this the user clicking Stop got ZERO feedback
+		// (no frame, no log) despite that. Reuse the existing "graceful"
+		// stage value rather than introducing a new CancelStageFrame.stage
+		// enum member: that field is a closed, SPA-validated enum
+		// ({graceful, hard, detached} — contracts/components/schemas/
+		// CancelStageFrame.yaml) and adding a value would require a
+		// contract + frontend change beyond this fix's scope; "graceful"'s
+		// documented meaning ("cancel request acknowledged") fits a
+		// background-only kill well enough to give the Stop button SOME
+		// visible response instead of silence.
+		if outcome.BackgroundSessionsKilled > 0 {
+			slog.Info("ws: cancel killed background session(s) with no active turn",
+				"session_id", sessionID,
+				"background_sessions_killed", outcome.BackgroundSessionsKilled,
+				"background_sessions_failed", outcome.BackgroundSessionsFailed,
+			)
+			sendCancelStageFrame(wc, sessionID, "graceful")
+		}
 	}
+}
+
+// reapOrphanForegroundTurn is the ADR-045 orphan-foreground-turn watchdog's
+// reap callback (wired at Arm time in ServeHTTP's teardown defer). It is
+// invoked by agent.AgentLoop.fireOrphanForegroundTurnWatch AT MOST ONCE per
+// arm, and only once that function has itself confirmed all three safety
+// conditions hold (a genuine live root turn, no surviving Critical/background
+// delegate, no reconnect) — see that function's doc comment for the full
+// gate. This performs the EXACT SAME cancellation every other cancel surface
+// gets: RequestCancel's audit/transcript writes, approval auto-deny,
+// background-session kill, and graceful->hard->detached escalation —
+// attributed to the system rather than a human canceller, since this is
+// precisely the WHOLE reason this fired: nobody is here to have clicked Stop.
+//
+// wc is nil here (see buildCancelHooks) — there is no live connection to
+// notify with cancel_stage frames.
+func (h *WSHandler) reapOrphanForegroundTurn(sessionID, reason string) {
+	scope := agent.CancelScope{SessionID: sessionID}
+	canceller := agent.CancelCanceller{
+		UserID:  "system",
+		Channel: "orphan-watchdog",
+	}
+	hooks := h.buildCancelHooks(nil)
+
+	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
+	if err != nil {
+		slog.Warn("ws: orphan watchdog: RequestCancel error",
+			"session_id", sessionID, "reason", reason, "error", err)
+		return
+	}
+	if !outcome.Fired {
+		slog.Debug("ws: orphan watchdog: RequestCancel no-op (turn already finished or already canceled)",
+			"session_id", sessionID, "reason", reason)
+	}
+}
+
+// sessionStillOrphaned reports whether sessionID currently has NO live WS
+// connection watching it — i.e. nobody has reconnected/reattached since the
+// orphan-foreground-turn watch was armed. Called by
+// agent.AgentLoop.fireOrphanForegroundTurnWatch immediately before reaping so
+// a reconnect that raced the grace timer — landing after
+// DisarmOrphanForegroundTurnWatch would have caught it, but before the fire
+// goroutine actually ran — still wins (MA-5).
+func (h *WSHandler) sessionStillOrphaned(sessionID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, sid := range h.sessionIDs {
+		if sid == sessionID {
+			return false
+		}
+	}
+	return true
 }
 
 // applySinceCursor applies the since-cursor filter to a slice of transcript entries.
@@ -1636,6 +1785,11 @@ func (h *WSHandler) handleAttachSession(
 	h.sessionIDs[attachID] = attachID
 	h.sessionIDs[chatID] = attachID
 	h.mu.Unlock()
+
+	// ADR-045: a live connection just (re)confirmed itself on attachID — cancel
+	// any pending orphan-foreground-turn watchdog for this session. Covers the
+	// common browser-refresh/reconnect case with zero user-visible effect.
+	h.agentLoop.DisarmOrphanForegroundTurnWatch(attachID)
 
 	// Arm the divert: any sendConnGenFrame calls after this point will route live
 	// frames into replayDivertCh instead of sendCh.

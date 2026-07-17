@@ -16,11 +16,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
@@ -77,6 +79,83 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	}()
 }
 
+// Recap transcript-filtering constants, shared by runRecap and the fallback
+// writer (writeHeuristicFallbackRetro) so both agree on which transcript
+// entries count as real user turns (FR-028).
+const (
+	recapSubTurnPrefix        = "[SubTurn Result]"
+	recapInterruptHintLiteral = "Interrupt requested. Stop scheduling tools and provide a short final summary."
+	// carryForwardMaxRunes bounds the verbatim recent-context tail the fallback
+	// recap carries forward when summarisation is unavailable (see buildCarryForward).
+	// ~1500 runes is ~19% of the summariser's own input budget (2000 tokens ≈ 8000
+	// runes at this file's ~4-runes-per-token ratio; see runRecap's tokenBudget),
+	// enough to preserve the essential facts a user stated most recently without
+	// bloating last-session.md.
+	carryForwardMaxRunes = 1500
+)
+
+// buildCarryForward returns a compact, verbatim tail of the most recent user
+// turns, for the recap FALLBACK path only.
+//
+// When the summariser LLM is unavailable or degrades (all candidates fail,
+// json_parse_error, no_memory_store), a content-free "Session <id> ended.
+// Turns: N..." stub is worthless for continuity — last-session.md is injected
+// into the next session, so a stub silently drops whatever the user just said
+// (a stated codename, a decision, a hand-off note). Carrying the recent user
+// turns forward verbatim preserves those facts even without a real summary.
+//
+// Bounded to maxRunes, keeping the NEWEST turns (a fact stated at the end of
+// the conversation is the most likely thing the next session needs). A single
+// final turn longer than the budget is tail-truncated so its end still lands.
+func buildCarryForward(userTurns []string, maxRunes int) string {
+	if len(userTurns) == 0 || maxRunes <= 0 {
+		return ""
+	}
+	var kept []string // accumulated newest→oldest, reversed to chronological below
+	total := 0
+	for i := len(userTurns) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(userTurns[i])
+		if t == "" {
+			continue
+		}
+		r := []rune(t)
+		if total+len(r) > maxRunes {
+			// Budget hit. If we have kept nothing yet, this single turn is
+			// larger than the whole budget — keep its tail so a nonce stated
+			// at the very end still survives. Otherwise stop here.
+			if len(kept) == 0 && len(r) > maxRunes {
+				kept = append(kept, string(r[len(r)-maxRunes:]))
+			}
+			break
+		}
+		kept = append(kept, t)
+		total += len(r)
+	}
+	slices.Reverse(kept) // accumulated newest→oldest; restore chronological order
+	return strings.Join(kept, "\n\n")
+}
+
+// filterRecapUserTurns extracts the real user turns from a transcript (FR-028:
+// user-role, non-empty, non-SubTurn-result, non-interrupt-hint) and counts tool
+// calls across all entries. Shared by runRecap and writeHeuristicFallbackRetro so
+// the two can never diverge on what counts as a "user turn" — the reason the
+// recapSubTurnPrefix/recapInterruptHintLiteral constants were hoisted to package
+// scope. (User-role entries never carry ToolCalls, so the count is identical to a
+// version that summed unconditionally.)
+func filterRecapUserTurns(entries []session.TranscriptEntry) (userTurns []string, toolCallCount int) {
+	for _, e := range entries {
+		if e.Role == "user" {
+			content := strings.TrimSpace(e.Content)
+			if content == "" || strings.HasPrefix(content, recapSubTurnPrefix) || content == recapInterruptHintLiteral {
+				continue
+			}
+			userTurns = append(userTurns, content)
+		}
+		toolCallCount += len(e.ToolCalls)
+	}
+	return userTurns, toolCallCount
+}
+
 // runRecap performs the session-end LLM summarisation and persists the result.
 // Runs in a goroutine; a top-level recover() prevents a panic in any
 // subsystem (provider, JSON parse, file I/O) from killing the gateway process.
@@ -114,26 +193,12 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	}
 
 	// FR-028: filter to user-role, non-empty, non-SubTurn, non-interrupt-hint messages.
-	const subTurnPrefix = "[SubTurn Result]"
-	const interruptHintLiteral = "Interrupt requested. Stop scheduling tools and provide a short final summary."
-	var userTurns []string
-	toolCallCount := 0
-	for _, e := range entries {
-		if e.Role == "user" {
-			content := strings.TrimSpace(e.Content)
-			if content == "" {
-				continue
-			}
-			if strings.HasPrefix(content, subTurnPrefix) {
-				continue
-			}
-			if content == interruptHintLiteral {
-				continue
-			}
-			userTurns = append(userTurns, content)
-		}
-		toolCallCount += len(e.ToolCalls)
-	}
+	userTurns, toolCallCount := filterRecapUserTurns(entries)
+
+	// Carry-forward tail for the fallback path: if summarisation fails below,
+	// the recent user turns are preserved verbatim so cross-session continuity
+	// survives a degraded recap (buildCarryForward / writeHeuristicFallbackRetroWithCount).
+	carryForward := buildCarryForward(userTurns, carryForwardMaxRunes)
 
 	// Build the conversation text, truncate to 2000 tokens (~8000 runes).
 	// FR-030: "truncate oldest" — we keep the tail (most recent turns) because
@@ -355,6 +420,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			agentInst,
 			len(entries),
 			toolCallCount,
+			carryForward,
 		)
 		return
 	}
@@ -406,6 +472,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			agentInst,
 			len(entries),
 			toolCallCount,
+			carryForward,
 		)
 		return
 	}
@@ -420,6 +487,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			agentInst,
 			len(entries),
 			toolCallCount,
+			carryForward,
 		)
 		return
 	}
@@ -471,28 +539,40 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 // when the caller has already computed turn + tool-call counts.
 func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackReason string, agentInst *AgentInstance) {
 	turnCount, toolCallCount := 0, 0
+	var userTurns []string
 	if agentInst != nil {
 		if store := al.sharedSessionStore; store != nil {
 			if entries, err := store.ReadTranscript(sessionID); err == nil {
 				turnCount = len(entries)
-				for _, e := range entries {
-					toolCallCount += len(e.ToolCalls)
-				}
+				userTurns, toolCallCount = filterRecapUserTurns(entries)
 			}
 		}
 	}
-	al.writeHeuristicFallbackRetroWithCount(sessionID, trigger, fallbackReason, agentInst, turnCount, toolCallCount)
+	al.writeHeuristicFallbackRetroWithCount(
+		sessionID,
+		trigger,
+		fallbackReason,
+		agentInst,
+		turnCount,
+		toolCallCount,
+		buildCarryForward(userTurns, carryForwardMaxRunes),
+	)
 }
 
 // writeHeuristicFallbackRetroWithCount is the preferred fallback writer when
 // the transcript has already been parsed — avoids re-reading the file. The
-// recap body matches the format pinned in Ambiguity #2:
+// recap body opens with the status line pinned in Ambiguity #2:
 //
 //	"Session <id> ended. Turns: N. Tool calls: M. Fallback reason: <reason>."
+//
+// When carryForward is non-empty it is appended as a verbatim "Recent context"
+// block so cross-session continuity survives a degraded recap (the status line
+// alone carries no facts — see buildCarryForward).
 func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	sessionID, trigger, fallbackReason string,
 	agentInst *AgentInstance,
 	turnCount, toolCallCount int,
+	carryForward string,
 ) {
 	slog.Warn("session_end: recap fallback",
 		"session_id", sessionID,
@@ -514,6 +594,9 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 
 	recap := fmt.Sprintf("Session %s ended. Turns: %d. Tool calls: %d. Fallback reason: %s.",
 		sessionID, turnCount, toolCallCount, fallbackReason)
+	if cf := strings.TrimSpace(carryForward); cf != "" {
+		recap += "\n\nRecent context (verbatim — automatic summary unavailable):\n" + cf
+	}
 
 	slog.Info("session_end: fallback: writing LAST_SESSION.md",
 		"session_id", sessionID,

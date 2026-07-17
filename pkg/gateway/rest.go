@@ -4826,19 +4826,71 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/browser/inspect", a.withAuth(a.HandleBrowserInspect))
 }
 
-// registerPreviewEndpoints registers /preview/ on the preview mux ONLY
-// (FR-005, FR-006). Not registered on the main mux.
+// registerPreviewEndpoints registers /preview/ on the MAIN mux (ADR-044,
+// FR-001/FR-002/FR-003). There is no separate preview listener/mux anymore —
+// /preview/ shares gateway.port with the SPA and /api/v1/*.
 //
-// Auth model: token-only (FR-023). No RequireSessionCookieOrBearer, no
-// RequireMatchingOriginOnStateChanging (FR-023a).
+// Auth model: token-only (FR-023). Registered bare — no withAuth/session
+// wrapping — the URL path token is the credential. (There is also no live
+// Origin-check middleware in this handler chain to opt out of:
+// middleware.RequireMatchingOriginOnStateChanging exists in origin.go as a
+// tested reference helper — FR-023a documents the /preview/ exemption it
+// would need — but it is not wired into gateway.go for ANY route, so this is
+// not something /preview/ specifically forgoes.) It DOES inherit the global
+// configSnapshotMiddleware (and the CSRF middleware, which exempts the
+// /preview/ prefix — see middleware/csrf.go's defaultExemptPrefixes) because
+// those are wrapped around the whole main mux in gateway.go, not per-route.
+// HandlePreview itself checks cfg.IsPreviewEnabled() live on every request
+// and 404s when disabled (FR-006) — toggling it never requires a restart.
 //
 // /preview/ is the unified route for the web_serve tool. The legacy /serve/
 // and /dev/ back-compat handlers (for registrations produced before /preview/
-// landed, 2026-05-04) were removed once the safety window for any such
-// registration closed — registrations are short-lived (max 24h), so nothing
-// minted before the migration could still be valid.
-func (a *restAPI) registerPreviewEndpoints(cm previewHandlerRegistrar) {
-	cm.RegisterPreviewHandler("/preview/", http.HandlerFunc(a.HandlePreview))
+// landed, 2026-05-04) were retired from actually SERVING content once the
+// safety window for any such registration closed — registrations are
+// short-lived (max 24h), so nothing minted before the migration could still
+// be valid. "Retired" here means routing to HandlePreview was removed; it
+// does NOT mean the prefixes were dropped from the mux entirely — see below.
+//
+// Both legacy prefixes remain registered here, but ONLY to a dedicated
+// 404 responder (handleLegacyPreviewRetired) — not to HandlePreview. Without
+// this, an unmatched /serve/... or /dev/... request falls through to the
+// "/" SPA catch-all (embed.go's newSPAHandler), which answers any unknown
+// path with a 200 + index.html. The SPA's own link validator
+// (src/lib/preview-url.ts's PREVIEW_PATH_REGEX) still recognizes /serve/ and
+// /dev/ paths for historical transcript replay, and its warmup probe
+// (IframePreview.tsx) does a same-origin HEAD fetch expecting a genuine
+// non-2xx/3xx status to detect a dead legacy link — a 200-index.html
+// response instead makes it falsely report the (nonexistent) dev server as
+// "ready". Registering these two prefixes on the dynamicServeMux
+// (pkg/channels/dynamic_mux.go) outranks the "/" catch-all for any path
+// under them, since it dispatches by longest matching subtree prefix.
+func (a *restAPI) registerPreviewEndpoints(cm httpHandlerRegistrar) {
+	cm.RegisterHTTPHandler(middleware.PreviewPathPrefix, http.HandlerFunc(a.HandlePreview))
+	cm.RegisterHTTPHandler(legacyServePathPrefix, http.HandlerFunc(handleLegacyPreviewRetired))
+	cm.RegisterHTTPHandler(legacyDevPathPrefix, http.HandlerFunc(handleLegacyPreviewRetired))
+}
+
+// legacyServePathPrefix and legacyDevPathPrefix are the retired back-compat
+// preview prefixes (pre-ADR-044). See registerPreviewEndpoints' doc comment.
+const (
+	legacyServePathPrefix = "/serve/"
+	legacyDevPathPrefix   = "/dev/"
+)
+
+// handleLegacyPreviewRetired answers a GET/HEAD/OPTIONS request under the
+// retired /serve/ or /dev/ preview prefixes with a genuine 404. It exists
+// solely to keep these paths off the "/" SPA catch-all — no legacy token
+// minted before the ADR-044 migration can still be valid (registrations are
+// short-lived, max 24h), so there is nothing to look up or proxy here. A
+// state-changing method (POST/PUT/PATCH/DELETE) never actually reaches this
+// handler: /serve/ and /dev/ are deliberately NOT in the CSRF
+// exempt-prefixes set (middleware/csrf.go's defaultExemptPrefixes, which
+// lists only middleware.PreviewPathPrefix), so the CSRF middleware rejects
+// those methods with 403 first. Either outcome — this handler's 404 or the
+// CSRF middleware's 403 — keeps the retired prefixes off the 200 SPA shell,
+// which is the invariant that matters.
+func handleLegacyPreviewRetired(w http.ResponseWriter, _ *http.Request) {
+	jsonErr(w, http.StatusNotFound, "this preview path prefix has been retired; use /preview/")
 }
 
 // rotateGatewayToken generates a new random bearer token, persists it to config, and returns it.
@@ -4882,17 +4934,11 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, gen.RotateTokenResponse{Token: newToken})
 }
 
-// httpHandlerRegistrar is the subset of channels.Manager used for route registration.
+// httpHandlerRegistrar is the subset of channels.Manager used for route
+// registration on the main mux. registerPreviewEndpoints (ADR-044) uses this
+// same interface — /preview/ no longer has its own registrar/mux.
 type httpHandlerRegistrar interface {
 	RegisterHTTPHandler(pattern string, handler http.Handler)
-}
-
-// previewHandlerRegistrar is the subset of channels.Manager used to register
-// routes on the preview mux (FR-005). Separate from httpHandlerRegistrar so
-// that existing test mocks implementing the main-mux interface do not need to
-// be updated when preview routes are added.
-type previewHandlerRegistrar interface {
-	RegisterPreviewHandler(pattern string, handler http.Handler)
 }
 
 // --- App State ---

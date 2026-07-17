@@ -473,6 +473,75 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 	a.providerPool.Store(publish)
 }
 
+// snapshotForExternalDispatch returns a private copy of a suitable for handing
+// to a long-running dispatch that executes OUTSIDE of a.mu's protection
+// window (e.g. an external-CLI run, which can take minutes) — a itself may be
+// the LIVE registry instance, and SwitchModel/ApplyAgentModel can concurrently
+// rewrite its Model/Provider/Candidates/ThinkingLevel (+ providerPool) tuple
+// while the dispatched run is in flight (see mu's doc comment above).
+//
+// FIX 1 (7-reviewer gate, data race): processTaskDirectExternalCLI used to
+// pass the live *AgentInstance straight into runExternalCLISubTurn, which
+// reads agent.Model unlocked (transcript attribution + RunOptions.Model) —
+// a read/write race with SwitchModel. This mirrors spawnSubTurn's existing
+// execSource-snapshot pattern (subturn.go ~603-662, which the native
+// delegation path already relies on for the identical reason): take a SINGLE
+// RLock and copy the whole mutex-protected quad together (never a per-field
+// read spread across separate lock acquisitions, which could observe a torn
+// combination), then build a brand-new AgentInstance value via struct
+// literal — NOT `*a` dereference-assignment, which would copy the mutex and
+// the atomic providerPool/toolPolicy fields themselves and trip `go vet`'s
+// copylocks check. Every other field is shared by value/pointer from the
+// same source, matching what the live instance held at snapshot time.
+//
+// providerPool and toolPolicy are copied via their own atomic accessors
+// (Load then Store into the new instance) so the pool snapshot stays paired
+// with the Candidates it was built for, exactly as spawnSubTurn's comment
+// there explains.
+func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
+	a.mu.RLock()
+	model := a.Model
+	provider := a.Provider
+	candidates := a.Candidates
+	thinkingLevel := a.ThinkingLevel
+	pool := a.providerPool.Load()
+	a.mu.RUnlock()
+
+	out := &AgentInstance{
+		ID:                        a.ID,
+		Name:                      a.Name,
+		Model:                     model,
+		Fallbacks:                 a.Fallbacks,
+		FallbackModels:            a.FallbackModels,
+		Workspace:                 a.Workspace,
+		MaxIterations:             a.MaxIterations,
+		MaxTokens:                 a.MaxTokens,
+		Temperature:               a.Temperature,
+		ThinkingLevel:             thinkingLevel,
+		ContextWindow:             a.ContextWindow,
+		SummarizeMessageThreshold: a.SummarizeMessageThreshold,
+		SummarizeTokenPercent:     a.SummarizeTokenPercent,
+		Provider:                  provider,
+		Sessions:                  a.Sessions,
+		ContextBuilder:            a.ContextBuilder,
+		Tools:                     a.Tools,
+		Subagents:                 a.Subagents,
+		SkillsFilter:              a.SkillsFilter,
+		Candidates:                candidates,
+		TimeoutSeconds:            a.TimeoutSeconds,
+		AgentType:                 a.AgentType,
+		IsRoutingDefault:          a.IsRoutingDefault,
+		Router:                    a.Router,
+		LightCandidates:           a.LightCandidates,
+		LightProvider:             a.LightProvider,
+	}
+	if pool != nil {
+		out.StoreProviderPool(*pool)
+	}
+	out.StoreToolPolicy(a.LoadToolPolicy())
+	return out
+}
+
 // buildProviderPool pre-builds an LLMProvider for every distinct provider
 // name referenced by the agent's candidate chain (primary + fallbacks).
 // Returns nil when the candidate chain has no explicit providers (every

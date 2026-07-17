@@ -21,3 +21,22 @@ func ResolveBool(v *bool, def bool) bool {
 	}
 	return *v
 }
+
+// ResolveInt returns the concrete int value for a *int config field,
+// applying the caller-supplied default when the pointer is nil. Mirrors
+// ResolveBool's nil-means-unset contract.
+//
+// Usage example (GatewayConfig.OrphanedTurnGraceSeconds, ADR-045):
+//
+//	grace := ResolveInt(cfg.Gateway.OrphanedTurnGraceSeconds, DefaultOrphanedTurnGraceSeconds)
+//
+// Unlike ResolveBool, an explicit non-nil value of 0 (or negative) is
+// returned verbatim rather than treated as "unset" — callers that use 0 to
+// mean "disabled" (e.g. the orphan-turn watchdog) rely on this to
+// distinguish "operator explicitly disabled" from "operator never set it".
+func ResolveInt(v *int, def int) int {
+	if v == nil {
+		return def
+	}
+	return *v
+}

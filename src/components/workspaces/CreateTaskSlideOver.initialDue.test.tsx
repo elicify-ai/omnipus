@@ -19,11 +19,18 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // Fix B: the assignee picker's workspace-team scoping (useWorkspaceTeamIds)
+    // — this test file doesn't exercise the Agent field, so the rejection
+    // just exercises the documented degraded/unscoped fallback path.
+    fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
     createTask: vi.fn(),
     updateTask: vi.fn(),
     tasksQueryKeys: { list: () => ['tasks'] },
     boardTasksQueryKeys: { list: () => ['tasks'] },
-    workspacesQueryKeys: { list: () => ['workspaces'] },
+    workspacesQueryKeys: {
+      list: () => ['workspaces'],
+      delegation: (id: string) => ['workspaces', id, 'delegation'],
+    },
     milestonesQueryKeys: { list: (id: string) => ['milestones', id] },
     isApiError: vi.fn().mockReturnValue(false),
   }

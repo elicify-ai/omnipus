@@ -17,6 +17,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
 var warnUnauthOnce sync.Once
@@ -150,7 +151,22 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	}
 
 	if !strings.HasPrefix(auth, prefix) {
-		// No Bearer prefix — treat as unauthenticated.
+		// FR-009: no Bearer prefix — fall back to the omnipus-session cookie
+		// before rejecting. The SPA no longer sends a bearer token at all
+		// (Wave 1 cutover: it relies on the browser auto-attaching this
+		// HttpOnly cookie); this is now the primary browser-auth path.
+		// Programmatic/CLI clients that never carry the cookie still hit the
+		// Bearer branch above unaffected. Fail-closed: no cookie, or a
+		// present-but-invalid one, falls through to the same 401 the
+		// missing-Bearer case always returned.
+		if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
+			return AuthResult{Authenticated: true, User: user}
+		}
+		// SFH-1: surface "cookie present but invalid" (replay/probe/stale
+		// cookie) as a log line — silent for the routine "no cookie at all"
+		// case (see LogInvalidSessionCookiePresent's doc). Log-only: the
+		// fail-closed 401 below is unchanged either way.
+		middleware.LogInvalidSessionCookiePresent(r, cfg)
 		http.Error(w, "unauthorized: missing Bearer token", http.StatusUnauthorized)
 		return AuthResult{Authenticated: false}
 	}

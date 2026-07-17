@@ -55,14 +55,17 @@ var RestartGatedKeys = []config.ConfigKey{
 	// only happen safely on restart — so it is restart-gated like gateway.port.
 	config.GatewayHost,
 	config.GatewayPort,
-	// Preview listener fields require restart because changing a listener's bind
-	// address or port mid-process races with active connections (FR-027b, MR-02).
-	config.GatewayPreviewPort,
-	config.GatewayPreviewHost,
-	config.GatewayPreviewOrigin,
+	// gateway.public_url drives boot-frozen CORS/CSP/WS-origin fences
+	// (CanonicalGatewayOrigin) — it MUST remain restart-gated (ADR-044, FR-007).
+	// gateway.preview_enabled is deliberately NOT listed here: /preview/ shares
+	// the main listener and preview_enabled is read live, so toggling it never
+	// requires a restart (ADR-044, US-6/FR-007).
 	config.GatewayPublicURL,
-	config.GatewayPreviewListenerEnabled,
 	config.ToolsWebServeWarmup,
+	// gateway.orphaned_turn_grace_seconds is deliberately NOT listed here: the
+	// orphan-foreground-turn watchdog (ADR-045) reads the config live on
+	// every WS teardown when deciding whether/how long to arm, so a change
+	// takes effect on the very next disconnect with no restart required.
 }
 
 // pendingRestartEntry is an alias for the generated type — same dotted key
@@ -88,14 +91,16 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 	// Load the on-disk config through the SAME path boot used to produce
 	// appliedConfig, so restart-gated fields that get a computed default at boot
 	// but are absent from config.json on disk do NOT surface as phantom diffs on
-	// a clean install (regression: session.dm_scope, gateway.preview_host,
-	// gateway.preview_port, tools.run_in_workspace.warmup_timeout_seconds).
+	// a clean install (regression: session.dm_scope,
+	// tools.run_in_workspace.warmup_timeout_seconds).
 	//
 	// LoadConfig starts from DefaultConfig() (which seeds Session.DMScope =
 	// "per-channel-peer") and unmarshals the JSON over it with omitempty tags, so
 	// the dm_scope default is already applied here exactly as at boot. The
-	// gateway-specific normalization (preview defaults, warmup timeout) is applied
-	// separately at boot (gateway.go ~1248-1252) and is mirrored below.
+	// gateway-specific normalization (warmup timeout) is applied separately at
+	// boot and is mirrored below. gateway.preview_enabled needs no boot-time
+	// normalization — IsPreviewEnabled() resolves the nil-vs-false default live,
+	// on every read, so there is nothing to mirror here (ADR-044).
 	//
 	// LoadConfig (not LoadConfigWithStore) is correct: every RestartGatedKey is a
 	// non-secret field. Post-boot the on-disk config is already at CurrentVersion,
@@ -105,11 +110,6 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 	persistedCfg, err := config.LoadConfig(a.configPath())
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to read persisted config")
-		return
-	}
-	// Mirror the boot-time gateway normalization that produced appliedConfig.
-	if err = persistedCfg.Gateway.ValidateAndApplyPreviewDefaults(); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "failed to normalize persisted config")
 		return
 	}
 	persistedCfg.Tools.ApplyWarmupTimeoutDefault()

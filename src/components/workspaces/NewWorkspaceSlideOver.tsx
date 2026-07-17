@@ -252,11 +252,12 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
                 </SelectTrigger>
                 <SelectContent>
                   {agents
-                    .filter((a) => !isWorker(a))
+                    .filter((a) => a.type !== 'system') // legacy/system agents aren't team-addable (mirrors AddAgentPicker)
                     .filter((a) => !form.core_team.includes(a.id))
                     .map((agent) => (
                       <SelectItem key={agent.id} value={agent.id}>
                         {agent.name}
+                        {isWorker(agent) ? ' · leaf' : ''}
                       </SelectItem>
                     ))}
                 </SelectContent>

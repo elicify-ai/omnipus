@@ -1,18 +1,24 @@
 /**
- * IframePreview — edge-case render tests (Phase 5 agent C)
+ * IframePreview — edge-case render tests (Phase 5 agent C; updated for ADR-044)
  *
- * Goal: no degenerate-but-valid payload should crash IframePreview.
+ * Goal: no degenerate-but-valid payload should crash IframePreview, and no
+ * payload should ever cause an <iframe> to be mounted (US-9 / FR-016 —
+ * preview-on-main-listener-spec.md).
  *
  * These tests are ADDITIVE to IframePreview.test.tsx. They focus on
  * degenerate input shapes (edge-case paths, urls, kind variants, null
  * result for every kind) that were not covered by the existing spec test.
+ *
+ * IframePreview no longer reads /api/v1/about (ADR-044 — `/preview/` shares
+ * the SPA's own origin, no separate preview port/origin to resolve), so
+ * there is no useQuery/fetchAboutInfo mock needed here anymore.
  *
  * Fixture types come exclusively from src/lib/api.ts:
  *   ServeWorkspaceResult, RunInWorkspaceResult
  * and IframePreview's discriminated union IframePreviewProps.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { IframePreview, type IframePreviewProps } from './IframePreview'
 import type { ServeWorkspaceResult, RunInWorkspaceResult } from '@/lib/api'
@@ -23,44 +29,19 @@ vi.mock('@/store/ui', () => ({
   useUiStore: () => ({ addToast: vi.fn() }),
 }))
 
-const mockUseQuery = vi.fn().mockReturnValue({
-  data: {
-    preview_port: 5001,
-    preview_listener_enabled: true,
-    warmup_timeout_seconds: 10,
-  },
-  isLoading: false,
-  isError: false,
-  refetch: vi.fn(),
-})
-
-vi.mock('@tanstack/react-query', () => ({
-  useQuery: (...args: unknown[]) => mockUseQuery(...args),
-}))
-
-vi.mock('@/lib/api', () => ({
-  fetchAboutInfo: vi.fn().mockResolvedValue({
-    preview_port: 5001,
-    preview_listener_enabled: true,
-    warmup_timeout_seconds: 10,
-  }),
-}))
-
 beforeEach(() => {
-  mockUseQuery.mockReturnValue({
-    data: {
-      preview_port: 5001,
-      preview_listener_enabled: true,
-      warmup_timeout_seconds: 10,
-    },
-    isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
-  })
   Object.defineProperty(window, 'location', {
-    value: { hostname: 'localhost', protocol: 'http:', origin: 'http://localhost:5000' },
+    value: { hostname: 'localhost', protocol: 'http:', origin: 'http://localhost:5000', port: '5000' },
     writable: true,
   })
+  // Dev-mode fixtures kick off warmup polling via fetch(); default to a
+  // rejected promise (server not reachable in jsdom) so tests that don't
+  // care about the warmup outcome don't leave it unmocked.
+  vi.spyOn(global, 'fetch').mockRejectedValue(new Error('not reachable in test env'))
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 // ── Fixture builders ──────────────────────────────────────────────────────────
@@ -68,7 +49,7 @@ beforeEach(() => {
 function baseServe(overrides: Partial<ServeWorkspaceResult> = {}): ServeWorkspaceResult {
   return {
     path: '/preview/agent-1/tok123/',
-    url: 'http://localhost:5001/preview/agent-1/tok123/',
+    url: 'http://localhost:5000/preview/agent-1/tok123/',
     expires_at: '2099-01-01T00:00:00Z',
     ...overrides,
   }
@@ -77,7 +58,7 @@ function baseServe(overrides: Partial<ServeWorkspaceResult> = {}): ServeWorkspac
 function baseRun(overrides: Partial<RunInWorkspaceResult> = {}): RunInWorkspaceResult {
   return {
     path: '/preview/agent-1/devtok/',
-    url: 'http://localhost:5001/preview/agent-1/devtok/',
+    url: 'http://localhost:5000/preview/agent-1/devtok/',
     expires_at: '2099-01-01T00:00:00Z',
     command: 'npm run dev',
     port: 3000,
@@ -120,6 +101,8 @@ describe.each([
       expect(() =>
         render(<IframePreview kind="serve_workspace" result={result} />)
       ).not.toThrow()
+      // Never an iframe, regardless of how malformed the path is.
+      expect(document.querySelectorAll('iframe').length).toBe(0)
     })
   }
 )
@@ -127,12 +110,12 @@ describe.each([
 // ── describe.each: url edge cases (no path, legacy url replay) ───────────────
 
 describe.each([
-  ['url only (no path), absolute URL', { url: 'http://localhost:5001/preview/agent-1/tok/', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
+  ['url only (no path), absolute URL', { url: 'http://localhost:5000/preview/agent-1/tok/', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
   ['url with data: scheme', { url: 'data:text/html,<h1>hi</h1>', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
   ['url with javascript: scheme', { url: 'javascript:alert(1)', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
   ['url that is empty string', { url: '', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
   ['url that is relative path', { url: '/preview/tok/', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
-  ['url with host 0.0.0.0 (legacy)', { url: 'http://0.0.0.0:5001/preview/tok/', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
+  ['url with host 0.0.0.0 (legacy)', { url: 'http://0.0.0.0:5000/preview/tok/', path: undefined as unknown as string, expires_at: '2099-01-01T00:00:00Z' }],
 ])(
   'IframePreview renders serve_workspace with %s without throwing',
   (_label: string, result: ServeWorkspaceResult) => {
@@ -140,6 +123,7 @@ describe.each([
       expect(() =>
         render(<IframePreview kind="serve_workspace" result={result} />)
       ).not.toThrow()
+      expect(document.querySelectorAll('iframe').length).toBe(0)
     })
   }
 )
@@ -157,6 +141,7 @@ describe.each([
       expect(() =>
         render(<IframePreview kind={props.kind} result={props.result} />)
       ).not.toThrow()
+      expect(document.querySelectorAll('iframe').length).toBe(0)
     })
   }
 )
@@ -177,26 +162,7 @@ describe.each([
       expect(() =>
         render(<IframePreview kind={props.kind} result={props.result} />)
       ).not.toThrow()
-    })
-  }
-)
-
-// ── describe.each: aboutInfo query states ────────────────────────────────────
-
-describe.each([
-  ['aboutInfo isLoading=true', { data: undefined, isLoading: true, isError: false, refetch: vi.fn() }],
-  ['aboutInfo isError=true', { data: undefined, isLoading: false, isError: true, refetch: vi.fn() }],
-  ['aboutInfo preview_port=null', { data: { preview_port: null, preview_listener_enabled: true, warmup_timeout_seconds: 10 }, isLoading: false, isError: false, refetch: vi.fn() }],
-  ['aboutInfo warmup_timeout_seconds=0', { data: { preview_port: 5001, preview_listener_enabled: true, warmup_timeout_seconds: 0 }, isLoading: false, isError: false, refetch: vi.fn() }],
-  ['aboutInfo warmup_timeout_seconds very large', { data: { preview_port: 5001, preview_listener_enabled: true, warmup_timeout_seconds: 999_999 }, isLoading: false, isError: false, refetch: vi.fn() }],
-])(
-  'IframePreview renders with %s without throwing',
-  (_label: string, queryReturn: Record<string, unknown>) => {
-    it('renders without throwing', () => {
-      mockUseQuery.mockReturnValueOnce(queryReturn)
-      expect(() =>
-        render(<IframePreview kind="serve_workspace" result={baseServe()} />)
-      ).not.toThrow()
+      expect(document.querySelectorAll('iframe').length).toBe(0)
     })
   }
 )
@@ -221,6 +187,7 @@ describe.each([
           />
         )
       ).not.toThrow()
+      expect(document.querySelectorAll('iframe').length).toBe(0)
     })
   }
 )
@@ -232,7 +199,6 @@ describe.each([
 
 it('null result for serve_workspace renders a "Waiting for" placeholder', () => {
   render(<IframePreview kind="serve_workspace" result={null} />)
-  // The component renders "Waiting for {toolName}…" when result is null.
   expect(screen.getByText(/Waiting for/i)).toBeInTheDocument()
 })
 
@@ -243,14 +209,9 @@ it('null result for web_serve renders a "Waiting for" placeholder', () => {
 
 it('null result for run_in_workspace renders a warming-up placeholder', () => {
   render(<IframePreview kind="run_in_workspace" result={null} />)
-  // run_in_workspace with null result kicks off warmup polling UI.
-  // The component must render something visible — it must not be blank.
+  // run_in_workspace with null result shows the "waiting for the tool" state
+  // (there's no href to warm up yet since there's no result). The component
+  // must render something visible — it must not be blank.
   const container = document.querySelector('body')
   expect(container?.textContent?.trim().length).toBeGreaterThan(0)
-})
-
-it('isLoading state renders a "Loading preview" placeholder', () => {
-  mockUseQuery.mockReturnValueOnce({ data: undefined, isLoading: true, isError: false, refetch: vi.fn() })
-  render(<IframePreview kind="serve_workspace" result={baseServe()} />)
-  expect(screen.getByText(/Loading preview/i)).toBeInTheDocument()
 })

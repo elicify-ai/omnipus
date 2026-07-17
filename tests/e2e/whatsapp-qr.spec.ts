@@ -444,7 +444,7 @@ test(
 
     // Read the CSRF cookie now that the SPA has initialised it.
     const freshCookies = await page.context().cookies()
-    const freshCsrf = freshCookies.find((c) => c.name === '__Host-csrf')
+    const freshCsrf = freshCookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
     const finalHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
@@ -507,7 +507,7 @@ test(
     // Best effort — if this fails the test result is still the assertion above.
     try {
       const freshCookies2 = await page.context().cookies()
-      const cleanupCsrf = freshCookies2.find((c) => c.name === '__Host-csrf')
+      const cleanupCsrf = freshCookies2.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
       await page.request.put(`${BASE_URL}/api/v1/channels/whatsapp/disable`, {
         headers: {
           'Content-Type': 'application/json',

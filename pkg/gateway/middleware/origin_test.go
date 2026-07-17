@@ -202,6 +202,98 @@ func TestOrigin_DeleteMismatchedRejected(t *testing.T) {
 	}
 }
 
+// TestOrigin_PreviewPrefixExempt_NoOriginHeader verifies that a state-changing
+// request under /preview/ is NOT rejected even with no Origin header at all —
+// the prefix exemption is unconditional, not merely a relaxed match (ADR-044 /
+// FR-012 / US-7 AS-3).
+func TestOrigin_PreviewPrefixExempt_NoOriginHeader(t *testing.T) {
+	t.Parallel()
+	cfg := buildOriginCfg("localhost", 3000)
+	inner := &passThroughHandler{}
+	mw := RequireMatchingOriginOnStateChanging(func() *config.Config { return cfg }, nil)
+	handler := mw(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/preview/agent-1/some-token/submit", nil)
+	// Deliberately no Origin header — a previewed app's own form POST would
+	// not carry the SPA's origin.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("POST /preview/ with no Origin: expected 200 (exempt), got %d", rec.Code)
+	}
+	if !inner.called {
+		t.Error("expected inner handler to be called for /preview/ prefix regardless of Origin")
+	}
+}
+
+// TestOrigin_PreviewPrefixExempt_ForeignOrigin verifies that a /preview/
+// request with a foreign Origin header still passes — the prefix exemption
+// does not fall back to origin matching (ADR-044 / FR-012).
+func TestOrigin_PreviewPrefixExempt_ForeignOrigin(t *testing.T) {
+	t.Parallel()
+	cfg := buildOriginCfg("localhost", 3000)
+	inner := &passThroughHandler{}
+	mw := RequireMatchingOriginOnStateChanging(func() *config.Config { return cfg }, nil)
+	handler := mw(inner)
+
+	req := httptest.NewRequest(http.MethodDelete, "/preview/agent-1/some-token/resource", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:9999") // the previewed dev server's own loopback port
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("DELETE /preview/ with foreign Origin: expected 200 (exempt), got %d", rec.Code)
+	}
+	if !inner.called {
+		t.Error("expected inner handler to be called for /preview/ prefix regardless of Origin")
+	}
+}
+
+// TestOrigin_PreviewPrefixExempt_NilConfig verifies the exemption fires even
+// when getCfg returns nil — the check for /preview/ happens before the
+// fail-closed nil-config branch, so a boot-time config wiring gap cannot
+// accidentally 403 a legitimate previewed-app request.
+func TestOrigin_PreviewPrefixExempt_NilConfig(t *testing.T) {
+	t.Parallel()
+	inner := &passThroughHandler{}
+	mw := RequireMatchingOriginOnStateChanging(func() *config.Config { return nil }, nil)
+	handler := mw(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/preview/agent-1/some-token/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("POST /preview/ with nil config: expected 200 (exempt), got %d", rec.Code)
+	}
+	if !inner.called {
+		t.Error("expected inner handler to be called for /preview/ prefix even with nil config")
+	}
+}
+
+// TestOrigin_NonPreviewPathStillEnforced is a differentiation guard: a path
+// that merely CONTAINS "preview" but isn't under the exact /preview/ prefix
+// must still be origin-checked normally.
+func TestOrigin_NonPreviewPathStillEnforced(t *testing.T) {
+	t.Parallel()
+	cfg := buildOriginCfg("localhost", 3000)
+	inner := &passThroughHandler{}
+	mw := RequireMatchingOriginOnStateChanging(func() *config.Config { return cfg }, nil)
+	handler := mw(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/preview-settings", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST /api/v1/preview-settings with no Origin: expected 403 (not exempt), got %d", rec.Code)
+	}
+	if inner.called {
+		t.Error("inner handler must not be called — this path is not under the /preview/ prefix")
+	}
+}
+
 // TestCanonicalGatewayOrigin_HostPort verifies the origin string derivation for
 // a non-standard port.
 func TestCanonicalGatewayOrigin_HostPort(t *testing.T) {

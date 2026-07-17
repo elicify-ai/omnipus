@@ -11,11 +11,31 @@ async function selectFirstModel(page: Page) {
   await expect(modelTrigger).toBeVisible()
   await modelTrigger.click()
   const firstOption = page.locator('[role="option"]').first()
-  await expect(firstOption).toBeVisible({ timeout: 5_000 })
+  // Model-catalog options load asynchronously; 5s was too tight under CI load
+  // (flaked as "[role=option] not visible"). 15s gives headroom without masking
+  // a genuinely broken selector.
+  await expect(firstOption).toBeVisible({ timeout: 15_000 })
   await firstOption.click()
 }
 
 test.describe('create agent wizard', () => {
+  // Agents this spec actually creates (only the end-to-end test does) so afterEach can
+  // delete them — otherwise they accumulate in the shard's gateway roster across tests.
+  // Inert today (no sibling asserts roster count) but a latent trap once the suite runs
+  // sharded and a future test does; best-effort so a failed delete never fails the test.
+  const createdAgentIds: string[] = []
+
+  test.afterEach(async ({ page }) => {
+    while (createdAgentIds.length > 0) {
+      const id = createdAgentIds.pop()!
+      const cookies = await page.context().cookies()
+      const csrf = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')?.value
+      await page.request
+        .delete(`/api/v1/agents/${id}`, { headers: csrf ? { 'X-CSRF-Token': csrf } : {} })
+        .catch(() => {})
+    }
+  })
+
   const fillIdentityStep = async (
     page: Page,
     opts: { type: 'Main' | 'Subagent' | 'subagent_3p' },
@@ -146,6 +166,9 @@ test.describe('create agent wizard', () => {
     // The created agent's id rides on the 201 body — use it to scope the
     // roster card assertion rather than matching on the (timestamped) name.
     const created = (await createResponse.json()) as { id: string; name: string }
+    // Register for afterEach cleanup immediately — before the roster assertions
+    // below — so a later assertion failure can't leak the created agent.
+    createdAgentIds.push(created.id)
 
     // The modal (a Radix Dialog surfaced as [role="dialog"]) closes on
     // success via CreateAgentModal's useMutation.onSuccess → handleClose.

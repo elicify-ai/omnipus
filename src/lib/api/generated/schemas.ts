@@ -1471,9 +1471,7 @@ export const AboutResponse = z.object({
   uptime: z.string(),
   uptime_seconds: z.number().int().gte(0),
   pid: z.number().int(),
-  preview_port: z.number().int(),
-  preview_listener_enabled: z.boolean(),
-  preview_origin: z.string().optional(),
+  preview_enabled: z.boolean(),
   warmup_timeout_seconds: z.number().int().gte(0),
   frame_ancestors_fallback: z.boolean(),
   device_pairing_enabled: z.boolean(),
@@ -2471,7 +2469,7 @@ const endpoints = makeApi([
     method: "get",
     path: "/about",
     alias: "getAbout",
-    description: `Returns version, runtime, uptime, PID, and preview listener fields. Used by the SPA to construct iframe preview URLs (FR-009).
+    description: `Returns version, runtime, uptime, PID, and the live preview_enabled flag. The SPA uses preview_enabled to decide whether to surface preview links, which resolve against the main gateway origin at /preview/ (no separate preview listener/port/origin exists — ADR-044).
 `,
     requestFormat: "json",
     response: AboutResponse,
@@ -4419,7 +4417,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/preview/:agent_id/:token/:path",
     alias: "getPreview",
-    description: `Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the separate preview listener (default port gateway.port + 1). Unknown or expired tokens return 404. Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection.
+    description: `Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the MAIN gateway listener at the /preview/ path prefix (ADR-044) — there is no separate preview listener/port/origin. Gated by the live gateway.preview_enabled flag: when disabled the endpoint returns 404 with no restart required. Unknown or expired tokens return 404. All HTTP methods are proxied (previewed apps may POST). Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection; the proxy strips inbound Cookie/Authorization and neutralizes reserved Set-Cookie so a previewed app cannot read or plant the gateway session/CSRF cookies.
 `,
     requestFormat: "json",
     parameters: [

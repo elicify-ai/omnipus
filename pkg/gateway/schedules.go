@@ -294,19 +294,40 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 			agent.CancelHooks{
 				// Cascade the scheduled-run force-abort to any detached
 				// background bash/exec sessions this run's session started
-				// (FR-B10/FR-B11). The returned count flows back through
+				// (FR-B10/FR-B11). The returned counts flow back through
 				// RequestCancel into the turn_canceled audit event's
-				// background_sessions_killed field.
-				KillBackgroundSessions: func(sid string) int {
+				// background_sessions_killed/background_sessions_failed
+				// fields.
+				KillBackgroundSessions: func(sid string) (killed, failed int) {
 					return tools.GetSharedSessionManager().KillAllForSession(sid)
 				},
 			})
-		if cancelErr == nil && !outcome.Fired {
-			// A force-abort that targeted no active turn is worth observing: the
-			// run may have already completed between the deadline check and the
-			// cancel, or the turn was never registered under this session id.
-			logger.DebugCF("gateway", "scheduled run force-abort hit no active turn",
-				map[string]any{"session_id": sessionID, "owner": owner})
+		if cancelErr == nil {
+			if !outcome.Fired {
+				// A force-abort that targeted no active turn is worth observing: the
+				// run may have already completed between the deadline check and the
+				// cancel, or the turn was never registered under this session id.
+				logger.DebugCF("gateway", "scheduled run force-abort hit no active turn",
+					map[string]any{"session_id": sessionID, "owner": owner})
+			}
+			// Observability fix: even when the run's own turn is already
+			// gone (!Fired — e.g. it dispatched a `bash
+			// run_in_background=true` job and returned before the deadline
+			// fired), the kill cascade above still runs unconditionally and
+			// may have killed real background work. There is no live client
+			// connection to notify here (unlike the WS handleCancel path),
+			// so an INFO log is this surface's equivalent observability
+			// signal — an operator scanning gateway.log for this run should
+			// see that background work was cleaned up, not just silence.
+			if outcome.BackgroundSessionsKilled > 0 || outcome.BackgroundSessionsFailed > 0 {
+				logger.InfoCF("gateway", "scheduled run force-abort killed background session(s)",
+					map[string]any{
+						"session_id":                 sessionID,
+						"owner":                      owner,
+						"background_sessions_killed": outcome.BackgroundSessionsKilled,
+						"background_sessions_failed": outcome.BackgroundSessionsFailed,
+					})
+			}
 		}
 		// Short cleanup window: let the turn observe the cancel and unwind before
 		// ProcessScheduled returns.

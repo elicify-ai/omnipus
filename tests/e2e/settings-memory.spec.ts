@@ -150,6 +150,44 @@ async function openMemoryTab(
   return activePanel;
 }
 
+// ── Global-settings safety net ────────────────────────────────────────────────
+//
+// Both tests below mutate GLOBAL gateway memory settings (auto_recap_enabled,
+// idle_timeout_minutes, memory_retros_days, bootstrap_recap_*). Each test also restores
+// them inline, but an assertion that throws BEFORE that inline restore would leak the
+// mutated settings to sibling specs sharing this shard's gateway. These hooks snapshot
+// the settings before each test and restore them afterEach EVEN ON FAILURE, making the
+// restore exception-safe. Best-effort (errors swallowed) so the safety net can never
+// itself fail a test; the per-test inline restores remain as harmless redundancy.
+let memoryBaseline: MemorySettingsWire | null = null;
+
+test.beforeEach(async ({ page }) => {
+  const resp = await page.request.get(`${BASE_URL}/api/v1/settings/memory`, {
+    headers: await authHeaders(page),
+  });
+  memoryBaseline = resp.ok() ? ((await resp.json()) as MemorySettingsWire) : null;
+});
+
+test.afterEach(async ({ page }) => {
+  if (!memoryBaseline) return;
+  const b = memoryBaseline;
+  memoryBaseline = null;
+  const restorePayload: MemorySettingsWire = {
+    auto_recap_enabled: b.auto_recap_enabled ?? false,
+    idle_timeout_minutes: b.idle_timeout_minutes ?? 30,
+    bootstrap_recap_enabled: b.bootstrap_recap_enabled ?? false,
+    bootstrap_recap_max_per_minute: b.bootstrap_recap_max_per_minute ?? 5,
+    session_days: b.session_days ?? 90,
+    memory_retros_days: b.memory_retros_days ?? 180,
+  };
+  await page.request
+    .put(`${BASE_URL}/api/v1/settings/memory`, {
+      headers: await authHeaders(page),
+      data: JSON.stringify(restorePayload),
+    })
+    .catch(() => {});
+});
+
 // ── Test 1: settings persist across page reload ───────────────────────────────
 //
 // BDD:
@@ -298,7 +336,7 @@ test('persists memory settings across reload', async ({ page }) => {
 //
 //   Given the operator turns Auto recap ON and saves
 //   When a WS session_close frame is sent for the same session
-//   Then last-session.md appears under agents/<id>/.omnipus/ within 30 s
+//   Then last-session.md appears under agents/<id>/.omnipus/ within 90 s
 //
 // Why this test exists (the "saved but ignored" gap):
 //   The component test (MemorySection.test.tsx) only verifies that clicking
@@ -312,10 +350,22 @@ test('persists memory settings across reload', async ({ page }) => {
 //   - The OFF case polls for 10 s and asserts ABSENT. False negatives
 //     (a recap that arrives after 10 s would be a very slow recap, not a
 //     gateway bug) are extremely unlikely in E2E environment timing.
-//   - The ON case allows 30 s for the recap file to appear. The LLM call
-//     is real (uses the OpenRouter key from global-setup). If the LLM is
-//     unavailable the recap falls back to a heuristic summary that still
-//     writes last-session.md, so the assertion is robust to LLM timeouts.
+//   - The ON case allows 90 s for the recap file to appear. This must
+//     comfortably exceed the recap pipeline's own self-bounded overall
+//     budget of 60 s (pkg/agent/session_end.go:252 `overallBudget`) — only
+//     after that budget is exhausted does CloseSession's runRecap fall back
+//     to a heuristic summary (session_end.go:515
+//     writeHeuristicFallbackRetroWithCount) that still writes last-session.md.
+//     A 30 s poll window raced that 60 s contract directly: any real recap
+//     call that was merely slow (not failed) — legitimate under load, since
+//     the pipeline is contractually allowed up to 60 s before ANY file
+//     (real or fallback) exists — produced a deterministic false failure.
+//     90 s gives ~30 s of margin past the pipeline's hard 60 s cap.
+//   - This test overrides the suite's default 90 s Playwright test-level
+//     timeout via test.setTimeout() below — a 90 s recap poll alone would
+//     otherwise butt up against that harness deadline with near-zero margin
+//     once setup/WS/teardown overhead is added, which would just relocate
+//     the same budget-mismatch bug rather than fix it.
 //   - The test retries up to 3× in CI (playwright.config.ts), absorbing
 //     the occasional OpenRouter cold-start delay.
 //
@@ -323,6 +373,11 @@ test('persists memory settings across reload', async ({ page }) => {
 //   pkg/agent/session_end.go CloseSession(), pkg/memrooms/rooms.go
 
 test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ page }) => {
+  // 150s test-level override (Phase A 10s + Phase B 90s + REST/WS setup and
+  // teardown overhead) — see "Notes on flakiness budget" above for the full
+  // 60s-overallBudget rationale.
+  test.setTimeout(150_000);
+
   // ── Arrange: navigate and obtain a session ID + agent ID ─────────────────
   await page.goto('/');
   await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 });
@@ -535,13 +590,9 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
     { baseUrl: BASE_URL, sid: sessionId2, token: getStoredAuthToken() },
   );
 
-  // Poll for up to 30 s for last-session.md to appear.
-  // The recap pipeline: CloseSession → runRecap goroutine → LLM call (or fallback)
-  // → WriteLastSession. With the fallback path (no LLM needed), this typically
-  // completes in < 2 s. With a real LLM call it can take up to ~20 s under load.
-  // 30 s matches the suite's expect timeout (playwright.config.ts) and gives
-  // adequate headroom for both paths.
-  const recapPresentDeadline = Date.now() + 30_000;
+  // Poll for up to 90 s for last-session.md to appear — see "Notes on
+  // flakiness budget" above for the 60s-overallBudget rationale.
+  const recapPresentDeadline = Date.now() + 90_000;
   let recapAppearedWhileOn = false;
   while (Date.now() < recapPresentDeadline) {
     if (fs.existsSync(lastSessionPath)) {
@@ -554,7 +605,7 @@ test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ 
   expect(
     recapAppearedWhileOn,
     [
-      `last-session.md did NOT appear at ${lastSessionPath} within 30 s`,
+      `last-session.md did NOT appear at ${lastSessionPath} within 90 s`,
       'even though auto_recap_enabled=true was saved and a session_close frame was sent.',
       'This means either the agent loop is not reading the updated flag,',
       'the session_close WS frame was not delivered, or the recap pipeline failed.',

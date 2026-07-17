@@ -37,6 +37,8 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -123,10 +125,20 @@ type WebServeTool struct {
 	workspace string
 	// agentID is the agent this tool instance belongs to.
 	agentID string
-	// gatewayPreviewBaseURL is the preview listener base URL (e.g.
-	// "http://localhost:5001"). Used to build absolute URLs in tool results.
-	// MUST be the preview origin (different from SPA origin) per T-01.
-	gatewayPreviewBaseURL string
+	// getConfig returns the LIVE *config.Config snapshot at call time
+	// (preview-on-main-listener v5, FR-005/FR-006, US-3). It replaces the old
+	// constructor-frozen gatewayPreviewBaseURL string. Every call site uses it
+	// for two purposes:
+	//   1. Build the /preview/<agent>/<token>/ URL from
+	//      middleware.CanonicalGatewayOrigin(cfg) — the SAME canonical origin
+	//      CORS/CSP/WS CheckOrigin use, so serve_web's host can never desync
+	//      from those origin fences. gateway.public_url (the dominant input to
+	//      CanonicalGatewayOrigin) is restart-gated, so this is boot-stable
+	//      even though it is re-derived on every call.
+	//   2. Read gateway.preview_enabled LIVE (cfg.IsPreviewEnabled()) so an
+	//      operator toggling Settings → Gateway → Preview takes effect on the
+	//      very next serve_web call, no restart.
+	getConfig func() *config.Config
 	// served is the process-wide static registration map (Tier 1).
 	served ServedSubdirsRegistry
 	// devReg is the process-wide dev-server registry (Tier 3). May be nil on
@@ -147,7 +159,11 @@ type WebServeTool struct {
 //
 //   - workspace: absolute path to the agent's workspace root.
 //   - agentID: the agent's ID (embedded in the URL).
-//   - gatewayPreviewBaseURL: preview listener base URL (no trailing slash).
+//   - getConfig: live *config.Config accessor. Used to build the
+//     /preview/<agent>/<token>/ URL from the canonical gateway origin and to
+//     read gateway.preview_enabled live on every call (FR-005/FR-006). A nil
+//     getConfig (or one that returns nil) makes every call fail closed with
+//     the "preview disabled" error.
 //   - served: ServedSubdirs registry for static mode.
 //   - devReg: DevServerRegistry for dev mode (nil on non-Linux).
 //   - devCfg: dev mode config.
@@ -157,7 +173,7 @@ type WebServeTool struct {
 func NewWebServeTool(
 	workspace string,
 	agentID string,
-	gatewayPreviewBaseURL string,
+	getConfig func() *config.Config,
 	served ServedSubdirsRegistry,
 	devReg *sandbox.DevServerRegistry,
 	devCfg WebServeDevConfig,
@@ -178,16 +194,62 @@ func NewWebServeTool(
 		devCfg.MaxConcurrent = 2
 	}
 	return &WebServeTool{
-		workspace:             workspace,
-		agentID:               agentID,
-		gatewayPreviewBaseURL: gatewayPreviewBaseURL,
-		served:                served,
-		devReg:                devReg,
-		devCfg:                devCfg,
-		proxy:                 egressProxy,
-		auditLogger:           auditLogger,
-		minDuration:           time.Duration(minDurSec) * time.Second,
-		maxDuration:           time.Duration(maxDurSec) * time.Second,
+		workspace:   workspace,
+		agentID:     agentID,
+		getConfig:   getConfig,
+		served:      served,
+		devReg:      devReg,
+		devCfg:      devCfg,
+		proxy:       egressProxy,
+		auditLogger: auditLogger,
+		minDuration: time.Duration(minDurSec) * time.Second,
+		maxDuration: time.Duration(maxDurSec) * time.Second,
+	}
+}
+
+// currentConfig returns the live *config.Config snapshot, or nil when
+// getConfig is unset (a construction bug) or itself returns nil. Callers
+// treat a nil result as "preview unavailable" and fail closed — this mirrors
+// the pre-v5 behavior where an empty gatewayPreviewBaseURL disabled preview.
+func (t *WebServeTool) currentConfig() *config.Config {
+	if t.getConfig == nil {
+		return nil
+	}
+	return t.getConfig()
+}
+
+// previewDisabledResult builds the fail-closed IsError result returned
+// whenever preview is unavailable — either gateway.preview_enabled is
+// live-false (FR-006), or getConfig/cfg is missing (a wiring bug, treated the
+// same way: fail closed). The literal substring "preview disabled" is part of
+// the test contract (TestServeWebDisabledError) — do not reword it away.
+func previewDisabledResult() *ToolResult {
+	return &ToolResult{
+		IsError: true,
+		ForLLM:  "preview disabled: gateway.preview_enabled is false (or unavailable); web_serve cannot mint a working /preview/ URL",
+		ForUser: "Preview is disabled in this gateway configuration. Enable the Preview toggle in Settings → Gateway.",
+	}
+}
+
+// previewOriginUnresolvedResult builds the fail-closed IsError result
+// returned when preview IS enabled but middleware.CanonicalGatewayOrigin(cfg)
+// cannot resolve a usable origin — the case where gateway.host is a wildcard
+// bind ("0.0.0.0", "::", "::0") and gateway.public_url is unset. Before this
+// guard, web_serve concatenated the empty origin with the /preview/ path and
+// returned a schemeless/hostless URL (e.g. "/preview/<agent>/<token>/") as a
+// SUCCESS result — a fail-open regression from the deleted H4 guard (SFH-2).
+// Deliberately distinct wording from previewDisabledResult: this is not "the
+// feature is off", it's "the feature is on but the gateway's own public
+// origin cannot be determined", so the fix is different (set public_url, not
+// flip the preview toggle).
+func previewOriginUnresolvedResult() *ToolResult {
+	return &ToolResult{
+		IsError: true,
+		ForLLM: "web_serve: cannot resolve the gateway's public origin — gateway.host is bound to a " +
+			"wildcard address (0.0.0.0/::) and gateway.public_url is unset, so no usable /preview/ URL " +
+			"can be minted; set gateway.public_url to the gateway's externally-reachable https:// URL",
+		ForUser: "Preview cannot generate a working link because the gateway is bound to a wildcard address " +
+			"with no public URL configured. Set Settings → Gateway → Public URL to the gateway's reachable address.",
 	}
 }
 
@@ -250,16 +312,24 @@ func (t *WebServeTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 // executeStatic handles the static-file serving mode.
 func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args map[string]any) *ToolResult {
-	// H4: fail-fast when the preview listener is not configured. An empty
-	// gatewayPreviewBaseURL means the URL we'd return would have no scheme
-	// or host, producing a silently-broken link for the agent. Operator must
-	// set gateway.preview_listener_enabled=true and restart.
-	if t.gatewayPreviewBaseURL == "" {
-		return &ToolResult{
-			IsError: true,
-			ForLLM:  "preview disabled: gateway preview listener is not configured; web_serve cannot mint a working URL",
-			ForUser: "Iframe preview is disabled in this gateway configuration. Enable gateway.preview_listener_enabled and restart.",
-		}
+	// FR-006/US-3 AS-4: gateway.preview_enabled is read LIVE on every call —
+	// no restart required to flip it. cfg is also the source for the
+	// canonical-origin URL built below.
+	cfg := t.currentConfig()
+	if cfg == nil || !cfg.IsPreviewEnabled() {
+		return previewDisabledResult()
+	}
+
+	// SFH-2: resolve the canonical gateway origin BEFORE any registration
+	// side effect. middleware.CanonicalGatewayOrigin(cfg) returns "" when
+	// gateway.host is a wildcard bind (0.0.0.0/::/::0) and gateway.public_url
+	// is unset — there is then no usable host to embed in the /preview/ URL.
+	// Fail closed here instead of concatenating the empty origin with the
+	// path, which would mint a schemeless/hostless URL and report it as a
+	// SUCCESS.
+	origin := middleware.CanonicalGatewayOrigin(cfg)
+	if origin == "" {
+		return previewOriginUnresolvedResult()
 	}
 
 	// Resolve and validate the path within the workspace.
@@ -287,7 +357,13 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 	}
 
 	path := fmt.Sprintf("/preview/%s/%s/", agentID, token)
-	url := t.gatewayPreviewBaseURL + path
+	// US-3 AS-3: host MUST equal the canonical gateway origin — the SAME
+	// origin CORS/CSP/WS CheckOrigin use — so serve_web can never desync from
+	// those fences. gateway.public_url (the dominant input) is restart-gated,
+	// so this is boot-stable even though it's recomputed on every call.
+	// origin was already resolved (and fail-closed-checked for emptiness)
+	// above, before the registration side effect.
+	url := origin + path
 
 	return NewToolResult(fmt.Sprintf(
 		`{"kind":"static","path":%q,"url":%q,"expires_at":%q}`,
@@ -414,13 +490,23 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		return ErrorResult(Tier3UnsupportedMessage)
 	}
 
-	// H4: fail-fast when the preview listener is not configured.
-	if t.gatewayPreviewBaseURL == "" {
-		return &ToolResult{
-			IsError: true,
-			ForLLM:  "preview disabled: gateway preview listener is not configured; web_serve cannot mint a working URL",
-			ForUser: "Iframe preview is disabled in this gateway configuration. Enable gateway.preview_listener_enabled and restart.",
-		}
+	// FR-006/US-3 AS-4: gateway.preview_enabled is read LIVE on every call —
+	// no restart required to flip it. cfg is also the source for the
+	// canonical-origin URL built below.
+	cfg := t.currentConfig()
+	if cfg == nil || !cfg.IsPreviewEnabled() {
+		return previewDisabledResult()
+	}
+
+	// SFH-2: resolve the canonical gateway origin BEFORE reserving a port or
+	// spawning the dev-server child. See the identical guard in
+	// executeStatic for the full rationale — failing here, before any spawn,
+	// also avoids leaking a running dev-server process that no caller could
+	// ever be told the URL for (an empty origin would otherwise only be
+	// discovered after the child was already running).
+	origin := middleware.CanonicalGatewayOrigin(cfg)
+	if origin == "" {
+		return previewOriginUnresolvedResult()
 	}
 
 	if t.devReg == nil {
@@ -563,11 +649,14 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	_ = probeConn.Close()
 
 	path := fmt.Sprintf("/preview/%s/%s/", agentID, token)
-	// Build the URL by concatenating the base URL and the path. The base
-	// URL is constructed upstream with a scheme (http/https), so the simple
-	// concat is the canonical builder here; sandbox.BuildDevURL's dead first
-	// line has been removed (H3/A4).
-	url := t.gatewayPreviewBaseURL + path
+	// US-3 AS-3: host MUST equal the canonical gateway origin — the SAME
+	// origin CORS/CSP/WS CheckOrigin use (middleware.CanonicalGatewayOrigin),
+	// resolved live from cfg but boot-stable because gateway.public_url is
+	// restart-gated; origin was already resolved (and fail-closed-checked
+	// for emptiness) above, before the port reservation/spawn. sandbox.
+	// BuildDevURL is not used here — see its package doc comment (unused in
+	// production, kept as reference + test fixture).
+	url := origin + path
 
 	deadline := startedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
 	summary := fmt.Sprintf(

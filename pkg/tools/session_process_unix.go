@@ -17,9 +17,27 @@ func killProcessGroup(pid int) error {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			return nil
 		}
-		// Attempt individual PID fallback regardless of the group-kill error.
-		// This covers EPERM on the group signal but success on the direct signal.
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		// Group signal failed for a reason OTHER than "already gone" (e.g.
+		// EPERM). Attempt the individual PID as a fallback regardless — and
+		// if THAT succeeds (or the direct PID is also merely already gone),
+		// report overall SUCCESS, not the group-kill error: the session was
+		// still terminated, just not via the process-group signal, and a
+		// caller that sees an error here would wrongly leave the session
+		// labeled "running" (and, for KillAndRelabel callers, skip the
+		// atomic relabel/count entirely) despite the process actually being
+		// dead. Only report failure when BOTH signals failed for a reason
+		// other than "already gone".
+		fallbackErr := syscall.Kill(pid, syscall.SIGKILL)
+		if fallbackErr == nil || errors.Is(fallbackErr, syscall.ESRCH) {
+			return nil
+		}
+		// Both the group signal and the direct-PID fallback failed for a
+		// real reason (not merely "already gone") — this is a genuine kill
+		// failure, distinct from ErrSessionDone (the caller-side benign
+		// "lost the race, already terminal" case): that is detected by the
+		// CALLER via errors.Is(err, ErrSessionDone) before ever reaching
+		// here, so any error returned by this function is by construction a
+		// real syscall failure, never a masked double-cancel.
 		return err
 	}
 	// Group signal succeeded; also signal the individual PID as a fallback for

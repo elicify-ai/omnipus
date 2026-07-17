@@ -851,19 +851,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         if (isCurrent) isDirtyRef.current = false
       },
       // I13: best-effort flush of pending edits on tab close / page hide /
-      // unload. The gateway validates every PUT against the account's
-      // bearer token, so the flush must carry Authorization (sendBeacon
-      // can't, which is why useAutoSave now uses fetch keepalive). The token
-      // is read from the same store the REST client uses (sessionStorage
-      // preferred, localStorage fallback) — kept inline rather than via an
-      // exported accessor because no such accessor exists in src/lib/api.ts
-      // (getAuthHeaders is module-private) and the inline read is the
-      // established pattern (ws.ts, _app.tsx, store/auth.ts).
+      // unload. Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010),
+      // sent automatically by the browser (useAutoSave sets
+      // credentials:'include' + echoes the CSRF cookie on this PUT) —
+      // sendBeacon can't carry either, which is why useAutoSave uses fetch
+      // keepalive instead. No client-side token to pass through anymore.
       flushUrl: agentId !== null ? `/api/v1/agents/${agentId}` : undefined,
-      flushAuthToken:
-        typeof sessionStorage !== 'undefined'
-          ? (sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')) ?? undefined
-          : undefined,
     },
   )
 
