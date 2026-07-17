@@ -1832,9 +1832,18 @@ func registerSharedTools(
 						// browser context survive for the new manager to
 						// re-adopt.
 						coord.Release(agentID)
-					} else if prior != nil {
-						// No-coordinator test/legacy path: the old manager owns
-						// its own Chrome, so Shutdown actually kills it.
+					}
+					if prior != nil {
+						// Always Shutdown the replaced manager, even when a
+						// coordinator exists: a remote-CDP manager (cdp_url
+						// set) never attaches to the coordinator, so Release
+						// above is a no-op for it and its allocator would
+						// leak on every hot reload. Shutdown is idempotent
+						// and connection-only for a coordinator-attached
+						// manager (CRIT-002: it must NOT kill the shared
+						// Chrome — TestManager_Shutdown_DropsConnectionNotProcess),
+						// and kills the manager's own Chrome in the
+						// no-coordinator legacy path.
 						prior.Shutdown()
 					}
 				}

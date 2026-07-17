@@ -657,6 +657,19 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 		},
 	}
 
+	// Pin the browser exec path to a nonexistent binary so the gateway's
+	// boot-time Preprovision goroutine fails instantly and locally. Without
+	// this, every test gateway kicks off a real ~130 MB Chrome-for-Testing
+	// download into its t.TempDir() home — and since gateway shutdown does
+	// not wait for that detached goroutine, the extraction races TempDir
+	// RemoveAll cleanup ("unlinkat ...: directory not empty" — TestIdleHeartbeat
+	// on the ci-omnipus worker). ExecPath is an operator override honored
+	// as-is (no download fallback), so resolution fails with a stat error:
+	// no network, no disk writes, no race. No harness consumer drives real
+	// browser tools; a future test that needs them should override this via
+	// its own Option.
+	cfg.Tools.Browser.ExecPath = filepath.Join(homeDir, "nonexistent-test-chromium")
+
 	// Optional APIBase override (perf tests redirect LLM traffic to a local
 	// mock server — see tests/perf/mock_openrouter_test.go).
 	if hc.apiBase != "" {

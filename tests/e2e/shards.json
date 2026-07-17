@@ -17,6 +17,7 @@
         "tests/e2e/subagent.spec.ts",
         "tests/e2e/handoff.spec.ts",
         "tests/e2e/cancel-cross-channel.spec.ts",
+        "tests/e2e/delegation-hidden.spec.ts",
         "tests/e2e/hot-reload.spec.ts",
         "tests/e2e/recap-continuity.spec.ts"
       ]
@@ -63,7 +64,8 @@
         "tests/e2e/multi-turn-render.spec.ts",
         "tests/e2e/replay-fidelity.spec.ts",
         "tests/e2e/retention.spec.ts",
-        "tests/e2e/settings-memory.spec.ts"
+        "tests/e2e/settings-memory.spec.ts",
+        "tests/e2e/tool-order.spec.ts"
       ]
     },
     {
