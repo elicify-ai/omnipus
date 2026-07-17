@@ -20,9 +20,26 @@ interface UiStore {
   // plan). Opened from the sidebar search icon (Sidebar.tsx) and the /resume
   // slash command (useSlashMenu.ts). The SearchModal component is mounted once
   // at the AppShell root, so either entry point drives the same single instance.
+  //
+  // TWO MODES, one panel. `searchModalMode` picks which behavior SearchModal
+  // renders:
+  //   - 'sessions' (default): the original session-search panel — sessions
+  //     focus, ArrowUp/Down walks sessions, Enter opens the highlighted one.
+  //     Entered via `openSearchModal` (sidebar search icon, a workspace's
+  //     "More…" button with a workspaceId filter, /resume).
+  //   - 'workspaces': the workspace-switch panel — ALL workspaces listed
+  //     (including zero-session ones), session groups start collapsed,
+  //     ArrowUp/Down walks workspace headers, Enter switches to the
+  //     highlighted workspace, typing filters by workspace name. Entered
+  //     via `openWorkspaceSwitcher` (/workspace only).
+  // Kept as a separate action rather than an `openSearchModal(workspaceId?,
+  // mode?)` overload so every existing `openSearchModal` call site (sidebar
+  // icon, "More…", /resume) stays source-compatible with zero changes.
   searchModalOpen: boolean
   searchModalWorkspaceFilter: string | null
+  searchModalMode: 'sessions' | 'workspaces'
   openSearchModal: (workspaceId?: string) => void
+  openWorkspaceSwitcher: () => void
   closeSearchModal: () => void
 
   // Create agent modal
@@ -141,8 +158,18 @@ const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
 export const useUiStore = create<UiStore>((set, get) => ({
   searchModalOpen: false,
   searchModalWorkspaceFilter: null,
-  openSearchModal: (workspaceId?: string) => set({ searchModalOpen: true, searchModalWorkspaceFilter: workspaceId ?? null }),
-  closeSearchModal: () => set({ searchModalOpen: false, searchModalWorkspaceFilter: null }),
+  searchModalMode: 'sessions',
+  openSearchModal: (workspaceId?: string) =>
+    set({ searchModalOpen: true, searchModalWorkspaceFilter: workspaceId ?? null, searchModalMode: 'sessions' }),
+  openWorkspaceSwitcher: () =>
+    set({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'workspaces' }),
+  // Reset the mode back to 'sessions' on every close so a prior /workspace
+  // open can't leak into the next open via the sidebar search icon or
+  // /resume (both of which go through openSearchModal, which already sets
+  // 'sessions' explicitly — this reset is the belt-and-braces default for
+  // any other close path, e.g. Escape/outside-click, which don't call
+  // openSearchModal at all).
+  closeSearchModal: () => set({ searchModalOpen: false, searchModalWorkspaceFilter: null, searchModalMode: 'sessions' }),
 
   createAgentModalOpen: false,
   createAgentModalType: 'Main',

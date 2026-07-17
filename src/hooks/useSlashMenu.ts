@@ -274,13 +274,16 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // synthetic entries participate in palette filtering, /help, and the
   // send-path interception identically to a real backend command.
   // /resume is web-client-only: opens the cross-workspace session search
-  // modal (the same one the sidebar search icon opens) to resume a session.
+  // modal (the same one the sidebar search icon opens) in its default
+  // 'sessions' mode to resume a session.
   // /workspace is a second web-client-only entry, next to /resume: opens the
-  // SAME search modal (no session preselected) so the user can pick a
-  // workspace to switch into via its group-header switch arrow (SearchModal
-  // WorkspaceHeader). Session-search enhancement, user-approved. Note: a
-  // hidden BACKEND command literally named "switch" exists — unrelated,
-  // untouched; this entry is a distinct client-only name/delivery.
+  // SAME SearchModal instance but in its 'workspaces' mode (openWorkspaceSwitcher,
+  // ui store) — ALL workspaces listed, session groups collapsed by default,
+  // ArrowUp/Down walks workspace headers, Enter switches (SearchModal
+  // WorkspaceHeader's switch arrow / handleSwitchWorkspace). Session-search
+  // enhancement, user-approved. Note: a hidden BACKEND command literally
+  // named "switch" exists — unrelated, untouched; this entry is a distinct
+  // client-only name/delivery.
   const allCommands: SlashCommand[] = [
     {
       name: 'resume',
@@ -292,7 +295,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     {
       name: 'workspace',
       label: '/workspace',
-      description: 'Switch workspace — pick one in the session search panel',
+      description: 'Switch workspace — arrows to pick, Enter to switch',
       delivery: 'client',
       available_while_streaming: true,
     },
@@ -629,11 +632,12 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
 
     if (name === 'workspace') {
-      // Web-only: open the SAME search modal /resume opens (no workspace
-      // filter) — the user switches workspace from there via a group
-      // header's switch arrow (SearchModal WorkspaceHeader), not via a
-      // dedicated picker of its own.
-      useUiStore.getState().openSearchModal()
+      // Web-only: open the SAME SearchModal instance /resume opens, but in
+      // its 'workspaces' mode — ALL workspaces listed, ArrowUp/Down walks
+      // workspace headers, Enter switches (SearchModal's handleSwitchWorkspace,
+      // same as clicking a group header's switch arrow), not a dedicated
+      // picker of its own.
+      useUiStore.getState().openWorkspaceSwitcher()
       return true
     }
 

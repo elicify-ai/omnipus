@@ -56,7 +56,7 @@ interface WsGroup {
 
 // ── collapsible workspace header ─────────────────────────────────────────────
 
-function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch }: {
+function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHighlighted }: {
   name: string; isCollapsed: boolean; onToggle: () => void; panelId: string
   /**
    * Present only for a real workspace group — absent for the 'Unfiled'
@@ -70,9 +70,18 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch }: {
    * independently-clickable "Watch live" launcher.
    */
   onSwitch?: () => void
+  /**
+   * Workspaces-mode only: true when this header is the keyboard-highlighted
+   * row (ArrowUp/Down walks workspace headers in that mode — see
+   * SearchModal's `highlightedWorkspace`). Reuses SessionRow's highlight
+   * visual language (surface-2 wash + trailing "↵" hint) so the two modes
+   * read as the same interaction pattern. Always false/omitted in sessions
+   * mode, where the highlight instead follows SessionRow.
+   */
+  isHighlighted?: boolean
 }) {
   return (
-    <div className="flex items-center w-full">
+    <div className={cn('flex items-center w-full rounded-md', isHighlighted && 'bg-[var(--color-surface-2)]')}>
       <button tabIndex={0}
         type="button"
         onClick={onToggle}
@@ -83,6 +92,9 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch }: {
         {isCollapsed ? <CaretRight size={10} className="shrink-0" /> : <CaretDown size={10} className="shrink-0" />}
         <Folder size={14} className="shrink-0" />
         <span className="flex-1 text-left truncate">{name}</span>
+        {isHighlighted && (
+          <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-normal normal-case tracking-normal text-[var(--color-muted)]" aria-hidden="true">↵</span>
+        )}
       </button>
       {onSwitch && (
         <button tabIndex={0}
@@ -264,6 +276,13 @@ export function SearchModal() {
   const open = useUiStore((s) => s.searchModalOpen)
   const close = useUiStore((s) => s.closeSearchModal)
   const wsFilter = useUiStore((s) => s.searchModalWorkspaceFilter)
+  // TWO MODES, one panel (see ui.ts's doc comment on searchModalMode):
+  // 'sessions' (default, /resume + sidebar search icon + "More…") is the
+  // original session-search behavior, unchanged below. 'workspaces'
+  // (/workspace only) switches the panel into workspace-switch mode — ALL
+  // workspaces listed, groups collapsed by default, ArrowUp/Down walks
+  // workspace headers, Enter switches, typing filters by workspace name.
+  const mode = useUiStore((s) => s.searchModalMode)
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
@@ -290,9 +309,26 @@ export function SearchModal() {
   const [toDate, setToDate] = useState('')
   const debouncedSearch = useDebouncedValue(searchText, 200)
 
-  // Collapse state — default: all expanded (empty sets)
+  // Collapse state. `collapsedWs` holds workspace-group keys the user has
+  // manually TOGGLED away from the current mode's default — not "the set of
+  // collapsed groups" directly — because the two modes have opposite
+  // defaults: sessions mode starts every group EXPANDED (unchanged, original
+  // behavior), workspaces mode starts every group COLLAPSED (user can still
+  // expand one manually to peek at its sessions). `isWsCollapsed` below is
+  // the single place that reconciles "is this key toggled" against "what's
+  // the mode's default" into the actual collapsed/expanded answer — the
+  // render loop and `flatSessions` both go through it rather than reading
+  // `collapsedWs.has(...)` directly, so the two can never disagree.
+  // `collapsedAgent` (the nested per-agent sub-groups) is unaffected by mode
+  // — it always defaults expanded — so it keeps its original direct
+  // semantics.
   const [collapsedWs, setCollapsedWs] = useState<Set<string>>(new Set())
   const [collapsedAgent, setCollapsedAgent] = useState<Set<string>>(new Set())
+
+  const isWsCollapsed = useCallback(
+    (key: string) => (mode === 'workspaces' ? !collapsedWs.has(key) : collapsedWs.has(key)),
+    [mode, collapsedWs],
+  )
 
   const toggleWs = useCallback((key: string) => {
     setCollapsedWs((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
@@ -301,12 +337,23 @@ export function SearchModal() {
     setCollapsedAgent((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
   }, [])
 
+  // Resets all transient panel state (search text, date filter, collapse
+  // toggles, in-progress renames) whenever the panel closes — so the NEXT
+  // open (whichever mode it's in) starts from that mode's clean default —
+  // AND whenever the mode itself changes while the panel stays mounted
+  // (open never goes false — e.g. a /workspace invocation landing on an
+  // already-open sessions-mode panel). Without the mode branch, toggles
+  // made in one mode would carry over and be misread against the other
+  // mode's opposite default the next time `isWsCollapsed` evaluates them.
+  const prevModeRef = useRef(mode)
   useEffect(() => {
-    if (!open) {
+    const modeChanged = prevModeRef.current !== mode
+    prevModeRef.current = mode
+    if (!open || modeChanged) {
       setSearchText(''); setShowDateFilter(false); setFromDate(''); setToDate(''); setCollapsedWs(new Set()); setCollapsedAgent(new Set())
       editingSessionIdsRef.current.clear()
     }
-  }, [open])
+  }, [open, mode])
 
   const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), enabled: open })
   const { data: workspaces = [], isLoading: wLoading, isError: workspacesError } = useQuery({ queryKey: workspacesQueryKeys.list({ status: 'active' }), queryFn: () => fetchWorkspaces({ status: 'active' }), enabled: open })
@@ -364,9 +411,55 @@ export function SearchModal() {
     return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
   }
 
+  // Buckets a session list into AgentGroup[] — shared by both modes' branches
+  // below (sessions mode buckets a workspace's filtered sessions; workspaces
+  // mode buckets a workspace's UNFILTERED sessions, since the primary filter
+  // target there is the workspace name, not session content).
+  const bucketByAgent = useCallback((sess: Session[]): AgentGroup[] => {
+    const aBuckets = new Map<string, Session[]>()
+    for (const s of sess) {
+      const aId = s.active_agent_id ?? s.agent_id ?? 'unknown'
+      const arr = aBuckets.get(aId); arr ? arr.push(s) : aBuckets.set(aId, [s])
+    }
+    const agGroups: AgentGroup[] = []
+    for (const [aId, aSess] of aBuckets) {
+      aSess.sort(sortSessions)
+      agGroups.push({ agent: agents.find((a) => a.id === aId), agentId: aId, sessions: aSess })
+    }
+    agGroups.sort((a, b) => new Date(b.sessions[0]?.updated_at ?? '').getTime() - new Date(a.sessions[0]?.updated_at ?? '').getTime())
+    return agGroups
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents])
+
   const groups = useMemo<WsGroup[]>(() => {
     const wsMap = new Map(workspaces.map((w) => [w.id, w]))
     const q = debouncedSearch.trim().toLowerCase()
+
+    if (mode === 'workspaces') {
+      // Workspace-switch mode: source the FULL fetchWorkspaces list — every
+      // active workspace, including ones with zero sessions — not just the
+      // workspaces that happen to have a session (the sessions-mode bucket
+      // approach below would silently drop an empty workspace). The primary
+      // filter target is the workspace NAME; per-workspace sessions are
+      // attached unfiltered for the (collapsed-by-default) peek view. No
+      // Unfiled pseudo-group here — it isn't a real workspace and can't be
+      // switched to (handleSwitchWorkspace requires a Workspace).
+      const byWorkspace = new Map<string, Session[]>()
+      for (const s of sessions) {
+        if (s.workspace_id && wsMap.has(s.workspace_id)) {
+          const arr = byWorkspace.get(s.workspace_id); arr ? arr.push(s) : byWorkspace.set(s.workspace_id, [s])
+        }
+      }
+      const matched = q ? workspaces.filter((w) => w.name.toLowerCase().includes(q)) : workspaces
+      const sorted = [...matched].sort((a, b) => a.name.localeCompare(b.name))
+      return sorted.map((w) => {
+        const sess = byWorkspace.get(w.id) ?? []
+        return { workspace: w, agentGroups: bucketByAgent(sess), totalCount: sess.length }
+      })
+    }
+
+    // Sessions mode (default, unchanged): group the FILTERED sessions by
+    // workspace, then by agent within each workspace.
     const fromT = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null
     const toT = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null
 
@@ -390,18 +483,7 @@ export function SearchModal() {
 
     const result: WsGroup[] = []
     for (const [wsId, sess] of wsBuckets) {
-      const aBuckets = new Map<string, Session[]>()
-      for (const s of sess) {
-        const aId = s.active_agent_id ?? s.agent_id ?? 'unknown'
-        const arr = aBuckets.get(aId); arr ? arr.push(s) : aBuckets.set(aId, [s])
-      }
-      const agGroups: AgentGroup[] = []
-      for (const [aId, aSess] of aBuckets) {
-        aSess.sort(sortSessions)
-        agGroups.push({ agent: agents.find((a) => a.id === aId), agentId: aId, sessions: aSess })
-      }
-      agGroups.sort((a, b) => new Date(b.sessions[0]?.updated_at ?? '').getTime() - new Date(a.sessions[0]?.updated_at ?? '').getTime())
-      result.push({ workspace: wsId ? wsMap.get(wsId) ?? null : null, agentGroups: agGroups, totalCount: sess.length })
+      result.push({ workspace: wsId ? wsMap.get(wsId) ?? null : null, agentGroups: bucketByAgent(sess), totalCount: sess.length })
     }
     result.sort((a, b) => {
       if (a.workspace === null && b.workspace !== null) return 1
@@ -409,37 +491,60 @@ export function SearchModal() {
       return new Date(b.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime() - new Date(a.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime()
     })
     return result
-  }, [sessions, workspaces, agents, debouncedSearch, fromDate, toDate, wsFilter])
+  }, [sessions, workspaces, debouncedSearch, fromDate, toDate, wsFilter, mode, bucketByAgent])
 
-  const total = groups.reduce((n, g) => n + g.totalCount, 0)
+  // Sessions mode: total is a SESSION count (drives "No sessions found").
+  // Workspaces mode: total is a WORKSPACE count — `groups` already IS one
+  // entry per matched workspace (zero-session ones included), so summing
+  // `totalCount` (session counts) would wrongly read "no results" for an
+  // all-empty-but-real workspace list.
+  const total = mode === 'workspaces' ? groups.length : groups.reduce((n, g) => n + g.totalCount, 0)
   const loading = sLoading || wLoading
 
   // Flat, in-render-order list of VISIBLE sessions (collapsed groups excluded)
-  // — the arrow-key navigation space. Index 0 is what Enter selects by default.
+  // — the SESSIONS-mode arrow-key navigation space. Index 0 is what Enter
+  // selects by default. Not used for navigation in workspaces mode (see
+  // `groups` itself, used directly as that mode's flat nav list below) but
+  // still computed unconditionally — harmless, and keeps this hook order
+  // stable regardless of mode.
   const flatSessions = useMemo<Session[]>(() => {
     const out: Session[] = []
     for (const g of groups) {
       const wsKey = g.workspace?.id ?? 'unfiled'
-      if (collapsedWs.has(wsKey)) continue
+      if (isWsCollapsed(wsKey)) continue
       for (const ag of g.agentGroups) {
         if (collapsedAgent.has(`${wsKey}::${ag.agentId}`)) continue
         out.push(...ag.sessions)
       }
     }
     return out
-  }, [groups, collapsedWs, collapsedAgent])
+  }, [groups, isWsCollapsed, collapsedAgent])
 
-  // Keyboard highlight — follows ArrowUp/ArrowDown from the search input;
-  // resets to the top whenever the result set changes.
+  // Keyboard highlight — TWO SEPARATE nav lists, one active per mode (kept
+  // explicit rather than interleaved): sessions mode walks `flatSessions`
+  // (unchanged, original behavior — collapsed groups excluded). Workspaces
+  // mode walks `groups` directly — one entry per workspace header, ALWAYS
+  // visible regardless of that workspace's own collapse state (collapsing a
+  // group hides its sessions, never its own header row). Resets to the top
+  // whenever the active list's shape changes.
   const [highlightIndex, setHighlightIndex] = useState(0)
-  useEffect(() => { setHighlightIndex(0) }, [debouncedSearch, fromDate, toDate, wsFilter, flatSessions.length])
-  const highlighted = flatSessions[highlightIndex]
+  useEffect(() => { setHighlightIndex(0) }, [debouncedSearch, fromDate, toDate, wsFilter, flatSessions.length, mode, groups.length])
+  const highlighted = mode === 'sessions' ? flatSessions[highlightIndex] : undefined
+  const highlightedWorkspace = mode === 'workspaces' ? (groups[highlightIndex]?.workspace ?? null) : null
 
-  // Keep the highlighted row scrolled into view as the user arrows through.
+  // Keep the highlighted row scrolled into view as the user arrows through —
+  // targets the session row's id in sessions mode, the workspace header's id
+  // in workspaces mode (see the `id={search-ws-${wsKey}}` wrapper in the
+  // render loop below).
   useEffect(() => {
+    if (mode === 'workspaces') {
+      if (!highlightedWorkspace) return
+      document.getElementById(`search-ws-${highlightedWorkspace.id}`)?.scrollIntoView({ block: 'nearest' })
+      return
+    }
     if (!highlighted) return
     document.getElementById(`search-result-${highlighted.id}`)?.scrollIntoView({ block: 'nearest' })
-  }, [highlighted])
+  }, [highlighted, highlightedWorkspace, mode])
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close() }}>
@@ -472,8 +577,8 @@ export function SearchModal() {
         <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0 border-b border-[var(--color-border)]">
           <DialogTitle className="flex items-center gap-2 text-base mb-2">
             <MagnifyingGlass size={16} className="text-[var(--color-accent)]" />
-            Search sessions
-            {wsFilter && (
+            {mode === 'workspaces' ? 'Switch workspace' : 'Search sessions'}
+            {mode === 'sessions' && wsFilter && (
               <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-normal text-[var(--color-secondary)]">
                 {workspaces.find((w) => w.id === wsFilter)?.name ?? 'Filtered'}
                 <button tabIndex={0} type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
@@ -482,34 +587,50 @@ export function SearchModal() {
               </span>
             )}
           </DialogTitle>
-          <DialogDescription className="sr-only">Search sessions across all workspaces, grouped by workspace and agent.</DialogDescription>
+          <DialogDescription className="sr-only">
+            {mode === 'workspaces'
+              ? 'Switch workspace. Arrow keys move between workspaces, Enter switches to the highlighted one.'
+              : 'Search sessions across all workspaces, grouped by workspace and agent.'}
+          </DialogDescription>
 
           <div className="relative">
             <MagnifyingGlass size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-muted)]" />
-            <Input autoFocus placeholder="Search by title or workspace..." value={searchText}
+            <Input autoFocus
+              placeholder={mode === 'workspaces' ? 'Filter workspaces by name...' : 'Search by title or workspace...'}
+              value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               onKeyDown={(e) => {
+                const navLength = mode === 'workspaces' ? groups.length : flatSessions.length
                 if (e.key === 'ArrowDown') {
                   e.preventDefault()
-                  setHighlightIndex((i) => Math.min(i + 1, flatSessions.length - 1))
+                  setHighlightIndex((i) => Math.min(i + 1, navLength - 1))
                 } else if (e.key === 'ArrowUp') {
                   e.preventDefault()
                   setHighlightIndex((i) => Math.max(i - 1, 0))
-                } else if (e.key === 'Enter' && highlighted) {
-                  e.preventDefault()
-                  selectSession(highlighted)
+                } else if (e.key === 'Enter') {
+                  if (mode === 'workspaces') {
+                    if (highlightedWorkspace) {
+                      e.preventDefault()
+                      handleSwitchWorkspace(highlightedWorkspace)
+                    }
+                  } else if (highlighted) {
+                    e.preventDefault()
+                    selectSession(highlighted)
+                  }
                 }
               }}
-              className="pl-9" aria-label="Search sessions" />
-            <button tabIndex={0} type="button" onClick={() => setShowDateFilter((v) => !v)}
-              className={cn('absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded transition-colors',
-                showDateFilter ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]')}
-              title="Date range filter" aria-label="Toggle date range filter" aria-pressed={showDateFilter}>
-              <Calendar size={15} />
-            </button>
+              className="pl-9" aria-label={mode === 'workspaces' ? 'Filter workspaces' : 'Search sessions'} />
+            {mode === 'sessions' && (
+              <button tabIndex={0} type="button" onClick={() => setShowDateFilter((v) => !v)}
+                className={cn('absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded transition-colors',
+                  showDateFilter ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]')}
+                title="Date range filter" aria-label="Toggle date range filter" aria-pressed={showDateFilter}>
+                <Calendar size={15} />
+              </button>
+            )}
           </div>
 
-          {showDateFilter && (
+          {mode === 'sessions' && showDateFilter && (
             <div className="mt-2 flex items-center gap-2">
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="max-w-[180px]" aria-label="From date" />
               <span className="text-xs text-[var(--color-muted)]">to</span>
@@ -527,11 +648,27 @@ export function SearchModal() {
             // and present a transient outage as if no session had a workspace.
             <div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>
           ) : loading ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">Loading sessions...</div>
+            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
+              {mode === 'workspaces' ? 'Loading workspaces...' : 'Loading sessions...'}
+            </div>
           ) : total === 0 ? (
             <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
-              <p>No sessions found{wsFilter ? ' in this workspace' : ''}{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
-              {(wsFilter || debouncedSearch || fromDate || toDate) && (
+              {mode === 'workspaces' ? (
+                <p>No workspaces found{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
+              ) : (
+                <p>No sessions found{wsFilter ? ' in this workspace' : ''}{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
+              )}
+              {mode === 'workspaces' ? (
+                debouncedSearch && (
+                  <button tabIndex={0}
+                    type="button"
+                    onClick={() => setSearchText('')}
+                    className="mt-2 text-xs text-[var(--color-accent)] hover:underline"
+                  >
+                    Clear filter
+                  </button>
+                )
+              ) : (wsFilter || debouncedSearch || fromDate || toDate) && (
                 <button tabIndex={0}
                   type="button"
                   onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); useUiStore.setState({ searchModalWorkspaceFilter: null }) }}
@@ -542,11 +679,12 @@ export function SearchModal() {
               )}
             </div>
           ) : (
-            groups.map((group) => {
+            groups.map((group, idx) => {
               const wsKey = group.workspace?.id ?? 'unfiled'
-              const wsCollapsed = collapsedWs.has(wsKey)
+              const wsCollapsed = isWsCollapsed(wsKey)
+              const wsHighlighted = mode === 'workspaces' && idx === highlightIndex
               return (
-                <div key={wsKey} className="mb-1">
+                <div key={wsKey} id={`search-ws-${wsKey}`} className="mb-1">
                   <WorkspaceHeader
                     name={group.workspace?.name ?? 'Unfiled'}
                     isCollapsed={wsCollapsed}
@@ -554,7 +692,10 @@ export function SearchModal() {
                     panelId={`ws-panel-${wsKey}`}
                     // 'Unfiled' (group.workspace === null) has no real workspace
                     // to switch to — omit the arrow entirely for that group.
+                    // Never null in workspaces mode (Unfiled is excluded there),
+                    // so an empty (zero-session) workspace still gets its arrow.
                     onSwitch={group.workspace ? () => handleSwitchWorkspace(group.workspace!) : undefined}
+                    isHighlighted={wsHighlighted}
                   />
                   {!wsCollapsed && (
                     <div id={`ws-panel-${wsKey}`} role="region" className="space-y-0.5 px-2 pb-1">
@@ -576,7 +717,7 @@ export function SearchModal() {
                             {!agentCollapsed && (
                               <div id={`agent-panel-${agentKey}`} role="region" className="space-y-0.5 pl-3">
                                 {ag.sessions.map((s) => (
-                                  <SessionRow key={s.id} session={s} isActive={s.id === activeSessionId} isHighlighted={s.id === highlighted?.id} onSelect={() => selectSession(s)}
+                                  <SessionRow key={s.id} session={s} isActive={s.id === activeSessionId} isHighlighted={mode === 'sessions' && s.id === highlighted?.id} onSelect={() => selectSession(s)}
                                     onRename={(t) => renameMut.mutate({ id: s.id, title: t })}
                                     onDelete={() => deleteMut.mutate(s.id)}
                                     deleting={deleteMut.isPending && deleteMut.variables === s.id}
