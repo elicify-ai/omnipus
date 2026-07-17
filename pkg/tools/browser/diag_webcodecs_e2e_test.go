@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/cdppipe"
 )
@@ -69,7 +70,7 @@ func TestDiag_HeadlessShell_WebCodecsAndContexts(t *testing.T) {
 		})()`
 		err := chromedp.Run(rctx,
 			chromedp.Navigate("about:blank"),
-			chromedp.Evaluate(js, &typeofEncoder, func(p *chromedp.EvalParams) *chromedp.EvalParams {
+			chromedp.Evaluate(js, &typeofEncoder, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 				return p.WithAwaitPromise(true)
 			}),
 		)
