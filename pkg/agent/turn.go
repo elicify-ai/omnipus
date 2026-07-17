@@ -114,8 +114,22 @@ type turnState struct {
 	gracefulInterruptHint string
 	gracefulTerminalUsed  bool
 	hardAbort             bool
-	providerCancel        context.CancelFunc
-	turnCancel            context.CancelFunc
+	// providerCancel is fired by the graceful cascade (InterruptSession) to
+	// abort the in-flight LLM/provider call immediately; turnCancel is fired
+	// by the hard-abort cascade (InterruptSessionHard/requestHardAbort) to
+	// tear down the whole turn. For a NATIVE turn these are two genuinely
+	// distinct cancel funcs (turnCtx's cancel is a superset of the
+	// provider-call's own). For an EXTERNAL-CLI sub-turn
+	// (pkg/agent/external_dispatch.go's runExternalCLISubTurn) both slots are
+	// set to the exact SAME cancel func — the runner exposes no distinct
+	// graceful-stop primitive, so canceling either slot cancels the one
+	// runCtx the external CLI's OS child is bound to
+	// (exec.CommandContext(runCtx, ...)), killing the process outright either
+	// way. That makes firing providerCancel alone already terminal for an
+	// external-CLI turn — there is no softer "graceful" stage for this kind
+	// of turn to fall back through.
+	providerCancel context.CancelFunc
+	turnCancel     context.CancelFunc
 
 	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
