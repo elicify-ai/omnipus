@@ -482,3 +482,103 @@ describe('OmnipusComposer — Enter mid-stream respects inputEnabled (bugfixes3 
     expect(mockComposerSend).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * bugfixes3 follow-up: the Attach button (ComposerPrimitive.AddAttachment)
+ * and drag-drop were gated off mid-stream via `attachDisabled` — an
+ * inconsistent affordance, since PASTED images already rode a mid-turn
+ * steer correctly end-to-end. `attachDisabled` (ChatScreen.tsx) no longer
+ * includes `isStreaming`; it still includes !isConnected, isReplaying,
+ * reconnectPhase === 'gave_up', and agentRemoved. Button, drag-drop, and
+ * paste all funnel into the exact same `composerRuntime.addAttachment()`
+ * call (src/hooks/useFileUpload.ts's `commitFiles`) — there is no separate
+ * mid-stream attachment mechanism for the button/drag-drop to diverge from,
+ * so this block proves the UI-level gate is now consistent with paste
+ * rather than re-proving the (already-covered, in
+ * src/hooks/useFileUpload.test.ts and
+ * ChatScreen.harmful-upload.test.tsx) attach mechanics themselves.
+ */
+describe('OmnipusComposer — Attach button + drag-drop mid-stream (bugfixes3: attachDisabled no longer includes isStreaming)', () => {
+  it('AddAttachment is enabled while streaming', () => {
+    render(<OmnipusComposer />)
+    expect(screen.getByTestId('add-attachment')).not.toBeDisabled()
+  })
+
+  it('the drag-drop overlay appears mid-stream (drag handlers are wired, not `undefined`)', () => {
+    render(<OmnipusComposer />)
+    expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
+
+    // Drops target the composer card (ComposerPrimitive.Root's parent) — the
+    // drag/drop handlers live on OmnipusComposer's outermost wrapper div, one
+    // level further up, and the native dragover event bubbles to it. Same
+    // targeting convention as ChatScreen.harmful-upload.test.tsx's
+    // `dropFiles` helper.
+    const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
+    act(() => { fireEvent.dragOver(dropzone) })
+
+    expect(screen.getByText(/drop files here/i)).toBeInTheDocument()
+  })
+
+  it('dropping a file mid-stream attaches it via composerRuntime.addAttachment — the SAME call the button and paste use', () => {
+    const addAttachment = vi.fn(() => Promise.resolve())
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      getState: () => ({ text: '' }),
+      setText: mockSetText,
+      addAttachment,
+      subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
+    }))
+
+    render(<OmnipusComposer />)
+    const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
+    const file = new File(['hello'], 'note.txt', { type: 'text/plain' })
+
+    act(() => { fireEvent.drop(dropzone, { dataTransfer: { files: [file] } }) })
+
+    expect(addAttachment).toHaveBeenCalledTimes(1)
+    expect(addAttachment).toHaveBeenCalledWith(file)
+  })
+
+  it('isReplaying still disables the Attach button and suppresses the drag overlay', () => {
+    act(() => { useChatStore.setState({ isReplaying: true }) })
+    render(<OmnipusComposer />)
+
+    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+
+    const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
+    act(() => { fireEvent.dragOver(dropzone) })
+    expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
+  })
+
+  it("reconnectPhase 'gave_up' still disables the Attach button and suppresses the drag overlay", () => {
+    act(() => { useConnectionStore.setState({ reconnectPhase: 'gave_up' }) })
+    render(<OmnipusComposer />)
+
+    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+
+    const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
+    act(() => { fireEvent.dragOver(dropzone) })
+    expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
+  })
+
+  it('!isConnected still disables the Attach button and suppresses the drag overlay', () => {
+    act(() => { useConnectionStore.setState({ isConnected: false }) })
+    render(<OmnipusComposer />)
+
+    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+
+    const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
+    act(() => { fireEvent.dragOver(dropzone) })
+    expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
+  })
+
+  it('agentRemoved still disables the Attach button and suppresses the drag overlay', () => {
+    render(<OmnipusComposer agentRemoved />)
+
+    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+
+    const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
+    act(() => { fireEvent.dragOver(dropzone) })
+    expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
+  })
+})
