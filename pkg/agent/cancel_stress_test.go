@@ -1,4 +1,4 @@
-// Package agent — cancel_stress_test.go
+// cancel_stress_test.go
 //
 // HIGH-CONCURRENCY stress coverage for the two just-landed cancellation
 // fixes (see external_dispatch.go's "FIX 1" comment and cancel.go's
@@ -26,6 +26,7 @@
 // This is deliberately NOT a substitute for subturn_external_cancel_test.go
 // — it reuses that file's blockingExternalDriver fake (no build tag, same
 // package, always compiled) rather than duplicating it.
+
 package agent
 
 import (
@@ -138,7 +139,6 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 	// registration itself races the cascade's Range-and-fire.
 	var spawnWG sync.WaitGroup
 	for i := 0; i < total; i++ {
-		i := i
 		sessID := sessionIDs[i%numSessions]
 		spawnWG.Add(1)
 		go func() {
