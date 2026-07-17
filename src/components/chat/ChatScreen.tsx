@@ -1597,6 +1597,64 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // here is sufficient and provably correct for this app's actual mount
   // topology (verified against src/main.tsx and useCancelState.ts, not
   // assumed).
+  // Mid-turn steering send (bugfixes3 — enable mid-turn queued sends in the
+  // composer): the actual send/append mechanism used by BOTH (1) Enter
+  // pressed mid-stream, below, and (2) the mid-stream Send button rendered
+  // next to Stop, further down. Verified (not assumed — read against the
+  // installed @assistant-ui/react@0.14.14 / @assistant-ui/core@0.2.10
+  // sources under node_modules) that AssistantUI's OWN submission paths are
+  // both unusable mid-stream for this app's runtime:
+  //   - ComposerPrimitive.Input's internal Enter handling
+  //     (node_modules/@assistant-ui/react/dist/primitives/composer/
+  //     ComposerInput.js, handleKeyPress) hard-blocks submission whenever
+  //     `thread.isRunning && !thread.capabilities.queue`.
+  //   - ComposerPrimitive.Root's internal onSubmit (ComposerRoot.js) sends
+  //     via `useComposerSend()` (@assistant-ui/core's React hook), which
+  //     computes `disabled = !composer.canSend || (thread.isRunning &&
+  //     !thread.capabilities.queue)` — so the callback is `null` while
+  //     running and `handleSubmit`'s `if (!send) return` silently no-ops.
+  //     `form.requestSubmit()` therefore does nothing mid-stream.
+  // Our runtime is built via `useExternalStoreRuntime` (an ExternalStoreAdapter
+  // — see src/lib/omnipus-runtime.ts). `ExternalStoreThreadRuntimeCore`
+  // (node_modules/@assistant-ui/core/dist/runtimes/external-store/
+  // external-store-thread-runtime-core.js) hardcodes `queue: false` into
+  // `capabilities` unconditionally on every adapter update — there is no
+  // ExternalStoreAdapter option that flips it (`unstable_capabilities` only
+  // covers `copy`), so `thread.capabilities.queue` can never be true here.
+  //
+  // The fix bypasses that UI-only isRunning gate by calling the composer
+  // RUNTIME's own `.send()` instance method directly (`composerRuntime` from
+  // `useComposerRuntime()` above — a `ComposerRuntimeImpl`), NOT the
+  // `useComposerSend()` hook `ComposerPrimitive.Send`/`.Root` use internally.
+  // `ComposerRuntimeImpl.send()` (node_modules/@assistant-ui/core/dist/
+  // runtime/api/composer-runtime.js) forwards straight to
+  // `BaseComposerRuntimeCore.send()` (.../runtime/base/
+  // base-composer-runtime-core.js), which is gated ONLY by `canSend`
+  // (`!isEmpty && !isSendDisabled`) — there is no `isRunning` check anywhere
+  // in that call path, and `ExternalStoreThreadRuntimeCore.append()` →
+  // `adapter.onNew()` (src/lib/omnipus-runtime.ts's `onNew`, which forwards
+  // straight to `useChatStore.getState().sendMessage()`) has none either.
+  // This is therefore a genuine, intentional use of a real public API, not a
+  // workaround around business logic: the `isRunning` gate exists only to
+  // disable the PRESENTATIONAL button/keyboard-submit for runtimes that
+  // don't support mid-run sends — ours explicitly does (the gateway queues
+  // and injects mid-turn messages server-side), so this drives the send
+  // explicitly instead of going through the gated presentational path.
+  function submitMidStreamMessage() {
+    // Mirrors ComposerPrimitive.Root's onSubmit below: a typed client
+    // command (e.g. "/cancel") still intercepts locally instead of steering
+    // into the running turn as chat text.
+    if (slashMenu.interceptClientCommand()) return
+    // BaseComposerRuntimeCore.send() no-ops on its own `canSend` check
+    // (empty composer / isSendDisabled) — no separate emptiness guard is
+    // needed here, matching the native Enter/click-Send behavior when idle.
+    composerRuntime.send()
+    // Fix-4 mirror resync — see the identical call + comment in onSubmit
+    // below; the runtime clears its own text on a successful send without
+    // firing the textarea's onChange.
+    slashMenu.onInputChange('')
+  }
+
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Escape' && slashMenu.slashOpen && slashMenu.shouldShowSlash) {
       slashMenu.handleKeyDown(e) // closes the menu (its own Escape branch)
@@ -1618,24 +1676,38 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       return
     }
 
-    // Block Enter submission while streaming — slash/mention menu Enter
-    // still works below, but ONLY when the menu is actually VISIBLE. Fix F
-    // (bugfixes3 sign-off): gating on `slashOpen` alone was wrong —
-    // `slashOpen` can be true while the menu renders nothing at all (e.g.
-    // "/zzz" or "@zzz" typed — no match, `shouldShowSlash` is false), so a
-    // mid-stream Enter in that state slipped past this guard even though
-    // there was no menu to consume it. `ComposerPrimitive.Root`'s onSubmit
-    // (below, in the JSX) still preventDefaults while isStreaming
-    // regardless, so this was defense-in-depth, not the only guard — but
-    // the guard's own condition should actually say "block Enter unless the
-    // menu is genuinely showing and about to consume the Enter itself."
-    if (e.key === 'Enter' && isStreaming && !(slashMenu.slashOpen && slashMenu.shouldShowSlash)) {
+    // Mid-turn steering send: Enter pressed WHILE a turn is streaming no
+    // longer swallows the keystroke — it sends, and the gateway steers the
+    // message into the RUNNING turn (see submitMidStreamMessage's doc
+    // comment above for the full, verified mechanism). Still deferred to
+    // the slash/mention menu below when it's actually VISIBLE (menu-open
+    // Enter selects the highlighted row, not "send") — `slashOpen` alone is
+    // not enough (Fix F, bugfixes3 sign-off): it can be true while the menu
+    // renders nothing at all (e.g. "/zzz"/"@zzz" typed — no match,
+    // `shouldShowSlash` false), so this checks `shouldShowSlash` too. Also
+    // deferred on Shift+Enter — that is universally "insert a newline" in
+    // this composer (mirrors useSlashMenu.ts's own Fix 8 for the in-menu
+    // case), including mid-stream: falls through to the textarea's native
+    // handling below via `slashMenu.handleKeyDown(e)` (a no-op when the menu
+    // isn't open) and, past that, the internal ComposerPrimitive.Input
+    // handling, which inserts the newline.
+    if (e.key === 'Enter' && isStreaming && !e.shiftKey && !(slashMenu.slashOpen && slashMenu.shouldShowSlash)) {
       e.preventDefault()
+      submitMidStreamMessage()
       return
     }
 
     slashMenu.handleKeyDown(e)
   }
+
+  // Mid-turn Send affordance gate: the plain Send button rendered next to
+  // Stop while streaming (below), and the "Sends into the running response"
+  // hint line, both only show once there's actually something to steer.
+  // Reuses the slash-menu's own live text mirror (`inputValue`, kept in sync
+  // via the textarea's onChange) rather than a fresh subscription — trimmed
+  // to match `canSend`'s own emptiness semantics (whitespace-only text is
+  // not sendable).
+  const hasComposerText = slashMenu.inputValue.trim().length > 0
 
   return (
     // @container on the composer root: TokenCounter's `@2xl:flex` gate in the
@@ -2029,11 +2101,19 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         <ComposerPrimitive.Root
           className="flex items-end gap-2 p-2"
           onSubmit={(e) => {
-            // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
-            if (isStreaming) {
-              e.preventDefault()
-              return
-            }
+            // Mid-turn steering: this native form-submit path is NEVER
+            // actually reached while streaming (verified — see
+            // submitMidStreamMessage's doc comment above): Enter mid-stream
+            // is fully handled by handleKeyDown's own branch (which calls
+            // e.preventDefault(), so ComposerPrimitive.Input's internal
+            // handleKeyPress — the only thing that would call
+            // form.requestSubmit() — never runs), and the mid-stream Send
+            // button below is `type="button"`, so a click never fires this
+            // form's submit event either. The isStreaming preventDefault
+            // that used to sit here was therefore removed for coherence, not
+            // because it was blocking a live path — leaving it in place
+            // would misleadingly suggest Enter/Send still route through here
+            // while a turn is running.
             // Send-path interception: if the typed text is exactly a client-delivery
             // slash command (e.g. "/new", "/help", "/model", "/cancel"), handle it
             // locally and prevent it from reaching the backend. This converges the
@@ -2186,35 +2266,73 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // slot mid-stream (see the composer tab-ring map in
             // ChatControls.tsx) — it must keep Send's slot, not default to 0,
             // or the ring silently drops a stop the whole time a turn is
-            // streaming.
-            <button tabIndex={6}
-              type="button"
-              data-testid="stop-btn"
-              onClick={() => {
-                // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
-                // so the UI updates within the same React render tick, before the
-                // cancel network round-trip starts (no perceived latency). It does
-                // NOT guard on isStreaming — see useCancelState's doc comment for
-                // why guarding here would silently no-op on the render/click race.
-                cancelState.cancelUnconditional()
-              }}
-              className={cn(
-                // h-9 + mb-0.5: same footprint as the send button it replaces
-                // mid-stream (keeps the row from jumping on morph).
-                'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
-                cancelState.stopLabel === 'stopping'
-                  ? 'px-3 h-9 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                  : 'w-9 h-9',
-                isStreaming
-                  ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                  : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
+            // streaming. Mid-turn steering (below): the plain Send button
+            // that now sits next to Stop shares this same slot 6 (both are
+            // "the send/stop action cluster") — cancel must stay reachable
+            // in exactly one keystroke even when steering is also available,
+            // so Stop keeps its own dedicated element rather than being
+            // folded into a menu/toggle.
+            <>
+              <button tabIndex={6}
+                type="button"
+                data-testid="stop-btn"
+                onClick={() => {
+                  // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
+                  // so the UI updates within the same React render tick, before the
+                  // cancel network round-trip starts (no perceived latency). It does
+                  // NOT guard on isStreaming — see useCancelState's doc comment for
+                  // why guarding here would silently no-op on the render/click race.
+                  cancelState.cancelUnconditional()
+                }}
+                className={cn(
+                  // h-9 + mb-0.5: same footprint as the send button it replaces
+                  // mid-stream (keeps the row from jumping on morph).
+                  'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
+                  cancelState.stopLabel === 'stopping'
+                    ? 'px-3 h-9 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                    : 'w-9 h-9',
+                  isStreaming
+                    ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
+                )}
+                aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
+                title="Stop (Escape)"
+              >
+                <Stop size={15} weight="fill" />
+                {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
+              </button>
+              {/* Mid-turn steering Send — a PLAIN button, deliberately not
+                  ComposerPrimitive.Send: verified (see submitMidStreamMessage's
+                  doc comment above) that the primitive's own useComposerSend()
+                  hook hard-disables it whenever thread.isRunning &&
+                  !thread.capabilities.queue, and our ExternalStoreAdapter
+                  runtime always reports capabilities.queue === false — so the
+                  primitive would render permanently disabled here no matter
+                  what `disabled` prop it's given. `type="button"` (not
+                  "submit"): a click must NOT fire ComposerPrimitive.Root's
+                  form submit event — submitMidStreamMessage() drives the send
+                  directly. Only rendered once there's text to steer — an
+                  empty composer has nothing to send, and Stop alone already
+                  covers "I have nothing more to add, stop the response." */}
+              {hasComposerText && (
+                <button tabIndex={6}
+                  type="button"
+                  data-testid="chat-send-mid-stream"
+                  disabled={!inputEnabled}
+                  onClick={submitMidStreamMessage}
+                  className={cn(
+                    'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
+                    inputEnabled
+                      ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)]'
+                      : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
+                  )}
+                  aria-label="Send into running response"
+                  title="Send — steers into the running response"
+                >
+                  <PaperPlaneRight size={15} weight="bold" />
+                </button>
               )}
-              aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
-              title="Stop (Escape)"
-            >
-              <Stop size={15} weight="fill" />
-              {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
-            </button>
+            </>
           ) : (
             // FR-I-014: also disabled during replay so user cannot send out-of-order.
             // Fix 3: when reconnecting (fast or slow), allow send — messages go to
@@ -2282,6 +2400,23 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             </ComposerPrimitive.Send>
           )}
         </ComposerPrimitive.Root>
+
+        {/* Mid-turn steering affordance: the empty-composer case already says
+            "Waiting for response..." via the placeholder (composerPlaceholder,
+            above) — but a NATIVE placeholder only shows on an empty input, so
+            once the user has actually typed something mid-stream it goes
+            invisible right when the affordance matters most. This small,
+            muted line (tokens only, no emoji) fills that gap: it appears
+            only once there's live text to steer with, right where the Send
+            button next to Stop just appeared. */}
+        {isStreaming && hasComposerText && (
+          <div
+            data-testid="mid-stream-send-hint"
+            className="px-3 pb-1.5 -mt-1 text-[10px] text-[var(--color-muted)]"
+          >
+            Sends into the running response
+          </div>
+        )}
 
         {/* Pending attachments — native AssistantUI composer attachments. Shows a
             chip for each attached file (via the attach (+) button, drag-drop, or

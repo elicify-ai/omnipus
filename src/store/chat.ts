@@ -1680,10 +1680,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const { activeSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
 
-      if (isStreaming) {
-        useConnectionStore.getState().setConnectionError('Please wait — a response is still generating.')
-        return
-      }
+      // Mid-turn steering (bugfixes3 gate 4): sendMessage USED to hard-return
+      // here with a 'Please wait — a response is still generating.' toast
+      // whenever isStreaming was true — the SPA composer was the only surface
+      // in the app that couldn't send mid-turn; channels already deliver
+      // mid-turn messages today, and the gateway queues them per-scope,
+      // injecting each one into the turn that's already RUNNING (between
+      // tool calls — any still-in-flight tool calls for that turn are
+      // skipped server-side with "Skipped due to queued user message"). See
+      // the `if (isStreaming)` branch inside the `activeSessionId !== null`
+      // block below for how a mid-turn send differs from a new-turn send (no
+      // second assistant placeholder is minted; `isStreaming` is left alone).
+      //
+      // The offline check immediately below intentionally still runs FIRST,
+      // unconditional on isStreaming: mid-turn steering must NOT bypass
+      // offline buffering — if the socket is down, a message typed mid-turn
+      // queues into outboundQueue exactly like an idle-state message and
+      // drains once drainOutboundQueue() reconnects (maybeDrainNext still
+      // waits for !isStreaming before popping that queue — untouched,
+      // separate mechanism from this steering path).
       if (!connection || !isConnected) {
         // WS is disconnected — buffer the message for when the connection
         // recovers rather than losing it silently or showing a hard error.
@@ -1710,6 +1725,62 @@ export const useChatStore = create<ChatStore>((set, get) => {
           status: 'done',
           ...(attachments.length > 0 ? { media: attachments } : {}),
         }
+
+        // Mid-turn steering send: a turn is already streaming, so this
+        // message does NOT start a new turn — the gateway injects it into
+        // the turn that's already running (between tool calls). The existing
+        // streaming assistant bubble (the last message in the thread) stays
+        // live and keeps receiving content for THAT SAME turn. This path
+        // therefore:
+        //   - appends ONLY the user bubble (no second assistant placeholder —
+        //     minting one here would render a second, permanently-empty
+        //     "streaming" bubble that never receives tokens, since the
+        //     backend keeps streaming into the FIRST one, not this one);
+        //   - leaves `isStreaming` untouched (already true; resetting it here
+        //     would race the in-flight turn's own done/error frame);
+        //   - skips the prevAssistantIdx tool_calls-baking logic below — that
+        //     logic finalizes tool_calls onto a turn that has ALREADY ENDED
+        //     (it bakes the live toolCalls state onto the previous assistant
+        //     message right as a NEW turn begins); this turn hasn't ended,
+        //     so there is nothing to finalize yet.
+        // The appended user message lands AFTER the still-streaming assistant
+        // message in message order, which is the correct chronology for a
+        // steering message — it was sent while that assistant turn was still
+        // producing output.
+        if (isStreaming) {
+          withBucket(activeSessionId, (b) => {
+            const allMsgs = [...getMessages(b), userMsg]
+            return { ...applyMessageArray(allMsgs, b), lastUserMessageAt: Date.now() }
+          })
+
+          const steerPayload = {
+            type: 'message' as const,
+            content,
+            session_id: activeSessionId,
+            agent_id: activeAgentId ?? undefined,
+            ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+            ...metadataFrame,
+          }
+          get()._validateOutboundFrame(steerPayload, activeSessionId)
+          const steerSent = connection.send(steerPayload)
+
+          if (!steerSent) {
+            // The in-flight turn is unaffected by a steering-send failure —
+            // only THIS message failed to reach the gateway. Mark just the
+            // user bubble as 'error' (Retry affordance) and leave
+            // `isStreaming` alone; there is no assistant placeholder to roll
+            // back because a mid-turn steering send never creates one.
+            withBucket(activeSessionId, (b) => produce(b, (draft) => {
+              const um = draft.messagesById[userMsg.id]
+              if (um) { um.status = 'error' }
+            }) as Partial<SessionChatState>)
+            useConnectionStore.getState().setConnectionError(
+              'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
+            )
+          }
+          return
+        }
+
         const assistantMsg: ChatMessage = {
           id: generateId(),
           session_id: activeSessionId,
