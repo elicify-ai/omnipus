@@ -450,8 +450,8 @@ func TestManagedExecOpts_HeadfulPipeForVideoCapable(t *testing.T) {
 	// --remote-debugging-pipe + swiftshader); the earlier headful-on-Xvfb design
 	// failed over the CDP pipe ("no browser is open -32000").
 	video := managedExecAllocatorOpts(cfg, managedLaunchParams{VideoCapable: true, Display: ":99"})
-	if !hasFlag(video.Args, "--headless=new") {
-		t.Errorf("video-capable launch must use --headless=new (full Chrome, new headless); got %v", video.Args)
+	if !hasFlag(video.Args, "--headless") {
+		t.Errorf("video-capable launch must run headless (full Chrome, new headless renderer); got %v", video.Args)
 	}
 	if !hasFlag(video.Args, "--enable-unsafe-swiftshader") {
 		t.Errorf("video-capable launch must enable SwiftShader software rendering; got %v", video.Args)

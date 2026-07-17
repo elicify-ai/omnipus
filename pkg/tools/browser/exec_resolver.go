@@ -132,10 +132,20 @@ func managedExecAllocatorOpts(cfg BrowserConfig, params managedLaunchParams) man
 	// Target.createTarget returns "no browser is open (-32000)" and the pipe drops
 	// — the video path never actually launched. New-headless has an implicit
 	// browser, so createTarget just works, with none of the Xvfb/GTK/dbus deps.
-	if params.VideoCapable {
-		args = append(args, "--headless=new", "--hide-scrollbars")
-	} else {
-		args = append(args, "--headless", "--hide-scrollbars", "--mute-audio")
+	// Plain "--headless" (NOT "--headless=new"): on Chrome 132+ plain --headless
+	// already selects the new headless renderer, and it is what both Playwright
+	// and this project's own passing coordinator tests use with the full Chrome
+	// build. Empirically "--headless=new" behaves differently over the CDP pipe —
+	// Target.createTarget with a browserContextId returns "no browser is open
+	// (-32000)" — whereas plain "--headless" creates per-agent browser contexts
+	// fine (TestCoordinator_TwoAgents_OneChrome_TwoContexts). Video-capable and
+	// non-video launches use the SAME headless renderer; the only difference is
+	// that video-capable is the full Chrome build (full-quality screencast) and
+	// wires PULSE_SERVER for audio, whereas non-video keeps the mute-audio
+	// companion.
+	args = append(args, "--headless", "--hide-scrollbars")
+	if !params.VideoCapable {
+		args = append(args, "--mute-audio")
 	}
 
 	// Chromium's zygote sandbox depends on new user namespaces, which the
