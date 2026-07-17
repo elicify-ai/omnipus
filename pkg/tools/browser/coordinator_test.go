@@ -443,25 +443,26 @@ func TestManagedExecOpts_HeadfulPipeForVideoCapable(t *testing.T) {
 		}
 		return false
 	}
-	envHas := func(env []string, want string) bool {
-		for _, e := range env {
-			if e == want {
-				return true
-			}
-		}
-		return false
-	}
 
-	// Video-capable: headful + DISPLAY + no port.
+	// Video-capable: full Chrome in NEW headless mode (--headless=new) +
+	// SwiftShader software rendering, NO DISPLAY (no Xvfb/X server), no port.
+	// This is Playwright's proven headless-video approach (--headless +
+	// --remote-debugging-pipe + swiftshader); the earlier headful-on-Xvfb design
+	// failed over the CDP pipe ("no browser is open -32000").
 	video := managedExecAllocatorOpts(cfg, managedLaunchParams{VideoCapable: true, Display: ":99"})
-	if hasFlag(video.Args, "--headless") {
-		t.Errorf("video-capable launch must be HEADFUL (no --headless); got %v", video.Args)
+	if !hasFlag(video.Args, "--headless=new") {
+		t.Errorf("video-capable launch must use --headless=new (full Chrome, new headless); got %v", video.Args)
+	}
+	if !hasFlag(video.Args, "--enable-unsafe-swiftshader") {
+		t.Errorf("video-capable launch must enable SwiftShader software rendering; got %v", video.Args)
 	}
 	if !hasFlag(video.Args, "--window-size=1280,720") {
 		t.Errorf("video-capable launch must set --window-size=1280,720; got %v", video.Args)
 	}
-	if !envHas(video.Env, "DISPLAY=:99") {
-		t.Errorf("video-capable launch must set DISPLAY in env; got %v", video.Env)
+	for _, e := range video.Env {
+		if strings.HasPrefix(e, "DISPLAY=") {
+			t.Errorf("video-capable launch must NOT set DISPLAY (new-headless renders offscreen); got %v", video.Env)
+		}
 	}
 	if hasPrefix(video.Args, "--remote-debugging-port") {
 		t.Errorf("video-capable launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v", video.Args)

@@ -117,12 +117,24 @@ func managedExecAllocatorOpts(cfg BrowserConfig, params managedLaunchParams) man
 		"--window-size=1280,720",
 	}
 
-	// Headful (video-capable) vs headless-shell (everything else). Video-capable
-	// installs render into the Xvfb framebuffer with NO --headless so CDP
-	// Page.startScreencast has real pixels to capture (FR-001). The headless
-	// path keeps Puppeteer's hide-scrollbars/mute-audio companions (chromedp's
-	// Headless option sets all three).
-	if !params.VideoCapable {
+	// Both paths run HEADLESS over the CDP pipe. The video-capable path uses the
+	// full Chrome build in NEW headless mode (--headless=new): a full renderer
+	// that supports CDP Page.startScreencast at full quality with NO display,
+	// NO Xvfb, and NO GTK — exactly how Playwright records video on headless CI
+	// (verified: its Chrome runs --headless + --remote-debugging-pipe +
+	// --enable-unsafe-swiftshader, no X server). This is NOT chrome-headless-shell
+	// (the stripped, low-fps binary ADR-044 Gate-0 rejected) — it is the FULL
+	// Chrome build run headless, which is why it renders at full quality.
+	//
+	// An earlier design ran the video path HEADFUL (no --headless) on an Xvfb
+	// virtual display. That fails over the CDP pipe on real hardware: headful
+	// Chrome needs a GTK window it cannot create there, so the coordinator's first
+	// Target.createTarget returns "no browser is open (-32000)" and the pipe drops
+	// — the video path never actually launched. New-headless has an implicit
+	// browser, so createTarget just works, with none of the Xvfb/GTK/dbus deps.
+	if params.VideoCapable {
+		args = append(args, "--headless=new", "--hide-scrollbars")
+	} else {
 		args = append(args, "--headless", "--hide-scrollbars", "--mute-audio")
 	}
 
@@ -138,15 +150,15 @@ func managedExecAllocatorOpts(cfg BrowserConfig, params managedLaunchParams) man
 		"XDG_CONFIG_HOME=" + filepath.Join(chromeHome, "config"),
 		"XDG_CACHE_HOME=" + filepath.Join(chromeHome, "cache"),
 	}
-	// DISPLAY only for the headful video path; a stray DISPLAY on the headless
-	// path would make Chrome try to reach an X server it does not need.
-	if params.VideoCapable && params.Display != "" {
-		env = append(env, "DISPLAY="+params.Display)
-	}
-	// PULSE_SERVER only for the headful video path, same guard as DISPLAY: a
-	// stray PULSE_SERVER on the headless-shell path would make Chrome try to
-	// reach an audio sink it does not need. Empty PulseServer (no audio
-	// sidecar, or sidecar unhealthy) means video-only — never appended.
+	// No DISPLAY: new-headless Chrome renders offscreen (software/SwiftShader),
+	// so the video path needs no X server / Xvfb at all. params.Display is
+	// retained on the struct for now but deliberately unused here.
+	//
+	// PULSE_SERVER is still wired for the video-capable path so the ADR-044
+	// phase-2 encoder page's getUserMedia can reach the PulseAudio null-sink
+	// monitor (audio capture is independent of the display — a headless Chrome
+	// still routes audio to PULSE_SERVER). Empty PulseServer (no audio sidecar,
+	// or unhealthy) means video-only — never appended.
 	if params.VideoCapable && params.PulseServer != "" {
 		env = append(env, "PULSE_SERVER="+params.PulseServer)
 	}
