@@ -2,8 +2,8 @@
 //
 // HIGH-CONCURRENCY stress coverage for the just-landed background-bash
 // cancellation fix (see session.go's KillAllForSession "canceled" relabel,
-// the new SessionManager.KillAll(), and pkg/agent/cancel.go's RequestCancel
-// -> hooks.KillBackgroundSessions -> KillAllForSession wiring, backing
+// SessionManager.KillAll(), and pkg/agent/cancel.go's RequestCancel ->
+// hooks.KillBackgroundSessions -> KillAllForSession wiring, backing
 // AgentLoop.Close()'s KillAll() shutdown reaper).
 //
 // The correctness tests (session_kill_all_for_session_test.go, session_test.go)
@@ -13,20 +13,41 @@
 // callers targeting the SAME owner session — a double-kill race) against
 // MANY concurrent KillAll callers (mirroring an overlapping AgentLoop.Close()
 // shutdown reaper) over one shared SessionManager and its ProcessSessions,
-// plus concurrent List()/Get() read traffic, under `go test -race`, to catch:
-//   - a data race on SessionManager.sessions (the map) or a ProcessSession's
-//     internal fields
-//   - a deadlock in the two-phase locking pattern (sm.mu.RLock -> release ->
-//     per-session s.mu.Lock) that KillAllForSession/KillAll/cleanupOldSessions
-//     all share
+// plus concurrent List()/Get() read traffic, to catch:
+//   - a lost-cancel timing race: a session left "running" forever because
+//     every concurrent caller lost the two-phase (sm.mu.RLock -> release ->
+//     per-session s.mu.Lock) race against some other caller and none of them
+//     actually applied the kill — caught by asserting every session reaches
+//     IsDone() after the wave completes (see the loop near the end of the
+//     test below);
+//   - a deadlock in that same two-phase locking pattern, which
+//     KillAllForSession/KillAll/cleanupOldSessions all share — caught by the
+//     30s/10s watchdog timeouts below, which fail loud (t.Fatal) rather than
+//     hang the whole test binary;
 //   - a double-kill panic or an inconsistent terminal state left behind by
-//     two callers racing to kill the same session
+//     two callers racing to kill the same session — caught by recoverPanic
+//     below (t.Errorf, not t.Fatal, so one goroutine's panic doesn't abort
+//     the others mid-wave) and by the terminal-status/counter accounting at
+//     the end.
+//
+// NOTE: this is NOT `go test -race` coverage, despite the name "stress" and
+// the concurrency-bug list above sounding like it. The Go race detector
+// needs cgo (CGO_ENABLED=1); this project builds with CGO_ENABLED=0
+// everywhere (see CLAUDE.md's Tech Constraints), so `-race` is unavailable
+// in this repo's CI and is never actually run against this file. What this
+// test catches is purely Go-level and assertion-driven: lost updates/lost
+// cancels under contention, deadlocks (via the watchdog), and panics (via
+// recoverPanic) — NOT a race detector's happens-before analysis. A genuine
+// data race on SessionManager.sessions or a ProcessSession's fields would
+// still need `-race` (or a cgo-enabled build) to catch directly; this file
+// is not a substitute for that, only a best-effort outcome-level check that
+// runs in this project's actual constraints.
 //
 // Uses fake, deliberately out-of-range PIDs (fakeUnusedPIDBase, defined in
 // session_kill_all_for_session_test.go, same package, no build tag) so
 // killProcessGroup's underlying syscall.Kill(-pid, ...) reliably returns
 // ESRCH (treated as success) rather than spawning real child processes — the
-// race under test is in Go-level locking, not OS process management.
+// timing race under test is in Go-level locking, not OS process management.
 package tools
 
 import (

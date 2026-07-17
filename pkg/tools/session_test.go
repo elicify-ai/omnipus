@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -125,8 +126,9 @@ func TestSessionManager_KillAll(t *testing.T) {
 	sm.Add(done1)
 	sm.Add(killed1)
 
-	killed := sm.KillAll()
+	killed, failed := sm.KillAll()
 	require.Equal(t, 2, killed, "KillAll must kill exactly the running sessions")
+	require.Equal(t, 0, failed, "no kill should fail in this scenario")
 
 	got1, err := sm.Get("run-1")
 	require.NoError(t, err)
@@ -150,7 +152,41 @@ func TestSessionManager_KillAll(t *testing.T) {
 // gateway that never spawned any background work shuts down in.
 func TestSessionManager_KillAll_EmptyManagerIsNoOp(t *testing.T) {
 	sm := NewSessionManager()
-	require.Equal(t, 0, sm.KillAll())
+	killed, failed := sm.KillAll()
+	require.Equal(t, 0, killed)
+	require.Equal(t, 0, failed)
+}
+
+// TestSessionManager_KillAll_KillFailure_CountsAsFailed forces the Kill()
+// failure branch via the killProcessGroupFn test seam (a real fake PID
+// always succeeds via ESRCH-as-success — see killProcessGroup's own doc
+// comment — so there is no way to reach this branch with a real syscall in
+// a test environment) and asserts the failure is counted in `failed`, NOT
+// silently swallowed as before (7-reviewer gate finding: kill failures were
+// previously invisible outside a bare slog.Warn).
+func TestSessionManager_KillAll_KillFailure_CountsAsFailed(t *testing.T) {
+	origKillFn := killProcessGroupFn
+	t.Cleanup(func() { killProcessGroupFn = origKillFn })
+	wantErr := errors.New("forced kill failure for test")
+	killProcessGroupFn = func(pid int) error { return wantErr }
+
+	sm := NewSessionManager()
+	sess := &ProcessSession{
+		ID:        "fail-shutdown-1",
+		Status:    "running",
+		PID:       fakeUnusedPIDBase + 901,
+		StartTime: time.Now().Unix(),
+	}
+	sm.Add(sess)
+
+	killed, failed := sm.KillAll()
+	require.Equal(t, 0, killed, "a failed kill must not be counted as killed")
+	require.Equal(t, 1, failed, "a failed kill must be counted as failed")
+
+	got, err := sm.Get("fail-shutdown-1")
+	require.NoError(t, err)
+	require.Equal(t, "running", got.GetStatus(),
+		"status must stay running when the kill itself failed — no relabel on failure")
 }
 
 func TestProcessSession_ToSessionInfo(t *testing.T) {

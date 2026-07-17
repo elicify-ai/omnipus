@@ -2841,10 +2841,41 @@ func (al *AgentLoop) Close() {
 	// is distinct from) RequestCancel's owner-scoped KillAllForSession
 	// cascade — that fires per-session on an explicit user cancel; this fires
 	// unconditionally, process-wide, on whole-process teardown.
-	if killed := tools.GetSharedSessionManager().KillAll(); killed > 0 {
-		logger.InfoCF("agent", "Close: killed background sessions on shutdown",
-			map[string]any{"killed": killed})
-	}
+	//
+	// LOAD-BEARING PRECONDITION: tools.GetSharedSessionManager() returns a
+	// PROCESS-WIDE singleton (a package-level var in pkg/tools) — it is NOT
+	// scoped to this *AgentLoop. This reaper is only correct under the
+	// assumption that a process hosts AT MOST ONE live *AgentLoop at a time,
+	// which holds for the omnipus gateway/CLI binary (every real entry
+	// point constructs exactly one). It does NOT hold inside this package's
+	// own test suite, where many tests each construct their own *AgentLoop
+	// and Close() it independently (often in parallel) — every one of those
+	// Close() calls reaps the SAME shared manager. This is harmless (a
+	// session already killed by another test's Close() is silently skipped
+	// — see KillAll's two-phase locking) but means "killed" here can never
+	// be read as "sessions THIS AgentLoop's own agents started" in a test
+	// context; only in the single-AgentLoop production process is that
+	// reading correct.
+	//
+	// Panic-guarded (mirrors cancel.go's PHASE B/C timer recover pattern):
+	// the shared SessionManager is reached via a package boundary this
+	// method does not otherwise control, so a panic inside it must not skip
+	// the teardown steps that follow (MCP manager close, agent memory
+	// stores, registry close, hooks, event bus, exec proxy, idle tickers,
+	// orphan watches) — a torn-down AgentLoop that leaked those would be
+	// worse than a background-kill step that failed loudly and moved on.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.ErrorCF("agent", "Close: panic recovered while killing background sessions",
+					map[string]any{"panic": fmt.Sprintf("%v", r), "stack": string(debug.Stack())})
+			}
+		}()
+		if killed, failed := tools.GetSharedSessionManager().KillAll(); killed > 0 || failed > 0 {
+			logger.InfoCF("agent", "Close: killed background sessions on shutdown",
+				map[string]any{"killed": killed, "failed": failed})
+		}
+	}()
 
 	mcpManager := al.mcp.takeManager()
 
@@ -4067,18 +4098,24 @@ func (al *AgentLoop) processTaskDirect(
 //     vanished from the transcript on a mid-run restart).
 //   - GetActiveTurn/GetActiveAgentIDs now report this run like any other.
 //   - A RequestCancel against this session (transcriptSessionID == taskChatID)
-//     can reach and ClaimCancel this turnState. Verified tolerant: ts.al is
-//     set (FIX 5) but ts.cancelFunc/ts.providerCancel are both left nil (this
-//     dispatch path has no native LLM call to cancel and no delegate/
-//     create_task tools that could spawn a child turnState under
-//     ts.childTurnIDs) — every cancel.go/steering.go call site that touches
-//     those fields nil-checks first, so a cancel here safely claims
-//     cancelFired, fires the turn_canceled transcript callback, and no-ops
-//     the graceful/hard escalation timers rather than panicking. It does NOT
-//     actually stop the already-dispatched external CLI process (no
-//     cancelFunc wired to runExternalCLISubTurn's ctx) — a best-effort,
-//     observability-only posture, the same one runner/consent.go already
-//     documents for external-CLI permission requests.
+//     can reach and ClaimCancel this turnState. STALE-COMMENT CORRECTION
+//     (doc-only, cancel-propagation FIX 1): this used to say ts.cancelFunc/
+//     ts.providerCancel stay nil for this dispatch path — that is no longer
+//     true. runExternalCLISubTurn (external_dispatch.go) now calls
+//     childTS.setTurnCancel(cancel) / childTS.setProviderCancel(cancel) on
+//     THIS SAME ts (it is passed in as runExternalCLISubTurn's childTS
+//     argument below), wiring both fields to the context.CancelFunc that
+//     actually tears down the dispatched external-CLI subprocess (every
+//     driver binds the OS child via exec.CommandContext(runCtx, ...), so
+//     canceling that func kills the subprocess outright — see FIX 1's own
+//     doc comment at that call site for the full rationale). So a
+//     RequestCancel reaching this turnState now does more than update
+//     transcript/audit bookkeeping: it ALSO cancels the real external-CLI
+//     process, the same as the native delegation path. The remaining true
+//     part of the original claim: this dispatch still has no
+//     delegate/create_task tools that could populate ts.childTurnIDs, so the
+//     hard-abort child-cascade branch is still unreachable here — that part
+//     of the "no-panic" reasoning is unaffected.
 func (al *AgentLoop) processTaskDirectExternalCLI(
 	ctx context.Context,
 	liveAgent *AgentInstance,
@@ -4134,12 +4171,24 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// doc comment above, which already (incorrectly, until this fix)
 	// described the callback as firing.
 	//
-	// Finish(false) is safe to add here: ts.cancelFunc/ts.providerCancel are
-	// both nil (nil-checked internally by Finish), isHardAbort is false so
-	// the child-cascade branch is unreachable, and Finish's closeOnce.Do +
-	// the cancelFired-swap-then-nil-check around onCancelFinish make a
-	// second Finish call (e.g. a concurrent InterruptSessionHard elsewhere
-	// calling Finish(true) on this same ts via steering.go) idempotent — the
+	// Finish(false) is safe to add here: at THIS point (construction, right
+	// before registerActiveTurn ran above) ts.cancelFunc/ts.providerCancel
+	// are still nil — cancel-propagation FIX 1 (external_dispatch.go's
+	// runExternalCLISubTurn) only wires them once dispatch actually starts,
+	// below. By the time this function returns and the deferred Finish(false)
+	// below actually RUNS, those fields are typically non-nil (set to the
+	// dispatch's own context.CancelFunc) — see this function's top doc
+	// comment's STALE-COMMENT CORRECTION note for the full explanation. That
+	// does not change this safety argument: Finish's cancelFunc branch
+	// (`if ts.cancelFunc != nil { ts.cancelFunc() }`) simply invokes it,
+	// which is exactly what dispatchCancel's own `defer dispatchCancel()`
+	// below already guarantees happens — canceling an already-canceled
+	// context is a no-op, so calling it twice (once via that defer, once via
+	// Finish) is harmless. isHardAbort is false so the child-cascade branch
+	// is unreachable, and Finish's closeOnce.Do + the
+	// cancelFired-swap-then-nil-check around onCancelFinish make a second
+	// Finish call (e.g. a concurrent InterruptSessionHard elsewhere calling
+	// Finish(true) on this same ts via steering.go) idempotent — the
 	// identical safety runTurn's own `defer ts.Finish(false)` already relies
 	// on for the hard-abort-then-graceful-defer sequence (loop.go, "closeOnce.Do
 	// inside Finish makes repeated Finish calls safe" comment).

@@ -49,6 +49,21 @@ type CancelOutcome struct {
 	Fired       bool     // true if a turn was actually targeted (ClaimCancel succeeded)
 	Descendants []string // turn IDs canceled (parent + sub-turns)
 	TurnID      string   // root turn ID; empty when Fired is false
+
+	// BackgroundSessionsKilled and BackgroundSessionsFailed report the
+	// hooks.KillBackgroundSessions cascade's outcome (FR-B10/FR-B11/FR-B14).
+	// Populated UNCONDITIONALLY — regardless of Fired — because the cascade
+	// itself fires unconditionally too (see the call site's doc comment): a
+	// `bash run_in_background=true` job's own turn ends immediately, so the
+	// MOST COMMON way a user cancels it is with no active turn left to
+	// claim (Fired stays false), and callers (the web WS handler, the
+	// scheduled-run deadline watcher) need these counts to give the user/
+	// operator feedback even on that no-active-turn path — see
+	// pkg/gateway/websocket.go's handleCancel and pkg/gateway/schedules.go's
+	// watchDeadline, both of which log/notify on BackgroundSessionsKilled >
+	// 0 even when Fired is false.
+	BackgroundSessionsKilled int
+	BackgroundSessionsFailed int
 }
 
 // CancelHooks lets callers inject transport-specific side-effects. All fields
@@ -80,15 +95,21 @@ type CancelHooks struct {
 	// background work sees no behavior change — this hook is a no-op in that
 	// case, not an error.
 	//
-	// Returns the count of background sessions actually killed so
-	// RequestCancel can (a) emit its own turn.cancel.background_killed audit
-	// event unconditionally, and (b) thread the count into the turn_canceled
-	// audit event's fields map (background_sessions_killed) on the
-	// ClaimCancel-gated path. Before this, the cascade had no audit trail of
-	// its own — a kill failure surfaced only as a slog.Warn deep in
-	// pkg/tools/session.go, uncorrelated with any audit event a security
-	// reviewer would actually go looking at.
-	KillBackgroundSessions func(sessionID string) int
+	// Returns (killed, failed): killed is the count of background sessions
+	// actually killed, failed is the count that were RUNNING and eligible but
+	// whose kill call itself failed (the underlying syscall failing, not a
+	// benign lost-race — see tools.SessionManager.KillAllForSession's doc
+	// comment for that distinction). RequestCancel uses both to (a) emit its
+	// own turn.cancel.background_killed audit event — gated on killed>0 ||
+	// failed>0 so a cancel that finds nothing to kill does not emit a no-op
+	// audit row — carrying background_sessions_failed alongside
+	// background_sessions_killed, and (b) thread both counts into the
+	// turn_canceled audit event's fields map on the ClaimCancel-gated path.
+	// Before the failed count was added, a kill failure was invisible outside
+	// a slog.Warn deep in pkg/tools/session.go, uncorrelated with any audit
+	// event a security reviewer would actually go looking at — contradicting
+	// this very event's own doc comment below.
+	KillBackgroundSessions func(sessionID string) (killed, failed int)
 }
 
 // RequestCancel is the canonical cancel entry point. All four cancel surfaces
@@ -186,15 +207,26 @@ func (al *AgentLoop) RequestCancel(
 	// ClaimCancel-gated path below and a background-only cancel (no active
 	// turn at all) would otherwise leave no audit trail whatsoever.
 	var backgroundSessionsKilled int64
+	var backgroundSessionsFailed int64
 	if sessionID != "" && hooks.KillBackgroundSessions != nil {
-		killed := hooks.KillBackgroundSessions(sessionID)
+		killed, failed := hooks.KillBackgroundSessions(sessionID)
 		atomic.StoreInt64(&backgroundSessionsKilled, int64(killed))
-		audit.Emit(ctx, auditLogger, audit.EventTurnCancelBackgroundKilled, audit.SeverityInfo, map[string]any{
-			"session_id":                 sessionID,
-			"canceller_user":             canceller.UserID,
-			"canceller_channel":          canceller.Channel,
-			"background_sessions_killed": killed,
-		})
+		atomic.StoreInt64(&backgroundSessionsFailed, int64(failed))
+		// Gate emission on killed>0 || failed>0 (architect finding): a
+		// duplicate/no-op cancel that finds no background work at all (the
+		// common case — most cancels target a session with nothing running
+		// in the background) must not emit a no-op audit row. The outcome
+		// counts themselves are still populated on CancelOutcome
+		// unconditionally below, regardless of this gate.
+		if killed > 0 || failed > 0 {
+			audit.Emit(ctx, auditLogger, audit.EventTurnCancelBackgroundKilled, audit.SeverityInfo, map[string]any{
+				"session_id":                 sessionID,
+				"canceller_user":             canceller.UserID,
+				"canceller_channel":          canceller.Channel,
+				"background_sessions_killed": killed,
+				"background_sessions_failed": failed,
+			})
+		}
 	}
 
 	// --- Abuse detection (always, before ClaimCancel) ---
@@ -218,12 +250,27 @@ func (al *AgentLoop) RequestCancel(
 	})
 
 	if !wasFired {
+		killedCount := int(atomic.LoadInt64(&backgroundSessionsKilled))
+		failedCount := int(atomic.LoadInt64(&backgroundSessionsFailed))
 		slog.Debug("agent: RequestCancel — no active turn or already canceled",
 			"session_id", sessionID,
 			"channel", scope.Channel,
 			"chat_id", scope.ChatID,
+			"background_sessions_killed", killedCount,
+			"background_sessions_failed", failedCount,
 		)
-		return CancelOutcome{Fired: false}, nil
+		// BackgroundSessionsKilled/Failed are populated here even though Fired
+		// is false: the kill cascade above ran unconditionally, independent of
+		// wasFired (see that block's doc comment) — this is precisely the
+		// "background job outlived its own turn" case the cascade exists to
+		// handle, and callers (handleCancel, watchDeadline) need these counts
+		// to give the user/operator feedback despite there being no turn to
+		// report as canceled.
+		return CancelOutcome{
+			Fired:                    false,
+			BackgroundSessionsKilled: killedCount,
+			BackgroundSessionsFailed: failedCount,
+		}, nil
 	}
 
 	// --- Compute descendants list BEFORE InterruptSession to close the race ---
@@ -281,6 +328,7 @@ func (al *AgentLoop) RequestCancel(
 			"cancel_method":              cancelMethod,
 			"descendants_canceled":       descendants,
 			"background_sessions_killed": atomic.LoadInt64(&backgroundSessionsKilled),
+			"background_sessions_failed": atomic.LoadInt64(&backgroundSessionsFailed),
 		})
 	})
 
@@ -391,9 +439,11 @@ func (al *AgentLoop) RequestCancel(
 	})
 
 	return CancelOutcome{
-		Fired:       true,
-		Descendants: descendants,
-		TurnID:      turnID,
+		Fired:                    true,
+		Descendants:              descendants,
+		TurnID:                   turnID,
+		BackgroundSessionsKilled: int(atomic.LoadInt64(&backgroundSessionsKilled)),
+		BackgroundSessionsFailed: int(atomic.LoadInt64(&backgroundSessionsFailed)),
 	}, nil
 }
 
@@ -431,9 +481,9 @@ func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, use
 // process-wide pkg/tools SessionManager via the exported GetSharedSessionManager
 // accessor (getSessionManager itself is unexported/package-private to
 // pkg/tools), kills every background session owned by sessionID, and returns
-// the count killed so RequestCancel can thread it into the turn_canceled
-// audit event.
-func killBackgroundSessionsForCancelSurface(sessionID string) int {
+// (killed, failed) so RequestCancel can thread both counts into the
+// turn_canceled audit event and its own background_killed audit event.
+func killBackgroundSessionsForCancelSurface(sessionID string) (killed, failed int) {
 	return tools.GetSharedSessionManager().KillAllForSession(sessionID)
 }
 
