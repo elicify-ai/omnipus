@@ -160,7 +160,7 @@ An **operator** at an interactive session is prompted the first time an `ask`-sc
 2. **Given** the operator approved `/home/u/data.csv`, **When** the agent accesses it again in the same session, **Then** it is allowed without a prompt.
 3. **Given** a different outside path, **When** it resolves, **Then** a new prompt is emitted (per-path, not per-turn).
 4. **Given** an `ask` agent on a channel/task/heartbeat/background/**delegated-from-non-webchat** turn, **When** it accesses an outside path, **Then** it is denied immediately (fail-closed via the `TurnOrigin` predicate), the turn continues confined to `work/`, the agent receives an `IsError` tool result it can reason about, and no approval frame is broadcast to any web client. *(error path)*
-5. **Given** an approval grant for a path via `read_file`, **When** the grant is stored, **Then** its key and the prompt copy make the tool scope explicit (a grant is `(session, agent, path-prefix)` — tool-agnostic — and the prompt says "approve this path for all tools", OR keyed `(session, agent, tool, path-prefix)` per the locked grant-key decision).
+5. **Given** an approval grant for a path via `read_file`, **When** the grant is stored, **Then** it is keyed `(session, agent, tool, path-prefix)` — approving `read_file` on a path does not grant `bash` on it, and a different tool on the same path re-prompts.
 
 ### User Story 7 — Per-exec-child kernel sandbox (Priority: P0) — Phase P3 *(spike-gated)*
 
@@ -649,9 +649,9 @@ Boundary conditions:
 - **FR-016**: `deny` MUST confine an agent to its effective working directory for all tools.
 - **FR-017**: The carve-out matcher MUST always deny `$OMNIPUS_HOME/master.key`, `credentials.json`, other agents' homes (`agents/<other>/`), and other workspaces (`workspaces/<other>/`), regardless of scope, **anchored on the boot-known `$OMNIPUS_HOME`** (never derived from the working dir), MUST run unconditionally before any FS I/O, and MUST be independently fuzz-tested.
 - **FR-018**: `ask` MUST prompt on first access to each new outside path/subtree and remember the grant for the session.
-- **FR-019**: The `ToolApprovalRequiredFrame` and the grant store MUST carry a path/subtree dimension and the operation kind (for prompt copy); the grant-key tuple MUST be specified explicitly (`(session, agent, tool, path-prefix)` unless the locked decision selects tool-agnostic, in which case the prompt MUST state "for all tools").
+- **FR-019**: The `ToolApprovalRequiredFrame` and the grant store MUST carry a path/subtree dimension and the operation kind (for prompt copy). The grant-key tuple is **`(session, agent, tool, path-prefix)`** (locked 2026-07-17) — per-tool: approving `read_file` on a path does NOT grant `bash` (or any other tool) on it; a different tool on the same path re-prompts. Grants are session-scoped (not persisted across sessions).
 - **FR-020**: When no interactive approver is reachable, `ask` MUST fail closed immediately (no stall, no broadcast) via a per-turn `TurnOrigin` predicate; a new `TurnOrigin` enum (`webchat_interactive | channel | task | heartbeat | background | delegated`) MUST be threaded through `RunTurnOptions`/`processOptions`, computed at every entry point, and **propagated by `spawnSubTurn`** from parent to child.
-- **FR-021**: `allow` MUST permit access to any OS-user-accessible path except carve-outs, for both file tools and `bash`/exec (subject to FR-023 and the P3 spike outcome for `bash` carve-outs).
+- **FR-021**: `allow` MUST permit access to any path accessible to **the OS user running the gateway process (its process UID)** — no separate configurable principal in v1 — except carve-outs, for both file tools and `bash`/exec (subject to FR-023 and the P3 spike outcome for `bash` carve-outs).
 - **FR-022**: The system MUST NOT apply a boot-time process-wide `$OMNIPUS_HOME` **filesystem** Landlock fence once per-exec-child enforcement is active.
 - **FR-023**: Each `bash`/exec MUST spawn a child with a **fresh, per-call** Landlock ruleset computed from `EffectiveFSPolicy` (deny→working dir + libs + `/tmp`; ask→+approved; allow→per the spike carve-out decision), applied via a **non-latched** apply path and a `LockOSThread → apply-fresh → fork → runtime.Goexit()` thread-lifecycle protocol; seccomp remains one fixed, scope-independent filter installed once.
 - **FR-023a**: The `pkg/sandbox` Landlock/seccomp apply path MUST be refactored from a process-latched singleton to a per-call-capable API; the boot path becomes one caller among many.
@@ -735,12 +735,12 @@ Boundary conditions:
 |---|------------------|------------------------|---------------------|--------|
 | 1 | Per-child Landlock apply mechanism + non-latched refactor + thread-lifecycle | Reuse the pure-Go `LockOSThread→restrict_self→fork→Goexit` pattern behind a new `RestrictCurrentThreadWithPolicy`; prove no 2nd-spawn no-op | **Mandatory P3 spike GATE — must prove the refactor before P3 breakdown** | OPEN (spike) |
 | 2 | Residual main-process protection after FS-fence removal | Carve-outs enforced app-layer in-process + per-child kernel; network Landlock retained; no process-wide FS rule | Lock as decision in P3 (ADR gap #9) with written rationale | OPEN (P3) |
-| 3 | Grant-key granularity (`(session,agent,path)` vs `(session,agent,tool,path)`) + cross-session persistence | Tool-agnostic subtree-prefix, session-scoped, prompt says "for all tools" | Confirm UX in P2 | OPEN (P2) |
+| 3 | Grant-key granularity + cross-session persistence | — | **RESOLVED 2026-07-17: `(session, agent, tool, path-prefix)`, session-scoped, per-tool subtree-prefix** (FR-019) | CLOSED |
 | 4 | `allow`+`bash` carve-outs when `working_dir` is internal (under `$OMNIPUS_HOME`) | External `working_dir` → clean kernel carve-outs; internal `work/` → app-layer/wrapper carve-outs with documented reduced guarantee | Confirm in P3 spike (operator flagged: "grant-except-$OMNIPUS_HOME does not cleanly work for the internal work dir") | OPEN (spike) |
-| 5 | `allow`'s "OS user" = process UID vs configurable principal | Process UID running the gateway | Confirm with operator | OPEN |
+| 5 | `allow`'s "OS user" = process UID vs configurable principal | — | **RESOLVED 2026-07-17: the gateway process UID; no configurable principal in v1** (FR-021) | CLOSED |
 | 6 | `working_dir` on network/remote mounts | Best-effort realpath; reject if unresolvable at set-time | Confirm in P2/P3 | OPEN |
 
-**GATE**: Items 1 & 4 are the two P3 BLOCK findings — they gate P3 task breakdown behind the de-risking spike. Items 2, 3, 5, 6 carry documented assumptions and do not block P1/P2.
+**GATE**: Items 1 & 4 are the two P3 BLOCK findings — they gate P3 task breakdown behind the de-risking spike. Items 3 & 5 resolved 2026-07-17. Items 2 & 6 carry documented assumptions and do not block P1/P2.
 
 ---
 
@@ -804,6 +804,8 @@ Boundary conditions:
 - **Delegation (ADR-032)**: `filesystem_scope` + working dir + grants are target-sourced in a sub-turn.
 - **Boot network Landlock** (v0.2 #155) must be preserved when the FS fence is removed.
 - **P3 gated** behind a mandatory de-risking spike (latched-singleton refactor + Landlock-no-deny).
+- **Grant key** locked to `(session, agent, tool, path-prefix)`, session-scoped (Ambiguity #3) — approving one tool on a path does not grant another; a `read_file` approval does not grant `bash`.
+- **`allow` principal** locked to the gateway process UID; no separate configurable principal in v1 (Ambiguity #5).
 
 ---
 
