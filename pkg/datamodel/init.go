@@ -143,7 +143,7 @@ func Init(home string) error {
 	return nil
 }
 
-// InitAgentHome creates the workspace directory tree for an agent.
+// InitAgentHome creates the agent home directory tree for an agent.
 //
 // Layout per Appendix E §E.3 (agent subtree):
 //
@@ -177,7 +177,7 @@ func InitAgentHome(home, agentID string) error {
 	return nil
 }
 
-// AgentHomePath returns the canonical workspace path for agentID.
+// AgentHomePath returns the canonical agent home path for agentID.
 func AgentHomePath(home, agentID string) string {
 	return filepath.Join(home, "agents", agentID)
 }
