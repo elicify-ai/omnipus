@@ -109,21 +109,6 @@ type BrowserCoordinator struct {
 	// real Chrome; defaults to launchManagedPipe (exec_resolver.go).
 	pipeLauncher func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error)
 
-	// display, when non-nil AND healthy, makes managed launches VIDEO-CAPABLE
-	// (FR-001): headful Chrome rendering into the sidecar's virtual framebuffer
-	// (DISPLAY=:N), wrapped in dbus-run-session. When nil — the default until
-	// stream orchestration wires an Xvfb sidecar via SetDisplaySidecar — launches
-	// stay headless-shell (non-video-capable), still over the CDP pipe.
-	display DisplaySidecar
-
-	// audio, when non-nil AND healthy, wires PULSE_SERVER into the NEXT
-	// headful (video-capable) managed launch so Chrome finds the virtual sink
-	// (FR-022, US-11). A pure best-effort companion to video — nil, unhealthy,
-	// or a headless-shell launch all mean "no PULSE_SERVER", never an error.
-	// Set by stream orchestration once a PulseAudio sidecar is up via
-	// SetAudioSidecar.
-	audio AudioSidecar
-
 	// Chrome process state (lives on the coordinator; managers never touch it).
 	launched   bool
 	launching  bool       // single-flight: a launch is in progress
@@ -493,15 +478,14 @@ func (c *BrowserCoordinator) totalOpenTabsLocked() int {
 // RootContext returns the coordinator's SHARED, session-independent root
 // chromedp context (the same rootCtx Register returns) — the context every
 // agent's browser context is a CHILD of, over the one multiplexed CDP pipe.
+// Used by callers that only hold a *BrowserManager (not the coordinator
+// itself), e.g. the no-coordinator managed-pipe fallback (manager.go).
 //
-// CRIT-002 (live-browser-video-streaming): callers that only hold a
-// *BrowserManager (not the coordinator itself) use this to launch work — most
-// notably the video stream orchestrator's encoder page — as an isolated
-// SIBLING of rootCtx (via chromedp.NewContext(rootCtx,
-// chromedp.WithNewBrowserContext())) rather than as a child of one agent's own
-// TAB context. A sibling of rootCtx survives that agent's tab context being
-// torn down and recreated (e.g. a crash-relaunch, ReconcileTabs, or the agent
-// closing/reopening its tab) mid-stream; a child of the tab context does not.
+// ADR-044 Option A: the dedicated encoder browser (browser_stream.go's
+// encoderBrowser) is NOT a sibling context of this rootCtx — it is a wholly
+// separate Chrome process the orchestrator launches itself (its own pipe,
+// its own rootCtx), because chrome-headless-shell (what this coordinator's
+// Chrome always is now) has no WebCodecs VideoEncoder.
 //
 // ok is false when no Chrome is currently live — never launched yet, or torn
 // down by Shutdown/a crash awaiting relaunch. Callers MUST treat ok=false as
@@ -719,36 +703,13 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		return fmt.Errorf("browser: coordinator: cannot locate chromium: %w", err)
 	}
 
-	// Video-capable (headful on the Xvfb virtual display) vs headless-shell. nil
-	// or unhealthy sidecar → headless-shell (still over the pipe). FR-001.
-	videoCapable, display := c.videoLaunchMode()
-	// PulseServer is only meaningful on the headful (video-capable) launch path
-	// — a headless-shell Chrome has no framebuffer to pair audio with, so audio
-	// parity mirrors Display above and stays gated on videoCapable even though
-	// the audio sidecar itself is independent of video health (FR-022/FR-023).
-	pulseServer := ""
-	if videoCapable {
-		pulseServer = c.audioLaunchServer()
-	}
-	cmdline := managedExecAllocatorOpts(c.cfg, managedLaunchParams{
-		VideoCapable: videoCapable,
-		Display:      display,
-		PulseServer:  pulseServer,
-	})
+	// ADR-044 Option A: the agent's shared Chrome is unconditionally
+	// headless-shell now (managedExecAllocatorOpts collapsed the video-capable
+	// branch entirely — video capture lives on a separate encoder browser the
+	// orchestrator owns and launches via EncoderChromeCmdline). Nothing left to
+	// compute here; pass the zero-value params.
+	cmdline := managedExecAllocatorOpts(c.cfg, managedLaunchParams{})
 
-	// Headful Chrome launches DIRECTLY over the CDP pipe (DISPLAY set via
-	// managedExecAllocatorOpts, no --headless), exactly like the headless path —
-	// no dbus-run-session wrapper. An earlier version wrapped the headful launch
-	// in `dbus-run-session -- <chrome>` ("headful wants a session bus"), but real-
-	// hardware testing (ci-omnipus) showed that breaks the launch: Chrome's
-	// bidirectional NUL pipe on fd 3/4 does not survive dbus-run-session's exec, so
-	// the CDP pipe drops immediately ("Connection terminated while reading from
-	// pipe" → Target.createTarget "no browser is open -32000"). dbus-run-session
-	// only provides a SESSION bus anyway — it does not silence the (harmless)
-	// SYSTEM-bus / UPower errors headful Chrome logs — so it was pure downside.
-	// Headful Chrome runs fine on Xvfb without any session bus (verified: it stays
-	// alive and drives screencast); the session-bus warnings are non-fatal.
-	//
 	// Launch over the pipe (fail closed — err reports launch + CDP connectivity
 	// failure directly). The launcher is a seam so tests never spawn real Chrome.
 	launch := c.pipeLauncher
@@ -817,10 +778,9 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	}
 
 	logger.InfoCF("browser", "coordinator: shared Chrome launched (CDP over pipe, no TCP port)", map[string]any{
-		"pid":           pid,
-		"exec_path":     execPath,
-		"product":       product,
-		"video_capable": videoCapable,
+		"pid":       pid,
+		"exec_path": execPath,
+		"product":   product,
 	})
 	return nil
 }
@@ -901,58 +861,6 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 			},
 		)
 	}
-}
-
-// SetDisplaySidecar wires (or clears) the virtual-display sidecar that makes
-// managed launches video-capable (FR-001). Set by stream orchestration once an
-// Xvfb sidecar is up and healthy; the NEXT launch reads it via videoLaunchMode.
-// nil (the default) keeps launches headless-shell. Launch-time only (SEC-12
-// spirit) — it does not restart an already-running Chrome.
-func (c *BrowserCoordinator) SetDisplaySidecar(d DisplaySidecar) {
-	c.mu.Lock()
-	c.display = d
-	c.mu.Unlock()
-}
-
-// SetAudioSidecar wires (or clears) the PulseAudio sidecar that makes managed
-// launches audio-capable (FR-022, US-11). Set by stream orchestration once a
-// PulseAudio sidecar is up and healthy; the NEXT launch reads it via
-// audioLaunchServer. nil (the default) keeps launches without PULSE_SERVER.
-// Launch-time only (SEC-12 spirit) — it does not restart an already-running
-// Chrome.
-func (c *BrowserCoordinator) SetAudioSidecar(a AudioSidecar) {
-	c.mu.Lock()
-	c.audio = a
-	c.mu.Unlock()
-}
-
-// videoLaunchMode reports whether the NEXT launch should be video-capable
-// (headful on the sidecar's DISPLAY) or headless-shell. A nil or unhealthy
-// sidecar, or an empty DISPLAY, means headless-shell (still over the pipe).
-func (c *BrowserCoordinator) videoLaunchMode() (videoCapable bool, display string) {
-	c.mu.Lock()
-	d := c.display
-	c.mu.Unlock()
-	if d != nil && d.Healthy() {
-		if disp := d.Display(); disp != "" {
-			return true, disp
-		}
-	}
-	return false, ""
-}
-
-// audioLaunchServer reports the PULSE_SERVER value the NEXT managed launch
-// should wire in, or "" if audio is unavailable. A nil or unhealthy sidecar
-// means "" (audio absent) — never an error; audio is a pure best-effort
-// companion to video (FR-022, FR-023).
-func (c *BrowserCoordinator) audioLaunchServer() string {
-	c.mu.Lock()
-	a := c.audio
-	c.mu.Unlock()
-	if a != nil && a.Healthy() {
-		return a.PulseServer()
-	}
-	return ""
 }
 
 // lockPath is the single-launch lockfile (CRIT-001). It lives in the profile

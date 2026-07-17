@@ -31,7 +31,7 @@ const omnipusShutdownTimeout = 70 * time.Second
 //  2. Drain agent loop — wait for active turns (US-7, FR-008), then close
 //  3. Flush partial state — interrupted responses already saved by agent loop cancellation
 //  4. Stop background services — heartbeat, cron, device, health, ADR-044
-//     browser-video sidecars (display, audio) after Chrome is already reaped
+//     live-browser-video orchestrator (streams + encoder browser)
 //  5. Close provider connections — release HTTP/WebSocket sessions
 //
 // Implements US-9 and US-7 acceptance criteria.
@@ -133,25 +133,20 @@ func omnipusGracefulShutdown(
 		}
 	}
 
-	// ADR-044 T6: tear down the boot-time Xvfb/PulseAudio sidecars. This MUST
-	// run after step 2's agentLoop.Close() above, which already reaped the
-	// managed Chrome process via BrowserCoordinator.Shutdown() — Chrome must
-	// die before the display/audio it depended on disappears out from under
-	// it. Both Stop() calls are idempotent and safe to call on a
-	// never-started sidecar, and the non-Linux stubs (display_other.go
-	// unavailableDisplaySidecar, audiosink_other.go noopAudioSidecar) are
-	// no-ops, so the only guard needed is the nil-interface check (a dormant
-	// install, degraded boot, or non-Linux host leaves these fields nil).
-	// Sequential worst case here is ~5s (2s display grace + 3s audio grace),
-	// comfortably inside the 70s omnipusShutdownTimeout budget after the
-	// ≤65s active-turn drain.
-	if runningServices.displaySidecar != nil {
-		slog.Info("shutdown: stopping display sidecar")
-		runningServices.displaySidecar.Stop()
-	}
-	if runningServices.audioSidecar != nil {
-		slog.Info("shutdown: stopping audio sidecar")
-		runningServices.audioSidecar.Stop()
+	// ADR-044 T6 (Option-A rearchitecture): tear down the live-browser-video
+	// orchestrator — every active viewer stream plus, if it was ever lazily
+	// launched, the dedicated encoder browser (component M). This MUST run
+	// after step 2's agentLoop.Close() above, which already reaped the
+	// agent-facing managed Chrome process via BrowserCoordinator.Shutdown() —
+	// the encoder browser is a wholly separate process, but keeping the same
+	// ordering avoids any teardown race between the two. browserVideo is nil
+	// only if boot itself failed before RegisterBrowserVideo ran (a degraded
+	// boot never reaches this shutdown path in practice, but the nil-check
+	// is defensive since setupAndStartServices' contract for a nil
+	// runningServices.browserVideo is "never touched, never Stop()'d").
+	if runningServices.browserVideo != nil {
+		slog.Info("shutdown: stopping live-browser video orchestrator")
+		runningServices.browserVideo.Shutdown()
 	}
 
 	slog.Info("shutdown: step 5 — closing provider connections")

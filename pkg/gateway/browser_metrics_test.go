@@ -71,7 +71,7 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E", "vp8"},
 	})
 	if err != nil || h == nil {
@@ -232,19 +232,9 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 		t.Fatalf("decode error total = %d, want 1", got)
 	}
 
-	// ---- Xvfb / PulseAudio sidecar restart counts (counters) ----
-	// See the file doc comment: the real crash->restart hook is Linux-only,
-	// process-spawning code proven separately by pkg/tools/browser's Test
-	// 17/31. Here we prove the registry method itself — the same method
-	// those hooks call via browser.SetBrowserMetricsRecorder.
-	m.IncXvfbSidecarRestart()
-	m.IncPulseSidecarRestart()
-	if got := m.xvfbSidecarRestartTotal.Load(); got != 1 {
-		t.Fatalf("xvfb sidecar restart total = %d, want 1", got)
-	}
-	if got := m.pulseSidecarRestartTotal.Load(); got != 1 {
-		t.Fatalf("pulse sidecar restart total = %d, want 1", got)
-	}
+	// (The Xvfb/PulseAudio sidecar-restart counters were removed with the
+	// ADR-044 Option-A rearchitecture — video no longer runs any Xvfb/PulseAudio
+	// sidecar; the encoder is a dedicated full-Chrome process.)
 
 	// ---- /metrics exposes every FR-019 series with the values above ----
 	a := &restAPI{}
@@ -264,10 +254,6 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 		"omnipus_browser_decode_error_total 1",
 		"# TYPE omnipus_browser_capture_restart_total counter",
 		"omnipus_browser_capture_restart_total 2",
-		"# TYPE omnipus_browser_xvfb_sidecar_restart_total counter",
-		"omnipus_browser_xvfb_sidecar_restart_total 1",
-		"# TYPE omnipus_browser_pulse_sidecar_restart_total counter",
-		"omnipus_browser_pulse_sidecar_restart_total 1",
 		"# TYPE omnipus_browser_ingest_auth_reject_total counter",
 		`omnipus_browser_ingest_auth_reject_total{reason="unknown_or_dead_token"} 1`,
 	} {

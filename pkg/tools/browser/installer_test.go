@@ -150,17 +150,6 @@ func withManifestURL(t *testing.T, url string) {
 	t.Cleanup(func() { globalManifestURLForTesting = prev })
 }
 
-// withDisplaySidecarHealthy forces DisplaySidecarHealthyProbe (the AR-C1/
-// GC-1/GC-2 Option-B dormant gate — NOT an Xvfb-binary-on-PATH probe) to
-// return want for the duration of the test, restoring the previous probe on
-// cleanup.
-func withDisplaySidecarHealthy(t *testing.T, want bool) {
-	t.Helper()
-	prev := DisplaySidecarHealthyProbe
-	DisplaySidecarHealthyProbe = func() bool { return want }
-	t.Cleanup(func() { DisplaySidecarHealthyProbe = prev })
-}
-
 // --- tests -------------------------------------------------------------
 
 func TestInstaller_PrefersInstalledBinary(t *testing.T) {
@@ -183,12 +172,18 @@ func TestInstaller_PrefersInstalledBinary(t *testing.T) {
 	}
 }
 
-// TestInstaller_DetectsEither_PrefersFullChromeWhenBothCached covers DS-5's
-// "both cached (full + headless-shell) -> video-capable (prefer full)" row at
-// the installer level: when both builds are already on disk, EnsureChromium
-// must return the full "chrome" build without touching the network, since it
-// is a strict superset of headless-shell's browsing capability.
-func TestInstaller_DetectsEither_PrefersFullChromeWhenBothCached(t *testing.T) {
+// TestInstaller_EnsureChromiumBuild_ResolvesTheSpecificallyRequestedBuild is
+// the Option-A (ADR-044) regression case superseding the pre-Option-A
+// "detect-either, prefer full when both cached" behavior: the agent build
+// (chrome-headless-shell) and the encoder build (full "chrome") are
+// NON-INTERCHANGEABLE — the encoder needs full Chrome's WebCodecs
+// VideoEncoder, which chrome-headless-shell entirely lacks, so handing the
+// encoder a cached headless-shell binary would silently break video. With
+// BOTH builds already cached on disk, EnsureChromiumBuild must resolve
+// EXACTLY the build it was asked for, never substituting the other flavor
+// even though it too is available — proven in both directions so this cannot
+// pass by coincidentally always returning the same one build.
+func TestInstaller_EnsureChromiumBuild_ResolvesTheSpecificallyRequestedBuild(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix-only path layout")
 	}
@@ -197,29 +192,46 @@ func TestInstaller_DetectsEither_PrefersFullChromeWhenBothCached(t *testing.T) {
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	seedBuildBinary(t, root, "131.0.6778.108", platform, headlessShellBuild())
+	shellPath := seedBuildBinary(t, root, "131.0.6778.108", platform, headlessShellBuild())
 	fullPath := seedBuildBinary(t, root, "131.0.6778.108", platform, fullChromeBuild())
 
-	// No manifest URL configured — if EnsureChromium tried to hit the
-	// network it would fail closed (empty URL), proving detect-either
-	// short-circuits before any fetch.
+	// No manifest URL configured — if EnsureChromiumBuild tried to hit the
+	// network it would fail closed (empty URL), proving the cache hit
+	// short-circuits before any fetch in either direction.
 	withManifestURL(t, "")
 
-	got, err := EnsureChromium(context.Background(), root)
+	// Requesting the full build, with headless-shell ALSO cached, must return
+	// the full build — not the other cached flavor.
+	gotFull, err := EnsureChromiumBuild(context.Background(), root, fullChromeBuild())
 	if err != nil {
-		t.Fatalf("EnsureChromium with both builds cached: %v", err)
+		t.Fatalf("EnsureChromiumBuild(fullChromeBuild()) with both builds cached: %v", err)
 	}
-	if got != fullPath {
-		t.Fatalf("expected full-chrome binary %q preferred, got %q", fullPath, got)
+	if gotFull != fullPath {
+		t.Fatalf("expected the full-chrome binary %q, got %q", fullPath, gotFull)
+	}
+
+	// Requesting headless-shell, with the full build ALSO cached, must return
+	// headless-shell — the differentiation half of this proof: swapping only
+	// the requested build flips the resolved binary, so the first assertion
+	// wasn't just "always returns whatever's first."
+	gotShell, err := EnsureChromiumBuild(context.Background(), root, headlessShellBuild())
+	if err != nil {
+		t.Fatalf("EnsureChromiumBuild(headlessShellBuild()) with both builds cached: %v", err)
+	}
+	if gotShell != shellPath {
+		t.Fatalf("expected the chrome-headless-shell binary %q, got %q", shellPath, gotShell)
+	}
+	if gotShell == gotFull {
+		t.Fatalf("expected the two requested builds to resolve to DIFFERENT binaries, both resolved to %q", gotShell)
 	}
 }
 
-// TestInstaller_HeadlessShellDefault_WhenDisplaySidecarNotHealthy is the F-08
-// regression case: with no healthy display sidecar wired (the pre-Gate-0 /
-// non-video-capable default posture — AR-C1/GC-1/GC-2's Option-B dormant
-// gate), a fresh EnsureChromium download must still fetch
-// chrome-headless-shell, matching pre-dual-download behavior byte for byte.
-func TestInstaller_HeadlessShellDefault_WhenDisplaySidecarNotHealthy(t *testing.T) {
+// TestInstaller_HeadlessShellDefault_Always is the Option-A (ADR-044)
+// regression case: the agent's own browser is always chrome-headless-shell
+// (the dedicated full-Chrome build is only ever fetched via
+// EnsureChromiumFullBuild for the live-view encoder), so a fresh
+// EnsureChromium download must always fetch chrome-headless-shell.
+func TestInstaller_HeadlessShellDefault_Always(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix-only path layout")
 	}
@@ -227,7 +239,6 @@ func TestInstaller_HeadlessShellDefault_WhenDisplaySidecarNotHealthy(t *testing.
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withDisplaySidecarHealthy(t, false)
 
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
@@ -265,27 +276,25 @@ func TestInstaller_HeadlessShellDefault_WhenDisplaySidecarNotHealthy(t *testing.
 	}
 }
 
-// TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity is the F-08
-// / FR-009 / Test 15 / DS-5 centerpiece: it proves, in one flow —
-//  1. a fresh install with a healthy display sidecar wired downloads the full
-//     "chrome" build (not chrome-headless-shell) — its own download key,
-//     binary name, and on-disk layout;
+// TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity is
+// the Option-A (ADR-044) centerpiece for the dedicated live-view encoder's
+// install path: it proves, in one flow —
+//  1. EnsureChromiumFullBuild downloads the full "chrome" build (not
+//     chrome-headless-shell) — its own download key, binary name, and
+//     on-disk layout;
 //  2. the downloaded archive's integrity is verified against the
 //     GCS-published X-Goog-Hash checksum before the binary is trusted;
-//  3. a second EnsureChromium call against the same install root detects the
-//     already-extracted binary and re-downloads nothing (F-08 detect-either);
+//  3. a second EnsureChromiumFullBuild call against the same install root
+//     detects the already-extracted binary and re-downloads nothing (F-08
+//     detect-either);
 //  4. a corrupted/mismatched checksum on a fresh install is rejected outright
 //     — no binary is ever extracted or left on disk (DS-5 "bad hash -> reject
 //     download").
-func TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("full-chrome-default selection only applies on linux (Platform Matrix, M-3)")
-	}
+func TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity(t *testing.T) {
 	platform, err := cftPlatform()
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withDisplaySidecarHealthy(t, true)
 
 	fullBuild := fullChromeBuild()
 	content := []byte("#!/bin/sh\nexit 0\n# full chrome fixture\n")
@@ -315,9 +324,9 @@ func TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity(t *testing.
 	root := t.TempDir()
 
 	// Step 1+2: fresh download picks the full build and verifies integrity.
-	got, err := EnsureChromium(context.Background(), root)
+	got, err := EnsureChromiumFullBuild(context.Background(), root)
 	if err != nil {
-		t.Fatalf("EnsureChromium full-chrome download: %v", err)
+		t.Fatalf("EnsureChromiumFullBuild full-chrome download: %v", err)
 	}
 	if strings.Contains(got, "chrome-headless-shell") {
 		t.Fatalf("expected the full chrome build to be selected, got headless-shell path %q", got)
@@ -342,9 +351,9 @@ func TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity(t *testing.
 
 	// Step 3: detect-either — a second call against the same root must not
 	// touch the network again.
-	got2, err := EnsureChromium(context.Background(), root)
+	got2, err := EnsureChromiumFullBuild(context.Background(), root)
 	if err != nil {
-		t.Fatalf("EnsureChromium second call: %v", err)
+		t.Fatalf("EnsureChromiumFullBuild second call: %v", err)
 	}
 	if got2 != got {
 		t.Fatalf("expected the same cached binary on re-resolve, got %q vs %q", got2, got)
@@ -373,9 +382,9 @@ func TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity(t *testing.
 	})
 	withManifestURL(t, badSrv.URL+"/manifest")
 
-	_, err = EnsureChromium(context.Background(), badZipRoot)
+	_, err = EnsureChromiumFullBuild(context.Background(), badZipRoot)
 	if err == nil {
-		t.Fatal("expected EnsureChromium to reject a bad-hash download, got nil error")
+		t.Fatal("expected EnsureChromiumFullBuild to reject a bad-hash download, got nil error")
 	}
 	if !strings.Contains(err.Error(), "integrity") && !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("expected an integrity/checksum error, got: %v", err)
@@ -412,9 +421,8 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withDisplaySidecarHealthy(t, false) // exercise the headless-shell download path
 
-	build := headlessShellBuild()
+	build := headlessShellBuild() // EnsureChromium's own default build (Option A)
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
 
@@ -464,7 +472,6 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
-	withDisplaySidecarHealthy(t, false)
 
 	prev := allowHeaderlessDownloadForTesting
 	allowHeaderlessDownloadForTesting = true
@@ -497,23 +504,17 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	}
 }
 
-// TestInstaller_SelectDownloadBuild_DormantByDefault_OptionB is the AR-C1/
-// GC-1/GC-2 coherent-dormant regression guard for the installer side of the
-// same defect capability_test.go's TestVideoCapability_DormantByDefault_
-// OptionB guards on the classifier side: with DisplaySidecarHealthyProbe left
-// UNTOUCHED (the shipped default, always false), selectDownloadBuild must
-// choose chrome-headless-shell on linux regardless of what's on PATH — it
-// must never regress into reading an Xvfb-binary-on-PATH signal.
-func TestInstaller_SelectDownloadBuild_DormantByDefault_OptionB(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip(
-			"this guard only matters on linux — selectDownloadBuild's only branch that could ever pick the full chrome build",
-		)
-	}
+// TestInstaller_SelectDownloadBuild_AlwaysHeadlessShell is the Option-A
+// (ADR-044) regression guard: the agent's own browser is always
+// chrome-headless-shell — selectDownloadBuild must return it unconditionally
+// on every platform. The dedicated full-Chrome build for the live-view
+// encoder is fetched exclusively via EnsureChromiumFullBuild, never through
+// this path.
+func TestInstaller_SelectDownloadBuild_AlwaysHeadlessShell(t *testing.T) {
 	got := selectDownloadBuild()
 	if got.downloadID != cftDownloadID {
 		t.Fatalf(
-			"expected selectDownloadBuild to default to chrome-headless-shell (downloadID %q) with no display sidecar wired, got %q",
+			"expected selectDownloadBuild to always default to chrome-headless-shell (downloadID %q), got %q",
 			cftDownloadID,
 			got.downloadID,
 		)

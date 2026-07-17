@@ -24,7 +24,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -219,20 +218,6 @@ type services struct {
 	// RegisterBrowserVideo ran (setupAndStartServices returns an error in that
 	// case, so executeReload never observes a nil browserVideo in practice).
 	browserVideo *BrowserVideoOrchestrator
-
-	// displaySidecar and audioSidecar are the ADR-044 T5 boot-time Xvfb/
-	// PulseAudio sidecars (bootLiveBrowserVideo, RunContextWithOptions) when
-	// this host was capable and Start succeeded — nil otherwise (non-Linux, no
-	// Xvfb on PATH, the FR-020 kill-switch off, or Start itself failed; see
-	// Hard Constraint #4 graceful degradation). Populated by
-	// setupAndStartServices from the boot block's return values so shutdown
-	// can Stop() them (a nil sidecar's Stop is never called). Independent of
-	// whether the coordinator was ultimately wired via SetDisplaySidecar/
-	// SetAudioSidecar (B4) — a fresh install's sidecars are already running
-	// while Chrome is still downloading in the background, and still need
-	// teardown on shutdown either way.
-	displaySidecar browser.DisplaySidecar
-	audioSidecar   browser.AudioSidecar
 
 	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
 	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
@@ -840,8 +825,8 @@ func pluralSuffix(n int) string {
 // browserInstallRoot derives the managed-Chromium install root from cfg and
 // homePath — the SAME derivation pkg/tools/browser/exec_resolver.go's private
 // installRoot computation uses (installRoot = <ProfileDir>/../chromium), so
-// every gateway-side consumer (bootLiveBrowserVideo's B4 EnsureChromium/
-// ClassifyVideoCapability calls below, and setupAndStartServices'
+// every gateway-side consumer (the dedicated encoder browser's lazy
+// EnsureChromium/ClassifyVideoCapability calls, and setupAndStartServices'
 // RegisterBrowserVideo, component M, ADR-044) classifies/installs against the
 // exact root exec_resolver.go actually launches Chrome from. cfg.Tools.
 // Browser.ProfileDir is empty on a fresh/default install, in which case
@@ -855,145 +840,6 @@ func browserInstallRoot(homePath string, cfg *config.Config) string {
 	return filepath.Clean(
 		filepath.Join(filepath.Dir(filepath.Clean(browserProfileDir)), "..", "chromium"),
 	)
-}
-
-// bootLiveBrowserVideo performs the ADR-044 sidecar-wiring boot sequence
-// (component M, tasks B0-B4): when this host is capable, it starts the Xvfb
-// virtual-display sidecar, flips the DisplaySidecarHealthyProbe seam so
-// ClassifyVideoCapability/selectDownloadBuild (pkg/tools/browser) see it,
-// best-effort starts the PulseAudio sidecar, and — only once a full-Chrome
-// build is confirmed installed under browserInstallRoot(homePath, cfg) — wires
-// both sidecars into the coordinator so the NEXT managed Chrome launch goes
-// headful (BrowserCoordinator.videoLaunchMode). It never relaunches an
-// already-running Chrome (CRIT-002); wiring only ever affects the next launch.
-//
-// POSTURE (operator decision, 2026-07-17): default ON wherever capable — no
-// opt-in flag. The only gates are host capability (Linux, an `Xvfb` binary on
-// PATH, a gateway-scoped BrowserCoordinator already constructed via
-// agentLoop.BrowserCoordinator(), ADR-043) and the existing FR-020 kill-switch
-// (gateway.browser_video_enabled, default true).
-//
-// Every step is non-fatal (Hard Constraint #4, graceful degradation): a
-// failure anywhere is logged at WARN and the feature stays dormant (JPEG-per-
-// frame screencast fallback) — this never aborts boot. The returned
-// DisplaySidecar/AudioSidecar are non-nil whenever their own Start succeeded,
-// REGARDLESS of whether the coordinator was ultimately wired (B4) — a fresh
-// install's Xvfb/Pulse sidecars are already running while the full-Chrome
-// download is still in flight in the background — so callers must still own
-// their teardown (services.displaySidecar/audioSidecar, Stop()'d at shutdown)
-// independent of the wiring outcome.
-// browserVideoWireTimeout bounds B4's wait for a full-Chrome build to be
-// installed before it gives up and leaves live video dormant. Generous: a
-// ~130MB Chrome-for-Testing download on a constrained self-host can take
-// minutes, and the wait is a cheap background poll that blocks nothing.
-const browserVideoWireTimeout = 15 * time.Minute
-
-func bootLiveBrowserVideo(
-	ctx context.Context,
-	cfg *config.Config,
-	agentLoop *agent.AgentLoop,
-	homePath string,
-) (browser.DisplaySidecar, browser.AudioSidecar) {
-	// B0: capability + kill-switch gate. Any miss leaves the feature dormant
-	// with no WARN — these are expected steady states (non-Linux dev boxes,
-	// hosts without Xvfb installed, the kill-switch explicitly disabled, or
-	// simply too early in boot for any agent to have constructed a
-	// coordinator yet via registerSharedTools) rather than failures worth
-	// surfacing to operators.
-	if runtime.GOOS != "linux" || !cfg.Gateway.IsBrowserVideoEnabled() {
-		return nil, nil
-	}
-	if _, lookErr := exec.LookPath("Xvfb"); lookErr != nil {
-		return nil, nil
-	}
-	coordinator := agentLoop.BrowserCoordinator()
-	if coordinator == nil {
-		return nil, nil
-	}
-
-	// B1: start the Xvfb virtual-display sidecar. A failure here (binary
-	// present on PATH but spawn/readiness fails) is the first WARN-worthy
-	// outcome — this host looked capable but is not, in practice.
-	d := browser.NewDisplaySidecar(browser.DisplayConfig{})
-	if err := d.Start(ctx); err != nil {
-		logger.WarnCF("browser", "live-browser video: xvfb sidecar failed to start at boot — video stays dormant",
-			map[string]any{"error": err.Error()})
-		return nil, nil
-	}
-
-	// B2: flip the DS-5 capability seam BEFORE the browser preprovision
-	// goroutines below (RunContextWithOptions) so selectDownloadBuild picks
-	// the full-Chrome build on a fresh install and ClassifyVideoCapability
-	// agrees with the coordinator's actual launch decision (AR-C1/GC-1/GC-2).
-	browser.DisplaySidecarHealthyProbe = d.Healthy
-
-	// B3: best-effort start of the PulseAudio sidecar. Audio is independent
-	// of video (FR-022/FR-023) — any failure here degrades to video-only and
-	// never unwinds the video path already secured by B1/B2.
-	var a browser.AudioSidecar
-	audioCfg, acfgErr := browser.DefaultAudioConfig()
-	if acfgErr != nil {
-		logger.WarnCF("browser", "live-browser video: audio sidecar config unavailable — proceeding video-only",
-			map[string]any{"error": acfgErr.Error()})
-	} else {
-		sidecar := browser.NewAudioSidecar(audioCfg)
-		if startErr := sidecar.Start(ctx); startErr != nil {
-			logger.WarnCF("browser", "live-browser video: pulseaudio sidecar failed to start — proceeding video-only",
-				map[string]any{"error": startErr.Error()})
-		} else {
-			a = sidecar
-			browser.PulseAudioAvailableProbe = a.Healthy
-		}
-	}
-
-	// B4: wait (in the background, boot never blocks) for a full-Chrome build to
-	// be installed under installRoot, then wire the coordinator so the NEXT
-	// managed Chrome launch goes headful. We wire ONLY once a full-Chrome build
-	// is confirmed — never a headless-shell-only install (that would masquerade
-	// as video-capable while launchChrome has nothing to actually capture from).
-	//
-	// This POLLS ClassifyVideoCapability (a cheap findInstalledBuild filesystem
-	// check, already gated on DisplaySidecarHealthyProbe = d.Healthy from B2) —
-	// it deliberately does NOT call EnsureChromium itself. The unconditional
-	// preprovision goroutines below (and lazy first-use resolution) perform the
-	// actual ~130MB download under installMu; if B4 also called EnsureChromium it
-	// would contend on that lock behind every preprovision goroutine and could
-	// block for the full download before wiring (observed on the CI worker: the
-	// wire never fired because B4 sat in EnsureChromium). Bounded by
-	// browserVideoWireTimeout so a host that never installs full Chrome logs a
-	// dormant outcome instead of a silent hang. Does NOT relaunch a running
-	// Chrome (CRIT-002) — wiring only takes effect on the next launch.
-	installRoot := browserInstallRoot(homePath, cfg)
-	go func() {
-		deadline := time.NewTimer(browserVideoWireTimeout)
-		defer deadline.Stop()
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-		for {
-			if browser.ClassifyVideoCapability(installRoot).Capable {
-				coordinator.SetDisplaySidecar(d)
-				coordinator.SetAudioSidecar(a)
-				logger.InfoCF("browser",
-					"live-browser video: display/audio sidecars wired — next managed Chrome launch goes headful",
-					map[string]any{"install_root": installRoot, "display": d.Display(), "audio_available": a != nil})
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-deadline.C:
-				logger.WarnCF(
-					"browser",
-					"live-browser video: full-Chrome build not installed within the wire timeout — video stays dormant (activates on a later boot once installed)",
-					map[string]any{"install_root": installRoot},
-				)
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-
-	return d, a
 }
 
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
@@ -1143,15 +989,6 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 		return fmt.Errorf("gateway: agent loop boot failed: %w", err)
 	}
-
-	// ADR-044 T5: live-browser video boot-time sidecar wiring (component M).
-	// Must run BEFORE the browser preprovision loop below so B2's probe flip
-	// (browser.DisplaySidecarHealthyProbe) is visible to selectDownloadBuild
-	// by the time any EnsureChromium call — this one's B4 goroutine or
-	// preprovision's — decides which Chrome-for-Testing build to download.
-	// See bootLiveBrowserVideo's doc comment for the full B0-B4 sequence and
-	// the POSTURE DECISION (default ON where capable, no opt-in flag).
-	displaySidecarBoot, audioSidecarBoot := bootLiveBrowserVideo(ctx, cfg, agentLoop, homePath)
 
 	// Boot-time browser provisioning: NewAgentLoop above just finished
 	// registering browser tools for every agent (registerSharedTools →
@@ -1436,8 +1273,6 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		centralBuiltinReg,
 		centralMCPReg,
 		allowGodMode,
-		displaySidecarBoot,
-		audioSidecarBoot,
 	)
 	if err != nil {
 		stopNag() // don't leak the nag goroutine if service setup fails.
@@ -1983,16 +1818,12 @@ func setupAndStartServices(
 	builtinReg *tools.BuiltinRegistry, // M16: central builtin registry (FR-001)
 	mcpReg *tools.MCPRegistry, // M16: central MCP registry (FR-001)
 	allowGodMode bool,
-	displaySidecar browser.DisplaySidecar, // ADR-044 T5: boot-time Xvfb sidecar; nil if this host is not video-capable
-	audioSidecar browser.AudioSidecar, // ADR-044 T5: boot-time PulseAudio sidecar; nil if audio is unavailable
 ) (rs *services, retErr error) {
 	runningServices := &services{
-		credStore:      credStore,
-		bundle:         bundle,
-		sandboxResult:  sandboxResult,
-		homePath:       homePath,
-		displaySidecar: displaySidecar,
-		audioSidecar:   audioSidecar,
+		credStore:     credStore,
+		bundle:        bundle,
+		sandboxResult: sandboxResult,
+		homePath:      homePath,
 	}
 
 	// Per-user notification store (#264). Backs schedule-failure notifications and
@@ -2316,8 +2147,9 @@ func setupAndStartServices(
 	// installRoot uses the shared browserInstallRoot helper (defined above
 	// RunContextWithOptions) so the live-browser video capability check
 	// (component M, ADR-044) classifies the SAME install exec_resolver.go
-	// would actually launch, and agrees with bootLiveBrowserVideo's B4
-	// EnsureChromium/ClassifyVideoCapability calls at boot.
+	// would actually launch, and agrees with the dedicated encoder browser's
+	// lazy EnsureChromium/ClassifyVideoCapability calls (orchestrator-owned,
+	// launched on first use rather than at boot).
 	installRoot := browserInstallRoot(homePath, cfg)
 
 	// Live-browser video streaming (component M, ADR-044): the WebCodecs

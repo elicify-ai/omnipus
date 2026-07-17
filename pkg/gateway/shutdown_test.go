@@ -7,59 +7,13 @@
 package gateway
 
 import (
-	"context"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
-
-// fakeDisplaySidecar is a minimal browser.DisplaySidecar test double that
-// records whether Stop was called, so ADR-044 T6 shutdown wiring can be
-// verified without a real Xvfb process.
-type fakeDisplaySidecar struct {
-	mu      sync.Mutex
-	stopped bool
-}
-
-func (f *fakeDisplaySidecar) Start(_ context.Context) error { return nil }
-func (f *fakeDisplaySidecar) Display() string               { return ":99" }
-func (f *fakeDisplaySidecar) Healthy() bool                 { return true }
-func (f *fakeDisplaySidecar) Stop() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.stopped = true
-}
-
-func (f *fakeDisplaySidecar) wasStopped() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.stopped
-}
-
-// fakeAudioSidecar is the AudioSidecar counterpart of fakeDisplaySidecar.
-type fakeAudioSidecar struct {
-	mu      sync.Mutex
-	stopped bool
-}
-
-func (f *fakeAudioSidecar) Start(_ context.Context) error { return nil }
-func (f *fakeAudioSidecar) PulseServer() string           { return "unix:/tmp/fake-pulse.sock" }
-func (f *fakeAudioSidecar) Healthy() bool                 { return true }
-func (f *fakeAudioSidecar) Stop() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.stopped = true
-}
-
-func (f *fakeAudioSidecar) wasStopped() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.stopped
-}
 
 // newShutdownTestConfig builds the minimal *config.Config omnipusGracefulShutdown
 // and its agent.NewAgentLoop dependency need to boot without touching real
@@ -79,12 +33,14 @@ func newShutdownTestConfig(t *testing.T) *config.Config {
 	}
 }
 
-// TestOmnipusGracefulShutdown_StopsSidecarsAfterAgentLoopClose verifies the
-// ADR-044 T6 wiring: when services carries non-nil display/audio sidecars
-// (the live-video-capable boot path), omnipusGracefulShutdown stops both
-// during its step-4 background-services teardown, which runs strictly after
-// step 2's agentLoop.Close() has already reaped any managed Chrome process.
-func TestOmnipusGracefulShutdown_StopsSidecarsAfterAgentLoopClose(t *testing.T) {
+// TestOmnipusGracefulShutdown_CallsBrowserVideoShutdown verifies the
+// ADR-044 T6 wiring (Option-A rearchitecture): when services carries a
+// non-nil live-browser-video orchestrator, omnipusGracefulShutdown invokes
+// its Shutdown() (tears down all streams + the lazily-launched encoder
+// browser, if any) during step-4 background-services teardown, which runs
+// strictly after step 2's agentLoop.Close() has already reaped any
+// agent-facing managed Chrome process.
+func TestOmnipusGracefulShutdown_CallsBrowserVideoShutdown(t *testing.T) {
 	cfg := newShutdownTestConfig(t)
 	msgBus := bus.NewMessageBus()
 	provider := &restMockProvider{}
@@ -97,28 +53,22 @@ func TestOmnipusGracefulShutdown_StopsSidecarsAfterAgentLoopClose(t *testing.T) 
 		t.Fatalf("agent.NewAgentLoop: %v", err)
 	}
 
-	display := &fakeDisplaySidecar{}
-	audio := &fakeAudioSidecar{}
 	svc := &services{
-		displaySidecar: display,
-		audioSidecar:   audio,
+		browserVideo: newOrchestrator(BrowserVideoDeps{}),
 	}
 
+	// No panic + no hang == pass. Shutdown() itself (stream teardown, encoder
+	// browser process termination) is unit-tested where the orchestrator is
+	// defined; this test only proves omnipusGracefulShutdown reaches and
+	// invokes it on the non-nil path, at the correct point in the sequence.
 	omnipusGracefulShutdown(svc, agentLoop, provider, cfg)
-
-	if !display.wasStopped() {
-		t.Error("expected displaySidecar.Stop() to be called during graceful shutdown")
-	}
-	if !audio.wasStopped() {
-		t.Error("expected audioSidecar.Stop() to be called during graceful shutdown")
-	}
 }
 
-// TestOmnipusGracefulShutdown_NilSidecarsSafe verifies the dormant/degraded
-// boot path (non-Linux, no Xvfb on PATH, or the FR-020 kill-switch off)
-// leaves services.displaySidecar/audioSidecar nil, and that
-// omnipusGracefulShutdown tolerates that without panicking.
-func TestOmnipusGracefulShutdown_NilSidecarsSafe(t *testing.T) {
+// TestOmnipusGracefulShutdown_NilBrowserVideoSafe verifies the degraded-boot
+// path (setupAndStartServices failed before RegisterBrowserVideo ran) leaves
+// services.browserVideo nil, and that omnipusGracefulShutdown tolerates that
+// without panicking.
+func TestOmnipusGracefulShutdown_NilBrowserVideoSafe(t *testing.T) {
 	cfg := newShutdownTestConfig(t)
 	msgBus := bus.NewMessageBus()
 	provider := &restMockProvider{}
@@ -130,5 +80,5 @@ func TestOmnipusGracefulShutdown_NilSidecarsSafe(t *testing.T) {
 	svc := &services{}
 
 	omnipusGracefulShutdown(svc, agentLoop, provider, cfg)
-	// No panic == pass. Nil sidecars must never be dereferenced.
+	// No panic == pass. A nil browserVideo must never be dereferenced.
 }

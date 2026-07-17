@@ -420,11 +420,13 @@ func TestManager_NoCoordinator_ManagedPipeLaunch(t *testing.T) {
 	}
 }
 
-// TestManagedExecOpts_HeadfulPipeForVideoCapable proves the MAJ-001 launch-args
-// contract: video-capable launches are HEADFUL (no --headless, a --window-size,
-// DISPLAY in env) and non-video-capable launches preserve the headless-shell
-// path — and NEITHER carries a --remote-debugging-port (CDP is over the pipe).
-func TestManagedExecOpts_HeadfulPipeForVideoCapable(t *testing.T) {
+// TestManagedExecOpts_HeadlessShellNoPortNoDisplay proves the agent launch
+// path (ADR-044 Option A) stays headless-shell unconditionally: --headless is
+// always present, and NEITHER --remote-debugging-port (CDP is over the pipe)
+// NOR DISPLAY (no virtual-display sidecar in this path anymore) ever appear.
+// Replaces the pre-Option-A TestManagedExecOpts_HeadfulPipeForVideoCapable,
+// which asserted the now-removed video-capable/headful branch.
+func TestManagedExecOpts_HeadlessShellNoPortNoDisplay(t *testing.T) {
 	cfg := BrowserConfig{ProfileDir: filepath.Join(t.TempDir(), "profile")}
 
 	hasFlag := func(args []string, want string) bool {
@@ -444,44 +446,76 @@ func TestManagedExecOpts_HeadfulPipeForVideoCapable(t *testing.T) {
 		return false
 	}
 
-	// Video-capable: full Chrome in NEW headless mode (--headless=new) +
-	// SwiftShader software rendering, NO DISPLAY (no Xvfb/X server), no port.
-	// This is Playwright's proven headless-video approach (--headless +
-	// --remote-debugging-pipe + swiftshader); the earlier headful-on-Xvfb design
-	// failed over the CDP pipe ("no browser is open -32000").
-	video := managedExecAllocatorOpts(cfg, managedLaunchParams{VideoCapable: true, Display: ":99"})
-	if !hasFlag(video.Args, "--headless") {
-		t.Errorf("video-capable launch must run headless (full Chrome, new headless renderer); got %v", video.Args)
-	}
-	if !hasFlag(video.Args, "--enable-unsafe-swiftshader") {
-		t.Errorf("video-capable launch must enable SwiftShader software rendering; got %v", video.Args)
-	}
-	if !hasFlag(video.Args, "--window-size=1280,720") {
-		t.Errorf("video-capable launch must set --window-size=1280,720; got %v", video.Args)
-	}
-	for _, e := range video.Env {
-		if strings.HasPrefix(e, "DISPLAY=") {
-			t.Errorf("video-capable launch must NOT set DISPLAY (new-headless renders offscreen); got %v", video.Env)
-		}
-	}
-	if hasPrefix(video.Args, "--remote-debugging-port") {
-		t.Errorf("video-capable launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v", video.Args)
-	}
-
-	// Non-video-capable: headless-shell preserved, no DISPLAY, no port.
 	headless := managedExecAllocatorOpts(cfg, managedLaunchParams{})
 	if !hasFlag(headless.Args, "--headless") {
-		t.Errorf("non-video-capable launch must preserve the headless-shell path (--headless); got %v", headless.Args)
+		t.Errorf("agent launch must stay headless-shell (--headless); got %v", headless.Args)
+	}
+	if !hasFlag(headless.Args, "--mute-audio") {
+		t.Errorf("agent launch must mute audio (no audio sidecar in this path); got %v", headless.Args)
 	}
 	if hasPrefix(headless.Args, "--remote-debugging-port") {
 		t.Errorf(
-			"non-video-capable launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v",
+			"agent launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v",
 			headless.Args,
 		)
 	}
 	for _, e := range headless.Env {
 		if strings.HasPrefix(e, "DISPLAY=") {
-			t.Errorf("non-video-capable launch must NOT set DISPLAY; got %v", headless.Env)
+			t.Errorf("agent launch must NOT set DISPLAY; got %v", headless.Env)
+		}
+		if strings.HasPrefix(e, "PULSE_SERVER=") {
+			t.Errorf("agent launch must NOT set PULSE_SERVER; got %v", headless.Env)
+		}
+	}
+}
+
+// TestEncoderChromeCmdline_HeadlessFullChromeNoDisplayNoPulse proves the
+// dedicated encoder browser's cmdline (ADR-044 Option A / Task B's
+// encoderBrowser): full Chrome in new-headless mode with SwiftShader, sharing
+// the agent's hardening base, but with neither DISPLAY nor PULSE_SERVER nor
+// --user-data-dir (cdppipe supplies the latter from PipeOptions.UserDataDir).
+func TestEncoderChromeCmdline_HeadlessFullChromeNoDisplayNoPulse(t *testing.T) {
+	cfg := BrowserConfig{ProfileDir: filepath.Join(t.TempDir(), "profile", "encoder")}
+
+	hasFlag := func(args []string, want string) bool {
+		for _, a := range args {
+			if a == want {
+				return true
+			}
+		}
+		return false
+	}
+	hasPrefix := func(args []string, prefix string) bool {
+		for _, a := range args {
+			if strings.HasPrefix(a, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	encoder := EncoderChromeCmdline(cfg)
+	if !hasFlag(encoder.Args, "--headless") {
+		t.Errorf("encoder launch must run new-headless full Chrome; got %v", encoder.Args)
+	}
+	if !hasFlag(encoder.Args, "--enable-unsafe-swiftshader") {
+		t.Errorf("encoder launch must enable SwiftShader software rendering; got %v", encoder.Args)
+	}
+	if hasFlag(encoder.Args, "--mute-audio") {
+		t.Errorf("encoder launch must NOT carry the agent-only --mute-audio flag; got %v", encoder.Args)
+	}
+	if hasPrefix(encoder.Args, "--remote-debugging-port") {
+		t.Errorf("encoder launch must NOT set --remote-debugging-port (CDP is over the pipe); got %v", encoder.Args)
+	}
+	if hasPrefix(encoder.Args, "--user-data-dir") {
+		t.Errorf("encoder launch must NOT set --user-data-dir itself (cdppipe supplies it); got %v", encoder.Args)
+	}
+	for _, e := range encoder.Env {
+		if strings.HasPrefix(e, "DISPLAY=") {
+			t.Errorf("encoder launch must NOT set DISPLAY (new-headless renders offscreen); got %v", encoder.Env)
+		}
+		if strings.HasPrefix(e, "PULSE_SERVER=") {
+			t.Errorf("encoder launch must NOT set PULSE_SERVER (audio deferred to phase 2); got %v", encoder.Env)
 		}
 	}
 }

@@ -162,7 +162,7 @@ func TestStream_SingleEncodeMismatch_NoSecondEncoderSpawned(t *testing.T) {
 	wc1 := newTestVideoConn()
 	h1, err := o.AttachViewer(AttachParams{
 		WC: wc1, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil || h1 == nil {
@@ -184,7 +184,7 @@ func TestStream_SingleEncodeMismatch_NoSecondEncoderSpawned(t *testing.T) {
 	wc2 := newTestVideoConn()
 	h2, err := o.AttachViewer(AttachParams{
 		WC: wc2, AgentID: "agent1", SessionID: "sess2", ViewerID: "v2",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"vp8"},
 	})
 	if err != nil {
@@ -248,7 +248,7 @@ func TestAudioChunk_SuppressedWhenNotNegotiated(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D4028"},
 		AudioCaps: []string{"opus"},
 	})

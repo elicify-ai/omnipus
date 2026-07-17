@@ -54,7 +54,7 @@ func TestStream_BringupFailure_NoStreamPersists(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agentX", SessionID: "sessX", ViewerID: "vX",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E", "vp8"},
 	})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestStream_BringupFailure_NoStreamPersists(t *testing.T) {
 	wc2 := newTestVideoConn()
 	h2, err := o.AttachViewer(AttachParams{
 		WC: wc2, AgentID: "agentX", SessionID: "sessX2", ViewerID: "vX2",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E", "vp8"},
 	})
 	if err != nil {
@@ -151,11 +151,22 @@ func TestStream_BringupFailure_EmitsAuditEvent(t *testing.T) {
 		EncoderServer: srv,
 	})
 	o.ingest = ing
+	// ADR-044 Option A / Task B: launchEncoderTab now calls o.encoder.ensureRoot
+	// BEFORE the LaunchEncoder seam faked above ever runs — fake ITS launch
+	// seams too (mirrors newTestOrchestrator, browser_stream_test.go) so this
+	// test stays hermetic (no real Chrome download/launch) and its injected
+	// capture-start failure is what actually fails bring-up.
+	o.encoder.resolveExecPath = func(context.Context, string) (string, error) {
+		return "fake-encoder-chrome", nil
+	}
+	o.encoder.pipeLauncher = func(context.Context, string, string) (encoderPipeLaunch, error) {
+		return encoderPipeLaunch{rootCtx: context.Background()}, nil
+	}
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agentZ", SessionID: "sessZ", ViewerID: "vZ",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E", "vp8"},
 	})
 	if err != nil {
@@ -249,11 +260,21 @@ func TestStream_MidStreamStall_LivenessTimeoutFailsStream(t *testing.T) {
 		EncoderServer: srv,
 	})
 	o.ingest = ing
+	// ADR-044 Option A / Task B: same hermeticity fix as
+	// TestStream_BringupFailure_EmitsAuditEvent above — fake o.encoder's own
+	// launch seams so ensureRoot never touches the network or spawns a real
+	// Chrome process.
+	o.encoder.resolveExecPath = func(context.Context, string) (string, error) {
+		return "fake-encoder-chrome", nil
+	}
+	o.encoder.pipeLauncher = func(context.Context, string, string) (encoderPipeLaunch, error) {
+		return encoderPipeLaunch{rootCtx: context.Background()}, nil
+	}
 
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agentY", SessionID: "sessY", ViewerID: "vY",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil || h == nil {

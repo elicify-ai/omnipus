@@ -2,16 +2,19 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 //
-// browser_dormant_integration_test.go — round-2 test-analysis Option-B
-// regression guard. The operator's round-2 decision (see r2-ledger.md
-// KEY DECISION) is that the live-browser-video-streaming feature ships
-// DORMANT this increment: the Xvfb/PulseAudio sidecars exist (display.go,
-// audiosink*.go) but are wired into NO boot sequence
-// (BrowserCoordinator.SetDisplaySidecar has zero production callers), so
-// browser.DisplaySidecarHealthyProbe stays at its shipped default (always
-// false) and browser.ClassifyVideoCapability must report NotCapable — the
-// installer picks chrome-headless-shell and the live-browser viewer falls
-// back to the existing JPEG browser_screencast path.
+// browser_dormant_integration_test.go — Option-A (ADR-044) regression guard
+// for the "no full-Chrome encoder build installed yet" dormant posture. Under
+// Option A, video-capable means linux + a full-Chrome build already present
+// under installRoot for the dedicated live-view encoder browser (see
+// capability.go's ClassifyVideoCapability doc) — the agent's own browser is
+// always chrome-headless-shell regardless of this classification, and no
+// virtual-display or audio sidecar is involved anywhere in the decision (that
+// whole apparatus was deleted with the Option-A rearchitecture). "Dormant"
+// here simply means: nothing is installed at installRoot yet, so
+// ClassifyVideoCapability returns NotCapable and the installer/live-view path
+// must behave exactly as it does for any other NotCapable host — the
+// live-browser viewer falls back to the existing JPEG browser_screencast
+// path.
 //
 // browser_stream_test.go's existing suite only ever wires a FAKE classifier
 // (capable() or an inline notCapable closure) — it proves the orchestrator's
@@ -23,12 +26,12 @@
 // capture started, no token minted, and the viewer gets the same generic
 // unavailable signal it would from a fake NotCapable classifier.
 //
-// (The classifier's OWN dormant-by-default behavior, including the AR-C1
-// regression case of "NotCapable even with a full Chrome build already
-// installed", is already covered directly in
-// pkg/tools/browser/capability_test.go's TestVideoCapability_DormantByDefault_OptionB
-// — this file does not duplicate that; it covers the gateway orchestration
-// layer's integration with the real classifier instead.)
+// (The classifier's OWN behavior when nothing is installed, including the
+// "NotCapable without a full-Chrome build present" case, is already covered
+// directly in pkg/tools/browser/capability_test.go's
+// TestVideoCapability_NotCapable_WithoutFullChromeInstalled — this file does
+// not duplicate that; it covers the gateway orchestration layer's
+// integration with the real classifier instead.)
 
 package gateway
 
@@ -40,26 +43,15 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
-// TestBrowserVideo_Dormant_OptionB_RealClassifier_NoEncoderNoLiveStream is the
+// TestBrowserVideo_Dormant_OptionA_RealClassifier_NoEncoderNoLiveStream is the
 // end-to-end (orchestrator + real classifier) regression guard for the
-// Option-B posture: with browser.DisplaySidecarHealthyProbe at its shipped
-// default, a viewer attach through the REAL production wiring (Classify left
-// nil so newOrchestrator installs browser.ClassifyVideoCapability itself,
-// exactly as RegisterBrowserVideo's real callers get it) must never launch an
-// encoder page, never start capture, never mint an ingest token, and must
-// leave the viewer in the generic unavailable state.
-func TestBrowserVideo_Dormant_OptionB_RealClassifier_NoEncoderNoLiveStream(t *testing.T) {
-	// Canary: if a future change wires the sidecar at boot (flipping
-	// DisplaySidecarHealthyProbe's default), this test's whole premise breaks
-	// — fail loudly here instead of silently passing for the wrong reason.
-	if browser.DisplaySidecarHealthyProbe() {
-		t.Fatal(
-			"browser.DisplaySidecarHealthyProbe defaults true — the Option-B dormant-by-default " +
-				"assumption this test rests on no longer holds; this test needs updating for the " +
-				"sidecar-wiring increment (see capability.go's doc comment)",
-		)
-	}
-
+// Option-A dormant posture: with nothing installed under installRoot yet, a
+// viewer attach through the REAL production wiring (Classify left nil so
+// newOrchestrator installs browser.ClassifyVideoCapability itself, exactly as
+// RegisterBrowserVideo's real callers get it) must never launch an encoder
+// page, never start capture, never mint an ingest token, and must leave the
+// viewer in the generic unavailable state.
+func TestBrowserVideo_Dormant_OptionA_RealClassifier_NoEncoderNoLiveStream(t *testing.T) {
 	installRoot := filepath.Join(t.TempDir(), "chromium") // nothing installed at this path
 	capab := browser.ClassifyVideoCapability(installRoot)
 	if capab.Capable {
@@ -91,7 +83,7 @@ func TestBrowserVideo_Dormant_OptionB_RealClassifier_NoEncoderNoLiveStream(t *te
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E", "vp8"},
 		AudioCaps: []string{"opus"},
 	})
@@ -142,7 +134,7 @@ func TestBrowserVideo_Dormant_vs_Capable_ClassifierIsTheDecidingFactor(t *testin
 		wc := newTestVideoConn()
 		h, err := o.AttachViewer(AttachParams{
 			WC: wc, AgentID: agentID, SessionID: "sess-" + agentID, ViewerID: "v-" + agentID,
-			RootCtx: context.Background(), AgentCtx: context.Background(),
+			AgentCtx:  context.Background(),
 			VideoCaps: []string{"avc1.4D401E", "vp8"},
 		})
 		if err != nil {

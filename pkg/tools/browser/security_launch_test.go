@@ -32,33 +32,34 @@ import (
 
 // TestManagedExecOpts_ForbiddenFakeUIMediaStreamFlag_NeverPresent is the
 // FR-016 negative-space guard: --use-fake-ui-for-media-stream would silently
-// auto-grant getUserMedia to EVERY page in the managed Chrome instance,
+// auto-grant getUserMedia to EVERY page in a managed Chrome instance,
 // including a page the agent itself navigates to — defeating the whole
 // origin-scoped-audio-grant design in encoder_launch.go (LaunchEncoderPage's
-// doc comment explicitly forbids it, C-2/P-6). Table-driven over both launch
-// modes (video-capable headful and the pre-video headless-shell default) so
-// a regression in EITHER path is caught.
+// doc comment explicitly forbids it, C-2/P-6). Table-driven over BOTH managed
+// Chrome processes this package launches under ADR-044 Option A — the agent's
+// own chrome-headless-shell (managedExecAllocatorOpts) and the dedicated
+// full-Chrome encoder browser (EncoderChromeCmdline) — so a regression in
+// EITHER path is caught.
 //
 // Traces to: docs/internal/specs/live-browser-video-streaming-spec.md FR-016 / Test 3.
 func TestManagedExecOpts_ForbiddenFakeUIMediaStreamFlag_NeverPresent(t *testing.T) {
 	cfg := BrowserConfig{ProfileDir: t.TempDir()}
 
 	tests := []struct {
-		name   string
-		params managedLaunchParams
+		name    string
+		cmdline managedChromeCmdline
 	}{
-		{name: "video-capable headful launch", params: managedLaunchParams{VideoCapable: true, Display: ":99"}},
-		{name: "non-video-capable headless-shell launch", params: managedLaunchParams{}},
+		{name: "agent headless-shell launch", cmdline: managedExecAllocatorOpts(cfg, managedLaunchParams{})},
+		{name: "encoder full-Chrome launch", cmdline: EncoderChromeCmdline(cfg)},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmdline := managedExecAllocatorOpts(cfg, tc.params)
-			for _, a := range cmdline.Args {
+			for _, a := range tc.cmdline.Args {
 				if a == "--use-fake-ui-for-media-stream" || strings.HasPrefix(a, "--use-fake-ui-for-media-stream=") {
 					t.Fatalf(
 						"FORBIDDEN flag --use-fake-ui-for-media-stream present in managed launch args: %v",
-						cmdline.Args,
+						tc.cmdline.Args,
 					)
 				}
 			}
@@ -69,27 +70,34 @@ func TestManagedExecOpts_ForbiddenFakeUIMediaStreamFlag_NeverPresent(t *testing.
 // ---- SC-017 / EC-3 / TC-G5: no fixed CDP TCP port ----
 
 // TestManagedExecOpts_NoRemoteDebuggingPort_EitherLaunchMode complements the
-// MAJ-001 launch-args contract test in coordinator_test.go
-// (TestManagedExecOpts_HeadfulPipeForVideoCapable) with a security-framed,
-// standalone assertion: managedExecAllocatorOpts itself must never emit
-// --remote-debugging-port under ANY params — a fixed TCP CDP port would be a
-// locally-reachable, unauthenticated control surface for the shared managed
-// Chrome (SC-017/EC-3). CDP flows exclusively over the cdppipe fd 3/4 pipe.
+// MAJ-001 launch-args contract tests in coordinator_test.go
+// (TestManagedExecOpts_HeadlessShellNoPortNoDisplay,
+// TestEncoderChromeCmdline_HeadlessFullChromeNoDisplayNoPulse) with a
+// security-framed, standalone assertion: NEITHER managed Chrome process this
+// package launches — the agent's chrome-headless-shell nor the dedicated
+// full-Chrome encoder browser — may ever emit --remote-debugging-port. A
+// fixed TCP CDP port would be a locally-reachable, unauthenticated control
+// surface for a managed Chrome process (SC-017/EC-3). CDP flows exclusively
+// over the cdppipe fd 3/4 pipe.
 //
 // Traces to: docs/internal/specs/live-browser-video-streaming-spec.md SC-017 / EC-3.
 func TestManagedExecOpts_NoRemoteDebuggingPort_EitherLaunchMode(t *testing.T) {
 	cfg := BrowserConfig{ProfileDir: t.TempDir()}
 
-	for _, params := range []managedLaunchParams{
-		{VideoCapable: true, Display: ":42"},
-		{VideoCapable: false},
-	} {
-		cmdline := managedExecAllocatorOpts(cfg, params)
-		for _, a := range cmdline.Args {
+	tests := []struct {
+		name    string
+		cmdline managedChromeCmdline
+	}{
+		{name: "agent headless-shell launch", cmdline: managedExecAllocatorOpts(cfg, managedLaunchParams{})},
+		{name: "encoder full-Chrome launch", cmdline: EncoderChromeCmdline(cfg)},
+	}
+
+	for _, tc := range tests {
+		for _, a := range tc.cmdline.Args {
 			if strings.HasPrefix(a, "--remote-debugging-port") {
 				t.Fatalf(
-					"managedExecAllocatorOpts(params=%+v) must never set --remote-debugging-port; got %v",
-					params, cmdline.Args,
+					"%s must never set --remote-debugging-port; got %v",
+					tc.name, tc.cmdline.Args,
 				)
 			}
 		}
@@ -124,7 +132,7 @@ func TestSecurityLaunch_ComposedPipeArgv_HasPipeFlagNoTCPPort(t *testing.T) {
 	}
 
 	cfg := BrowserConfig{ProfileDir: t.TempDir()}
-	managedArgs := managedExecAllocatorOpts(cfg, managedLaunchParams{VideoCapable: true, Display: ":7"}).Args
+	managedArgs := managedExecAllocatorOpts(cfg, managedLaunchParams{}).Args
 
 	var captured []string
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

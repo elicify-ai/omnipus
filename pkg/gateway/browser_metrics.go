@@ -12,10 +12,9 @@
 // boot" pattern pkg/tools/compositor.go's
 // toolMetricsRecorder/SetToolMetricsRecorder already established for
 // pkg/tools (FR-039/C4) — see pkg/tools/browser/metrics.go for the half of
-// this wiring that lives in the leaf package (the relay drop-on-full path
-// and the Xvfb/PulseAudio sidecar restart hooks, which this package must
-// never reach into directly per stream_relay.go's no-import-of-gateway
-// contract).
+// this wiring that lives in the leaf package (the relay drop-on-full path,
+// which this package must never reach into directly per stream_relay.go's
+// no-import-of-gateway contract).
 //
 // Metrics (FR-019):
 //
@@ -25,8 +24,6 @@
 //	omnipus_browser_viewer_drop_total           counter   (none)
 //	omnipus_browser_decode_error_total          counter   (none)
 //	omnipus_browser_capture_restart_total       counter   (none)
-//	omnipus_browser_xvfb_sidecar_restart_total  counter   (none)
-//	omnipus_browser_pulse_sidecar_restart_total counter   (none)
 //	omnipus_browser_ingest_auth_reject_total    counter   reason
 //
 // fps/bitrate are deliberately exposed as raw counters
@@ -68,18 +65,13 @@
 //     call-site exists yet — see RecordDecodeError's doc comment. Do not
 //     alert on this metric until a client decode-error wire message lands
 //     in contracts/asyncapi.yaml and a real call site is wired.
-//   - omnipus_browser_capture_restart_total /
-//     omnipus_browser_xvfb_sidecar_restart_total /
-//     omnipus_browser_pulse_sidecar_restart_total: alert if
-//     rate(...[5m]) > 3. FR-018/FR-021/FR-022's bounded-backoff supervisors
-//     recover from an OCCASIONAL crash by design; a high rate means a
-//     crash-loop that will soon exhaust the bounded retry budget
-//     (xvfbMaxRestartAttempts=5 in display_linux.go,
-//     defaultMaxRelaunches=3 in browser_stream.go), which classifies the
-//     install not-video-capable / fails the stream. Runbook: check
-//     $OMNIPUS_HOME/logs/gateway.log for the sidecar's captured stderr
-//     ("xvfb sidecar: restart attempt failed to spawn Xvfb" /
-//     "audio sidecar: bring-up failed") to find the underlying crash cause.
+//   - omnipus_browser_capture_restart_total: alert if rate(...[5m]) > 3.
+//     FR-018's bounded-backoff capture-restart / encoder-relaunch recovers
+//     from an OCCASIONAL crash by design; a high rate means a crash-loop that
+//     will soon exhaust the bounded retry budget (defaultMaxRelaunches=3 in
+//     browser_stream.go), which fails the stream. Runbook: check
+//     $OMNIPUS_HOME/logs/gateway.log for the captured encoder/agent Chrome
+//     stderr to find the underlying crash cause.
 //   - omnipus_browser_ingest_auth_reject_total{reason}: alert if
 //     rate(...[5m]) > 10 for any reason OTHER than "duplicate_connection"
 //     (a handful of duplicate_connection rejects is expected churn around a
@@ -130,12 +122,6 @@ type browserVideoMetrics struct {
 	// pipeline: StepDown's capture-driver restart (browser_stream.go) and
 	// handleEncoderDrop's CRIT-002 re-mint+relaunch (browser_stream.go).
 	captureRestartTotal atomic.Int64
-
-	// xvfbSidecarRestartTotal / pulseSidecarRestartTotal: FR-019 sidecar
-	// restart counts (components B/C). Incremented via pkg/tools/browser's
-	// browserMetricsRecorder — see display_linux.go / audiosink_linux.go.
-	xvfbSidecarRestartTotal  atomic.Int64
-	pulseSidecarRestartTotal atomic.Int64
 
 	// ingestAuthRejectTotal: FR-019 "ingest-auth-reject count", labeled by
 	// the same ingestRejectReason values browser_ingest.go already audits
@@ -202,9 +188,7 @@ func newBrowserVideoMetrics() *browserVideoMetrics {
 // ---- pkg/tools/browser.browserMetricsRecorder implementation ----
 // (registered via browser.SetBrowserMetricsRecorder in RegisterBrowserVideo)
 
-func (m *browserVideoMetrics) IncViewerDrop()          { m.viewerDropTotal.Add(1) }
-func (m *browserVideoMetrics) IncXvfbSidecarRestart()  { m.xvfbSidecarRestartTotal.Add(1) }
-func (m *browserVideoMetrics) IncPulseSidecarRestart() { m.pulseSidecarRestartTotal.Add(1) }
+func (m *browserVideoMetrics) IncViewerDrop() { m.viewerDropTotal.Add(1) }
 
 // ---- gateway-package-local hooks (no cross-package interface needed —
 // these call sites already live in package gateway) ----
@@ -367,26 +351,6 @@ func writeBrowserVideoMetrics(sb *strings.Builder) {
 	)
 	sb.WriteString("# TYPE omnipus_browser_capture_restart_total counter\n")
 	fmt.Fprintf(sb, "omnipus_browser_capture_restart_total %d\n", m.captureRestartTotal.Load())
-
-	sb.WriteString(
-		"# HELP omnipus_browser_xvfb_sidecar_restart_total Xvfb sidecar bounded-backoff restarts (FR-021).\n",
-	)
-	sb.WriteString("# TYPE omnipus_browser_xvfb_sidecar_restart_total counter\n")
-	fmt.Fprintf(
-		sb,
-		"omnipus_browser_xvfb_sidecar_restart_total %d\n",
-		m.xvfbSidecarRestartTotal.Load(),
-	)
-
-	sb.WriteString(
-		"# HELP omnipus_browser_pulse_sidecar_restart_total PulseAudio sidecar bounded-backoff restarts (FR-022).\n",
-	)
-	sb.WriteString("# TYPE omnipus_browser_pulse_sidecar_restart_total counter\n")
-	fmt.Fprintf(
-		sb,
-		"omnipus_browser_pulse_sidecar_restart_total %d\n",
-		m.pulseSidecarRestartTotal.Load(),
-	)
 
 	sb.WriteString(
 		"# HELP omnipus_browser_ingest_auth_reject_total Capture-ingest auth rejections by reason (FR-013/FR-024).\n",

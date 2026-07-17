@@ -809,18 +809,12 @@ func (h *BrowserWSHandler) handleAttach(
 	// internally), used by component L's capture driver to start the
 	// screencast this stream encodes.
 	//
-	// RootCtx is the coordinator's shared, session-independent root context
-	// (CRIT-002) via *browser.BrowserManager.RootContext() — NOT this agent's
-	// own tab context. The encoder page LaunchEncoderPage starts is created as
-	// a chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext()) sibling
-	// of rootCtx (encoder_launch.go), so it survives this agent's OWN tab
-	// context being torn down and recreated mid-stream (a crash-relaunch,
-	// ReconcileTabs, or the agent closing/reopening its tab) — it no longer
-	// shares that context's lifecycle. RootContext() returns ok=false in the
-	// no-coordinator managed-mode fallback, remote-CDP-override mode, or when
-	// the coordinator hasn't launched Chrome yet; AgentCtx is the fallback for
-	// those cases (the prior behavior — fail-safe, never a panic, just unable
-	// to survive an agent-tab-ctx recreation independently).
+	// There is no RootCtx to resolve here anymore (Option-A rearchitecture,
+	// ADR-044): the encoder now runs in its own dedicated, full-Chrome
+	// encoder browser with a root context it owns and sources internally
+	// (browser_stream.go's encoderBrowser.ensureRoot), independent of any
+	// per-agent coordinator root. AttachViewer no longer needs — and
+	// AttachParams no longer has — a RootCtx field for this call.
 	agentCtx, sessErr := mgr.Session(browser.DefaultSessionID)
 	if sessErr != nil {
 		slog.Warn("browser-ws: video attach: resolve agent session failed",
@@ -833,17 +827,12 @@ func (h *BrowserWSHandler) handleAttach(
 		)
 		return
 	}
-	rootCtx, rootOK := mgr.RootContext()
-	if !rootOK {
-		rootCtx = agentCtx
-	}
 
 	handle, verr := h.browserVideo.AttachViewer(AttachParams{
 		WC:        wc,
 		AgentID:   frame.AgentId,
 		SessionID: chatSessionID,
 		ViewerID:  viewerID,
-		RootCtx:   rootCtx,
 		AgentCtx:  agentCtx,
 		VideoCaps: frame.VideoCaps,
 		AudioCaps: frame.AudioCaps,

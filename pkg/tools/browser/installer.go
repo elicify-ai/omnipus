@@ -91,25 +91,27 @@ func (b chromiumBuild) binaryFullPath(versionDir, platform string) string {
 	return filepath.Join(versionDir, b.subdir(platform), b.binaryPath())
 }
 
-// EnsureChromium ensures a managed Chromium binary is present under
-// installRoot, downloading the appropriate Chrome for Testing build when
-// neither flavor is already installed. Returns the absolute path to the
-// executable.
+// EnsureChromiumBuild ensures a managed Chromium binary is present under
+// installRoot, downloading build when neither flavor is already installed.
+// Returns the absolute path to the executable.
 //
 // F-08 dual-download: two CfT builds are supported — the full "chrome" build
-// (FR-009's default for Linux video-capable installs) and the
-// "chrome-headless-shell" fallback — each with its own manifest download key,
-// on-disk extraction layout, binary-name resolver, and integrity
-// verification (verifyGoogHashMD5). EnsureChromium detects EITHER binary
-// already installed and never re-downloads in that case, preferring the full
-// build when both are cached (it is a strict superset of headless-shell's
-// browsing capability — DS-5 "both cached -> prefer full").
+// (Option A / ADR-044's dedicated live-view encoder browser) and the
+// "chrome-headless-shell" build (the agent's own default browser) — each
+// with its own manifest download key, on-disk extraction layout, binary-name
+// resolver, and integrity verification (verifyGoogHashMD5).
+// EnsureChromiumBuild resolves the SPECIFICALLY requested build: if that build
+// is already installed it returns it without hitting the network, otherwise it
+// downloads that build. The two builds are NOT interchangeable under Option A —
+// the encoder needs full Chrome's WebCodecs VideoEncoder, which
+// chrome-headless-shell lacks — so resolution is deliberately per-build, not a
+// "detect either" short-circuit that could hand the encoder a cached shell.
 //
 // Layout: <installRoot>/<version>/<downloadID>-<platform>/<binary-per-build-layout>
 //
 // Concurrent calls are serialized; the second caller observes the freshly
 // extracted binary and returns immediately.
-func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
+func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromiumBuild) (string, error) {
 	installMu.Lock()
 	defer installMu.Unlock()
 
@@ -118,13 +120,16 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 		return "", err
 	}
 
-	// If any prior install already left a usable binary of either build,
-	// prefer it without hitting the network (F-08 detect-either).
-	if path := findInstalledBinary(installRoot, platform); path != "" {
+	// If the SPECIFICALLY requested build is already installed, return it without
+	// hitting the network. ADR-044 Option A makes the agent (chrome-headless-shell)
+	// and the encoder (full Chrome) launch DIFFERENT, non-interchangeable builds —
+	// the encoder needs full Chrome's WebCodecs VideoEncoder, which
+	// chrome-headless-shell lacks entirely. A prior "detect-either" short-circuit
+	// (findInstalledBinary) would hand the encoder a cached headless-shell and
+	// silently break video, so resolution MUST be per-build now.
+	if path := findInstalledBuild(installRoot, platform, build); path != "" {
 		return path, nil
 	}
-
-	build := selectDownloadBuild()
 
 	logger.InfoCF("browser", "Chromium not installed — downloading from chrome-for-testing",
 		map[string]any{
@@ -216,6 +221,24 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 	return binaryPath, nil
 }
 
+// EnsureChromium ensures the agent's default managed Chromium binary
+// (chrome-headless-shell — Option A / ADR-044: the agent's own browser is
+// always headless-shell, never the full-Chrome build) is present under
+// installRoot. See EnsureChromiumBuild.
+func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
+	return EnsureChromiumBuild(ctx, installRoot, selectDownloadBuild())
+}
+
+// EnsureChromiumFullBuild ensures the dedicated live-view encoder's full
+// "chrome" build (Option A / ADR-044 — WebCodecs VideoEncoder support the
+// agent's chrome-headless-shell build lacks; never used for agent browsing)
+// is present under installRoot. This is the public entry point other
+// packages (e.g. pkg/gateway's browser-video orchestrator) call to
+// ensure/prefetch the encoder binary.
+func EnsureChromiumFullBuild(ctx context.Context, installRoot string) (string, error) {
+	return EnsureChromiumBuild(ctx, installRoot, fullChromeBuild())
+}
+
 // zipURLForPlatform returns the download URL among downloads matching
 // platform, or "" if none matches.
 func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) string {
@@ -227,39 +250,14 @@ func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) stri
 	return ""
 }
 
-// selectDownloadBuild decides which CfT build a fresh EnsureChromium download
-// (nothing of either flavor cached yet) should fetch — FR-009/F-08: the full
-// "chrome" build is the default only once this host is ACTUALLY positioned to
-// run it as a video-capable install (Linux + a healthy, wired virtual-display
-// sidecar); every other host (macOS/Windows self-host, Linux with no sidecar
-// wired, or before the Xvfb sidecar / Gate-0 rollout is live) keeps
-// downloading chrome-headless-shell, preserving pre-F-08 behavior byte for
-// byte.
-//
-// This is deliberately NOT gated behind a separate config flag: FR-009's
-// "flipped only after Gate 0" requirement is realized structurally — the
-// video-capable precondition is DisplaySidecarHealthyProbe() (capability.go),
-// not an Xvfb-binary-on-PATH probe (AR-C1/GC-1/GC-2's Option-B dormant gate).
-// A host merely having the xvfb/pulseaudio OS packages installed must never,
-// by itself, flip this to the full-Chrome build — that decoupling (packages
-// on PATH vs. an actually-running, health-checked sidecar) was exactly the
-// coherence bug this gate fixes: a host with those packages present would
-// download +120MB of full Chrome and get classified "capable" while every
-// real launch stayed headless-shell, because coordinator.videoLaunchMode
-// gates the ACTUAL launch on a wired-and-Healthy() DisplaySidecar, which
-// nothing sets this increment.
-//
-// Because DisplaySidecarHealthyProbe defaults to a hardcoded false and no
-// boot path calls BrowserCoordinator.SetDisplaySidecar yet, this function is
-// TRUE BY CONSTRUCTION right now — it always returns headlessShellBuild(),
-// with no additional wiring required in this file. The seam for the next
-// increment is DisplaySidecarHealthyProbe itself (see its doc comment in
-// capability.go): once boot wires a real Xvfb sidecar there, this function
-// starts returning fullChromeBuild() automatically.
+// selectDownloadBuild decides which CfT build the agent's default
+// EnsureChromium download (nothing of either flavor cached yet) should
+// fetch. Option A (ADR-044) dedicates a SEPARATE full-Chrome browser process
+// to live-view encoding (see EnsureChromiumFullBuild) — the agent's own
+// browser is always chrome-headless-shell, so this always returns
+// headlessShellBuild() now that the display-sidecar probe this used to gate
+// on (DisplaySidecarHealthyProbe) is gone.
 func selectDownloadBuild() chromiumBuild {
-	if runtime.GOOS == "linux" && DisplaySidecarHealthyProbe() {
-		return fullChromeBuild()
-	}
 	return headlessShellBuild()
 }
 

@@ -5,36 +5,45 @@
 // Copyright (c) 2026 Omnipus contributors
 //
 // live_video_pipeline_e2e_test.go — REAL-HARDWARE end-to-end proof for the
-// live-browser video pipeline (ADR-044, docs/internal/specs/
-// live-browser-video-streaming-spec.md). Runs ONLY under the browservideo_e2e
-// build tag on a host with the real display stack (Xvfb + PulseAudio + a
-// full-Chrome install) — e.g. the ci-omnipus worker. NEVER in the default
-// suite or the dev pod (no display).
+// live-browser video pipeline (ADR-044 Option A rearchitecture,
+// docs/internal/specs/live-browser-video-streaming-spec.md). Runs ONLY under
+// the browservideo_e2e build tag on a host that can run real Chrome (e.g. the
+// ci-omnipus worker). NEVER in the default suite or the dev pod.
 //
-// PIPELINE DEPTH ACHIEVED: FULL. Unlike diag_capability_e2e_test.go (which
-// only proves the boot-time capability classification) and the
-// pkg/tools/browser skeleton (live_video_e2e_test.go, permanently t.Skip'd,
-// proves only the capture leg because that package cannot import pkg/gateway),
-// this test lives in package gateway specifically so it can construct the
-// REAL gateway.BrowserVideoOrchestrator via RegisterBrowserVideo, wired with
-// EVERY seam left at its production default (real browser.StartCapture, real
-// browser.LaunchEncoderPage, real loopbackEncoderServer, a real loopback HTTP
-// server hosting the real CaptureIngestHandler) — mirroring
-// setupAndStartServices' construction (pkg/gateway/gateway.go ~line 2335)
-// field for field. It then drives AttachViewer exactly the way the browser
-// WS attach path does and reads genuine binary browser_video_chunk frames
-// off a real *browserWSConn sink. This is the level the round-1 deadlock
-// (ADR-038 postmortem referenced throughout browser_stream.go/capture.go)
-// actually lived at — a hermetic unit test with fakes cannot reach it,
-// because the deadlock was a real chromedp/CDP dispatch-goroutine reentrancy
-// bug that only manifests against real Chrome.
+// Option A dedicates a SEPARATE, full-Chrome-headless process to encoding
+// (the orchestrator's own encoderBrowser, browser_stream.go) — the agent's
+// own browser is always chrome-headless-shell, which has no WebCodecs
+// VideoEncoder at all. There is no virtual-display or audio sidecar anywhere
+// in this path: chrome-headless-shell needs no display to run headless, and
+// the dedicated encoder browser renders offscreen via new-headless +
+// SwiftShader (see EncoderChromeCmdline's doc comment). Audio capture is
+// deferred to phase 2 (ADR-044) — HasAudio is always false in this
+// increment.
 //
-// The one deliberate simplification versus true gateway boot: Chrome bring-up
-// is driven directly through browser.NewBrowserCoordinator +
-// browser.NewBrowserManager (mirroring bootLiveBrowserVideo's B1-B4 sidecar
-// sequence plus registerSharedTools' mgr.AttachSharedChrome wiring) rather
-// than spinning up a full *agent.AgentLoop — everything downstream of "a live
-// coordinator-mediated headful Chrome tab" is the real production path.
+// PIPELINE DEPTH ACHIEVED: FULL. This test lives in package gateway
+// specifically so it can construct the REAL gateway.BrowserVideoOrchestrator
+// via RegisterBrowserVideo, wired with EVERY seam left at its production
+// default (real browser.StartCapture, real browser.LaunchEncoderPage, real
+// loopbackEncoderServer, a real loopback HTTP server hosting the real
+// CaptureIngestHandler) — mirroring setupAndStartServices' construction
+// (pkg/gateway/gateway.go) field for field. It then drives AttachViewer
+// exactly the way the browser WS attach path does and reads genuine binary
+// browser_video_chunk frames off a real *browserWSConn sink. This is the
+// level the round-1 deadlock (ADR-038 postmortem referenced throughout
+// browser_stream.go/capture.go) actually lived at — a hermetic unit test
+// with fakes cannot reach it, because the deadlock was a real chromedp/CDP
+// dispatch-goroutine reentrancy bug that only manifests against real Chrome.
+//
+// The one deliberate simplification versus true gateway boot: the agent's
+// own Chrome bring-up is driven directly through browser.NewBrowserCoordinator
+// + browser.NewBrowserManager (mirroring registerSharedTools'
+// mgr.AttachSharedChrome wiring) rather than spinning up a full
+// *agent.AgentLoop — everything downstream of "a live coordinator-mediated
+// agent Chrome tab" is the real production path. The dedicated encoder
+// browser itself is launched by the REAL orchestrator (o.encoder.ensureRoot,
+// via launchEncoderTab) — this test never fakes or pre-launches it; the first
+// AttachViewer call below is what triggers its lazy cold-start, exactly as in
+// production.
 
 package gateway
 
@@ -46,7 +55,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -118,8 +126,8 @@ draw();
 // (inclusive) and returns the first process whose /proc/<pid>/cmdline
 // contains needle (case-insensitive), space-joined for readability. Best-
 // effort: any read failure just means that pid is skipped, never a hard
-// error — this is corroboration for assertHeadfulChrome, not the sole proof.
-// Linux-only (/proc); this whole file only ever runs on the ci-omnipus worker.
+// error — this is corroboration, not the sole proof. Linux-only (/proc);
+// this whole file only ever runs on the ci-omnipus worker.
 func findProcessCmdlineContaining(rootPID int, needle string) (string, bool) {
 	needle = strings.ToLower(needle)
 	entries, err := os.ReadDir("/proc")
@@ -174,111 +182,82 @@ func findProcessCmdlineContaining(rootPID int, needle string) (string, bool) {
 	return "", false
 }
 
-// assertHeadfulChrome corroborates, via the real /proc process tree, that the
-// shared Chrome the coordinator launched under rootPid is running HEADFUL
-// (no --headless flag). The deterministic guarantee lives in source:
-// coordinator.go's launchChrome/videoLaunchMode (unexported, package browser)
-// only omits --headless when SetDisplaySidecar was wired with an already-
-// Healthy() sidecar BEFORE the coordinator's first launch — which the caller
-// arranges before mgr.Session ever triggers ensureLaunched (see
-// exec_resolver.go: managedExecAllocatorOpts appends "--headless" iff
-// !params.VideoCapable, and VideoCapable is exactly that wired-and-healthy
-// check). This function is corroboration of that guarantee via a genuinely
-// independent observation channel, not the sole proof.
-func assertHeadfulChrome(t *testing.T, rootPid int) {
+// processAlive reports whether pid still has a /proc entry — best-effort
+// liveness check used to corroborate that a killed Chrome process has
+// actually exited, not merely that Shutdown/close was called.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
+	return err == nil
+}
+
+// assertAgentIsHeadlessShell corroborates, via the real /proc process tree,
+// that the coordinator's OWN agent Chrome (rootPid = coordinator.PID()) is
+// running chrome-headless-shell in headless mode — the Option-A (ADR-044)
+// invariant that the agent's own browser is UNCONDITIONALLY headless-shell,
+// never the dedicated encoder's full-Chrome build. The deterministic
+// guarantee lives in source (exec_resolver.go: managedExecAllocatorOpts
+// always appends "--headless", and selectDownloadBuild always resolves
+// headlessShellBuild() — there is no video-capable branch on the agent launch
+// path anymore); this function is corroboration via a genuinely independent
+// observation channel, not the sole proof.
+func assertAgentIsHeadlessShell(t *testing.T, rootPid int) {
 	t.Helper()
 	if rootPid <= 0 {
 		t.Fatalf("coordinator.PID() returned %d — no live Chrome process to inspect", rootPid)
 	}
 	cmdline, found := findProcessCmdlineContaining(rootPid, "chrom")
 	if !found {
-		t.Logf(
-			"WARNING: could not locate a chrome[ium] process under pid %d via /proc — skipping direct "+
-				"cmdline corroboration (relying on the SetDisplaySidecar-before-launch source guarantee only)",
-			rootPid,
-		)
-		return
+		t.Fatalf("could not locate a chrome[ium] process under pid %d via /proc", rootPid)
 	}
-	t.Logf("CHROME ARGS: %s", cmdline)
-	if strings.Contains(cmdline, "--headless") {
+	t.Logf("AGENT CHROME ARGS: %s", cmdline)
+	if !strings.Contains(cmdline, "--headless") {
 		t.Fatalf(
-			"expected HEADFUL Chrome (no --headless flag) with a healthy Xvfb sidecar wired, got cmdline: %s",
+			"expected the agent's own Chrome to run --headless (chrome-headless-shell, unconditional under Option A), got cmdline: %s",
 			cmdline,
 		)
+	}
+	if !strings.Contains(strings.ToLower(cmdline), "headless-shell") {
+		t.Fatalf("expected the agent's own Chrome binary to be chrome-headless-shell, got cmdline: %s", cmdline)
 	}
 }
 
 // TestLiveVideoPipeline_RealChrome_EmitsChunks is the full-depth ADR-044
-// real-hardware proof: real Xvfb + best-effort real PulseAudio, a real
-// managed full-Chrome build launched HEADFUL by the real BrowserCoordinator,
-// a real animated page, the REAL gateway.BrowserVideoOrchestrator (every
-// seam at its production default) wired against a real loopback capture-
-// ingest HTTP server, a real AttachViewer, and assertions against genuine
-// binary browser_video_chunk envelopes read off a real *browserWSConn sink —
-// then a real Detach + teardown check. This is what catches the class of bug
-// hermetic tests with fakes cannot: the round-1 CDP dispatch-goroutine
+// Option A real-hardware proof: a real chrome-headless-shell agent Chrome
+// launched by the real BrowserCoordinator, a real animated page, the REAL
+// gateway.BrowserVideoOrchestrator (every seam at its production default)
+// wired against a real loopback capture-ingest HTTP server, a real
+// AttachViewer that lazily cold-starts the orchestrator's OWN dedicated
+// full-Chrome-headless encoder browser, and assertions against genuine binary
+// browser_video_chunk envelopes read off a real *browserWSConn sink — then a
+// real Detach + Shutdown teardown check. This is what catches the class of
+// bug hermetic tests with fakes cannot: the round-1 CDP dispatch-goroutine
 // deadlock (capture.go's ADR-038 DEADLOCK POSTMORTEM comment) only ever
 // manifested here, against real Chrome's real CDP event delivery.
 func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
-	if _, err := exec.LookPath("Xvfb"); err != nil {
-		t.Skipf("Xvfb not on PATH: %v", err)
-	}
-
 	homeDir := t.TempDir()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
-	// ---- STEP 1: real Xvfb sidecar (required) + real PulseAudio sidecar (best-effort) ----
-	display := browser.NewDisplaySidecar(browser.DisplayConfig{})
-	if err := display.Start(ctx); err != nil {
-		t.Fatalf("start Xvfb sidecar: %v", err)
-	}
-	t.Cleanup(display.Stop)
-	if !display.Healthy() {
-		t.Fatal("Xvfb sidecar reported unhealthy immediately after Start")
-	}
-	t.Logf("XVFB: display=%q healthy=%v", display.Display(), display.Healthy())
-	// B2 ordering (bootLiveBrowserVideo): the probe MUST be flipped before
-	// EnsureChromium below, since selectDownloadBuild (installer.go) consults
-	// it to decide full-Chrome vs headless-shell-only on a fresh install.
-	browser.DisplaySidecarHealthyProbe = display.Healthy
-
-	var audioSidecar browser.AudioSidecar
-	audioCfg, acfgErr := browser.DefaultAudioConfig()
-	if acfgErr != nil {
-		t.Logf("AUDIO: DefaultAudioConfig error — proceeding video-only: %v", acfgErr)
-	} else {
-		// Explicit SocketDir (not $HOME-derived) so bring-up never depends on
-		// the ambient environment of whatever process runs `go test`.
-		audioCfg.SocketDir = filepath.Join(homeDir, "browser", "pulse")
-		a := browser.NewAudioSidecar(audioCfg)
-		if startErr := a.Start(ctx); startErr != nil {
-			t.Logf("AUDIO: Start error — proceeding video-only: %v", startErr)
-		} else {
-			t.Cleanup(a.Stop)
-			deadline := time.Now().Add(10 * time.Second)
-			for time.Now().Before(deadline) && !a.Healthy() {
-				time.Sleep(100 * time.Millisecond)
-			}
-			if a.Healthy() {
-				audioSidecar = a
-				browser.PulseAudioAvailableProbe = a.Healthy
-			}
-			t.Logf("AUDIO: healthy=%v pulse_server=%q", a.Healthy(), a.PulseServer())
-		}
-	}
-
-	// ---- STEP 2: real full-Chrome install + DS-5 capability classification ----
+	// ---- STEP 1: real full-Chrome install (for the dedicated encoder) + DS-5 capability classification ----
+	// Option A: ClassifyVideoCapability is satisfied by linux + a full-Chrome
+	// build already present under installRoot alone — no display/audio
+	// sidecar is involved. The agent's own chrome-headless-shell is a
+	// SEPARATE, non-interchangeable build (see installer.go's
+	// EnsureChromiumBuild doc) that the coordinator resolves lazily on its
+	// own in STEP 2 below — it is deliberately NOT pre-fetched here.
 	installRoot := os.Getenv("DIAG_INSTALL_ROOT")
 	if installRoot == "" {
 		installRoot = filepath.Join(homeDir, "chromium")
 	}
-	chromePath, ensureErr := browser.EnsureChromium(ctx, installRoot)
+	fullChromePath, ensureErr := browser.EnsureChromiumFullBuild(ctx, installRoot)
 	if ensureErr != nil {
-		t.Fatalf("BLOCKED: EnsureChromium(%q): %v", installRoot, ensureErr)
+		t.Fatalf("BLOCKED: EnsureChromiumFullBuild(%q): %v", installRoot, ensureErr)
 	}
-	t.Logf("CHROME: full-Chrome build ready at %q (install_root=%q)", chromePath, installRoot)
+	t.Logf("CHROME: full-Chrome build ready at %q (install_root=%q)", fullChromePath, installRoot)
 
 	capability := browser.ClassifyVideoCapability(installRoot)
 	t.Logf(
@@ -292,8 +271,11 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 	if !capability.Capable {
 		t.Fatalf("BLOCKED: host not classified video-capable — reason: %s", capability.Reason)
 	}
+	if capability.Level.String() != "video_only" {
+		t.Fatalf("BLOCKED: expected video_only capability level (audio deferred to phase 2), got %v", capability.Level)
+	}
 
-	// ---- STEP 3: real BrowserCoordinator + BrowserManager, headful launch + motion page ----
+	// ---- STEP 2: real BrowserCoordinator + BrowserManager — agent Chrome is UNCONDITIONALLY chrome-headless-shell ----
 	profileDir := filepath.Join(homeDir, "browser-profile")
 	coordinator := browser.NewBrowserCoordinator(homeDir, browser.BrowserConfig{
 		Enabled:     true,
@@ -301,10 +283,6 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 		MaxTabs:     5,
 		PageTimeout: 30 * time.Second,
 	}, 10)
-	coordinator.SetDisplaySidecar(display)
-	if audioSidecar != nil {
-		coordinator.SetAudioSidecar(audioSidecar)
-	}
 	t.Cleanup(coordinator.Shutdown)
 
 	ssrf := security.NewSSRFChecker(nil)
@@ -318,22 +296,16 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 	const agentID = "e2e-agent"
 	// Wires this manager to the coordinator BEFORE any Session/tab call, so
 	// ensureStarted asks the coordinator for the shared Chrome (ADR-043)
-	// instead of launching its own separate, non-video-capable instance —
-	// mirrors pkg/agent/loop.go's registerSharedTools call site exactly.
+	// instead of launching its own separate instance — mirrors
+	// pkg/agent/loop.go's registerSharedTools call site exactly.
 	mgr.AttachSharedChrome(coordinator, agentID)
 
 	agentTabCtx, sessionErr := mgr.Session("e2e-session")
 	if sessionErr != nil {
 		t.Fatalf("mgr.Session (triggers the coordinator-mediated Chrome launch): %v", sessionErr)
 	}
-	rootCtx, rootOK := coordinator.RootContext()
-	if !rootOK {
-		t.Fatal(
-			"coordinator.RootContext(): no shared Chrome root available after a successful Session()",
-		)
-	}
 	t.Logf("CHROME LAUNCH: coordinator pid=%d", coordinator.PID())
-	assertHeadfulChrome(t, coordinator.PID())
+	assertAgentIsHeadlessShell(t, coordinator.PID())
 
 	motionURL := motionPageDataURL()
 	if navErr := chromedp.Run(agentTabCtx, chromedp.Navigate(motionURL)); navErr != nil {
@@ -341,7 +313,7 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 	}
 	t.Logf("PAGE: agent tab navigated to a %d-byte animated data: URL", len(motionURL))
 
-	// ---- STEP 4: REAL BrowserVideoOrchestrator, mirroring setupAndStartServices ----
+	// ---- STEP 3: REAL BrowserVideoOrchestrator, mirroring setupAndStartServices ----
 	ingestMux := newE2EIngestMux()
 	ln, lnErr := net.Listen("tcp", "127.0.0.1:0")
 	if lnErr != nil {
@@ -360,7 +332,12 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 	// production default (browser.NewStreamRelay, browser.ClassifyVideoCapability,
 	// browser.LaunchEncoderPage, browser.StartCapture, loopbackEncoderServer{}) —
 	// field-for-field the same call setupAndStartServices makes
-	// (pkg/gateway/gateway.go ~line 2335). Nothing here is a fake.
+	// (pkg/gateway/gateway.go). Nothing here is a fake — including the
+	// orchestrator's OWN dedicated encoder browser (o.encoder), which the
+	// first AttachViewer call below launches lazily via the real
+	// resolveExecPath/pipeLauncher seams (defaultEncoderExecPath ->
+	// browser.EnsureChromiumFullBuild, defaultEncoderPipeLaunch ->
+	// browser.EncoderChromeCmdline over cdppipe).
 	orch := RegisterBrowserVideo(ingestMux, BrowserVideoDeps{
 		InstallRoot: installRoot,
 		Config: BrowserVideoConfig{
@@ -369,6 +346,7 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 			Enabled:         &enabled,
 		},
 	})
+	t.Cleanup(orch.Shutdown)
 
 	wc := newTestVideoConn()
 	handle, attachErr := orch.AttachViewer(AttachParams{
@@ -376,7 +354,6 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 		AgentID:   agentID,
 		SessionID: "e2e-session",
 		ViewerID:  "e2e-viewer",
-		RootCtx:   rootCtx,
 		AgentCtx:  agentTabCtx,
 		VideoCaps: []string{
 			"avc1.4D4028",
@@ -397,7 +374,54 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 	}
 	t.Logf("ATTACH: stream started for agent=%q", agentID)
 
-	// ---- STEP 5: assert real browser_stream_init, then real binary chunks ----
+	// ---- STEP 3 cont'd: the dedicated encoder browser must now be a REAL, DISTINCT process ----
+	// AttachViewer's first call lazily cold-starts the orchestrator's own
+	// encoderBrowser (o.encoder.ensureRoot, via launchEncoderTab) — assert it
+	// is a genuine, separate OS process from the agent's chrome-headless-shell
+	// (coordinator.PID()), and corroborate via /proc that it is full Chrome
+	// running new-headless (--headless present, but NOT chrome-headless-shell).
+	orch.encoder.mu.Lock()
+	var encoderPID int
+	if orch.encoder.cmd != nil && orch.encoder.cmd.Process != nil {
+		encoderPID = orch.encoder.cmd.Process.Pid
+	}
+	orch.encoder.mu.Unlock()
+	if encoderPID == 0 {
+		t.Fatal(
+			"BLOCKED: no encoder Chrome process captured after a successful AttachViewer — the dedicated encoder browser never launched",
+		)
+	}
+	if encoderPID == coordinator.PID() {
+		t.Fatalf(
+			"expected the encoder Chrome process (pid=%d) to be DISTINCT from the agent's own chrome-headless-shell process (pid=%d)",
+			encoderPID,
+			coordinator.PID(),
+		)
+	}
+	if encoderCmdline, found := findProcessCmdlineContaining(encoderPID, "chrom"); found {
+		t.Logf("ENCODER CHROME ARGS: %s", encoderCmdline)
+		if !strings.Contains(encoderCmdline, "--headless") {
+			t.Fatalf("expected the dedicated encoder Chrome to run --headless, got cmdline: %s", encoderCmdline)
+		}
+		if strings.Contains(strings.ToLower(encoderCmdline), "headless-shell") {
+			t.Fatalf(
+				"expected the dedicated encoder Chrome to be the FULL chrome build, not chrome-headless-shell: %s",
+				encoderCmdline,
+			)
+		}
+	} else {
+		t.Logf(
+			"WARNING: could not locate the encoder Chrome process (pid=%d) via /proc — relying on the captured PID alone",
+			encoderPID,
+		)
+	}
+	t.Logf(
+		"ENCODER: dedicated full-Chrome encoder browser live at pid=%d (agent pid=%d)",
+		encoderPID,
+		coordinator.PID(),
+	)
+
+	// ---- STEP 4: assert real browser_stream_init, then real binary chunks ----
 	initFrame := drainStreamInit(t, wc)
 	t.Logf(
 		"INIT: codec=%q has_audio=%v width=%d height=%d keyframe_interval=%d",
@@ -509,7 +533,7 @@ collectLoop:
 		len(chunks),
 	)
 
-	// ---- STEP 5 cont'd: Detach + assert clean teardown ----
+	// ---- STEP 5: Detach, then orch.Shutdown() — assert clean teardown of BOTH the stream and the encoder process ----
 	streamID := handle.streamID
 	var encTabDone <-chan struct{}
 	if st := orch.streamByID(streamID); st != nil && st.encoderTab != nil {
@@ -533,4 +557,12 @@ collectLoop:
 	} else {
 		t.Log("TEARDOWN: no encoder tab handle captured before Detach (stream already gone) — skipping Done() check")
 	}
+
+	// orch.Shutdown() tears down the dedicated encoder browser process itself
+	// (encoderBrowser.close, via its cdppipe CancelFunc) — assert the real OS
+	// process captured above genuinely exits, not just that the in-process
+	// bookkeeping was cleared.
+	orch.Shutdown()
+	eventually(t, 5*time.Second, func() bool { return !processAlive(encoderPID) })
+	t.Logf("TEARDOWN: encoder Chrome process (pid=%d) confirmed gone after orch.Shutdown()", encoderPID)
 }

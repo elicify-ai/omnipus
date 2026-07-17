@@ -203,6 +203,21 @@ func newTestOrchestrator(
 		EncoderServer: srv,
 	})
 	o.ingest = ing
+	// ADR-044 Option A / Task B: every AttachViewer cold-start/relaunch now
+	// routes the encoder-page launch through launchEncoderTab, which first
+	// calls o.encoder.ensureRoot to bring up the dedicated encoder browser.
+	// Fake ITS launch seams too (separate from the LaunchEncoder fake above,
+	// which still receives every encoder-page-launch call exactly as
+	// before) so ensureRoot never touches the network or spawns a real
+	// Chrome process — context.Background()'s Done() never fires, so this
+	// also gives every test a permanently "warm" encoder root (no real
+	// relaunch-budget interaction).
+	o.encoder.resolveExecPath = func(context.Context, string) (string, error) {
+		return "fake-encoder-chrome", nil
+	}
+	o.encoder.pipeLauncher = func(context.Context, string, string) (encoderPipeLaunch, error) {
+		return encoderPipeLaunch{rootCtx: context.Background()}, nil
+	}
 	return o
 }
 
@@ -299,7 +314,7 @@ func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E", "vp8"},
 	})
 	if err != nil {
@@ -411,7 +426,7 @@ func TestStream_NotCapable_Unavailable(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E", "vp8"},
 	})
 	if err != nil {
@@ -448,7 +463,7 @@ func TestStream_KillSwitch_TearsDown(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil || h == nil {
@@ -488,7 +503,7 @@ func TestStream_KillSwitch_TearsDown(t *testing.T) {
 	wc2 := newTestVideoConn()
 	h2, err := o.AttachViewer(AttachParams{
 		WC: wc2, AgentID: "agent2", SessionID: "sess2", ViewerID: "v2",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil {
@@ -544,7 +559,7 @@ func TestNewOrchestrator_EnabledFromConfig(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := offOrch.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil {
@@ -593,7 +608,7 @@ func TestStream_KillSwitch_ReEnable_AllowsNewAttach(t *testing.T) {
 	wcBlocked := newTestVideoConn()
 	hBlocked, err := o.AttachViewer(AttachParams{
 		WC: wcBlocked, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil {
@@ -620,7 +635,7 @@ func TestStream_KillSwitch_ReEnable_AllowsNewAttach(t *testing.T) {
 	wcOK := newTestVideoConn()
 	hOK, err := o.AttachViewer(AttachParams{
 		WC: wcOK, AgentID: "agent1", SessionID: "sess1", ViewerID: "v2",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil {
@@ -652,7 +667,7 @@ func TestStream_IngestDrop_Remints(t *testing.T) {
 	wc := newTestVideoConn()
 	h, err := o.AttachViewer(AttachParams{
 		WC: wc, AgentID: "agent1", SessionID: "sess1", ViewerID: "v1",
-		RootCtx: context.Background(), AgentCtx: context.Background(),
+		AgentCtx:  context.Background(),
 		VideoCaps: []string{"avc1.4D401E"},
 	})
 	if err != nil || h == nil {

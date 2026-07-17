@@ -33,18 +33,6 @@ type browserMetricsRecorder interface {
 	// was full (FR-004's drop-in-isolation discipline) — see
 	// deliverToViewer in stream_relay.go.
 	IncViewerDrop()
-
-	// IncXvfbSidecarRestart records one FR-019 "Xvfb sidecar restart count"
-	// event: the Xvfb sidecar (component B, FR-021) recovered from an
-	// unexpected exit via its bounded-backoff supervisor — see
-	// xvfbSidecar.supervise in display_linux.go.
-	IncXvfbSidecarRestart()
-
-	// IncPulseSidecarRestart records one FR-019 "PulseAudio sidecar restart
-	// count" event: the PulseAudio sidecar (component C, FR-022) recovered
-	// from an unexpected exit via its bounded-backoff supervisor — see
-	// pulseSidecar.runAndSupervise in audiosink_linux.go.
-	IncPulseSidecarRestart()
 }
 
 // nopBrowserMetrics satisfies browserMetricsRecorder when no gateway has
@@ -53,9 +41,7 @@ type browserMetricsRecorder interface {
 // SetBrowserMetricsRecorder).
 type nopBrowserMetrics struct{}
 
-func (nopBrowserMetrics) IncViewerDrop()          {}
-func (nopBrowserMetrics) IncXvfbSidecarRestart()  {}
-func (nopBrowserMetrics) IncPulseSidecarRestart() {}
+func (nopBrowserMetrics) IncViewerDrop() {}
 
 // activeBrowserMetricsRecorder is swapped at gateway boot
 // (RegisterBrowserVideo in pkg/gateway/browser_stream.go).
