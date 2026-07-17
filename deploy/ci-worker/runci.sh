@@ -81,15 +81,20 @@ run_lint() {
 #
 # Contention control (2026-07-17): the worker is performance-8x (8 vCPUs). Plain `-p 4` runs 4
 # test binaries EACH defaulting to GOMAXPROCS=8 → ~32 scheduler threads oversubscribing 8 cores
-# 4:1, which starves wall-clock-deadline timing tests (they complete, just late → intermittent
-# flake-filter noise, a shifting random subset each run). Pinning GOMAXPROCS=2 on the -p4 run
-# makes 4 × 2 = 8 threads ≈ 8 cores (no oversubscription) while KEEPING package throughput —
-# far better than halving -p (which would still oversubscribe 2×8=16 AND double wall-clock). The
-# isolated re-run below is a single process, so it deliberately keeps the default (full)
-# GOMAXPROCS to give a flagged package maximum CPU when proving pass-vs-real-failure.
+# 4:1, starving wall-clock-deadline timing tests (they complete, just late → a shifting random
+# subset hits the flake filter each run). Two failure modes must BOTH be avoided:
+#   1. cross-process oversubscription (total threads ≫ cores) → scheduling delays; and
+#   2. per-test-binary CPU starvation (too few cores for one heavyweight test) → its own
+#      internal deadlines blow (e.g. TestCompactionBoundsMemory, a CPU-bound perf test).
+# `-p 2` + GOMAXPROCS=4 satisfies both: 2 × 4 = 8 threads ≈ 8 cores (no oversubscription) AND
+# each of the 2 concurrent binaries gets 4 cores. (An earlier `-p 4`+GOMAXPROCS=2 attempt fixed
+# only #1 and still flaked long CPU-bound tests by throttling them to 2 cores.) Cost: the run
+# phase roughly doubles vs -p4 (build is shared) — fine for a pre-merge gate. The isolated
+# re-run below is a single process, so it keeps the default (full) GOMAXPROCS to give a flagged
+# package maximum CPU when proving pass-vs-real-failure.
 run_gotest() {
   ensure_spa_stub
-  local out; out=$(GOMAXPROCS=2 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 4 ./... 2>&1)
+  local out; out=$(GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   [ $code -eq 0 ] && return 0
