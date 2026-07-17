@@ -48,6 +48,7 @@
 // killProcessGroup's underlying syscall.Kill(-pid, ...) reliably returns
 // ESRCH (treated as success) rather than spawning real child processes — the
 // timing race under test is in Go-level locking, not OS process management.
+
 package tools
 
 import (
@@ -114,7 +115,6 @@ func TestStress_SessionManager_ConcurrentKillAllForSessionAndKillAll(t *testing.
 	// double-kill race within one owner's session set.
 	const killersPerOwner = 3
 	for _, owner := range owners {
-		owner := owner
 		for k := 0; k < killersPerOwner; k++ {
 			killWG.Add(1)
 			go func() {

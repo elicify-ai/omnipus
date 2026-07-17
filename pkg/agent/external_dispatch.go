@@ -280,10 +280,17 @@ func runExternalCLISubTurn(
 	// eventually frees.
 	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, workDir)
 	if !acquired {
-		cancelErr := fmt.Errorf("external-cli dispatch: canceled while waiting for the workspace lock: %w", runCtx.Err())
+		cancelErr := fmt.Errorf(
+			"external-cli dispatch: canceled while waiting for the workspace lock: %w",
+			runCtx.Err(),
+		)
 		return &tools.ToolResult{
-			Err:    cancelErr,
-			ForLLM: fmt.Sprintf("External CLI run (%s) canceled while waiting for the workspace lock: %v", cli, cancelErr),
+			Err: cancelErr,
+			ForLLM: fmt.Sprintf(
+				"External CLI run (%s) canceled while waiting for the workspace lock: %v",
+				cli,
+				cancelErr,
+			),
 		}, cancelErr
 	}
 	defer releaseWorkspaceLock()
