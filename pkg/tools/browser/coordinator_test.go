@@ -23,7 +23,7 @@ import (
 var (
 	sharedTestBinOnce sync.Once
 	sharedTestBin     string
-	sharedTestBinErr  error
+	errSharedTestBin  error
 )
 
 func resolveTestBinary(t *testing.T) string {
@@ -38,10 +38,10 @@ func resolveTestBinary(t *testing.T) string {
 			}
 		}
 		// Else download once into a shared temp dir.
-		sharedTestBin, sharedTestBinErr = EnsureChromium(context.Background(), filepath.Join(t.TempDir(), "chromium"))
+		sharedTestBin, errSharedTestBin = EnsureChromium(context.Background(), filepath.Join(t.TempDir(), "chromium"))
 	})
-	if sharedTestBinErr != nil {
-		t.Skipf("no managed Chrome for coordinator test: %v", sharedTestBinErr)
+	if errSharedTestBin != nil {
+		t.Skipf("no managed Chrome for coordinator test: %v", errSharedTestBin)
 	}
 	return sharedTestBin
 }
@@ -132,10 +132,18 @@ func TestManager_Shutdown_DropsConnectionNotProcess(t *testing.T) {
 	mgr.Shutdown()
 
 	if coord.PID() != pidBefore {
-		t.Fatalf("CRIT-002/C1 VIOLATION: manager.Shutdown() killed the Chrome process (pid %d → %d)", pidBefore, coord.PID())
+		t.Fatalf(
+			"CRIT-002/C1 VIOLATION: manager.Shutdown() killed the Chrome process (pid %d → %d)",
+			pidBefore,
+			coord.PID(),
+		)
 	}
 	if coord.contextCount() != ctxBefore {
-		t.Fatalf("CRIT-002 VIOLATION: manager.Shutdown() changed the agent's browser context count (%d → %d) — context must persist for reload re-adoption", ctxBefore, coord.contextCount())
+		t.Fatalf(
+			"CRIT-002 VIOLATION: manager.Shutdown() changed the agent's browser context count (%d → %d) — context must persist for reload re-adoption",
+			ctxBefore,
+			coord.contextCount(),
+		)
 	}
 	if coord.KillCount() != 0 {
 		t.Fatalf("manager.Shutdown() must not register a Chrome kill; KillCount=%d", coord.KillCount())

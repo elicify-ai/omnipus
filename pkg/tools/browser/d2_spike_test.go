@@ -143,8 +143,13 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 		t.Fatalf("FATAL (O1 FAILED): no new page target appeared within 3s of window.open — " +
 			"popup did not fire (expected to fire on a real http origin)")
 	}
-	t.Logf("new window.open target: id=%q url=%q context=%q", newTarget.TargetID, newTarget.URL, newTarget.BrowserContextID)
-	if newTarget.BrowserContextID != cdp.BrowserContextID(idA) {
+	t.Logf(
+		"new window.open target: id=%q url=%q context=%q",
+		newTarget.TargetID,
+		newTarget.URL,
+		newTarget.BrowserContextID,
+	)
+	if newTarget.BrowserContextID != idA {
 		t.Fatalf("FATAL (O1 FAILED): window.open target landed in context %q, expected A %q",
 			newTarget.BrowserContextID, idA)
 	}
@@ -156,14 +161,17 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 		if ti.Type != "page" {
 			continue
 		}
-		if ti.BrowserContextID == cdp.BrowserContextID(idA) {
+		if ti.BrowserContextID == idA {
 			inA++
-		} else if ti.BrowserContextID == cdp.BrowserContextID(idB) {
+		} else if ti.BrowserContextID == idB {
 			inB++
 		}
 	}
 	t.Logf("page targets in A=%d in B=%d (infos=%d)", inA, inB, len(infos))
 
-	t.Logf("D2 SPIKE PASSED: distinct browser contexts (%q != %q); O1 window.open-in-opener-context VERIFIED (new target in A)",
-		idA, idB)
+	t.Logf(
+		"D2 SPIKE PASSED: distinct browser contexts (%q != %q); O1 window.open-in-opener-context VERIFIED (new target in A)",
+		idA,
+		idB,
+	)
 }

@@ -379,7 +379,10 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		}
 	}
 	if cliCount != 13 {
-		t.Errorf("expected 13 CLI-surface canonical commands (skill removed D1, memory commands added), got %d", cliCount)
+		t.Errorf(
+			"expected 13 CLI-surface canonical commands (skill removed D1, memory commands added), got %d",
+			cliCount,
+		)
 	}
 }
 
