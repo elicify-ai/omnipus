@@ -214,7 +214,7 @@ The return (video) leg is the only thing that changes. Capture is **server-drive
 |---|---|---|---|
 | `browser_attach` (amended) | SPA → gateway | JSON | add `video_caps`: the SPA's decodable codec list from `VideoDecoder.isConfigSupported` |
 | `browser_stream_init` | gateway → SPA | JSON | negotiated `codec`, `width`/`height`, `keyframe_interval`, `has_audio` |
-| `browser_video_chunk` | gateway → SPA | **binary** | compact envelope `{ seq:u32, ts:u64, key:u8, len:u32, payload }`; documented as a binary AsyncAPI message (R3: `u64`, not `u48` — m-3) |
+| `browser_video_chunk` | gateway → SPA | **binary** | compact **18-byte** big-endian envelope `{ seq:u32, ts:u64, key:u8, kind:u8, len:u32, payload }` — `kind` at offset 13 (0=video / 1=audio; one ingest connection multiplexes both, so `browser_video_chunk`/`browser_audio_chunk` share the envelope). The contract schema `BrowserChunkEnvelope.yaml` is authoritative (Constraint #8). Binary AsyncAPI message (R3: `u64`, not `u48` — m-3; the earlier 17-byte "no kind byte" text is superseded by the as-built + contract). |
 | `browser_audio_chunk` (phase 2) | gateway → SPA | binary | Opus frames, same envelope shape |
 | `browser_stream_bitrate` (v1.1) | relay → capture | JSON | target bitrate/framerate (ABR step) — **deferred to v1.1, not in the v1 contract** (R3/O-1) |
 

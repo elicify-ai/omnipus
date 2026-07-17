@@ -59,6 +59,7 @@ func (r *spyRelay) snapshot() []EncodedChunk {
 type fakeMsg struct {
 	mt   int
 	data []byte
+	err  error // when set, ReadMessage returns this error instead of (mt, data)
 }
 
 type fakeConn struct {
@@ -82,12 +83,24 @@ func (c *fakeConn) feedText(data []byte) {
 func (c *fakeConn) feedBinary(data []byte) {
 	c.incoming <- fakeMsg{mt: websocket.BinaryMessage, data: data}
 }
+
+// feedReadErr injects err as the outcome of the NEXT ReadMessage call —
+// used by TestIngest_OversizeChunk_ReadLimitExceeded (SF2) to simulate
+// gorilla/websocket's real behavior when a message exceeds SetReadLimit:
+// ReadMessage returns websocket.ErrReadLimit rather than the message.
+func (c *fakeConn) feedReadErr(err error) {
+	c.incoming <- fakeMsg{err: err}
+}
+
 func (c *fakeConn) closeIncoming() { close(c.incoming) }
 
 func (c *fakeConn) ReadMessage() (int, []byte, error) {
 	m, ok := <-c.incoming
 	if !ok {
 		return 0, nil, io.EOF
+	}
+	if m.err != nil {
+		return 0, nil, m.err
 	}
 	return m.mt, m.data, nil
 }
@@ -130,11 +143,15 @@ func (c *fakeConn) writes() [][]byte {
 
 const testLoopback = "127.0.0.1:50505"
 
-func initFrameBytes(streamID, token, videoCodec string) []byte {
+// token is typed ingestToken (not string) so this helper accepts both a
+// MintIngestToken() return value directly and a raw string literal (an
+// untyped constant converts to ingestToken automatically) — e.g. the
+// deliberately-wrong/absent-token test cases below.
+func initFrameBytes(streamID string, token ingestToken, videoCodec string) []byte {
 	b, _ := json.Marshal(generated.BrowserIngestInitFrame{
 		Type:       string(generated.WsFrameTypeBrowserIngestInit),
 		StreamId:   streamID,
-		Token:      token,
+		Token:      string(token),
 		VideoCodec: videoCodec,
 	})
 	return b
@@ -434,6 +451,73 @@ func TestIngest_OversizeKeyframe_RejectedNotFragmented(t *testing.T) {
 	}
 }
 
+// --- SF2: a chunk exceeding even the read-limit ceiling (2x+header) -------
+
+// TestIngest_OversizeChunk_ReadLimitExceeded_RejectedAndStepDown covers the
+// path TestIngest_OversizeKeyframe_RejectedNotFragmented does NOT: a chunk so
+// large it trips gorilla/websocket's OWN read-limit ceiling (SetReadLimit,
+// set to 2x+header in serveConn) before handleChunk's app-layer length check
+// ever runs. ReadMessage returns websocket.ErrReadLimit in that case — this
+// must funnel through the same reject+step-down audit path as an ordinary
+// (<=2x) oversize chunk, not silently drop the connection.
+func TestIngest_OversizeChunk_ReadLimitExceeded_RejectedAndStepDown(t *testing.T) {
+	var stepDowns []string
+	var mu sync.Mutex
+	relay := &spyRelay{}
+	h, read := newAuditIngest(t, IngestDeps{
+		Relay:           relay,
+		MaxMessageBytes: 1024,
+		StepDown: func(id string) {
+			mu.Lock()
+			stepDowns = append(stepDowns, id)
+			mu.Unlock()
+		},
+	})
+	tok := h.MintIngestToken("streamA")
+
+	c := newFakeConn()
+	c.feedText(initFrameBytes("streamA", tok, "vp8"))
+	c.feedReadErr(websocket.ErrReadLimit)
+	c.closeIncoming()
+	waitDone(t, serveAsync(h, c))
+
+	if relay.count() != 0 {
+		t.Fatalf("expected no chunks relayed, got %d", relay.count())
+	}
+	mu.Lock()
+	sd := append([]string(nil), stepDowns...)
+	mu.Unlock()
+	if len(sd) != 1 || sd[0] != "streamA" {
+		t.Fatalf("expected exactly one step-down for streamA, got %v", sd)
+	}
+	if !hasReason(read(), string(rejectOversizeChunk)) {
+		t.Fatal("expected oversize_chunk reject audit for a read-limit-exceeded chunk")
+	}
+}
+
+// --- SF6: a nil Relay dependency must not panic or log-spam per chunk -----
+
+// TestIngest_NilRelay_DropsChunksWithoutPanic proves a misconfigured (nil)
+// Relay drops every chunk on the connection without panicking. The
+// once-per-connection (not once-per-chunk) logging this fix also introduces
+// is not independently observable from this hermetic harness (no slog
+// handler capture used elsewhere in this suite); it is verified by
+// inspection — handleChunk's nil-Relay branch no longer calls slog.Error at
+// all; serveConn logs it exactly once, before the chunk loop starts.
+func TestIngest_NilRelay_DropsChunksWithoutPanic(t *testing.T) {
+	h := NewCaptureIngestHandler(IngestDeps{}) // Relay intentionally nil
+	tok := h.MintIngestToken("streamA")
+
+	c := newFakeConn()
+	c.feedText(initFrameBytes("streamA", tok, "vp8"))
+	for i := 0; i < 5; i++ {
+		c.feedBinary(chunkVideoBytes(uint32(i), uint64(i*33), chunkVideoKey, []byte("frame")))
+	}
+	c.closeIncoming()
+	waitDone(t, serveAsync(h, c))
+	// No panic across 5 chunks with a nil Relay is the whole assertion.
+}
+
 // --- Test 32: Audit_StreamLifecycle_And_IngestRejections ------------------
 
 func TestAudit_StreamLifecycle_And_IngestRejections(t *testing.T) {
@@ -582,7 +666,7 @@ func TestIngest_RelaysValidChunks(t *testing.T) {
 	initB, _ := json.Marshal(generated.BrowserIngestInitFrame{
 		Type:       string(generated.WsFrameTypeBrowserIngestInit),
 		StreamId:   "streamA",
-		Token:      tok,
+		Token:      string(tok),
 		VideoCodec: "avc1.4D401E",
 		HasAudio:   true,
 		AudioCodec: &audioCodec,
@@ -756,7 +840,7 @@ func TestFrameFeed_EncodeRoundTrip(t *testing.T) {
 
 func TestMintIngestToken_UnguessableAndUnique(t *testing.T) {
 	h := NewCaptureIngestHandler(IngestDeps{Relay: &spyRelay{}})
-	seen := map[string]bool{}
+	seen := map[ingestToken]bool{}
 	for i := 0; i < 100; i++ {
 		tok := h.MintIngestToken("stream-" + string(rune('a'+i%26)) + string(rune('0'+i/26)))
 		if len(tok) != 64 { // 32 bytes hex

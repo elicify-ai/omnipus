@@ -46,20 +46,84 @@ const (
 	relayChunkOverheadBytes = 32
 )
 
+// ChunkKind discriminates a video chunk from an audio chunk on the
+// relay/viewer path (TD1/TD2). It replaces a bare `Kind string` field that
+// used to be compared via `== "audio"`: a typo, an unexpected casing, or the
+// zero value would silently be treated as video with no compile-time
+// signal, and nothing stopped a caller from constructing the
+// contract-forbidden combination of an audio chunk carrying the video
+// keyframe flag (Key=true). ChunkKind is a closed, two-valued uint8 enum —
+// the only strings that classify as audio are handled by ParseChunkKind, and
+// the only way to mint an EncodedChunk that is unambiguously audio is
+// NewAudioChunk, which has no Key parameter at all.
+type ChunkKind uint8
+
+const (
+	// KindVideo is the wire envelope's kind(u8)=0 value
+	// (BrowserChunkEnvelope.yaml) and ChunkKind's zero value — matching the
+	// pre-existing "anything that isn't recognized as audio is video"
+	// tolerant-default behavior this type preserves.
+	KindVideo ChunkKind = 0
+	// KindAudio is the wire envelope's kind(u8)=1 value.
+	KindAudio ChunkKind = 1
+)
+
+// String renders k as the human-readable label used in metrics/logs
+// ("video"/"audio") — the SAME strings the pre-typed field used to carry, so
+// existing metric label values (kind="video"/kind="audio") are unaffected.
+func (k ChunkKind) String() string {
+	if k == KindAudio {
+		return "audio"
+	}
+	return "video"
+}
+
+// ParseChunkKind maps a "video"/"audio" label (as carried across the
+// gateway/relay package boundary, where the ingest endpoint's EncodedChunk
+// still carries Kind as a plain string) to a ChunkKind. Only the exact
+// string "audio" classifies as KindAudio; every other value — a typo, an
+// unexpected casing, an empty/zero value — classifies as KindVideo. This is
+// the SAME tolerant-default behavior EncodeChunk's old `c.Kind == "audio"`
+// check already had; naming it here makes the default explicit and gives it
+// exactly one call site instead of letting the comparison re-appear ad hoc.
+func ParseChunkKind(s string) ChunkKind {
+	if s == "audio" {
+		return KindAudio
+	}
+	return KindVideo
+}
+
 // EncodedChunk is one encoded media chunk on the relay/viewer path — the
 // video/audio analog of the JPEG-era LiveFrame above, produced by the
 // encoder page (component G) and carried from the capture ingest endpoint
 // (component E) through this relay to attached viewers (component F/the
-// gateway WS write pump).
+// gateway WS write pump). Prefer NewVideoChunk/NewAudioChunk over a raw
+// struct literal (TD1/TD2): they are the only construction path that makes
+// an illegal audio+key=true chunk impossible to express.
 type EncodedChunk struct {
 	Seq   uint32
 	TS    uint64 // MILLISECONDS (the wire unit — matches the encoder page & contract)
-	Key   bool
+	Key   bool   // keyframe flag; MUST be false for any chunk with Kind==KindAudio
 	Codec string // e.g. "avc1.4D4028", "vp8", "opus"
-	Kind  string // "video" | "audio"
+	Kind  ChunkKind
 	// Payload is the raw codec bytes (NO tag byte — the ingest endpoint
 	// strips its transport tag before calling Ingest).
 	Payload []byte
+}
+
+// NewVideoChunk constructs a video EncodedChunk. isKey reports whether c is
+// a keyframe (the GOP cache's appendToCacheLocked / deliverToViewer's
+// recovery logic both depend on this flag being accurate).
+func NewVideoChunk(seq uint32, ts uint64, isKey bool, codec string, payload []byte) EncodedChunk {
+	return EncodedChunk{Seq: seq, TS: ts, Key: isKey, Codec: codec, Kind: KindVideo, Payload: payload}
+}
+
+// NewAudioChunk constructs an audio EncodedChunk. There is deliberately NO
+// key parameter: Opus packets are never classified key/delta
+// (BrowserChunkEnvelope.yaml), so this constructor makes the illegal
+// audio+key=true combination (TD1/TD2) impossible to express through it.
+func NewAudioChunk(seq uint32, ts uint64, codec string, payload []byte) EncodedChunk {
+	return EncodedChunk{Seq: seq, TS: ts, Key: false, Codec: codec, Kind: KindAudio, Payload: payload}
 }
 
 // Viewer is the relay's view of one attached WS viewer connection —
@@ -301,11 +365,20 @@ func (r *StreamRelay) evictLocked(maxStreams, maxBytes int) {
 
 // Attach binds v to streamID's stream, authorizing it BEFORE any GOP replay
 // (FR-015, Test 27 — an unauthorized viewer must never see a single cached
-// frame). On success, returns the cached keyframe followed by its retained
-// deltas, in that order (Test 4) — the caller (the gateway WS write path) is
-// responsible for actually delivering that replay (e.g. via EncodeChunk +
-// SendChunk) before switching the viewer over to live Ingest fan-out; Attach
-// itself never calls v.SendChunk.
+// frame). On success, it flushes the cached keyframe followed by its
+// retained deltas (Test 4) to v via v.SendChunk WHILE s.mu IS STILL HELD
+// (CR2): SendChunk is contractually non-blocking (see the Viewer doc
+// comment above), so this never stalls the stream lock, and holding the
+// lock across the flush guarantees every replay chunk reaches v strictly
+// BEFORE s.mu is released and a concurrently in-flight Ingest call can
+// enqueue a live chunk to v. Without that ordering guarantee a live delta
+// could reach v's queue before (or interleaved with) a replay the caller
+// sent afterward, corrupting decode (a delta depends on its keyframe
+// arriving first).
+//
+// The replayed chunks are ALSO returned, for introspection/tests and
+// backward-compat with existing callers — but by the time Attach returns,
+// they have ALREADY been delivered to v. Callers MUST NOT resend them.
 func (r *StreamRelay) Attach(streamID string, v Viewer) ([]EncodedChunk, error) {
 	if v == nil {
 		return nil, fmt.Errorf("stream relay: viewer is required")
@@ -332,9 +405,20 @@ func (r *StreamRelay) Attach(streamID string, v Viewer) ([]EncodedChunk, error) 
 		s.mu.Unlock()
 		return nil, fmt.Errorf("stream relay: stream %q has failed", streamID)
 	}
-	s.viewers[v] = &relayViewerState{}
+	vst := &relayViewerState{}
+	s.viewers[v] = vst
 	s.lastViewed = time.Now()
 	replay := s.replayLocked()
+	for _, c := range replay {
+		if !v.SendChunk(EncodeChunk(c)) {
+			// A replay chunk was dropped on an already-full queue — mark
+			// degraded so the next live Ingest delivery recovers this
+			// viewer with a fresh keyframe (deliverToViewer's DS-3 row 3
+			// rule) instead of leaving it stuck with an incomplete replay.
+			vst.degraded.Store(true)
+			activeBrowserMetricsRecorder.IncViewerDrop()
+		}
+	}
 	s.mu.Unlock()
 
 	return replay, nil
@@ -469,7 +553,15 @@ func deliverToViewer(v Viewer, st *relayViewerState, c EncodedChunk, wire []byte
 // ingested is discarded from the cache (it would be an orphan a fresh replay
 // could never decode) — it is still forwarded live to attached viewers by
 // Ingest, just not cached for future replay. Must be called with s.mu held.
+//
+// TD1: the GOP cache is video-only. An audio chunk must never occupy the
+// video keyframe slot or a delta slot, and must never count against
+// maxDeltas/cacheBytes — it fans out live via Ingest's viewer loop and is
+// simply not retained here.
 func (s *relayStream) appendToCacheLocked(c EncodedChunk) {
+	if c.Kind != KindVideo {
+		return
+	}
 	if c.Key {
 		cp := c
 		s.keyframe = &cp
@@ -523,24 +615,19 @@ func chunkApproxSize(c EncodedChunk) int {
 // write path (component F) both use; there is no fragment field (M-4).
 const relayChunkEnvelopeHeaderBytes = 4 + 8 + 1 + 1 + 4
 
-// chunkKindAudioByte / chunkKindVideoByte are the wire values of the
-// envelope's kind(u8) field (BrowserChunkEnvelope.yaml: 0=video, 1=audio).
-const (
-	chunkKindVideoByte byte = 0
-	chunkKindAudioByte byte = 1
-)
-
 // EncodeChunk serializes c into the wire envelope carried by the viewer WS's
 // binary browser_video_chunk/browser_audio_chunk frames (and the ingest
 // endpoint's browser_ingest_chunk, same envelope — FR-002/011/012/017,
 // DS-2): an 18-byte big-endian header — seq:u32, ts:u64, key:u8, kind:u8,
 // len:u32 — followed by exactly len raw payload bytes, with NO fragment
 // field (chunks are always sent whole in one binary WS message — M-4). The
-// kind byte is derived from c.Kind ("audio" -> 1, anything else, including
-// the zero value, -> 0/video). Exported (not package-private) because the
-// viewer send path lives in pkg/gateway (component F/E), a different
-// package, and must produce byte-for-byte the same envelope this relay
-// computes cache-eviction/recovery decisions against.
+// kind byte is c.Kind's own wire value (KindVideo=0, KindAudio=1 —
+// TD1/TD2: c.Kind is now a closed ChunkKind enum, so there is no longer a
+// string comparison here that a typo/casing/zero-value could silently fall
+// through). Exported (not package-private) because the viewer send path
+// lives in pkg/gateway (component F/E), a different package, and must
+// produce byte-for-byte the same envelope this relay computes
+// cache-eviction/recovery decisions against.
 func EncodeChunk(c EncodedChunk) []byte {
 	buf := make([]byte, relayChunkEnvelopeHeaderBytes+len(c.Payload))
 	binary.BigEndian.PutUint32(buf[0:4], c.Seq)
@@ -550,11 +637,7 @@ func EncodeChunk(c EncodedChunk) []byte {
 	} else {
 		buf[12] = 0
 	}
-	if c.Kind == "audio" {
-		buf[13] = chunkKindAudioByte
-	} else {
-		buf[13] = chunkKindVideoByte
-	}
+	buf[13] = byte(c.Kind)
 	binary.BigEndian.PutUint32(buf[14:18], uint32(len(c.Payload))) //nolint:gosec // payload length is bound-checked well below 2^32 by the ingest endpoint's max-message-bytes gate (FR-014)
 	copy(buf[18:], c.Payload)
 	return buf

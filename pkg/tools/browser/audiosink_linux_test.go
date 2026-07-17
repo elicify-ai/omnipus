@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -433,4 +434,48 @@ func TestPulseSidecar_SpawnFailure_RetriesWithoutPanicking(t *testing.T) {
 		t.Fatal("expected Healthy() == false when spawn always fails")
 	}
 	sidecar.Stop()
+}
+
+// TestPulseSidecar_BoundedRestartAttempts_GivesUp is the SF5 regression test:
+// a permanently-failing spawn (e.g. `pulseaudio` never on PATH) must NOT
+// retry forever — the supervisor gives up after pulseMaxRestartAttempts
+// consecutive failures, leaving Healthy() false and never spawning again,
+// mirroring the Xvfb sidecar's bounded-restart posture
+// (TestXvfbSidecar_SpawnSuperviseRestart's "bounded restart attempts"
+// subtest).
+func TestPulseSidecar_BoundedRestartAttempts_GivesUp(t *testing.T) {
+	cfg := testAudioConfig(t)
+	cfg.RestartBackoff = 2 * time.Millisecond
+	cfg.MaxRestartBackoff = 5 * time.Millisecond
+
+	var attempts int32
+	sidecar := NewAudioSidecar(cfg).(*pulseSidecar)
+	sidecar.spawnFn = func(AudioConfig) (process, error) {
+		atomic.AddInt32(&attempts, 1)
+		return nil, errors.New("pulseaudio not found on PATH")
+	}
+	defer sidecar.Stop()
+
+	if err := sidecar.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Eventually the supervisor exhausts pulseMaxRestartAttempts and gives
+	// up; the spawn count converges to pulseMaxRestartAttempts and stays
+	// there (proves the retry loop is bounded, not infinite).
+	waitUntil(t, 2*time.Second, func() bool {
+		return atomic.LoadInt32(&attempts) >= int32(pulseMaxRestartAttempts)
+	})
+	if sidecar.Healthy() {
+		t.Fatal("expected Healthy() == false after exhausting restart attempts")
+	}
+
+	stalled := atomic.LoadInt32(&attempts)
+	time.Sleep(100 * time.Millisecond)
+	if got := atomic.LoadInt32(&attempts); got != stalled {
+		t.Fatalf("expected spawn attempts to stop at %d once the bound is exceeded, got %d (retried forever)", stalled, got)
+	}
+	if sidecar.Healthy() {
+		t.Fatal("expected Healthy() to stay false")
+	}
 }

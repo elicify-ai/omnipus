@@ -159,6 +159,17 @@ const (
 	// on the privileged ingest entry point (ADR-044 FR-024, CRIT-002).
 	EventBrowserLiveIngestRejected = "browser.live.ingest_rejected"
 
+	// EventBrowserLiveVideoStreamStarted / ...Relaunched / ...Failed /
+	// EventBrowserLiveVideoKillSwitch — live-browser VIDEO stream orchestration
+	// lifecycle (ADR-044): a video stream started / was re-minted + relaunched
+	// after an ingest drop (CRIT-002) / failed / was torn down by the
+	// gateway.browser_video_enabled kill-switch (FR-020). Emitted by the
+	// orchestrator (pkg/gateway/browser_stream.go).
+	EventBrowserLiveVideoStreamStarted    = "browser.live.video_stream_started"
+	EventBrowserLiveVideoStreamRelaunched = "browser.live.video_stream_relaunched"
+	EventBrowserLiveVideoStreamFailed     = "browser.live.video_stream_failed"
+	EventBrowserLiveVideoKillSwitch       = "browser.live.video_kill_switch"
+
 	// EventChannelRoutingDriftDrop — WARN. A workspace-bound channel instance's
 	// configured agent is unresolvable (deleted or a worker): the
 	// inbound message is dropped rather than silently degraded to the global

@@ -154,6 +154,10 @@ func IsValidEventName(e EventName) bool {
 		EventBrowserLiveStreamStarted,
 		EventBrowserLiveStreamStopped,
 		EventBrowserLiveIngestRejected,
+		EventBrowserLiveVideoStreamStarted,
+		EventBrowserLiveVideoStreamRelaunched,
+		EventBrowserLiveVideoStreamFailed,
+		EventBrowserLiveVideoKillSwitch,
 		// security_change.go.
 		EventSecuritySettingChange,
 		// Misc event names emitted by other packages with stable wire

@@ -409,7 +409,8 @@ describe('BrowserLiveWsConnection — binary transport wiring', () => {
     lastWsInstance.onmessage?.({ data: buf })
 
     expect(lastVideoDecoderInstance?.decode).toHaveBeenCalledTimes(1)
-    expect(MockEncodedVideoChunk).toHaveBeenCalledWith({ type: 'key', timestamp: 33, data: payload })
+    // A4 — wire `ts` is milliseconds; WebCodecs timestamp is microseconds (ts * 1000).
+    expect(MockEncodedVideoChunk).toHaveBeenCalledWith({ type: 'key', timestamp: 33_000, data: payload })
   })
 
   it('feeds a binary audio chunk to the mocked AudioDecoder.decode as an EncodedAudioChunk when has_audio', async () => {
@@ -433,7 +434,8 @@ describe('BrowserLiveWsConnection — binary transport wiring', () => {
     lastWsInstance.onmessage?.({ data: buf })
 
     expect(lastAudioDecoderInstance?.decode).toHaveBeenCalledTimes(1)
-    expect(MockEncodedAudioChunk).toHaveBeenCalledWith({ type: 'delta', timestamp: 66, data: payload })
+    // A4 — wire `ts` is milliseconds; WebCodecs timestamp is microseconds (ts * 1000).
+    expect(MockEncodedAudioChunk).toHaveBeenCalledWith({ type: 'delta', timestamp: 66_000, data: payload })
   })
 
   it('delivers decoded VideoFrame output via onVideoFrame and closes the frame afterwards', async () => {

@@ -270,6 +270,53 @@ func (r *LiveViewRegistry) Attach(
 	onControl ControlSink,
 	onTabs TabsSink,
 ) (bool, error) {
+	return r.attachSession(sessionID, viewerID, true, onFrame, onStatus, onControl, onTabs)
+}
+
+// AttachWithoutScreencast binds viewerID to sessionID's live view exactly
+// like Attach — viewer/status/control/tabs registration, take-the-wheel
+// input eligibility (lv.tabCtx is still resolved and set), controlledByOther
+// computation, and the immediate tabs snapshot — but deliberately does NOT
+// issue CDP Page.startScreencast, even when this is the first attach for the
+// session (Fix 2, double-screencast finding).
+//
+// Callers on the video-relay path (component M) drive their own, separate
+// CDP Page.startScreencast subscription via CaptureDriver (component L,
+// capture.go) against the SAME underlying target that this registry's
+// screencast would otherwise also subscribe to. If BOTH were started for the
+// same viewer, both ListenTarget handlers would receive and ack every
+// screencast frame — double-acking (Chrome paces frame delivery on the ack)
+// while the two Page.startScreencast calls contend over quality/size — see
+// browser_ws.go's handleAttach for the full finding.
+//
+// onFrame is still required and still registered in lv.viewers (never
+// nil-called): if a LATER, non-video-capable viewer attaches to the SAME
+// session via the ordinary Attach and thereby starts the legacy screencast
+// for real (D3's ref-counted "first viewer starts it" — len(lv.viewers)==0
+// is what gates teardown in detach(), not who happened to start it), this
+// viewer's sink must still receive those frames (and safely discard them,
+// per its own videoCapable branch) rather than leaving deliver()'s fan-out to
+// call a nil sink.
+func (r *LiveViewRegistry) AttachWithoutScreencast(
+	sessionID, viewerID string,
+	onFrame FrameSink,
+	onStatus StatusSink,
+	onControl ControlSink,
+	onTabs TabsSink,
+) (bool, error) {
+	return r.attachSession(sessionID, viewerID, false, onFrame, onStatus, onControl, onTabs)
+}
+
+// attachSession is the shared implementation behind Attach and
+// AttachWithoutScreencast; wantScreencast selects which of the two.
+func (r *LiveViewRegistry) attachSession(
+	sessionID, viewerID string,
+	wantScreencast bool,
+	onFrame FrameSink,
+	onStatus StatusSink,
+	onControl ControlSink,
+	onTabs TabsSink,
+) (bool, error) {
 	sessionID = resolveSessionID(sessionID)
 	if viewerID == "" {
 		return false, fmt.Errorf("browser live: viewer id is required")
@@ -278,7 +325,7 @@ func (r *LiveViewRegistry) Attach(
 	if err != nil {
 		return false, fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
 	}
-	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus, onControl, onTabs)
+	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onFrame, onStatus, onControl, onTabs, wantScreencast)
 	if err != nil {
 		return false, err
 	}
@@ -499,6 +546,16 @@ func (lv *LiveView) hasEpochLocked() bool {
 // already controlled by a viewer other than viewerID at the moment of this
 // attach — computed and returned under lv.mu before any CDP call, so it is
 // available even on the fast piggyback path below.
+//
+// wantScreencast is a trailing variadic bool (rather than a plain required
+// parameter) purely so every existing 6-arg call site — including the
+// in-package deadlock/live-view tests, which construct a *LiveView directly
+// and call attach() without going through the registry — keeps compiling
+// unchanged; omitted (the overwhelming majority of call sites) it defaults
+// to true, i.e. today's behavior. LiveViewRegistry.attachSession is the only
+// caller that ever passes an explicit value, forwarding the choice between
+// its two exported entry points, Attach (true) and AttachWithoutScreencast
+// (false, Fix 2 double-screencast finding — see its doc comment).
 func (lv *LiveView) attach(
 	tabCtx context.Context,
 	viewerID string,
@@ -506,7 +563,13 @@ func (lv *LiveView) attach(
 	onStatus StatusSink,
 	onControl ControlSink,
 	onTabs TabsSink,
+	wantScreencast ...bool,
 ) (bool, error) {
+	startScreencast := true
+	if len(wantScreencast) > 0 {
+		startScreencast = wantScreencast[0]
+	}
+
 	lv.mu.Lock()
 	lv.viewers[viewerID] = onFrame
 	if onStatus != nil {
@@ -534,7 +597,17 @@ func (lv *LiveView) attach(
 		return controlledByOther, nil
 	}
 
+	// lv.tabCtx is kept current regardless of startScreencast: dispatchInput
+	// (take-the-wheel input) requires it non-nil, and onTabsChanged's rebind
+	// decision compares against it via hasEpochLocked — both must work for a
+	// viewer that owns no CDP screencast subscription of its own (Fix 2).
 	lv.tabCtx = tabCtx
+
+	if !startScreencast {
+		lv.mu.Unlock()
+		return controlledByOther, nil
+	}
+
 	listenCtx, cancel := context.WithCancel(tabCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel

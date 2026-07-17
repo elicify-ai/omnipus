@@ -656,18 +656,38 @@ func (h *BrowserWSHandler) handleAttach(
 	// FR-005/US-1/US-6 (ADR-044): a video-capable, kill-switch-enabled install
 	// drives this viewer over the component-M WebCodecs relay instead of the
 	// legacy JPEG screencast (F-02 — the legacy path is UNCHANGED for every
-	// other install/state, this only adds a parallel one). mgr.Live().Attach
-	// below is called identically on BOTH paths — take-the-wheel input, tabs,
-	// and viewer control/status authz (FR-015) all flow through the SAME
+	// other install/state, this only adds a parallel one). attachFn below
+	// (Attach or AttachWithoutScreencast, chosen just below) is called
+	// identically on BOTH paths — take-the-wheel input, tabs, and viewer
+	// control/status authz (FR-015) all flow through the SAME
 	// LiveViewRegistry regardless of which frame transport is chosen; only
 	// the onFrame SINK differs, so a video viewer never receives a
 	// browser_screencast frame racing its browser_video_chunk stream (the
-	// video relay drives frames instead — see AttachViewer below). Note
-	// LiveView.attach (pkg/tools/browser/live.go) starts the real CDP
-	// Page.startScreencast at most once per SESSION regardless of viewer
-	// count or transport choice (piggybacked by every later Attach call,
-	// video or not), so this branch changes only what reaches the wire, not
-	// whether a screencast subscription exists underneath.
+	// video relay drives frames instead — see AttachViewer below).
+	//
+	// FIX 2 (double-screencast finding): a video-capable viewer's frames are
+	// ALWAYS discarded by onFrame below (the `if videoCapable { return }`
+	// branch) regardless of whether AttachViewer below ends up succeeding —
+	// they were never going to reach this connection via the legacy path
+	// either way. So for a video-capable viewer this call uses
+	// AttachWithoutScreencast instead of Attach: same viewer/status/control/
+	// tabs registration and take-the-wheel eligibility, but it deliberately
+	// does NOT start LiveView's own CDP Page.startScreencast subscription.
+	// Reason: AttachViewer's video path (below) drives its own, SEPARATE
+	// Page.startScreencast via CaptureDriver (component L, capture.go)
+	// against the same underlying agent tab. Before this fix, BOTH
+	// screencasts would start for a video-capable viewer — two ListenTarget
+	// handlers receiving and acking every frame (double-ack; Chrome paces
+	// frame delivery on the ack) while contending over quality/size. A
+	// non-video-capable viewer (videoCapable == false) is completely
+	// unaffected — it still calls Attach and still owns/starts the legacy
+	// screencast exactly as before (F-02); and if a non-video-capable viewer
+	// later joins the SAME session as an already-attached video-capable one,
+	// its Attach call still starts the legacy screencast for real at that
+	// point (LiveView.attach's ref-counted "first REAL screencast subscriber
+	// starts it" rule, D3 — see AttachWithoutScreencast's doc comment in
+	// live.go), and this viewer's onFrame keeps discarding those frames too,
+	// exactly as it already does today.
 	videoCapable := h.videoAttachCapable()
 	onFrame := func(lf browser.LiveFrame) {
 		if videoCapable {
@@ -687,7 +707,11 @@ func (h *BrowserWSHandler) handleAttach(
 			ScrollOffsetY: &scrollY,
 		})
 	}
-	controlledByOther, err := mgr.Live().Attach(browser.DefaultSessionID, viewerID, onFrame, func(message string) {
+	attachFn := mgr.Live().Attach
+	if videoCapable {
+		attachFn = mgr.Live().AttachWithoutScreencast
+	}
+	controlledByOther, err := attachFn(browser.DefaultSessionID, viewerID, onFrame, func(message string) {
 		// ADR-038 finding #2's split-brain fix: the LiveView's underlying tab
 		// context died without an explicit browser_detach — e.g. this
 		// connection is still holding a reference to a BrowserManager that

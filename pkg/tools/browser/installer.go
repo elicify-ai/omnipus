@@ -379,9 +379,12 @@ func fetchCFTManifest(ctx context.Context) (*cftManifest, error) {
 // downloadFile fetches url to dest atomically (temp file + rename), verifying
 // the downloaded content's integrity (verifyGoogHashMD5) before the rename —
 // i.e. before it becomes visible to extractZip / the runtime (FR-009, Test
-// 15, DS-5 "bad hash -> reject download"). On any failure, including a failed
-// integrity check, the partial/rejected temp file is removed and dest is
-// never created.
+// 15, DS-5 "bad hash -> reject download"). A response with a mismatched hash
+// OR with no X-Goog-Hash checksum header at all is rejected the same way
+// (SF1: verify integrity before an unverified download ever becomes the
+// agent's Chrome runtime — never fail open). On any failure, including a
+// failed integrity check, the partial/rejected temp file is removed and dest
+// is never created.
 func downloadFile(ctx context.Context, url, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -416,15 +419,22 @@ func downloadFile(ctx context.Context, url, dest string) error {
 
 	if err := verifyGoogHashMD5(resp.Header, hasher.Sum(nil)); err != nil {
 		_ = os.Remove(tmpPath)
+		logger.ErrorCF("browser", "chromium download failed integrity verification — refusing to install",
+			map[string]any{"url": url, "error": err.Error()})
 		return fmt.Errorf("integrity check failed: %w", err)
-	}
-	if len(resp.Header.Values("X-Goog-Hash")) == 0 {
-		logger.WarnCF("browser", "download response carried no X-Goog-Hash checksum — proceeding unverified",
-			map[string]any{"url": url})
 	}
 
 	return os.Rename(tmpPath, dest)
 }
+
+// allowHeaderlessDownloadForTesting lets verifyGoogHashMD5 accept a download
+// response that carries no X-Goog-Hash header at all, instead of the default
+// hard rejection (SF1). Production code never sets this true: it exists only
+// so a hermetic test can exercise a headerless response deliberately.
+// Chrome-for-Testing's storage backend (storage.googleapis.com) always
+// publishes X-Goog-Hash on every real response, so this stays a
+// same-package-test-only opt-in, never a default or an exported switch.
+var allowHeaderlessDownloadForTesting = false
 
 // verifyGoogHashMD5 verifies a just-downloaded archive's MD5 digest (got)
 // against the MD5 checksum the server published for that response via the
@@ -441,15 +451,20 @@ func downloadFile(ctx context.Context, url, dest string) error {
 // A response that carries an X-Goog-Hash header whose declared and actual
 // digests disagree (or whose md5 value is malformed) is always rejected
 // (Test 15 / DS-5 "bad hash -> reject download"). A response with NO
-// X-Goog-Hash header at all (e.g. a non-GCS mirror, or a caller-supplied test
-// double that doesn't set one) is not rejected — DS-5 only specifies a
-// reject-on-*bad*-hash row, not reject-on-absent-hash — but downloadFile logs
-// a WARN in that case so an operator-visible signal exists for a feed that
-// unexpectedly stops publishing checksums.
+// X-Goog-Hash header at all is likewise a hard reject by default (SF1):
+// ADR §6.5/§6.6 require verifying integrity BEFORE a downloaded binary
+// becomes the agent's Chrome runtime, and an absent header from the expected
+// GCS host (a non-GCS mirror, a stripped proxy, or a tampered response) is
+// exactly the case that check exists to catch — silently trusting it would
+// fail open. If a headerless mirror must ever be tolerated, that requires an
+// explicit opt-in (allowHeaderlessDownloadForTesting), never the default.
 func verifyGoogHashMD5(header http.Header, got []byte) error {
 	raw := header.Get("X-Goog-Hash")
 	if raw == "" {
-		return nil
+		if allowHeaderlessDownloadForTesting {
+			return nil
+		}
+		return fmt.Errorf("response carried no X-Goog-Hash checksum header — refusing to trust an unverified chromium download")
 	}
 	var want []byte
 	for _, part := range strings.Split(raw, ",") {

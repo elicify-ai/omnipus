@@ -40,12 +40,17 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	// Hermetic: swap in a fresh metrics registry for this test's duration
 	// and restore the previous one afterward, so this test can assert exact
 	// counts without being polluted by (or polluting) any other test that
-	// shares these package-level singletons.
-	prev := globalBrowserVideoMetrics
+	// shares these package-level singletons. The swap itself goes through
+	// swapGlobalBrowserVideoMetrics (atomic.Pointer-backed) rather than a
+	// plain package-var reassignment: StepDown/watchEncoder below launch
+	// background goroutines that read the singleton concurrently, and a
+	// plain reassignment here (including t.Cleanup's restore, which can run
+	// while one of those goroutines is still in flight) would be an
+	// unsynchronized race under `go test -race`.
 	m := newBrowserVideoMetrics()
-	globalBrowserVideoMetrics = m
+	prev := swapGlobalBrowserVideoMetrics(m)
 	t.Cleanup(func() {
-		globalBrowserVideoMetrics = prev
+		swapGlobalBrowserVideoMetrics(prev)
 		browser.SetBrowserMetricsRecorder(prev)
 	})
 
@@ -104,16 +109,31 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	}
 
 	// ---- per-viewer drop rate (counter) ----
-	// A second viewer on the SAME stream with a queue depth of 1 so the
-	// second delivered chunk finds it full — the exact production
-	// drop-in-isolation path (FR-004), through relay.Attach + the real
-	// videoRelayAdapter.Ingest -> deliverToViewer.
-	smallWC := &browserWSConn{sendCh: make(chan *wsSendItem, 1), doneCh: make(chan struct{})}
+	// A second viewer on the SAME stream, attaching AFTER a keyframe+delta
+	// are already cached (the two video ingests above). CR2 made
+	// StreamRelay.Attach flush that GOP replay (keyframe + 1 delta = 2
+	// chunks) into the viewer's send queue WHILE HOLDING THE STREAM LOCK, so
+	// the queue depth must be large enough to absorb that replay WITHOUT
+	// dropping — a depth-1 queue (the stale precondition here) is consumed
+	// by the replay itself before the test's own two intentional deltas ever
+	// run, which is exactly the bug this test was failing on ("viewer drop
+	// total = 2 before queue full, want 0"). Depth 3 = 2 replay chunks + the
+	// "first delta fills it" step below, leaving the "second delta finds it
+	// full" step to be the one genuine, isolated drop this test intends to
+	// exercise — the exact production drop-in-isolation path (FR-004),
+	// through relay.Attach + the real videoRelayAdapter.Ingest ->
+	// deliverToViewer.
+	smallWC := &browserWSConn{sendCh: make(chan *wsSendItem, 3), doneCh: make(chan struct{})}
 	vv2 := newWSVideoViewer(smallWC, streamID, "sess2", "v2")
 	if _, aerr := o.relay.Attach(streamID, vv2); aerr != nil {
 		t.Fatalf("relay.Attach: %v", aerr)
 	}
-	// First delta fills vv2's depth-1 queue (nobody drains smallWC.sendCh).
+	// The GOP replay (2 chunks) must have been fully absorbed with no drop.
+	if got := m.viewerDropTotal.Load(); got != 0 {
+		t.Fatalf("viewer drop total = %d after Attach's GOP replay, want 0 (queue depth sized to absorb it)", got)
+	}
+	// First delta fills the queue (2 replay chunks + this one = 3/3; nobody
+	// drains smallWC.sendCh).
 	adapter.Ingest(streamID, EncodedChunk{Seq: 2, TS: 66, Key: false, Kind: "video", Payload: []byte{1}})
 	if got := m.viewerDropTotal.Load(); got != 0 {
 		t.Fatalf("viewer drop total = %d before the queue is full, want 0", got)
@@ -125,24 +145,36 @@ func TestObservability_MetricsEmitted(t *testing.T) {
 	}
 
 	// ---- capture restart count (counter): StepDown path ----
+	// PT-FLAKY fix: poll the ACTUAL metric under test, not a proxy signal.
+	// StepDown (browser_stream.go:~787) starts the new capture driver (which
+	// bumps cap.count()) BEFORE it calls IncCaptureRestart() — waiting on the
+	// proxy (cap.count()==2) leaves a race window where this goroutine can
+	// observe the proxy flip yet still read captureRestartTotal==0 an
+	// instant later, which is exactly the intermittent "want 1" flake under
+	// `-p` load. Polling captureRestartTotal directly closes that window
+	// deterministically.
 	o.StepDown(streamID)
-	if !eventuallyTrue(2*time.Second, func() bool { return cap.count() == 2 }) {
-		t.Fatal("expected StepDown to restart capture within the deadline")
+	if !eventuallyTrue(2*time.Second, func() bool { return m.captureRestartTotal.Load() == 1 }) {
+		t.Fatalf("capture restart total after StepDown = %d, want 1 within the deadline", m.captureRestartTotal.Load())
 	}
-	if got := m.captureRestartTotal.Load(); got != 1 {
-		t.Fatalf("capture restart total after StepDown = %d, want 1", got)
+	if got := cap.count(); got != 2 {
+		t.Fatalf("expected StepDown to restart capture, cap.count() = %d, want 2", got)
 	}
 
 	// ---- capture restart count (counter): CRIT-002 re-mint+relaunch path ----
+	// Same PT-FLAKY fix: handleEncoderDrop (browser_stream.go:~705) re-mints
+	// + relaunches (bumping ing.mintCount()/launch.count()) BEFORE it calls
+	// IncCaptureRestart() — poll the metric itself, not the proxy.
 	firstTab := launch.tabAt(0)
 	close(firstTab.done) // simulate the ingest drop (encoder tab crash)
-	if !eventuallyTrue(2*time.Second, func() bool {
-		return launch.count() == 2 && ing.mintCount() == 2
-	}) {
-		t.Fatal("expected the orchestrator to re-mint + relaunch after the simulated encoder drop")
+	if !eventuallyTrue(2*time.Second, func() bool { return m.captureRestartTotal.Load() == 2 }) {
+		t.Fatalf("capture restart total after encoder-drop relaunch = %d, want 2 (StepDown + relaunch) within the deadline", m.captureRestartTotal.Load())
 	}
-	if got := m.captureRestartTotal.Load(); got != 2 {
-		t.Fatalf("capture restart total after encoder-drop relaunch = %d, want 2 (StepDown + relaunch)", got)
+	if got := launch.count(); got != 2 {
+		t.Fatalf("expected the orchestrator to relaunch after the simulated encoder drop; launch count = %d, want 2", got)
+	}
+	if got := ing.mintCount(); got != 2 {
+		t.Fatalf("expected the orchestrator to re-mint after the simulated encoder drop; mint count = %d, want 2", got)
 	}
 
 	// ---- ingest-auth-reject count (counter), labeled by reason ----

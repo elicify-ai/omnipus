@@ -56,9 +56,11 @@ import (
 
 // ownershipMarkerOwner is the owner string stamped into the shared-Chrome
 // ownership marker (shared-chrome.pid). Its presence + a live pid is the proof
-// that a 9223 holder is OUR Chrome (ADR-043 D1 / grill M2). Its ABSENCE on a
-// held port means the holder is foreign and must be rejected, never silently
-// driven.
+// that the process holding the launch lockfile is OUR Chrome (ADR-043 D1 / grill
+// M2). CRIT-001 / ADR-044 §6.0.3 replaced the old net.Listen(":9223") port bind
+// with an O_EXCL/flock lockfile, so the marker is now the identity layer over
+// the lock: a held lock whose marker is absent or whose marker pid is dead is
+// treated as stale/foreign and never silently driven.
 const ownershipMarkerOwner = "omnipus"
 
 // agentBrowserContext is a coordinator-owned CDP browser context for one agent

@@ -346,3 +346,102 @@ func TestInstaller_FullChromeDefault_DetectsEither_VerifiesIntegrity(t *testing.
 		}
 	}
 }
+
+// TestInstaller_MissingGoogHashHeader_RejectedByDefault is the SF1
+// regression test: a download response that carries NO X-Goog-Hash header at
+// all (e.g. a stripped proxy, a non-GCS mirror, or a tampered response) must
+// be rejected outright by default — never installed "unverified" — matching
+// ADR §6.5/§6.6's "verify integrity before it becomes the runtime". Before
+// the fix, downloadFile only WARNed and installed the binary anyway.
+func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only path layout")
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	withXvfbProbe(t, false) // exercise the headless-shell download path
+
+	build := headlessShellBuild()
+	content := []byte("#!/bin/sh\nexit 0\n")
+	zipBytes := buildZipFixture(t, build, platform, content)
+
+	var zipHits int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zip", func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&zipHits, 1)
+		// Deliberately no X-Goog-Hash header at all.
+		_, _ = w.Write(zipBytes)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+			cftDownloadID: srv.URL + "/zip",
+		}))
+	})
+	withManifestURL(t, srv.URL+"/manifest")
+
+	root := t.TempDir()
+	_, err = EnsureChromium(context.Background(), root)
+	if err == nil {
+		t.Fatal("expected EnsureChromium to reject a headerless download, got nil error")
+	}
+	if !strings.Contains(err.Error(), "X-Goog-Hash") {
+		t.Fatalf("expected an X-Goog-Hash-related rejection error, got: %v", err)
+	}
+	if atomic.LoadInt32(&zipHits) != 1 {
+		t.Fatalf("expected exactly 1 zip fetch attempt, got %d", zipHits)
+	}
+	// No binary must have been extracted anywhere under root.
+	expectBin := build.binaryFullPath(filepath.Join(root, "131.0.6778.999"), platform)
+	if _, statErr := os.Stat(expectBin); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no binary at %s after a headerless-download rejection, stat err: %v", expectBin, statErr)
+	}
+}
+
+// TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn proves
+// the opt-in escape hatch works and is a same-package-test-only seam, not a
+// production default: with allowHeaderlessDownloadForTesting forced true, a
+// headerless response is accepted.
+func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only path layout")
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	withXvfbProbe(t, false)
+
+	prev := allowHeaderlessDownloadForTesting
+	allowHeaderlessDownloadForTesting = true
+	t.Cleanup(func() { allowHeaderlessDownloadForTesting = prev })
+
+	build := headlessShellBuild()
+	content := []byte("#!/bin/sh\nexit 0\n")
+	zipBytes := buildZipFixture(t, build, platform, content)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBytes) // no X-Goog-Hash header
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+			cftDownloadID: srv.URL + "/zip",
+		}))
+	})
+	withManifestURL(t, srv.URL+"/manifest")
+
+	root := t.TempDir()
+	got, err := EnsureChromium(context.Background(), root)
+	if err != nil {
+		t.Fatalf("expected the headerless download to be accepted under the opt-in, got: %v", err)
+	}
+	if _, statErr := os.Stat(got); statErr != nil {
+		t.Fatalf("expected the installed binary to exist: %v", statErr)
+	}
+}

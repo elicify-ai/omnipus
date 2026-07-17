@@ -156,9 +156,40 @@ type browserVideoMetrics struct {
 	streamCounterFn func() int
 }
 
-// globalBrowserVideoMetrics is the package-level singleton, created once at
-// init — mirrors globalToolMetrics in metrics.go.
-var globalBrowserVideoMetrics = newBrowserVideoMetrics()
+// globalBrowserVideoMetricsPtr holds the package-level singleton behind an
+// atomic.Pointer (PT secondary / -race hazard fix). TestObservability_MetricsEmitted
+// (Test 28) swaps in a fresh, hermetic registry for its duration and restores
+// the previous one afterward via swapGlobalBrowserVideoMetrics, while
+// orchestrator goroutines started during that same test (StepDown's async
+// capture restart, watchEncoder's async CRIT-002 relaunch — both in
+// browser_stream.go) read the singleton concurrently at call time via
+// globalBrowserVideoMetrics(). A plain *browserVideoMetrics package var
+// reassigned by the test (the pre-fix shape) is an unsynchronized
+// read/write race between the test goroutine and those background
+// goroutines — real under `go test -race`, not just theoretical, since nothing
+// serializes the test's `t.Cleanup` restore against a still-running
+// StepDown/watchEncoder goroutine. atomic.Pointer makes both the swap and
+// every read race-safe without changing any call site's method-call shape
+// beyond adding the `()` this accessor requires.
+var globalBrowserVideoMetricsPtr atomic.Pointer[browserVideoMetrics]
+
+func init() {
+	globalBrowserVideoMetricsPtr.Store(newBrowserVideoMetrics())
+}
+
+// globalBrowserVideoMetrics returns the current metrics singleton. Safe for
+// concurrent use alongside swapGlobalBrowserVideoMetrics.
+func globalBrowserVideoMetrics() *browserVideoMetrics {
+	return globalBrowserVideoMetricsPtr.Load()
+}
+
+// swapGlobalBrowserVideoMetrics atomically replaces the singleton with m and
+// returns the previous value. Used by TestObservability_MetricsEmitted to
+// install a hermetic, per-test registry and restore the real one afterward
+// without racing the background goroutines the test itself drives.
+func swapGlobalBrowserVideoMetrics(m *browserVideoMetrics) *browserVideoMetrics {
+	return globalBrowserVideoMetricsPtr.Swap(m)
+}
 
 func newBrowserVideoMetrics() *browserVideoMetrics {
 	return &browserVideoMetrics{
@@ -261,7 +292,7 @@ func (m *browserVideoMetrics) streamCount() int {
 // text-exposition format, matching the style HandleMetrics already uses for
 // the FR-039 tool-registry metrics above it on the same /metrics endpoint.
 func writeBrowserVideoMetrics(sb *strings.Builder) {
-	m := globalBrowserVideoMetrics
+	m := globalBrowserVideoMetrics()
 
 	sb.WriteString("# HELP omnipus_browser_live_stream_count Active live-browser video streams.\n")
 	sb.WriteString("# TYPE omnipus_browser_live_stream_count gauge\n")

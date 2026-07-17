@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,14 +41,14 @@ type fakeIngest struct {
 
 func newFakeIngest() *fakeIngest { return &fakeIngest{current: map[string]string{}} }
 
-func (f *fakeIngest) MintIngestToken(streamID string) string {
+func (f *fakeIngest) MintIngestToken(streamID string) ingestToken {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.tokenSeq++
 	tok := "tok-" + strconv.Itoa(f.tokenSeq)
 	f.mintCalls = append(f.mintCalls, streamID)
 	f.current[streamID] = tok // re-mint supersedes: only the newest token is live
-	return tok
+	return ingestToken(tok)
 }
 
 func (f *fakeIngest) EndStream(streamID string) {
@@ -296,13 +297,13 @@ func TestStream_CapableAttach_StreamsToViewer(t *testing.T) {
 	if cfg.Origin != "http://127.0.0.1:12345" || cfg.EncoderURL == "" {
 		t.Fatalf("encoder cfg origin/url not wired: origin=%q url=%q", cfg.Origin, cfg.EncoderURL)
 	}
-	if codecFamily(cfg.VideoCodec) != "h264" {
+	if !strings.HasPrefix(codecFamily(cfg.VideoCodec), "h264") {
 		t.Fatalf("expected H.264-first codec, got %q", cfg.VideoCodec)
 	}
 
 	// browser_stream_init is sent first, before any chunk.
 	initFrame := drainStreamInit(t, wc)
-	if codecFamily(initFrame.Codec) != "h264" {
+	if !strings.HasPrefix(codecFamily(initFrame.Codec), "h264") {
 		t.Fatalf("stream_init codec = %q, want h264 family", initFrame.Codec)
 	}
 

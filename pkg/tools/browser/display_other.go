@@ -7,6 +7,9 @@
 // always fails with a descriptive error — callers classify the install
 // not-video-capable and continue with headless agent browsing unchanged.
 // Never panics, never blocks, never touches agent browsing.
+//
+// DisplayConfig and the DisplaySidecar interface are platform-agnostic and
+// live in the untagged display.go, shared by this file and display_linux.go.
 
 //go:build !linux
 
@@ -16,48 +19,6 @@ import (
 	"context"
 	"fmt"
 )
-
-// Default framebuffer geometry, kept in sync with display_linux.go so
-// callers see the same defaults regardless of platform.
-const (
-	defaultDisplayWidth  = 1280
-	defaultDisplayHeight = 720
-	defaultDisplayDepth  = 24
-)
-
-// DisplayConfig configures the virtual-display sidecar's framebuffer. See
-// display_linux.go for the fields' meaning; on this platform the values are
-// accepted but never used (Start always fails).
-type DisplayConfig struct {
-	Width  int
-	Height int
-	Depth  int
-}
-
-// withDefaults returns cfg with zero-valued fields replaced by the
-// 1280x720x24 default, matching display_linux.go.
-func (cfg DisplayConfig) withDefaults() DisplayConfig {
-	if cfg.Width <= 0 {
-		cfg.Width = defaultDisplayWidth
-	}
-	if cfg.Height <= 0 {
-		cfg.Height = defaultDisplayHeight
-	}
-	if cfg.Depth <= 0 {
-		cfg.Depth = defaultDisplayDepth
-	}
-	return cfg
-}
-
-// DisplaySidecar is the supervised virtual-display process consumed by the
-// headful-Chrome launch path. See display_linux.go for the interface's full
-// doc; the non-Linux stub below satisfies the same surface honestly.
-type DisplaySidecar interface {
-	Start(ctx context.Context) error
-	Display() string
-	Healthy() bool
-	Stop()
-}
 
 // NewDisplaySidecar returns a stub DisplaySidecar on non-Linux platforms.
 // Its Start always fails so callers classify the install not-video-capable

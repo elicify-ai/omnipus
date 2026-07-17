@@ -253,6 +253,12 @@ func (p *pulseSidecar) runAndSupervise() {
 	// the very first successful bring-up in this sidecar's lifetime is not.
 	everHealthy := false
 
+	// consecutiveFailures counts spawn/bring-up failures since the last
+	// successful bring-up (SF5). It resets to 0 on every success, so it only
+	// bounds an unbroken run of failures — not the sidecar's total lifetime
+	// restart count.
+	consecutiveFailures := 0
+
 	for {
 		if p.isStopped() {
 			return
@@ -260,13 +266,21 @@ func (p *pulseSidecar) runAndSupervise() {
 
 		proc, err := p.spawnFn(p.cfg)
 		if err != nil {
+			consecutiveFailures++
 			logger.WarnCF(
 				"browser",
 				"audio sidecar: spawn failed — audio unavailable, video unaffected",
 				map[string]any{
-					"error": err.Error(),
+					"error":               err.Error(),
+					"consecutive_failure": consecutiveFailures,
 				},
 			)
+			if consecutiveFailures >= pulseMaxRestartAttempts {
+				logger.ErrorCF("browser",
+					"audio sidecar: exceeded max consecutive spawn/bring-up failures — giving up; audio stays unavailable, video unaffected",
+					map[string]any{"max_attempts": pulseMaxRestartAttempts})
+				return
+			}
 			if !p.sleepOrStop(backoff) {
 				return
 			}
@@ -278,11 +292,13 @@ func (p *pulseSidecar) runAndSupervise() {
 		bringErr := p.bringUp(bringCtx, proc)
 		cancel()
 		if bringErr != nil {
+			consecutiveFailures++
 			logger.WarnCF(
 				"browser",
 				"audio sidecar: bring-up failed — audio unavailable, video unaffected",
 				map[string]any{
-					"error": bringErr.Error(),
+					"error":               bringErr.Error(),
+					"consecutive_failure": consecutiveFailures,
 				},
 			)
 			if termErr := proc.Terminate(); termErr != nil {
@@ -290,12 +306,20 @@ func (p *pulseSidecar) runAndSupervise() {
 					"error": termErr.Error(),
 				})
 			}
+			if consecutiveFailures >= pulseMaxRestartAttempts {
+				logger.ErrorCF("browser",
+					"audio sidecar: exceeded max consecutive spawn/bring-up failures — giving up; audio stays unavailable, video unaffected",
+					map[string]any{"max_attempts": pulseMaxRestartAttempts})
+				return
+			}
 			if !p.sleepOrStop(backoff) {
 				return
 			}
 			backoff = nextBackoff(backoff, p.cfg)
 			continue
 		}
+
+		consecutiveFailures = 0
 
 		p.mu.Lock()
 		p.proc = proc
@@ -359,6 +383,16 @@ func (p *pulseSidecar) sleepOrStop(d time.Duration) bool {
 		return true
 	}
 }
+
+// pulseMaxRestartAttempts bounds a run of CONSECUTIVE spawn/bring-up
+// failures — mirroring xvfbMaxRestartAttempts (display_linux.go) — so a host
+// with no `pulseaudio` on PATH (or one that never manages to bring up) does
+// not retry forever, WARNing every ≤15s indefinitely (SF5). The counter
+// resets to zero after every successful bring-up, so a sidecar that has run
+// successfully at least once still gets a fresh run of retries after a later
+// crash — only a PERSISTENTLY absent/broken binary gives up for good, never
+// restarting again for the lifetime of this sidecar instance.
+var pulseMaxRestartAttempts = 5
 
 func nextBackoff(cur time.Duration, cfg AudioConfig) time.Duration {
 	maxBackoff := cfg.MaxRestartBackoff

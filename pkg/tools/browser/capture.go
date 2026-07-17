@@ -41,6 +41,17 @@ const (
 	// (orchestration) maps a StartCapture error to that unavailable
 	// state.
 	defaultBringupTimeout = 3 * time.Second
+
+	// captureFrameQueueDepth bounds the handoff queue between the CDP
+	// event-dispatch goroutine (handler, below) and runAckWorker's single
+	// consumer. Matches the chromedp cmdQueue depth documented in
+	// live.go's ADR-038 postmortem (32, buffered, one writer/reader loop)
+	// — deep enough that this driver's own queue is never the bottleneck
+	// relative to what chromedp's transport can already have in flight.
+	// A full queue applies backpressure (the handler's send blocks) rather
+	// than dropping a frame, preserving the in-order, no-drop contract
+	// this driver's callers need for the video encoder pipeline.
+	captureFrameQueueDepth = 32
 )
 
 // CaptureOptions configures one CDP Page.startScreencast capture session.
@@ -169,11 +180,12 @@ func startCapture(
 		done:          make(chan struct{}),
 	}
 
-	// watcher is the sole goroutine this driver spawns; it exists purely
-	// to close d.done once captureCtx ends (Stop(), a parent ctx
-	// cancellation, or the bring-up-timeout path below), so Stop() has
-	// something deterministic to wait on and no goroutine is ever leaked
-	// — captureCtx is always eventually canceled on every exit path.
+	// watcher is one of two goroutines this driver spawns (the other is
+	// ackWorker, below); it exists purely to close d.done once captureCtx
+	// ends (Stop(), a parent ctx cancellation, or the bring-up-timeout
+	// path below), so Stop() has something deterministic to wait on and
+	// no goroutine is ever leaked — captureCtx is always eventually
+	// canceled on every exit path, and both goroutines are bounded by it.
 	go func() {
 		<-captureCtx.Done()
 		close(d.done)
@@ -191,45 +203,101 @@ func startCapture(
 	var firstFrameOnce sync.Once
 	firstFrame := make(chan struct{})
 
+	// frameCh is the handoff queue from the CDP event-dispatch goroutine
+	// (handler, below) to ackWorker's single consumer. Buffered
+	// (captureFrameQueueDepth) and drained strictly in order — see
+	// ackWorker's doc comment for why this driver, unlike live.go's
+	// coalescing runAckWorker, must never drop or reorder a frame.
+	frameCh := make(chan *page.EventScreencastFrame, captureFrameQueueDepth)
+
+	// handler is the chromedp.ListenTarget callback. Per chromedp's
+	// contract this runs synchronously on the target's CDP event-dispatch
+	// goroutine and — per ackWorker's ADR-038 DEADLOCK POSTMORTEM doc
+	// comment below — MUST NOT run any CDP action inline. It only
+	// enqueues the frame onto frameCh for ackWorker to ack/decode/forward
+	// off this goroutine. The select's captureCtx.Done() branch means a
+	// frame racing Stop()/cancellation can never leave this handler (and,
+	// in production, the real chromedp dispatch goroutine) blocked
+	// forever on a full queue that ackWorker has already stopped
+	// draining.
 	handler := func(ev any) {
 		frame, ok := ev.(*page.EventScreencastFrame)
 		if !ok {
 			return
 		}
-
-		// Ack immediately — Chrome will not send the next screencast
-		// frame until the previous one is acked (spec: "the ack is
-		// required for the next frame"). Unlike live.go's
-		// coalescing ack worker (which only needs the newest frame
-		// for a human-viewed JPEG preview and can safely drop
-		// stale acks), this driver feeds a video encoder that needs
-		// every frame in order, so each frame is acked and forwarded
-		// synchronously here, bounded by actionTimeout so a
-		// wedged/overloaded transport cannot hang this indefinitely.
-		if err := runCDP(captureCtx, actionTimeout, page.ScreencastFrameAck(frame.SessionID)); err != nil {
-			logger.WarnCF("browser", "capture: frame ack failed", map[string]any{
-				"error":      err.Error(),
-				"session_id": frame.SessionID,
-			})
-			return
+		select {
+		case frameCh <- frame:
+		case <-captureCtx.Done():
 		}
-
-		jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
-		if err != nil {
-			logger.WarnCF("browser", "capture: frame payload was not valid base64 — dropping frame", map[string]any{
-				"error":      err.Error(),
-				"session_id": frame.SessionID,
-			})
-			return
-		}
-
-		frameSeq := seq.Add(1) - 1 // first frame is seq 0, then monotonically increasing
-		tsMillis := captureStartMillis + uint64(time.Since(captureStart).Milliseconds())
-
-		firstFrameOnce.Do(func() { close(firstFrame) })
-
-		onFrame(jpegBytes, frameSeq, tsMillis)
 	}
+
+	// ackWorker is the single goroutine that acks, decodes, and forwards
+	// screencast frames for this capture session, draining frameCh
+	// strictly in the order the handler enqueued them — unlike live.go's
+	// runAckWorker (pkg/tools/browser/live.go:938-1004), which coalesces
+	// to the newest frame for a human-viewed JPEG preview and can safely
+	// drop stale acks, this driver feeds a video encoder that needs every
+	// frame acked and delivered in order, so frames are never coalesced
+	// or dropped here — a full frameCh instead applies backpressure on
+	// the handler (see its doc comment above). Bounded by captureCtx, so
+	// it exits on Stop(), a parent ctx cancellation, or the
+	// bring-up-timeout path below — captureCtx is always eventually
+	// canceled on every exit path (see the watcher goroutine above), so
+	// this goroutine is never leaked either.
+	//
+	// ADR-038 DEADLOCK POSTMORTEM: the previous implementation of this
+	// file ran page.ScreencastFrameAck synchronously INSIDE the
+	// ListenTarget handler (i.e. inline in what is now `handler`, above).
+	// chromedp routes a chromedp.Run call's response back through the
+	// SAME single per-target CDP dispatch goroutine that invokes
+	// ListenTarget handlers (mirrors live.go's own postmortem for the
+	// identical class of bug) — calling chromedp.Run from inside a
+	// handler therefore blocks that goroutine waiting for a response that
+	// can only ever be delivered by that same, now-blocked goroutine: a
+	// guaranteed deadlock, not merely a slow path. The handler's
+	// runCDP(ScreencastFrameAck) call never returned, so firstFrame never
+	// closed, so StartCapture always hit the bring-up timeout — no frame
+	// was ever deliverable on real Chrome. Running the ack from this
+	// separate goroutine instead means the CDP dispatch goroutine is
+	// always free to process the ack's own response, exactly like
+	// live.go's runAckWorker.
+	ackWorker := func() {
+		for {
+			select {
+			case <-captureCtx.Done():
+				return
+			case frame := <-frameCh:
+				if err := runCDP(captureCtx, actionTimeout, page.ScreencastFrameAck(frame.SessionID)); err != nil {
+					logger.WarnCF("browser", "capture: frame ack failed", map[string]any{
+						"error":      err.Error(),
+						"session_id": frame.SessionID,
+					})
+					continue
+				}
+
+				jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
+				if err != nil {
+					logger.WarnCF("browser", "capture: frame payload was not valid base64 — dropping frame", map[string]any{
+						"error":      err.Error(),
+						"session_id": frame.SessionID,
+					})
+					continue
+				}
+
+				frameSeq := seq.Add(1) - 1 // first frame is seq 0, then monotonically increasing
+				tsMillis := captureStartMillis + uint64(time.Since(captureStart).Milliseconds())
+
+				firstFrameOnce.Do(func() { close(firstFrame) })
+
+				onFrame(jpegBytes, frameSeq, tsMillis)
+			}
+		}
+	}
+	// Started before the listener is registered so ackWorker is always
+	// already draining frameCh before any frame could possibly be
+	// enqueued — no window where the handler's buffered send could stall
+	// waiting for a not-yet-scheduled consumer.
+	go ackWorker()
 
 	// Register the listener before issuing Page.startScreencast so no
 	// frame emitted immediately after Chrome accepts the command can be
@@ -276,6 +344,15 @@ func startCapture(
 // exited so callers never observe a partially-torn-down driver. Idempotent
 // — safe to call more than once or after the target/context has already
 // ended on its own.
+//
+// Note: ackWorker (started in startCapture) is bounded by the same
+// captureCtx cancellation this triggers and always exits promptly, but —
+// exactly like live.go's LiveView.detach()/runAckWorker pair — Stop()
+// does not additionally join it. A frame whose ack already succeeded
+// concurrently with this call may still reach onFrame a moment after
+// Stop() returns; a frame not yet acked when captureCtx is canceled has
+// its ack aborted by ackWorker's own context-bounded runCDP call and is
+// dropped, never reaching onFrame.
 func (d *CaptureDriver) Stop() {
 	d.stopOnce.Do(func() {
 		if err := d.runCDP(d.tabCtx, d.actionTimeout, page.StopScreencast()); err != nil {

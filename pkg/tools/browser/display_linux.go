@@ -9,6 +9,8 @@
 // SIGTERM-then-SIGKILL kill escalation with a poll loop, and package-level
 // tunables so tests can shrink timing). Linux-only; display_other.go stubs
 // this out (not-video-capable) everywhere else — see spec §Platform Matrix.
+// DisplayConfig and the DisplaySidecar interface are platform-agnostic and
+// live in the untagged display.go, shared by this file and display_other.go.
 
 //go:build linux
 
@@ -29,14 +31,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// Default framebuffer geometry (FR-021) used when a DisplayConfig field is
-// left zero-valued.
-const (
-	defaultDisplayWidth  = 1280
-	defaultDisplayHeight = 720
-	defaultDisplayDepth  = 24
-)
-
 // Bounded-backoff restart + readiness/kill timing. Package-level vars (not
 // consts) so tests can shrink them, mirroring pkg/daemon/daemon_unix.go's
 // stopGracePeriod/pollInterval pattern.
@@ -53,49 +47,6 @@ var (
 // displayScanMax bounds the free-display-number probe (pickFreeDisplayNumber)
 // so a pathologically full /tmp/.X11-unix never spins forever.
 const displayScanMax = 200
-
-// DisplayConfig configures the virtual-display sidecar's framebuffer.
-type DisplayConfig struct {
-	Width  int
-	Height int
-	Depth  int
-}
-
-// withDefaults returns cfg with zero-valued fields replaced by the
-// 1280x720x24 default (FR-021).
-func (cfg DisplayConfig) withDefaults() DisplayConfig {
-	if cfg.Width <= 0 {
-		cfg.Width = defaultDisplayWidth
-	}
-	if cfg.Height <= 0 {
-		cfg.Height = defaultDisplayHeight
-	}
-	if cfg.Depth <= 0 {
-		cfg.Depth = defaultDisplayDepth
-	}
-	return cfg
-}
-
-// DisplaySidecar is the supervised virtual-display process consumed by the
-// headful-Chrome launch path (managedExecAllocatorOpts, W2) to give headful
-// Chrome a framebuffer. This file provides the real Linux implementation;
-// display_other.go provides the non-Linux stub with an identical surface.
-type DisplaySidecar interface {
-	// Start launches the sidecar and blocks until the display is confirmed
-	// ready, ctx is canceled, or the readiness timeout expires. A non-nil
-	// error means the sidecar is NOT available — callers MUST classify the
-	// install not-video-capable (US-10/AC-3) and MUST NOT crash the gateway
-	// or degrade agent browsing.
-	Start(ctx context.Context) error
-	// Display returns the wired DISPLAY value (e.g. ":37"), or "" if the
-	// sidecar never started successfully or has since stopped.
-	Display() string
-	// Healthy reports whether the sidecar is currently up and supervised.
-	Healthy() bool
-	// Stop tears the sidecar down cleanly and frees the display number.
-	// Safe to call even if Start was never called or failed.
-	Stop()
-}
 
 // NewDisplaySidecar constructs the platform-appropriate DisplaySidecar. On
 // Linux (this file) it is a real supervised Xvfb process.

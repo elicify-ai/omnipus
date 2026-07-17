@@ -85,7 +85,15 @@ const (
 // defaultProducibleVideoCodecs is the encoder's producible-codec priority order
 // (FR-006): H.264 main first, VP8 fallback. EC-4 (iPad) may later invert this;
 // it is config so that inversion touches only data, not control flow.
-var defaultProducibleVideoCodecs = []string{"avc1.4D401E", "vp8"}
+//
+// CS1: the H.264 string here MUST match what the encoder page's WebCodecs
+// VideoEncoder is actually configured to produce — the SPA configures its
+// VideoDecoder from the announced codec (browser_stream_init), so a mismatch
+// between "announced" and "produced" breaks decode. The encoder
+// (encoderpage) and the SPA (src/lib/browserLiveWs.ts) both use
+// "avc1.4D4028"; this used to say "avc1.4D401E" (a different H.264 level),
+// which never matched either producer.
+var defaultProducibleVideoCodecs = []string{"avc1.4D4028", "vp8"}
 
 // BrowserVideoConfig is component M's config surface (FR-018/019/020). Zero
 // values fall back to the defaults above, so a zero BrowserVideoConfig is a
@@ -189,7 +197,7 @@ func defaultEncoderLauncher(rootCtx context.Context, cfg browser.EncoderLaunchCf
 // ingestController is the subset of *CaptureIngestHandler (component E) the
 // orchestrator drives.
 type ingestController interface {
-	MintIngestToken(streamID string) string
+	MintIngestToken(streamID string) ingestToken
 	EndStream(streamID string)
 	FeedFrame(streamID string, jpeg []byte, seq uint32, ts uint64)
 }
@@ -267,10 +275,6 @@ type videoStream struct {
 
 	encoderTab encoderTab
 	capture    captureDriver
-
-	// token is the CURRENT ingest capability token; updated atomically on
-	// re-mint so a late reader never sees a torn value.
-	token atomic.Value // string
 
 	// dims are the current encode dimensions (reduced by StepDown); guarded by
 	// the agent gate.
@@ -354,7 +358,7 @@ func RegisterBrowserVideo(mux IngestMux, deps BrowserVideoDeps) *BrowserVideoOrc
 	// Xvfb/PulseAudio-sidecar-restart hooks into the gateway's metrics
 	// singleton (browser_metrics.go) — mirrors tools.SetToolMetricsRecorder
 	// (FR-039/C4).
-	browser.SetBrowserMetricsRecorder(globalBrowserVideoMetrics)
+	browser.SetBrowserMetricsRecorder(globalBrowserVideoMetrics())
 	return o
 }
 
@@ -394,7 +398,7 @@ func newOrchestrator(deps BrowserVideoDeps) *BrowserVideoOrchestrator {
 	// StreamCount() (stream_relay.go already tracks this for exactly this
 	// purpose). Re-registering on every newOrchestrator call (including in
 	// tests) is harmless — it just points the gauge at the current relay.
-	globalBrowserVideoMetrics.setStreamCounter(o.relay.StreamCount)
+	globalBrowserVideoMetrics().setStreamCounter(o.relay.StreamCount)
 	enabled := true
 	if deps.Config.Enabled != nil {
 		enabled = *deps.Config.Enabled
@@ -478,16 +482,24 @@ func (o *BrowserVideoOrchestrator) AttachViewer(p AttachParams) (*VideoViewerHan
 	// browser_stream_init MUST be sent before the first chunk (contract).
 	o.sendStreamInit(p.WC, p.SessionID, p.ViewerID, st, codec)
 
-	// FR-015: relay.Attach authorizes (via vv.Authorized) BEFORE any GOP
-	// replay. Then deliver the replay (keyframe first, then deltas) before live
-	// fan-out takes over.
-	replay, err := o.relay.Attach(st.streamID, vv)
-	if err != nil {
+	// FR-015/CR2: relay.Attach authorizes (via vv.Authorized) BEFORE any GOP
+	// replay, then flushes the replay (keyframe first, then deltas) to vv
+	// itself while still holding the stream's own lock — this guarantees the
+	// replay is fully delivered before any concurrently in-flight Ingest
+	// chunk can reach vv. The returned slice is for introspection only (see
+	// StreamRelay.Attach's doc comment) — it must NOT be resent here.
+	if _, err := o.relay.Attach(st.streamID, vv); err != nil {
 		o.sendUnavailable(p.WC, p.SessionID, p.ViewerID, "relay_attach_failed:"+err.Error())
+		if len(st.viewers) == 0 {
+			// SF4: ensureStreamLocked may have just cold-started this stream
+			// for this very attach — a pre-existing stream can never
+			// legitimately have 0 viewers at this point (detachViewer tears
+			// one down the instant its last viewer leaves), so don't leak a
+			// viewerless stream that will never get one now that its only
+			// attach failed.
+			o.teardownStreamLocked(st)
+		}
 		return nil, nil
-	}
-	for _, c := range replay {
-		vv.SendChunk(browser.EncodeChunk(c))
 	}
 
 	st.viewers[vv] = struct{}{}
@@ -545,7 +557,7 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(p AttachParams, codec strin
 	width, height := o.cfg.panelWidth, o.cfg.panelHeight
 
 	encTab, err := o.launchEncoder(p.RootCtx, browser.EncoderLaunchCfg{
-		Token:            token,
+		Token:            string(token),
 		WSURL:            o.cfg.ingestWSURL,
 		StreamID:         streamID,
 		VideoCodec:       codec,
@@ -596,7 +608,6 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(p AttachParams, codec strin
 		viewers:    make(map[*wsVideoViewer]struct{}),
 		stopCh:     make(chan struct{}),
 	}
-	st.token.Store(token)
 	st.liveness = time.AfterFunc(o.cfg.livenessTimeout, func() { o.onLivenessTimeout(streamID) })
 
 	o.mu.Lock()
@@ -664,7 +675,7 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 	oldTab := st.encoderTab
 
 	newTab, err := o.launchEncoder(st.rootCtx, browser.EncoderLaunchCfg{
-		Token:            newToken,
+		Token:            string(newToken),
 		WSURL:            o.cfg.ingestWSURL,
 		StreamID:         streamID,
 		VideoCodec:       st.codec,
@@ -683,7 +694,6 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 	}
 
 	st.encoderTab = newTab
-	st.token.Store(newToken)
 	if oldTab != nil {
 		_ = oldTab.Close()
 	}
@@ -692,7 +702,7 @@ func (o *BrowserVideoOrchestrator) handleEncoderDrop(streamID string) {
 	// FR-019 "capture restart count" (Test 28): the CRIT-002 re-mint +
 	// relaunch path is one of the two recovery mechanisms this metric
 	// covers (the other is StepDown's capture-driver restart, below).
-	globalBrowserVideoMetrics.IncCaptureRestart()
+	globalBrowserVideoMetrics().IncCaptureRestart()
 
 	o.auditStream("browser.live.video_stream_relaunched", audit.SeverityWarn, map[string]any{
 		"stream_id":  streamID,
@@ -774,7 +784,7 @@ func (o *BrowserVideoOrchestrator) StepDown(streamID string) {
 		// actually stopped and a new one started at reduced dimensions —
 		// the other of the two recovery mechanisms this metric covers (see
 		// handleEncoderDrop's CRIT-002 relaunch above).
-		globalBrowserVideoMetrics.IncCaptureRestart()
+		globalBrowserVideoMetrics().IncCaptureRestart()
 		slog.Info("browser video: stepped down encode dimensions", "stream_id", streamID, "width", newW, "height", newH)
 	}()
 }
@@ -879,7 +889,7 @@ func (o *BrowserVideoOrchestrator) teardownStreamLocked(st *videoStream) {
 	// FR-019: drop this stream's fps/bitrate counters so cardinality tracks
 	// live streams, not total-streams-ever (browser_metrics.go's
 	// removeStream doc note).
-	globalBrowserVideoMetrics.removeStream(st.streamID)
+	globalBrowserVideoMetrics().removeStream(st.streamID)
 }
 
 // noteChunk resets the mid-stream liveness timer for streamID (called by the
@@ -1008,12 +1018,23 @@ func viewerSupportsCodec(viewerCaps []string, codec string) bool {
 }
 
 // codecFamily normalizes a codec string to a coarse family so a viewer's
-// specific "avc1.4D401E" matches the producible "avc1.4D401E" (and any other
-// H.264 profile the viewer might advertise) without exact-string brittleness.
+// specific H.264 profile string (e.g. "avc1.4D4028") matches the producible
+// codec (and any other H.264 profile the viewer might advertise) without
+// exact-string brittleness.
 func codecFamily(c string) string {
 	lc := strings.ToLower(strings.TrimSpace(c))
 	switch {
-	case strings.HasPrefix(lc, "avc1"), strings.HasPrefix(lc, "h264"), strings.HasPrefix(lc, "avc3"):
+	case strings.HasPrefix(lc, "avc1."), strings.HasPrefix(lc, "avc3."):
+		// Discriminate the H.264 family by PROFILE (avc1.PPCCLL — PP: 42=baseline,
+		// 4d=main, 64=high), NOT collapsed to a single "h264", so a baseline-only
+		// viewer does not negotiate a main-profile producible codec (FR-006). Only
+		// the profile byte (PP) forms the family; level (LL) differences still match
+		// (e.g. avc1.4d401e ~ avc1.4d4028 both → "h264-4d").
+		if len(lc) >= 7 {
+			return "h264-" + lc[5:7]
+		}
+		return "h264"
+	case strings.HasPrefix(lc, "avc1"), strings.HasPrefix(lc, "avc3"), strings.HasPrefix(lc, "h264"):
 		return "h264"
 	case strings.HasPrefix(lc, "vp8"):
 		return "vp8"
@@ -1051,15 +1072,23 @@ func (a *videoRelayAdapter) Ingest(streamID string, c EncodedChunk) {
 	// FR-019 "per-stream fps/bitrate": account this chunk's count + bytes
 	// (see writeBrowserVideoMetrics for the rate()-based fps/bitrate
 	// derivation).
-	globalBrowserVideoMetrics.recordChunk(streamID, c.Kind, len(c.Payload))
-	a.orch.relay.Ingest(streamID, browser.EncodedChunk{
-		Seq:     c.Seq,
-		TS:      c.TS,
-		Key:     c.Key,
-		Codec:   c.Codec,
-		Kind:    c.Kind,
-		Payload: c.Payload,
-	})
+	globalBrowserVideoMetrics().recordChunk(streamID, c.Kind, len(c.Payload))
+	// TD3: this is the one production boundary between the gateway's
+	// wire-adjacent EncodedChunk (Kind as a plain string, from
+	// classifyChunkKind) and the relay's typed browser.EncodedChunk
+	// (TD1/TD2). Route through browser.ParseChunkKind + the
+	// NewVideoChunk/NewAudioChunk constructors instead of a raw
+	// field-by-field struct copy, so the illegal audio+key=true state stays
+	// unconstructable from here on: NewAudioChunk takes no Key parameter at
+	// all, so c.Key is simply discarded for an audio chunk regardless of
+	// what the gateway-side value was.
+	var bc browser.EncodedChunk
+	if browser.ParseChunkKind(c.Kind) == browser.KindAudio {
+		bc = browser.NewAudioChunk(c.Seq, c.TS, c.Codec, c.Payload)
+	} else {
+		bc = browser.NewVideoChunk(c.Seq, c.TS, c.Key, c.Codec, c.Payload)
+	}
+	a.orch.relay.Ingest(streamID, bc)
 }
 
 // compile-time assertion: videoRelayAdapter satisfies the ingest Relay seam.

@@ -216,13 +216,18 @@ func (l *launch) start(ctx context.Context) error {
 	if len(l.opts.Env) > 0 {
 		cmd.Env = append(os.Environ(), l.opts.Env...)
 	}
-	if l.opts.Errf != nil {
-		cmd.Stderr = &lineWriter{fn: l.opts.Errf, prefix: "cdppipe: chrome: "}
-	}
-	// Caller hook first (process attrs / capture); then cdppipe asserts the pipe
-	// fds so they are always final regardless of what ModifyCmd did.
+	// Caller hook first (process attrs / capture); then cdppipe asserts
+	// Stderr and the pipe fds so they are always final regardless of what
+	// ModifyCmd did — matching PipeOptions.ModifyCmd's doc ("cdppipe owns
+	// cmd.ExtraFiles / Stdout / Stderr; do NOT reassign them from ModifyCmd
+	// — they are set after this hook runs and will win"). Assigning Stderr
+	// here (after ModifyCmd, not before) is what actually makes that true;
+	// setting it before ModifyCmd would let the hook silently clobber it.
 	if l.opts.ModifyCmd != nil {
 		l.opts.ModifyCmd(cmd)
+	}
+	if l.opts.Errf != nil {
+		cmd.Stderr = &lineWriter{fn: l.opts.Errf, prefix: "cdppipe: chrome: "}
 	}
 	cmd.ExtraFiles = []*os.File{browserInR, browserOutW} // → child fd 3, fd 4
 

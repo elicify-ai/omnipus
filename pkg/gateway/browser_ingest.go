@@ -60,6 +60,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
 // captureIngestPath is the loopback-only ingest endpoint (FR-012).
@@ -102,10 +103,15 @@ const ingestReadDeadline = 120 * time.Second
 // audio. A single ingest connection multiplexes both video and Opus audio
 // chunks over browser_ingest_chunk, so this explicit discriminator byte
 // (independent of the key(u8) keyframe flag) is what routes each chunk to
-// the video or audio relay path — see decodeChunkEnvelope / chunkKindLabel.
+// the video or audio relay path — see decodeChunkEnvelope / classifyChunkKind.
+//
+// TD3: these are derived from pkg/tools/browser's canonical browser.ChunkKind
+// enum (the SAME wire values the relay's EncodeChunk uses) rather than
+// re-declaring the 0/1 literals independently, so the two packages can never
+// drift apart on what the kind byte means.
 const (
-	chunkKindVideo byte = 0
-	chunkKindAudio byte = 1
+	chunkKindVideo byte = byte(browser.KindVideo)
+	chunkKindAudio byte = byte(browser.KindAudio)
 )
 
 // Video keyframe flag values carried in the envelope's key(u8) field
@@ -117,9 +123,12 @@ const (
 
 // Audit event names for the ingest lifecycle (FR-024). These follow the
 // existing browser.live.* namespace (see EventBrowserLiveControlTaken in
-// pkg/audit/events.go). They are emitted via audit.Emit, whose Record path does
-// not validate against IsValidEventName, so they log correctly today; adding
-// them to IsValidEventName is a follow-up for SIEM tooling (noted in the report).
+// pkg/audit/events.go) and are emitted via audit.Emit. They are already
+// registered in pkg/audit's IsValidEventName catalog — EventBrowserLiveStreamStarted,
+// EventBrowserLiveStreamStopped, and EventBrowserLiveIngestRejected carry these
+// exact string values — so no follow-up registration is needed here; kept as
+// local string constants (rather than importing the audit package's typed
+// EventName constants) purely to keep this file's audit surface self-contained.
 const (
 	eventIngestStreamStarted = "browser.live.stream_started"
 	eventIngestStreamStopped = "browser.live.stream_stopped"
@@ -152,11 +161,21 @@ var (
 // to the stream relay (component D). Field-identical to the relay's own chunk
 // type by design; the integration adapter (see RegisterCaptureIngest) maps
 // between the two so the two parallel components stay file-disjoint.
+// TD3: Kind stays a plain string here (rather than the relay's typed
+// browser.ChunkKind) because gateway.EncodedChunk is a wire-adjacent
+// boundary type constructed directly by test doubles elsewhere in this
+// package; classifyChunkKind is the ONLY producer on the production path and
+// it only ever returns "video"/"audio" (see browser.ChunkKind.String()).
+// The relay-side conversion (videoRelayAdapter.Ingest, browser_stream.go)
+// funnels this string through browser.ParseChunkKind + the
+// NewVideoChunk/NewAudioChunk constructors, so the illegal-state risk
+// (TD1/TD2) is closed at the one real production boundary even though the
+// two packages don't share a single Go type end-to-end.
 type EncodedChunk struct {
 	Seq     uint32 // monotonic per-connection sequence (wraps at 2^32-1)
 	TS      uint64 // monotonic capture timestamp (ms), source-injected for glass-to-glass
 	Key     bool   // true == keyframe (video only)
-	Codec   string // e.g. "avc1.4D401E" (H.264 main), "vp8", "opus"
+	Codec   string // e.g. "avc1.4D4028" (H.264 main), "vp8", "opus"
 	Kind    string // "video" | "audio"
 	Payload []byte // encoded bytes; owned by the relay (copied off the read buffer)
 }
@@ -206,11 +225,18 @@ const (
 	streamDead                         // token consumed/ended — reject any connection (CRIT-002)
 )
 
+// ingestToken is the per-stream ingest capability token (FR-013), typed
+// distinctly from a plain string (TD4) so a token value can never be
+// silently passed where a streamID is expected, or vice versa — both are
+// opaque-looking hex/random strings, and without a distinct type a same-type
+// mix-up at a call site would compile without complaint.
+type ingestToken string
+
 // ingestStream is the per-stream registry entry. All fields are guarded by
 // CaptureIngestHandler.mu EXCEPT the codec fields, which are set once under mu
 // at claim time and thereafter read only by the owning connection's read loop.
 type ingestStream struct {
-	token      string
+	token      ingestToken
 	state      streamState
 	conn       ingestConn    // the single live connection (nil when not connected)
 	sendCh     chan []byte   // downstream JPEG feed queue (nil when not connected)
@@ -303,7 +329,7 @@ func RegisterCaptureIngest(mux IngestMux, deps IngestDeps) *CaptureIngestHandler
 // live connection is closed, and the entry is reset to a fresh token — NO
 // lifecycle audit (it is the same logical stream, so exactly one start/stop is
 // emitted per stream regardless of how many transient drops/re-mints occur).
-func (h *CaptureIngestHandler) MintIngestToken(streamID string) string {
+func (h *CaptureIngestHandler) MintIngestToken(streamID string) ingestToken {
 	tok := newIngestToken()
 
 	h.mu.Lock()
@@ -453,6 +479,16 @@ func (h *CaptureIngestHandler) serveConn(conn ingestConn, remoteAddr string) {
 	// the write pump.
 	defer h.releaseConn(streamID, s)
 
+	if h.deps.Relay == nil {
+		// SF6: Relay is a boot-time wiring dependency — for this handler's
+		// entire lifetime it is either always nil or never nil, never a
+		// per-chunk condition. Log the misconfiguration ONCE here, per
+		// connection, instead of handleChunk re-logging it on every single
+		// chunk (a 30fps stream would otherwise emit ~30 Error logs/sec for
+		// as long as the encoder keeps pushing chunks into a black hole).
+		slog.Error("browser-ingest: no relay configured; every chunk on this connection will be dropped", "stream_id", streamID)
+	}
+
 	go h.writePump(conn, s.sendCh, s.doneCh)
 
 	// --- chunk relay loop ---
@@ -460,6 +496,20 @@ func (h *CaptureIngestHandler) serveConn(conn ingestConn, remoteAddr string) {
 		_ = conn.SetReadDeadline(time.Now().Add(ingestReadDeadline))
 		mt, msg, rerr := conn.ReadMessage()
 		if rerr != nil {
+			if errors.Is(rerr, websocket.ErrReadLimit) {
+				// SF2: a chunk larger than even the read-limit ceiling
+				// (2x+header, set via SetReadLimit above) trips gorilla's
+				// own frame reader before handleChunk's app-layer length
+				// check (FR-014) ever runs. Previously this silently
+				// dropped the connection with no audit trail and no
+				// encoder step-down signal — route it through the same
+				// reject+step-down path an ordinary (<=2x) oversize chunk
+				// already gets.
+				h.auditReject(streamID, rejectOversizeChunk, remoteAddr)
+				if h.deps.StepDown != nil {
+					h.deps.StepDown(streamID)
+				}
+			}
 			return // drop; orchestration (W2-M) re-mints + relaunches
 		}
 		if mt != websocket.BinaryMessage {
@@ -599,7 +649,8 @@ func (h *CaptureIngestHandler) handleChunk(streamID string, s *ingestStream, msg
 	}
 
 	if h.deps.Relay == nil {
-		slog.Error("browser-ingest: no relay configured; dropping chunk", "stream_id", streamID)
+		// Already logged once for this connection in serveConn (SF6) — just
+		// drop silently here to avoid re-logging on every chunk.
 		return
 	}
 
@@ -631,9 +682,9 @@ func classifyChunkKind(kindByte, keyByte byte, s *ingestStream) (kind, codec str
 		if codec == "" {
 			codec = "opus"
 		}
-		return "audio", codec, false
+		return browser.KindAudio.String(), codec, false
 	}
-	return "video", s.videoCodec, keyByte == chunkVideoKey
+	return browser.KindVideo.String(), s.videoCodec, keyByte == chunkVideoKey
 }
 
 // audit emits one audit record (FR-024). No-op when audit is disabled (nil
@@ -656,7 +707,7 @@ func (h *CaptureIngestHandler) audit(event string, sev audit.Severity, decision 
 // "ingest-auth-reject count" metric (Test 28) — same single funnel point, so
 // no rejection reason is ever missed there either.
 func (h *CaptureIngestHandler) auditReject(streamID string, reason ingestRejectReason, remoteAddr string) {
-	globalBrowserVideoMetrics.IncIngestAuthReject(string(reason))
+	globalBrowserVideoMetrics().IncIngestAuthReject(string(reason))
 	h.audit(eventIngestRejected, audit.SeverityWarn, "deny", map[string]any{
 		"stream_id":   streamID,
 		"reason":      string(reason),
@@ -665,7 +716,7 @@ func (h *CaptureIngestHandler) auditReject(streamID string, reason ingestRejectR
 }
 
 // newIngestToken mints a 256-bit unguessable capability token (FR-013).
-func newIngestToken() string {
+func newIngestToken() ingestToken {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		// crypto/rand failure is catastrophic; a predictable token would defeat
@@ -673,7 +724,7 @@ func newIngestToken() string {
 		// mint result can accidentally match.
 		panic(fmt.Sprintf("browser-ingest: crypto/rand failed: %v", err))
 	}
-	return hex.EncodeToString(b[:])
+	return ingestToken(hex.EncodeToString(b[:]))
 }
 
 // decodeChunkEnvelope parses the fixed BigEndian upstream chunk envelope:

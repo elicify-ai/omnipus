@@ -32,36 +32,11 @@
 // binary path is additive (FR-010/M-10/F-02: `browser_screencast` is
 // removed only in a later wave, once the video path is reachable).
 //
-// Binary envelope wire-format gap (FLAGGED for the cross-wave integration
-// review — verified against the actual backend code, not just the contract):
-// contracts/components/schemas/BrowserChunkEnvelope.yaml documents ONLY
-// {seq:u32, ts:u64, key:u8, len:u32, payload} — shared verbatim by both
-// browser_video_chunk and browser_audio_chunk — with no field distinguishing
-// which is which when both ride the same `/api/v1/browser/ws` connection.
-// Confirmed against pkg/tools/browser/stream_relay.go (component D, already
-// on this branch): `EncodeChunk` serializes an `EncodedChunk` — which DOES
-// carry a `Kind string // "video"|"audio"` field internally — into exactly
-// that 17-byte-header shape with NO kind byte; `deliverToViewer` calls
-// `Viewer.SendChunk(wire)` with `Kind` dropped. The `Viewer` adapter that
-// would bridge `StreamRelay` to `browserWSConn.sendChunk` (component M,
-// stream orchestration — the piece that actually decides what a given
-// binary WS message TO A VIEWER contains) does not exist anywhere in the
-// tree yet (confirmed by grepping pkg/gateway for a SendChunk
-// implementation), so this is a genuinely open cross-wave question, not
-// something already answered by shipped code.
-//
-// This client's resolution: treat the FIRST byte of every binary WS message
-// as a 1-byte kind tag (CHUNK_KIND_VIDEO=0 / CHUNK_KIND_AUDIO=1), with the
-// REMAINING bytes being EncodeChunk's exact, unmodified 17-byte-header
-// output (seq/ts/key/len each shifted +1 byte, payload unchanged) — i.e.
-// "prefix one tag byte in front of what component D already produces
-// verbatim," the minimal change for whoever wires the not-yet-built Viewer
-// adapter (`sendCh <- &wsSendItem{Binary:true, Data: append([]byte{tag},
-// wire...)}` before calling sendChunk, using the chunk's own `Kind` field to
-// pick the tag). REQUIRES CONFIRMATION during the integration review before
-// end-to-end video/audio delivery is wired — this file's own tests define
-// and exercise the tag so the SPA side is independently correct regardless
-// of how that confirmation resolves.
+// Binary envelope = 18-byte big-endian header `seq:u32 | ts:u64 | key:u8 |
+// kind:u8 (offset 13: 0=video/1=audio) | len:u32`, produced by
+// `browser.EncodeChunk` (stream_relay.go) and fanned out by the
+// `wsVideoViewer` adapter (pkg/gateway/browser_ws_video.go);
+// `decodeChunkEnvelope` below parses that exact shape.
 //
 // FR-007/FR-018/FR-020 (unavailable state): the SPA-visible "unavailable"
 // signal is derived here, not carried by a dedicated wire message (none
@@ -183,11 +158,11 @@ const AUDIO_CODEC_CANDIDATES = ['opus'] as const
 // Binary envelope: seq(u32) + ts(u64) + key(u8) + kind(u8) + len(u32), BigEndian throughout (DS-2).
 const CHUNK_KIND_VIDEO = 0
 const CHUNK_KIND_AUDIO = 1
-const ENVELOPE_HEADER_BYTES = 1 + 4 + 8 + 1 + 4
+const ENVELOPE_HEADER_BYTES = 4 + 8 + 1 + 1 + 4
 
 let _droppedBinaryChunkCount = 0
 
-/** Count of binary WS messages dropped as malformed (too short, bad kind byte, length mismatch) since the last reset. Test/observability hook — mirrors ws.ts's getDroppedFrameCount pattern. */
+/** Count of binary WS messages dropped as malformed (too short, bad kind byte at offset 13, length mismatch) since the last reset. Test/observability hook — mirrors ws.ts's getDroppedFrameCount pattern. */
 export function getDroppedBinaryChunkCount(): number {
   return _droppedBinaryChunkCount
 }
@@ -207,7 +182,7 @@ export interface DecodedChunkEnvelope { // not-wire-format: local parsed shape o
 /**
  * Parses one binary WS message into a DecodedChunkEnvelope. Returns null
  * (never throws) on any malformed input: too short to hold a header, an
- * unrecognized leading kind byte, or a declared `len` that doesn't match the
+ * unrecognized kind byte at offset 13, or a declared `len` that doesn't match the
  * actual trailing byte count — mirrors the backend's own FR-014 "reject,
  * never fragment/partially-reassemble" posture on the client side. BigEndian
  * throughout, per the contract (DS-2).
@@ -321,6 +296,8 @@ export class BrowserLiveWsConnection {
   private everReceivedLiveFrame = false
   private videoDecoder: VideoDecoder | null = null
   private audioDecoder: AudioDecoder | null = null
+  /** CR2 — dropped-until-first-keyframe gate for the CURRENT stream. Reset on every browser_stream_init (see _configureDecoders); set once the first keyframe chunk has been handed to the video decoder. */
+  private seenKeyframe = false
 
   constructor(sessionId: string, agentId: string, callbacks: BrowserLiveWsCallbacks) {
     this.sessionId = sessionId
@@ -493,6 +470,10 @@ export class BrowserLiveWsConnection {
    */
   private _configureDecoders(init: BrowserStreamInitFrame): boolean {
     this._closeDecoders()
+    // CR2 — a fresh stream_init means a fresh GOP: any decoder previously
+    // configured is gone (_closeDecoders just ran), so any delta chunk must
+    // wait for this stream's own first keyframe before it can be decoded.
+    this.seenKeyframe = false
 
     if (typeof VideoDecoder === 'undefined') {
       // Defensive only: a spec-compliant server shouldn't negotiate video
@@ -558,10 +539,37 @@ export class BrowserLiveWsConnection {
       void maybeDevToast('[browser-live] Dropped malformed binary chunk', 'browser-live-chunk-malformed', 'warning')
       return
     }
-    this._markLiveFrameReceived()
+
+    // FR-018 (SF3 fix) — only clear the bring-up backstop when this chunk is
+    // actually decodable, i.e. this.videoDecoder is configured (a
+    // browser_stream_init already succeeded). If stream_init was NEVER
+    // processed — decoder still null — any binary chunk that arrives is
+    // dropped below regardless; clearing the backstop here too would
+    // permanently disarm FR-018's "no infinite spinner" guard while nothing
+    // is actually decoding, leaving a silently blank panel with no
+    // unavailable state.
+    if (this.videoDecoder) {
+      this._markLiveFrameReceived()
+    }
+
+    // A4 — WebCodecs' EncodedVideoChunk/EncodedAudioChunk `timestamp` is in
+    // MICROSECONDS; the wire envelope's `ts` field (DS-2) is milliseconds.
+    // Scaled uniformly for both video and audio so the relative timeline
+    // stays correct once audio playback lands and needs real A/V sync —
+    // video-only decode order is unaffected by the scale factor either way.
+    const timestampUs = Number(decoded.ts) * 1000
 
     if (decoded.kind === 'video') {
       if (!this.videoDecoder) {
+        _droppedBinaryChunkCount++
+        return
+      }
+      // CR2 — client-side hardening: never feed a delta chunk to the
+      // decoder before this stream's first keyframe has been decoded.
+      // Guards both the warm-attach ordering race (this viewer's chunks can
+      // start arriving mid-GOP) and mid-stream keyframe loss. seenKeyframe
+      // is reset per stream in _configureDecoders.
+      if (!decoded.key && !this.seenKeyframe) {
         _droppedBinaryChunkCount++
         return
       }
@@ -569,10 +577,11 @@ export class BrowserLiveWsConnection {
         this.videoDecoder.decode(
           new EncodedVideoChunk({
             type: decoded.key ? 'key' : 'delta',
-            timestamp: Number(decoded.ts),
+            timestamp: timestampUs,
             data: decoded.payload,
           }),
         )
+        if (decoded.key) this.seenKeyframe = true
       } catch (err) {
         this.callbacks.onDecodeError?.('video', err instanceof Error ? err.message : String(err))
         void maybeDevToast('[browser-live] Video decode error', 'browser-live-video-decode', 'error')
@@ -587,7 +596,7 @@ export class BrowserLiveWsConnection {
       this.audioDecoder.decode(
         new EncodedAudioChunk({
           type: decoded.key ? 'key' : 'delta',
-          timestamp: Number(decoded.ts),
+          timestamp: timestampUs,
           data: decoded.payload,
         }),
       )

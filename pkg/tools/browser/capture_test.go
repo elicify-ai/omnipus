@@ -113,6 +113,24 @@ func startCaptureAsync(ctx context.Context, opts CaptureOptions, onFrame func(jp
 	return resultCh
 }
 
+// waitForFrameNotify blocks until notify has fired once (i.e. ackWorker has
+// finished processing one frame — see the doc comment on
+// TestCapture_StartAckForward's frameNotify channel), failing the test if it
+// doesn't arrive within 2s. Exercising the worker path deliberately: since
+// FIX 1 moved ack+decode+onFrame off the chromedp dispatch goroutine and onto
+// ackWorker (capture.go), fake.emit() returning no longer means onFrame has
+// run for that frame — only that the frame was handed off to frameCh. Tests
+// that need to observe onFrame's effects must synchronize on it explicitly
+// instead of relying on the old (pre-fix) synchronous-inline-ack behavior.
+func waitForFrameNotify(t *testing.T, notify <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-notify:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("onFrame was not invoked for %s within the timeout — ackWorker may be stuck or not draining frameCh", what)
+	}
+}
+
 func TestCapture_StartAckForward(t *testing.T) {
 	fake := newFakeCDP()
 
@@ -123,10 +141,18 @@ func TestCapture_StartAckForward(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var frames []recordedFrame
+	// frameNotify fires once per onFrame invocation, AFTER the frame has
+	// been appended to `frames` — the only reliable way for this test to
+	// know ackWorker (running on its own goroutine, off the fake's
+	// synchronous emit() call) has actually finished processing a given
+	// frame, now that the ack/decode/onFrame pipeline is no longer
+	// inline in the ListenTarget handler (FIX 1).
+	frameNotify := make(chan struct{}, 4)
 	onFrame := func(jpeg []byte, seq uint32, tsMillis uint64) {
 		mu.Lock()
-		defer mu.Unlock()
 		frames = append(frames, recordedFrame{jpeg: append([]byte(nil), jpeg...), seq: seq, tsMillis: tsMillis})
+		mu.Unlock()
+		frameNotify <- struct{}{}
 	}
 
 	opts := CaptureOptions{
@@ -181,11 +207,19 @@ func TestCapture_StartAckForward(t *testing.T) {
 	}
 	defer driver.Stop()
 
+	// StartCapture unblocks the instant ackWorker closes firstFrame, which
+	// happens BEFORE ackWorker's own onFrame(frame1) call in the same
+	// worker iteration (see capture.go's ackWorker) — so resultCh firing
+	// does not itself guarantee onFrame(frame1) has run yet. Wait for it
+	// explicitly before trusting `frames`.
+	waitForFrameNotify(t, frameNotify, "the first frame")
+
 	payload2 := []byte("second-jpeg-bytes")
 	fake.emit(&page.EventScreencastFrame{
 		Data:      base64.StdEncoding.EncodeToString(payload2),
 		SessionID: 102,
 	})
+	waitForFrameNotify(t, frameNotify, "the second frame")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -216,8 +250,15 @@ func TestCapture_StopStopsScreencast(t *testing.T) {
 	fake := newFakeCDP()
 
 	var frameCount atomic.Int32
+	// frameNotify fires after each onFrame call — needed to deterministically
+	// know ackWorker has finished processing frame 1 BEFORE calling Stop(),
+	// now that ack/decode/onFrame run on ackWorker's own goroutine rather
+	// than inline in the ListenTarget handler (FIX 1) — see
+	// waitForFrameNotify's doc comment.
+	frameNotify := make(chan struct{}, 4)
 	onFrame := func(_ []byte, _ uint32, _ uint64) {
 		frameCount.Add(1)
+		frameNotify <- struct{}{}
 	}
 
 	opts := CaptureOptions{BringupTimeout: 2 * time.Second}
@@ -239,6 +280,11 @@ func TestCapture_StopStopsScreencast(t *testing.T) {
 		t.Fatalf("StartCapture returned an error: %v", res.err)
 	}
 	driver := res.driver
+
+	// See frameNotify's doc comment: resultCh firing only guarantees
+	// ackWorker closed firstFrame, not that it has also finished calling
+	// onFrame(f1) yet (that happens right after, same worker iteration).
+	waitForFrameNotify(t, frameNotify, "the first frame")
 
 	driver.Stop()
 

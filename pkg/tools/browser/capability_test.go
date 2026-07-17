@@ -46,6 +46,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 		pulse           bool
 		wantCapable     bool
 		wantAudio       bool
+		wantLevel       CapabilityLevel
 	}
 
 	scenarios := []scenario{
@@ -57,6 +58,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			pulse:       true,
 			wantCapable: true,
 			wantAudio:   true,
+			wantLevel:   VideoAndAudioLevel,
 		},
 		{
 			name:        "linux full-chrome ok + Xvfb up + PulseAudio absent -> video-capable, audio no (silent)",
@@ -66,6 +68,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			pulse:       false,
 			wantCapable: true,
 			wantAudio:   false,
+			wantLevel:   VideoOnlyLevel,
 		},
 		{
 			name:        "linux full-chrome ok + Xvfb absent -> not capable",
@@ -74,6 +77,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			xvfb:        false,
 			pulse:       true,
 			wantCapable: false,
+			wantLevel:   NotCapableLevel,
 		},
 		{
 			name:            "linux headless-shell only (no full chrome) -> not capable",
@@ -82,6 +86,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			xvfb:            true,
 			pulse:           true,
 			wantCapable:     false,
+			wantLevel:       NotCapableLevel,
 		},
 		{
 			name:        "linux nothing installed -> not capable",
@@ -89,6 +94,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			xvfb:        true,
 			pulse:       true,
 			wantCapable: false,
+			wantLevel:   NotCapableLevel,
 		},
 		{
 			name:        "macOS -> not capable (M-3, Xvfb/PulseAudio are linux-only)",
@@ -97,6 +103,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			xvfb:        true,
 			pulse:       true,
 			wantCapable: false,
+			wantLevel:   NotCapableLevel,
 		},
 		{
 			name:        "windows -> not capable (M-3)",
@@ -105,6 +112,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			xvfb:        true,
 			pulse:       true,
 			wantCapable: false,
+			wantLevel:   NotCapableLevel,
 		},
 		{
 			name:            "linux both cached (full + headless-shell) + Xvfb up + PulseAudio up -> video-capable (prefer full), F-08",
@@ -115,6 +123,7 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			pulse:           true,
 			wantCapable:     true,
 			wantAudio:       true,
+			wantLevel:       VideoAndAudioLevel,
 		},
 	}
 
@@ -144,7 +153,45 @@ func TestVideoCapability_DS5Table(t *testing.T) {
 			if !got.Capable && got.Reason == "" {
 				t.Fatalf("expected a non-empty operator-facing Reason when not capable (O-3)")
 			}
+			// TD5: Level must never disagree with the derived Capable/
+			// AudioAvailable booleans — it is the exhaustive, non-overloaded
+			// source of truth the flag pair is derived from.
+			if got.Level != sc.wantLevel {
+				t.Fatalf("Level = %v, want %v", got.Level, sc.wantLevel)
+			}
+			if (got.Level != NotCapableLevel) != got.Capable {
+				t.Fatalf("Level %v disagrees with Capable=%v (illegal state)", got.Level, got.Capable)
+			}
+			if (got.Level == VideoAndAudioLevel) != got.AudioAvailable {
+				t.Fatalf("Level %v disagrees with AudioAvailable=%v (illegal state)", got.Level, got.AudioAvailable)
+			}
+			// TD5: Reason must no longer double as the audio-absent
+			// explanation when Capable is true — that lives in AudioReason.
+			if got.Capable && got.Reason != "" {
+				t.Fatalf("Reason must be empty when Capable=true (de-overloaded by TD5), got %q", got.Reason)
+			}
+			if got.Level == VideoOnlyLevel && got.AudioReason == "" {
+				t.Fatalf("expected a non-empty AudioReason when video-capable but audio unavailable")
+			}
+			if got.Level != VideoOnlyLevel && got.AudioReason != "" {
+				t.Fatalf("expected an empty AudioReason outside VideoOnlyLevel, got %q", got.AudioReason)
+			}
 		})
+	}
+}
+
+// TestCapabilityLevel_String_IsStable pins CapabilityLevel.String()'s output
+// so it stays log/telemetry-friendly and doesn't silently drift.
+func TestCapabilityLevel_String_IsStable(t *testing.T) {
+	cases := map[CapabilityLevel]string{
+		NotCapableLevel:    "not_capable",
+		VideoOnlyLevel:     "video_only",
+		VideoAndAudioLevel: "video_and_audio",
+	}
+	for level, want := range cases {
+		if got := level.String(); got != want {
+			t.Fatalf("CapabilityLevel(%d).String() = %q, want %q", level, got, want)
+		}
 	}
 }
 
