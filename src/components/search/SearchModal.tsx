@@ -5,6 +5,7 @@
 // Driven by useUiStore.searchModalOpen.
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
@@ -16,7 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import {
   MagnifyingGlass, Calendar, PencilSimple, Trash, Check, X,
-  CaretRight, CaretDown, Folder,
+  CaretRight, CaretDown, Folder, ArrowRight,
 } from '@phosphor-icons/react'
 import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession, workspacesQueryKeys, getErrorMessage } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
@@ -24,6 +25,7 @@ import { formatRelative } from '@/lib/formatRelative'
 import type { Session, Workspace, Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { cn, initialOf } from '@/lib/utils'
@@ -54,19 +56,47 @@ interface WsGroup {
 
 // ── collapsible workspace header ─────────────────────────────────────────────
 
-function WorkspaceHeader({ name, isCollapsed, onToggle, panelId }: { name: string; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
+function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch }: {
+  name: string; isCollapsed: boolean; onToggle: () => void; panelId: string
+  /**
+   * Present only for a real workspace group — absent for the 'Unfiled'
+   * pseudo-group (no workspace to switch to; the caller omits this prop
+   * there, see SearchModal's render loop).
+   *
+   * The header row itself is a collapse-toggle <button>; this must be a
+   * SIBLING <button>, never nested inside it (invalid HTML — a button can't
+   * contain a button — and it would make "switch" and "collapse" the same
+   * click target). Mirrors GenericToolCall.tsx's row split for its
+   * independently-clickable "Watch live" launcher.
+   */
+  onSwitch?: () => void
+}) {
   return (
-    <button tabIndex={0}
-      type="button"
-      onClick={onToggle}
-      className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
-      aria-expanded={!isCollapsed}
-      aria-controls={panelId}
-    >
-      {isCollapsed ? <CaretRight size={10} className="shrink-0" /> : <CaretDown size={10} className="shrink-0" />}
-      <Folder size={14} className="shrink-0" />
-      <span className="flex-1 text-left truncate">{name}</span>
-    </button>
+    <div className="flex items-center w-full">
+      <button tabIndex={0}
+        type="button"
+        onClick={onToggle}
+        className="min-w-0 flex-1 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
+        aria-expanded={!isCollapsed}
+        aria-controls={panelId}
+      >
+        {isCollapsed ? <CaretRight size={10} className="shrink-0" /> : <CaretDown size={10} className="shrink-0" />}
+        <Folder size={14} className="shrink-0" />
+        <span className="flex-1 text-left truncate">{name}</span>
+      </button>
+      {onSwitch && (
+        <button tabIndex={0}
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onSwitch() }}
+          data-testid="workspace-switch-arrow"
+          aria-label={`Switch to workspace ${name}`}
+          title={`Switch to workspace ${name}`}
+          className="shrink-0 mr-2 flex items-center justify-center rounded p-1 text-[var(--color-accent)] opacity-80 hover:opacity-100 hover:underline transition-all"
+        >
+          <ArrowRight size={13} />
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -233,6 +263,7 @@ export function SearchModal() {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const navigate = useNavigate()
   // Tracks the set of session ids currently in inline-rename mode, so the
   // Dialog's own Escape-to-close can be suppressed in favour of just
   // cancelling the rename(s) in progress (see SessionRow's onEditingChange +
@@ -278,6 +309,21 @@ export function SearchModal() {
   const { data: agents = [], isError: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, enabled: open })
 
   const selectSession = useSelectSession({ agents, workspaces, onClose: close })
+
+  // Workspace-switch arrow (WorkspaceHeader) — mirrors Sidebar.tsx's
+  // "New chat" workspace-row action EXACTLY (setActiveWorkspaceId ->
+  // startNewSession -> navigate -> close): switching from search should land
+  // the user on a fresh composer in the target workspace, not silently
+  // re-attach whatever session happened to be active there before. Reads
+  // both stores via getState() (a plain click handler, not something that
+  // needs reactive re-renders) — the same pattern this file already uses for
+  // deleteMut's pruneSessionDescriptor call above.
+  const handleSwitchWorkspace = useCallback((ws: Workspace) => {
+    useWorkspacesStore.getState().setActiveWorkspaceId(ws.id)
+    useSessionStore.getState().startNewSession()
+    void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
+    close()
+  }, [close, navigate])
 
   const renameMut = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => renameSession(id, title),
@@ -390,7 +436,20 @@ export function SearchModal() {
           the actual visible height. */}
       <DialogContent
         onEscapeKeyDown={(e) => { if (editingSessionIdsRef.current.size > 0) e.preventDefault() }}
-        className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl">
+        // Operator direction (session-search enhancement): the rest of the
+        // screen must stay 100% visible while search is open — no dim, no
+        // blur. Opts THIS dialog out of the shared 80% Deep Space dim via
+        // DialogContent's overlayClassName (dialog.tsx) rather than changing
+        // the shared default (every other dialog in the app is unaffected).
+        // The overlay element itself still renders (just transparent), so
+        // outside-click-to-dismiss, Escape, and the focus trap all keep
+        // working exactly as before. Since there's no dim to set the panel
+        // apart from the page behind it, the panel supplies its own
+        // boundary: `border` + `shadow-2xl` here (shadow-2xl is already the
+        // DialogContent base default; restated explicitly so this dialog
+        // doesn't silently lose it if the shared base ever changes).
+        overlayClassName="bg-transparent"
+        className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl shadow-2xl">
         {/* Header with search input + date toggle */}
         <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0 border-b border-[var(--color-border)]">
           <DialogTitle className="flex items-center gap-2 text-base mb-2">
@@ -470,7 +529,15 @@ export function SearchModal() {
               const wsCollapsed = collapsedWs.has(wsKey)
               return (
                 <div key={wsKey} className="mb-1">
-                  <WorkspaceHeader name={group.workspace?.name ?? 'Unfiled'} isCollapsed={wsCollapsed} onToggle={() => toggleWs(wsKey)} panelId={`ws-panel-${wsKey}`} />
+                  <WorkspaceHeader
+                    name={group.workspace?.name ?? 'Unfiled'}
+                    isCollapsed={wsCollapsed}
+                    onToggle={() => toggleWs(wsKey)}
+                    panelId={`ws-panel-${wsKey}`}
+                    // 'Unfiled' (group.workspace === null) has no real workspace
+                    // to switch to — omit the arrow entirely for that group.
+                    onSwitch={group.workspace ? () => handleSwitchWorkspace(group.workspace!) : undefined}
+                  />
                   {!wsCollapsed && (
                     <div id={`ws-panel-${wsKey}`} role="region" className="space-y-0.5 px-2 pb-1">
                       {group.agentGroups.map((ag) => {
@@ -481,11 +548,15 @@ export function SearchModal() {
                         const agentName = ag.agent?.name ?? (agentsError || ag.agentId === 'unknown' ? 'Unknown' : '[removed]')
                         return (
                           <div key={agentKey}>
-                            {group.agentGroups.length > 1 && (
-                              <AgentHeader agent={ag.agent} name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
-                            )}
+                            {/* Always shown — even for a single-agent workspace
+                                group (previously gated behind
+                                agentGroups.length > 1). User direction: the
+                                agent sub-header is useful context (avatar +
+                                name) regardless of how many agents a
+                                workspace has. */}
+                            <AgentHeader agent={ag.agent} name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
                             {!agentCollapsed && (
-                              <div id={`agent-panel-${agentKey}`} role="region" className={cn('space-y-0.5', group.agentGroups.length > 1 && 'pl-3')}>
+                              <div id={`agent-panel-${agentKey}`} role="region" className="space-y-0.5 pl-3">
                                 {ag.sessions.map((s) => (
                                   <SessionRow key={s.id} session={s} isActive={s.id === activeSessionId} isHighlighted={s.id === highlighted?.id} onSelect={() => selectSession(s)}
                                     onRename={(t) => renameMut.mutate({ id: s.id, title: t })}

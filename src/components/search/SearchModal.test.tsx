@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SearchModal } from './SearchModal'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
 // jsdom doesn't implement scrollIntoView; SearchModal calls it to keep the
@@ -27,6 +28,21 @@ const mockSelectSession = vi.fn()
 vi.mock('@/components/chat/useSelectSession', () => ({
   useSelectSession: () => mockSelectSession,
 }))
+
+// Session-search enhancement: SearchModal now also calls useNavigate()
+// directly (the workspace-switch arrow), separately from useSelectSession's
+// own router usage above. Mirrors useSelectSession.test.tsx's own mock
+// pattern (importOriginal + override just useNavigate) rather than
+// Sidebar.test.tsx's full hand-rolled replacement — this file doesn't render
+// <Link>, so there's nothing else to stub.
+const mockNavigate = vi.fn()
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -102,6 +118,12 @@ function renderModal() {
   return { ...utils, client }
 }
 
+// Captured once, before any test can override it (see the workspace-switch
+// "does not collapse" test below, which temporarily swaps closeSearchModal
+// for a spy) — restored in beforeEach so that override never leaks into a
+// later test.
+const realCloseSearchModal = useUiStore.getState().closeSearchModal
+
 beforeEach(() => {
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([makeAgent()])
   vi.mocked(fetchWorkspaces).mockReset().mockResolvedValue([makeWorkspace()])
@@ -109,8 +131,9 @@ beforeEach(() => {
   vi.mocked(renameSession).mockReset().mockImplementation(async (id, title) => makeSession({ id, title }))
   vi.mocked(deleteSession).mockReset().mockResolvedValue({ success: true })
   mockSelectSession.mockClear()
+  mockNavigate.mockClear()
   act(() => {
-    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null })
+    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null, closeSearchModal: realCloseSearchModal })
     useSessionStore.setState({
       activeSessionId: null,
       activeAgentId: null,
@@ -118,6 +141,7 @@ beforeEach(() => {
       attachedSessionType: null,
       attachedTaskTitle: null,
     })
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
   })
 })
 
@@ -415,5 +439,116 @@ describe('SearchModal — error states', () => {
     await waitFor(() => expect(screen.getByText('Session X')).toBeInTheDocument())
     expect(screen.queryByText('[removed]')).not.toBeInTheDocument()
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0)
+  })
+})
+
+// Session-search enhancement (user-approved): agent sub-headers now always
+// render, even for a single-agent workspace group — previously gated behind
+// `group.agentGroups.length > 1` (SearchModal.tsx).
+describe('SearchModal — agent header visibility (always shown)', () => {
+  it('shows the agent sub-header even for a single-agent workspace group', async () => {
+    // Default fixture: one workspace ("Alpha Workspace"), one agent ("Mia"),
+    // one session — exactly the case the old `length > 1` gate used to hide.
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    expect(screen.getByRole('button', { name: /Mia/ })).toBeInTheDocument()
+  })
+})
+
+// Session-search enhancement (user-approved): a workspace-switch arrow sits
+// at the right end of each real WorkspaceHeader row.
+describe('SearchModal — workspace-switch arrow', () => {
+  it('renders on a real workspace group but not on the Unfiled pseudo-group', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' }),
+      makeSession({ id: 's-2', title: 'Session Two', workspace_id: undefined }),
+    ])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Session Two')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Unfiled' })).toBeInTheDocument()
+
+    const arrows = screen.getAllByTestId('workspace-switch-arrow')
+    expect(arrows).toHaveLength(1)
+    expect(arrows[0]).toHaveAttribute('aria-label', 'Switch to workspace Alpha Workspace')
+    expect(screen.queryByLabelText('Switch to workspace Unfiled')).not.toBeInTheDocument()
+  })
+
+  it('clicking it switches the active workspace, starts a fresh session, navigates, and closes the modal', async () => {
+    const user = userEvent.setup()
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 's-1', activeAgentId: 'agent-1', activeAgentType: 'core' })
+    })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    // setActiveWorkspaceId
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-1')
+    // startNewSession — clears the previously-active session (exactly what
+    // Sidebar's "New chat" workspace-row action does; session.ts's
+    // startNewSession implementation).
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().attachedSessionType).toBeNull()
+    // navigate
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
+    // closes the modal
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+  })
+
+  it('does NOT collapse the group — it is a sibling control, not the toggle', async () => {
+    const user = userEvent.setup()
+    // Swap closeSearchModal for a spy that does not actually flip
+    // searchModalOpen, so the panel stays mounted after the click and the
+    // group's expand/collapse state remains observable (clicking the arrow
+    // closes the modal per spec, which would otherwise unmount everything
+    // and make "still expanded" unobservable). Restored in beforeEach.
+    const closeSpy = vi.fn()
+    act(() => { useUiStore.setState({ closeSearchModal: closeSpy }) })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const toggle = screen.getByRole('button', { name: 'Alpha Workspace' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    expect(closeSpy).toHaveBeenCalledTimes(1)
+    // The group is still expanded and its session row still rendered — the
+    // arrow click never reached the toggle button's onToggle.
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Session One')).toBeInTheDocument()
+  })
+
+  it('is keyboard reachable (a real <button>) and Enter activates it', async () => {
+    const user = userEvent.setup()
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const arrow = screen.getByTestId('workspace-switch-arrow')
+    expect(arrow.tagName).toBe('BUTTON')
+    arrow.focus()
+    expect(arrow).toHaveFocus()
+
+    await user.keyboard('{Enter}')
+
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
+  })
+})
+
+// Session-search enhancement (user-approved): the search panel opts out of
+// the shared dialog.tsx dim (DialogContent's overlayClassName) so the rest
+// of the screen stays 100% visible while search is open.
+describe('SearchModal — zero backdrop (no dim overlay)', () => {
+  it('renders a transparent overlay — no dim behind the panel', async () => {
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const overlay = screen.getByTestId('dialog-overlay')
+    expect(overlay.className).not.toContain('bg-[var(--color-primary)]/80')
+    expect(overlay.className).toContain('bg-transparent')
   })
 })

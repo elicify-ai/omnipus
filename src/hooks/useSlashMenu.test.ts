@@ -178,8 +178,12 @@ describe('useSlashMenu — gating', () => {
     // web-research (previously API/array order). A bare "/" is an EMPTY
     // filter, so rankByFilter's early-return still preserves this
     // (pre-sorted) order rather than re-ranking by prefix/substring.
+    // Session-search enhancement: "/workspace" is a second synthetic
+    // client-only entry, inserted immediately after "/resume" in
+    // useSlashMenu's allCommands (both web-client-only synthetic commands
+    // sit together ahead of every backend-served command).
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/resume', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
+      '/resume', '/workspace', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
     ])
   })
 })
@@ -189,7 +193,9 @@ describe('useSlashMenu — streaming filter', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams({ isStreaming: true })))
     act(() => result.current.onInputChange('/'))
     const commandKeys = result.current.slashItems.filter((i) => i.section === 'commands').map((i) => i.key)
-    expect(commandKeys).toEqual(['/resume', '/cancel'])
+    // "/workspace" is declared with available_while_streaming: true (same as
+    // "/resume" and "/cancel") — session search must stay reachable mid-turn.
+    expect(commandKeys).toEqual(['/resume', '/workspace', '/cancel'])
     const skillKeys = result.current.slashItems.filter((i) => i.section === 'skills').map((i) => i.key)
     // Deferred item 3: alphabetical by name (see comment on the "gating" test above).
     expect(skillKeys).toEqual(['code-review', 'web-research'])
@@ -315,9 +321,12 @@ describe('useSlashMenu — keyboard navigation', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
     act(() => result.current.onInputChange('/'))
     // Move highlight off "/resume" (index 0, whose onSelect touches the
-    // global ui store) onto "/new" (index 1, whose onSelect calls the
+    // global ui store) past "/workspace" (index 1, session-search
+    // enhancement's second synthetic client-only entry — also touches the
+    // global ui store) onto "/new" (index 2, whose onSelect calls the
     // locally-mocked startNewSession) so this test's assertions stay
     // self-contained.
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
     act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
     expect(result.current.slashItems[result.current.slashHighlight].key).toBe('/new')
 
@@ -625,10 +634,13 @@ describe('useSlashMenu — onHoverItem', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.slashHighlight).toBe(0)
 
-    // Index 4 in the unified list is "/agents" (resume, new, help, model, agents, ...).
-    act(() => result.current.onHoverItem(4))
-    expect(result.current.slashHighlight).toBe(4)
-    expect(result.current.slashItems[4].key).toBe('/agents')
+    // Index 5 in the unified list is "/agents" (resume, workspace, new, help,
+    // model, agents, ...) — shifted by one from "/workspace" (session-search
+    // enhancement's second synthetic client-only entry, inserted right after
+    // "/resume").
+    act(() => result.current.onHoverItem(5))
+    expect(result.current.slashHighlight).toBe(5)
+    expect(result.current.slashItems[5].key).toBe('/agents')
 
     // Prove the hover-set index is the SAME one keyboard selection acts on —
     // not just a display-only value that Enter ignores.
@@ -711,10 +723,11 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
   })
 
   it('keeps the menu open (shouldShowSlash=true) even when the error leaves zero matching items', () => {
-    // With the commands query errored, allCommands is just the synthetic
-    // client-only "/resume" entry — a prefix that matches neither "/resume"
-    // nor any skill leaves slashItems empty. shouldShowSlash must still be
-    // true so the caller's "Commands unavailable" row has somewhere to render.
+    // With the commands query errored, allCommands is just the two synthetic
+    // client-only entries ("/resume", "/workspace") — a prefix that matches
+    // neither of those nor any skill leaves slashItems empty. shouldShowSlash
+    // must still be true so the caller's "Commands unavailable" row has
+    // somewhere to render.
     commandsQueryIsError = true
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('/zzz'))
@@ -729,12 +742,12 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
   })
 
   // Documented per the task, not a new behavior: with the commands list
-  // unavailable, only the synthetic "/resume" client command still resolves
-  // locally. Any other slash text — even the name of a real backend command
-  // — can no longer be matched, so interceptClientCommand correctly returns
-  // false and the caller's normal send path takes over (no silent swallow,
-  // no crash; the degradation is the visible "Commands unavailable" row,
-  // not a broken send).
+  // unavailable, only the two synthetic client-only commands ("/resume",
+  // "/workspace") still resolve locally. Any other slash text — even the
+  // name of a real backend command — can no longer be matched, so
+  // interceptClientCommand correctly returns false and the caller's normal
+  // send path takes over (no silent swallow, no crash; the degradation is
+  // the visible "Commands unavailable" row, not a broken send).
   it('interceptClientCommand returns false for a command name that can no longer resolve locally', () => {
     commandsQueryIsError = true
     const composerRuntime = makeComposerRuntime('/help')
@@ -747,6 +760,20 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
   it('the synthetic client-only "/resume" command still intercepts even when the backend commands query errors', () => {
     commandsQueryIsError = true
     const composerRuntime = makeComposerRuntime('/resume')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    expect(intercepted).toBe(true)
+    expect(useUiStore.getState().searchModalOpen).toBe(true)
+  })
+
+  // Mirrors the "/resume" case directly above: "/workspace" (session-search
+  // enhancement) is the second synthetic client-only command and must
+  // survive the same backend-outage degradation, opening the identical
+  // search modal instance (no workspace preselected).
+  it('the synthetic client-only "/workspace" command still intercepts even when the backend commands query errors', () => {
+    commandsQueryIsError = true
+    const composerRuntime = makeComposerRuntime('/workspace')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     let intercepted = false
     act(() => { intercepted = result.current.interceptClientCommand() })

@@ -275,11 +275,24 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // send-path interception identically to a real backend command.
   // /resume is web-client-only: opens the cross-workspace session search
   // modal (the same one the sidebar search icon opens) to resume a session.
+  // /workspace is a second web-client-only entry, next to /resume: opens the
+  // SAME search modal (no session preselected) so the user can pick a
+  // workspace to switch into via its group-header switch arrow (SearchModal
+  // WorkspaceHeader). Session-search enhancement, user-approved. Note: a
+  // hidden BACKEND command literally named "switch" exists — unrelated,
+  // untouched; this entry is a distinct client-only name/delivery.
   const allCommands: SlashCommand[] = [
     {
       name: 'resume',
       label: '/resume',
       description: 'Resume a session — search across all workspaces',
+      delivery: 'client',
+      available_while_streaming: true,
+    },
+    {
+      name: 'workspace',
+      label: '/workspace',
+      description: 'Switch workspace — pick one in the session search panel',
       delivery: 'client',
       available_while_streaming: true,
     },
@@ -611,6 +624,15 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     if (name === 'resume') {
       // Web-only: open the cross-workspace session search modal to pick a
       // session to resume — same single instance the sidebar icon opens.
+      useUiStore.getState().openSearchModal()
+      return true
+    }
+
+    if (name === 'workspace') {
+      // Web-only: open the SAME search modal /resume opens (no workspace
+      // filter) — the user switches workspace from there via a group
+      // header's switch arrow (SearchModal WorkspaceHeader), not via a
+      // dedicated picker of its own.
       useUiStore.getState().openSearchModal()
       return true
     }
