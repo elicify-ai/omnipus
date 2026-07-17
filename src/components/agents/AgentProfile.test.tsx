@@ -1139,8 +1139,9 @@ describe('AgentProfile — Wave 5 tab structure (spec §6.2-§6.4)', () => {
   // Item 4 reorg: pin the tab ORDER for both native and external agents,
   // and heartbeat's position when present (between Skills and Advanced —
   // moved from visually-first). Order is read off the rendered
-  // TabsTrigger DOM sequence via compareDocumentPosition, not just
-  // presence, so a future accidental reorder is caught.
+  // TabsTrigger DOM sequence via `querySelectorAll`, which returns matches
+  // in document order — not just presence — so a future accidental reorder
+  // is caught.
   it('tab order for a native Main agent (no workspace context): Basics, Personality, Tools, Skills, Advanced', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
     renderProfile('general-assistant')
@@ -1186,6 +1187,66 @@ describe('AgentProfile — Wave 5 tab structure (spec §6.2-§6.4)', () => {
       (el) => el.getAttribute('data-testid'),
     )
     expect(order).toEqual(['tab-basics', 'tab-personality', 'tab-tools', 'tab-skills', 'tab-heartbeat', 'tab-advanced'])
+    // Reset store for subsequent tests in this file.
+    useUiStore.setState({ editAgentWorkspaceId: null })
+  })
+
+  // Mobile accordion structural tests — mirrors the 3 tablist-order tests
+  // above exactly (same fixtures, same 3 shapes), but against the `<
+  // sm` accordion rendered alongside the desktop Tabs (AgentProfile.tsx's
+  // `<Accordion type="single" collapsible ... className="block sm:hidden">`)
+  // rather than the tablist. The accordion is built from the SAME
+  // conditional branches (isExternalAgent / showHeartbeatTab) as the tab
+  // bar, so its trigger sequence must match 1-for-1 — these tests catch a
+  // reorder OR an accidental omission (e.g. deleting the mobile Skills
+  // AccordionItem while leaving the desktop Skills tab in place) that the
+  // desktop-only tablist tests above cannot see. AccordionTrigger renders a
+  // plain `<button data-testid="accordion-*">` (see
+  // src/components/ui/accordion.tsx) with no distinguishing ARIA role, so —
+  // unlike the tablist queries above — triggers are read off their shared
+  // `data-testid` prefix, in DOM order. Queried via `document.body` (NOT the
+  // `render()`-returned `container`): AgentProfile renders inside a Radix
+  // Sheet/Dialog, which portals its content straight to `document.body`,
+  // outside the local `container` subtree — the same reason the tablist
+  // queries above use `screen.getByRole` rather than `container` too.
+  it('mobile accordion trigger order for a native Main agent (no workspace context): Basics, Personality, Tools, Skills, Advanced', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    const order = Array.from(document.body.querySelectorAll('[data-testid^="accordion-"]')).map(
+      (el) => el.getAttribute('data-testid'),
+    )
+    expect(order).toEqual(['accordion-basics', 'accordion-personality', 'accordion-tools', 'accordion-skills', 'accordion-advanced'])
+  })
+
+  it('mobile accordion trigger order for a subagent_3p agent: Basics, Personality, Runtime, Advanced (no Tools/Skills/Heartbeat)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      id: 'external-worker',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    renderProfile('external-worker')
+    await screen.findByText('External Worker')
+    const order = Array.from(document.body.querySelectorAll('[data-testid^="accordion-"]')).map(
+      (el) => el.getAttribute('data-testid'),
+    )
+    expect(order).toEqual(['accordion-basics', 'accordion-personality', 'accordion-runtime', 'accordion-advanced'])
+  })
+
+  it('mobile accordion trigger order with workspace context (Heartbeat shown): Basics, Personality, Tools, Skills, Heartbeat, Advanced', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
+    vi.mocked(fetchWorkspace).mockResolvedValue(mockWorkspace)
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    await waitFor(() => {
+      expect(screen.getByTestId('accordion-heartbeat')).toBeInTheDocument()
+    })
+    const order = Array.from(document.body.querySelectorAll('[data-testid^="accordion-"]')).map(
+      (el) => el.getAttribute('data-testid'),
+    )
+    expect(order).toEqual(['accordion-basics', 'accordion-personality', 'accordion-tools', 'accordion-skills', 'accordion-heartbeat', 'accordion-advanced'])
     // Reset store for subsequent tests in this file.
     useUiStore.setState({ editAgentWorkspaceId: null })
   })

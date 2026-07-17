@@ -306,3 +306,292 @@ describe('sendMessage — mid-turn steering respects offline buffering (does not
     expect(useChatStore.getState().isStreaming).toBe(true)
   })
 })
+
+/**
+ * bugfixes3 consolidated fix round — item 1 (HIGH, reproduced): a steer
+ * appended a USER message after the still-streaming assistant bubble,
+ * making the bucket's raw message-order TAIL a user message. Two bugs
+ * stemmed from that:
+ *   (a) `tool_call_start` anchored on the raw tail instead of the last
+ *       STREAMING assistant message, so it minted a brand-new assistant
+ *       placeholder instead of reusing the original — stranding the
+ *       original bubble at isStreaming:true forever (permanent shimmer,
+ *       Copy bar suppressed; only a reload repaired it).
+ *   (b) `done`/`error` only finalized the LAST assistant message, which
+ *       (post-steer) is no longer the one still streaming, so even without
+ *       bug (a) the original bubble would never get closed out.
+ * Both are fixed in src/store/chat.ts: `tool_call_start` now resolves its
+ * anchor via `findLastAssistantMessageId` + a still-streaming check
+ * (mirroring the `token` handler), and `done`/`error` now sweep EVERY
+ * still-streaming assistant message in the bucket (mirroring
+ * clearStreamingState's own sweep) instead of only the last one.
+ */
+describe('sendMessage — mid-turn steering + tool_call_start/done sweep (bugfixes3 fix round, item 1)', () => {
+  beforeEach(resetStores)
+
+  it('steer → tool_call_start → token → done: exactly one assistant bubble, none left status "streaming" (regression — stranded streaming bubble)', () => {
+    const send = connectWithSendSpy()
+    startTurn(send)
+
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'AAAA', session_id: TEST_SESSION_ID })
+    })
+
+    // Steer mid-turn — appends a USER message AFTER the still-streaming
+    // assistant bubble, making the raw message-order tail a user message.
+    // This is the exact precondition that broke tool_call_start's old
+    // raw-tail anchor.
+    act(() => {
+      useChatStore.getState().sendMessage('steer this turn')
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_post_steer',
+        tool: 'bash',
+        params: {},
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_post_steer',
+        tool: 'bash',
+        result: 'ok',
+        status: 'success',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'BBBB', session_id: TEST_SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: TEST_SESSION_ID })
+    })
+
+    const { messages, isStreaming } = useChatStore.getState()
+    const assistantMsgs = messages.filter((m) => m.role === 'assistant')
+
+    // Exactly ONE assistant bubble for the whole turn — no stray second
+    // placeholder minted by the mis-anchored tool_call_start.
+    expect(assistantMsgs).toHaveLength(1)
+    // pendingTextBoundary inserts a paragraph break between the tool call
+    // and the resumed narration.
+    expect(assistantMsgs[0].content).toBe('AAAA\n\nBBBB')
+    expect((assistantMsgs[0].tool_calls ?? []).map((tc) => tc.id)).toEqual(['tc_post_steer'])
+
+    // NONE left mid-stream — the done-sweep fix must fully finalize every
+    // assistant message it touches, not just the (now-wrong) "last" one.
+    for (const m of assistantMsgs) {
+      expect(m.isStreaming).toBe(false)
+      expect(m.status).not.toBe('streaming')
+    }
+    expect(isStreaming).toBe(false)
+
+    // Chronology preserved: first user msg, the single assistant bubble,
+    // then the steer.
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+  })
+
+  it('steer → done (no tool calls): unchanged — single assistant bubble, fully finalized', () => {
+    const send = connectWithSendSpy()
+    startTurn(send)
+
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Working on it.', session_id: TEST_SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().sendMessage('steer this turn')
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: TEST_SESSION_ID })
+    })
+
+    const { messages, isStreaming } = useChatStore.getState()
+    const assistantMsgs = messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(1)
+    expect(assistantMsgs[0].content).toBe('Working on it.')
+    expect(assistantMsgs[0].isStreaming).toBe(false)
+    expect(assistantMsgs[0].status).toBe('done')
+    expect(isStreaming).toBe(false)
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+  })
+
+  it('a tool call BEFORE the steer and one AFTER both keep correct owner/offset on the same bubble', () => {
+    const send = connectWithSendSpy()
+    startTurn(send)
+
+    // Pre-steer tool call — establishes ownership/offset bookkeeping the
+    // normal (pre-fix) way, before the raw tail ever becomes a user message.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'AAAA', session_id: TEST_SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_pre',
+        tool: 'bash',
+        params: {},
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_pre',
+        tool: 'bash',
+        result: 'ok',
+        status: 'success',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'BBBB', session_id: TEST_SESSION_ID })
+    })
+
+    // Steer — raw tail is now the user steering message.
+    act(() => {
+      useChatStore.getState().sendMessage('steer this turn')
+    })
+
+    // Post-steer tool call — must anchor on the still-streaming assistant
+    // bubble (the fix), not mint a second one or misattribute ownership.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_post',
+        tool: 'bash',
+        params: {},
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_post',
+        tool: 'bash',
+        result: 'ok',
+        status: 'success',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'CCCC', session_id: TEST_SESSION_ID })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: TEST_SESSION_ID })
+    })
+
+    const { messages } = useChatStore.getState()
+    const assistantMsgs = messages.filter((m) => m.role === 'assistant')
+
+    // Both tool calls landed on the SAME single bubble, in call order.
+    expect(assistantMsgs).toHaveLength(1)
+    const toolCalls = assistantMsgs[0].tool_calls ?? []
+    expect(toolCalls.map((tc) => tc.id)).toEqual(['tc_pre', 'tc_post'])
+
+    // Pre-steer call snapshot the text BEFORE the post-tool-call "BBBB"
+    // segment (offset 4 = length of "AAAA"); post-steer call snapshot the
+    // text after the paragraph-break-joined "AAAA\n\nBBBB" (offset 10).
+    // Confirms the post-steer tool_call_start did NOT anchor on the user
+    // steering bubble (which would have produced a fresh, wrong snapshot on
+    // a brand-new placeholder instead).
+    expect((toolCalls[0] as { textOffset?: number }).textOffset).toBe(4)
+    expect((toolCalls[1] as { textOffset?: number }).textOffset).toBe(10)
+
+    expect(assistantMsgs[0].content).toBe('AAAA\n\nBBBB\n\nCCCC')
+    expect(assistantMsgs[0].isStreaming).toBe(false)
+    expect(assistantMsgs[0].status).toBe('done')
+  })
+})
+
+/**
+ * bugfixes3 consolidated fix round — item 2 (MEDIUM): a steer sent while
+ * the FIRST message of a brand new chat is still under the '__pending'
+ * placeholder session id (before session_started resolves the real
+ * session_id) used to send session_id:'__pending' on the wire — a protocol
+ * violation the gateway answers with a terminal error, which then
+ * (incorrectly) errored out the legitimate first turn and lost the steer
+ * text. Fixed by degrading to the existing offline-style buffering
+ * (enqueueOutboundMessage) instead of sending.
+ */
+describe('sendMessage — steer during the "__pending" session window (bugfixes3 fix round, item 2)', () => {
+  beforeEach(resetStores)
+
+  it('nothing is sent on the socket, the message is buffered, and the first turn is untouched', () => {
+    const send = connectWithSendSpy()
+
+    // No active session yet — sendMessage's no-session branch renders
+    // optimistically into the '__pending' bucket and sets it active.
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null })
+    })
+    act(() => {
+      useChatStore.getState().sendMessage('first message')
+    })
+    expect(useSessionStore.getState().activeSessionId).toBe('__pending')
+    expect(useChatStore.getState().isStreaming).toBe(true)
+    send.mockClear()
+
+    act(() => {
+      useChatStore.getState().sendMessage('steer before session_started')
+    })
+
+    // Nothing sent on the socket for the steer attempt.
+    expect(send).not.toHaveBeenCalled()
+    // Buffered into outboundQueue instead of lost.
+    expect(useChatStore.getState().outboundQueue).toContain('steer before session_started')
+    // The first turn's own bucket/messages are untouched — no stray user
+    // bubble was appended for the (buffered, not sent) steer, and the
+    // original placeholder assistant message is still streaming normally.
+    const { messages, isStreaming } = useChatStore.getState()
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(messages[0].content).toBe('first message')
+    expect(
+      messages.some((m) => m.content === 'steer before session_started')
+    ).toBe(false)
+    expect(isStreaming).toBe(true)
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+  })
+
+  it('drains the buffered steer as a follow-up message once session_started resolves and the first turn completes', () => {
+    const send = connectWithSendSpy()
+
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null })
+    })
+    act(() => {
+      useChatStore.getState().sendMessage('first message')
+    })
+    send.mockClear()
+
+    act(() => {
+      useChatStore.getState().sendMessage('steer before session_started')
+    })
+    expect(useChatStore.getState().outboundQueue).toContain('steer before session_started')
+
+    // The server resolves the real session_id — session_started now also
+    // calls drainOutboundQueue(), which moves the buffered steer into
+    // pendingDrainQueue. maybeDrainNext() (called inside) reads isStreaming
+    // fresh — still true for the just-started turn — so it must NOT send yet.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'real-session-1', agent_id: 'general-assistant' })
+    })
+    expect(useChatStore.getState().outboundQueue).toEqual([])
+    expect(useChatStore.getState().pendingDrainQueue).toContain('steer before session_started')
+    expect(send).not.toHaveBeenCalled()
+
+    // The first turn completes — its own `done` handler's maybeDrainNext()
+    // call now finds isStreaming:false and sends the buffered message as an
+    // ordinary next-turn message.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: 'real-session-1' })
+    })
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'message', content: 'steer before session_started', session_id: 'real-session-1' })
+    )
+    expect(useChatStore.getState().pendingDrainQueue).toEqual([])
+  })
+})

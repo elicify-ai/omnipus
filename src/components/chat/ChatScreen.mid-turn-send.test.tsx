@@ -422,3 +422,63 @@ describe('OmnipusComposer — idle (not streaming) composer is unaffected by the
     expect(mockComposerSend).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * bugfixes3 consolidated fix round — item 3 (MEDIUM): the mid-stream Enter
+ * branch in handleKeyDown only checked `isStreaming` — the native `disabled`
+ * attribute (driven by `inputEnabled`) on the textarea/mid-stream-Send
+ * button was the ONLY thing preventing Enter-to-steer while
+ * replaying/agentRemoved/gave-up-reconnect. That's real protection against
+ * an actual user typing into an actual browser, but the branch itself had
+ * no defense-in-depth: dispatching the keydown directly (as these tests do,
+ * and as could happen from a future refactor that renders the textarea
+ * without `disabled` wired through) would still call
+ * submitMidStreamMessage(). Fixed by adding an explicit `inputEnabled`
+ * check to the branch itself. All 3 scenarios below combine
+ * isStreaming:true (the read-only state's OWN "disabled" driver,
+ * `inputEnabled`, is independent of isStreaming — see ChatScreen.tsx's
+ * `inputEnabled` definition) with each of the three `inputEnabled: false`
+ * causes.
+ */
+describe('OmnipusComposer — Enter mid-stream respects inputEnabled (bugfixes3 fix round, item 3)', () => {
+  it('isReplaying: textarea disabled, mid-stream Send disabled, Enter produces no send', () => {
+    act(() => { useChatStore.setState({ isReplaying: true }) })
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+    expect(input).toBeDisabled()
+
+    act(() => { fireEvent.change(input, { target: { value: 'steer this turn' } }) })
+    const sendBtn = screen.getByTestId('chat-send-mid-stream')
+    expect(sendBtn).toBeDisabled()
+
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(mockComposerSend).not.toHaveBeenCalled()
+  })
+
+  it('agentRemoved: textarea disabled, mid-stream Send disabled, Enter produces no send', () => {
+    render(<OmnipusComposer agentRemoved />)
+    const input = screen.getByTestId('composer-input')
+    expect(input).toBeDisabled()
+
+    act(() => { fireEvent.change(input, { target: { value: 'steer this turn' } }) })
+    const sendBtn = screen.getByTestId('chat-send-mid-stream')
+    expect(sendBtn).toBeDisabled()
+
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(mockComposerSend).not.toHaveBeenCalled()
+  })
+
+  it("reconnectPhase 'gave_up': textarea disabled, mid-stream Send disabled, Enter produces no send", () => {
+    act(() => { useConnectionStore.setState({ reconnectPhase: 'gave_up' }) })
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+    expect(input).toBeDisabled()
+
+    act(() => { fireEvent.change(input, { target: { value: 'steer this turn' } }) })
+    const sendBtn = screen.getByTestId('chat-send-mid-stream')
+    expect(sendBtn).toBeDisabled()
+
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(mockComposerSend).not.toHaveBeenCalled()
+  })
+})

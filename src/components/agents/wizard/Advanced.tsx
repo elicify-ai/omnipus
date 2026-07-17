@@ -67,8 +67,15 @@ export function Advanced({
 // Slim variant: the external CLI runner manages its own isolation, sampling,
 // and tool loop, so ONLY timeout_seconds and rate_limits apply on the wire
 // (`AgentCreateRequestSubagent3p` — see the field matrix). No sampling
-// (temperature/max_tokens/top_p), steering, max_tool_iterations, or shell
-// policy — those all 400 on this variant.
+// (temperature/max_tokens/top_p), max_tool_iterations, or shell policy —
+// those all 400 on this variant. `steering_mode` is NOT variant-specific
+// here: it is retired from the wire entirely (2026-07-17 — dead config
+// removal) and 400s on every create variant, including Main, which used
+// to be the one variant that carried it — see
+// TestCreateAgent_SteeringModeFieldRetiredFromWire in
+// pkg/gateway/rest_agent_executor_test.go. The runtime steering engine
+// (pkg/agent/steering.go) stays global-only, driven by
+// agents.defaults.steering_mode; there was never a per-agent override.
 
 interface ExternalAdvancedFieldsProps {
   payload: AdvancedProps['payload']
