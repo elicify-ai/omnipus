@@ -193,22 +193,7 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	var final *task.Task
-	for time.Now().Before(deadline) {
-		got, err := al.taskStore.Get(tk.ID)
-		if err != nil {
-			t.Fatalf("get task: %v", err)
-		}
-		if task.IsTerminal(got.Status) {
-			final = got
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if final == nil {
-		t.Fatal("task did not reach a terminal status within the deadline")
-	}
+	final := waitTaskTerminal(t, al, tk.ID)
 	if final.Status != task.StatusDone {
 		t.Fatalf("task status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
@@ -259,22 +244,7 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	var final *task.Task
-	for time.Now().Before(deadline) {
-		got, err := al.taskStore.Get(tk.ID)
-		if err != nil {
-			t.Fatalf("get task: %v", err)
-		}
-		if task.IsTerminal(got.Status) {
-			final = got
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if final == nil {
-		t.Fatal("task did not reach a terminal status within the deadline")
-	}
+	final := waitTaskTerminal(t, al, tk.ID)
 	if final.Status != task.StatusFailed {
 		t.Fatalf("task status = %q, want %q (result: %s)", final.Status, task.StatusFailed, final.Result)
 	}
@@ -345,24 +315,12 @@ func TestProcessTaskDirect_ExternalCLIWorker_Timeout_TaskFailsWithoutHanging(t *
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	// Poll ceiling well under the "<10s" budget: the run should actually
-	// finish around the 2s ctx deadline, not the ceiling itself.
-	deadline := time.Now().Add(8 * time.Second)
-	var final *task.Task
-	for time.Now().Before(deadline) {
-		got, err := al.taskStore.Get(tk.ID)
-		if err != nil {
-			t.Fatalf("get task: %v", err)
-		}
-		if task.IsTerminal(got.Status) {
-			final = got
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if final == nil {
-		t.Fatal("task did not reach a terminal status within the deadline — dispatch hung instead of timing out")
-	}
+	// The run should finish around the 2s ctx deadline; waitTaskTerminal's
+	// generous ceiling is only the test's patience for the async status write
+	// under -p4 CI contention (see asyncTaskPollTimeout), not an SLA on the
+	// timeout firing. A dispatch that truly hung (never became terminal) still
+	// fails here — the helper fatals when nothing reaches terminal.
+	final := waitTaskTerminal(t, al, tk.ID)
 	if final.Status != task.StatusFailed {
 		t.Fatalf("task status = %q, want %q (result: %s)", final.Status, task.StatusFailed, final.Result)
 	}
@@ -436,7 +394,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 	// driver.Run, all on the same goroutine with no intervening hop — so
 	// once RecordedRunOpts is non-empty, both are guaranteed to have already
 	// happened and RequestCancel below is guaranteed to find the turn.
-	runStarted := time.Now().Add(5 * time.Second)
+	runStarted := time.Now().Add(asyncTaskPollTimeout)
 	for time.Now().Before(runStarted) && len(fr.RecordedRunOpts()) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -480,7 +438,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 		t.Fatal("GetAgentStore(\"ext-agent\") returned nil")
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(asyncTaskPollTimeout)
 	var cancelledEntry *session.TranscriptEntry
 	for time.Now().Before(deadline) {
 		entries, rerr := sessStore.ReadTranscript(taskChatID)
@@ -523,6 +481,39 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 	waitTaskRunGoroutineDone(t, al.taskExecutor, tk.ID)
 }
 
+// asyncTaskPollTimeout bounds how long these tests wait for an ASYNCHRONOUS
+// runTask goroutine to drive its side effects (terminal task status, transcript
+// entries, run-lock release) to completion. It is deliberately generous: the
+// assertions verify that the effect DOES happen, not that it happens within any
+// particular wall-clock budget. The ci go-test gate runs packages in parallel
+// (-p 4) on 2–4 shared cores, so a fixed few-second deadline starves under
+// cross-package CPU contention and flakes (the work completes, just later — the
+// root cause of the CompletesViaStatusMarker flake seen 2026-07-17). The package
+// -timeout is the real hang backstop; a genuinely stuck task still fails here,
+// only later and with a clear message rather than an intermittent red.
+const asyncTaskPollTimeout = 30 * time.Second
+
+// waitTaskTerminal polls the task store until taskID reaches a terminal status,
+// returning the terminal task. It fatals if the task never becomes terminal
+// within asyncTaskPollTimeout (a genuine hang, not contention — see the const's
+// doc). Callers assert on the returned task's Status/Result.
+func waitTaskTerminal(t *testing.T, al *AgentLoop, taskID string) *task.Task {
+	t.Helper()
+	deadline := time.Now().Add(asyncTaskPollTimeout)
+	for time.Now().Before(deadline) {
+		got, err := al.taskStore.Get(taskID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if task.IsTerminal(got.Status) {
+			return got
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("task %s did not reach a terminal status within %s", taskID, asyncTaskPollTimeout)
+	return nil
+}
+
 // waitTaskRunGoroutineDone blocks until the runTask goroutine for taskID has
 // fully finished. runTask defers delete(te.running, id) (task_executor.go), which
 // runs LAST — after finishTaskRun's late task-store/transcript writes — so once
@@ -530,7 +521,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 // race a test's t.TempDir() cleanup.
 func waitTaskRunGoroutineDone(t *testing.T, te *TaskExecutor, taskID string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(asyncTaskPollTimeout)
 	for time.Now().Before(deadline) {
 		te.mu.Lock()
 		_, running := te.running[taskID]
@@ -540,5 +531,5 @@ func waitTaskRunGoroutineDone(t *testing.T, te *TaskExecutor, taskID string) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("runTask goroutine did not finish within 5s")
+	t.Fatalf("runTask goroutine did not finish within %s", asyncTaskPollTimeout)
 }
