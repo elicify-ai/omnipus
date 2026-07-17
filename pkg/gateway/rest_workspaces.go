@@ -345,6 +345,16 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	}
 	for _, w := range workspaces {
 		if w.IsDefault {
+			// FR-008/US-3 AS-4: an upgraded install whose default workspace
+			// already exists still needs the built-in roster back-filled
+			// (e.g. a coreagent added after the operator's install) — but
+			// must NEVER retroactively auto-add a custom/user-created agent.
+			// Best-effort: a back-fill failure is logged, not fatal — the
+			// gateway continues booting on the pre-existing default workspace.
+			if berr := ensureBuiltinRosterPresent(home, w, cfg); berr != nil {
+				slog.Warn("rest: ensureDefaultWorkspace: failed to back-fill built-in roster",
+					"workspace_id", w.ID, "error", berr)
+			}
 			return nil // already exists
 		}
 	}
@@ -391,6 +401,49 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	slog.Info("rest: default workspace auto-created",
 		"id", ws.ID, "owner", ownerUsername,
 		"team_size", len(ws.CoreTeam), "edge_count", len(ws.Delegation))
+	return nil
+}
+
+// ensureBuiltinRosterPresent unions any built-in-roster member
+// (defaultWorkspaceTeam(cfg) — coreagent.All() ∩ configured agents) missing
+// from the existing default workspace w's CoreTeam, and persists the change
+// ONLY if the set actually grew (ADR-046 P1, FR-008 / US-3 AS-4). This keeps
+// an upgraded install's pre-existing default workspace current with the
+// installed built-in roster (e.g. a coreagent added post-upgrade) every
+// boot, idempotently and safely:
+//   - NEVER removes an existing member (including a custom agent an operator
+//     added to the team by hand).
+//   - NEVER adds a non-built-in ID — only defaultWorkspaceTeam(cfg)'s own
+//     coreagent.All() ∩ configured-agents set is eligible.
+//   - Does NOT touch w.Delegation. Expanding or seeding a workspace team must
+//     never create or imply a Delegation[] trust edge (FR-038) — trust stays
+//     workspace-scoped and explicit (ADR-037).
+func ensureBuiltinRosterPresent(home string, w storedWorkspace, cfg *config.Config) error {
+	builtin := defaultWorkspaceTeam(cfg)
+	if len(builtin) == 0 {
+		return nil
+	}
+	existing := make(map[string]bool, len(w.CoreTeam))
+	for _, id := range w.CoreTeam {
+		existing[id] = true
+	}
+	grew := false
+	for _, id := range builtin {
+		if !existing[id] {
+			w.CoreTeam = append(w.CoreTeam, id)
+			existing[id] = true
+			grew = true
+		}
+	}
+	if !grew {
+		return nil
+	}
+	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := writeWorkspaceFile(home, w); err != nil {
+		return fmt.Errorf("ensureBuiltinRosterPresent: write: %w", err)
+	}
+	slog.Info("rest: ensureDefaultWorkspace: back-filled built-in roster into existing default workspace",
+		"workspace_id", w.ID, "team_size", len(w.CoreTeam))
 	return nil
 }
 

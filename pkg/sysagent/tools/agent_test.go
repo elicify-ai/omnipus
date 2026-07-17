@@ -904,3 +904,103 @@ func TestBashScopeCore_UnlistedResolvesToDeny_FailClosedBaseline(t *testing.T) {
 			"seed and no global coverage to resolve to %q, got %q", "deny", got)
 	}
 }
+
+// TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace (ADR-046 P1,
+// FR-007/008, US-3 AS-2/AS-3) proves create_agent's creation-in-context join:
+// agents are metadata — creating one must NEVER auto-add it to any global
+// roster. When the tool runs inside a workspace's turn context
+// (tools.WithWorkspaceID on ctx), the new agent joins THAT workspace's
+// core_team only — every other workspace is left untouched. With no
+// workspace context, the new agent is metadata-only: a member of no team at
+// all, unable to execute until an operator adds it to a workspace's Team tab.
+func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
+	writeWorkspaceJSON := func(t *testing.T, home, id string) string {
+		t.Helper()
+		wsDir := filepath.Join(home, "workspaces")
+		if err := os.MkdirAll(wsDir, 0o755); err != nil {
+			t.Fatalf("mkdir workspaces: %v", err)
+		}
+		path := filepath.Join(wsDir, id+".json")
+		body := fmt.Sprintf(`{"id":%q,"name":"ws","status":"active","core_team":[]}`, id)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write workspace %s: %v", id, err)
+		}
+		return path
+	}
+	readCoreTeam := func(t *testing.T, path string) []any {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read workspace: %v", err)
+		}
+		var ws map[string]any
+		if err := json.Unmarshal(data, &ws); err != nil {
+			t.Fatalf("unmarshal workspace: %v", err)
+		}
+		team, _ := ws["core_team"].([]any)
+		return team
+	}
+
+	t.Run("with workspace context: joins that workspace only", func(t *testing.T) {
+		deps, home := newTestDepsWithHome(t)
+		ctxWsPath := writeWorkspaceJSON(t, home, "ctx-ws")
+		otherWsPath := writeWorkspaceJSON(t, home, "other-ws")
+
+		ctx := tools.WithWorkspaceID(context.Background(), "ctx-ws")
+		result := systools.NewAgentCreateTool(deps).Execute(ctx, map[string]any{
+			"name":        "Ctx Bot",
+			"description": "Created in a workspace context",
+			"soul":        "You help.",
+			"model":       "test/model",
+			"color":       "#22C55E",
+			"icon":        "robot",
+		})
+		if result.IsError {
+			t.Fatalf("create failed: %s", result.ForLLM)
+		}
+		body := parseSuccess(t, result.ForLLM)
+		agentID, _ := body["id"].(string)
+		if agentID == "" {
+			t.Fatal("result missing id")
+		}
+
+		ctxTeam := readCoreTeam(t, ctxWsPath)
+		found := false
+		for _, m := range ctxTeam {
+			if s, ok := m.(string); ok && s == agentID {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("new agent %q must be added to the context workspace's core_team, got %v", agentID, ctxTeam)
+		}
+
+		otherTeam := readCoreTeam(t, otherWsPath)
+		if len(otherTeam) != 0 {
+			t.Errorf("an unrelated workspace's core_team must remain untouched, got %v", otherTeam)
+		}
+	})
+
+	t.Run("without workspace context: metadata-only, joins nothing", func(t *testing.T) {
+		deps, home := newTestDepsWithHome(t)
+		someWsPath := writeWorkspaceJSON(t, home, "some-ws")
+
+		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
+			"name":        "Metadata Bot",
+			"description": "Created with no workspace context",
+			"soul":        "You help.",
+			"model":       "test/model",
+			"color":       "#22C55E",
+			"icon":        "robot",
+		})
+		if result.IsError {
+			t.Fatalf("create failed: %s", result.ForLLM)
+		}
+
+		someTeam := readCoreTeam(t, someWsPath)
+		if len(someTeam) != 0 {
+			t.Errorf("no workspace must gain the new agent when create_agent runs with no workspace "+
+				"context, got %v", someTeam)
+		}
+	})
+}

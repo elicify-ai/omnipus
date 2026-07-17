@@ -515,6 +515,15 @@ var ErrReloadNotConfigured = errors.New("reload not configured")
 // reload will call ClearReloadPending when it completes, unblocking any poller.
 var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
 
+// ErrAgentNotWorkspaceMember is returned by runTurn when the acting agent is
+// not a member of any workspace's CoreTeam (ADR-046 P1, FR-007/008). Execution
+// is always workspace-scoped: agents are metadata until added to a workspace's
+// team, and a turn for an unassigned agent MUST be refused rather than
+// silently falling through to the agent's own private home directory. This
+// applies uniformly to top-level and delegated (spawnSubTurn) turns alike,
+// since both resolve ts.agent.ID the same way in the re-root block below.
+var ErrAgentNotWorkspaceMember = errors.New("agent is not a member of any workspace; turn refused")
+
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
 // chain from the provider config. It uses the RequestTimeout of the first provider
 // that has a positive RequestTimeout value, falling back to the providers package
@@ -5672,33 +5681,52 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// pkg/tools/metadata_guard.go's app-level guard only recognizes the
 	// agents/<id>/ layout and does not match workspaces/<id>/AGENT.md, so
 	// nothing else was catching it.)
-	if wsID, found := workspace.FindForAgentPreferring(omnipusHome(), ts.agent.ID, ts.opts.WorkspaceID); found {
-		// Derive the re-root dir from the SAME canonical home ($OMNIPUS_HOME)
-		// the rest of the feature uses — buildWorkspaceInstructionsNote, the
-		// REST handlers, and ResolveDefaultID/FindForAgent — so the agent's
-		// work files, its injected instructions, and the shared memory room
-		// all live under one workspaces/<id>/ tree (work/ as a dedicated
-		// sibling of AGENT.md and .omnipus/, not their container).
-		// SafeWorkDir validates the id against traversal before it becomes a
-		// filesystem root (fail-closed: an unsafe id falls back to the
-		// agent's own directory).
-		wsDir, idErr := workspace.SafeWorkDir(omnipusHome(), wsID)
-		if idErr != nil {
-			logger.WarnCF(
-				"agent",
-				"workspace-rooted filesystem: invalid workspace id; falling back to agent's own directory",
-				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "error": idErr.Error()},
-			)
-		} else if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
-			logger.WarnCF(
-				"agent",
-				"workspace-rooted filesystem: MkdirAll failed; falling back to agent's own directory",
-				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
-			)
-		} else {
-			turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
-		}
+	// ADR-046 P1 (FR-007/008): execution is always workspace-scoped. An agent
+	// that is not a member of ANY workspace's CoreTeam cannot execute at all —
+	// no silent fallthrough to its own agent-home directory, no ambiguous
+	// lexicographic guess. This refusal deliberately runs AFTER the
+	// tools.WithWorkspaceID injection above (memory routing, FR-030) so that
+	// separate signal is completely unaffected by this gate either way.
+	wsID, found := workspace.FindForAgentPreferring(omnipusHome(), ts.agent.ID, ts.opts.WorkspaceID)
+	if !found {
+		logger.WarnCF(
+			"agent",
+			"turn refused: agent is not a member of any workspace",
+			map[string]any{"agent_id": ts.agent.ID},
+		)
+		return turnResult{}, fmt.Errorf("%w: agent_id=%s", ErrAgentNotWorkspaceMember, ts.agent.ID)
 	}
+	// Derive the re-root dir from the SAME canonical home ($OMNIPUS_HOME)
+	// the rest of the feature uses — buildWorkspaceInstructionsNote, the
+	// REST handlers, and ResolveDefaultID/FindForAgent — so the agent's
+	// work files, its injected instructions, and the shared memory room
+	// all live under one workspaces/<id>/ tree (work/ as a dedicated
+	// sibling of AGENT.md and .omnipus/, not their container).
+	// SafeWorkDir validates the id against traversal before it becomes a
+	// filesystem root. Since execution is now unconditionally
+	// workspace-scoped, a failure here (unsafe id, or the work dir cannot be
+	// created) REFUSES the turn rather than silently falling back to the
+	// agent's own directory — the same no-fallthrough guarantee FR-007/008
+	// requires for the not-a-member case applies equally to a member whose
+	// work/ dir cannot be resolved.
+	wsDir, idErr := workspace.SafeWorkDir(omnipusHome(), wsID)
+	if idErr != nil {
+		logger.WarnCF(
+			"agent",
+			"turn refused: invalid workspace id resolving work dir",
+			map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "error": idErr.Error()},
+		)
+		return turnResult{}, fmt.Errorf("workspace work dir unavailable for agent_id=%s workspace_id=%s: %w", ts.agent.ID, wsID, idErr)
+	}
+	if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
+		logger.WarnCF(
+			"agent",
+			"turn refused: could not create workspace work dir",
+			map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
+		)
+		return turnResult{}, fmt.Errorf("workspace work dir unavailable for agent_id=%s workspace_id=%s: %w", ts.agent.ID, wsID, mkErr)
+	}
+	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
 
 	// FR-7.5 / NFR-1: install a per-turn citation tracker so recall_memory can
 	// report surfaced memories and the loop can emit op:cited counter events

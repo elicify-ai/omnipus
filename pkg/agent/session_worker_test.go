@@ -262,10 +262,7 @@ func TestSessionWorker_AdmissionRejection(t *testing.T) {
 	release := make(chan struct{})
 	blockingProvider := &blockingMockProvider{releaseAll: release}
 
-	al, err := NewAgentLoop(cfg, msgBus, blockingProvider)
-	if err != nil {
-		t.Fatalf("NewAgentLoop: %v", err)
-	}
+	al := mustNewAgentLoop(t, cfg, msgBus, blockingProvider)
 	defer al.Close()
 
 	// Set soft cap to 2 so the third session is rejected.

@@ -682,12 +682,38 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
-	parentWorkspace := t.TempDir()
-	targetWorkspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(parentWorkspace, relPath), []byte(parentContent), 0o600); err != nil {
+	// ADR-046 P1 (FR-007/008): execution is always workspace-scoped now — a
+	// native agent's file tools resolve to ITS OWN workspace's work/ dir
+	// (loop.go's runTurn re-root, keyed on agent identity), not a raw
+	// AgentConfig.Home path directly. To keep proving the ADR-032
+	// distinctness property this test exists for (native dispatch must use
+	// the TARGET's own tool objects, never the PARENT's), give the parent and
+	// the target their OWN DEDICATED workspaces — never the same one — and
+	// write each one's file into ITS OWN workspace's work/ dir. Pre-creating
+	// these before mustNewAgentLoop also means the test harness's own
+	// membership seeding (test_helpers_test.go) sees both IDs already
+	// covered and leaves them alone (see testHarnessAgentIDs' doc comment).
+	workspacesDir := filepath.Join(home, "workspaces")
+	parentWorkDir := filepath.Join(workspacesDir, "parent-ws", "work")
+	targetWorkDir := filepath.Join(workspacesDir, "target-ws", "work")
+	if err := os.MkdirAll(parentWorkDir, 0o755); err != nil {
+		t.Fatalf("mkdir parent work dir: %v", err)
+	}
+	if err := os.MkdirAll(targetWorkDir, 0o755); err != nil {
+		t.Fatalf("mkdir target work dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacesDir, "parent-ws.json"),
+		[]byte(`{"id":"parent-ws","core_team":["parent-fs-scope"]}`), 0o644); err != nil {
+		t.Fatalf("write parent-ws.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacesDir, "target-ws.json"),
+		[]byte(`{"id":"target-ws","core_team":["native-target-fs-scope"]}`), 0o644); err != nil {
+		t.Fatalf("write target-ws.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parentWorkDir, relPath), []byte(parentContent), 0o600); err != nil {
 		t.Fatalf("write parent file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(targetWorkspace, relPath), []byte(targetContent), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(targetWorkDir, relPath), []byte(targetContent), 0o600); err != nil {
 		t.Fatalf("write target file: %v", err)
 	}
 
@@ -695,16 +721,15 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:            "mock",
-				Home:                parentWorkspace,
+				Home:                filepath.Join(home, "agents", "parent-fs-scope"),
 				ModelName:           "parent-model",
-				RestrictToWorkspace: true, // required for read_file to actually root relative paths at Workspace, not the raw host fs (buildFs: !restrict -> hostFs{})
+				RestrictToWorkspace: true, // required for read_file to actually root relative paths at the re-rooted workspace dir, not the raw host fs (buildFs: !restrict -> hostFs{})
 			},
 			List: []config.AgentConfig{
 				{
 					ID:      "parent-fs-scope",
 					Type:    config.AgentTypeCore,
 					Default: true,
-					Home:    parentWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{"read_file": config.ToolPolicyAllow},
@@ -714,7 +739,6 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 				{
 					ID:   "native-target-fs-scope",
 					Type: config.AgentTypeWorker,
-					Home: targetWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{"read_file": config.ToolPolicyAllow},

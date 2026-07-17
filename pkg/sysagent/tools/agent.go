@@ -148,7 +148,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	// Validate mandatory fields.
 	name, _ := args["name"].(string)
 	if strings.TrimSpace(name) == "" {
@@ -323,6 +323,24 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		}
 	}
 
+	// ADR-046 P1 (FR-007/008, US-3 AS-2/AS-3): agents are metadata — creating
+	// one must NOT auto-add it to any global roster. If this call is running
+	// inside a workspace's turn context (create_agent invoked by an agent
+	// that is itself a workspace CoreTeam member, or a future workspace-scoped
+	// entry point), the new agent joins THAT workspace's team only —
+	// creation-in-context — so it becomes runnable there immediately. With no
+	// workspace context, the agent is intentionally metadata-only: a member
+	// of no team, unable to execute (runTurn's ErrAgentNotWorkspaceMember)
+	// until an operator adds it to a workspace's Team tab. Best-effort: a
+	// join failure is logged, not fatal — the agent still exists, just not
+	// yet joined anywhere.
+	if wsID := tools.ToolWorkspaceID(ctx); wsID != "" {
+		if err := t.joinWorkspaceTeam(wsID, finalID); err != nil {
+			slog.Warn("sysagent: create_agent: could not add new agent to workspace core_team",
+				"agent_id", finalID, "workspace_id", wsID, "error", err)
+		}
+	}
+
 	// Trigger hot-reload so the new agent is immediately available for chat.
 	if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
@@ -343,6 +361,30 @@ func (t *AgentCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		result["cli_path"] = execCLIPath
 	}
 	return tools.NewToolResult(successJSON(result))
+}
+
+// joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
+// and persists the change. Used exclusively by create_agent's
+// creation-in-context join (ADR-046 P1, US-3 AS-2): a custom agent created
+// from within a workspace's turn context joins THAT workspace's team only —
+// never any other, and never seeds a Delegation[] trust edge (FR-038:
+// expanding a workspace team must not create or imply delegation trust).
+func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) error {
+	w, err := readWorkspaceFromDisk(t.deps.Home, wsID)
+	if err != nil {
+		return fmt.Errorf("read workspace %s: %w", wsID, err)
+	}
+	for _, id := range w.CoreTeam {
+		if id == agentID {
+			return nil // already a member
+		}
+	}
+	w.CoreTeam = append(w.CoreTeam, agentID)
+	w.UpdatedAt = nowISO()
+	if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
+		return fmt.Errorf("write workspace %s: %w", wsID, err)
+	}
+	return nil
 }
 
 // ---- system.agent.update ----

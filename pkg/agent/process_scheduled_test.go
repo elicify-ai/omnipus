@@ -129,6 +129,13 @@ func schedTestLoop(t *testing.T) (*AgentLoop, string) {
 
 // registerAgent registers an agent with the given id, provider, and default flag
 // into the loop's registry, returning the instance.
+//
+// ADR-046 P1 (FR-007/008): this bypasses cfg.Agents.List entirely (it writes
+// directly into al.registry.agents, AFTER mustNewAgentLoop already ran), so
+// mustNewAgentLoop's own workspace-membership seeding never saw id coming.
+// ProcessScheduled runs this agent as itself (owner-pinned, never the
+// default), so it must be workspace-scoped too — seed its membership here,
+// at the exact point id is introduced.
 func registerAgent(
 	t *testing.T,
 	al *AgentLoop,
@@ -137,6 +144,7 @@ func registerAgent(
 	isDefault bool,
 ) *AgentInstance {
 	t.Helper()
+	seedTestWorkspaceMembershipForIDs(t, []string{id})
 	cfg := al.cfg
 	ag := NewAgentInstance(
 		&config.AgentConfig{ID: id, Name: id, Default: isDefault},

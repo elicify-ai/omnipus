@@ -21,6 +21,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -123,33 +124,105 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	)
 }
 
-// TestRunTurn_NotCoreTeamMember_WritesToOwnDir confirms the negative case:
-// with no workspace claiming "main" in its core_team, write_file lands in the
-// agent's own directory exactly as before the CoreTeam-based re-rooting was
-// introduced.
-func TestRunTurn_NotCoreTeamMember_WritesToOwnDir(t *testing.T) {
+// TestRunTurn_WorkspacelessAgentRefused (ADR-046 P1, FR-007/008, US-2 AS-2 /
+// US-3 AS-3) replaces the old TestRunTurn_NotCoreTeamMember_WritesToOwnDir:
+// execution is now ALWAYS workspace-scoped, so an agent that belongs to no
+// workspace's CoreTeam must have its turn REFUSED — no silent fallthrough to
+// its own agent-home directory (the pre-ADR-046 behavior the old test
+// pinned). This deliberately constructs the AgentLoop via NewAgentLoop
+// directly, NOT mustNewAgentLoop — mustNewAgentLoop's harness seeding would
+// otherwise make "main" a member of a workspace and defeat the very case
+// under test.
+func TestRunTurn_WorkspacelessAgentRefused(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpHome)
 
 	agentWorkspaceDir := filepath.Join(tmpHome, "agents", "main")
 	require.NoError(t, os.MkdirAll(agentWorkspaceDir, 0o755))
 
-	// No workspaces/ directory at all — "main" is not a CoreTeam member of
-	// anything.
+	// No workspaces/ directory at all — "main" is a member of nothing.
 	provider := testutil.NewScenario().
-		WithToolCall("write_file", `{"path":"proof.txt","content":"solo-agent-write","overwrite":true}`).
+		WithToolCall("write_file", `{"path":"proof.txt","content":"should-never-land","overwrite":true}`).
 		WithText("done")
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:              agentWorkspaceDir,
-				ModelName:         "scripted-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-				// Sandboxed (os.Root-relative) file resolution — required for a
-				// relative write_file path to resolve against the workspace root
-				// (fixed or re-rooted) instead of the process CWD.
+				Home:                agentWorkspaceDir,
+				ModelName:           "scripted-model",
+				MaxTokens:           4096,
+				MaxToolIterations:   10,
+				RestrictToWorkspace: true,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	al, err := NewAgentLoop(cfg, msgBus, provider)
+	require.NoError(t, err, "NewAgentLoop must succeed")
+	defer al.Close()
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
+	})
+
+	const sessionKey = "test-session-workspaceless-refused"
+	ctx := context.Background()
+	_, procErr := al.ProcessDirect(ctx, "please write proof.txt for me", sessionKey)
+	require.Error(t, procErr, "a turn for an agent that is a member of no workspace must be refused")
+	assert.True(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
+		"refusal error must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)
+
+	// No file anywhere: neither the agent's own private directory...
+	privateFile := filepath.Join(agentWorkspaceDir, "proof.txt")
+	_, statErr := os.Stat(privateFile)
+	assert.True(t, os.IsNotExist(statErr),
+		"write_file must NOT land in the agent's own directory when the turn is refused (%s)", privateFile)
+
+	// ...nor any workspace (there are none — the turn must never have reached
+	// the tool-call stage at all).
+	workspacesDir := filepath.Join(tmpHome, "workspaces")
+	_, wsStatErr := os.Stat(workspacesDir)
+	assert.True(t, os.IsNotExist(wsStatErr),
+		"a refused turn must not create any workspace directory")
+}
+
+// TestRunTurn_MemberGetsWorkspaceWorkDir (ADR-046 P1, FR-007, US-2 AS-1)
+// proves the turn resolves its working dir from the EXPLICIT turn workspace
+// (meta.WorkspaceID -> opts.WorkspaceID -> FindForAgentPreferring), not just
+// identity-based CoreTeam derivation with no turn-carried workspace id (the
+// sibling TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir test above
+// covers that case via ProcessDirect, which never threads a workspace id).
+// Here the turn is driven through processMessage directly with
+// msg.Metadata["workspace_id"] set — the same fallback path a board-task run
+// uses (loop.go's processMessage, "Falls back to the inbound metadata key
+// when present") — so ts.opts.WorkspaceID is non-empty for a member agent.
+func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpHome)
+
+	agentWorkspaceDir := filepath.Join(tmpHome, "agents", "main")
+	require.NoError(t, os.MkdirAll(agentWorkspaceDir, 0o755))
+
+	workspacesDir := filepath.Join(tmpHome, "workspaces")
+	require.NoError(t, os.MkdirAll(workspacesDir, 0o755))
+	wsJSON := `{"id":"explicit-ws","core_team":["main"]}`
+	require.NoError(t, os.WriteFile(filepath.Join(workspacesDir, "explicit-ws.json"), []byte(wsJSON), 0o644))
+
+	provider := testutil.NewScenario().
+		WithToolCall("write_file", `{"path":"explicit.txt","content":"explicit-workspace-write","overwrite":true}`).
+		WithText("done")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:                agentWorkspaceDir,
+				ModelName:           "scripted-model",
+				MaxTokens:           4096,
+				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
 		},
@@ -162,23 +235,26 @@ func TestRunTurn_NotCoreTeamMember_WritesToOwnDir(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
-	// No-default-policy model (CLAUDE.md hard constraint 6): write_file needs
-	// an explicit agent-level grant, or it fails closed to "deny" and the
-	// non-CoreTeam write-path under test never gets exercised.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
-	const sessionKey = "test-session-no-coreteam"
 	ctx := context.Background()
-	finalContent, err := al.ProcessDirect(ctx, "please write proof.txt for me", sessionKey)
-	require.NoError(t, err, "ProcessDirect must succeed")
+	finalContent, _, procErr := al.processMessage(ctx, bus.InboundMessage{
+		Channel:    "cli",
+		ChatID:     "direct",
+		Content:    "please write explicit.txt for me",
+		SessionKey: "test-session-explicit-workspace",
+		Metadata:   map[string]string{"workspace_id": "explicit-ws"},
+	})
+	require.NoError(t, procErr, "processMessage must succeed")
 	assert.Equal(t, "done", finalContent)
 
-	privateFile := filepath.Join(agentWorkspaceDir, "proof.txt")
-	got, readErr := os.ReadFile(privateFile)
-	require.NoError(t, readErr, "write_file must land in the agent's own directory when it is not a CoreTeam member")
-	assert.Equal(t, "solo-agent-write", string(got))
+	sharedFile := filepath.Join(workspacesDir, "explicit-ws", "work", "explicit.txt")
+	got, readErr := os.ReadFile(sharedFile)
+	require.NoError(t, readErr,
+		"write_file must land in the EXPLICIT turn workspace's work/ dir (%s)", sharedFile)
+	assert.Equal(t, "explicit-workspace-write", string(got))
 }
 
 // TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot proves the
