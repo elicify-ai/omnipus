@@ -38,7 +38,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
@@ -346,10 +345,7 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 	// RestrictToWorkspace setting — matching the pre-migration
 	// ValidateWorkspacePath(rawPath, t.workspace, true, nil) call this
 	// replaces.
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), true,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, true)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}
@@ -572,10 +568,7 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	// comment for the restrict=true rationale and the P2/FR-031 deferred
 	// TOCTOU note on the dev-server child's OWN subsequent file access under
 	// absDir (governed by sandbox.Limits.WorkspaceDir, not this handle).
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), true,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, true)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}

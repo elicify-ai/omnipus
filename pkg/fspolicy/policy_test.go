@@ -111,6 +111,91 @@ func TestEffectiveFSPolicy_FailsClosedOnUnresolvable(t *testing.T) {
 	})
 }
 
+// TestEffectiveFSPolicy_FailsClosedOnEmptyWorkingDir is the BLOCK #1
+// regression (ADR-046 P1 review): before the fix, agentHome=="" AND
+// turnWorkDir=="" together left effectiveWorkDir=="", which
+// filepath.Abs("") — inside realpath — silently resolved to the omnipus
+// PROCESS's own current working directory rather than erroring. That is a
+// fail-OPEN: a misconfigured/uninitialized agent (no home, no per-turn
+// re-root) would get a policy confined to wherever the server process
+// happens to be running from, instead of no policy at all.
+// EffectiveFSPolicy(ctx,"","",true,home,"a","") must return a non-nil error.
+func TestEffectiveFSPolicy_FailsClosedOnEmptyWorkingDir(t *testing.T) {
+	home := t.TempDir()
+
+	policy, err := EffectiveFSPolicy(context.Background(), "", "", true, home, "a", "")
+	if err == nil {
+		t.Fatalf("expected error when agentHome and turnWorkDir are both empty, got policy %+v", policy)
+	}
+}
+
+// TestFSPolicy_Validate exercises the Validate invariants ResolvePath now
+// consults as its first step (BLOCK #1, ADR-046 P1 review).
+func TestFSPolicy_Validate(t *testing.T) {
+	home := filepath.FromSlash("/omnh")
+
+	t.Run("zero-value policy is refused", func(t *testing.T) {
+		if err := (FSPolicy{}).Validate(); err == nil {
+			t.Fatalf("expected zero-value FSPolicy{} to fail Validate")
+		}
+	})
+
+	t.Run("empty WorkDir is refused even with a valid Scope", func(t *testing.T) {
+		if err := (FSPolicy{Scope: FSScopeConfined}).Validate(); err == nil {
+			t.Fatalf("expected empty WorkDir to fail Validate")
+		}
+	})
+
+	t.Run("relative WorkDir is refused", func(t *testing.T) {
+		p := FSPolicy{WorkDir: "relative/dir", Scope: FSScopeConfined}
+		if err := p.Validate(); err == nil {
+			t.Fatalf("expected a non-absolute WorkDir to fail Validate")
+		}
+	})
+
+	t.Run("unknown Scope is refused", func(t *testing.T) {
+		p := FSPolicy{WorkDir: filepath.Join(home, "agents", "self"), Scope: FSScope("bogus")}
+		if err := p.Validate(); err == nil {
+			t.Fatalf("expected an unknown Scope to fail Validate")
+		}
+	})
+
+	t.Run("WorkDir == $OMNIPUS_HOME is refused (BLOCK #2 companion)", func(t *testing.T) {
+		p := FSPolicy{WorkDir: home, Scope: FSScopeUnrestricted, CarveOuts: buildCarveOuts(home)}
+		if err := p.Validate(); err == nil {
+			t.Fatalf("expected WorkDir == $OMNIPUS_HOME to fail Validate")
+		}
+	})
+
+	t.Run("WorkDir an ancestor of $OMNIPUS_HOME is refused", func(t *testing.T) {
+		p := FSPolicy{WorkDir: filepath.Dir(home), Scope: FSScopeUnrestricted, CarveOuts: buildCarveOuts(home)}
+		if err := p.Validate(); err == nil {
+			t.Fatalf("expected WorkDir above $OMNIPUS_HOME to fail Validate")
+		}
+	})
+
+	t.Run("agent-home-rooted WorkDir passes", func(t *testing.T) {
+		p := FSPolicy{WorkDir: filepath.Join(home, "agents", "self"), Scope: FSScopeConfined, CarveOuts: buildCarveOuts(home)}
+		if err := p.Validate(); err != nil {
+			t.Errorf("expected a well-formed agent-home-rooted policy to pass Validate, got: %v", err)
+		}
+	})
+
+	t.Run("workspace-rooted WorkDir passes", func(t *testing.T) {
+		p := FSPolicy{WorkDir: filepath.Join(home, "workspaces", "w1", "work"), Scope: FSScopeConfined, CarveOuts: buildCarveOuts(home)}
+		if err := p.Validate(); err != nil {
+			t.Errorf("expected a well-formed workspace-rooted policy to pass Validate, got: %v", err)
+		}
+	})
+
+	t.Run("no CarveOuts (resolver-level unit test shape) passes", func(t *testing.T) {
+		p := FSPolicy{WorkDir: filepath.FromSlash("/tmp/some-test-dir"), Scope: FSScopeConfined}
+		if err := p.Validate(); err != nil {
+			t.Errorf("expected a CarveOuts-less policy to pass Validate, got: %v", err)
+		}
+	})
+}
+
 // TestFSScope_P1NeverReturnsReservedValues asserts that no input combination
 // available to P1 (restrict true/false, turnWorkDir present/empty) ever
 // yields FSScopeAsk or FSScopeAllow — those are reserved for P2/P3 and P1

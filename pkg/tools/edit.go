@@ -7,9 +7,6 @@ import (
 	"io/fs"
 	"regexp"
 	"strings"
-
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
 // EditFileTool edits a file by replacing old_text with new_text.
@@ -72,10 +69,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}
@@ -163,10 +157,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("path is required")
 	}
 
-	policy, err := fspolicy.EffectiveFSPolicy(
-		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
-		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
-	)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}

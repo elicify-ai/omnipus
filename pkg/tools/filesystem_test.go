@@ -19,7 +19,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test content"), 0o644)
 
-	tool := NewReadFileTool("", false, MaxReadFileSize)
+	tool := NewReadFileTool(tmpDir, false, MaxReadFileSize)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": testFile,
@@ -46,7 +46,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 
 // TestFilesystemTool_ReadFile_NotFound verifies error handling for missing file
 func TestFilesystemTool_ReadFile_NotFound(t *testing.T) {
-	tool := NewReadFileTool("", false, MaxReadFileSize)
+	tool := NewReadFileTool(t.TempDir(), false, MaxReadFileSize)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/nonexistent_file_12345.txt",
@@ -89,7 +89,7 @@ func TestFilesystemTool_WriteFile_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "newfile.txt")
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path":    testFile,
@@ -128,7 +128,7 @@ func TestFilesystemTool_WriteFile_CreateDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "subdir", "newfile.txt")
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path":    testFile,
@@ -170,7 +170,7 @@ func TestFilesystemTool_WriteFile_MissingPath(t *testing.T) {
 
 // TestFilesystemTool_WriteFile_MissingContent verifies error handling for missing content
 func TestFilesystemTool_WriteFile_MissingContent(t *testing.T) {
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(t.TempDir(), false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/tmp/test.txt",
@@ -197,7 +197,7 @@ func TestFilesystemTool_WriteFile_OverwriteDefaultBlocked(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "existing.txt")
 	os.WriteFile(testFile, []byte("original"), 0o644)
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":    testFile,
 		"content": "new content",
@@ -220,7 +220,7 @@ func TestFilesystemTool_WriteFile_OverwriteExplicitAllowed(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "existing.txt")
 	os.WriteFile(testFile, []byte("original"), 0o644)
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":      testFile,
 		"content":   "replaced",
@@ -240,7 +240,7 @@ func TestFilesystemTool_WriteFile_NewFileNoOverwriteFlag(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "newfile.txt")
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":    testFile,
 		"content": "brand new",
@@ -260,7 +260,7 @@ func TestFilesystemTool_WriteFile_OverwriteFalseExplicitBlocked(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "existing.txt")
 	os.WriteFile(testFile, []byte("original"), 0o644)
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":      testFile,
 		"content":   "new content",
@@ -312,7 +312,7 @@ func TestFilesystemTool_ListDir_Success(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("content"), 0o644)
 	os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755)
 
-	tool := NewListDirTool("", false)
+	tool := NewListDirTool(tmpDir, false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": tmpDir,
@@ -336,7 +336,7 @@ func TestFilesystemTool_ListDir_Success(t *testing.T) {
 
 // TestFilesystemTool_ListDir_NotFound verifies error handling for non-existent directory
 func TestFilesystemTool_ListDir_NotFound(t *testing.T) {
-	tool := NewListDirTool("", false)
+	tool := NewListDirTool(t.TempDir(), false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/nonexistent_directory_12345",
@@ -357,7 +357,7 @@ func TestFilesystemTool_ListDir_NotFound(t *testing.T) {
 
 // TestFilesystemTool_ListDir_DefaultPath verifies default to current directory
 func TestFilesystemTool_ListDir_DefaultPath(t *testing.T) {
-	tool := NewListDirTool("", false)
+	tool := NewListDirTool(t.TempDir(), false)
 	ctx := context.Background()
 	args := map[string]any{}
 
@@ -408,15 +408,18 @@ func TestFilesystemTool_ReadFile_RejectsSymlinkEscape(t *testing.T) {
 // the pre-existing "empty workspace fails closed" regression guard. Under
 // the OLD architecture, workspace=="" was a distinguished misconfiguration
 // state (getSafeRelPath/validatePathWithAllowPaths special-cased it with the
-// literal "workspace is not defined" error). Under the NEW architecture,
-// agentHome=="" is a well-defined fallback — fspolicy.EffectiveFSPolicy
-// resolves WorkDir to the process's own cwd rather than treating it as an
-// error — so the exact legacy message no longer applies. The SECURITY
-// PROPERTY this test guards (an agent tool constructed with no home cannot
-// reach an arbitrary absolute path outside its effective root under a
-// Confined scope) still holds: it is now enforced by ResolvePath's
-// ErrOutsideScope refusal, surfaced via the structured permission_denied
-// JSON convention instead of the old bespoke string.
+// literal "workspace is not defined" error). Under the ADR-046 P1 review's
+// BLOCK #1 fix, agentHome=="" (with no per-turn TurnWorkspaceDir either) is
+// likewise a distinguished misconfiguration: fspolicy.EffectiveFSPolicy now
+// refuses to produce a policy at all, rather than the earlier, briefly-true
+// intermediate behavior of falling back to the process's own cwd. The
+// SECURITY PROPERTY this test guards (an agent tool constructed with no home
+// can never reach an arbitrary absolute path, or ANY path at all) still
+// holds — arguably more strongly, since there is no longer even a
+// process-cwd fallback to reason about — it is now enforced by
+// ResolveTurnFSPolicy's policy-resolution failure, surfaced as a plain
+// ErrorResult (not the structured permission_denied shape, since the denial
+// happens before ResolvePath — and its typed sentinels — are ever reached).
 func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 	tool := NewReadFileTool("", true, MaxReadFileSize) // restrict=true but workspace=""
 
@@ -429,15 +432,14 @@ func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 		"path": secretFile,
 	})
 
-	// We EXPECT IsError=true (access blocked: an absolute path outside the
-	// effective — process-cwd-fallback — working directory under Confined
-	// scope).
+	// We EXPECT IsError=true (access blocked: no working directory at all
+	// means no policy can be resolved, so no read is ever attempted).
 	assert.True(t, result.IsError, "Security Regression: Empty workspace allowed access! content: %s", result.ForLLM)
 
-	// Verify it failed for the right reason: the structured permission_denied
-	// convention, carrying the ErrOutsideScope classification.
-	assert.Contains(t, result.ForLLM, "permission_denied", "Expected the structured permission_denied error shape")
-	assert.Contains(t, result.ForLLM, "access denied", "Expected the ErrOutsideScope reason text")
+	// Verify it failed for the right reason: fspolicy's fail-closed
+	// empty-working-directory guard (BLOCK #1), not some unrelated error.
+	assert.Contains(t, result.ForLLM, "failed to resolve filesystem policy")
+	assert.Contains(t, result.ForLLM, "no working directory")
 }
 
 // TestRootMkdirAll verifies that root.MkdirAll (used by atomicWriteFileInRoot) handles all cases:
