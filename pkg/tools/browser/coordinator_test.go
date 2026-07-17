@@ -44,8 +44,19 @@ func resolveTestBinary(t *testing.T) string {
 				return
 			}
 		}
-		// Else download once into a shared temp dir.
-		sharedTestBin, errSharedTestBin = EnsureChromium(context.Background(), filepath.Join(t.TempDir(), "chromium"))
+		// Else download once into a PROCESS-LIFETIME temp dir. This must NOT use
+		// t.TempDir(): that dir is deleted as soon as the FIRST test to trigger
+		// this sync.Once returns, but sharedTestBin is cached and reused by every
+		// later coordinator test — which would then resolve a deleted path
+		// ("cannot locate chromium: no such file", a -p1-deterministic /
+		// -p4-order-dependent failure). os.MkdirTemp persists for the whole test
+		// process and is reclaimed by the OS / CI worker teardown on exit.
+		var dir string
+		dir, errSharedTestBin = os.MkdirTemp("", "coordinator-shared-chromium-")
+		if errSharedTestBin != nil {
+			return
+		}
+		sharedTestBin, errSharedTestBin = EnsureChromium(context.Background(), filepath.Join(dir, "chromium"))
 	})
 	if errSharedTestBin != nil {
 		t.Skipf("no managed Chrome for coordinator test: %v", errSharedTestBin)
