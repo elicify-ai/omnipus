@@ -87,11 +87,15 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch }: {
       {onSwitch && (
         <button tabIndex={0}
           type="button"
-          onClick={(e) => { e.stopPropagation(); onSwitch() }}
+          onClick={onSwitch}
           data-testid="workspace-switch-arrow"
           aria-label={`Switch to workspace ${name}`}
           title={`Switch to workspace ${name}`}
-          className="shrink-0 mr-2 flex items-center justify-center rounded p-1 text-[var(--color-accent)] opacity-80 hover:opacity-100 hover:underline transition-all"
+          // p-1.5: 13px icon + 12px padding = 25px target (WCAG 2.5.8 needs
+          // 24px, and the collapse toggle is flush-adjacent so the spacing
+          // exception can't cover an undersized target). Matches the file's
+          // rename/delete icon-button sizing.
+          className="shrink-0 mr-2 flex items-center justify-center rounded p-1.5 text-[var(--color-accent)] opacity-80 hover:opacity-100 transition-all"
         >
           <ArrowRight size={13} />
         </button>
@@ -314,11 +318,21 @@ export function SearchModal() {
   // "New chat" workspace-row action EXACTLY (setActiveWorkspaceId ->
   // startNewSession -> navigate -> close): switching from search should land
   // the user on a fresh composer in the target workspace, not silently
-  // re-attach whatever session happened to be active there before. Reads
-  // both stores via getState() (a plain click handler, not something that
-  // needs reactive re-renders) — the same pattern this file already uses for
-  // deleteMut's pruneSessionDescriptor call above.
+  // re-attach whatever session happened to be active there before. The
+  // setActiveWorkspaceId-BEFORE-startNewSession order is load-bearing:
+  // startNewSession clears sessionByWorkspace for the CURRENT workspace, so
+  // the switch must happen first for the target to get the fresh slate.
+  // Reads both stores via getState() (a plain click handler, not something
+  // that needs reactive re-renders) — the same pattern deleteMut's
+  // pruneSessionDescriptor call below uses.
   const handleSwitchWorkspace = useCallback((ws: Workspace) => {
+    if (ws.id === useWorkspacesStore.getState().activeWorkspaceId) {
+      // Already there: the arrow says "Switch", not "New chat" — don't
+      // detach a possibly-live session; just land on the workspace chat.
+      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
+      close()
+      return
+    }
     useWorkspacesStore.getState().setActiveWorkspaceId(ws.id)
     useSessionStore.getState().startNewSession()
     void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
@@ -445,11 +459,15 @@ export function SearchModal() {
         // outside-click-to-dismiss, Escape, and the focus trap all keep
         // working exactly as before. Since there's no dim to set the panel
         // apart from the page behind it, the panel supplies its own
-        // boundary: `border` + `shadow-2xl` here (shadow-2xl is already the
-        // DialogContent base default; restated explicitly so this dialog
-        // doesn't silently lose it if the shared base ever changes).
+        // boundary — and it must be STRONGER than the default border:
+        // surface-0 equals the page background and --color-border is only
+        // ~1.7:1 against it, invisible without the dim. bg-surface-1 lifts
+        // the panel one surface step and the muted/40 border reads clearly
+        // on the near-black page (1.4.11 non-text boundary). shadow-2xl is
+        // restated so this dialog doesn't silently lose it if the shared
+        // base ever changes.
         overlayClassName="bg-transparent"
-        className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-0)] border border-[var(--color-border)] rounded-2xl shadow-2xl">
+        className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-1)] border border-[var(--color-muted)]/40 rounded-2xl shadow-2xl">
         {/* Header with search input + date toggle */}
         <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0 border-b border-[var(--color-border)]">
           <DialogTitle className="flex items-center gap-2 text-base mb-2">

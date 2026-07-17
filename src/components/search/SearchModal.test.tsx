@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SearchModal } from './SearchModal'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -497,6 +498,30 @@ describe('SearchModal — workspace-switch arrow', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
     // closes the modal
     await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+    // Order pin (load-bearing): setActiveWorkspaceId must run BEFORE
+    // startNewSession — startNewSession clears sessionByWorkspace for the
+    // CURRENT workspace, so only the correct order leaves the TARGET
+    // workspace's slot explicitly null (fresh composer, no silent
+    // re-attach). If the two calls were swapped, this key would be
+    // undefined, not null.
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+  })
+
+  it('is a no-op switch on the ALREADY-active workspace — navigates and closes but does not detach the live session', async () => {
+    const user = userEvent.setup()
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+      useSessionStore.setState({ activeSessionId: 's-1', activeAgentId: 'agent-1', activeAgentType: 'core' })
+    })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    // The arrow says "Switch", not "New chat": the live session survives.
+    expect(useSessionStore.getState().activeSessionId).toBe('s-1')
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
   })
 
   it('does NOT collapse the group — it is a sibling control, not the toggle', async () => {
@@ -517,8 +542,10 @@ describe('SearchModal — workspace-switch arrow', () => {
     await user.click(screen.getByTestId('workspace-switch-arrow'))
 
     expect(closeSpy).toHaveBeenCalledTimes(1)
-    // The group is still expanded and its session row still rendered — the
-    // arrow click never reached the toggle button's onToggle.
+    // The group is still expanded and its session row still rendered. What
+    // this guards: the arrow must stay a SIBLING of the collapse-toggle
+    // button — nesting it inside the toggle would fire onToggle on every
+    // switch click (and be invalid HTML).
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('Session One')).toBeInTheDocument()
   })
@@ -550,5 +577,21 @@ describe('SearchModal — zero backdrop (no dim overlay)', () => {
     const overlay = screen.getByTestId('dialog-overlay')
     expect(overlay.className).not.toContain('bg-[var(--color-primary)]/80')
     expect(overlay.className).toContain('bg-transparent')
+  })
+
+  it('every OTHER dialog keeps the default 80% dim (overlayClassName plumbing must not leak)', () => {
+    // Renders the shared DialogContent directly with no overlayClassName —
+    // the other half of the contract: a regression that defaulted all
+    // overlays to transparent would ship silently without this.
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>plain dialog</DialogTitle>
+        </DialogContent>
+      </Dialog>,
+    )
+    const overlay = screen.getByTestId('dialog-overlay')
+    expect(overlay.className).toContain('bg-[var(--color-primary)]/80')
+    expect(overlay.className).not.toContain('bg-transparent')
   })
 })
