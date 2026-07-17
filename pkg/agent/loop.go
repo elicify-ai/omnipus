@@ -1762,7 +1762,11 @@ func registerSharedTools(
 				// never rebuilt on reload.
 				al.mu.Lock()
 				if al.browserCoordinator == nil {
-					al.browserCoordinator = browser.NewBrowserCoordinator(al.homePath, browserCfg, cfg.Tools.Browser.MaxTotalTabs)
+					al.browserCoordinator = browser.NewBrowserCoordinator(
+						al.homePath,
+						browserCfg,
+						cfg.Tools.Browser.MaxTotalTabs,
+					)
 				} else {
 					al.browserCoordinator.ApplyRuntimeConfig(browserCfg, cfg.Tools.Browser.MaxTotalTabs)
 				}
@@ -9637,7 +9641,10 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 // registers them only for agentID != "main". The steering prompt still
 // degrades gracefully there: the model simply reports it doesn't have that
 // capability instead of the turn erroring.
-func (al *AgentLoop) applyMemoryCommandPrompt(raw string, opts *processOptions) (matched bool, handled bool, reply string) {
+func (al *AgentLoop) applyMemoryCommandPrompt(
+	raw string,
+	opts *processOptions,
+) (matched bool, handled bool, reply string) {
 	cmdName, ok := commands.CommandName(raw)
 	if !ok {
 		return false, false, ""

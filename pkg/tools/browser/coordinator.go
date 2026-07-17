@@ -164,7 +164,11 @@ const defaultTotalTabs = 30
 // CDP handshake for seconds). Concurrent Register callers serialize on the
 // single-flight launch (c.launching / c.launchDone); the winner launches, the
 // losers wait and then observe c.launched.
-func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *BrowserManager) (cdpURL string, browserCtxID cdp.BrowserContextID, err error) {
+func (c *BrowserCoordinator) Register(
+	ctx context.Context,
+	agentID string,
+	mgr *BrowserManager,
+) (cdpURL string, browserCtxID cdp.BrowserContextID, err error) {
 	if agentID == "" {
 		return "", "", fmt.Errorf("browser: coordinator.Register requires a non-empty agentID")
 	}
@@ -207,12 +211,19 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 	agentCtx, agentCancel := chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext())
 	if err := chromedp.Run(agentCtx); err != nil {
 		agentCancel()
-		return "", "", fmt.Errorf("browser: coordinator: failed to create browser context for agent %q: %w", agentID, err)
+		return "", "", fmt.Errorf(
+			"browser: coordinator: failed to create browser context for agent %q: %w",
+			agentID,
+			err,
+		)
 	}
 	bid := chromedp.FromContext(agentCtx).BrowserContextID
 	if bid == "" {
 		agentCancel()
-		return "", "", fmt.Errorf("browser: coordinator: browser context for agent %q came back with an empty id", agentID)
+		return "", "", fmt.Errorf(
+			"browser: coordinator: browser context for agent %q came back with an empty id",
+			agentID,
+		)
 	}
 
 	c.mu.Lock()
@@ -358,16 +369,28 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTota
 	oldCfg := c.cfg
 	c.mu.Unlock()
 	if oldCfg.Headless != newCfg.Headless {
-		logger.WarnCF("browser", "coordinator: tools.browser.headless changed on reload — applies after gateway restart (Chrome already running)", map[string]any{
-			"old": oldCfg.Headless,
-			"new": newCfg.Headless,
-		})
+		logger.WarnCF(
+			"browser",
+			"coordinator: tools.browser.headless changed on reload — applies after gateway restart (Chrome already running)",
+			map[string]any{
+				"old": oldCfg.Headless,
+				"new": newCfg.Headless,
+			},
+		)
 	}
 	if oldCfg.ExecPath != newCfg.ExecPath {
-		logger.WarnCF("browser", "coordinator: tools.browser.exec_path changed on reload — applies after gateway restart (Chrome already running)", nil)
+		logger.WarnCF(
+			"browser",
+			"coordinator: tools.browser.exec_path changed on reload — applies after gateway restart (Chrome already running)",
+			nil,
+		)
 	}
 	if oldCfg.ProfileDir != newCfg.ProfileDir {
-		logger.WarnCF("browser", "coordinator: tools.browser.profile_dir changed on reload — applies after gateway restart (Chrome already running)", nil)
+		logger.WarnCF(
+			"browser",
+			"coordinator: tools.browser.profile_dir changed on reload — applies after gateway restart (Chrome already running)",
+			nil,
+		)
 	}
 }
 
@@ -496,6 +519,7 @@ func (c *BrowserCoordinator) contextCount() int {
 	defer c.mu.Unlock()
 	return len(c.contexts)
 }
+
 func (c *BrowserCoordinator) managerCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -657,7 +681,11 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 			})
 		}
 	} else {
-		logger.WarnCF("browser", "coordinator: could not capture Chrome pid — ownership marker NOT written (preflight identity check disabled until a pid is available)", nil)
+		logger.WarnCF(
+			"browser",
+			"coordinator: could not capture Chrome pid — ownership marker NOT written (preflight identity check disabled until a pid is available)",
+			nil,
+		)
 	}
 
 	c.mu.Lock()
@@ -744,9 +772,13 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	relaunchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := c.ensureLaunched(relaunchCtx); err != nil {
-		logger.ErrorCF("browser", "coordinator: proactive relaunch after crash failed (next tool call will retry)", map[string]any{
-			"error": err.Error(),
-		})
+		logger.ErrorCF(
+			"browser",
+			"coordinator: proactive relaunch after crash failed (next tool call will retry)",
+			map[string]any{
+				"error": err.Error(),
+			},
+		)
 	}
 }
 

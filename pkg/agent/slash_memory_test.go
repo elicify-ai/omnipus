@@ -16,7 +16,7 @@ import (
 // TestApplyMemoryCommandPrompt_Matrix verifies the rewrite for all three
 // commands, with and without trailing args.
 func TestApplyMemoryCommandPrompt_Matrix(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	type row struct {
@@ -163,7 +163,7 @@ func TestApplyMemoryCommandPrompt_Precedence(t *testing.T) {
 // main agent; the model is left to report the missing capability rather than
 // the turn erroring.
 func TestApplyMemoryCommandPrompt_MainAgentDegradesGracefully(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	opts := &processOptions{SessionKey: "test-session", UserMessage: "/retrospective"}
@@ -172,6 +172,9 @@ func TestApplyMemoryCommandPrompt_MainAgentDegradesGracefully(t *testing.T) {
 		t.Fatalf("matched=%v handled=%v, want matched=true handled=false", matched, handled)
 	}
 	if !strings.Contains(opts.UserMessage, "run_retrospective") {
-		t.Fatalf("UserMessage=%q must still contain the steering prompt regardless of which agent handles the turn", opts.UserMessage)
+		t.Fatalf(
+			"UserMessage=%q must still contain the steering prompt regardless of which agent handles the turn",
+			opts.UserMessage,
+		)
 	}
 }

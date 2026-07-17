@@ -217,7 +217,12 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	// fails, that reservation MUST be returned (releaseGlobalTab) so the budget
 	// doesn't grow permanently conservative on every failed open.
 	if ok, reason := t.mgr.reserveGlobalTab(); !ok {
-		return tools.ErrorResult(fmt.Sprintf("browser_open_tab: global tab budget reached (%s) — close a tab with browser_close_tab first", reason))
+		return tools.ErrorResult(
+			fmt.Sprintf(
+				"browser_open_tab: global tab budget reached (%s) — close a tab with browser_close_tab first",
+				reason,
+			),
+		)
 	}
 
 	tab, err := t.mgr.OpenTab(defaultSessionID)

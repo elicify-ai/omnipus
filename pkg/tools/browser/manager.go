@@ -623,11 +623,6 @@ func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	return m.execPath.resolve(ctx, m.cfg)
 }
 
-// cacheExecPath / cacheExecPathFailure remain as thin wrappers for any external
-// caller; the caching itself now lives in execPathCaches (exec_resolver.go).
-func (m *BrowserManager) cacheExecPath(path string)      { m.execPath.cacheSuccess(path) }
-func (m *BrowserManager) cacheExecPathFailure(err error) { m.execPath.cacheFailure(err) }
-
 // execPathNegativeCacheTTL bounds how long a failed resolution is remembered
 // (and returned verbatim, without re-probing) before resolveExecPath retries
 // the real PATH/managed resolution. Long enough that a dead host's repeated

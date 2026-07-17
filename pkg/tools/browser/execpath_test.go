@@ -315,7 +315,7 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 // when cfg.ExecPath is set to a real executable file, resolveExecPath returns
 // it verbatim and NEVER probes $PATH — proven via a decoy google-chrome on
 // PATH that records itself (mkdir is atomic, so concurrent-safe) if its probe
-// ever ran. The override is an operator trust: honoured as-is after the
+// ever ran. The override is an operator trust: honored as-is after the
 // stat/dir/exec-bit check instead of being silently replaced by a discovered
 // binary.
 func TestResolveExecPath_ExecPathOverride_ReturnedVerbatim_NoProbe(t *testing.T) {
