@@ -30,11 +30,12 @@ import (
 var allowlistedRawFSFiles = map[string]string{
 	"resolvepath.go": "the sanctioned I/O layer itself — PathHandle's methods " +
 		"(and their host-mode branches) are the only place raw os/os.Root I/O may live.",
-	"filesystem.go": "the legacy validators (validatePathWithAllowPaths, " +
-		"resolveAbsPath, guardMetadataPath) kept for the not-yet-migrated " +
-		"defect tools (send_file.go, web_serve.go via ValidateWorkspacePath) " +
-		"plus the metadata-guard's own symlink resolution — see the file's " +
-		"top-of-function comments for why each is kept.",
+	"filesystem.go": "resolveAbsPath's own filepath.EvalSymlinks call, used " +
+		"only by guardMetadataPath (the agents/<id>/(SOUL|HEARTBEAT|MEMORY|" +
+		"AGENT).md fail-closed guard) to resolve a caller-supplied path " +
+		"argument for a basename match BEFORE the real ResolvePath-backed " +
+		"I/O runs — it performs no data I/O itself and cannot grant " +
+		"filesystem access on its own.",
 	"skills_install.go": "installs into the GLOBAL, identifier-validated " +
 		"skills registry ($OMNIPUS_HOME/skills/<id>/), never a caller-" +
 		"supplied workspace path — the follow-up defects wave routes it " +
