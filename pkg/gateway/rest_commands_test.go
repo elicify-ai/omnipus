@@ -79,8 +79,10 @@ func parseCommandsResponse(t *testing.T, w *httptest.ResponseRecorder) []gen.Sla
 	return cmds
 }
 
-// TestHandleListCommands_Web verifies surface=web returns exactly 6 commands.
+// TestHandleListCommands_Web verifies surface=web returns exactly 9 commands.
 // Post ADR-026: /skill+/use removed; /skills and /agents gained the web surface.
+// The three memory commands (remember/recall/retrospective) are also
+// all-surface (agent-delivery), bringing the web count from 6 to 9.
 func TestHandleListCommands_Web(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
@@ -90,17 +92,20 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 6 {
-		t.Errorf("web: expected 6 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 9 {
+		t.Errorf("web: expected 9 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	wantNames := map[string]bool{
-		"new":  true,
-		"help":   true,
-		"model":  true,
-		"cancel": true,
-		"agents": true,
-		"skills": true,
+		"new":           true,
+		"help":          true,
+		"model":         true,
+		"cancel":        true,
+		"agents":        true,
+		"skills":        true,
+		"remember":      true,
+		"recall":        true,
+		"retrospective": true,
 	}
 	for _, c := range cmds {
 		if !wantNames[c.Name] {
@@ -113,8 +118,9 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_CLI verifies surface=cli returns all 10 canonical commands.
-// Post ADR-026: /skill (singular) removed, so the canonical set is 10 (was 11).
+// TestHandleListCommands_CLI verifies surface=cli returns all 13 canonical commands.
+// Post ADR-026: /skill (singular) removed, so the canonical set was 10 (was 11);
+// the memory commands (remember/recall/retrospective) bring it to 13.
 func TestHandleListCommands_CLI(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "cli", true)
@@ -124,8 +130,8 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 10 {
-		t.Errorf("cli: expected 10 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 13 {
+		t.Errorf("cli: expected 13 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	allCanonical := []string{
@@ -139,6 +145,9 @@ func TestHandleListCommands_CLI(t *testing.T) {
 		"channels",
 		"status",
 		"config",
+		"remember",
+		"recall",
+		"retrospective",
 	}
 	nameSet := make(map[string]bool, len(cmds))
 	for _, c := range cmds {
@@ -151,7 +160,7 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_Channel verifies surface=channel returns all 10 commands.
+// TestHandleListCommands_Channel verifies surface=channel returns all 13 commands.
 func TestHandleListCommands_Channel(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "channel", true)
@@ -161,8 +170,8 @@ func TestHandleListCommands_Channel(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 10 {
-		t.Errorf("channel: expected 10 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 13 {
+		t.Errorf("channel: expected 13 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 }
 
@@ -177,9 +186,9 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 6 {
+	if len(cmds) != 9 {
 		t.Errorf(
-			"default surface (web): expected 6 commands, got %d: %v",
+			"default surface (web): expected 9 commands, got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -196,9 +205,9 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 6 {
+	if len(cmds) != 9 {
 		t.Errorf(
-			"unknown surface should default to web (6 cmds), got %d: %v",
+			"unknown surface should default to web (9 cmds), got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -232,24 +241,39 @@ func TestHandleListCommands_MethodNotAllowed(t *testing.T) {
 }
 
 // TestHandleListCommands_DeliveryFields verifies delivery field values (FR-007, US-3/AS-5, TDD #10).
+//
+// Post ADR-026, /agents and /skills became client commands (D7/D9 — they open
+// the in-header selector / filter the menu instead of reaching the agent).
+// That is no longer true of every web command: the memory commands
+// (remember/recall/retrospective) are deliberately agent-delivery — the SPA
+// inserts the text and forwards it so the agent loop can rewrite it into a
+// steering prompt (see pkg/agent/loop.go applyMemoryCommandPrompt). This test
+// therefore asserts per-command expected delivery rather than "all web
+// commands are client".
 func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
 	cmds := parseCommandsResponse(t, w)
 
-	// Post ADR-026: all web commands are client-delivered (D7/D9 made /agents and
-	// /skills client commands that open the in-header selector / filter the menu).
 	clientCmds := map[string]bool{
-		"new":  true,
+		"new":    true,
 		"help":   true,
 		"model":  true,
 		"cancel": true,
 		"agents": true,
 		"skills": true,
 	}
+	agentCmds := map[string]bool{
+		"remember":      true,
+		"recall":        true,
+		"retrospective": true,
+	}
 
+	seen := make(map[string]bool, len(cmds))
 	for _, c := range cmds {
-		if clientCmds[c.Name] {
+		seen[c.Name] = true
+		switch {
+		case clientCmds[c.Name]:
 			if c.Delivery != gen.SlashCommandDeliveryClient {
 				t.Errorf(
 					"%q: Delivery=%q, want %q",
@@ -258,6 +282,27 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 					gen.SlashCommandDeliveryClient,
 				)
 			}
+		case agentCmds[c.Name]:
+			if c.Delivery != gen.SlashCommandDeliveryAgent {
+				t.Errorf(
+					"%q: Delivery=%q, want %q",
+					c.Name,
+					c.Delivery,
+					gen.SlashCommandDeliveryAgent,
+				)
+			}
+		default:
+			t.Errorf("%q: unexpected web command not covered by either delivery expectation", c.Name)
+		}
+	}
+	for name := range clientCmds {
+		if !seen[name] {
+			t.Errorf("expected client command %q missing from web response", name)
+		}
+	}
+	for name := range agentCmds {
+		if !seen[name] {
+			t.Errorf("expected agent command %q missing from web response", name)
 		}
 	}
 }

@@ -9103,6 +9103,17 @@ func (al *AgentLoop) handleCommand(
 		return reply, handled
 	}
 
+	// applyMemoryCommandPrompt runs after the skill hook and before dispatch
+	// (same seam as applyExplicitSkillCommand above). Since /remember, /recall,
+	// and /retrospective are registered builtins (pkg/commands/cmd_memory.go),
+	// applyExplicitSkillCommand's own builtin-wins check already returns
+	// matched=false for these three names, so this hook is what actually
+	// rewrites their turn. See applyMemoryCommandPrompt's doc comment for why
+	// a rewrite hook is used instead of a Handler.
+	if matched, handled, reply := al.applyMemoryCommandPrompt(msg.Content, opts); matched {
+		return reply, handled
+	}
+
 	if al.cmdRegistry == nil {
 		return "", false
 	}
@@ -9242,6 +9253,48 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 	}
 
 	// Return matched=true, handled=false so the turn continues to the LLM.
+	return true, false, ""
+}
+
+// applyMemoryCommandPrompt rewrites opts.UserMessage into a steering prompt
+// for the three memory slash commands (/remember, /recall, /retrospective)
+// and lets the turn continue to the LLM afterward. Templates live in
+// commands.MemoryCommandSteeringPrompt (pkg/commands/cmd_memory.go).
+//
+// Constraint — why a rewrite hook and not a commands.Definition.Handler:
+// a Handler runs synchronously inside Executor.executeDefinition and replies
+// immediately (pkg/commands/executor.go), which short-circuits the turn
+// BEFORE the LLM ever sees it. These three commands need the model itself to
+// invoke a real tool (remember / recall_memory / recall_conversation /
+// run_retrospective) and shape its reply from the tool's actual output, so
+// their Definitions are registered with Handler: nil (passthrough, per
+// executor.go's OutcomePassthrough) and this hook does the rewrite instead —
+// mirroring how applyExplicitSkillCommand rewrites opts.UserMessage for
+// one-shot skill activation above.
+//
+// Known nuance: agentID "main" (the gateway/router agent) is never given the
+// remember / recall_memory / run_retrospective tools — pkg/agent/instance.go
+// registers them only for agentID != "main". The steering prompt still
+// degrades gracefully there: the model simply reports it doesn't have that
+// capability instead of the turn erroring.
+func (al *AgentLoop) applyMemoryCommandPrompt(raw string, opts *processOptions) (matched bool, handled bool, reply string) {
+	cmdName, ok := commands.CommandName(raw)
+	if !ok {
+		return false, false, ""
+	}
+
+	args := commands.CommandArgs(raw)
+	prompt, ok := commands.MemoryCommandSteeringPrompt(cmdName, args)
+	if !ok {
+		return false, false, ""
+	}
+
+	if opts != nil {
+		opts.UserMessage = prompt
+	}
+
+	// matched=true, handled=false: the turn continues to the LLM with the
+	// rewritten steering prompt as its user message.
 	return true, false, ""
 }
 

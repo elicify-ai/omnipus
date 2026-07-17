@@ -19,7 +19,8 @@ func findDefinitionByName(t *testing.T, defs []Definition, name string) Definiti
 
 // TestBuiltinHelpHandler_ReturnsFormattedMessage verifies /help lists the
 // canonical noun commands (not the hidden deprecated ones) for the caller's surface.
-// Updated for D1: /skill and /use are hard-removed; the canonical count is now 10.
+// Updated for D1: /skill and /use are hard-removed; and for the memory commands
+// (remember/recall/retrospective) — the canonical count is now 13.
 func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 	defs := BuiltinDefinitions()
 	helpDef := findDefinitionByName(t, defs, "help")
@@ -27,7 +28,8 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 		t.Fatalf("/help handler should not be nil")
 	}
 
-	// Call from CLI surface — should see the 10 canonical commands (skill removed).
+	// Call from CLI surface — should see the 13 canonical commands (skill removed;
+	// remember/recall/retrospective added).
 	var reply string
 	err := helpDef.Handler(context.Background(), Request{
 		Channel: "cli",
@@ -41,9 +43,10 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 		t.Fatalf("/help handler error: %v", err)
 	}
 
-	// Canonical commands must appear (10; /skill hard-removed per D1;
-	// /clear renamed to /new with 'clear' as a hidden alias).
-	for _, name := range []string{"new", "help", "model", "cancel", "agents", "tasks", "skills", "channels", "status", "config"} {
+	// Canonical commands must appear (13; /skill hard-removed per D1;
+	// /clear renamed to /new with 'clear' as a hidden alias;
+	// remember/recall/retrospective added).
+	for _, name := range []string{"new", "help", "model", "cancel", "agents", "tasks", "skills", "channels", "status", "config", "remember", "recall", "retrospective"} {
 		if !strings.Contains(reply, "/"+name) {
 			t.Errorf("/help cli: missing /%s in output:\n%s", name, reply)
 		}
