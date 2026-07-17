@@ -190,6 +190,84 @@ func TestRunTurn_WorkspacelessAgentRefused(t *testing.T) {
 		"a refused turn must not create any workspace directory")
 }
 
+// TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage (ADR-046 P1,
+// FR-007/008) is a SECOND, harness-independent proof of the same P0 property
+// TestRunTurn_WorkspacelessAgentRefused pins, reached through a DIFFERENT
+// entry point: al.processMessage (the channel/board-task-origin path — see
+// TestRunTurn_MemberGetsWorkspaceWorkDir's sibling coverage of the MEMBER
+// case via this same entry point), not al.ProcessDirect. This matters
+// because the shared test harness (mustNewAgentLoop ->
+// ensureTestWorkspaceMembership, test_helpers_test.go) auto-seeds workspace
+// membership for essentially every agent id in this package's ~100 other
+// tests — masking the FR-008 refusal gate everywhere except the one test
+// that deliberately opts out of it. This test opts out too (NewAgentLoop
+// directly, no workspaces/ directory at all) but drives the turn through a
+// second, independent code path so the P0 "member of no workspace = refused"
+// property isn't protected by exactly one entry point/test in the whole
+// suite.
+func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpHome)
+
+	agentWorkspaceDir := filepath.Join(tmpHome, "agents", "main")
+	require.NoError(t, os.MkdirAll(agentWorkspaceDir, 0o755))
+
+	// No workspaces/ directory at all — "main" is a member of nothing.
+	provider := testutil.NewScenario().
+		WithToolCall("write_file", `{"path":"proof.txt","content":"should-never-land","overwrite":true}`).
+		WithText("done")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:                agentWorkspaceDir,
+				ModelName:           "scripted-model",
+				MaxTokens:           4096,
+				MaxToolIterations:   10,
+				RestrictToWorkspace: true,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	al, err := NewAgentLoop(cfg, msgBus, provider)
+	require.NoError(t, err, "NewAgentLoop must succeed")
+	defer al.Close()
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
+	})
+
+	ctx := context.Background()
+	// Same entry point TestRunTurn_MemberGetsWorkspaceWorkDir uses for the
+	// MEMBER case, but with no workspace at all — and, unlike that test, no
+	// metadata workspace_id either, so the refusal isn't merely "explicit id
+	// not found" but the identity-only FindForAgentPreferring path (mirrors
+	// a plain channel message with no workspace binding).
+	_, _, procErr := al.processMessage(ctx, bus.InboundMessage{
+		Channel:    "cli",
+		ChatID:     "direct",
+		Content:    "please write proof.txt for me",
+		SessionKey: "test-session-workspaceless-refused-via-process-message",
+	})
+	require.Error(t, procErr, "a turn for an agent that is a member of no workspace must be refused")
+	assert.True(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
+		"refusal error must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)
+
+	privateFile := filepath.Join(agentWorkspaceDir, "proof.txt")
+	_, statErr := os.Stat(privateFile)
+	assert.True(t, os.IsNotExist(statErr),
+		"write_file must NOT land in the agent's own directory when the turn is refused (%s)", privateFile)
+
+	workspacesDir := filepath.Join(tmpHome, "workspaces")
+	_, wsStatErr := os.Stat(workspacesDir)
+	assert.True(t, os.IsNotExist(wsStatErr),
+		"a refused turn must not create any workspace directory")
+}
+
 // TestRunTurn_MemberGetsWorkspaceWorkDir (ADR-046 P1, FR-007, US-2 AS-1)
 // proves the turn resolves its working dir from the EXPLICIT turn workspace
 // (meta.WorkspaceID -> opts.WorkspaceID -> FindForAgentPreferring), not just

@@ -447,6 +447,44 @@ func ensureBuiltinRosterPresent(home string, w storedWorkspace, cfg *config.Conf
 	return nil
 }
 
+// logWorkspacelessAgents is a boot-time diagnostic (ADR-046 P1, FR-007/008):
+// it enumerates every configured agent (cfg.Agents.List) that is a member of
+// NO workspace's CoreTeam and emits ONE WARN naming all of them, if any
+// exist. Called once at boot, after ensureDefaultWorkspace has run, so an
+// operator upgrading an install with pre-existing custom agents sees the
+// full list up front — rather than discovering it only as per-turn
+// ErrAgentNotWorkspaceMember refusals, one agent at a time, as those agents
+// happen to be invoked.
+//
+// This is diagnostic ONLY: it never mutates any workspace or agent — FR-008
+// forbids auto-adding a pre-existing/custom agent to any team, and that rule
+// applies here too. The operator remedy is manual: add the agent to a
+// workspace's Team tab.
+func logWorkspacelessAgents(home string, cfg *config.Config) {
+	if cfg == nil || len(cfg.Agents.List) == 0 {
+		return
+	}
+	var workspaceless []string
+	for i := range cfg.Agents.List {
+		id := cfg.Agents.List[i].ID
+		if id == "" {
+			continue
+		}
+		if _, found := workspace.FindForAgent(home, id); !found {
+			workspaceless = append(workspaceless, id)
+		}
+	}
+	if len(workspaceless) == 0 {
+		return
+	}
+	sort.Strings(workspaceless)
+	slog.Warn(
+		"gateway: configured agents are members of no workspace — they cannot execute a turn until added to a workspace's Team tab (ADR-046 P1, FR-007/008)",
+		"agent_ids", strings.Join(workspaceless, ","),
+		"count", len(workspaceless),
+	)
+}
+
 // HandleWorkspaces dispatches all /api/v1/workspaces* requests.
 func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")

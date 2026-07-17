@@ -111,8 +111,20 @@ func TestProcessTaskDirect_ExternalCLIWorker_DispatchesViaExternalCLI(t *testing
 	if opts[0].Input != wantInput {
 		t.Errorf("driver input = %q, want %q", opts[0].Input, wantInput)
 	}
-	if opts[0].WorkDir != workspace {
-		t.Errorf("driver WorkDir = %q, want the agent's own workspace %q", opts[0].WorkDir, workspace)
+	// ADR-046 P1 (FR-007/008): WorkDir is always the resolved workspace's
+	// work/ dir now, not agent.Home — newExternalCLITaskTestLoop's
+	// mustNewAgentLoop call auto-seeds "ext-agent" into the shared
+	// test-harness workspace (test_helpers_test.go), so resolve the SAME way
+	// runExternalCLISubTurn itself does rather than hardcoding that
+	// workspace's id here. SOUL.md above is still read from agent.Home
+	// (workspace) — persona resolution is a separate, unaffected mechanism
+	// from working-directory resolution.
+	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse("ext-agent", "")
+	if wsErr != nil {
+		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
+	}
+	if opts[0].WorkDir != wantWorkDir {
+		t.Errorf("driver WorkDir = %q, want the resolved workspace's work/ dir %q", opts[0].WorkDir, wantWorkDir)
 	}
 }
 

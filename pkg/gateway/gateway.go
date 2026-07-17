@@ -2139,6 +2139,17 @@ func setupAndStartServices(
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
 
+	// ADR-046 P1 (FR-007/008): execution is workspace-scoped, and the system
+	// deliberately never auto-adds a custom/pre-existing agent to any
+	// workspace team (FR-008 — no silent global-roster membership). That is
+	// correct for a fresh install (ensureDefaultWorkspace seeds the built-in
+	// roster) but means an operator upgrading an install with pre-existing
+	// CUSTOM agents can end up with agents that silently cannot execute at
+	// all until manually added via a workspace's Team tab — previously only
+	// discoverable one per-turn refusal at a time. Surface the full list ONCE
+	// at boot, after workspaces are ensured, so it's visible up front instead.
+	logWorkspacelessAgents(homePath, cfg)
+
 	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
 	// Runs before the HTTP listener accepts connections (StartAll, below), so no
 	// handler can race reconciliation.

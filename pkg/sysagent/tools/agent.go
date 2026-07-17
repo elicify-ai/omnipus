@@ -369,6 +369,13 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 // from within a workspace's turn context joins THAT workspace's team only —
 // never any other, and never seeds a Delegation[] trust edge (FR-038:
 // expanding a workspace team must not create or imply delegation trust).
+//
+// wsID here is the caller's tools.ToolWorkspaceID(ctx) — the channel-bound
+// turn workspace id that memory routing uses — which is a different,
+// independent signal from the identity-resolved workspace
+// workspace.FindForAgentPreferring keys off (CoreTeam membership) for
+// execution/work-dir purposes; the two can diverge, exactly as pkg/agent/loop.go's
+// runTurn documents for its own mirrored resolution.
 func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) error {
 	w, err := readWorkspaceFromDisk(t.deps.Home, wsID)
 	if err != nil {

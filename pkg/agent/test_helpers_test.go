@@ -211,33 +211,37 @@ func seedTestWorkspaceMembershipForIDs(t *testing.T, ids []string) {
 // cfg will register with NewAgentRegistry: DefaultAgentID ("main", always
 // registered as the synthetic default/fallback agent regardless of cfg — see
 // NewAgentRegistry in registry.go) plus every explicit, non-reserved ID in
-// cfg.Agents.List — EXCEPT an agent configured with an external-CLI executor
-// (Subagents.Executor.Kind == config.ExecutorKindExternalCLI).
+// cfg.Agents.List — INCLUDING an agent configured with an external-CLI
+// executor (Subagents.Executor.Kind == config.ExecutorKindExternalCLI).
 //
-// That exclusion matters: dispatch to an external-CLI worker runs through
-// external_dispatch.go's runExternalCLISubTurn, a SEPARATE, PRE-EXISTING code
-// path this ADR-046 P1 change does not touch — it never reaches loop.go's
-// membership-refusal gate, so an external-CLI worker never NEEDS seeded
-// membership to execute. Worse, GIVING it membership would be actively
-// wrong: that same pre-existing (unrelated) function has its OWN
-// CoreTeam-based re-root override ("if this agent is a workspace CoreTeam
-// member, use the workspace's work/ dir instead of its own"), which several
-// tests (subturn_target_identity_test.go's
-// TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig,
+// External-CLI agents are NOT excluded (a prior version of this function
+// excluded them): external_dispatch.go's runExternalCLISubTurn now calls the
+// EXACT SAME shared gate (resolveTurnWorkDirOrRefuse, workspace_reroot.go)
+// loop.go's runTurn does — a 7-reviewer gate found the prior asymmetry (the
+// external-cli path silently falling through to agent.Home for a non-member)
+// a BLOCK. So an external-CLI agent now needs seeded membership to execute,
+// exactly like a native one — no exception by dispatch kind.
+//
+// A test whose whole point is asserting WHICH workspace a dispatch resolves
+// to (subturn_target_identity_test.go's identity-source regression tests;
 // task_executor_external_cli_test.go's
-// TestProcessTaskDirect_ExternalCLIWorker_DispatchesViaExternalCLI) rely on
-// NOT firing so they can assert the worker resolves its OWN private
-// per-agent directory. Seeding those IDs would false-positive-trigger that
-// override and break both tests.
+// TestProcessTaskDirect_ExternalCLIWorker_DispatchesViaExternalCLI) must NOT
+// rely on this shared, catch-all seeding for the id(s) it cares about —
+// every id this function seeds lands in the SAME shared workspace
+// (testHarnessWorkspaceMembershipID), so two different agents seeded here
+// are indistinguishable members of one workspace, which would mask a bug
+// that resolves the wrong agent's identity (e.g. the parent's instead of the
+// delegation target's) since both would still land in the same place. Such
+// a test must instead persist its OWN dedicated workspace file (listing only
+// the id(s) it cares about) BEFORE calling mustNewAgentLoop —
+// seedTestWorkspaceMembershipForIDs skips any id workspace.FindForAgent
+// already resolves, so a pre-existing dedicated file keeps that id out of
+// the shared one and preserves the test's isolation.
 //
-// A NATIVE agent (no external-CLI executor) dispatches through al.runTurn —
-// the actual code this task modified — so it DOES need seeded membership;
-// once seeded, it is (correctly, by design) re-rooted to its workspace's
-// work/ dir too, same as any other member. A test asserting a native agent's
-// OWN private per-agent directory (rather than a workspace's work/) is
-// testing a premise ADR-046 P1 retired — see
-// TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools, updated
-// to assert workspace-relative resolution instead.
+// A test asserting an agent's OWN private per-agent directory (rather than
+// a workspace's work/) — for either dispatch kind — is testing a premise
+// ADR-046 P1 retired; see TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools,
+// updated to assert workspace-relative resolution instead.
 func testHarnessAgentIDs(cfg *config.Config) []string {
 	ids := []string{DefaultAgentID}
 	if cfg == nil {
@@ -246,10 +250,6 @@ func testHarnessAgentIDs(cfg *config.Config) []string {
 	seen := map[string]bool{DefaultAgentID: true}
 	for _, a := range cfg.Agents.List {
 		if a.ID == "" || seen[a.ID] {
-			continue
-		}
-		if a.Subagents != nil && a.Subagents.Executor != nil &&
-			a.Subagents.Executor.Kind == config.ExecutorKindExternalCLI {
 			continue
 		}
 		seen[a.ID] = true

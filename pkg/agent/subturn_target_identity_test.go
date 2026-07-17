@@ -66,6 +66,26 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 			},
 		},
 	}
+	// ADR-046 P1 (FR-007/008): dispatch is always workspace-scoped, so
+	// "ext-worker" needs CoreTeam membership to execute at all. Persist a
+	// DEDICATED workspace listing ONLY "ext-worker" — deliberately NOT the
+	// shared test-harness workspace mustNewAgentLoop would otherwise seed it
+	// into (testHarnessAgentIDs' doc comment) — so this stays a genuine
+	// identity-source regression check: if dispatch ever mistakenly resolved
+	// the PARENT's identity instead of the TARGET's, the parent (a member of
+	// the shared harness workspace only) would NOT be a member of this
+	// workspace and the run would be refused rather than silently
+	// succeeding in the wrong place.
+	workerWsDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(workerWsDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspaces dir: %v", err)
+	}
+	wsJSON := `{"id":"ext-worker-ws","core_team":["ext-worker"]}`
+	if err := os.WriteFile(filepath.Join(workerWsDir, "ext-worker-ws.json"), []byte(wsJSON), 0o644); err != nil {
+		t.Fatalf("write dedicated workspace record: %v", err)
+	}
+	wantWorkDir := filepath.Join(workerWsDir, "ext-worker-ws", "work")
+
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 
 	// The delegating PARENT is the registry's default "main" agent: it has NO
@@ -120,9 +140,12 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 	if len(opts) != 1 {
 		t.Fatalf("driver Run called %d times, want 1 (dispatch must have gone external-cli)", len(opts))
 	}
-	if opts[0].WorkDir != workerWorkspace {
-		t.Errorf("WorkDir = %q, want the TARGET worker's own workspace %q (not the parent's %q)",
-			opts[0].WorkDir, workerWorkspace, parentWorkspace)
+	// ADR-046 P1: WorkDir is always the resolved workspace's work/ dir,
+	// keyed off the TARGET's identity — never the parent's workspace, and
+	// never the target's raw agent.Home (workerWorkspace) either.
+	if opts[0].WorkDir != wantWorkDir {
+		t.Errorf("WorkDir = %q, want the TARGET worker's own workspace's work/ dir %q (not the parent's %q, not the target's raw Home %q)",
+			opts[0].WorkDir, wantWorkDir, parentWorkspace, workerWorkspace)
 	}
 	if opts[0].Model != "claude-sonnet-4.6" {
 		t.Errorf("Model = %q, want the TARGET worker's own configured model %q",
