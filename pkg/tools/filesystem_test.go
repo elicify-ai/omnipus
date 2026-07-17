@@ -404,6 +404,19 @@ func TestFilesystemTool_ReadFile_RejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestFilesystemTool_EmptyWorkspace_AccessDenied is the ADR-046 adaptation of
+// the pre-existing "empty workspace fails closed" regression guard. Under
+// the OLD architecture, workspace=="" was a distinguished misconfiguration
+// state (getSafeRelPath/validatePathWithAllowPaths special-cased it with the
+// literal "workspace is not defined" error). Under the NEW architecture,
+// agentHome=="" is a well-defined fallback — fspolicy.EffectiveFSPolicy
+// resolves WorkDir to the process's own cwd rather than treating it as an
+// error — so the exact legacy message no longer applies. The SECURITY
+// PROPERTY this test guards (an agent tool constructed with no home cannot
+// reach an arbitrary absolute path outside its effective root under a
+// Confined scope) still holds: it is now enforced by ResolvePath's
+// ErrOutsideScope refusal, surfaced via the structured permission_denied
+// JSON convention instead of the old bespoke string.
 func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 	tool := NewReadFileTool("", true, MaxReadFileSize) // restrict=true but workspace=""
 
@@ -416,11 +429,15 @@ func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 		"path": secretFile,
 	})
 
-	// We EXPECT IsError=true (access blocked due to empty workspace)
+	// We EXPECT IsError=true (access blocked: an absolute path outside the
+	// effective — process-cwd-fallback — working directory under Confined
+	// scope).
 	assert.True(t, result.IsError, "Security Regression: Empty workspace allowed access! content: %s", result.ForLLM)
 
-	// Verify it failed for the right reason
-	assert.Contains(t, result.ForLLM, "workspace is not defined", "Expected 'workspace is not defined' error")
+	// Verify it failed for the right reason: the structured permission_denied
+	// convention, carrying the ErrOutsideScope classification.
+	assert.Contains(t, result.ForLLM, "permission_denied", "Expected the structured permission_denied error shape")
+	assert.Contains(t, result.ForLLM, "access denied", "Expected the ErrOutsideScope reason text")
 }
 
 // TestRootMkdirAll verifies that root.MkdirAll (used by atomicWriteFileInRoot) handles all cases:
@@ -478,7 +495,9 @@ func TestFilesystemTool_WriteFile_Restricted_CreateDir(t *testing.T) {
 	assert.Equal(t, content, string(data))
 }
 
-// TestHostRW_Read_PermissionDenied verifies that hostRW.Read surfaces access denied errors.
+// TestHostRW_Read_PermissionDenied verifies that the host-mode PathHandle
+// (fspolicy.FSScopeUnrestricted — ResolvePath's root==nil branch, ported
+// from the pre-ADR-046 hostFs) surfaces access denied errors.
 func TestHostRW_Read_PermissionDenied(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		// chmod 0o000 is advisory-only on Windows; injection doesn't fire.
@@ -488,46 +507,65 @@ func TestHostRW_Read_PermissionDenied(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("skipping permission test: running as root")
 	}
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	protected := filepath.Join(tmpDir, "protected.txt")
 	err := os.WriteFile(protected, []byte("secret"), 0o000)
 	assert.NoError(t, err)
 	defer os.Chmod(protected, 0o644) // ensure cleanup
 
-	_, err = (&hostFs{}).ReadFile(protected)
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "read_file", "", FSOpRead, protected)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	_, err = handle.ReadFile()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
 
-// TestHostRW_Read_Directory verifies that hostRW.Read returns an error when given a directory path.
+// TestHostRW_Read_Directory verifies that the host-mode PathHandle returns
+// an error when given a directory path.
 func TestHostRW_Read_Directory(t *testing.T) {
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 
-	_, err := (&hostFs{}).ReadFile(tmpDir)
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "read_file", "", FSOpRead, tmpDir)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	_, err = handle.ReadFile()
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
-// TestRootRW_Read_Directory verifies that rootRW.Read returns an error when given a directory.
+// TestRootRW_Read_Directory verifies that the confined (os.Root-backed)
+// PathHandle returns an error when given a directory.
 func TestRootRW_Read_Directory(t *testing.T) {
 	workspace := t.TempDir()
-	root, err := os.OpenRoot(workspace)
-	assert.NoError(t, err)
-	defer root.Close()
 
 	// Create a subdirectory
-	err = root.Mkdir("subdir", 0o755)
+	err := os.Mkdir(filepath.Join(workspace, "subdir"), 0o755)
 	assert.NoError(t, err)
 
-	_, err = (&sandboxFs{workspace: workspace}).ReadFile("subdir")
+	handle, err := ResolvePath(context.Background(), confinedPolicy(t, workspace), "read_file", "", FSOpRead, "subdir")
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	_, err = handle.ReadFile()
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
-// TestHostRW_Write_ParentDirMissing verifies that hostRW.Write creates parent dirs automatically.
+// TestHostRW_Write_ParentDirMissing verifies that the host-mode PathHandle
+// creates parent dirs automatically.
 func TestHostRW_Write_ParentDirMissing(t *testing.T) {
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "a", "b", "c", "file.txt")
 
-	err := (&hostFs{}).WriteFile(target, []byte("hello"))
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "write_file", "", FSOpWrite, target)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile([]byte("hello"))
 	assert.NoError(t, err)
 
 	data, err := os.ReadFile(target)
@@ -535,13 +573,18 @@ func TestHostRW_Write_ParentDirMissing(t *testing.T) {
 	assert.Equal(t, "hello", string(data))
 }
 
-// TestRootRW_Write_ParentDirMissing verifies that rootRW.Write creates
-// nested parent directories automatically within the sandbox.
+// TestRootRW_Write_ParentDirMissing verifies that the confined
+// (os.Root-backed) PathHandle creates nested parent directories
+// automatically within the sandbox.
 func TestRootRW_Write_ParentDirMissing(t *testing.T) {
 	workspace := t.TempDir()
 
 	relPath := "x/y/z/file.txt"
-	err := (&sandboxFs{workspace: workspace}).WriteFile(relPath, []byte("nested"))
+	handle, err := ResolvePath(context.Background(), confinedPolicy(t, workspace), "write_file", "", FSOpWrite, relPath)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile([]byte("nested"))
 	assert.NoError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(workspace, relPath))
@@ -549,13 +592,18 @@ func TestRootRW_Write_ParentDirMissing(t *testing.T) {
 	assert.Equal(t, "nested", string(data))
 }
 
-// TestHostRW_Write verifies the hostRW.Write helper function
+// TestHostRW_Write verifies the host-mode PathHandle.WriteFile helper.
 func TestHostRW_Write(t *testing.T) {
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "atomic_test.txt")
 	testData := []byte("atomic test content")
 
-	err := (&hostFs{}).WriteFile(testFile, testData)
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "write_file", "", FSOpWrite, testFile)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile(testData)
 	assert.NoError(t, err)
 
 	content, err := os.ReadFile(testFile)
@@ -564,7 +612,7 @@ func TestHostRW_Write(t *testing.T) {
 
 	// Verify it overwrites correctly
 	newData := []byte("new atomic content")
-	err = (&hostFs{}).WriteFile(testFile, newData)
+	err = handle.WriteFile(newData)
 	assert.NoError(t, err)
 
 	content, err = os.ReadFile(testFile)
@@ -572,15 +620,19 @@ func TestHostRW_Write(t *testing.T) {
 	assert.Equal(t, newData, content)
 }
 
-// TestRootRW_Write verifies the rootRW.Write helper function
+// TestRootRW_Write verifies the confined (os.Root-backed)
+// PathHandle.WriteFile helper.
 func TestRootRW_Write(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	relPath := "atomic_root_test.txt"
 	testData := []byte("atomic root test content")
 
-	erw := &sandboxFs{workspace: tmpDir}
-	err := erw.WriteFile(relPath, testData)
+	handle, err := ResolvePath(context.Background(), confinedPolicy(t, tmpDir), "write_file", "", FSOpWrite, relPath)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile(testData)
 	assert.NoError(t, err)
 
 	root, err := os.OpenRoot(tmpDir)
@@ -597,7 +649,7 @@ func TestRootRW_Write(t *testing.T) {
 
 	// Verify it overwrites correctly
 	newData := []byte("new root atomic content")
-	err = erw.WriteFile(relPath, newData)
+	err = handle.WriteFile(newData)
 	assert.NoError(t, err)
 
 	f2, err := root.Open(relPath)

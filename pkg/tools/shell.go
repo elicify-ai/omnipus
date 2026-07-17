@@ -54,6 +54,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -509,7 +510,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		baseDir = d
 	}
 
-	cwd, cwdErr := t.resolveCWD(args, baseDir)
+	cwd, cwdErr := t.resolveCWD(ctx, args, baseDir)
 	if cwdErr != nil {
 		t.emitAudit(ctx, command, "", audit.DecisionDeny)
 		return ErrorResult(cwdErr.Error())
@@ -540,6 +541,12 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 
 	// FR-B6: route every non-god-mode invocation through sandbox.ResolveLimits.
+	// P3 (ADR-046): EffectiveFSPolicy feeds the per-child Landlock ruleset
+	// here — sandbox.ResolveLimits is where the fresh, per-call ruleset
+	// (FR-023: deny -> working dir + libs + /tmp; ask -> +approved; allow ->
+	// per the P3 spike's carve-out decision) will be computed and applied via
+	// the non-latched apply path, once the P3 kernel-sandbox rearchitecture
+	// lands. Today this remains the pre-ADR-046 god-mode/no-god-mode split.
 	lim, limErr := sandbox.ResolveLimits(t.godMode, baseDir, t.proxy, timeoutSeconds)
 	if limErr != nil {
 		return ErrorResult(fmt.Sprintf("sandbox limits error: %v", limErr))
@@ -557,53 +564,63 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 // resolveCWD resolves the optional cwd argument to an absolute path under
 // baseDir. Absolute paths are rejected outright (no escape hatch); relative
-// paths are resolved via validatePathWithAllowPaths, which also follows
-// symlinks (filepath.EvalSymlinks) before the containment check — a
-// workspace-internal symlink pointing outside the workspace is rejected the
-// same way an absolute path is (FR-B13). Empty cwd defaults to baseDir.
+// paths are resolved via ResolvePath (resolvepath.go, ADR-046's mandatory
+// chokepoint), which also follows symlinks and anchors confinement on the
+// realpath before the containment check — a workspace-internal symlink
+// pointing outside the workspace is rejected the same way an absolute path
+// is (FR-B13). Empty cwd defaults to baseDir.
 //
 // SEC-05/FR-B2 threat model: t.allowedPathPatterns is the operator-configured
 // cross-tool allowlist that read_file/write_file/list_directory legitimately
 // honor (e.g. the shared media/attachments temp dir — see
 // buildAllowReadPatterns/mediaTempDirPattern in pkg/agent/instance.go). That
 // directory is shared across ALL agents and ALL sessions, so it is NOT a safe
-// place for bash to chdir into: validatePathWithAllowPaths checks
-// isAllowedPath() BEFORE the workspace-containment check and before the
-// cross-agent guard (isCrossAgentPath) ever runs, so an absolute (or
-// traversed-relative) cwd landing inside that shared directory would let one
-// agent read another agent's uploads via bash — exactly what isCrossAgentPath
-// exists to block. bash's cwd must never consult that allowlist at all
-// (mirrors the pre-consolidation workspace_shell.go, which rejected
-// filepath.IsAbs(rawCWD) outright and passed nil — not the real
-// patterns — into validatePathWithAllowPaths). Concretely:
+// place for bash to chdir into. bash's cwd must never consult that allowlist
+// at all (mirrors the pre-consolidation workspace_shell.go, which rejected
+// filepath.IsAbs(rawCWD) outright and passed nil — not the real patterns —
+// into the legacy validator). Concretely:
 //  1. Any absolute path is rejected unconditionally, with no allowlist-based
-//     exception, before validatePathWithAllowPaths is even called.
-//  2. The relative-path resolution below passes nil for patterns, so a
-//     relative cwd that traverses (e.g. "../../media") out to the shared
-//     media dir cannot short-circuit past the containment/cross-agent checks
-//     either — it is judged purely on workspace containment, same as any
-//     other outside-workspace target.
-func (t *ExecTool) resolveCWD(args map[string]any, baseDir string) (string, error) {
+//     exception, before ResolvePath is ever called.
+//  2. Below calls the PLAIN ResolvePath (never ResolvePathAllowingPatterns),
+//     which has no patterns parameter at all — so a relative cwd that
+//     traverses (e.g. "../../media") out to the shared media dir cannot
+//     short-circuit past the containment check either; it is judged purely
+//     on the effective working directory's confinement, same as any other
+//     outside-workspace target.
+//  3. The scope is forced to fspolicy.FSScopeConfined for this call
+//     regardless of the exec tool's own restrictToWorkspace setting —
+//     matching the pre-ADR-046 behavior, which always passed
+//     restrict=true (hardcoded) into the legacy validator for cwd
+//     resolution specifically, never t.restrictToWorkspace. bash's OWN
+//     host-filesystem reach (when unrestricted) is governed entirely by
+//     sandbox.ResolveLimits/god-mode below, not by widening cwd's escape
+//     hatch.
+func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir string) (string, error) {
 	rawCWD, _ := args["cwd"].(string)
 	rawCWD = strings.TrimSpace(rawCWD)
-
-	if rawCWD == "" {
-		abs, err := filepath.Abs(baseDir)
-		if err != nil {
-			return "", fmt.Errorf("workspace dir not resolvable: %w", err)
-		}
-		return abs, nil
-	}
 
 	if filepath.IsAbs(rawCWD) {
 		return "", fmt.Errorf("path escapes workspace: absolute path not allowed (use a relative path)")
 	}
 
-	resolved, err := validatePathWithAllowPaths(rawCWD, baseDir, true, nil)
+	policyForCWD, err := fspolicy.EffectiveFSPolicy(
+		ctx, baseDir, "", true, config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
+	)
+	if err != nil {
+		return "", fmt.Errorf("workspace dir not resolvable: %w", err)
+	}
+
+	handle, err := ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)
 	if err != nil {
 		return "", fmt.Errorf("path escapes workspace: %w", err)
 	}
-	return resolved, nil
+	defer handle.Close()
+
+	real, err := handle.RealPath()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve cwd: %w", err)
+	}
+	return real, nil
 }
 
 // --- deny-pattern guard ------------------------------------------------------
