@@ -47,9 +47,9 @@ function makeClient() {
   })
 }
 
-function renderSection() {
+function renderSection(client?: QueryClient) {
   return render(
-    <QueryClientProvider client={makeClient()}>
+    <QueryClientProvider client={client ?? makeClient()}>
       <ProfileSection />
     </QueryClientProvider>
   )
@@ -228,7 +228,8 @@ describe('ProfileSection — Workspace Context echo-race (autosave hydration mus
       .mockReturnValueOnce(putPromise1)
       .mockReturnValueOnce(putPromise2)
 
-    renderSection()
+    const queryClient = makeClient()
+    renderSection(queryClient)
 
     await waitFor(() => {
       expect(
@@ -278,6 +279,16 @@ describe('ProfileSection — Workspace Context echo-race (autosave hydration mus
       expect(updateUserContext).toHaveBeenCalledTimes(2)
     })
 
+    // Reviewer F3 hardening (item 9b): `fetchUserContext` being CALLED twice
+    // only proves the queryFn was invoked, not that its resolved value has
+    // actually landed in the query cache yet — `getQueryData` is the direct
+    // check. Poll the cache itself for the stale echo's content before the
+    // load-bearing assertion below, so this test can't pass on a lucky
+    // timing coincidence where the mid-race snapshot hadn't actually landed.
+    await waitFor(() => {
+      expect(queryClient.getQueryData(['user-context'])).toEqual({ content: 'first edit' })
+    })
+
     // THE regression assertion: even though the query cache just updated
     // with the stale "first edit" echo, the textarea must still show the
     // NEWEST typed text — contextDirtyRef stayed armed because
@@ -298,5 +309,49 @@ describe('ProfileSection — Workspace Context echo-race (autosave hydration mus
     expect(updateUserContext).toHaveBeenNthCalledWith(1, 'first edit')
     expect(updateUserContext).toHaveBeenNthCalledWith(2, 'first edit second edit')
     expect(textarea).toHaveValue('first edit second edit')
+  })
+})
+
+// ── Pagehide flush wiring (item 4) ───────────────────────────────────────────
+//
+// The Workspace Context field previously passed no `flushUrl`/`beaconFlush`
+// to useAutoSave — a tab close within the 1500ms debounce window silently
+// dropped up to 1500ms of typing. Fixed by wiring `flushUrl: '/api/v1/user-context'`
+// with a `{content}`-shaped `data` (see ProfileSection.tsx's `contextFormData`)
+// so the hook's built-in single-URL keepalive fetch sends the correct wire body.
+describe('ProfileSection — Workspace Context pagehide flush (item 4)', () => {
+  it('keepalive-flushes the pending edit on pagehide before the debounce fires', async () => {
+    vi.mocked(fetchUserContext).mockReset().mockResolvedValue({ content: 'initial text' })
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+
+    renderSection()
+
+    const textarea = await screen.findByRole('textbox', { name: /workspace context/i })
+    await waitFor(() => expect(textarea).toHaveValue('initial text'))
+
+    vi.useFakeTimers()
+    fireEvent.change(textarea, { target: { value: 'unsaved edit' } })
+
+    // Fire pagehide WELL before the 1500ms debounce would otherwise save —
+    // the exact tab-close-mid-typing window item 4 closes.
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    vi.useRealTimers()
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/user-context',
+      expect.objectContaining({
+        method: 'PUT',
+        keepalive: true,
+        body: JSON.stringify({ content: 'unsaved edit' }),
+      }),
+    )
+    // The debounced PUT itself must NOT have fired yet — the flush is a
+    // best-effort SEPARATE keepalive fetch, not a substitute for the normal
+    // save path.
+    expect(updateUserContext).not.toHaveBeenCalled()
+
+    fetchSpy.mockRestore()
   })
 })

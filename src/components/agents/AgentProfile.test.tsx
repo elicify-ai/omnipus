@@ -143,9 +143,9 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
-function renderProfile(agentId: string) {
+function renderProfile(agentId: string, client?: QueryClient) {
   return render(
-    <QueryClientProvider client={makeClient()}>
+    <QueryClientProvider client={client ?? makeClient()}>
       <AgentProfile agentId={agentId} />
     </QueryClientProvider>
   )
@@ -534,8 +534,14 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     await screen.findByTestId('executor-kind-select')
     pickExecutorKind(/External CLI/i)
     await waitFor(() => expect(testAgentRunner).toHaveBeenCalled(), { timeout: 6000 })
-    // Give the auto-save a chance to attempt the save.
-    await new Promise((r) => setTimeout(r, 800))
+    // Item 9a hardening: this is a real-timer NEGATIVE window — it only
+    // proves anything if it spans the full 1500ms debounce (raised from the
+    // 500ms default; see AgentProfile.tsx's main useAutoSave call). At
+    // 800ms the debounce timer hasn't even fired yet, so "not called" was
+    // trivially true regardless of whether the runner-test block actually
+    // works. Give the auto-save a chance to attempt (and be blocked from
+    // completing) the save.
+    await new Promise((r) => setTimeout(r, 1800))
     expect(updateAgent).not.toHaveBeenCalled()
   })
 
@@ -1482,9 +1488,12 @@ describe('AgentProfile — Environment overrides editor (focus-loss / duplicate-
     expect(screen.getByDisplayValue('qux')).toBeInTheDocument()
 
     // The blocked rename must never reach the autosave payload — give the
-    // debounce (500ms) a beat and confirm no PUT ever collapsed the pair
-    // down to a single key.
-    await new Promise((r) => setTimeout(r, 800))
+    // debounce (1500ms — raised from the 500ms default; see item 9a) a beat
+    // and confirm no PUT ever collapsed the pair down to a single key. This
+    // assertion loop tolerates zero calls too, so it doesn't strictly need
+    // to outlast the debounce to be meaningful — widened anyway for
+    // consistency with the other real-timer negative windows in this file.
+    await new Promise((r) => setTimeout(r, 1800))
     for (const call of vi.mocked(updateAgent).mock.calls) {
       const body = call[1] as { executor?: { env_overrides?: Record<string, string> } }
       if (body.executor?.env_overrides) {
@@ -1775,7 +1784,8 @@ describe('AgentProfile — SOUL echo-race (autosave hydration must never revert 
       .mockReturnValueOnce(putPromise1)
       .mockReturnValueOnce(putPromise2)
 
-    renderProfile('general-assistant')
+    const queryClient = makeClient()
+    renderProfile('general-assistant', queryClient)
     await screen.findByText('General Assistant')
 
     switchTab('tab-personality')
@@ -1822,6 +1832,17 @@ describe('AgentProfile — SOUL echo-race (autosave hydration must never revert 
       expect(updateAgent).toHaveBeenCalledTimes(2)
     })
 
+    // Reviewer F3 hardening (item 9b): `fetchAgent` being CALLED twice only
+    // proves the queryFn was invoked, not that its resolved value has
+    // actually landed in the query cache yet. Poll the cache itself for the
+    // stale echo's `updated_at` (t2) before the load-bearing assertion
+    // below, so this test can't pass on a lucky timing coincidence where
+    // the mid-race snapshot hadn't actually landed.
+    await waitFor(() => {
+      const cached = queryClient.getQueryData<Agent>(['agent', 'general-assistant'])
+      expect(cached?.updated_at).toBe(t2)
+    })
+
     // THE regression assertion: even though the (updated_at-guard-passing)
     // refetch echo just landed, the textarea must still show the NEWEST
     // typed text — isDirtyRef stayed armed because useAutoSave's onSaved
@@ -1846,6 +1867,71 @@ describe('AgentProfile — SOUL echo-race (autosave hydration must never revert 
       2, 'general-assistant', expect.objectContaining({ soul: 'First soul text Second soul text' }),
     )
     expect(soulTextarea).toHaveValue('First soul text Second soul text')
+  })
+})
+
+// ── Sheet-close flush regression (item 1: MERGE-BLOCKER sheet-close data loss) ──
+//
+// Root cause: AgentProfile is mounted at the route level and does NOT
+// unmount when the sheet closes (only the store's `editAgentId` flips to
+// null) — so useAutoSave's own unmount-flush never fires on close. A
+// debounce timer armed less than 1500ms before close instead fires AFTER
+// close, lands in saveFn's `agentId === null` early-return, and useAutoSave
+// records that as a SUCCESS — the edit is silently lost even though nothing
+// was ever sent to the server. Fixed by flushing explicitly in the sheet's
+// onClose handler (`handleCloseAgentSheet`), before the store write that
+// clears `editAgentId`.
+//
+// This suite renders <AgentProfile /> with NO `agentId` prop (unlike every
+// other test in this file) so `agentId` is driven purely by the store's
+// `editAgentId`, exactly like the real app's route-level mount — a
+// prop-driven render can never observe the close transition, since the
+// prop always wins over the store value.
+describe('AgentProfile — sheet-close flush (item 1)', () => {
+  beforeEach(() => {
+    useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null })
+  })
+
+  it('typing into SOUL then closing the sheet within the debounce window still persists the typed text', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, soul: '' })
+    vi.mocked(updateAgent).mockReset().mockResolvedValue(mockCoreAgent)
+
+    useUiStore.setState({ editAgentId: 'general-assistant' })
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <AgentProfile />
+      </QueryClientProvider>,
+    )
+
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+
+    vi.useFakeTimers()
+    fireEvent.change(soulTextarea, { target: { value: 'Typed just before close' } })
+
+    // Advance WELL SHORT of the 1500ms debounce — the timer is still armed,
+    // unfired, when we close.
+    await act(async () => { vi.advanceTimersByTime(200) })
+    expect(updateAgent).not.toHaveBeenCalled()
+
+    // Close via the sheet's own dismiss affordance (the Radix `X` button —
+    // the same `onOpenChange(false)` path Escape / backdrop-click also
+    // drive), exercising `handleCloseAgentSheet` for real rather than
+    // calling the store action directly.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    vi.useRealTimers()
+
+    await waitFor(() => {
+      expect(updateAgent).toHaveBeenCalledWith(
+        'general-assistant',
+        expect.objectContaining({ soul: 'Typed just before close' }),
+      )
+    })
+
+    // The sheet actually closed (store cleared) — confirms this exercised
+    // the real close path, not a debounce coincidence.
+    expect(useUiStore.getState().editAgentId).toBeNull()
   })
 })
 

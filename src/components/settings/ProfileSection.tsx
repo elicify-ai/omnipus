@@ -98,10 +98,17 @@ export function ProfileSection() {
     }
   }, [userContextData])
 
+  // Item 4 (pagehide flush): the tracked `data` must match the wire body
+  // exactly (`{content: string}`, per `updateUserContext`) so the hook's
+  // built-in single-`flushUrl` keepalive fetch — which just
+  // `JSON.stringify`s whatever `data` is — sends the right shape. A bare
+  // string would keepalive-PUT a JSON string literal, not an object.
+  const contextFormData = useMemo(() => ({ content: userContent }), [userContent])
+
   const { status: contextSaveStatus, error: contextSaveError } = useAutoSave(
-    userContent,
-    async (content) => {
-      await updateUserContext(content)
+    contextFormData,
+    async (data) => {
+      await updateUserContext(data.content)
       queryClient.invalidateQueries({ queryKey: ['user-context'] })
     },
     {
@@ -111,13 +118,20 @@ export function ProfileSection() {
       // echo) on nearly every pause.
       debounceMs: 1500,
       onSaved: (_saved, isCurrent) => {
-        // Only clear dirty when the save snapshot still equals the live
-        // draft — if the operator kept typing during the PUT round-trip,
-        // `isCurrent` is false and the flag stays armed so the hydration
-        // guard above keeps rejecting the stale echo until the queued
-        // re-save (useAutoSave's own serialization) persists the newer text.
+        // Draft-ownership rule — see useAutoSave onSaved docs; clear only
+        // when isCurrent.
         if (isCurrent) contextDirtyRef.current = false
       },
+      // Item 4: best-effort flush on tab close / page hide / backgrounding,
+      // mirroring AgentProfile's flushUrl usage (same auth-token read; the
+      // gateway validates every state-changing call against the bearer
+      // token, so the flush must carry Authorization — sendBeacon can't,
+      // which is why the hook uses keepalive fetch instead).
+      flushUrl: '/api/v1/user-context',
+      flushAuthToken:
+        typeof sessionStorage !== 'undefined'
+          ? (sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')) ?? undefined
+          : undefined,
     },
   )
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowSquareOut, Archive, ArrowCounterClockwise, Trash, ArrowsClockwise } from '@phosphor-icons/react'
@@ -31,6 +31,21 @@ import type { Workspace } from '@/lib/api'
 
 interface WorkspaceSettingsTabProps {
   workspace: Workspace
+}
+
+// Item 4 / item 10: same inline auth-token read the rest of the app uses
+// (sessionStorage preferred, localStorage fallback — see AgentProfile's
+// flushAuthToken and WorkspaceTeamTab's readAuthToken for the sibling
+// pattern). No shared accessor exists (getAuthHeaders is module-private in
+// src/lib/api.ts), so this is the established convention rather than a
+// new one.
+function readAuthToken(): string | undefined {
+  if (typeof sessionStorage === 'undefined') return undefined
+  return (
+    sessionStorage.getItem('omnipus_auth_token') ??
+    localStorage.getItem('omnipus_auth_token') ??
+    undefined
+  )
 }
 
 /**
@@ -102,10 +117,51 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     }
   }, [instructionsData])
 
+  // Item 10 (cross-workspace timer, cheap variant): tag the autosave data
+  // with the workspace it was captured for. A debounce timer armed while
+  // editing THIS workspace's instructions can still be outstanding if the
+  // operator switches to a different workspace before it fires; `saveFn`
+  // below no-ops when `data.workspaceId` no longer matches the CURRENT
+  // `workspace.id` prop rather than writing this workspace's stale draft
+  // over whichever workspace is now active. See the identity `formData`
+  // below for the twin fix in this same file.
+  const instructionsFormData = useMemo(
+    () => ({ workspaceId: workspace.id, content: instructionsContent }),
+    [workspace.id, instructionsContent],
+  )
+
+  // Item 4 (pagehide flush): keepalive-flush the instructions PUT on tab
+  // close / page hide / backgrounding, mirroring AgentProfile's `flushUrl`
+  // pattern. A plain `flushUrl` can't be used here because the tracked
+  // `data` carries `workspaceId` (for the item-10 guard above), which is
+  // NOT part of the wire body (`{content}` only, per
+  // `updateWorkspaceInstructions`) — `beaconFlush` lets us keep watching
+  // the tagged object for isCurrent/dirty purposes while still sending the
+  // correct wire shape.
+  const instructionsBeaconFlush = useCallback(() => {
+    const token = readAuthToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    void fetch(`/api/v1/workspaces/${encodeURIComponent(workspace.id)}/instructions`, {
+      method: 'PUT',
+      keepalive: true,
+      headers,
+      body: JSON.stringify({ content: instructionsContent }),
+    }).catch((err) => {
+      // Match the useAutoSave.ts unmount-flush precedent: a failed
+      // best-effort flush is at least discoverable in the console rather
+      // than silently dropped.
+      console.error('[WorkspaceSettingsTab] instructions beacon flush failed:', err)
+    })
+  }, [workspace.id, instructionsContent])
+
   const { status: instructionsSaveStatus, error: instructionsSaveError } = useAutoSave(
-    instructionsContent,
-    async (content) => {
-      await updateWorkspaceInstructions(workspace.id, content)
+    instructionsFormData,
+    async (data) => {
+      // Item 10: a stale timer from a workspace we've since navigated away
+      // from — no-op instead of writing its draft into the CURRENT workspace.
+      if (data.workspaceId !== workspace.id) return
+      await updateWorkspaceInstructions(workspace.id, data.content)
       await queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.instructions(workspace.id) })
     },
     {
@@ -115,42 +171,71 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
       // save (and its own invalidate/refetch echo) on nearly every pause.
       debounceMs: 1500,
       onSaved: (_saved, isCurrent) => {
-        // Only clear dirty when the save snapshot still equals the live
-        // draft — if the operator kept typing during the PUT round-trip,
-        // `isCurrent` is false and the flag stays armed so the hydration
-        // guard above keeps rejecting the stale echo until the queued
-        // re-save (useAutoSave's own serialization) persists the newer text.
+        // Draft-ownership rule — see useAutoSave onSaved docs; clear only
+        // when isCurrent.
         if (isCurrent) instructionsDirtyRef.current = false
       },
+      beaconFlush: instructionsBeaconFlush,
     },
   )
 
   const isDefault = workspace.is_default === true
   const isArchived = workspace.status === 'archived'
 
-  // Auto-save the editable text fields. Name is required — an empty name is not
-  // sent (the hook skips when the payload is unchanged; we guard empties here).
+  // Auto-save the editable text fields. Name is required — an empty (trimmed)
+  // name is not sent (the hook skips when the payload is unchanged; we guard
+  // empties here).
+  //
+  // Item 2 (trim-vs-raw isCurrent gap): this carries RAW (untrimmed) values —
+  // trimming happens inside saveFn, on the WIRE payload only. useAutoSave's
+  // `isCurrent` deep-compares this object before vs. after the save's
+  // round-trip; if it compared TRIMMED values, typing a trailing space
+  // ("New name ") would trim-equal the already-saved "New name", clearing
+  // `identityDirtyRef` on a raw draft that still differs from the server.
+  // The hydration effect above writes the RAW `workspace.name` prop straight
+  // into state, so a refetch landing right after that premature clear would
+  // silently snap the trailing space out from under the operator's cursor
+  // mid-edit. Comparing raw-to-raw closes the gap.
+  //
+  // Item 10: also carries workspaceId — see the instructions block above for
+  // the cross-workspace-timer rationale (twin fix, same file).
   const formData = useMemo(
     () => ({
-      name: name.trim(),
-      description: description.trim(),
-      repository: repository.trim(),
+      workspaceId: workspace.id,
+      name,
+      description,
+      repository,
     }),
-    [name, description, repository],
+    [workspace.id, name, description, repository],
   )
 
   const { status, error, lastSavedAt } = useAutoSave(
     formData,
     async (data) => {
-      if (!data.name) {
+      // Item 10: a stale timer from a workspace we've since navigated away
+      // from — no-op instead of writing its draft into the CURRENT workspace.
+      if (data.workspaceId !== workspace.id) return
+      const trimmedName = data.name.trim()
+      if (!trimmedName) {
         throw new Error('Workspace name is required')
       }
       await updateWorkspace(workspace.id, {
-        name: data.name,
-        description: data.description,
-        repository: data.repository,
+        name: trimmedName,
+        description: data.description.trim(),
+        repository: data.repository.trim(),
       })
-      await queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      // Item 6 (no-op invalidation): `workspacesQueryKeys.list()` called
+      // with no args produces ['workspaces', undefined], which matches ZERO
+      // registered queries — every real list query is registered as
+      // ['workspaces', {status: 'active'|'archived'}] (see
+      // workspacesQueryKeys.list's builder in src/lib/api.ts), and TanStack
+      // Query's partial-match invalidation requires the filter key to be a
+      // prefix of the stored key at every index — `undefined` at index 1
+      // never matches a defined params object there, so this call was a
+      // silent no-op. `['workspaces']` (length 1) IS a valid prefix of
+      // every 'workspaces'-keyed query — list, detail, delegation,
+      // instructions alike — so it actually invalidates on save.
+      await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
     },
     {
       debounceMs: 600,
@@ -166,7 +251,9 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     mutationFn: () =>
       updateWorkspace(workspace.id, { status: isArchived ? 'active' : 'archived' }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      // Item 6: see the identity saveFn's comment above — `.list()` with no
+      // args matches zero queries; `['workspaces']` prefix-matches all of them.
+      await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       addToast({
         message: isArchived ? 'Workspace restored' : 'Workspace archived',
         variant: 'success',
@@ -182,7 +269,8 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   const deleteMutation = useMutation({
     mutationFn: () => deleteWorkspace(workspace.id),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      // Item 6: see the identity saveFn's comment above.
+      await queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       addToast({ message: 'Workspace deleted', variant: 'success' })
       setConfirmDelete(false)
       void navigate({ to: '/' })
