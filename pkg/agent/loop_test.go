@@ -1671,11 +1671,17 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		Content: "/new",
 		Peer:    baseMsg.Peer,
 	})
-	if newResp != "LLM reply" {
+	// /new carries a real handler on the channel surface since the command
+	// harmonization (cmd_clear.go: canonical name "new", alias "clear") —
+	// channel users get the "Chat history cleared!" reply and no LLM turn.
+	// This expectation was stale (pinned the pre-harmonization passthrough
+	// behavior) and failed on every branch of this lineage; CI never caught
+	// it because workflows only run on PRs.
+	if newResp != "Chat history cleared!" {
 		t.Fatalf("unexpected /new reply: %q", newResp)
 	}
-	if provider.calls != 2 {
-		t.Fatalf("LLM should be called for passthrough /new command, calls=%d", provider.calls)
+	if provider.calls != 1 {
+		t.Fatalf("LLM should NOT be called for the handled /new command, calls=%d", provider.calls)
 	}
 }
 
