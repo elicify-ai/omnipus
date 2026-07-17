@@ -287,7 +287,12 @@ func TestLiveVideoPipeline_RealChrome_EmitsChunks(t *testing.T) {
 
 	ssrf := security.NewSSRFChecker(nil)
 	mgr, mgrErr := browser.NewBrowserManager(
-		browser.BrowserConfig{Enabled: true, ProfileDir: profileDir},
+		browser.BrowserConfig{
+			Enabled:     true,
+			ProfileDir:  profileDir,
+			MaxTabs:     5, // must be >0 — the manager's own tab cap gates mgr.Session
+			PageTimeout: 30 * time.Second,
+		},
 		ssrf,
 	)
 	if mgrErr != nil {
