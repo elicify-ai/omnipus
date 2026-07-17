@@ -104,6 +104,19 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 	// characteristics and gives every sub-turn a DISTINCT workspace path so
 	// none of them serialize on external_dispatch.go's workspaceRunLocks
 	// (keyed by workDir), which would otherwise mask true concurrency.
+	//
+	// NOTE (7-reviewer gate, BLOCK finding on FIX 1): this distinct-workDir
+	// choice is deliberate and remains correct for THIS stress test's own
+	// purpose (proving the setTurnCancel/setProviderCancel-vs-Range race is
+	// race-detector-clean under high concurrency) — it is not a gap left
+	// unaddressed. The CONTENDED case this choice avoids — a cancel firing
+	// while a second same-workspace external-cli sub-turn is queued behind a
+	// first on workspaceRunLocks — is covered explicitly by
+	// TestExternalCLISubTurn_CancelDuringWorkspaceLockWait in
+	// subturn_external_cancel_test.go, which was exactly the scenario the
+	// BLOCK finding identified as unprotected before FIX 1's lock-ordering
+	// fix (registering childTS's cancel funcs before acquiring the lock, and
+	// making the lock acquisition itself cancel-aware).
 	workDirs := make([]string, total)
 	for i := range workDirs {
 		workDirs[i] = t.TempDir()
@@ -234,8 +247,26 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 	}
 
 	drivers := reg.snapshot()
-	if len(drivers) != total {
-		t.Fatalf("driver count=%d, want %d — some sub-turns never reached driver.Run", len(drivers), total)
+	// NOTE (BLOCK-fix follow-up): len(drivers) is deliberately NOT required to
+	// equal `total` here. FIX 1's BLOCK-finding fix added a belt-and-suspenders
+	// check (layer 3, external_dispatch.go) that skips driver instantiation
+	// entirely when runCtx is already canceled at the point the lock is
+	// acquired — correct behavior, since starting a driver for a run that is
+	// already canceled is pure waste. Even on this test's intentionally
+	// DISTINCT, uncontended workDirs (see the note above), a cancel racing in
+	// aggressively enough — from the 6 canceller goroutines hammering
+	// InterruptSession/InterruptSessionHard in a tight loop — can win Go's
+	// select against an immediately-available lock token often enough that
+	// occasionally one of the 80 sub-turns is canceled before it ever reaches
+	// newExternalDriver. That sub-turn still correctly appears in
+	// canceledCount above (asserted immediately above this block); it simply
+	// contributes no *blockingExternalDriver to this registry. What this
+	// block still asserts unconditionally: every driver that WAS actually
+	// instantiated observed its own runCtx being canceled, and that
+	// concurrency was genuinely exercised (at least one driver ran) rather
+	// than the test accidentally becoming a no-op.
+	if len(drivers) == 0 {
+		t.Fatal("no sub-turn ever reached driver.Run — concurrency was not actually exercised")
 	}
 	for i, d := range drivers {
 		if !d.ctxCanceled.Load() {

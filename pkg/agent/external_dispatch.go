@@ -66,30 +66,59 @@ func executorConfigOf(a *AgentInstance) *config.ExecutorConfig {
 // to the same agent (or to two agents that happen to share a workspace
 // path) would otherwise spawn two child CLI processes reading/writing the
 // same directory concurrently: file races, a corrupted git index, clobbered
-// output files. Keyed by the workspace's cleaned path; the mutex is held for
+// output files. Keyed by the workspace's cleaned path; the lock is held for
 // the FULL duration of the child run (acquired near the top of
 // runExternalCLISubTurn, released via defer), which is the window in which
 // the child process touches the workspace tree. Runs against distinct
 // workspace paths are never blocked by each other — only same-path runs
 // serialize.
 //
+// Each entry is a buffered channel of capacity 1 holding a single token —
+// acquiring the lock is receiving the token, releasing is sending it back.
+// This replaces a plain *sync.Mutex (BLOCK finding, 7-reviewer gate on
+// FIX 1): Mutex.Lock() blocks unconditionally, with no way for a queued
+// waiter to observe a cancel that fires while it is still waiting for the
+// lock — a session-wide cancel arriving during that wait was a silent,
+// PERMANENT no-op (requestHardAbort latches hardAbort=true on its first
+// call and never re-fires once the nil cancel funcs are later replaced with
+// real ones). A channel lets acquireWorkspaceRunLockCtx select on the
+// caller's ctx.Done() alongside the receive, so a cancel firing while queued
+// unblocks the wait immediately and the queued run is skipped entirely,
+// instead of becoming uncancelable until the lock eventually frees.
+//
 // Entries are never removed from the map: a long-running gateway
-// accumulates one *sync.Mutex per distinct workspace path ever dispatched
+// accumulates one token channel per distinct workspace path ever dispatched
 // to. That set is bounded by the number of configured external-cli
 // agents/workspaces (small, operator-controlled), not by run count, so the
 // unbounded map is an accepted trade-off rather than a leak.
-var workspaceRunLocks sync.Map // map[string]*sync.Mutex
+var workspaceRunLocks sync.Map // map[string]chan struct{}
 
-// acquireWorkspaceRunLock locks the mutex for workDir's cleaned path,
-// creating it on first use via LoadOrStore, and returns the unlock func.
-// Callers MUST `defer` the returned func so the lock releases even on an
-// early return or panic.
-func acquireWorkspaceRunLock(workDir string) func() {
+// workspaceRunLockChan returns the capacity-1 token channel for workDir's
+// cleaned path, creating and pre-loading it with a single token on first use
+// via LoadOrStore.
+func workspaceRunLockChan(workDir string) chan struct{} {
 	key := filepath.Clean(workDir)
-	muAny, _ := workspaceRunLocks.LoadOrStore(key, &sync.Mutex{})
-	mu, _ := muAny.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	fresh := make(chan struct{}, 1)
+	fresh <- struct{}{}
+	chAny, _ := workspaceRunLocks.LoadOrStore(key, fresh)
+	return chAny.(chan struct{})
+}
+
+// acquireWorkspaceRunLockCtx acquires the workDir run lock in a cancel-aware
+// way: it selects on receiving the path's token OR ctx.Done(). Returns
+// (release, true) when the token was acquired — the caller MUST `defer`
+// release() (which sends the token back) so the lock releases even on an
+// early return or panic. Returns (nil, false) when ctx ended while still
+// waiting for the token — the caller must NOT start the run in that case;
+// there is nothing to release.
+func acquireWorkspaceRunLockCtx(ctx context.Context, workDir string) (release func(), acquired bool) {
+	ch := workspaceRunLockChan(workDir)
+	select {
+	case <-ch:
+		return func() { ch <- struct{}{} }, true
+	case <-ctx.Done():
+		return nil, false
+	}
 }
 
 // runExternalCLISubTurn executes a delegated sub-agent task through an external
@@ -193,14 +222,84 @@ func runExternalCLISubTurn(
 		return nil, fmt.Errorf("external-cli dispatch: ensuring workspace dir %q: %w", workDir, mkErr)
 	}
 
+	// FIX 1 (cancel propagation, BLOCK finding on the 7-reviewer gate): create
+	// the run's context and register its cancel func on childTS — the SAME
+	// way al.runTurn does for the native path (loop.go's ts.setTurnCancel /
+	// ts.setProviderCancel — the ONLY other call sites, grep-verified) — and
+	// do this BEFORE acquiring the workspace run lock below. The native path
+	// already follows this exact order (ts.setTurnCancel is called before
+	// al.registerActiveTurn, loop.go), and this dispatch path must too:
+	// registering the lock FIRST (the original order here) left a window,
+	// while a run was queued behind another same-workspace run, during which
+	// childTS.providerCancel/turnCancel were still nil — a cancel firing in
+	// that window was a silent, PERMANENT no-op (requestHardAbort latches
+	// hardAbort=true on its very first call and never re-fires once the nil
+	// cancel funcs are later replaced with real ones once the lock frees).
+	// Moving this registration above the lock acquire means a cancel that
+	// fires while queued now cancels runCtx directly, which the cancel-aware
+	// lock acquisition immediately below observes.
+	//
+	// Without this registration at all, childTS.providerCancel/turnCancel
+	// would stay nil, so the session-wide cancel cascade
+	// (InterruptSession/InterruptSessionHard, steering.go — which fires those
+	// two turnState fields directly, never through context inheritance) is a
+	// silent no-op for an external-CLI sub-turn: childCtx is deliberately
+	// detached from the parent's ctx tree (context.Background() in
+	// spawnSubTurn), so nothing else can ever cancel runCtx. Worst case: a
+	// SYNCHRONOUS delegate (`delegate(async=false)`) deadlocks the parent
+	// inside this call for up to the full run timeout while the UI shows
+	// graceful→hard→detached as if cancel worked.
+	//
+	// One cancel func for both slots is the correct behavior here (not a
+	// simplification): runner.ExternalAgentRunner exposes no distinct graceful
+	// stop — its doc says "canceling [ctx] is equivalent to calling Cancel"
+	// (immediate termination), and all three drivers (claude/codex/opencode)
+	// bind the OS child via exec.CommandContext(runCtx, ...), so canceling
+	// runCtx already kills the subprocess outright. Firing the graceful stage
+	// (InterruptSession → providerCancel) is therefore already sufficient to
+	// end the run; the hard stage (InterruptSessionHard → providerCancel +
+	// turnCancel) re-fires the same (idempotent) cancel func defensively.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	childTS.setTurnCancel(cancel)
+	childTS.setProviderCancel(cancel)
+
 	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
 	// share this workspace directory — see workspaceRunLocks' doc comment.
 	// Held for the whole run (driver instantiation through the drain loop
 	// below) since that is the window during which the child process can
 	// touch the workspace tree. A different workspace path is never blocked
 	// by this.
-	releaseWorkspaceLock := acquireWorkspaceRunLock(workDir)
+	//
+	// Cancel-aware acquire (BLOCK finding, layer 2 of the fix): waits for the
+	// token OR runCtx ending, whichever comes first. Because runCtx's cancel
+	// func was registered on childTS immediately above (layer 1), a cancel
+	// that fires while this run is queued behind another same-workspace run
+	// now unblocks this select right away and the run below is skipped
+	// entirely, rather than silently becoming uncancelable until the lock
+	// eventually frees.
+	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, workDir)
+	if !acquired {
+		cancelErr := fmt.Errorf("external-cli dispatch: canceled while waiting for the workspace lock: %w", runCtx.Err())
+		return &tools.ToolResult{
+			Err:    cancelErr,
+			ForLLM: fmt.Sprintf("External CLI run (%s) canceled while waiting for the workspace lock: %v", cli, cancelErr),
+		}, cancelErr
+	}
 	defer releaseWorkspaceLock()
+
+	// Belt-and-suspenders (BLOCK finding, layer 3 of the fix): a cancel could
+	// in principle race in between acquireWorkspaceRunLockCtx's ctx-check and
+	// the token actually being received. Re-check immediately after
+	// acquiring, before touching the driver at all, so a run that got its
+	// cancel signal during the wait never starts.
+	if runCtx.Err() != nil {
+		cancelErr := fmt.Errorf("external-cli dispatch: canceled before starting: %w", runCtx.Err())
+		return &tools.ToolResult{
+			Err:    cancelErr,
+			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
+		}, cancelErr
+	}
 
 	// 2. Build the consent handler. External-CLI permission requests are
 	//    auto-approved unconditionally (issue #488) — see policyApproverConsent's
@@ -227,34 +326,6 @@ func runExternalCLISubTurn(
 	if maxTurns <= 0 {
 		maxTurns = DefaultExternalMaxTurns
 	}
-
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// FIX 1 (cancel propagation): register this run's cancel func on childTS the
-	// SAME way al.runTurn does for the native path (loop.go's ts.setTurnCancel /
-	// ts.setProviderCancel — the ONLY other call sites, grep-verified). Without
-	// this, childTS.providerCancel/turnCancel stay nil, so the session-wide
-	// cancel cascade (InterruptSession/InterruptSessionHard, steering.go —
-	// which fires those two turnState fields directly, never through context
-	// inheritance) is a silent no-op for an external-CLI sub-turn: childCtx is
-	// deliberately detached from the parent's ctx tree (context.Background() in
-	// spawnSubTurn), so nothing else can ever cancel runCtx. Worst case: a
-	// SYNCHRONOUS delegate (`delegate(async=false)`) deadlocks the parent inside
-	// this call for up to the full run timeout while the UI shows
-	// graceful→hard→detached as if cancel worked.
-	//
-	// One cancel func for both slots is the correct behavior here (not a
-	// simplification): runner.ExternalAgentRunner exposes no distinct graceful
-	// stop — its doc says "canceling [ctx] is equivalent to calling Cancel"
-	// (immediate termination), and all three drivers (claude/codex/opencode)
-	// bind the OS child via exec.CommandContext(runCtx, ...), so canceling
-	// runCtx already kills the subprocess outright. Firing the graceful stage
-	// (InterruptSession → providerCancel) is therefore already sufficient to
-	// end the run; the hard stage (InterruptSessionHard → providerCancel +
-	// turnCancel) re-fires the same (idempotent) cancel func defensively.
-	childTS.setTurnCancel(cancel)
-	childTS.setProviderCancel(cancel)
 
 	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
 	// (previously done independently for the transcript model stamp below
@@ -359,6 +430,29 @@ func drainExternalRun(
 			goto done
 		case ev, ok := <-out:
 			if !ok {
+				// SELECT-RACE FIX (found while verifying the BLOCK fix above,
+				// via TestStress_ExternalCLI_ConcurrentSpawnAndCancel):
+				// `out` closing and ctx ending are not independent events for
+				// an external-cli run — a cancel fires runCtx.Done(), which is
+				// exactly what makes the driver's own event channel close
+				// (blockingExternalDriver/the real CLI drivers all exit their
+				// producer goroutine on <-ctx.Done()), which is what makes
+				// ConsentDispatcher return and `out` close via its `defer
+				// close(out)`. When BOTH the ctx.Done() case above and this
+				// case become ready at effectively the same instant, Go's
+				// `select` picks between them uniformly at random — so a
+				// GENUINELY canceled run could still take this branch instead
+				// of the `<-ctx.Done()` one above, and without this check
+				// would fall through to "completed with no textual output"
+				// with Err==nil, silently misreporting a canceled run as a
+				// normal completion in the RETURNED ToolResult (the process
+				// itself was still correctly killed either way — only the
+				// caller-visible result was wrong). Checking ctx.Err() here
+				// closes that gap regardless of which case the select
+				// happened to take.
+				if ctx.Err() != nil {
+					runErr = ctx.Err()
+				}
 				goto done
 			}
 			switch ev.Kind {
