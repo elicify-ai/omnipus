@@ -6,23 +6,37 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/docextract"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 const MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow
 
+// validatePathWithAllowPaths resolves path against workspace, optionally
+// restricting to the workspace tree, with an optional compiled allow-list.
+//
+// SUPERSEDED (ADR-046 BLOCK #1): this computes `resolved` (EvalSymlinks) only
+// to CHECK containment, then returns the UN-resolved absPath — the exact
+// CWE-357 TOCTOU shape ResolvePath (resolvepath.go) fixes by doing all I/O
+// through an os.Root handle instead of handing back a bare string. It is
+// KEPT, UNCHANGED, only because two tools this wave does not migrate still
+// call it directly: send_file.go (via this function) and web_serve.go (via
+// the ValidateWorkspacePath wrapper in validate.go). The follow-up "defects
+// wave" (web_serve/send_file/browser/install_skill) migrates both to
+// ResolvePath and retires this function and isCrossAgentPath below with it —
+// do not add new callers; every tool migrated in THIS wave (read_file,
+// write_file, list_directory, edit_file, append_file, bash's cwd) uses
+// ResolvePath instead.
 func validatePathWithAllowPaths(path, workspace string, restrict bool, patterns []*regexp.Regexp) (string, error) {
 	if workspace == "" {
 		return path, fmt.Errorf("workspace is not defined")
@@ -95,6 +109,14 @@ func validatePathWithAllowPaths(path, workspace string, restrict bool, patterns 
 // The workspace root itself (absPath == absWorkspace) is always allowed; this
 // handles the common case of an agent serving "." which resolves to its own
 // workspace root without a trailing separator.
+//
+// SUPERSEDED by fspolicy.IsCarveOut (ADR-046 BLOCK #5): this derives
+// agentsRoot = filepath.Dir(absWorkspace), which is correct only when
+// workspace happens to be exactly agents/<id>/ — under a re-rooted
+// workspace turn (workspace == workspaces/<id>/work/) it silently allows a
+// cross-agent read. fspolicy.IsCarveOut anchors on the boot-known
+// $OMNIPUS_HOME instead and has no such gap. Kept only as the dependency of
+// the still-in-use validatePathWithAllowPaths above (see its comment).
 func isCrossAgentPath(absPath, absWorkspace string) bool {
 	cleanWorkspace := filepath.Clean(absWorkspace)
 	cleanPath := filepath.Clean(absPath)
@@ -114,6 +136,10 @@ func isCrossAgentPath(absPath, absWorkspace string) bool {
 		!strings.HasPrefix(cleanPath, workspaceSlash)
 }
 
+// isAllowedPath reports whether path matches one of the operator-configured
+// AllowRead/WritePaths regex patterns — a DIFFERENT feature from
+// filesystem_scope (ADR-046 does not change it; ResolvePathAllowingPatterns
+// in resolvepath.go is its new caller for the generic file tools below).
 func isAllowedPath(path string, patterns []*regexp.Regexp) bool {
 	if len(patterns) == 0 {
 		return false
@@ -281,6 +307,10 @@ func resolvePathAgainstExistingAncestor(path string) (string, error) {
 	}
 }
 
+// isWithinWorkspace reports whether candidate is workspace itself or lives
+// strictly under it. Used by ResolvePath (resolvepath.go) as well as the
+// legacy validators below — the single "is this contained" primitive both
+// generations of path resolution share.
 func isWithinWorkspace(candidate, workspace string) bool {
 	rel, err := filepath.Rel(filepath.Clean(workspace), filepath.Clean(candidate))
 	return err == nil && (rel == "." || filepath.IsLocal(rel))
@@ -348,6 +378,11 @@ func resolveAbsPath(rawPath, workspace string) (string, error) {
 //
 // Returns nil when the path is allowed to proceed to the real I/O.
 //
+// workspace here is the caller's fspolicy.FSPolicy.WorkDir — the SAME
+// effective working directory ResolvePath confines to (the per-turn
+// workspace re-root when set, else the agent's own home) — so the guard
+// always matches what the actual I/O will resolve against.
+//
 // Fail-closed semantics:
 //   - workspace == "" is a programming error: every constructor that wires the
 //     guard passes a non-empty workspace, and the call sites only invoke this
@@ -376,55 +411,24 @@ func guardMetadataPath(workspace, path, op string) *ToolResult {
 	return nil
 }
 
-// rerootable holds the construction parameters a file tool needs to rebuild its
-// confined fileSystem against a per-turn workspace root. It is embedded by
-// every generic file tool so the re-root logic lives in one place.
-//
-// When a turn carries no workspace dir (the turn's agent is not a member of
-// any Workspace's CoreTeam — see workspace.FindForAgent and the agent loop's
-// runTurn), effectiveFs returns the pre-built fixed-root fs and
-// effectiveWorkspace returns the fixed agent workspace unchanged. When a turn
-// DOES carry a workspace dir, both helpers rebuild against that dir using the
-// SAME restrict + allow-path-pattern config the fixed root was built with, so
-// every existing guard (os.Root confinement, metadata guard, cross-agent
-// guard, allow-paths) applies relative to the re-rooted dir.
-type rerootable struct {
-	restrict bool
-	patterns []*regexp.Regexp
-}
-
-// effectiveFs returns the fileSystem to use for this call: the fixed fs when no
-// per-turn workspace dir is set, or a freshly-built fs rooted at the per-turn
-// workspace dir when one is. fixedFs and fixedWorkspace are the tool's
-// construction-time values.
-func (r rerootable) effectiveFs(ctx context.Context, fixedFs fileSystem) fileSystem {
-	if dir := TurnWorkspaceDir(ctx); dir != "" {
-		return buildFs(dir, r.restrict, r.patterns)
-	}
-	return fixedFs
-}
-
-// effectiveWorkspace returns the workspace root the metadata/cross-agent guards
-// should resolve against: the per-turn workspace dir when set, else the fixed
-// agent workspace.
-func (r rerootable) effectiveWorkspace(ctx context.Context, fixedWorkspace string) string {
-	if dir := TurnWorkspaceDir(ctx); dir != "" {
-		return dir
-	}
-	return fixedWorkspace
-}
-
 type ReadFileTool struct {
 	BaseTool
-	rerootable
-	fs            fileSystem
-	maxSize       int64
+	// agentHome is the agent's fixed home directory (the pre-ADR-046-rename
+	// "workspace" constructor parameter) — fspolicy.EffectiveFSPolicy's
+	// agentHome argument. When the turn carries a TurnWorkspaceDir (the
+	// agent is a member of that turn's Workspace), EffectiveFSPolicy prefers
+	// that re-rooted directory instead.
+	agentHome string
+	// restrict maps to fspolicy.FSScopeConfined (true) / FSScopeUnrestricted
+	// (false) — the P1 equivalent of today's restrict flag.
+	restrict bool
+	maxSize  int64
+	// patterns is the operator-configured AllowRead/WritePaths regex axis —
+	// a feature orthogonal to filesystem_scope, bridged onto ResolvePath via
+	// ResolvePathAllowingPatterns.
+	patterns      []*regexp.Regexp
 	allowPathsLen int
-	// workspace is the agent's workspace root used for metadata-guard path
-	// resolution. Empty means no guard is applied (e.g. static read-only tools
-	// that have no agent workspace concept).
-	workspace string
-	// auditLogger receives path.access_denied events on workspace-guard
+	// auditLogger receives path.access_denied events on ResolvePath
 	// rejections. Nil means audit logging is disabled (best-effort).
 	auditLogger *audit.Logger
 }
@@ -446,11 +450,11 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
-		rerootable:    rerootable{restrict: restrict, patterns: patterns},
-		fs:            buildFs(workspace, restrict, patterns),
+		agentHome:     workspace,
+		restrict:      restrict,
 		maxSize:       maxSize,
+		patterns:      patterns,
 		allowPathsLen: len(patterns),
-		workspace:     workspace,
 	}
 }
 
@@ -508,21 +512,25 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
-	// Resolve the effective root for this call. When the turn re-roots to a
-	// workspace dir (the agent is a member of that Workspace's CoreTeam),
-	// effFs is a fresh fs confined to that dir and effWorkspace is that dir;
-	// otherwise they are the fixed agent fs/workspace, unchanged.
-	effFs := t.effectiveFs(ctx, t.fs)
-	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+	// Resolve the single, authoritative filesystem policy for this turn
+	// (FR-036): WorkDir prefers the per-turn workspace re-root
+	// (TurnWorkspaceDir) when the agent is a Workspace CoreTeam member,
+	// else falls back to the agent's own home.
+	policy, err := fspolicy.EffectiveFSPolicy(
+		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
+		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
+	)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
+	}
 
 	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.read_metadata instead.
-	// Skipped only for static tools that have no agent workspace concept.
-	// When re-rooted to a workspace dir the guard resolves against that dir; a
-	// workspace dir has no AGENT metadata files, so the guard is a safe no-op
-	// there (it only ever matches the four canonical agents/<id>/ files).
-	if effWorkspace != "" {
-		if denied := guardMetadataPath(effWorkspace, path, "read"); denied != nil {
+	// A re-rooted workspace turn has no AGENT metadata files, so the guard
+	// is a safe no-op there (it only ever matches the four canonical
+	// agents/<id>/ files).
+	if policy.WorkDir != "" {
+		if denied := guardMetadataPath(policy.WorkDir, path, "read"); denied != nil {
 			return denied
 		}
 	}
@@ -548,7 +556,14 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		length = t.maxSize
 	}
 
-	file, err := effFs.Open(path)
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)
+	if err != nil {
+		emitPathAccessDenied(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+
+	file, err := handle.Open()
 	if err != nil {
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
 		// emitPathAccessDenied is a no-op when t.auditLogger is nil (best-effort).
@@ -579,11 +594,12 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		// Before rejecting, check whether this opaque binary is actually a
 		// readable document (Word/PowerPoint/Excel/PDF). If so, return its
 		// extracted plain text instead. Extraction reads through the SAME
-		// confined filesystem this call resolved (effFs — the re-rooted
-		// workspace fs when the turn carries a workspace dir, else t.fs), never
-		// a raw os.Open, so it cannot escape the boundary effFs.Open enforced.
+		// resolved handle this call resolved (handle — the re-rooted
+		// workspace policy when the turn carries a workspace dir, else the
+		// fixed agent policy), never a raw os.Open, so it cannot escape the
+		// boundary ResolvePath enforced.
 		if docextract.IsExtractable("", filepath.Base(path)) {
-			return t.extractDocument(ctx, effFs, path, offset, length)
+			return t.extractDocument(ctx, handle, path, offset, length)
 		}
 		return ErrorResult("binary file detected: use a dedicated tool to handle binary files")
 	}
@@ -687,15 +703,17 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	return NewToolResult(header + "\n\n" + string(data))
 }
 
-// extractDocument reads a document file through the sandboxed filesystem and
-// returns its extracted plain text, paginated by character offset/length so the
-// caller can page through long documents the same way it pages raw files.
+// extractDocument re-resolves path through handle (the SAME PathHandle the
+// calling read_file resolved for this turn — the confined os.Root-backed
+// handle when the effective scope is confined, or the host-mode handle when
+// unrestricted), returning its extracted plain text, paginated by character
+// offset/length so the caller can page through long documents the same way
+// it pages raw files.
 //
-// Sandbox safety: the bytes are read via effFs.Open — the same confined handle
-// the calling read_file resolved for this turn (re-rooted to the workspace dir
-// when the agent is a CoreTeam member, else the fixed agent fs) — then
-// extraction runs purely in memory via docextract.ExtractBytes, which opens no
-// paths of its own, so it cannot read outside the workspace even for archive
+// Sandbox safety: the bytes are read via handle.Open — the same resolved
+// handle the calling read_file established — then extraction runs purely in
+// memory via docextract.ExtractBytes, which opens no paths of its own, so it
+// cannot read outside the boundary ResolvePath enforced even for archive
 // formats that re-open by path.
 //
 // offset and length are interpreted as character (rune) positions into the
@@ -703,11 +721,11 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 // meaningless once the document is decoded).
 func (t *ReadFileTool) extractDocument(
 	ctx context.Context,
-	effFs fileSystem,
+	handle *PathHandle,
 	path string,
 	offset, length int64,
 ) *ToolResult {
-	file, err := effFs.Open(path)
+	file, err := handle.Open()
 	if err != nil {
 		emitPathAccessDenied(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
 		return ErrorResult(err.Error())
@@ -811,9 +829,9 @@ func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, erro
 
 type WriteFileTool struct {
 	BaseTool
-	rerootable
-	fs        fileSystem
-	workspace string
+	agentHome string
+	restrict  bool
+	patterns  []*regexp.Regexp
 	// auditLogger receives file_op audit entries on successful writes, so
 	// lastWriterForPath (path_audit.go) can attribute a CoreTeam-shared-dir
 	// overwrite to the agent that last touched the path. Nil means audit
@@ -827,9 +845,9 @@ func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.R
 		patterns = allowPaths[0]
 	}
 	return &WriteFileTool{
-		rerootable: rerootable{restrict: restrict, patterns: patterns},
-		fs:         buildFs(workspace, restrict, patterns),
-		workspace:  workspace,
+		agentHome: workspace,
+		restrict:  restrict,
+		patterns:  patterns,
 	}
 }
 
@@ -883,14 +901,18 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult("path is required")
 	}
 
-	effFs := t.effectiveFs(ctx, t.fs)
-	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+	policy, err := fspolicy.EffectiveFSPolicy(
+		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
+		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
+	)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
+	}
 
 	// Metadata guard: reject writes to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
-	// Skipped only for static tools that have no agent workspace concept.
-	if effWorkspace != "" {
-		if denied := guardMetadataPath(effWorkspace, path, "write"); denied != nil {
+	if policy.WorkDir != "" {
+		if denied := guardMetadataPath(policy.WorkDir, path, "write"); denied != nil {
 			return denied
 		}
 	}
@@ -902,35 +924,32 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	overwrite, _ := args["overwrite"].(bool)
 
-	// Canonical path for audit-log keying, resolved against the effective
-	// workspace root (the CoreTeam-shared dir when the turn is re-rooted,
-	// else the agent's own workspace) — NOT the raw arg path. This is what
-	// makes the cross-agent note below correct rather than a false positive:
-	// two agents writing "identity.txt" into their own SEPARATE private
-	// workspaces resolve to different canonical paths (no note), while the
-	// same relative name written into the SAME shared workspace directory
-	// resolves to the same canonical path (note fires). Falls back to the
-	// raw path when there is no workspace to resolve against (static tools
-	// with no agent workspace concept) — best-effort, never blocking either way.
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)
+	if err != nil {
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+
+	// Canonical path for audit-log keying — the handle's own resolved
+	// absolute path (advisory-only per PathHandle.RealPath's doc, but safe
+	// here since it is used only as an audit-log dictionary key, never for
+	// further I/O). Falls back to the raw arg path if RealPath somehow
+	// yields nothing, matching the prior best-effort contract.
 	canonicalPath := path
-	if effWorkspace != "" {
-		if resolved, err := resolveAbsPath(path, effWorkspace); err == nil {
-			canonicalPath = resolved
-		}
+	if resolved, rpErr := handle.RealPath(); rpErr == nil && resolved != "" {
+		canonicalPath = resolved
 	}
 
 	var clobberNote string
 	if !overwrite {
-		if f, err := effFs.Open(path); err == nil {
-			f.Close()
+		if _, statErr := handle.Stat(); statErr == nil {
 			return ErrorResult(fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
 		}
-	} else if f, err := effFs.Open(path); err == nil {
+	} else if _, statErr := handle.Stat(); statErr == nil {
 		// We are about to replace a file that already exists. Look up who
 		// last wrote it (per the audit log's write history) and, if it was a
 		// DIFFERENT agent, surface that as a purely informational note — no
 		// new blocking behavior, this write proceeds regardless.
-		f.Close()
 		if writerID, found := lastWriterForPath(t.auditLogger, canonicalPath, ToolAgentID(ctx)); found {
 			// Precisely scoped wording: only write_file calls are tracked
 			// (edit_file/append_file are not), and only within
@@ -944,7 +963,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		}
 	}
 
-	if err := effFs.WriteFile(path, []byte(content)); err != nil {
+	if err := handle.WriteFile([]byte(content)); err != nil {
 		return ErrorResult(err.Error())
 	}
 
@@ -955,8 +974,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 type ListDirTool struct {
 	BaseTool
-	rerootable
-	fs fileSystem
+	agentHome string
+	restrict  bool
+	patterns  []*regexp.Regexp
 }
 
 func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *ListDirTool {
@@ -965,8 +985,9 @@ func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Reg
 		patterns = allowPaths[0]
 	}
 	return &ListDirTool{
-		rerootable: rerootable{restrict: restrict, patterns: patterns},
-		fs:         buildFs(workspace, restrict, patterns),
+		agentHome: workspace,
+		restrict:  restrict,
+		patterns:  patterns,
 	}
 }
 
@@ -1000,9 +1021,23 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		path = "."
 	}
 
-	entries, err := t.effectiveFs(ctx, t.fs).ReadDir(path)
+	policy, err := fspolicy.EffectiveFSPolicy(
+		ctx, t.agentHome, TurnWorkspaceDir(ctx), t.restrict,
+		config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
+	)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
+	}
+
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)
+	if err != nil {
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+
+	entries, err := handle.ReadDir()
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
 	return formatDirEntries(entries)
 }
@@ -1017,266 +1052,4 @@ func formatDirEntries(entries []os.DirEntry) *ToolResult {
 		}
 	}
 	return NewToolResult(result.String())
-}
-
-// fileSystem abstracts reading, writing, and listing files, allowing both
-// unrestricted (host filesystem) and sandbox (os.Root) implementations to share the same polymorphic interface.
-type fileSystem interface {
-	ReadFile(path string) ([]byte, error)
-	WriteFile(path string, data []byte) error
-	ReadDir(path string) ([]os.DirEntry, error)
-	Open(path string) (fs.File, error)
-}
-
-// hostFs is an unrestricted fileReadWriter that operates directly on the host filesystem.
-type hostFs struct{}
-
-func (h *hostFs) ReadFile(path string) ([]byte, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("failed to read file: file not found: %w", err)
-		}
-		if os.IsPermission(err) {
-			return nil, fmt.Errorf("failed to read file: access denied: %w", err)
-		}
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-	return content, nil
-}
-
-func (h *hostFs) ReadDir(path string) ([]os.DirEntry, error) {
-	return os.ReadDir(path)
-}
-
-func (h *hostFs) WriteFile(path string, data []byte) error {
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	// Using 0o600 (owner read/write only) for secure default permissions.
-	return fileutil.WriteFileAtomic(path, data, 0o600)
-}
-
-func (h *hostFs) Open(path string) (fs.File, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("failed to open file: file not found: %w", err)
-		}
-		if os.IsPermission(err) {
-			return nil, fmt.Errorf("failed to open file: access denied: %w", err)
-		}
-		return nil, fmt.Errorf("failed to open file: %w", err)
-	}
-	return f, nil
-}
-
-// sandboxFs is a sandboxed fileSystem that operates within a strictly defined workspace using os.Root.
-type sandboxFs struct {
-	workspace string
-}
-
-func (r *sandboxFs) execute(path string, fn func(root *os.Root, relPath string) error) error {
-	if r.workspace == "" {
-		return fmt.Errorf("workspace is not defined")
-	}
-
-	root, err := os.OpenRoot(r.workspace)
-	if err != nil {
-		return fmt.Errorf("failed to open workspace: %w", err)
-	}
-	defer root.Close()
-
-	relPath, err := getSafeRelPath(r.workspace, path)
-	if err != nil {
-		return err
-	}
-
-	return fn(root, relPath)
-}
-
-func (r *sandboxFs) ReadFile(path string) ([]byte, error) {
-	var content []byte
-	err := r.execute(path, func(root *os.Root, relPath string) error {
-		fileContent, err := root.ReadFile(relPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("failed to read file: file not found: %w", err)
-			}
-			// os.Root returns "escapes from parent" for paths outside the root
-			if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") ||
-				strings.Contains(err.Error(), "permission denied") {
-				return fmt.Errorf("failed to read file: access denied: %w", err)
-			}
-			return fmt.Errorf("failed to read file: %w", err)
-		}
-		content = fileContent
-		return nil
-	})
-	return content, err
-}
-
-func (r *sandboxFs) WriteFile(path string, data []byte) error {
-	return r.execute(path, func(root *os.Root, relPath string) error {
-		dir := filepath.Dir(relPath)
-		if dir != "." && dir != "/" {
-			if err := root.MkdirAll(dir, 0o755); err != nil {
-				return fmt.Errorf("failed to create parent directories: %w", err)
-			}
-		}
-
-		// Use atomic write pattern with explicit sync for flash storage reliability.
-		// Using 0o600 (owner read/write only) for secure default permissions.
-		tmpRelPath := fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano())
-
-		tmpFile, err := root.OpenFile(tmpRelPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			root.Remove(tmpRelPath)
-			return fmt.Errorf("failed to open temp file: %w", err)
-		}
-
-		if _, err := tmpFile.Write(data); err != nil {
-			tmpFile.Close()
-			root.Remove(tmpRelPath)
-			return fmt.Errorf("failed to write temp file: %w", err)
-		}
-
-		// CRITICAL: Force sync to storage medium before rename.
-		// This ensures data is physically written to disk, not just cached.
-		if err := tmpFile.Sync(); err != nil {
-			tmpFile.Close()
-			root.Remove(tmpRelPath)
-			return fmt.Errorf("failed to sync temp file: %w", err)
-		}
-
-		if err := tmpFile.Close(); err != nil {
-			root.Remove(tmpRelPath)
-			return fmt.Errorf("failed to close temp file: %w", err)
-		}
-
-		if err := root.Rename(tmpRelPath, relPath); err != nil {
-			root.Remove(tmpRelPath)
-			return fmt.Errorf("failed to rename temp file over target: %w", err)
-		}
-
-		// Sync directory to ensure rename is durable
-		if dirFile, err := root.Open("."); err == nil {
-			if syncErr := dirFile.Sync(); syncErr != nil {
-				logger.WarnCF(
-					"filesystem",
-					"directory sync failed after atomic write",
-					map[string]any{"error": syncErr.Error()},
-				)
-			}
-			dirFile.Close()
-		}
-
-		return nil
-	})
-}
-
-func (r *sandboxFs) ReadDir(path string) ([]os.DirEntry, error) {
-	var entries []os.DirEntry
-	err := r.execute(path, func(root *os.Root, relPath string) error {
-		dirEntries, err := fs.ReadDir(root.FS(), relPath)
-		if err != nil {
-			return err
-		}
-		entries = dirEntries
-		return nil
-	})
-	return entries, err
-}
-
-func (r *sandboxFs) Open(path string) (fs.File, error) {
-	var f fs.File
-	err := r.execute(path, func(root *os.Root, relPath string) error {
-		file, err := root.Open(relPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("failed to open file: file not found: %w", err)
-			}
-			if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") ||
-				strings.Contains(err.Error(), "permission denied") {
-				return fmt.Errorf("failed to open file: access denied: %w", err)
-			}
-			return fmt.Errorf("failed to open file: %w", err)
-		}
-		f = file
-		return nil
-	})
-	return f, err
-}
-
-// whitelistFs wraps a sandboxFs and allows access to specific paths outside
-// the workspace when they match any of the provided patterns.
-type whitelistFs struct {
-	sandbox  *sandboxFs
-	host     hostFs
-	patterns []*regexp.Regexp
-}
-
-func (w *whitelistFs) matches(path string) bool {
-	return isAllowedPath(path, w.patterns)
-}
-
-func (w *whitelistFs) ReadFile(path string) ([]byte, error) {
-	if w.matches(path) {
-		return w.host.ReadFile(path)
-	}
-	return w.sandbox.ReadFile(path)
-}
-
-func (w *whitelistFs) WriteFile(path string, data []byte) error {
-	if w.matches(path) {
-		return w.host.WriteFile(path, data)
-	}
-	return w.sandbox.WriteFile(path, data)
-}
-
-func (w *whitelistFs) ReadDir(path string) ([]os.DirEntry, error) {
-	if w.matches(path) {
-		return w.host.ReadDir(path)
-	}
-	return w.sandbox.ReadDir(path)
-}
-
-func (w *whitelistFs) Open(path string) (fs.File, error) {
-	if w.matches(path) {
-		return w.host.Open(path)
-	}
-	return w.sandbox.Open(path)
-}
-
-// buildFs returns the appropriate fileSystem implementation based on restriction
-// settings and optional path whitelist patterns.
-func buildFs(workspace string, restrict bool, patterns []*regexp.Regexp) fileSystem {
-	if !restrict {
-		return &hostFs{}
-	}
-	sandbox := &sandboxFs{workspace: workspace}
-	if len(patterns) > 0 {
-		return &whitelistFs{sandbox: sandbox, patterns: patterns}
-	}
-	return sandbox
-}
-
-// Helper to get a safe relative path for os.Root usage
-func getSafeRelPath(workspace, path string) (string, error) {
-	if workspace == "" {
-		return "", fmt.Errorf("workspace is not defined")
-	}
-
-	rel := filepath.Clean(path)
-	if filepath.IsAbs(rel) {
-		var err error
-		rel, err = filepath.Rel(workspace, rel)
-		if err != nil {
-			return "", fmt.Errorf("failed to calculate relative path: %w", err)
-		}
-	}
-
-	if !filepath.IsLocal(rel) {
-		return "", fmt.Errorf("path escapes workspace: %s", path)
-	}
-
-	return rel, nil
 }

@@ -22,6 +22,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -41,15 +42,29 @@ const (
 	ReasonOutsideWorkspace = "outside_workspace"
 	ReasonNotInAllowList   = "not_in_allow_list"
 	ReasonSymlinkEscape    = "symlink_escape"
+	// ReasonCarveOut and ReasonPathInvalid are ADR-046 additions: FR-035
+	// explicitly calls out "carve-out hit" as a distinct filesystem-scope
+	// refusal category from a plain outside-work denial, and ResolvePath's
+	// ErrPathInvalid (embedded NUL / unresolvable path) is a third, distinct
+	// failure shape neither prior constant described.
+	ReasonCarveOut    = "carve_out"
+	ReasonPathInvalid = "path_invalid"
 )
 
 // classifyPathDenialReason picks the audit reason for a path-guard error.
 //
-// `validatorErr` is the error returned by validatePathWithAllowPaths or by
-// the shell guardCommand path checker. `allowPathsLen` is the number of
-// configured AllowReadPaths/AllowWritePaths entries — it discriminates
-// "outside workspace, no allow-list configured" from "outside workspace,
-// allow-list configured but no entry matched".
+// ADR-046: ResolvePath (resolvepath.go) returns typed sentinel errors
+// (ErrCarveOut/ErrOutsideScope/ErrPathInvalid), so the primary
+// classification is now an errors.Is type switch rather than string
+// sniffing. The legacy string-sniffing fallback below is kept for
+// `validatorErr` values that are NOT one of those sentinels — the shape
+// validatePathWithAllowPaths and the shell guardCommand path checker still
+// produce for the tools this ADR-046 wave does not migrate (send_file.go;
+// web_serve.go via ValidateWorkspacePath) — so their denials keep
+// classifying correctly too. `allowPathsLen` is the number of configured
+// AllowReadPaths/AllowWritePaths entries — it discriminates "outside
+// workspace, no allow-list configured" from "outside workspace, allow-list
+// configured but no entry matched" for that legacy path only.
 //
 // Pure function — no side effects, safe to call without locks.
 func classifyPathDenialReason(validatorErr error, allowPathsLen int) string {
@@ -58,6 +73,18 @@ func classifyPathDenialReason(validatorErr error, allowPathsLen int) string {
 		// Fall back to the most common reason rather than panicking.
 		return ReasonOutsideWorkspace
 	}
+
+	switch {
+	case errors.Is(validatorErr, ErrCarveOut):
+		return ReasonCarveOut
+	case errors.Is(validatorErr, ErrPathInvalid):
+		return ReasonPathInvalid
+	case errors.Is(validatorErr, ErrOutsideScope):
+		return ReasonOutsideWorkspace
+	}
+
+	// Legacy fallback: validatorErr is not one of the typed ResolvePath
+	// sentinels above — classify it the pre-ADR-046 way.
 	msg := strings.ToLower(validatorErr.Error())
 	if strings.Contains(msg, "symlink") {
 		return ReasonSymlinkEscape
