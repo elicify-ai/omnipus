@@ -2,6 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { isApiError } from '@/lib/api'
 import { isReAuthCancelled } from '@/components/settings/useReAuthGate'
 
+// Draft-ownership rule (canon): a dirty field is never hydrated from the
+// server; a caller's dirty flag clears ONLY when the save snapshot still
+// equals the live draft. See `UseAutoSaveOptions.onSaved`'s doc comment
+// below for the full rule and the callback contract that enforces it — every
+// consumer's own onSaved comment should point back here rather than
+// re-narrating it.
+
 export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
 interface UseAutoSaveOptions<T> {
@@ -61,7 +68,7 @@ interface UseAutoSaveOptions<T> {
    * false` — and NOT unconditionally on every successful save. If the
    * operator edited `data` again while this save's request was still in
    * flight, `isCurrent` is false: the dirty flag must stay armed, because
-   * this hook's own serialization (FIX 3 above) has already queued a
+   * this hook's own serialization (FIX 3 below) has already queued a
    * re-run that will persist the newer draft the moment this save's
    * `finally` releases the guard. Clearing dirty unconditionally is exactly
    * the bug this callback exists to prevent — it lets a same-tick (or
@@ -82,6 +89,17 @@ interface UseAutoSaveResult {
   lastSavedAt: Date | undefined
   /** Call this to trigger an immediate save (no debounce) */
   saveNow: () => void
+  /**
+   * True when the live `data` has not yet been durably persisted (deep
+   * JSON-compared against the last successfully-saved snapshot). Exposed so
+   * a caller can flush deliberately at a moment the hook itself has no
+   * hook into — e.g. a sheet/modal `onClose` that does NOT unmount the
+   * component (so the hook's own unmount-flush never fires): check this,
+   * and if true call `saveNow()` BEFORE tearing down whatever state the
+   * save's closure depends on (see AgentProfile's sheet-close handler for
+   * the canonical example and the ordering hazard it documents).
+   */
+  hasPendingChanges: () => boolean
 }
 
 /**
@@ -174,6 +192,13 @@ export function useAutoSave<T>(
     // saved (data may change again while the request is in flight).
     const inFlightData = latestDataRef.current
     const inFlightJson = JSON.stringify(inFlightData)
+    // Hook polish (7-reviewer-gate finding): tracks whether THIS save's own
+    // `saveFnRef` call actually succeeded, so the `onSaved` callback below —
+    // now invoked OUTSIDE this try/catch — knows whether it's allowed to
+    // fire without re-deriving that from `status` (which a concurrent
+    // queued re-run could have already moved past 'saved' by the time we
+    // get there).
+    let savedSuccessfully = false
     try {
       await saveFnRef.current(inFlightData)
       // Only NOW is the data durable — advance the saved marker so
@@ -181,13 +206,7 @@ export function useAutoSave<T>(
       lastSavedJsonRef.current = inFlightJson
       setStatus('saved')
       setLastSavedAt(new Date())
-      // Draft-ownership rule (see `onSaved`'s doc comment): report whether
-      // the LIVE draft — read now, after the round-trip — is still the
-      // exact payload we just persisted. Comparing `latestDataRef.current`
-      // (not `inFlightData`) here is the whole point: if the operator typed
-      // more while this save was in flight, they differ and `isCurrent` is
-      // false, so a caller-owned dirty flag must stay armed.
-      onSavedRef.current?.(inFlightData, JSON.stringify(latestDataRef.current) === inFlightJson)
+      savedSuccessfully = true
       // Fade back to idle after 2s. Cancel any previous fade timer first to
       // avoid leaking setTimeouts when saves happen in quick succession.
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
@@ -218,6 +237,31 @@ export function useAutoSave<T>(
         if (JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current) {
           void doSave()
         }
+      }
+    }
+    // Hook polish (7-reviewer-gate finding): `onSaved` is invoked OUTSIDE
+    // the try/catch above, in its own try/catch that only logs. A THROWING
+    // caller callback must never flip a save that already genuinely
+    // succeeded (the PUT landed, `lastSavedJsonRef` already advanced) into
+    // 'error' status — that would be a lie to the user (the AutoSaveIndicator
+    // would show a failure for a save that, in fact, persisted). `return`
+    // inside the `catch` block above (the re-auth-cancel path) still skips
+    // this entirely, since code after a try/catch/finally is unreachable
+    // once a `return` inside try/catch has fired; the plain error path falls
+    // through here with `savedSuccessfully` still false, so onSaved is
+    // correctly skipped for both failure modes.
+    if (savedSuccessfully) {
+      try {
+        // Draft-ownership rule (see `onSaved`'s doc comment above): report
+        // whether the LIVE draft — read now, after the round-trip — is
+        // still the exact payload we just persisted. Comparing
+        // `latestDataRef.current` (not `inFlightData`) here is the whole
+        // point: if the operator typed more while this save was in flight,
+        // they differ and `isCurrent` is false, so a caller-owned dirty
+        // flag must stay armed.
+        onSavedRef.current?.(inFlightData, JSON.stringify(latestDataRef.current) === inFlightJson)
+      } catch (err) {
+        console.error('useAutoSave: onSaved callback threw', err)
       }
     }
   }, [disabled])
@@ -412,5 +456,5 @@ export function useAutoSave<T>(
     }
   }, [hasPendingChanges, doSave])
 
-  return { status, error, lastSavedAt, saveNow: doSave }
+  return { status, error, lastSavedAt, saveNow: doSave, hasPendingChanges }
 }

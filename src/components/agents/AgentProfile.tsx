@@ -86,20 +86,26 @@ type FallbackEntry = FallbackModel & { provider: string }
 
 /**
  * Echo-race fix, item 3 (belt-and-braces): true when the currently focused
- * element is a text input/textarea inside THIS profile's own slide-over
- * (marked by `data-testid="agent-profile-sheet"` on its SheetContent — see
- * `ProfileSheet` below). Used only to add a second, independent line of
- * defense around the hydration effect's primary `isDirtyRef` guard — a
- * hydration must never clobber text the operator is actively typing into
- * right now, even in a hypothetical gap where `isDirtyRef` was not (yet)
- * set for the field being typed into.
+ * element is a text input/textarea inside THIS profile's own slide-over.
+ * Used only to add a second, independent line of defense around the
+ * hydration effect's primary `isDirtyRef` guard — a hydration must never
+ * clobber text the operator is actively typing into right now, even in a
+ * hypothetical gap where `isDirtyRef` was not (yet) set for the field being
+ * typed into.
+ *
+ * Item 11 (focus-check scoping): scoped via a React ref to THIS instance's
+ * own SheetContent DOM node — passed in by the caller — rather than
+ * `document.querySelector('[data-testid="agent-profile-sheet"]')`, which
+ * would resolve to the FIRST matching element in the whole document
+ * regardless of which AgentProfile instance owns it. The sheet renders
+ * through a Radix portal, but a ref still resolves to the real DOM node
+ * wherever it's portaled to, so scoping this way works cleanly.
  */
-function isFocusedInAgentProfileForm(): boolean {
+function isFocusedInAgentProfileForm(sheetEl: HTMLElement | null): boolean {
   if (typeof document === 'undefined') return false
   const active = document.activeElement
   if (!active || (active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA')) return false
-  const sheet = document.querySelector('[data-testid="agent-profile-sheet"]')
-  return !!sheet && sheet.contains(active)
+  return !!sheetEl && sheetEl.contains(active)
 }
 
 interface AgentProfileProps {
@@ -196,6 +202,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
+
+  // Item 11: ref to THIS instance's own SheetContent DOM node, so the
+  // focus-check belt-and-braces guard (`isFocusedInAgentProfileForm`) scopes
+  // to the right sheet instead of a document-wide first-match query.
+  const sheetContentRef = useRef<HTMLDivElement>(null)
 
   // Tracks whether the initial hydration from the server has completed.
   // Guards auto-save from firing with default (empty) state before the first fetch resolves.
@@ -378,7 +389,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // check — it deliberately duplicates `isDirtyRef.current` in its own
     // condition so it stays correct even if the primary guard below is
     // ever refactored.
-    if (isFocusedInAgentProfileForm() && (isDirtyRef.current || saveStatusRef.current === 'saving')) return
+    if (isFocusedInAgentProfileForm(sheetContentRef.current) && (isDirtyRef.current || saveStatusRef.current === 'saving')) return
     // isDirtyRef prevents background refetch from overwriting unsaved user edits.
     // We depend on the stable agentId prop (not agent?.id which can be undefined
     // during loading) so the effect re-runs reliably on agent navigation.
@@ -573,6 +584,23 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
       // "no voice configured" rather than persisting a literal "   " that
       // breaks TTS lookup at v0.2.0 release.
+      //
+      // Trim-vs-raw isCurrent gap (item 2, WorkspaceSettingsTab fix):
+      // `voice` (and `provider` above) are trimmed HERE, inside the object
+      // useAutoSave actually watches — in principle the same class of bug
+      // WorkspaceSettingsTab had (isCurrent's deep-equal compares trimmed
+      // values, so a same-tick hydration could clobber raw trailing
+      // whitespace the operator hasn't committed yet). Left as-is rather
+      // than moved to raw-in/trim-in-saveFn: unlike WorkspaceSettingsTab,
+      // this form's hydration effect is ALSO gated by the `updated_at`
+      // monotonic guard (`lastIncorporatedUpdatedAtRef`) — a same-or-stale
+      // refetch echo is rejected regardless of `isDirtyRef`, so the gap is
+      // shielded here. `provider` is additionally never free-typed (it's
+      // set only via ModelSelector's onPairChange), so trailing whitespace
+      // can't occur for it in practice. Aligning to raw-in/trim-in-saveFn
+      // would also require branching the trim by tier inside saveFn (this
+      // form's `data` shape differs for subagent_3p vs. not) for marginal
+      // benefit given the existing shield — not done.
       voice: voice.trim() !== '' ? voice.trim() : undefined,
       timeout_seconds: timeoutPayload,
       max_tool_iterations: maxToolIterations,
@@ -606,7 +634,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     agentSkills, executor,
   ])
 
-  const { status: saveStatus, error: saveError, lastSavedAt: saveLastSavedAt } = useAutoSave(
+  const {
+    status: saveStatus,
+    error: saveError,
+    lastSavedAt: saveLastSavedAt,
+    saveNow: saveAgentNow,
+    hasPendingChanges: hasPendingAgentChanges,
+  } = useAutoSave(
     formData,
     async (data) => {
       // Do not save before the server data has been hydrated into state —
@@ -796,25 +830,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // form) — raised from the 500ms default so a normal typing cadence
       // doesn't fire a save (and its own invalidateQueries echo) on nearly
       // every pause. Small-field edits (e.g. the Default toggle) still
-      // reach the server promptly via blur/unmount flush.
+      // reach the server within one debounce cycle. There is no "blur
+      // flush" — the hook has no blur hook at all. The real mechanisms that
+      // can flush a pending edit ahead of the 1500ms debounce are: the
+      // debounce timer itself, the hook's unmount flush, the pagehide/
+      // beforeunload/visibilitychange keepalive beacon (`flushUrl` below),
+      // and — since this sheet does NOT unmount on close (it lives at the
+      // route level; see `handleCloseAgentSheet` below) — the explicit
+      // flush-on-close this component now performs itself.
       debounceMs: 1500,
-      // Echo-race fix (P2 'Text input Auto save'): the saveFn above used to
-      // clear `isDirtyRef.current` unconditionally right after a successful
-      // PUT — BEFORE the `invalidateQueries` refetch it triggers has landed.
-      // If the operator typed more (e.g. into SOUL) during the PUT's
-      // round-trip, that unconditional clear let the hydration effect
-      // above (whose PRIMARY guard is `isDirtyRef.current`) accept the
-      // refetch's echo of the OLD text and revert the newer keystrokes out
-      // from under the operator's cursor.
-      //
-      // Draft-ownership rule: a dirty field is never hydrated from the
-      // server; dirty clears ONLY when the save snapshot still equals the
-      // live draft. `isCurrent` (computed by useAutoSave itself, reading
-      // the live `data` AFTER the round-trip) is false exactly when the
-      // operator edited the form again while this save was in flight — in
-      // that case `isDirtyRef` stays armed, so the hydration guard keeps
-      // rejecting the stale echo until the queued re-save (useAutoSave's
-      // own FIX-3 serialization) persists the newer draft.
+      // Draft-ownership rule — see useAutoSave onSaved docs; clear only
+      // when isCurrent.
       onSaved: (_saved, isCurrent) => {
         // Mirror the saveFn's own no-op early-returns above (not hydrated
         // yet / no agent selected / a 409 conflict refetch still pending):
@@ -853,6 +879,36 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // commit runs, regardless of declaration order.
   const saveStatusRef = useRef(saveStatus)
   saveStatusRef.current = saveStatus
+
+  // Item 1 (MERGE-BLOCKER — sheet-close data loss): AgentProfile is mounted
+  // at the route level and does NOT unmount when the sheet closes (only
+  // `editAgentId` flips to null) — so useAutoSave's own unmount-flush never
+  // fires here. Without this, a debounce timer armed less than 1500ms
+  // before close fires AFTER close, lands in saveFn's `agentId === null`
+  // early-return, and useAutoSave records that as a SUCCESS (advances
+  // `lastSavedJsonRef`, shows 'Saved') — the edit is silently lost even
+  // though nothing was ever sent to the server.
+  //
+  // Fix: flush explicitly on close, BEFORE the store write that clears
+  // `editAgentId`. Ordering is load-bearing, not cosmetic: `saveNow()` is
+  // fire-and-forget, but calling it synchronously captures the CURRENT
+  // render's `saveFn` closure (via useAutoSave's internal `saveFnRef`,
+  // reassigned every render) and the current `agentId` — both while they
+  // still refer to this agent. If `closeEditAgentSlideOver()` ran FIRST,
+  // the store update would (on the next render) flip `agentId` to null and
+  // the `[agentId]` reset effect would clear `isDirtyRef`/`hasHydrated`
+  // — but that reassignment happens strictly AFTER this synchronous call
+  // returns (React state updates from a store action are not applied
+  // mid-function), so calling `saveNow()` before the store write is safe
+  // either way; doing it in this order is simply the same "flush before
+  // teardown" pattern the hook's own unmount cleanup uses, applied to the
+  // one teardown moment (sheet close) that isn't a real unmount.
+  function handleCloseAgentSheet() {
+    if (hasPendingAgentChanges()) {
+      saveAgentNow()
+    }
+    closeEditAgentSlideOver()
+  }
 
   // W6-B4 / G3 fix: the "Default agent" toggle used to fire its success
   // toast (and invalidate ['agents']) the instant the Switch was flipped —
@@ -1020,9 +1076,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     return (
       <ProfileSheet
         isOpen={isOpen}
-        onClose={closeEditAgentSlideOver}
+        onClose={handleCloseAgentSheet}
         title="Edit agent"
         onOpenAutoFocus={handleOpenAutoFocus}
+        contentRef={sheetContentRef}
       >
         <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
           Loading agent...
@@ -1048,9 +1105,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     return (
       <ProfileSheet
         isOpen={isOpen}
-        onClose={closeEditAgentSlideOver}
+        onClose={handleCloseAgentSheet}
         title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
         onOpenAutoFocus={handleOpenAutoFocus}
+        contentRef={sheetContentRef}
       >
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
           <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
@@ -1061,7 +1119,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 Retry
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={closeEditAgentSlideOver}>
+            <Button variant="outline" size="sm" onClick={handleCloseAgentSheet}>
               Back to Agents
             </Button>
           </div>
@@ -1534,7 +1592,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         data-testid={`fallback-chip-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
-                        onClick={() => moveFallback(entry.model, -1)}
+                        onClick={() => { markDirty(); moveFallback(entry.model, -1) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowUp size={10} />
@@ -1544,7 +1602,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         data-testid={`fallback-chip-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === fallbackModels.length - 1}
-                        onClick={() => moveFallback(entry.model, 1)}
+                        onClick={() => { markDirty(); moveFallback(entry.model, 1) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowDown size={10} />
@@ -1553,7 +1611,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         type="button"
                         data-testid={`fallback-chip-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
-                        onClick={() => removeFallback(entry.model)}
+                        onClick={() => { markDirty(); removeFallback(entry.model) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <X size={10} />
@@ -1903,12 +1961,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     value={timeoutDraft}
                     onChange={(e) => {
                       const raw = e.target.value
+                      // Item 5 (draft-field dirty gap): mark dirty on EVERY
+                      // keystroke, not only once the draft commits to a
+                      // valid value. `markDirty()` only gates hydration —
+                      // it triggers no save on its own — so this is safe;
+                      // without it, an external hydration mid-edit (while
+                      // the draft holds an invalid/partial value that
+                      // hasn't committed to `timeoutSeconds` yet) could
+                      // silently reset the field the operator is still
+                      // typing into.
+                      markDirty()
                       setTimeoutDraft(raw)
                       const parsed = Number(raw)
                       // Commit (and autosave) only a real value; in-progress
                       // typing (empty/partial input) never persists.
                       if (raw !== '' && Number.isInteger(parsed) && parsed >= 0) {
-                        markDirty()
                         setTimeoutSeconds(parsed)
                       }
                     }}
@@ -1938,12 +2005,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       value={maxToolIterationsDraft}
                       onChange={(e) => {
                         const raw = e.target.value
+                        // Item 5 (draft-field dirty gap): mark dirty on every
+                        // keystroke — see the turn-timeout input's onChange
+                        // above for why this must not be gated on validity.
+                        markDirty()
                         setMaxToolIterationsDraft(raw)
                         const parsed = Number(raw)
                         // Commit (and autosave) only a real value >= 1; clearing
                         // the field to type never persists a 0 again.
                         if (raw !== '' && Number.isInteger(parsed) && parsed >= 1) {
-                          markDirty()
                           setMaxToolIterations(parsed)
                         }
                       }}
@@ -2142,12 +2212,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             value={hbIntervalDraft}
             onChange={(e) => {
               const raw = e.target.value
+              // Item 5 (draft-field dirty gap): mark dirty on every
+              // keystroke, not only once a valid value commits — see the
+              // Basics-tab draft inputs for the same fix and rationale.
+              markHbDirty()
               setHbIntervalDraft(raw)
-              // Commit (and mark dirty) only a real, valid value; in-progress
-              // typing (empty, or an intermediate value below the 5-minute
-              // floor on its way to a larger number) never persists.
+              // Commit only a real, valid value; in-progress typing (empty,
+              // or an intermediate value below the 5-minute floor on its way
+              // to a larger number) never persists.
               if (raw !== '' && Number.isInteger(Number(raw)) && Number(raw) >= 5) {
-                markHbDirty()
                 setHbIntervalMinutes(Number(raw))
               }
             }}
@@ -2224,9 +2297,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   return (
     <ProfileSheet
       isOpen={isOpen}
-      onClose={closeEditAgentSlideOver}
+      onClose={handleCloseAgentSheet}
       title={`Edit ${agent.name}`}
       onOpenAutoFocus={handleOpenAutoFocus}
+      contentRef={sheetContentRef}
     >
       {/* Title row locked to 44px chrome; badges/description sit below so the
           open panel aligns with the workspace top bar (flat shell chrome). */}
@@ -2510,6 +2584,10 @@ function ProfileSheet({
    *  can capture the trigger element before Radix shifts focus. Used by
    *  AgentProfile to restore focus to the AgentCard on close. */
   onOpenAutoFocus,
+  /** Item 11: forwarded to SheetContent so the parent can scope its own
+   *  focus-check belt-and-braces guard to THIS instance's DOM node instead
+   *  of a document-wide selector. */
+  contentRef,
   children,
 }: {
   isOpen: boolean
@@ -2523,6 +2601,7 @@ function ProfileSheet({
    */
   title: string
   onOpenAutoFocus?: (event: Event) => void
+  contentRef?: React.Ref<HTMLDivElement>
   children: React.ReactNode
 }) {
   return (
@@ -2532,13 +2611,13 @@ function ProfileSheet({
           i.e. 90vw on mobile, 672 px on desktop). Caps the Edit slide-over at
           ~32rem/90vw instead of 768 px / 47% of a 1440 viewport. */}
       <SheetContent
+        ref={contentRef}
         side="right"
         className="flex flex-col gap-0 p-0"
         onOpenAutoFocus={onOpenAutoFocus}
-        // Echo-race fix, item 3: stable selector so the hydration effect's
-        // `isFocusedInAgentProfileForm()` belt-and-braces check can scope
-        // "is the operator's cursor inside THIS profile's own inputs"
-        // without threading a ref through this local wrapper.
+        // Kept for tests/tooling that still target it by selector; the
+        // focus-check guard itself now uses `contentRef` (item 11), not
+        // this selector.
         data-testid="agent-profile-sheet"
       >
         <SheetTitle className="sr-only">{title}</SheetTitle>
