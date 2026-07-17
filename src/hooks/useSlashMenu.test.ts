@@ -123,7 +123,18 @@ function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {})
 }
 
 beforeEach(() => {
-  act(() => { useUiStore.setState({ modelSelectorOpen: false, agentSelectorOpen: false }) })
+  act(() => {
+    useUiStore.setState({
+      modelSelectorOpen: false,
+      agentSelectorOpen: false,
+      // Session-search TWO MODES: reset closed/sessions-mode/no-filter
+      // between tests so a /workspace dispatch in one test can't leak
+      // 'workspaces' mode (or a stale open=true) into the next.
+      searchModalOpen: false,
+      searchModalMode: 'sessions',
+      searchModalWorkspaceFilter: null,
+    })
+  })
   // useSessionStore is a real (unmocked) singleton store — selectMentionAgent
   // writes to it via setActiveSession, so it must be reset between tests the
   // same way useUiStore is, or a mention-selection test would leak its
@@ -402,6 +413,31 @@ describe('useSlashMenu — client command dispatch', () => {
     const item = result.current.slashItems.find((i) => i.key === '/cancel')!
     act(() => item.onSelect())
     expect(cancelIfStreaming).toHaveBeenCalledTimes(1)
+  })
+
+  // Session-search TWO MODES: /resume and /workspace open the SAME
+  // SearchModal instance (searchModalOpen) but in DIFFERENT modes —
+  // /resume must leave the panel in its original 'sessions' behavior
+  // (unchanged per spec); /workspace must switch it into 'workspaces' mode
+  // (openWorkspaceSwitcher, ui store) rather than reusing openSearchModal.
+  it('/resume opens the search modal in sessions mode (unchanged)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/resume')!
+    act(() => item.onSelect())
+    expect(useUiStore.getState().searchModalOpen).toBe(true)
+    expect(useUiStore.getState().searchModalMode).toBe('sessions')
+    expect(useUiStore.getState().searchModalWorkspaceFilter).toBeNull()
+  })
+
+  it('/workspace opens the search modal in workspaces mode (openWorkspaceSwitcher, not openSearchModal)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/workspace')!
+    act(() => item.onSelect())
+    expect(useUiStore.getState().searchModalOpen).toBe(true)
+    expect(useUiStore.getState().searchModalMode).toBe('workspaces')
+    expect(useUiStore.getState().searchModalWorkspaceFilter).toBeNull()
   })
 
   it('/skills sets the input to "/skills" and reopens the menu filtered to skills only (D9)', () => {
@@ -765,12 +801,14 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
     act(() => { intercepted = result.current.interceptClientCommand() })
     expect(intercepted).toBe(true)
     expect(useUiStore.getState().searchModalOpen).toBe(true)
+    // Two-modes contract: /resume must land in 'sessions' mode, unchanged.
+    expect(useUiStore.getState().searchModalMode).toBe('sessions')
   })
 
   // Mirrors the "/resume" case directly above: "/workspace" (session-search
   // enhancement) is the second synthetic client-only command and must
-  // survive the same backend-outage degradation, opening the identical
-  // search modal instance (no workspace preselected).
+  // survive the same backend-outage degradation, opening the SAME search
+  // modal instance but in its 'workspaces' mode (no workspace preselected).
   it('the synthetic client-only "/workspace" command still intercepts even when the backend commands query errors', () => {
     commandsQueryIsError = true
     const composerRuntime = makeComposerRuntime('/workspace')
@@ -779,6 +817,9 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
     act(() => { intercepted = result.current.interceptClientCommand() })
     expect(intercepted).toBe(true)
     expect(useUiStore.getState().searchModalOpen).toBe(true)
+    // Two-modes contract: /workspace must land in 'workspaces' mode, not
+    // 'sessions' — this is the whole point of the openWorkspaceSwitcher split.
+    expect(useUiStore.getState().searchModalMode).toBe('workspaces')
   })
 })
 
