@@ -136,8 +136,8 @@ func TestBash_CancelCascade_KillsOwnedBackgroundSessions(t *testing.T) {
 
 	got, getErr := sm.Get("bg-1")
 	require.NoError(t, getErr)
-	assert.Equal(t, "done", got.GetStatus(),
-		"the background session owned by the canceled chat session must be killed")
+	assert.Equal(t, "canceled", got.GetStatus(),
+		"the background session owned by the canceled chat session must be killed and relabeled canceled")
 
 	assert.Equal(t, countBefore+1, sm.KilledBackgroundSessionsCount(),
 		"FR-B14: the kill counter must increment so the cascade is observable without a subsequent poll")
@@ -245,26 +245,37 @@ func TestBash_CancelCascade_DoesNotAffectOtherSessions(t *testing.T) {
 
 	gotA, err := sm.Get("bg-A")
 	require.NoError(t, err)
-	assert.Equal(t, "done", gotA.GetStatus(), "session A's background work must be killed")
+	assert.Equal(t, "canceled", gotA.GetStatus(), "session A's background work must be killed and relabeled canceled")
 
 	gotB, err := sm.Get("bg-B")
 	require.NoError(t, err)
 	assert.Equal(t, "running", gotB.GetStatus(), "session B's background work must be left untouched")
 }
 
-// TestBash_CancelCascade_HookNotCalledWhenNoActiveTurn verifies that a
-// double-cancel-style no-op (no active turn claimed, ClaimCancel never
-// succeeds) does not reach PHASE A at all, so KillBackgroundSessions is never
-// invoked — matching RequestCancel's existing "Fired: false" short-circuit for
-// unmatched sessions (regression guard: the new hook must not change today's
-// no-active-turn behavior).
-func TestBash_CancelCascade_HookNotCalledWhenNoActiveTurn(t *testing.T) {
+// TestBash_CancelCascade_HookCalledEvenWithNoActiveTurn is the regression
+// test for the root-cause bug this fix closes: a `bash
+// run_in_background=true` call's turn ends immediately (the tool call
+// returns right away), so by the time a user later clicks Cancel to stop the
+// still-running background job, there is no active turn left for
+// GetActiveTurnHookForSession to find — ClaimCancel never runs, wasFired is
+// false. Before this fix, RequestCancel's wasFired-gated early return meant
+// hooks.KillBackgroundSessions was NEVER reached in this scenario: a silent
+// no-op that left the background process (and its process group) running
+// forever. This test previously encoded the bug (asserted the hook was NOT
+// called); it now asserts the opposite — the hook IS called for a
+// resolvable session even with no active turn — while confirming the
+// turn-cancel state machine itself still correctly reports Fired: false
+// (there genuinely is no turn to cancel).
+func TestBash_CancelCascade_HookCalledEvenWithNoActiveTurn(t *testing.T) {
 	t.Parallel()
 
 	al := newCancelTestAgentLoop(t)
-	// Deliberately do not register any turnState for this session.
+	// Deliberately do not register any turnState for this session — this is
+	// the real "background work outlived its turn" state a completed
+	// run_in_background=true call leaves behind.
 
 	called := false
+	var gotSessionID string
 	outcome, err := al.RequestCancel(
 		context.Background(),
 		CancelScope{SessionID: "sess-never-active"},
@@ -272,11 +283,56 @@ func TestBash_CancelCascade_HookNotCalledWhenNoActiveTurn(t *testing.T) {
 		CancelHooks{
 			KillBackgroundSessions: func(sessionID string) int {
 				called = true
+				gotSessionID = sessionID
 				return 0
 			},
 		},
 	)
 	require.NoError(t, err)
-	assert.False(t, outcome.Fired, "no active turn means no claim, so the cancel does not fire")
-	assert.False(t, called, "KillBackgroundSessions must not be invoked when no active turn is claimed")
+	assert.False(t, outcome.Fired, "no active turn means no claim, so the turn-cancel state machine itself does not fire")
+	assert.True(t, called, "KillBackgroundSessions must be invoked even when no active turn is claimed — "+
+		"this is the fix for the background-shell-never-canceled bug")
+	assert.Equal(t, "sess-never-active", gotSessionID, "the hook must receive the resolved sessionID")
+}
+
+// TestBash_CancelCascade_KillsRealBackgroundProcessWithNoActiveTurn drives
+// the exact end-to-end scenario the bug report identified, using a REAL
+// tools.ProcessSession registered against a tools.SessionManager rather than
+// a boolean callback flag: a background bash session owned by S is still
+// "running", NO active turn is registered for S (its turn already ended),
+// and the user cancels S. Before the fix, RequestCancel would early-return
+// before ever calling hooks.KillBackgroundSessions, so the background
+// process would keep running (silently) forever. After the fix, the process
+// must actually be killed and relabeled "canceled" even though
+// outcome.Fired is false.
+func TestBash_CancelCascade_KillsRealBackgroundProcessWithNoActiveTurn(t *testing.T) {
+	t.Parallel()
+
+	al := newCancelTestAgentLoop(t)
+	// Deliberately do not register any turnState for "sess-bg-orphaned" — the
+	// background job's own turn already finished by the time Cancel fires.
+
+	sm := tools.NewSessionManager()
+	bgSession := newRunningBackgroundSession("bg-orphaned", "sess-bg-orphaned", 999993001)
+	sm.Add(bgSession)
+
+	outcome, err := al.RequestCancel(
+		context.Background(),
+		CancelScope{SessionID: "sess-bg-orphaned"},
+		CancelCanceller{UserID: "alice", Channel: "web"},
+		CancelHooks{
+			KillBackgroundSessions: func(sessionID string) int {
+				return sm.KillAllForSession(sessionID)
+			},
+		},
+	)
+	require.NoError(t, err)
+	assert.False(t, outcome.Fired, "no active turn exists, so the turn-cancel state machine itself does not fire")
+
+	got, getErr := sm.Get("bg-orphaned")
+	require.NoError(t, getErr)
+	assert.True(t, got.IsDone(),
+		"the background process must be killed even though RequestCancel's own turn-cancel state machine never fired")
+	assert.Equal(t, "canceled", got.GetStatus(),
+		"KillAllForSession must relabel to the canceled terminal status even on this no-active-turn path")
 }

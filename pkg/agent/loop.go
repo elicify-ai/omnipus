@@ -2831,6 +2831,21 @@ func (al *AgentLoop) Close() {
 	}
 	al.mu.Unlock()
 
+	// Shutdown reaper: kill every still-running background bash/exec session
+	// (run_in_background=true) process-wide. These children have their
+	// Pdeathsig deliberately CLEARED at spawn time (they must outlive a
+	// crashed gateway, not be torn down by one — see
+	// pkg/sandbox/spawn_bg_pdeath_linux.go), so nothing else reaps them on
+	// process exit. Without this, a full gateway restart orphans every
+	// still-running background child to PID 1 forever. This complements (but
+	// is distinct from) RequestCancel's owner-scoped KillAllForSession
+	// cascade — that fires per-session on an explicit user cancel; this fires
+	// unconditionally, process-wide, on whole-process teardown.
+	if killed := tools.GetSharedSessionManager().KillAll(); killed > 0 {
+		logger.InfoCF("agent", "Close: killed background sessions on shutdown",
+			map[string]any{"killed": killed})
+	}
+
 	mcpManager := al.mcp.takeManager()
 
 	if mcpManager != nil {

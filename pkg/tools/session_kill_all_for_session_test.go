@@ -63,8 +63,12 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 			killSessionID: "owner-A",
 			wantKilled:    2,
 			wantStatus: map[string]string{
-				"s1": "done", // killProcess sets Status "done" on a successful kill
-				"s2": "done",
+				// killProcess sets Status "done" on a successful kill;
+				// KillAllForSession then relabels to "canceled" so a poll
+				// after a RequestCancel cascade is distinguishable from a
+				// natural exit or an explicit action=kill call.
+				"s1": "canceled",
+				"s2": "canceled",
 				"s3": "running", // different owner — untouched
 			},
 		},
@@ -89,8 +93,8 @@ func TestSessionManager_KillAllForSession(t *testing.T) {
 			killSessionID: "owner-C",
 			wantKilled:    1,
 			wantStatus: map[string]string{
-				"s4": "done",
-				"s5": "done", // already done, untouched by Kill(), still "done"
+				"s4": "canceled",
+				"s5": "done", // already done, untouched by Kill(), still "done" (no relabel applied)
 			},
 		},
 		{
@@ -187,7 +191,7 @@ func TestSessionManager_KillAllForSession_DoesNotAffectOtherOwners(t *testing.T)
 
 	gotA, err := sm.Get("a1")
 	require.NoError(t, err)
-	require.Equal(t, "done", gotA.GetStatus(), "session A's background work must be killed")
+	require.Equal(t, "canceled", gotA.GetStatus(), "session A's background work must be killed and relabeled canceled")
 
 	gotB, err := sm.Get("b1")
 	require.NoError(t, err)

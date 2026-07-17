@@ -68,12 +68,16 @@ type ProcessSession struct {
 // and "timeout" are ADR-036 additions (bash-tool-spec.md FR-B1/MIN-002): the
 // bash tool relabels a successful Kill() outcome from the generic "done" to
 // one of these two more specific terminal values so callers (action=poll/kill)
-// can distinguish an explicit kill / timeout from a natural exit. Both are
-// terminal exactly like "done"/"exited" for every existing caller of IsDone.
+// can distinguish an explicit kill / timeout from a natural exit. "canceled"
+// is the analogous relabel KillAllForSession applies for the RequestCancel
+// kill cascade (FR-B10/FR-B11), distinguishing a cancel-triggered kill from
+// both a natural exit and an explicit action=kill call. All are terminal
+// exactly like "done"/"exited" for every existing caller of IsDone.
 func (s *ProcessSession) IsDone() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Status == "done" || s.Status == "exited" || s.Status == "killed" || s.Status == "timeout"
+	return s.Status == "done" || s.Status == "exited" || s.Status == "killed" ||
+		s.Status == "timeout" || s.Status == "canceled"
 }
 
 func (s *ProcessSession) GetPtyKeyMode() PtyKeyMode {
@@ -320,6 +324,11 @@ func (sm *SessionManager) KillAllForSession(sessionID string) int {
 			)
 			continue
 		}
+		// s.Kill() succeeded and set Status="done" atomically; relabel to
+		// "canceled" (mirrors executeKill's "killed" relabel in shell.go) so a
+		// poll after a RequestCancel cascade is distinguishable from a natural
+		// completion or an explicit action=kill call.
+		s.SetStatus("canceled")
 
 		elapsedSeconds := time.Now().Unix() - startTime
 		slog.Info("tools: SessionManager.KillAllForSession: killed background session on cancel cascade",
@@ -342,6 +351,65 @@ func (sm *SessionManager) KillAllForSession(sessionID string) int {
 // an integration with an existing metrics system.
 func (sm *SessionManager) KilledBackgroundSessionsCount() int64 {
 	return atomic.LoadInt64(&sm.killedBackgroundSessionsTotal)
+}
+
+// KillAll kills every currently-running ProcessSession in the manager,
+// regardless of owner, and returns the count killed. It backs
+// AgentLoop.Close()'s shutdown reaper: a background bash/exec child started
+// via run_in_background has its Pdeathsig deliberately CLEARED at spawn time
+// (pkg/sandbox/spawn_bg_pdeath_linux.go's clearPdeathsigForBackground — the
+// child must outlive a crashed gateway, not be torn down by one) so nothing
+// else in the kernel reaps it on process exit. Without this reaper, a full
+// gateway restart orphans every still-running background child to PID 1
+// forever. This is distinct from KillAllForSession's cancel-cascade scope
+// (owner-filtered, user-triggered) — KillAll is unconditional and
+// process-wide, appropriate only for whole-process teardown.
+//
+// Locking mirrors KillAllForSession's two-phase pattern: candidate session
+// IDs are collected under sm.mu.RLock, sm.mu is released, and only then is
+// each candidate's status checked and killed — avoiding a lock-order
+// inversion between SessionManager.mu and ProcessSession.mu.
+func (sm *SessionManager) KillAll() int {
+	// Phase 1: collect every session ID under the read lock.
+	sm.mu.RLock()
+	candidates := make([]string, 0, len(sm.sessions))
+	for id := range sm.sessions {
+		candidates = append(candidates, id)
+	}
+	sm.mu.RUnlock()
+
+	// Phase 2: re-fetch and act on each candidate without holding sm.mu.
+	killed := 0
+	for _, id := range candidates {
+		sm.mu.RLock()
+		s, ok := sm.sessions[id]
+		sm.mu.RUnlock()
+		if !ok {
+			continue // removed between phase 1 and phase 2
+		}
+
+		if s.GetStatus() != "running" {
+			continue // already terminal — no-op for this candidate
+		}
+
+		pid := s.PID
+		if err := s.Kill(); err != nil {
+			slog.Warn("tools: SessionManager.KillAll: failed to kill background session on shutdown",
+				"session_id", id,
+				"pid", pid,
+				"error", err,
+			)
+			continue
+		}
+
+		slog.Info("tools: SessionManager.KillAll: killed background session on shutdown",
+			"session_id", id,
+			"pid", pid,
+		)
+		killed++
+	}
+
+	return killed
 }
 
 func (sm *SessionManager) Add(session *ProcessSession) {

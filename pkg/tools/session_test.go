@@ -2,6 +2,7 @@ package tools
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -79,6 +80,77 @@ func TestProcessSession_IsDone(t *testing.T) {
 
 	session.Status = "exited"
 	require.True(t, session.IsDone())
+
+	session.Status = "canceled"
+	require.True(t, session.IsDone())
+}
+
+// TestSessionManager_KillAll covers the AgentLoop.Close() shutdown reaper:
+// every currently-running session (regardless of owner) is killed, sessions
+// already in a terminal state are left untouched, and the returned count
+// reflects exactly the number actually killed.
+func TestSessionManager_KillAll(t *testing.T) {
+	sm := NewSessionManager()
+
+	running1 := &ProcessSession{
+		ID:             "run-1",
+		OwnerSessionID: "owner-X",
+		Status:         "running",
+		PID:            fakeUnusedPIDBase + 300,
+		StartTime:      time.Now().Unix(),
+	}
+	running2 := &ProcessSession{
+		ID:             "run-2",
+		OwnerSessionID: "owner-Y",
+		Status:         "running",
+		PID:            fakeUnusedPIDBase + 301,
+		StartTime:      time.Now().Unix(),
+	}
+	done1 := &ProcessSession{
+		ID:             "done-1",
+		OwnerSessionID: "owner-Z",
+		Status:         "done",
+		PID:            fakeUnusedPIDBase + 302,
+		StartTime:      time.Now().Unix(),
+	}
+	killed1 := &ProcessSession{
+		ID:             "killed-1",
+		OwnerSessionID: "owner-Z",
+		Status:         "killed",
+		PID:            fakeUnusedPIDBase + 303,
+		StartTime:      time.Now().Unix(),
+	}
+	sm.Add(running1)
+	sm.Add(running2)
+	sm.Add(done1)
+	sm.Add(killed1)
+
+	killed := sm.KillAll()
+	require.Equal(t, 2, killed, "KillAll must kill exactly the running sessions")
+
+	got1, err := sm.Get("run-1")
+	require.NoError(t, err)
+	require.True(t, got1.IsDone(), "running session must be killed by KillAll")
+
+	got2, err := sm.Get("run-2")
+	require.NoError(t, err)
+	require.True(t, got2.IsDone(), "running session must be killed by KillAll")
+
+	gotDone, err := sm.Get("done-1")
+	require.NoError(t, err)
+	require.Equal(t, "done", gotDone.GetStatus(), "already-terminal session must be left untouched")
+
+	gotKilled, err := sm.Get("killed-1")
+	require.NoError(t, err)
+	require.Equal(t, "killed", gotKilled.GetStatus(), "already-terminal session must be left untouched")
+}
+
+// TestSessionManager_KillAll_EmptyManagerIsNoOp guards against a panic or
+// spurious kill count on a manager with no sessions at all — the state a
+// gateway that never spawned any background work shuts down in.
+func TestSessionManager_KillAll_EmptyManagerIsNoOp(t *testing.T) {
+	sm := NewSessionManager()
+	require.Equal(t, 0, sm.KillAll())
 }
 
 func TestProcessSession_ToSessionInfo(t *testing.T) {
