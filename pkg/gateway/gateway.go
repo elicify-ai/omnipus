@@ -992,25 +992,35 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// resolution/download is retried lazily at first real use, exactly the
 	// pre-existing behavior — so it is logged at WARN, never returned as a
 	// boot error.
-	for _, browserMgr := range agentLoop.BrowserManagers() {
-		// Go 1.22+ loop semantics: browserMgr is per-iteration already, no
-		// shadow copy needed before capturing it in the goroutine below.
-		go func() {
-			path, ppErr := browserMgr.Preprovision(ctx)
-			if ppErr != nil {
-				// logger (not slog): slog writes to fd 2, which boot's
-				// initPanicFile redirects to gateway_panic.log — operators
-				// read gateway.log for runtime diagnostics, so route this
-				// through zerolog like the rest of the browser package.
-				logger.WarnCF("browser", "preprovision failed — will retry lazily at first browser tool use",
-					map[string]any{"error": ppErr.Error()})
-				return
-			}
-			if path != "" {
-				logger.InfoCF("browser", "preprovision resolved",
-					map[string]any{"exec_path": path})
-			}
-		}()
+	// OMNIPUS_SKIP_BROWSER_PREPROVISION=1 disables the boot-time preprovision.
+	// The integration test harness sets it so the suite's many short-lived
+	// gateways don't each spawn a Chrome-manifest fetch + download goroutine at
+	// boot: it's wasted work for tests that never use the browser, and an
+	// in-flight fetch delays RunContext's shutdown return past the harness's
+	// goroutine-stop deadline under CI load. Never set in production — there
+	// preprovision runs normally so the first real browser tool call isn't
+	// blocked on a ~130 MB download.
+	if os.Getenv("OMNIPUS_SKIP_BROWSER_PREPROVISION") != "1" {
+		for _, browserMgr := range agentLoop.BrowserManagers() {
+			// Go 1.22+ loop semantics: browserMgr is per-iteration already, no
+			// shadow copy needed before capturing it in the goroutine below.
+			go func() {
+				path, ppErr := browserMgr.Preprovision(ctx)
+				if ppErr != nil {
+					// logger (not slog): slog writes to fd 2, which boot's
+					// initPanicFile redirects to gateway_panic.log — operators
+					// read gateway.log for runtime diagnostics, so route this
+					// through zerolog like the rest of the browser package.
+					logger.WarnCF("browser", "preprovision failed — will retry lazily at first browser tool use",
+						map[string]any{"error": ppErr.Error()})
+					return
+				}
+				if path != "" {
+					logger.InfoCF("browser", "preprovision resolved",
+						map[string]any{"exec_path": path})
+				}
+			}()
+		}
 	}
 
 	// B1.2(d): wire the per-thread restrict-failure audit emitter into the

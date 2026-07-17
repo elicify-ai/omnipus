@@ -158,6 +158,14 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	// Set the master key in the test environment so credentials unlock cleanly.
 	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
 
+	// Skip boot-time browser preprovision. These integration gateways never use
+	// the browser, but each boot would otherwise spawn a Chrome-manifest fetch +
+	// ~130 MB download goroutine whose in-flight network call delays RunContext's
+	// shutdown return past Close's goroutine-stop deadline under CI load — a
+	// timing flake unrelated to what these tests exercise. Safe: t.Setenv, and
+	// these tests do not run in parallel (see OMNIPUS_HOME note below).
+	t.Setenv("OMNIPUS_SKIP_BROWSER_PREPROVISION", "1")
+
 	// Wire bearer token into the environment so checkBearerAuth's legacy
 	// OMNIPUS_BEARER_TOKEN path accepts requests from gw.NewRequest.
 	if hc.bearerAuth {
