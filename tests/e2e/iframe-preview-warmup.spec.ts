@@ -36,7 +36,10 @@ import { test } from './fixtures/console-errors'
 import { seedAndOpenSession } from './fixtures/session-setup'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const SYNTHETIC_AGENT_ID = 'main'
+// 'mia' — the seeded default of the 4-base roster. The historical 'main' id
+// no longer resolves to any agent; using it here would attribute these
+// synthetic transcript entries to a non-existent agent.
+const SYNTHETIC_AGENT_ID = 'mia'
 
 test(
   'warmup_default_60s_when_about_returns_60',

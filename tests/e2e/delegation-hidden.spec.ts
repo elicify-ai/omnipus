@@ -17,6 +17,32 @@
  * DEFAULT policy itself — this file is that test: no card by default, card
  * appears once verbose chat is turned on.
  *
+ * UPDATE (2026-07-17): the two root causes the history block below
+ * documents are now BOTH fixed.
+ *   (1) `src/routes/_app/sessions.$sessionId.tsx`'s loader no longer
+ *       pre-sets `activeSessionId`, so `SessionRoute`'s attach effect sees a
+ *       genuine mismatch on deep-link navigation and actually sends
+ *       `attach_session` — the missing `"ws: replay_start"` log line
+ *       reproduction #2 (below) reported should no longer occur.
+ *   (2) `tests/e2e/fixtures/session-setup.ts`'s `openSession()` — the
+ *       button-click flow reproduction #2 blames for masking
+ *       replay-fidelity.spec.ts test (b) from ever reaching this code path —
+ *       has been replaced with `openSessionByDeepLink`, which navigates
+ *       straight to `/#/sessions/{id}`; every caller (including
+ *       replay-fidelity.spec.ts test (b)) now reaches the real attach/replay
+ *       path again.
+ * Despite both fixes, this file deliberately KEEPS the live-delegation
+ * approach it was rewritten around (see the section below) rather than
+ * reverting to a transcript-seeded span: the original blocking finding —
+ * reproduction #1, a seeded `spawn` + nested-tool-call transcript rendering
+ * as flat top-level bubbles instead of reconstructing a
+ * `subagent-collapsed` card — was never confirmed to be CAUSED by either
+ * root cause above (the read of `replay.go`'s own span-bracketing logic
+ * "looks correct for this exact dataset", per the original note below), so
+ * re-deriving this spec from seeded replay would be a new, unverified
+ * change, not a re-application of either fix. Left as a follow-up rather
+ * than attempted here.
+ *
  * ── Why this is a LIVE-delegation test, not a transcript-seeded one ────────
  *
  * The original design for this file used the same deterministic,

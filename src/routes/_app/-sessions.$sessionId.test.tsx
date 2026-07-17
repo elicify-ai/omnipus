@@ -1,9 +1,17 @@
-// Unit tests for the sessions.$sessionId route component — SessionRoute.
+// Unit tests for the sessions.$sessionId route component — SessionRoute —
+// AND its route loader.
 //
 // Verifies the useEffect in SessionRoute fires the correct store actions for
 // the task-session attach path:
 //   - attachToSession(sessionId, 'chat', undefined, agentId) when the WS is connected
 //   - setAttachedContext('task', title) when session.type === 'task'
+//
+// Also verifies the route loader (bottom describe block) NEVER writes to the
+// session store — a confirmed bug had the loader call setActiveSession
+// synchronously before the component mounted, which pre-set activeSessionId
+// and made the component's `activeSessionId !== session.id` attach guard
+// false-positive on the very first mount, silently disabling WS replay for
+// every session deep link. See sessions.$sessionId.tsx for the full writeup.
 //
 // These tests replace the previous inline-copy loader-logic tests. The
 // inline-copy approach was false-confidence: it tested a re-implementation
@@ -14,7 +22,9 @@
 // WebSocket store init, AssistantUI hooks, and the full component tree —
 // those side effects caused test-environment hangs (original comment in the
 // old test). TanStack Router primitives and react-query useQuery are mocked
-// so SessionRoute can be rendered in isolation.
+// so SessionRoute can be rendered in isolation. @/lib/api is partially mocked
+// (fetchSessionDetail only) so the loader describe block can drive it
+// directly without a real network request.
 //
 // These tests WILL FAIL on a version of SessionRoute that only calls
 // setActiveSession (without calling attachToSession or setAttachedContext),
@@ -79,9 +89,18 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   }
 })
 
+// Mock @/lib/api's fetchSessionDetail so the loader-regression tests below can
+// drive it directly without a real network request, while keeping every other
+// export (isApiError, fetchWorkspaces, workspacesQueryKeys, ...) real.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return { ...actual, fetchSessionDetail: vi.fn() }
+})
+
 // ── Store imports (real Zustand stores) ───────────────────────────────────────
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { fetchSessionDetail, ApiError } from '@/lib/api'
 import type { SessionDetail } from '@/lib/api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -343,6 +362,127 @@ describe('SessionRoute component — task-session attach path (useEffect)', () =
         expect(setActiveSession).toHaveBeenCalledWith(mockSessionId, 'jim', null)
       })
       expect(setActiveSession).not.toHaveBeenCalledWith(mockSessionId, 'mia', null)
+    },
+  )
+})
+
+// ── Loader — deep-link WS-replay regression guard ─────────────────────────────
+//
+// Confirmed bug: the route loader used to call store.setActiveSession(...)
+// synchronously, BEFORE the component ever mounted. That pre-set
+// activeSessionId to this session, so the attach effect's
+// `activeSessionId !== session.id` guard (both the workspace-redirect branch
+// and the inline fallback branch) was already false on the very FIRST mount —
+// attachToSession never ran, no attach_session frame was ever sent, and
+// pkg/gateway/websocket.go's handleAttachSession/streamReplay never fired.
+// Every session deep link (/#/sessions/{id}) silently fell back to a plain
+// REST render with no WS replay.
+//
+// The fix: the loader now only fetches and returns session detail (used as
+// react-query `initialData`); it must NEVER touch the Zustand session store.
+// The component's attach effect is the SOLE attacher.
+describe('SessionRoute loader — deep-link WS-replay regression guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetStores()
+  })
+
+  it(
+    'does NOT call setActiveSession or setAttachedContext — only fetches and returns detail',
+    async () => {
+      // BDD: Given a deep link to /sessions/{id}, When the route loader runs
+      // (before the component mounts), Then it must not write activeSessionId
+      // (or anything else) to the session store — it only fetches and returns
+      // the session detail for react-query's initialData.
+      //
+      // This test FAILS on the pre-fix loader, which called
+      // store.setActiveSession(...) directly.
+      const detail = makeTaskSession()
+      vi.mocked(fetchSessionDetail).mockResolvedValue(detail)
+
+      const setActiveSession = vi.spyOn(useSessionStore.getState(), 'setActiveSession')
+      const setAttachedContext = vi.spyOn(useSessionStore.getState(), 'setAttachedContext')
+
+      const mod = await import('./sessions.$sessionId')
+      const loader = (
+        mod.Route as unknown as {
+          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+        }
+      ).loader
+
+      const result = await loader({ params: { sessionId: mockSessionId } })
+
+      expect(result).toEqual(detail)
+      expect(setActiveSession).not.toHaveBeenCalled()
+      expect(setAttachedContext).not.toHaveBeenCalled()
+      expect(useSessionStore.getState().activeSessionId).toBeNull()
+    },
+  )
+
+  it(
+    'returns null (not a throw) on a confirmed 404, still without touching the store',
+    async () => {
+      // BDD: Given the session was deleted (404), When the loader runs,
+      // Then it returns null (so SessionNotFound can render) and still never
+      // writes to the store.
+      vi.mocked(fetchSessionDetail).mockRejectedValue(new ApiError(404))
+
+      const setActiveSession = vi.spyOn(useSessionStore.getState(), 'setActiveSession')
+
+      const mod = await import('./sessions.$sessionId')
+      const loader = (
+        mod.Route as unknown as {
+          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+        }
+      ).loader
+
+      const result = await loader({ params: { sessionId: mockSessionId } })
+
+      expect(result).toBeNull()
+      expect(setActiveSession).not.toHaveBeenCalled()
+    },
+  )
+
+  it(
+    'the component still attaches via WS after a loader-only deep link, because activeSessionId still differs on mount',
+    async () => {
+      // BDD: Given the loader ran first and (per the fix) left activeSessionId
+      // untouched, When SessionRoute then mounts with WS connected, Then
+      // attachToSession fires — proving the attach effect's
+      // `activeSessionId !== session.id` guard does NOT false-positive on a
+      // fresh deep link now that the loader no longer poisons it.
+      //
+      // This exercises the real end-to-end order (loader resolves, THEN the
+      // component mounts) rather than only the component's synthetic initial
+      // state, which is what actually proves the deep-link replay path works.
+      const detail = makeTaskSession()
+      vi.mocked(fetchSessionDetail).mockResolvedValue(detail)
+      _mockUseQueryData = detail
+
+      const mockConn = makeMockConnection()
+      useConnectionStore.setState({ connection: mockConn as never, isConnected: true })
+
+      const mod = await import('./sessions.$sessionId')
+      const loader = (
+        mod.Route as unknown as {
+          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+        }
+      ).loader
+      await loader({ params: { sessionId: mockSessionId } })
+
+      // Confirm the loader did not poison activeSessionId before mount.
+      expect(useSessionStore.getState().activeSessionId).toBeNull()
+
+      const attachToSession = vi.spyOn(useSessionStore.getState(), 'attachToSession')
+
+      const Route = (mod.Route as unknown as { component: React.ComponentType }).component
+      await act(async () => {
+        render(<Route />)
+      })
+
+      await waitFor(() => {
+        expect(attachToSession).toHaveBeenCalledWith(mockSessionId, 'task', 'Fix bug #42', 'jim')
+      })
     },
   )
 })

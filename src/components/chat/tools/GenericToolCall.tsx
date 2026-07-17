@@ -374,16 +374,27 @@ export function GenericToolCall({
     // row is transparent on the thread. Separation comes from `mt-2`
     // spacing and the status dot, not a card frame.
     <div data-testid="tool-call-badge" data-tool={toolName} className="mt-2 text-xs font-mono">
-      {/* Header row — a composed row so browser tools can carry a separate,
-          independently clickable "Watch live" launcher between the status
-          text and the caret, and the caret can sit at the row's far right
-          (ml-auto) without nesting a button inside the toggle button. */}
+      {/* Header row — the toggle button spans the row (flex-1) and owns the
+          caret as its last child (ml-auto pushes it to the toggle's own
+          right edge), so the caret is inside the clickable toggle and
+          actually expands on click — mirrors ToolCallBadge.tsx. "Watch
+          live" stays an independent sibling *after* the toggle: a button
+          can't nest inside another button, so it can't live inside the
+          toggle too. For non-browser rows the toggle fills the whole row
+          and the caret still lands at the row's far right, unchanged. For
+          browser rows the toggle only fills the space left of "Watch
+          live", so the caret now sits immediately before that launcher
+          instead of after it — an acceptable, intentional shift. */}
       <div className="flex w-full items-center gap-2">
         <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
-            'flex min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            // flex-1: the toggle spans the whole row (minus the Watch-live
+            // launcher, which stays an independent target) — matching
+            // ToolCallBadge's full-row click target. Without it the toggle
+            // shrinks to its text and the row's middle is dead space.
+            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
             hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             !hasDetail && 'cursor-default'
           )}
@@ -397,6 +408,11 @@ export function GenericToolCall({
           <span className={cn('text-[var(--color-muted)]', statusConfig.textClass)}>
             {statusConfig.label}
           </span>
+          {hasDetail && (
+            <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+            </span>
+          )}
         </button>
         {isBrowserTool && (
           <button tabIndex={0}
@@ -409,11 +425,6 @@ export function GenericToolCall({
             <Broadcast size={13} />
             <span>Watch live</span>
           </button>
-        )}
-        {hasDetail && (
-          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-          </span>
         )}
       </div>
 

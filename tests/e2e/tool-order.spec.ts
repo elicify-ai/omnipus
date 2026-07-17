@@ -218,6 +218,12 @@ function seedTranscript(sessionId: string, entries: OrderedEntry[]): void {
  */
 async function openSessionByDeepLink(page: Page, sessionId: string): Promise<void> {
   await page.goto(`/#/sessions/${sessionId}`)
+  // Route-swap guard FIRST (mirrors session-setup.ts's helper): wait until
+  // the chat surface is bound to THIS session — a bare composer wait is
+  // satisfied by the previous route's composer during the swap.
+  await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({
+    timeout: 15_000,
+  })
   // App-shell-loaded signal: the session route renders no role=banner
   // element, so wait for the composer textarea to attach instead.
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })

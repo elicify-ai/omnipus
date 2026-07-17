@@ -32,7 +32,7 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 // Static import: vi.mock() calls are hoisted before this import, so all mocks
 // are in place when the module resolves. This avoids per-test dynamic import
 // contention that caused intermittent timeouts under full-suite parallel load.
-import { OmnipusComposer } from './ChatScreen'
+import { OmnipusComposer, ChatScreen } from './ChatScreen'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -508,6 +508,31 @@ describe('OmnipusComposer — model selector store contracts (FR-010)', () => {
     expect(last?.metadata).toBeUndefined()
   })
 
+})
+
+// ── data-active-session-id contract (fix-wave finding C.2) ────────────────────
+// The root ChatScreen div's data-active-session-id attribute is load-bearing:
+// tests/e2e/fixtures/session-setup.ts's openSessionByDeepLink polls it to
+// confirm the composer is bound to the NEW session (not a stale previous one
+// mid-route-swap) — it must not be silently dropped in a future refactor.
+describe('ChatScreen — data-active-session-id contract', () => {
+  it('root div carries data-active-session-id matching the active session', () => {
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: 'sess_send_test',
+        activeAgentId: 'general-assistant',
+      })
+      // Mark WS replay already completed for this session so ChatScreen's
+      // REST-history-fallback effect short-circuits instead of calling
+      // setMessages off the shared useQuery mock's unstable `[]` reference
+      // every render (that mock returns a fresh array/refetch fn per call,
+      // which isn't this test's concern — it only needs to pin the root
+      // div's data attribute, not exercise history loading).
+      useChatStore.setState({ replayCompletedForSession: 'sess_send_test' })
+    })
+    const { container } = render(<ChatScreen />)
+    expect(container.querySelector('[data-active-session-id="sess_send_test"]')).toBeTruthy()
+  })
 })
 
 // ── Partitioned slash menu (new skill integration) ────────────────────────────

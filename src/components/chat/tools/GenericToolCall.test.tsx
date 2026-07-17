@@ -509,6 +509,39 @@ describe('GenericToolCall — flat text-line status dot', () => {
   })
 })
 
+// ── caret lives inside the toggle button (clickable expand target) ─────────
+// Regression guard for the fix-wave finding: the caret used to render as a
+// plain <span> sibling OUTSIDE the toggle <button> (ml-auto), so clicking
+// the caret glyph — the strongest expand affordance on the row — did
+// nothing. The caret must now be the toggle button's own last child, so
+// clicking it fires the button's onClick and expands the detail, and the
+// toggle must still span the row (flex-1) as the full-row click target.
+
+describe('GenericToolCall — caret lives inside the toggle button (clickable expand target)', () => {
+  it('toggle button has flex-1 and clicking the caret element (inside the button) expands the detail', () => {
+    render(
+      <GenericToolCall toolName="exec" args={{ cmd: 'ls' }} result={{ ok: true }} status={COMPLETE_STATUS} />
+    )
+
+    const toggle = screen.getByRole('button')
+    expect(toggle.className).toContain('flex-1')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    // The caret (CaretUp/CaretDown, a Phosphor <svg>) is the only svg the
+    // success-status toggle renders — the status indicator itself is a
+    // <span> dot (see "flat text-line status dot" above) — so finding an
+    // svg inside the button and clicking it proves the caret is nested
+    // INSIDE the clickable toggle, not a dead sibling glyph outside it.
+    const caret = toggle.querySelector('svg')
+    expect(caret).not.toBeNull()
+
+    fireEvent.click(caret!)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Tool')).toBeInTheDocument()
+  })
+})
+
 // ── activity-bar tool visibility: verbose-chat gate ─────────────────────────
 // Traces to: src/lib/toolVisibility.ts shouldRenderToolCall — GenericToolCall
 // is the live/streaming fallback renderer for load_tool and delegate (neither

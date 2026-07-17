@@ -2643,7 +2643,21 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const liteMode = useConnectionStore((s) => s.liteMode)
 
   return (
-    <div className="flex flex-col absolute inset-0 overflow-hidden">
+    // data-active-session-id: deterministic DOM signal of WHICH session this
+    // chat surface is currently bound to. Only empty on a cold load with no
+    // session yet attached — during a route swap away from a previously
+    // attached session it still holds the PREVIOUS session's id (stale)
+    // until the new one lands, and it can transiently read '__pending' (the
+    // optimistic-send sentinel, store/chat.ts) too. E2E deep-link
+    // navigation needs it: a bare "composer is visible/enabled" wait is
+    // satisfied by the PREVIOUS route's composer during the route swap, so
+    // a test can type into the old surface and the message rides the stale
+    // session binding — see openSessionByDeepLink in
+    // tests/e2e/fixtures/session-setup.ts.
+    <div
+      className="flex flex-col absolute inset-0 overflow-hidden"
+      data-active-session-id={activeSessionId ?? ''}
+    >
       {/* Agent-removed banner — shown when the session's agent has been deleted (#103) */}
       {agentRemoved && (
         <div
