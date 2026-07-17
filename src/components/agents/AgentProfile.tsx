@@ -21,7 +21,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { SmartSelect } from '@/components/ui/smart-select'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { Switch } from '@/components/ui/switch'
@@ -332,7 +331,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // an invalid/empty draft restores the last committed value.
   const [timeoutDraft, setTimeoutDraft] = useState('0')
   const [maxToolIterationsDraft, setMaxToolIterationsDraft] = useState('200')
-  const [steeringMode, setSteeringMode] = useState<'one-at-a-time' | 'queue-and-process'>('one-at-a-time')
   // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
   // Opens an AlertDialog; the confirm mutation invalidates the list and
   // closes the slide-over. Locked agents do not render the trigger.
@@ -490,7 +488,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setTimeoutDraft(String(agent.timeout_seconds ?? 0))
     setMaxToolIterations(agent.max_tool_iterations ?? 200)
     setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
-    setSteeringMode((agent.steering_mode ?? 'one-at-a-time') as 'one-at-a-time' | 'queue-and-process')
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
     setExecutor(agent.executor)
@@ -604,7 +601,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       voice: voice.trim() !== '' ? voice.trim() : undefined,
       timeout_seconds: timeoutPayload,
       max_tool_iterations: maxToolIterations,
-      steering_mode: steeringMode,
       shell_policy: {
         custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
       },
@@ -629,7 +625,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, voice,
-    timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
+    timeoutPayload, timeoutSeconds, maxToolIterations,
     shellDenyPatterns,
     agentSkills, executor,
   ])
@@ -1333,48 +1329,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               emptyCatalogHint="Connect a provider in Settings to pick a model"
             />
             )}
-            {isLocked && (
-              <div className="space-y-1.5">
-                <p className="text-xs text-[var(--color-muted)]">Fallback models</p>
-                <div
-                  data-testid="fallback-summary-locked-basics"
-                  className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-                >
-                  <div className="flex items-center gap-2 text-[var(--color-muted)]">
-                    <Lock size={12} weight="fill" aria-hidden="true" />
-                    <p className="text-[11px]">
-                      Locked: fallback models are inherited from the locked core config.
-                    </p>
-                  </div>
-                  {fallbackModels.length === 0 ? (
-                    <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
-                  ) : (
-                    <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
-                      {fallbackModels.map((entry, idx) => (
-                        <li
-                          key={entry.model}
-                          className="flex items-center gap-2 text-xs font-mono text-[var(--color-secondary)]"
-                        >
-                          <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
-                          <span
-                            data-testid={`fallback-summary-provider-${entry.model}`}
-                            className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold"
-                            style={{
-                              backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
-                              color: 'var(--color-accent)',
-                              border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-                            }}
-                          >
-                            {entry.provider || '—'}
-                          </span>
-                          <span data-testid={`fallback-summary-model-${entry.model}`}>{entry.model}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              </div>
-            )}
             {/* Sampling parameters — collapsed disclosure. Operator decision
                 2026-07-03: editable for locked core agents too (model,
                 sampling, rate limits, and execution knobs ARE mutable on the
@@ -1434,72 +1388,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             )}
           </section>
 
-          {/* Shell deny patterns — a shell-hardening hint, independent of the
-              (removed) per-agent sandbox-profile concept. Editable for ALL
-              agents including locked core agents, and for native Subagents
-              (matrix: O or inherit); hidden ONLY for subagent_3p
-              (external-cli) — the external runner manages its own
-              isolation. */}
-          {!isExternalAgent && (
-            <section className="space-y-3">
-              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => setShellAdvancedOpen((o) => !o)}
-                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                  aria-expanded={shellAdvancedOpen}
-                >
-                  <span className="font-headline font-semibold text-[14px]">Shell deny patterns</span>
-                  {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                </button>
-                {shellAdvancedOpen && (
-                  <div className="px-3 pb-3 border-t border-[var(--color-border)]">
-                    <ShellDenyPatternsEditor
-                      value={shellDenyPatterns}
-                      onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
-                    />
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
-
-    </div>
-  )
-
-  // personality panel
-  const personalityPanel = (
-    <div className="space-y-5">
-
-          <BehaviorFields
-            isWorker={isWorkerAgent}
-            soul={soul}
-            setSoul={(v) => { markDirty(); setSoul(v) }}
-            voice={voice}
-            setVoice={(v) => { markDirty(); setVoice(v) }}
-            renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
-          />
-
-          {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
-              Heartbeat is now configured in the Workspace edit panel, not here. */}
-        
-    </div>
-  )
-
-  // tools panel
-  const toolsPanel = (
-    <div className="space-y-6">
-
-          {/* Fallback models — hidden for subagent_3p (the runner manages
-              its own retries; the field is not settable for this type per
-              the field matrix). */}
+          {/* Fallback models — item 1 reorg: relocated from the Tools tab to
+              sit directly below the Model section on Basics (visually
+              adjacent to the primary model). Hidden for subagent_3p (the
+              runner manages its own retries; the field is not settable for
+              this type per the field matrix). The two locked-only read-only
+              summaries that used to live separately on Basics and Tools are
+              CONSOLIDATED into this single copy — testids keep the
+              `-basics` suffix since this is now the only surface. */}
           {!isExternalAgent && (
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
             <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
             {isLocked ? (
               <div
-                data-testid="fallback-summary-locked-tools"
+                data-testid="fallback-summary-locked-basics"
                 className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
                 <div className="flex items-center gap-2 text-[var(--color-muted)]">
@@ -1511,7 +1414,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {fallbackModels.length === 0 ? (
                   <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
                 ) : (
-                  <ol className="space-y-1" data-testid="fallback-summary-locked-tools-list">
+                  <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
                     {fallbackModels.map((entry, idx) => (
                       <li
                         key={entry.model}
@@ -1650,6 +1553,33 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </section>
           )}
 
+    </div>
+  )
+
+  // personality panel
+  const personalityPanel = (
+    <div className="space-y-5">
+
+          <BehaviorFields
+            isWorker={isWorkerAgent}
+            soul={soul}
+            setSoul={(v) => { markDirty(); setSoul(v) }}
+            voice={voice}
+            setVoice={(v) => { markDirty(); setVoice(v) }}
+            renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
+          />
+
+          {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
+              Heartbeat is now configured in the Workspace edit panel, not here. */}
+        
+    </div>
+  )
+
+  // tools panel — item 2 reorg: Tools & Permissions ONLY (Skills is now its
+  // own tab; the Fallback models editor moved to Basics — item 1).
+  const toolsPanel = (
+    <div className="space-y-6">
+
           {/* Tools & Permissions — hidden for subagent_3p (the external
               runner has its own tools; per-tool CLI flags govern instead
               per the field matrix). Native workers (and every other kind)
@@ -1677,6 +1607,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               />
             </section>
           )}
+
+    </div>
+  )
+
+  // skills panel — item 2 reorg: split out of the former combined Tools tab
+  // into its own tab. Same gating and content as before, just relocated.
+  const skillsPanel = (
+    <div className="space-y-6">
+
           {/* Skills — Main/core/Subagent (native worker). Per the field
               matrix a native Subagent may optionally be granted skills (or
               inherit); only subagent_3p (external-cli) hides this — an
@@ -1764,7 +1703,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             </section>
           )}
-        
+
     </div>
   )
 
@@ -1940,7 +1879,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </section>
 
           {/* Execution — ALL agents including locked core agents (operator
-              decision 2026-07-03: timeout/max-tool-iterations/steering are
+              decision 2026-07-03: timeout/max-tool-iterations are
               mutable on the backend for locked agents). Max tool calls
               is further hidden for subagent_3p (see below). */}
           <section className="space-y-3">
@@ -2022,31 +1961,39 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     />
                   </div>
                 )}
-                {/* Steering mode — Main only. Workers and subagent_3p do
-                    not have a chat surface that consumes concurrent
-                    messages, so steering is a Main concept. */}
-                {!isWorkerAgent && (
-                  <div className="flex items-center gap-3">
-                    <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                      Message handling
-                      <span className="block text-[10px] text-[var(--color-muted)]/70">
-                        How concurrent messages are processed.
-                      </span>
-                    </label>
-                    <SmartSelect
-                      value={steeringMode}
-                      onValueChange={(v) => { markDirty(); setSteeringMode(v as 'one-at-a-time' | 'queue-and-process') }}
-                      triggerClassName="text-xs h-8"
-                      ariaLabel="Message handling"
-                      items={[
-                        { value: 'one-at-a-time', label: 'One at a time' },
-                        { value: 'queue-and-process', label: 'Queue and process' },
-                      ]}
+              </div>
+            </section>
+
+          {/* Shell deny patterns — item 3 reorg: relocated from Basics into
+              Advanced. A shell-hardening hint, independent of the (removed)
+              per-agent sandbox-profile concept. Editable for ALL agents
+              including locked core agents, and for native Subagents
+              (matrix: O or inherit); hidden ONLY for subagent_3p
+              (external-cli) — the external runner manages its own
+              isolation. */}
+          {!isExternalAgent && (
+            <section className="space-y-3">
+              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => setShellAdvancedOpen((o) => !o)}
+                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                  aria-expanded={shellAdvancedOpen}
+                >
+                  <span className="font-headline font-semibold text-[14px]">Shell deny patterns</span>
+                  {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
+                </button>
+                {shellAdvancedOpen && (
+                  <div className="px-3 pb-3 border-t border-[var(--color-border)]">
+                    <ShellDenyPatternsEditor
+                      value={shellDenyPatterns}
+                      onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
                     />
                   </div>
                 )}
               </div>
             </section>
+          )}
 
           {/* Executor summary — all workers (base + external). subagent_3p's
               full editor is in the Runtime tab. Locked core workers are
@@ -2400,10 +2347,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </div>
       )}
             <Tabs defaultValue="basics" className="hidden sm:block w-full">
+        {/* Tab order (item 4 reorg): Basics, Personality, Tools (or Runtime
+            for external), Skills, Heartbeat, Advanced. Heartbeat moves from
+            visually-first to between Skills and Advanced; defaultValue
+            stays 'basics'. */}
         <TabsList className="w-full justify-start overflow-x-auto">
-          {showHeartbeatTab && (
-            <TabsTrigger value="heartbeat" data-testid="tab-heartbeat" className="font-headline">Heartbeat</TabsTrigger>
-          )}
           <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
           <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
           {!isExternalAgent && (
@@ -2412,15 +2360,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           {isExternalAgent && (
             <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
           )}
+          {!isExternalAgent && (
+            <TabsTrigger value="skills" data-testid="tab-skills" className="font-headline">Skills</TabsTrigger>
+          )}
+          {showHeartbeatTab && (
+            <TabsTrigger value="heartbeat" data-testid="tab-heartbeat" className="font-headline">Heartbeat</TabsTrigger>
+          )}
           <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">{advancedTabLabel}</TabsTrigger>
         </TabsList>
 
         {/* ── BASICS TAB ─────────────────────────────────────────────────
             Identity (name/description/default toggle/delegation policy
             summary/avatar color/icon) + Model Configuration (model selector,
-            fallback editor, sampling parameters) + Shell deny patterns
-            (hidden for subagent_3p — the external runner manages its own
-            isolation). The Executor (Spec-4) is a worker-only
+            sampling parameters) + Fallback models (item 1: relocated here,
+            directly below Model). Shell deny patterns moved to Advanced
+            (item 3). The Executor (Spec-4) is a worker-only
             concern — for subagent_3p it is the headline of the Runtime
             tab below; for native workers (no external-cli selected) the
             whole thing is inherited from the caller so it is shown as a
@@ -2431,17 +2385,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             BehaviorFields (SOUL.md / Task prompt + Voice), and the
             Heartbeat sub-block for base agents (workers are
             delegation-only labour agents and never run on a schedule).
-            The Execution params (timeout / max_iter / steering) live in
+            The Execution params (timeout / max_iter) live in
             the Advanced tab per the spec matrix. */}
         <TabsContent value="personality" className="space-y-5">{personalityPanel}</TabsContent>
 
         {/* ── TOOLS TAB (hidden for subagent_3p) ────────────────────────
-            Tool policy editor + Skills picker, live-editable for Main and
-            native Subagents alike. External CLI workers have no Omnipus
-            tool chain (the runner brings its own tools), so every section
-            in this panel is out of scope for them and the whole tab is
-            omitted. The fallback models editor stays here too — FR-007
-            says fallbacks are part of the tool chain. */}
+            Tool policy editor only (item 2: Skills split into its own tab
+            below). External CLI workers have no Omnipus tool chain (the
+            runner brings its own tools), so this panel is out of scope
+            for them and the whole tab is omitted. */}
         {!isExternalAgent && (
           <TabsContent value="tools" className="space-y-6">{toolsPanel}</TabsContent>
         )}
@@ -2457,14 +2409,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <TabsContent value="runtime" className="space-y-5">{runtimePanel}</TabsContent>
         )}
 
-        {/* ── ADVANCED TAB ──────────────────────────────────────────────
-            Rate limits, Execution params (timeout / max_iter / steering —
-            Main only per the spec matrix), Executor summary (workers
-            only; subagent_3p gets the full editor in the Runtime tab),
-            Sessions, Schedules (base-only), Activity. The Executor
-            here is a compact summary for native workers; subagent_3p's
-            editor is in Runtime. */}
-        <TabsContent value="advanced" className="space-y-6">{advancedPanel}</TabsContent>
+        {/* ── SKILLS TAB (hidden for subagent_3p) ──────────────────────────
+            Item 2 reorg: Skills picker, live-editable for Main and native
+            Subagents alike, split out of the former combined Tools tab into
+            its own tab so Tools & Permissions and Skills are each a single
+            clear surface. */}
+        {!isExternalAgent && (
+          <TabsContent value="skills" className="space-y-6">{skillsPanel}</TabsContent>
+        )}
 
         {/* ── HEARTBEAT TAB ─────────────────────────────────────────────
             FR-016 / US-5: conditional tab — only rendered when the agent
@@ -2474,14 +2426,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {showHeartbeatTab && (
           <TabsContent value="heartbeat" className="space-y-5">{heartbeatPanel}</TabsContent>
         )}
+
+        {/* ── ADVANCED TAB ──────────────────────────────────────────────
+            Rate limits, Execution params (timeout / max_iter), Shell deny
+            patterns (item 3: relocated here from Basics), Executor summary
+            (workers only; subagent_3p gets the full editor in the Runtime
+            tab), Activity. The Executor here is a compact summary for
+            native workers; subagent_3p's editor is in Runtime. */}
+        <TabsContent value="advanced" className="space-y-6">{advancedPanel}</TabsContent>
       </Tabs>
       <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
-        {showHeartbeatTab && (
-          <AccordionItem value="heartbeat">
-            <AccordionTrigger data-testid="accordion-heartbeat" className="font-headline">Heartbeat</AccordionTrigger>
-            <AccordionContent>{heartbeatPanel}</AccordionContent>
-          </AccordionItem>
-        )}
         <AccordionItem value="basics">
           <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
           <AccordionContent>{basicsPanel}</AccordionContent>
@@ -2500,6 +2454,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <AccordionItem value="runtime">
           <AccordionTrigger data-testid="accordion-runtime" className="font-headline">Runtime</AccordionTrigger>
           <AccordionContent>{runtimePanel}</AccordionContent>
+        </AccordionItem>
+      )}
+      {!isExternalAgent && (
+        <AccordionItem value="skills">
+          <AccordionTrigger data-testid="accordion-skills" className="font-headline">Skills</AccordionTrigger>
+          <AccordionContent>{skillsPanel}</AccordionContent>
+        </AccordionItem>
+      )}
+      {showHeartbeatTab && (
+        <AccordionItem value="heartbeat">
+          <AccordionTrigger data-testid="accordion-heartbeat" className="font-headline">Heartbeat</AccordionTrigger>
+          <AccordionContent>{heartbeatPanel}</AccordionContent>
         </AccordionItem>
       )}
         <AccordionItem value="advanced">

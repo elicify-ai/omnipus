@@ -81,7 +81,6 @@ const mockExternalAgent: Agent = {
   soul: 'You are a focused delegate.',
   timeout_seconds: 60,
   max_tool_iterations: 20,
-  steering_mode: 'one-at-a-time',
   rate_limits: { use_global_defaults: true },
   executor: { kind: 'external-cli', cli: 'claude-code' },
 }

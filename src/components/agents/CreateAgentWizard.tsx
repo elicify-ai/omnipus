@@ -94,7 +94,6 @@ export interface WizardSubmitPayload {
   }
   timeout_seconds?: number
   max_tool_iterations?: number
-  steering_mode?: 'one-at-a-time' | 'queue-and-process'
   // ── Inherit-from-caller toggles (UAT agent-form fix 4a) ──────────────
   // UI-only flags (NOT wire fields). A native (in-process) subagent is a
   // delegation-only worker: by default its Model / Tools / Skills
@@ -191,13 +190,8 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     // max_tool_iterations is excluded for subagent_3p (the external CLI runs
     // its own loop — agent-types-field-matrix.md, Decisions #1 (resolved
     // 2026-07-03): excluded).
-    // steering_mode is a Main-surface concept only (workers are forced
-    // one-at-a-time server-side) — seeding it for a worker payload would
-    // carry a field its variant can't have even though payloadToCreateRequest
-    // already filters it; the Advanced UI also reads this default.
     timeout_seconds: 300,
     ...(initialType !== 'subagent_3p' ? { max_tool_iterations: 200 } : {}),
-    ...(initialType === 'Main' ? { steering_mode: 'one-at-a-time' as const } : {}),
     // Inherit-from-caller toggles default OFF so the corresponding editors
     // (model picker, tools, skills) render by default and the
     // operator makes an explicit choice. Inheritance stays an opt-in via the

@@ -69,8 +69,6 @@ export interface AdvancedFields {
     max_tool_calls_per_minute?: number
     max_cost_per_day?: number
   }
-  // Steering — Main only.
-  steering_mode?: 'one-at-a-time' | 'queue-and-process'
   // Runtime knobs (Main + Subagent only).
   timeout_seconds?: number
   max_tool_iterations?: number

@@ -1,17 +1,15 @@
 // Advanced — collapsible disclosure rendered ABOVE the footer (NOT a 4th
 // step in the stepper). Houses the wire-format fields that the operator
 // rarely touches on first-create: model_params, shell_policy, rate_limits,
-// timeout_seconds, max_tool_iterations, steering_mode, and the subagent_3p
-// executor block.
+// timeout_seconds, max_tool_iterations, and the subagent_3p executor block.
 //
 // All fields are type-branched (per the field matrix in
 // docs/internal/architecture/agent-types-field-matrix.md):
 //   Main + Subagent: model_params, shell_policy, rate_limits,
-//                     timeout_seconds, max_tool_iterations,
-//                     steering_mode (Main only)
+//                     timeout_seconds, max_tool_iterations
 //   subagent_3p:     timeout_seconds + rate_limits ONLY — the CLI manages
 //                     its own isolation/auth/retries, so model_params,
-//                     shell_policy, max_tool_iterations, and steering_mode
+//                     shell_policy, and max_tool_iterations
 //                     are all rejected 400 on the wire
 //                     (`AgentCreateRequestSubagent3p` never carries them —
 //                     see payloadToCreateRequest in CreateAgentModal.tsx).
@@ -25,7 +23,6 @@
 // inputs) and reuses the executor inputs from `<Step1Identity>` so the
 // disclosure stays in sync with the Step 1 editor.
 
-import { SmartSelect } from '@/components/ui/smart-select'
 import { Input } from '@/components/ui/input'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ShellDenyPatternsEditor } from '../ShellDenyPatternsEditor'
@@ -37,7 +34,6 @@ export function Advanced({
   initialType,
 }: AdvancedProps) {
   const isExternal = initialType === 'subagent_3p'
-  const isMain = initialType === 'Main'
 
   if (isExternal) {
     return (
@@ -61,7 +57,6 @@ export function Advanced({
         <MainAdvancedFields
           payload={payload}
           setField={setField}
-          isMain={isMain}
         />
       </div>
     </AdvancedDisclosure>
@@ -97,10 +92,9 @@ function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsPro
 interface MainAdvancedFieldsProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
-  isMain: boolean
 }
 
-function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsProps) {
+function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
   const shellPolicy = payload.shell_policy ?? {
     enable_deny_patterns: false,
@@ -186,25 +180,6 @@ function MainAdvancedFields({ payload, setField, isMain }: MainAdvancedFieldsPro
             min={1}
             onChange={(v) => setField('max_tool_iterations', v)}
           />
-          {isMain && (
-            <div className="space-y-1">
-              <p className="text-[11px] text-[var(--color-muted)]">Steering mode</p>
-              <SmartSelect
-                value={payload.steering_mode ?? 'one-at-a-time'}
-                onValueChange={(v) =>
-                  setField(
-                    'steering_mode',
-                    v as 'one-at-a-time' | 'queue-and-process',
-                  )
-                }
-                ariaLabel="Steering mode"
-                items={[
-                  { value: 'one-at-a-time', label: 'One at a time' },
-                  { value: 'queue-and-process', label: 'Queue and process' },
-                ]}
-              />
-            </div>
-          )}
         </div>
       </div>
     </>

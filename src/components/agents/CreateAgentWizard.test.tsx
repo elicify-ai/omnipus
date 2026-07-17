@@ -420,6 +420,39 @@ describe('CreateAgentWizard — inherit-from-caller toggles (UAT 4a)', () => {
   })
 })
 
+// Item 6 reorg: the Fallback models editor moved from Step 3 (Tools) to
+// Step 1 (Identity), directly adjacent to the primary model field, so it
+// is visible without ever advancing the stepper.
+describe('CreateAgentWizard — Fallback models on Step 1 (item 6 reorg)', () => {
+  it('renders the Fallback models editor on step 1 for a Main agent, adjacent to the model field', () => {
+    renderWizard({ initialType: 'Main' })
+    // The model field and the fallback editor's "+ Add fallback" trigger
+    // are both visible on step 1 without advancing the stepper.
+    expect(screen.getByTestId('wizard-model')).toBeInTheDocument()
+    expect(screen.getByTestId('wizard-add-fallback')).toBeInTheDocument()
+  })
+
+  it('adding a fallback row renders wizard-fallback-0 on step 1', () => {
+    renderWizard({ initialType: 'Main' })
+    fireEvent.click(screen.getByTestId('wizard-add-fallback'))
+    expect(screen.getByTestId('wizard-fallback-0')).toBeInTheDocument()
+    expect(screen.getByTestId('wizard-fallback-model-0')).toBeInTheDocument()
+  })
+
+  it('does NOT render the Fallback models editor for a subagent_3p wizard (the external runner manages its own retries)', () => {
+    renderWizard({ initialType: 'subagent_3p', initialCli: 'claude-code' })
+    expect(screen.queryByTestId('wizard-add-fallback')).toBeNull()
+  })
+
+  it('a native Subagent still shows the fallback editor on step 1 even before advancing (not gated on the model-inherit toggle)', () => {
+    renderWizard({ initialType: 'Subagent' })
+    // inherit_model defaults OFF, but the fallback editor is only gated on
+    // isExternal, not on the model-inherit toggle — it renders regardless.
+    expect(screen.getByTestId('wizard-inherit-model')).toBeInTheDocument()
+    expect(screen.getByTestId('wizard-add-fallback')).toBeInTheDocument()
+  })
+})
+
 describe('CreateAgentWizard — missing-field hint (B3 fix)', () => {
   it('names the missing required fields when Next is disabled (Main: Name + Model)', () => {
     renderWizard({ initialType: 'Main' })

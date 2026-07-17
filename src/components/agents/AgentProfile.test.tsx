@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
@@ -81,7 +81,6 @@ const mockCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
-  steering_mode: 'one-at-a-time',
   rate_limits: { use_global_defaults: true },
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
 }
@@ -97,7 +96,6 @@ const mockLockedCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
-  steering_mode: 'one-at-a-time',
 }
 
 // Tier-branched form fixtures (Spec-4 FR-4.1 + locked concept in
@@ -315,22 +313,33 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
 // US-E6: per-agent skill assignment tests
 // Traces to: nontech-ux-hardening-spec.md §6.5, F-06
 describe('AgentProfile — Skills picker (US-E6)', () => {
+  // Item 2 reorg: Skills now has its own tab literally labeled "Skills" —
+  // both the desktop TabsTrigger and the mobile AccordionTrigger also
+  // render that exact text, so a bare `findByText(/^Skills$/i)` now
+  // matches 3 elements (trigger, trigger, section heading). Scope to the
+  // active tabpanel (Radix Tabs.Content, role="tabpanel") to find only the
+  // section heading inside it.
+  async function skillsTabPanel() {
+    return screen.findByRole('tabpanel')
+  }
+
   it('always shows "Skills" section heading', async () => {
-    // Wave 5: Skills now lives inside the Tools tab. Open the tab and
-    // assert the section heading is present (the heading is always
-    // visible inside the tab panel).
+    // Open it and assert the section heading is present (the heading is
+    // always visible inside the tab panel).
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    switchTab('tab-tools')
-    expect(await screen.findByText(/^Skills$/i)).toBeInTheDocument()
+    switchTab('tab-skills')
+    const panel = await skillsTabPanel()
+    expect(within(panel).getByText(/^Skills$/i)).toBeInTheDocument()
   })
 
   it('shows empty state when no skills are installed', async () => {
     vi.mocked(fetchSkills).mockResolvedValue([])
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    switchTab('tab-tools')
-    expect(await screen.findByText(/^Skills$/i)).toBeInTheDocument()
+    switchTab('tab-skills')
+    const panel = await skillsTabPanel()
+    expect(within(panel).getByText(/^Skills$/i)).toBeInTheDocument()
   })
 
   it('new agent with no skills shows 0 granted count (not labeled)', async () => {
@@ -339,10 +348,11 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agentNoSkills)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    switchTab('tab-tools')
-    await screen.findByText(/^Skills$/i)
+    switchTab('tab-skills')
+    const panel = await skillsTabPanel()
+    within(panel).getByText(/^Skills$/i)
     // The "X granted" badge must NOT appear when skills is empty/absent.
-    expect(screen.queryByText(/granted/i)).toBeNull()
+    expect(within(panel).queryByText(/granted/i)).toBeNull()
   })
 
   it('shows granted count badge when agent has skills', async () => {
@@ -350,7 +360,7 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agentWithSkills)
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    switchTab('tab-tools')
+    switchTab('tab-skills')
     // "2 granted" badge in the section header
     expect(await screen.findByText(/2 granted/i)).toBeInTheDocument()
   })
@@ -365,7 +375,7 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agentA)
     const { unmount } = renderProfile('agent-a')
     await screen.findByText('Agent A')
-    switchTab('tab-tools')
+    switchTab('tab-skills')
     expect(await screen.findByText(/1 granted/i)).toBeInTheDocument()
     unmount()
 
@@ -373,9 +383,10 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(agentB)
     renderProfile('agent-b')
     await screen.findByText('Agent B')
-    switchTab('tab-tools')
-    await screen.findByText(/^Skills$/i)
-    expect(screen.queryByText(/granted/i)).toBeNull()
+    switchTab('tab-skills')
+    const panel = await skillsTabPanel()
+    within(panel).getByText(/^Skills$/i)
+    expect(within(panel).queryByText(/granted/i)).toBeNull()
   })
 })
 
@@ -394,8 +405,8 @@ describe('AgentProfile — B-2: Skills picker read-only for locked agents', () =
   it('shows "Skill assignment is read-only" notice for locked agents when tab is open', async () => {
     renderProfile('mia')
     await screen.findByText('Mia')
-    // Open the Tools tab where Skills now lives
-    switchTab('tab-tools')
+    // Open the Skills tab (item 2 reorg — split from the former Tools tab)
+    switchTab('tab-skills')
     // The read-only notice must be visible
     expect(await screen.findByText(/skill assignment is read-only/i)).toBeInTheDocument()
   })
@@ -403,8 +414,8 @@ describe('AgentProfile — B-2: Skills picker read-only for locked agents', () =
   it('renders skill checkboxes as disabled for locked agents', async () => {
     renderProfile('mia')
     await screen.findByText('Mia')
-    // Open the Tools tab where Skills now lives
-    switchTab('tab-tools')
+    // Open the Skills tab (item 2 reorg — split from the former Tools tab)
+    switchTab('tab-skills')
     // Wait for skill to appear
     const checkbox = await screen.findByTestId('skill-checkbox-web-research')
     expect((checkbox as HTMLInputElement).disabled).toBe(true)
@@ -676,21 +687,22 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
 // or out). The provider field is what makes US-3 (rate-limit on primary's
 // provider doesn't poison the fallback's provider) possible.
 describe('AgentProfile — provider-aware fallback editor', () => {
-  // The Model Configuration accordion must be opened before the fallback
-  // editor is visible. Helper that mounts the profile and opens the
-  // accordion, returning the underlying container.
+  // Item 1 reorg: the fallback editor now lives on Basics, directly below
+  // the Model section, which is the DEFAULT-open tab/accordion. Desktop
+  // Tabs and mobile Accordion both default to "basics" and are
+  // simultaneously mounted (established pattern in this file — see the
+  // locked-agent shell_policy persistence test's use of getAllBy*), so
+  // every query below uses the *All* variant and acts on the first
+  // (desktop) match for interactions.
   async function openFallbackEditor(agent: typeof mockCoreAgent = mockCoreAgent) {
     vi.mocked(fetchAgent).mockResolvedValue(agent)
     renderProfile(agent.id)
     await screen.findByText(agent.name)
-    // The fallback section heading is "Fallback models (...)" inside the panel.
-    // Wave 5 / spec §6.2: the fallback editor lives inside the Tools tab
-    // (per the spec, fallbacks are a "tooling surface"). If the Tools tab
-    // is not already active, click the trigger to switch to it.
-    if (!screen.queryByText(/Fallback models/i)) {
-      switchTab('tab-tools')
-    }
-    await screen.findByText(/Fallback models/i)
+    // Fallback models is on Basics, the default-open tab — no switch
+    // needed. Wait for both the desktop and mobile copies to hydrate.
+    await waitFor(() => {
+      expect(screen.getAllByText(/Fallback models/i).length).toBeGreaterThanOrEqual(1)
+    })
   }
 
   it('renders existing fallbacks as chips with model name and provider badge', async () => {
@@ -702,12 +714,12 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         { model: 'claude-sonnet-4-6', provider: 'anthropic' },
       ],
     })
-    // Each model name appears as a chip
-    expect(screen.getByTestId('fallback-chip-model-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
+    // Each model name appears as a chip (desktop + mobile copies)
+    expect(screen.getAllByTestId('fallback-chip-model-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-chip-model-claude-sonnet-4-6').length).toBeGreaterThanOrEqual(1)
     // Each chip has a provider badge (FR-005)
-    expect(screen.getByTestId('fallback-chip-provider-z-ai/glm-5-turbo')).toHaveTextContent(/openrouter/i)
-    expect(screen.getByTestId('fallback-chip-provider-claude-sonnet-4-6')).toHaveTextContent(/anthropic/i)
+    expect(screen.getAllByTestId('fallback-chip-provider-z-ai/glm-5-turbo')[0]).toHaveTextContent(/openrouter/i)
+    expect(screen.getAllByTestId('fallback-chip-provider-claude-sonnet-4-6')[0]).toHaveTextContent(/anthropic/i)
   })
 
   it('removes a fallback chip via the X button', async () => {
@@ -719,13 +731,14 @@ describe('AgentProfile — provider-aware fallback editor', () => {
       ],
     })
     // Both present initially
-    expect(screen.getByTestId('fallback-chip-model-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
-    // Click the remove button on the first chip
-    fireEvent.click(screen.getByTestId('fallback-chip-remove-z-ai/glm-5-turbo'))
+    expect(screen.getAllByTestId('fallback-chip-model-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-chip-model-claude-sonnet-4-6').length).toBeGreaterThanOrEqual(1)
+    // Click the remove button on the first (desktop) chip — both copies
+    // share the same underlying state, so this removes it everywhere.
+    fireEvent.click(screen.getAllByTestId('fallback-chip-remove-z-ai/glm-5-turbo')[0])
     // First chip is gone, second remains
-    expect(screen.queryByTestId('fallback-chip-model-z-ai/glm-5-turbo')).toBeNull()
-    expect(screen.getByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
+    expect(screen.queryAllByTestId('fallback-chip-model-z-ai/glm-5-turbo').length).toBe(0)
+    expect(screen.getAllByTestId('fallback-chip-model-claude-sonnet-4-6').length).toBeGreaterThanOrEqual(1)
   })
 
   it('adds a fallback via the ModelSelector with provider tracking', async () => {
@@ -734,10 +747,11 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     // route through a different provider).
     await openFallbackEditor({ ...mockCoreAgent, fallback_models: [] })
 
-    // The "add fallback" ModelSelector is mounted. Open it and pick a model.
-    // The trigger button is identified by data-testid on the add-fallback
-    // selector (the primary model selector above uses a different testid).
-    const addTrigger = screen.getByTestId('fallback-add-trigger')
+    // The "add fallback" ModelSelector is mounted (desktop + mobile). Open
+    // the desktop one and pick a model. The trigger button is identified by
+    // data-testid on the add-fallback selector (the primary model selector
+    // above uses a different testid).
+    const addTrigger = screen.getAllByTestId('fallback-add-trigger')[0]
     fireEvent.click(addTrigger)
 
     // The CommandItem for claude-sonnet-4-6 lives inside the popover content.
@@ -746,8 +760,8 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     fireEvent.click(item)
 
     // The new chip should now appear with both model and provider
-    expect(await screen.findByTestId('fallback-chip-model-claude-sonnet-4-6')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-provider-claude-sonnet-4-6')).toHaveTextContent(/anthropic/i)
+    expect((await screen.findAllByTestId('fallback-chip-model-claude-sonnet-4-6')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-chip-provider-claude-sonnet-4-6')[0]).toHaveTextContent(/anthropic/i)
   })
 
   it('persists the fallback list with model AND provider on save', async () => {
@@ -764,7 +778,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     })
 
     // Remove one
-    fireEvent.click(screen.getByTestId('fallback-chip-remove-z-ai/glm-5-turbo'))
+    fireEvent.click(screen.getAllByTestId('fallback-chip-remove-z-ai/glm-5-turbo')[0])
     // Wait for the auto-save debounce + flush
     await waitFor(
       () => {
@@ -845,7 +859,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
       updated_at: new Date(baseUpdatedAt).toISOString(),
     })
 
-    fireEvent.click(screen.getByTestId('fallback-add-trigger'))
+    fireEvent.click(screen.getAllByTestId('fallback-add-trigger')[0])
     const item = await screen.findByTestId('fallback-add-item-claude-sonnet-4-6')
     fireEvent.click(item)
 
@@ -878,7 +892,9 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     // agents but the editor strips it via `canEdit`. Pre-C2 operators
     // had no way to see what the locked core compiled with; now we
     // surface the configured chain as a read-only summary so the
-    // operator can verify the inherited fallback.
+    // operator can verify the inherited fallback. Item 1 reorg: the two
+    // locked-only summaries (formerly duplicated on Basics and Tools) are
+    // now CONSOLIDATED into this single copy on Basics.
     vi.mocked(fetchAgent).mockResolvedValue({
       ...mockLockedCoreAgent,
       fallback_models: [
@@ -923,16 +939,16 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
       ],
     })
-    // The provider select is rendered for each chip.
-    const providerSelect = screen.getByTestId('fallback-provider-select-z-ai/glm-5-turbo')
+    // The provider select is rendered for each chip (desktop + mobile).
+    const providerSelect = screen.getAllByTestId('fallback-provider-select-z-ai/glm-5-turbo')[0]
     expect(providerSelect).toBeInTheDocument()
     expect((providerSelect as HTMLSelectElement).value).toBe('openrouter')
     // Connected providers are populated as options.
-    expect(screen.getByTestId('fallback-provider-option-openrouter-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-provider-option-anthropic-z-ai/glm-5-turbo')).toBeInTheDocument()
+    expect(screen.getAllByTestId('fallback-provider-option-openrouter-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-provider-option-anthropic-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
     // An "empty" option exists so the user can clear the provider
     // (which surfaces the persistent warning — I11).
-    expect(screen.getByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo')).toBeInTheDocument()
+    expect(screen.getAllByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
   })
 
   it('changing the provider combobox persists the provider ID (not display name) on save (I9)', async () => {
@@ -949,7 +965,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
       ],
     })
     // Switch the provider to anthropic — a different connected provider.
-    fireEvent.change(screen.getByTestId('fallback-provider-select-claude-sonnet-4-6'), {
+    fireEvent.change(screen.getAllByTestId('fallback-provider-select-claude-sonnet-4-6')[0], {
       target: { value: 'anthropic' },
     })
     // Wait for the auto-save debounce + flush.
@@ -985,14 +1001,14 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         { model: 'claude-sonnet-4-6', provider: 'anthropic' },
       ],
     })
-    expect(screen.getByTestId('fallback-chip-up-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-down-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-up-claude-sonnet-4-6')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-down-claude-sonnet-4-6')).toBeInTheDocument()
+    expect(screen.getAllByTestId('fallback-chip-up-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-chip-down-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-chip-up-claude-sonnet-4-6').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-chip-down-claude-sonnet-4-6').length).toBeGreaterThanOrEqual(1)
     // Up is disabled for the first chip.
-    expect((screen.getByTestId('fallback-chip-up-z-ai/glm-5-turbo') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getAllByTestId('fallback-chip-up-z-ai/glm-5-turbo')[0] as HTMLButtonElement).disabled).toBe(true)
     // Down is disabled for the last chip.
-    expect((screen.getByTestId('fallback-chip-down-claude-sonnet-4-6') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getAllByTestId('fallback-chip-down-claude-sonnet-4-6')[0] as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('moving a fallback down reorders the wire array on save (I10)', async () => {
@@ -1006,7 +1022,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
       ],
     })
     // Move the first fallback DOWN — the array becomes [claude-sonnet-4-6, z-ai/glm-5-turbo].
-    fireEvent.click(screen.getByTestId('fallback-chip-down-z-ai/glm-5-turbo'))
+    fireEvent.click(screen.getAllByTestId('fallback-chip-down-z-ai/glm-5-turbo')[0])
     await waitFor(
       () => {
         const calls = vi.mocked(updateAgent).mock.calls.filter(
@@ -1042,7 +1058,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
       ],
     })
     // The unconnected chip has the persistent warning indicator.
-    const warning = screen.getByTestId('fallback-chip-warning-some-unconnected-slug')
+    const warning = screen.getAllByTestId('fallback-chip-warning-some-unconnected-slug')[0]
     expect(warning).toBeInTheDocument()
     expect(warning.getAttribute('aria-label')).toBe(
       'Provider not connected — fallback will not be used at runtime',
@@ -1064,243 +1080,45 @@ describe('AgentProfile — provider-aware fallback editor', () => {
       ],
     })
     expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
-    fireEvent.change(screen.getByTestId('fallback-provider-select-z-ai/glm-5-turbo'), {
+    fireEvent.change(screen.getAllByTestId('fallback-provider-select-z-ai/glm-5-turbo')[0], {
       target: { value: '' },
     })
-    expect(
-      await screen.findByTestId('fallback-chip-warning-z-ai/glm-5-turbo'),
-    ).toBeInTheDocument()
-  })
-
-  // W6-C2 / G6: read-only summary for locked core agents. Operators
-  // can see what the locked core compiled with but cannot edit it.
-  it('locked core agents: read-only fallback summary, no add-trigger, no provider picker (G6)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({
-      ...mockLockedCoreAgent,
-      fallback_models: [
-        { model: 'claude-opus-4-6', provider: 'anthropic' },
-      ],
+    await waitFor(() => {
+      expect(screen.getAllByTestId('fallback-chip-warning-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
     })
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    // Fallback editor is in the Tools tab. Switch to it first.
-    switchTab('tab-tools')
-    // The summary panel is present (G6), the locked note is visible.
-    expect(await screen.findByTestId('fallback-summary-locked-tools')).toBeInTheDocument()
-    expect(screen.getAllByText(/inherited from the locked core config/i).length).toBeGreaterThanOrEqual(1)
-    // The summary lists the configured fallback (model + provider).
-    screen.getAllByTestId('fallback-summary-model-claude-opus-4-6').forEach((el) => {
-      expect(el).toHaveTextContent(/claude-opus-4-6/)
-    })
-    screen.getAllByTestId('fallback-summary-provider-claude-opus-4-6').forEach((el) => {
-      expect(el).toHaveTextContent(/anthropic/i)
-    })
-    // The EDITOR affordances (chip, add-trigger, provider select) must
-    // NOT render for locked agents — the summary is read-only.
-    expect(screen.queryByTestId('fallback-chip-model-claude-opus-4-6')).toBeNull()
-    expect(screen.queryByTestId('fallback-add-trigger')).toBeNull()
-    expect(screen.queryByTestId('fallback-provider-select-claude-opus-4-6')).toBeNull()
-  })
-
-  it('locked core agents with no fallback_models show an "empty" summary line', async () => {
-    // The summary must not crash when `fallback_models` is absent on a
-    // locked agent — surface the empty-chain copy instead.
-    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    // Fallback editor is in the Tools tab.
-    switchTab('tab-tools')
-    expect(await screen.findByTestId('fallback-summary-locked-tools')).toBeInTheDocument()
-    expect(screen.getAllByText(/no fallback chain configured/i).length).toBeGreaterThanOrEqual(1)
-  })
-
-  // W6-C2 / I9: per-chip provider picker. The fallback can route through
-  // a different provider than the primary (FR-007), so the chip must
-  // expose the provider as a pickable field that persists the
-  // **provider id** (the wire routing key) on save.
-  it('renders a per-chip provider picker bound to connected providers (I9)', async () => {
-    await openFallbackEditor({
-      ...mockCoreAgent,
-      fallback_models: [
-        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
-      ],
-    })
-    // The provider select is rendered for each chip.
-    const providerSelect = screen.getByTestId('fallback-provider-select-z-ai/glm-5-turbo')
-    expect(providerSelect).toBeInTheDocument()
-    expect((providerSelect as HTMLSelectElement).value).toBe('openrouter')
-    // Connected providers are populated as options.
-    expect(screen.getByTestId('fallback-provider-option-openrouter-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-provider-option-anthropic-z-ai/glm-5-turbo')).toBeInTheDocument()
-    // An "empty" option exists so the user can clear the provider
-    // (which surfaces the persistent warning — I11).
-    expect(screen.getByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo')).toBeInTheDocument()
-  })
-
-  it('changing the provider combobox persists the provider ID (not display name) on save (I9)', async () => {
-    // Regression: pre-C2 the editor stored the provider DISPLAY name
-    // in `entry.provider` (FR-007 spec: routing key, e.g. "openrouter").
-    // Pin the wire payload as provider id; the display name is layered
-    // separately at render time.
-    vi.mocked(updateAgent).mockResolvedValue(mockCoreAgent)
-    vi.mocked(updateAgent).mockClear()
-    await openFallbackEditor({
-      ...mockCoreAgent,
-      fallback_models: [
-        { model: 'claude-sonnet-4-6', provider: 'openrouter' },
-      ],
-    })
-    // Switch the provider to anthropic — a different connected provider.
-    fireEvent.change(screen.getByTestId('fallback-provider-select-claude-sonnet-4-6'), {
-      target: { value: 'anthropic' },
-    })
-    // Wait for the auto-save debounce + flush.
-    await waitFor(
-      () => {
-        const calls = vi.mocked(updateAgent).mock.calls.filter(
-          ([id]) => id === mockCoreAgent.id,
-        )
-        expect(calls.length).toBeGreaterThan(0)
-      },
-      { timeout: 6000 },
-    )
-    const calls = vi.mocked(updateAgent).mock.calls.filter(
-      ([id]) => id === mockCoreAgent.id,
-    )
-    const last = calls.at(-1)!
-    expect(last[1].fallback_models).toEqual([
-      // The wire value MUST be the provider ID, not "Anthropic" or
-      // "OpenRouter". This is the I9 contract.
-      { model: 'claude-sonnet-4-6', provider: 'anthropic' },
-    ])
-  })
-
-  it('clearing the provider combobox flips the chip into the warning state (I11 + I9 integration)', async () => {
-    // Sanity: an explicit user action — picking "—" on the provider
-    // select — must trigger the warning indicator on that chip.
-    await openFallbackEditor({
-      ...mockCoreAgent,
-      fallback_models: [
-        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
-      ],
-    })
-    expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
-    fireEvent.change(screen.getByTestId('fallback-provider-select-z-ai/glm-5-turbo'), {
-      target: { value: '' },
-    })
-    expect(
-      await screen.findByTestId('fallback-chip-warning-z-ai/glm-5-turbo'),
-    ).toBeInTheDocument()
-  })
-
-  // W6-C2 / I10: reorder controls. The wire contract for
-  // `fallback_models` says entries are tried in the order they appear,
-  // so reordering changes runtime behavior. Up arrow disabled at index
-  // 0; down arrow disabled at last index.
-  it('renders up/down reorder buttons on each chip (I10)', async () => {
-    await openFallbackEditor({
-      ...mockCoreAgent,
-      fallback_models: [
-        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
-        { model: 'claude-sonnet-4-6', provider: 'anthropic' },
-      ],
-    })
-    expect(screen.getByTestId('fallback-chip-up-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-down-z-ai/glm-5-turbo')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-up-claude-sonnet-4-6')).toBeInTheDocument()
-    expect(screen.getByTestId('fallback-chip-down-claude-sonnet-4-6')).toBeInTheDocument()
-    // Up is disabled for the first chip.
-    expect((screen.getByTestId('fallback-chip-up-z-ai/glm-5-turbo') as HTMLButtonElement).disabled).toBe(true)
-    // Down is disabled for the last chip.
-    expect((screen.getByTestId('fallback-chip-down-claude-sonnet-4-6') as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('moving a fallback down reorders the wire array on save (I10)', async () => {
-    vi.mocked(updateAgent).mockResolvedValue(mockCoreAgent)
-    vi.mocked(updateAgent).mockClear()
-    await openFallbackEditor({
-      ...mockCoreAgent,
-      fallback_models: [
-        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
-        { model: 'claude-sonnet-4-6', provider: 'anthropic' },
-      ],
-    })
-    // Move the first fallback DOWN — the array becomes [claude-sonnet-4-6, z-ai/glm-5-turbo].
-    fireEvent.click(screen.getByTestId('fallback-chip-down-z-ai/glm-5-turbo'))
-    await waitFor(
-      () => {
-        const calls = vi.mocked(updateAgent).mock.calls.filter(
-          ([id]) => id === mockCoreAgent.id,
-        )
-        expect(calls.length).toBeGreaterThan(0)
-      },
-      { timeout: 6000 },
-    )
-    const calls = vi.mocked(updateAgent).mock.calls.filter(
-      ([id]) => id === mockCoreAgent.id,
-    )
-    const last = calls.at(-1)!
-    expect(last[1].fallback_models).toEqual([
-      { model: 'claude-sonnet-4-6', provider: 'anthropic' },
-      { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
-    ])
-  })
-
-  // W6-C2 / I11: persistent indicator when the chip's provider field
-  // is empty. The model is not in any connected provider, so the
-  // fallback would silently fail at runtime. The chip must surface
-  // a persistent indicator with a canonical accessible name; the
-  // pre-C2 dash was unexplained (the ticket).
-  it('shows the persistent warning indicator + aria-label when provider is missing (I11)', async () => {
-    // Hydrate with an entry whose provider was empty on the wire (e.g.
-    // a free-text model that was never connected). After hydration the
-    // chip's `provider` field stays empty because `modelToProvider`
-    // cannot resolve the slug.
-    await openFallbackEditor({
-      ...mockCoreAgent,
-      fallback_models: [
-        { model: 'z-ai/glm-5-turbo', provider: 'openrouter' },
-        { model: 'some-unconnected-slug', provider: '' },
-      ],
-    })
-    // The unconnected chip has the persistent warning indicator.
-    const warning = screen.getByTestId('fallback-chip-warning-some-unconnected-slug')
-    expect(warning).toBeInTheDocument()
-    expect(warning.getAttribute('aria-label')).toBe(
-      'Provider not connected — fallback will not be used at runtime',
-    )
-    expect(warning.getAttribute('title')).toBe(
-      'Provider not connected — fallback will not be used at runtime',
-    )
-    // The connected chip does NOT show the indicator (regression guard).
-    expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
   })
 })
 
-// Wave 5 / spec §6 — Edit slide-over body uses a 4-5 tab layout (Basics,
-// Personality, Tools, Advanced [+Runtime for subagent_3p]) instead of the
-// prior 10-section Accordion. The `tab-basics` / `tab-personality` /
-// `tab-tools` / `tab-advanced` / `tab-runtime` testids anchor the tab bar;
-// tests below exercise the spec BDDs (#15/#16/#17 from agent-form-requirements.md).
+// Wave 5 / spec §6 — Edit slide-over body uses a 5-6 tab layout (Basics,
+// Personality, Tools, Skills, Advanced [+Runtime for subagent_3p]
+// [+Heartbeat with workspace context]) instead of the prior 10-section
+// Accordion. Item 2 reorg split Skills out of the former combined Tools
+// tab into its own tab. The `tab-basics` / `tab-personality` / `tab-tools`
+// / `tab-skills` / `tab-advanced` / `tab-runtime` / `tab-heartbeat`
+// testids anchor the tab bar; tests below exercise the spec BDDs
+// (#15/#16/#17 from agent-form-requirements.md).
 describe('AgentProfile — Wave 5 tab structure (spec §6.2-§6.4)', () => {
-  it('renders 4 tabs (basics, personality, tools, advanced) for a Main agent', async () => {
-    // Traces to: agent-form-requirements.md §9.3 — "Edit slide-over (Main) shows 4 tabs"
+  it('renders 5 tabs (basics, personality, tools, skills, advanced) for a Main agent', async () => {
+    // Traces to: agent-form-requirements.md §9.3 — "Edit slide-over (Main) shows tabs"
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expect(screen.getByTestId('tab-basics')).toBeInTheDocument()
     expect(screen.getByTestId('tab-personality')).toBeInTheDocument()
     expect(screen.getByTestId('tab-tools')).toBeInTheDocument()
+    // Item 2 reorg: Skills is now its own tab.
+    expect(screen.getByTestId('tab-skills')).toBeInTheDocument()
     expect(screen.getByTestId('tab-advanced')).toBeInTheDocument()
     // No Runtime tab for Main
     expect(screen.queryByTestId('tab-runtime')).toBeNull()
   })
 
-  it('renders 4 tabs including Runtime (and NO Tools tab) for a subagent_3p agent', async () => {
+  it('renders 4 tabs including Runtime (and NO Tools/Skills tab) for a subagent_3p agent', async () => {
     // Traces to: agent-form-requirements.md §9.3, amended by the field
-    // matrix: the Tools tab is omitted for external CLI workers (every
-    // toolsPanel section is out of scope for them), so the external edit
-    // slide-over shows Basics / Personality / Runtime / Advanced.
+    // matrix: the Tools and Skills tabs are omitted for external CLI
+    // workers (every toolsPanel/skillsPanel section is out of scope for
+    // them), so the external edit slide-over shows Basics / Personality /
+    // Runtime / Advanced.
     vi.mocked(fetchAgent).mockResolvedValue({
       ...mockCoreAgent,
       id: 'external-worker',
@@ -1313,8 +1131,63 @@ describe('AgentProfile — Wave 5 tab structure (spec §6.2-§6.4)', () => {
     expect(screen.getByTestId('tab-basics')).toBeInTheDocument()
     expect(screen.getByTestId('tab-personality')).toBeInTheDocument()
     expect(screen.queryByTestId('tab-tools')).toBeNull()
+    expect(screen.queryByTestId('tab-skills')).toBeNull()
     expect(screen.getByTestId('tab-runtime')).toBeInTheDocument()
     expect(screen.getByTestId('tab-advanced')).toBeInTheDocument()
+  })
+
+  // Item 4 reorg: pin the tab ORDER for both native and external agents,
+  // and heartbeat's position when present (between Skills and Advanced —
+  // moved from visually-first). Order is read off the rendered
+  // TabsTrigger DOM sequence via compareDocumentPosition, not just
+  // presence, so a future accidental reorder is caught.
+  it('tab order for a native Main agent (no workspace context): Basics, Personality, Tools, Skills, Advanced', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    const tablist = screen.getByRole('tablist')
+    const order = Array.from(tablist.querySelectorAll('[role="tab"]')).map(
+      (el) => el.getAttribute('data-testid'),
+    )
+    expect(order).toEqual(['tab-basics', 'tab-personality', 'tab-tools', 'tab-skills', 'tab-advanced'])
+  })
+
+  it('tab order for a subagent_3p agent: Basics, Personality, Runtime, Advanced (no Tools/Skills/Heartbeat)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      id: 'external-worker',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    renderProfile('external-worker')
+    await screen.findByText('External Worker')
+    const tablist = screen.getByRole('tablist')
+    const order = Array.from(tablist.querySelectorAll('[role="tab"]')).map(
+      (el) => el.getAttribute('data-testid'),
+    )
+    expect(order).toEqual(['tab-basics', 'tab-personality', 'tab-runtime', 'tab-advanced'])
+  })
+
+  it('tab order with workspace context (Heartbeat shown): Basics, Personality, Tools, Skills, Heartbeat, Advanced', async () => {
+    // FR-016 / US-5: Heartbeat only renders with workspace context AND for
+    // a non-worker agent. `renderProfileWithWorkspace` + `mockWorkspace`
+    // are declared later in this file as `function`/module-level `const`
+    // bindings, both fully initialized before any `it()` body runs.
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
+    vi.mocked(fetchWorkspace).mockResolvedValue(mockWorkspace)
+    renderProfileWithWorkspace('general-assistant', 'ws-1')
+    await screen.findByText('General Assistant')
+    const tablist = await screen.findByRole('tablist')
+    await waitFor(() => {
+      expect(within(tablist).getByTestId('tab-heartbeat')).toBeInTheDocument()
+    })
+    const order = Array.from(tablist.querySelectorAll('[role="tab"]')).map(
+      (el) => el.getAttribute('data-testid'),
+    )
+    expect(order).toEqual(['tab-basics', 'tab-personality', 'tab-tools', 'tab-skills', 'tab-heartbeat', 'tab-advanced'])
+    // Reset store for subsequent tests in this file.
+    useUiStore.setState({ editAgentWorkspaceId: null })
   })
 
   it('clicking the Personality tab activates the personality content', async () => {
@@ -2303,8 +2176,12 @@ describe('AgentProfile — skills visibility by agent kind (field matrix, W2c)',
     vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    switchTab('tab-tools')
-    expect(await screen.findByText(/^Skills$/i)).toBeInTheDocument()
+    switchTab('tab-skills')
+    // "Skills" is also the literal tab/accordion trigger label now (item 2
+    // reorg) — scope to the active tabpanel so this matches only the
+    // section heading, not the triggers.
+    const panel = await screen.findByRole('tabpanel')
+    expect(within(panel).getByText(/^Skills$/i)).toBeInTheDocument()
   })
 })
 
@@ -2337,15 +2214,16 @@ describe('AgentProfile — Tools & Permissions visibility by agent kind (field m
 
 // W2c — Fallback models section visibility by agent kind (field matrix).
 // subagent_3p hides it (the runner manages its own retries); every other
-// kind (including Main) keeps it.
+// kind (including Main) keeps it. Item 1 reorg: fallback models now lives
+// on Basics (the default-open tab), directly below the Model section.
 describe('AgentProfile — Fallback models visibility by agent kind (field matrix, W2c)', () => {
   it('hides Fallback models for a subagent_3p agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
     renderProfile('external-researcher')
     await screen.findByText('External Researcher')
-    // The Tools tab (the fallback editor's home) is omitted for 3p.
+    // The Fallback models section itself is gated on !isExternalAgent
+    // within Basics — never renders for subagent_3p regardless of tab.
     await waitFor(() => {
-      expect(screen.queryByTestId('tab-tools')).toBeNull()
       expect(screen.queryByText(/^Fallback models$/i)).toBeNull()
     })
   })
@@ -2354,8 +2232,13 @@ describe('AgentProfile — Fallback models visibility by agent kind (field matri
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    switchTab('tab-tools')
-    expect(await screen.findByText(/^Fallback models$/i)).toBeInTheDocument()
+    // Basics is the default-open tab — retarget here (item 1 reorg).
+    // Desktop Tabs + mobile Accordion both render it simultaneously
+    // (established pattern in this file), so use the *All* variant.
+    switchTab('tab-basics')
+    await waitFor(() => {
+      expect(screen.getAllByText(/^Fallback models$/i).length).toBeGreaterThanOrEqual(1)
+    })
   })
 })
 
@@ -2561,6 +2444,10 @@ describe('AgentProfile — locked core agent shell_policy persistence (live-bug 
     vi.mocked(updateAgent).mockReset().mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
+
+    // Item 3 reorg: Shell deny patterns moved from the default-open Basics
+    // tab into Advanced — switch there first.
+    switchTab('tab-advanced')
 
     // Open the Shell deny patterns section (editable for locked core
     // agents too) and add a pattern.
