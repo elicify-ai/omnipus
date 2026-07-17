@@ -513,4 +513,32 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 		t.Errorf("turn_canceled entry CancelMethod = %q, want %q (Finish(false) => graceful)",
 			cancelledEntry.CancelMethod, "graceful")
 	}
+
+	// This test returns as soon as the turn_canceled entry appears (written mid-run
+	// in Finish's onCancelFinish callback) — but the runTask goroutine keeps going
+	// afterward through finishTaskRun (task-store status + transcript writes). Block
+	// until that goroutine has fully finished so t.TempDir()'s deferred cleanup can't
+	// race its late writes (the pre-existing "TempDir RemoveAll: directory not empty"
+	// flake, which contended package runs occasionally surfaced).
+	waitTaskRunGoroutineDone(t, al.taskExecutor, tk.ID)
+}
+
+// waitTaskRunGoroutineDone blocks until the runTask goroutine for taskID has
+// fully finished. runTask defers delete(te.running, id) (task_executor.go), which
+// runs LAST — after finishTaskRun's late task-store/transcript writes — so once
+// te.running no longer holds the id, no further writes from that goroutine can
+// race a test's t.TempDir() cleanup.
+func waitTaskRunGoroutineDone(t *testing.T, te *TaskExecutor, taskID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		te.mu.Lock()
+		_, running := te.running[taskID]
+		te.mu.Unlock()
+		if !running {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("runTask goroutine did not finish within 5s")
 }
