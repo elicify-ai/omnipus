@@ -44,6 +44,17 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
+// orphanWatchAssertTimeout is the ceiling for the arm/disarm state-change
+// require.Eventually assertions and the turn-start waits below. It is
+// deliberately generous: these assert that an event-driven state DOES flip
+// (arm on last-connection teardown, disarm on reattach/continuation), not that
+// it flips within a few seconds. The ci go-test gate runs -p4 on 8 vCPUs
+// (GOMAXPROCS pinned to 2, so ~1:1 threads:cores), but a residual scheduling
+// spike can still delay the goroutine that flips the flag past a tight 3s
+// window — the source of the intermittent orphan-watch flake seen 2026-07-17.
+// The package -timeout is the real hang backstop.
+const orphanWatchAssertTimeout = 15 * time.Second
+
 // newOrphanForegroundTurnTestWSHandler builds a WSHandler backed by a real
 // *agent.AgentLoop whose LLM calls block (via blockingCancelProvider, shared
 // with cancel_audit_test.go in this package) until explicitly canceled — so a
@@ -115,12 +126,12 @@ func startOrphanTestTurn(t *testing.T, conn *websocket.Conn, bp *blockingCancelP
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
+	started := readFrameOfType(t, conn, "session_started", orphanWatchAssertTimeout)
 	require.NotEmpty(t, started.SessionID)
 
 	select {
 	case <-bp.ready:
-	case <-time.After(5 * time.Second):
+	case <-time.After(orphanWatchAssertTimeout):
 		t.Fatal("BLOCKED: blockingCancelProvider never entered Chat — turn did not start in time")
 	}
 	return started.SessionID
@@ -164,7 +175,7 @@ func TestOrphanForegroundTurnWatch_LastConnectionTeardown_Arms(t *testing.T) {
 	// Close the only connection watching this session.
 	require.NoError(t, conn.Close())
 
-	require.Eventually(t, func() bool { return al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
+	require.Eventually(t, func() bool { return al.HasOrphanWatchArmed(sessionID) }, orphanWatchAssertTimeout, 20*time.Millisecond,
 		"closing the LAST connection watching a session must arm the orphan-foreground-turn watchdog")
 }
 
@@ -198,7 +209,7 @@ func TestOrphanForegroundTurnWatch_AnotherConnectionStillWatching_NotArmed(t *te
 	// very start of the handler, well before it starts streaming replay.
 	require.Eventually(t, func() bool {
 		return countChatIDsMappedToSessionForTest(handler, sessionID) >= 2
-	}, 3*time.Second, 20*time.Millisecond, "both connections must be mapped to sessionID before the teardown race is exercised")
+	}, orphanWatchAssertTimeout, 20*time.Millisecond, "both connections must be mapped to sessionID before the teardown race is exercised")
 
 	require.NoError(t, conn1.Close())
 
@@ -224,7 +235,7 @@ func TestOrphanForegroundTurnWatch_Reattach_Disarms(t *testing.T) {
 	sessionID := startOrphanTestTurn(t, conn1, bp)
 
 	require.NoError(t, conn1.Close())
-	require.Eventually(t, func() bool { return al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
+	require.Eventually(t, func() bool { return al.HasOrphanWatchArmed(sessionID) }, orphanWatchAssertTimeout, 20*time.Millisecond,
 		"precondition: closing the last connection must arm the watchdog")
 
 	// Reattach via a fresh connection.
@@ -236,7 +247,7 @@ func TestOrphanForegroundTurnWatch_Reattach_Disarms(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, attachData))
 
-	require.Eventually(t, func() bool { return !al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
+	require.Eventually(t, func() bool { return !al.HasOrphanWatchArmed(sessionID) }, orphanWatchAssertTimeout, 20*time.Millisecond,
 		"reattaching (handleAttachSession) must disarm the pending orphan-foreground-turn watchdog")
 }
 
@@ -262,7 +273,7 @@ func TestOrphanForegroundTurnWatch_ChatMessageContinuation_Disarms(t *testing.T)
 	sessionID := startOrphanTestTurn(t, conn1, bp)
 
 	require.NoError(t, conn1.Close())
-	require.Eventually(t, func() bool { return al.HasOrphanWatchArmed(sessionID) }, 3*time.Second, 20*time.Millisecond,
+	require.Eventually(t, func() bool { return al.HasOrphanWatchArmed(sessionID) }, orphanWatchAssertTimeout, 20*time.Millisecond,
 		"precondition: closing the last connection must arm the watchdog")
 
 	// Reconnect via a FRESH connection and send a "message" frame carrying
@@ -280,7 +291,7 @@ func TestOrphanForegroundTurnWatch_ChatMessageContinuation_Disarms(t *testing.T)
 	require.Eventually(
 		t,
 		func() bool { return !al.HasOrphanWatchArmed(sessionID) },
-		3*time.Second,
+		orphanWatchAssertTimeout,
 		20*time.Millisecond,
 		"sending a message with an existing session_id (handleChatMessage's continuation branch) must disarm the pending watchdog",
 	)
