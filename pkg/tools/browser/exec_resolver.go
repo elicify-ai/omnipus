@@ -160,6 +160,9 @@ type pipeLaunchConfig struct {
 	args        []string
 	env         []string
 	userDataDir string
+	// launcherPrefix wraps the whole Chrome command (e.g. {"dbus-run-session",
+	// "--"}) for the headful video path. Empty → Chrome is exec'd directly.
+	launcherPrefix []string
 }
 
 // pipeLaunchResult is what a managed CDP-pipe launch hands back. cmd is the
@@ -189,9 +192,10 @@ func launchManagedPipe(ctx context.Context, execPath string, cfg pipeLaunchConfi
 	_ = ctx
 	var captured *exec.Cmd
 	rootCtx, cancel, err := cdppipe.NewPipeAllocator(context.Background(), execPath, cdppipe.PipeOptions{
-		Args:        cfg.args,
-		Env:         cfg.env,
-		UserDataDir: cfg.userDataDir,
+		Args:           cfg.args,
+		Env:            cfg.env,
+		UserDataDir:    cfg.userDataDir,
+		LauncherPrefix: cfg.launcherPrefix,
 		// Capture the *exec.Cmd — the only PID/crash handle under the pipe
 		// allocator (chromedp.Browser.Process() is nil here). cdppipe wires the
 		// fd 3/4 ExtraFiles AFTER this hook, so it is safe to only read cmd here.

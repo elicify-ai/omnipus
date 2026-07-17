@@ -48,6 +48,20 @@ type PipeOptions struct {
 	// them from ModifyCmd (they are set after this hook runs and will win).
 	ModifyCmd func(*exec.Cmd)
 
+	// LauncherPrefix, when non-empty, wraps the whole Chrome command: the child
+	// process becomes LauncherPrefix[0] and the effective command line is
+	// LauncherPrefix[1:] ++ execPath ++ <chrome args>. It exists for the headful
+	// video path, which runs Chrome under `dbus-run-session -- <chrome> <args>`
+	// (LauncherPrefix = {"dbus-run-session", "--"}). The prefix MUST wrap the
+	// entire command here rather than the caller swapping execPath and prepending
+	// "-- chrome" to Args: cdppipe prepends --remote-debugging-pipe (and its other
+	// launch flags) to the FRONT of the command in buildArgs, so a caller-built
+	// `dbus-run-session -- chrome …` would receive --remote-debugging-pipe BEFORE
+	// the `--` and dbus-run-session would reject it as its own unknown option. The
+	// pipe fds (3/4) are set on this child via ExtraFiles and are inherited
+	// through the wrapper's exec (verified: dbus-run-session preserves fd 3/4).
+	LauncherPrefix []string
+
 	// UserDataDir is the Chrome profile directory. When empty a temporary dir is
 	// created and removed on teardown.
 	UserDataDir string
@@ -212,7 +226,20 @@ func (l *launch) start(ctx context.Context) error {
 	}
 	l.tempDir = tempDir
 
-	cmd := exec.CommandContext(ctx, l.execPath, args...)
+	// Wrap the whole command in LauncherPrefix (e.g. dbus-run-session -- <chrome>
+	// <chrome args>) when set. The prefix binary becomes the child; chrome and all
+	// its flags — including cdppipe's --remote-debugging-pipe from buildArgs — are
+	// its args, so the pipe flag lands AFTER the wrapper's "--" separator. fd 3/4
+	// (ExtraFiles below) are inherited through the wrapper's exec.
+	execCmd, execArgs := l.execPath, args
+	if len(l.opts.LauncherPrefix) > 0 {
+		execCmd = l.opts.LauncherPrefix[0]
+		execArgs = make([]string, 0, len(l.opts.LauncherPrefix)-1+1+len(args))
+		execArgs = append(execArgs, l.opts.LauncherPrefix[1:]...)
+		execArgs = append(execArgs, l.execPath)
+		execArgs = append(execArgs, args...)
+	}
+	cmd := exec.CommandContext(ctx, execCmd, execArgs...)
 	if len(l.opts.Env) > 0 {
 		cmd.Env = append(os.Environ(), l.opts.Env...)
 	}

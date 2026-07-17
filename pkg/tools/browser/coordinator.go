@@ -738,15 +738,20 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 
 	// dbus-run-session wrapping for the headful video path (the coordinator "sets
 	// this up"): headful Chrome wants a session bus. When video-capable and
-	// dbus-run-session is on PATH, launch `dbus-run-session -- <chrome> <args>`;
-	// the CDP pipe fds (3/4) inherit through the exec wrapper (dbus-run-session
-	// execs its command, preserving inherited fds). Falls back to launching
-	// Chrome directly (warn) when the wrapper is unavailable.
-	launchPath, launchArgs := execPath, cmdline.Args
+	// dbus-run-session is on PATH, run Chrome under `dbus-run-session -- <chrome>
+	// <args>` via cdppipe's LauncherPrefix — which wraps the WHOLE command so
+	// cdppipe's own --remote-debugging-pipe flag lands after the "--" (belonging
+	// to Chrome), not to dbus-run-session. (An earlier attempt swapped the exec to
+	// dbus-run-session and prepended "-- chrome" to the args; cdppipe then
+	// prepended --remote-debugging-pipe to the front, before the "--", and
+	// dbus-run-session died with "option '--remote-debugging-pipe' is unknown" —
+	// the headful path never launched. LauncherPrefix fixes the ordering.) The CDP
+	// pipe fds (3/4) inherit through the wrapper's exec (dbus-run-session preserves
+	// them). Falls back to launching Chrome directly (warn) when unavailable.
+	var launcherPrefix []string
 	if videoCapable {
 		if dbusPath, derr := exec.LookPath("dbus-run-session"); derr == nil {
-			launchPath = dbusPath
-			launchArgs = append([]string{"--", execPath}, cmdline.Args...)
+			launcherPrefix = []string{dbusPath, "--"}
 		} else {
 			logger.WarnCF(
 				"browser",
@@ -762,10 +767,11 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	if launch == nil {
 		launch = launchManagedPipe
 	}
-	res, err := launch(ctx, launchPath, pipeLaunchConfig{
-		args:        launchArgs,
-		env:         cmdline.Env,
-		userDataDir: c.cfg.ProfileDir,
+	res, err := launch(ctx, execPath, pipeLaunchConfig{
+		args:           cmdline.Args,
+		env:            cmdline.Env,
+		userDataDir:    c.cfg.ProfileDir,
+		launcherPrefix: launcherPrefix,
 	})
 	if err != nil {
 		c.mu.Lock()
