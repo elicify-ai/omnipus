@@ -1,6 +1,8 @@
 # Live Browser → WebRTC (browser-video-2) — Continuation Context
 
-**Status:** decision made, work not yet started. This doc is the single source of
+**Status:** decision made; **WV1 spike executed 2026-07-17 — see `wv1-spike-results.md`
+(Q2 capture-with-audio = YES proven; Q1 connectivity = in-pod pass, external test
+pending operator).** This doc is the single source of
 continuation truth so a fresh session can pick up without prior context.
 **Branch for the work:** `feature/browser-video-2` (this branch), cut from
 `bugfixes2` @ `eb4de2a2` (clean pre-video base), pushed to origin.

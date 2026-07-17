@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>TONETAB</title></head>
+<body style="background:#123;color:#eee;font-family:monospace">
+<h1>Q2 tone page</h1>
+<canvas id="c" width="640" height="360" style="border:1px solid #666"></canvas>
+<audio id="au" loop></audio>
+<div id="log"></div>
+<script>
+'use strict';
+const S = { errors: [] };
+
+// ---- <audio loop> path: JS-generated 330Hz WAV via blob URL ----
+function makeWav(freq, secs, rate) {
+  const n = Math.floor(secs * rate);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.round(Math.sin(2 * Math.PI * freq * i / rate) * 12000), true);
+  return buf;
+}
+// Query params let the nav-survival test switch to a distinguishable signature:
+// tone.html?freq=880&gain=0.5&wav=0 -> pure sine, expected RMS = gain/sqrt(2)
+const Q = new URLSearchParams(location.search);
+const FREQ = Number(Q.get('freq') || 440);
+const GAIN = Number(Q.get('gain') || 0.25);
+const WAV_ON = Q.get('wav') !== '0';
+
+const au = document.getElementById('au');
+if (WAV_ON) {
+  au.src = URL.createObjectURL(new Blob([makeWav(330, 1.0, 22050)], { type: 'audio/wav' }));
+  au.play().then(() => { S.audioElPlaying = true; }).catch(e => { S.errors.push('audioEl: ' + e); });
+}
+
+// ---- WebAudio path: 440Hz oscillator -> gain -> destination, with a self-analyser tap ----
+const ctx = new AudioContext();
+const osc = ctx.createOscillator(); osc.frequency.value = FREQ;
+const gain = ctx.createGain(); gain.gain.value = GAIN;
+const selfAn = ctx.createAnalyser(); selfAn.fftSize = 2048;
+osc.connect(gain); gain.connect(ctx.destination); gain.connect(selfAn);
+osc.start();
+ctx.resume().catch(e => S.errors.push('resume: ' + e));
+const selfBuf = new Float32Array(selfAn.fftSize);
+function selfRms() {
+  selfAn.getFloatTimeDomainData(selfBuf);
+  let s = 0; for (let i = 0; i < selfBuf.length; i++) s += selfBuf[i] * selfBuf[i];
+  return Math.sqrt(s / selfBuf.length);
+}
+
+// ---- animation so the video capture has changing pixels ----
+const c2d = document.getElementById('c').getContext('2d');
+let frameN = 0;
+(function draw() {
+  frameN++;
+  c2d.fillStyle = '#123'; c2d.fillRect(0, 0, 640, 360);
+  c2d.fillStyle = '#fc0'; c2d.fillRect((frameN * 5) % 600, 120, 40, 40);
+  c2d.fillStyle = '#fff'; c2d.font = '22px monospace';
+  c2d.fillText('frame ' + frameN, 20, 40);
+  c2d.fillText('t=' + performance.now().toFixed(0) + 'ms', 20, 70);
+  requestAnimationFrame(draw);
+})();
+
+window.__tone = () => ({
+  ctxState: ctx.state,
+  ctxTime: ctx.currentTime,
+  sampleRate: ctx.sampleRate,
+  selfRms: selfRms(),
+  audioElTime: au.currentTime,
+  audioElPaused: au.paused,
+  rafFrames: frameN,
+  vis: document.visibilityState,
+  errors: S.errors,
+});
+</script>
+</body>
+</html>
