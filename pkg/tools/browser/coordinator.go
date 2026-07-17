@@ -116,6 +116,14 @@ type BrowserCoordinator struct {
 	// stay headless-shell (non-video-capable), still over the CDP pipe.
 	display DisplaySidecar
 
+	// audio, when non-nil AND healthy, wires PULSE_SERVER into the NEXT
+	// headful (video-capable) managed launch so Chrome finds the virtual sink
+	// (FR-022, US-11). A pure best-effort companion to video — nil, unhealthy,
+	// or a headless-shell launch all mean "no PULSE_SERVER", never an error.
+	// Set by stream orchestration once a PulseAudio sidecar is up via
+	// SetAudioSidecar.
+	audio AudioSidecar
+
 	// Chrome process state (lives on the coordinator; managers never touch it).
 	launched   bool
 	launching  bool       // single-flight: a launch is in progress
@@ -714,9 +722,18 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	// Video-capable (headful on the Xvfb virtual display) vs headless-shell. nil
 	// or unhealthy sidecar → headless-shell (still over the pipe). FR-001.
 	videoCapable, display := c.videoLaunchMode()
+	// PulseServer is only meaningful on the headful (video-capable) launch path
+	// — a headless-shell Chrome has no framebuffer to pair audio with, so audio
+	// parity mirrors Display above and stays gated on videoCapable even though
+	// the audio sidecar itself is independent of video health (FR-022/FR-023).
+	pulseServer := ""
+	if videoCapable {
+		pulseServer = c.audioLaunchServer()
+	}
 	cmdline := managedExecAllocatorOpts(c.cfg, managedLaunchParams{
 		VideoCapable: videoCapable,
 		Display:      display,
+		PulseServer:  pulseServer,
 	})
 
 	// dbus-run-session wrapping for the headful video path (the coordinator "sets
@@ -904,6 +921,18 @@ func (c *BrowserCoordinator) SetDisplaySidecar(d DisplaySidecar) {
 	c.mu.Unlock()
 }
 
+// SetAudioSidecar wires (or clears) the PulseAudio sidecar that makes managed
+// launches audio-capable (FR-022, US-11). Set by stream orchestration once a
+// PulseAudio sidecar is up and healthy; the NEXT launch reads it via
+// audioLaunchServer. nil (the default) keeps launches without PULSE_SERVER.
+// Launch-time only (SEC-12 spirit) — it does not restart an already-running
+// Chrome.
+func (c *BrowserCoordinator) SetAudioSidecar(a AudioSidecar) {
+	c.mu.Lock()
+	c.audio = a
+	c.mu.Unlock()
+}
+
 // videoLaunchMode reports whether the NEXT launch should be video-capable
 // (headful on the sidecar's DISPLAY) or headless-shell. A nil or unhealthy
 // sidecar, or an empty DISPLAY, means headless-shell (still over the pipe).
@@ -917,6 +946,20 @@ func (c *BrowserCoordinator) videoLaunchMode() (videoCapable bool, display strin
 		}
 	}
 	return false, ""
+}
+
+// audioLaunchServer reports the PULSE_SERVER value the NEXT managed launch
+// should wire in, or "" if audio is unavailable. A nil or unhealthy sidecar
+// means "" (audio absent) — never an error; audio is a pure best-effort
+// companion to video (FR-022, FR-023).
+func (c *BrowserCoordinator) audioLaunchServer() string {
+	c.mu.Lock()
+	a := c.audio
+	c.mu.Unlock()
+	if a != nil && a.Healthy() {
+		return a.PulseServer()
+	}
+	return ""
 }
 
 // lockPath is the single-launch lockfile (CRIT-001). It lives in the profile

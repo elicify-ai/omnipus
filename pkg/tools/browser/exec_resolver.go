@@ -38,6 +38,14 @@ type managedLaunchParams struct {
 	// (display_linux.go). Required (non-empty) when VideoCapable; ignored
 	// otherwise. Threaded through from the coordinator, which owns the sidecar.
 	Display string
+	// PulseServer is the PulseAudio server address (audiosink_linux.go's
+	// AudioSidecar.PulseServer()) of the headful audio sink, wired into the
+	// managed launch's env as PULSE_SERVER so the ADR-044 phase-2 encoder
+	// page's getUserMedia can reach the null-sink monitor. Empty means no
+	// audio is available (sidecar not started/healthy, or the launch is not
+	// VideoCapable) — the launch proceeds video-only. Threaded through from
+	// the coordinator, which owns the sidecar (mirrors Display).
+	PulseServer string
 }
 
 // managedChromeCmdline is the rendered command line + environment for a managed
@@ -134,6 +142,13 @@ func managedExecAllocatorOpts(cfg BrowserConfig, params managedLaunchParams) man
 	// path would make Chrome try to reach an X server it does not need.
 	if params.VideoCapable && params.Display != "" {
 		env = append(env, "DISPLAY="+params.Display)
+	}
+	// PULSE_SERVER only for the headful video path, same guard as DISPLAY: a
+	// stray PULSE_SERVER on the headless-shell path would make Chrome try to
+	// reach an audio sink it does not need. Empty PulseServer (no audio
+	// sidecar, or sidecar unhealthy) means video-only — never appended.
+	if params.VideoCapable && params.PulseServer != "" {
+		env = append(env, "PULSE_SERVER="+params.PulseServer)
 	}
 
 	return managedChromeCmdline{Args: args, Env: env}

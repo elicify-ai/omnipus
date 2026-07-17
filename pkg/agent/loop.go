@@ -1710,7 +1710,11 @@ func registerSharedTools(
 				// never rebuilt on reload.
 				al.mu.Lock()
 				if al.browserCoordinator == nil {
-					al.browserCoordinator = browser.NewBrowserCoordinator(al.homePath, browserCfg, cfg.Tools.Browser.MaxTotalTabs)
+					al.browserCoordinator = browser.NewBrowserCoordinator(
+						al.homePath,
+						browserCfg,
+						cfg.Tools.Browser.MaxTotalTabs,
+					)
 				} else {
 					al.browserCoordinator.ApplyRuntimeConfig(browserCfg, cfg.Tools.Browser.MaxTotalTabs)
 				}
@@ -3614,6 +3618,24 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 		out = append(out, mgr)
 	}
 	return out
+}
+
+// BrowserCoordinator returns the AgentLoop's single gateway-scoped
+// BrowserCoordinator (ADR-043) — the shared owner of the one Chrome process
+// and every agent's browser context. It is constructed lazily, the first
+// time registerSharedTools processes an agent with browser tools enabled, so
+// this can return nil on a fresh AgentLoop before that happens, or in tests
+// that build BrowserManagers directly without a coordinator. Thread-safe.
+//
+// Used by gateway boot (RunContextWithOptions, ADR-044) to obtain a direct
+// handle onto the coordinator so it can call SetDisplaySidecar/
+// SetAudioSidecar once the Xvfb/Pulse sidecars and a full-Chromium build are
+// confirmed ready — callers MUST nil-check the result and skip video wiring
+// (dormant) rather than treat nil as an error.
+func (al *AgentLoop) BrowserCoordinator() *browser.BrowserCoordinator {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.browserCoordinator
 }
 
 // ResolveApprovalToolPolicy returns the effective tool policy ("allow"/"ask"/
