@@ -152,7 +152,7 @@ async function apiHeaders(
 async function createSession(page: Page): Promise<string> {
   const resp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
     headers: await apiHeaders(page),
-    data: { agent_id: 'main', type: 'chat' },
+    data: { agent_id: 'mia', type: 'chat' },
   })
 
   if (!resp.ok()) {
@@ -188,20 +188,28 @@ async function renameSession(page: Page, sessionId: string, title: string): Prom
 }
 
 /**
- * Navigate to the sessions panel and click a session by its title.
- * The session must be visible in the panel (sorted by recency — newly created sessions appear first).
+ * Open (or reopen) a session via its deep-link route, `/#/sessions/{id}`.
+ *
+ * Was: click a button named "Open sessions panel", then one named "Open
+ * session: <title>". Neither accessible name exists anywhere in current
+ * `src/` since the session panel was redesigned into the two-mode
+ * SearchModal (`src/components/search/SearchModal.tsx`) — see
+ * tests/e2e/fixtures/session-setup.ts's `openSessionByDeepLink` doc comment
+ * for the full history. The deep link is the app's own real navigation
+ * seam: `src/routes/_app/sessions.$sessionId.tsx`'s loader no longer
+ * pre-sets `activeSessionId`, so this drives a genuine WS attach + replay,
+ * not a REST-only render.
  */
-async function openSession(page: Page, sessionTitle: string): Promise<void> {
-  // Click the "Sessions" button in the top-right of the chat header
-  await page.getByRole('button', { name: 'Open sessions panel' }).click()
-
-  // Wait for the session list to appear
-  const sessionBtn = page
-    .getByRole('button', { name: new RegExp(`Open session: ${sessionTitle}`, 'i') })
-    .first()
-
-  await expect(sessionBtn).toBeVisible({ timeout: 10_000 })
-  await sessionBtn.click()
+async function openSession(page: Page, sessionId: string): Promise<void> {
+  await page.goto(`/#/sessions/${sessionId}`)
+  // Route-swap guard FIRST (mirrors session-setup.ts's openSessionByDeepLink):
+  // wait until the chat surface is bound to THIS session — a bare composer
+  // wait is satisfied by the previous route's composer during the swap, and
+  // typing at that instant sends on a stale/null session binding.
+  await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
 }
 
 /**
@@ -292,7 +300,7 @@ test(
     ])
 
     // ── Step 2: Navigate to the session via the session panel ──
-    await openSession(page, sessionTitle)
+    await openSession(page, sessionId)
 
     // Wait for replay to complete
     await waitForReplayDone(page)
@@ -420,7 +428,7 @@ test(
       },
     ])
 
-    await openSession(page, sessionTitle)
+    await openSession(page, sessionId)
     await waitForReplayDone(page)
 
     // Assert SubagentBlock is present.
@@ -440,7 +448,7 @@ test(
     // Close and reopen the session to validate replay round-trip.
     // Navigate away then back.
     await page.goto('/')
-    await openSession(page, sessionTitle)
+    await openSession(page, sessionId)
     await waitForReplayDone(page)
 
     const replayedBlock = page.locator('[data-testid="subagent-collapsed"]').first()
@@ -499,7 +507,7 @@ test(
     // The unique nonce forces a verbatim echo we can match exactly. The
     // 600-word body prefix ensures the response streams for several seconds
     // (typically 4-12s on gemini-2.5-flash) so page2 can attach mid-turn.
-    await openSession(page, sessionTitle)
+    await openSession(page, sessionId)
     await waitForReplayDone(page)
 
     const nonce = `attach-during-turn-${Date.now()}`
@@ -528,7 +536,7 @@ test(
       await page2.goto('/')
       await expect(page2.getByRole('banner')).toBeVisible({ timeout: 15_000 })
       await waitForWsConnected(page2)
-      await openSession(page2, sessionTitle)
+      await openSession(page2, sessionId)
       await waitForReplayDone(page2)
 
       // page2 must replay the user message that page1 sent before page2 attached.
@@ -616,7 +624,7 @@ test(
     ])
 
     // ── Step 1: Open the session and wait for replay ──
-    await openSession(page, sessionTitle)
+    await openSession(page, sessionId)
     await waitForReplayDone(page)
 
     // Verify the replayed messages are present (user + assistant).
@@ -734,7 +742,7 @@ test(
     ])
 
     // ── Step 2: Open the session for the first time and capture badge count ──
-    await openSession(page, sessionTitle)
+    await openSession(page, sessionId)
     await waitForReplayDone(page)
 
     const badgeLocator = page.locator('[data-testid="tool-call-badge"]')
@@ -755,7 +763,7 @@ test(
     // ── Step 4: Navigate back and verify badges are identical ──
     // This is the core contract: the second open (replay) must produce the
     // same badges as the first open.
-    await openSession(page, sessionTitle)
+    await openSession(page, sessionId)
     await waitForReplayDone(page)
 
     const replayedBadges = page.locator('[data-testid="tool-call-badge"]')
@@ -834,15 +842,14 @@ test(
 
     // ── Navigate to the session and immediately check send button state ──
     // Traces to: Scenario 10 When "user types in the input → send button is disabled".
-
-    // Open the session panel and click the session
-    await page.getByRole('button', { name: 'Open sessions panel' }).click()
-    const sessionBtn = page
-      .getByRole('button', {
-        name: new RegExp(`Open session: ${sessionTitle}`, 'i'),
-      })
-      .first()
-    await expect(sessionBtn).toBeVisible({ timeout: 10_000 })
+    //
+    // This test does NOT use the shared `openSession` helper (which now
+    // navigates via the deep-link route AND waits for the composer to
+    // re-enable) because it needs to install a MutationObserver BEFORE the
+    // attach-triggering navigation fires, then trigger that navigation
+    // itself — see the OBSERVATION STRATEGY comment below. `sessionId` is
+    // already in scope from the `createSession` call above; the navigation
+    // itself happens further down, right after the observer is armed.
 
     // Note: the send button (ComposerPrimitive.Send) is ALSO disabled when the input
     // is empty (AssistantUI internal behavior), making it unreliable for replay detection.
@@ -899,7 +906,14 @@ test(
       bodyObs.observe(document.body, { subtree: true, childList: true })
     })
 
-    await sessionBtn.click()
+    // Trigger the attach-triggering navigation now that the observer is armed.
+    // Same-document hash navigation (HashRouter): the `window` the observer
+    // was installed on survives this goto, so the trace keeps accumulating
+    // uninterrupted — same guarantee the old sessionBtn.click() gave, just
+    // addressed directly via the app's deep-link route (see openSession's
+    // doc comment above for why this is the current real seam, not a
+    // workaround).
+    await page.goto(`/#/sessions/${sessionId}`)
 
     // Poll the observer trace from the test side. We accept anything that proves
     // the disabled state was true at least once between click and done. expect.poll

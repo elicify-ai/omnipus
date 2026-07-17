@@ -97,24 +97,21 @@ function SessionRoute() {
       // Step 1: bind workspace so subsequent store writes use the correct key.
       setActiveWorkspaceId(wsId)
 
-      // Step 2: write the descriptor by explicit key BEFORE navigate().
-      // This guarantees WorkspaceTabContainer.enterWorkspaceChat sees the
-      // descriptor and takes the no-op path regardless of WS state.
-      const descriptor = {
-        id: session.id,
-        type: session.type,
-        title: session.title ?? null,
-        agentId: headerAgentId ?? null,
-      }
-      setWorkspaceSessionDescriptor(wsId, descriptor)
-
-      // Step 3: send attach_session frame (or defer to onConnected path).
+      // Step 2: send attach_session frame (or defer to onConnected path).
+      // Gate on connection.isConnected, not mere connection existence: on a
+      // fresh page load the connection object is published synchronously
+      // BEFORE the socket opens (WsLifecycle), so send() would fail and
+      // attachToSession's failure branch would flash a spurious global
+      // "connection dropped" banner for a socket that is merely still
+      // CONNECTING. A non-open socket takes the offline branch instead —
+      // reattachActiveSession sends the frame on connect.
       // The activeSessionId check guards against re-attaching an already-active
       // session id — mirrors enterWorkspaceChat's no-op guard (session.ts) —
       // so re-mounting this route for a session already attached this tab
       // doesn't fire a redundant attach_session + bucket wipe.
+      const wsOpen = !!connection?.isConnected
       if (
-        connection &&
+        wsOpen &&
         attachedRef.current !== session.id &&
         useSessionStore.getState().activeSessionId !== session.id
       ) {
@@ -128,11 +125,28 @@ function SessionRoute() {
           // whatever session was PREVIOUSLY active instead of this one.
           setActiveSession(session.id, headerAgentId, null)
         }
-      } else if (!connection) {
-        // Offline: setActiveSession records the session so reattachActiveSession
-        // can send the frame once the WS connects (WsLifecycle.onConnected path).
+      } else if (!wsOpen) {
+        // Offline / still-connecting: setActiveSession records the session so
+        // reattachActiveSession can send the frame once the WS connects
+        // (WsLifecycle.onConnected path).
         setActiveSession(session.id, headerAgentId, null)
       }
+
+      // Step 3: write the descriptor by explicit key BEFORE navigate().
+      // This guarantees WorkspaceTabContainer.enterWorkspaceChat sees the
+      // descriptor and takes the no-op path regardless of WS state. Written
+      // AFTER the attach/fallback block deliberately: the fallback/offline
+      // setActiveSession above records a generic descriptor (type 'chat',
+      // no title) under this workspace key — this explicit write restores
+      // the session's REAL type/title so a later workspace re-entry
+      // re-attaches with correct labeling (task sessions especially).
+      const descriptor = {
+        id: session.id,
+        type: session.type,
+        title: session.title ?? null,
+        agentId: headerAgentId ?? null,
+      }
+      setWorkspaceSessionDescriptor(wsId, descriptor)
 
       if (session.type === 'task') {
         setAttachedContext('task', session.title)
@@ -154,8 +168,12 @@ function SessionRoute() {
     // re-attaching an already-active session id — mirrors enterWorkspaceChat's
     // no-op guard (session.ts) — since useSelectSession no longer attaches for
     // Unfiled sessions, this route is now the SOLE attacher for them.
+    // Same isConnected gate as the workspace branch above: a CONNECTING
+    // socket must take the offline path, not a doomed send that flashes a
+    // spurious global error banner on every fresh-tab deep link.
+    const wsOpenInline = !!connection?.isConnected
     if (
-      connection &&
+      wsOpenInline &&
       attachedRef.current !== session.id &&
       useSessionStore.getState().activeSessionId !== session.id
     ) {
@@ -168,7 +186,7 @@ function SessionRoute() {
         // workspace-known branch above for why this matters on reconnect).
         setActiveSession(session.id, headerAgentId, null)
       }
-    } else if (!connection) {
+    } else if (!wsOpenInline) {
       setActiveSession(session.id, headerAgentId, null)
     }
 
@@ -210,18 +228,23 @@ function SessionRoute() {
 export const Route = createFileRoute('/_app/sessions/$sessionId')({
   component: SessionRoute,
   loader: async ({ params }) => {
-    // Pre-fetch session detail and activate the session in the Zustand store
-    // BEFORE the component renders.
+    // Pre-fetch session detail ONLY — as `initialData` for the component's
+    // useQuery — so the query doesn't waterfall behind mount.
+    //
+    // MUST NOT write to the session store here (no setActiveSession /
+    // setAttachedContext). The component's attach effect below is the SOLE
+    // attacher and it gates on `activeSessionId !== session.id` to avoid a
+    // redundant re-attach when the route remounts for an already-attached
+    // session. If the loader pre-set activeSessionId to this session, that
+    // guard would see the session as "already attached" on the very first
+    // mount and skip attachToSession entirely — no attach_session frame is
+    // ever sent, so the backend never runs replay and the thread silently
+    // falls back to the plain REST fetch below with no WS-driven replay,
+    // subagent span reconstruction, or composer/replay lifecycle. This was a
+    // real, confirmed bug for every session deep link (/#/sessions/{id}) —
+    // do not reintroduce the store write here.
     try {
       const detail = await fetchSessionDetail(params.sessionId)
-      if (detail?.session) {
-        const store = useSessionStore.getState()
-        const headerAgentId = detail.session.active_agent_id ?? detail.session.agent_id
-        store.setActiveSession(detail.session.id, headerAgentId, null)
-        if (detail.session.type === 'task') {
-          store.setAttachedContext('task', detail.session.title)
-        }
-      }
       return detail ?? null
     } catch (err) {
       if (isApiError(err) && err.status === 404) {

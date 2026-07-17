@@ -4,7 +4,8 @@
  * Factors out the repeated 7-step setup block used by replay-fidelity.spec.ts
  * tests (a), (b), (d), and (e):
  *   goto('/') → waitForWsConnected → createSession → renameSession →
- *   seedTranscript → openSession → waitForReplayDone
+ *   seedTranscript → openSessionByDeepLink (folds in the old separate
+ *   waitForReplayDone step — see that helper's doc comment)
  *
  * Traces to: temporal-puzzling-melody.md W5-16.
  */
@@ -91,7 +92,10 @@ async function apiHeaders(page: Page): Promise<Record<string, string>> {
 async function createSession(page: Page): Promise<string> {
   const resp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
     headers: await apiHeaders(page),
-    data: { agent_id: 'main', type: 'chat' },
+    // 'mia' — the seeded default of the 4-base roster. The historical
+    // 'main' id no longer resolves to any agent, which makes the session
+    // detail report agent_removed and locks the composer read-only.
+    data: { agent_id: 'mia', type: 'chat' },
   })
   if (!resp.ok()) {
     const body = await resp.text()
@@ -126,24 +130,55 @@ function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
   fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
 }
 
-async function openSession(page: Page, sessionTitle: string): Promise<void> {
-  await page.getByRole('button', { name: 'Open sessions panel' }).click()
-  const sessionBtn = page
-    .getByRole('button', { name: new RegExp(`Open session: ${sessionTitle}`, 'i') })
-    .first()
-  await expect(sessionBtn).toBeVisible({ timeout: 10_000 })
-  await sessionBtn.click()
-}
-
 async function waitForWsConnected(page: Page): Promise<void> {
   await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
 }
 
-async function waitForReplayDone(page: Page): Promise<void> {
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Open (or reopen) a seeded session via the app's own current deep-link
+ * route, `/#/sessions/{id}`.
+ *
+ * Replaces the old click-through flow (click a button named "Open sessions
+ * panel", then one named "Open session: <title>") — neither accessible name
+ * exists anywhere in current `src/` since the session panel was redesigned
+ * into the two-mode SearchModal (`src/components/search/SearchModal.tsx`):
+ * the sidebar's session-search trigger is now
+ * `aria-label="Search sessions"` (`src/components/layout/Sidebar.tsx:316`),
+ * and session rows render `{session.title || 'Untitled session'}` inside
+ * plain buttons with no "Open session: <title>" naming convention.
+ *
+ * The deep link is not a workaround standing in for that broken flow — it is
+ * the app's own real navigation seam: `src/routes/_app/sessions.$sessionId.tsx`'s
+ * loader no longer pre-sets `activeSessionId`, so navigating straight to this
+ * route makes `SessionRoute`'s attach effect see a genuine mismatch and send
+ * `attach_session` over the WebSocket, exactly as clicking the (now-gone)
+ * session-list button used to — a real WS attach + replay, not a REST-only
+ * render.
+ *
+ * Waits for the chat composer to mount (route loaded) AND re-enable (the
+ * replay `done` frame landed) — this subsumes the old separate
+ * `waitForReplayDone` wait, so callers should NOT add another enabled-wait
+ * immediately after this.
+ */
+export async function openSessionByDeepLink(page: Page, sessionId: string): Promise<void> {
+  await page.goto(`/#/sessions/${sessionId}`)
+  // Route-swap guard FIRST: wait until the chat surface is bound to THIS
+  // session (ChatScreen stamps data-active-session-id once attach lands).
+  // A bare visible/enabled wait on the composer is satisfied by the
+  // PREVIOUS route's composer during the swap — typing at that instant
+  // sends with a stale/null session binding and the message lands in a
+  // brand-new workspace session instead of sessionId (root cause of the
+  // replay-fidelity (c) mid-turn attach flake).
+  await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
+  // "Replay finished" signal — the composer re-enables once the replay's
+  // done frame lands. No arbitrary timeout.
   await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
 }
-
-// ── Public API ────────────────────────────────────────────────────────────────
 
 export interface SeedAndOpenResult {
   sessionId: string
@@ -161,8 +196,15 @@ export interface SeedAndOpenResult {
  *   4. Create a session via REST API
  *   5. Rename it to `${namePrefix}-${Date.now()}`
  *   6. Seed the transcript.jsonl with `entries`
- *   7. Open the session via the sessions panel
- *   8. Wait for replay to complete (done frame)
+ *   7. Open the session via its deep-link route, `/#/sessions/{id}`
+ *      (openSessionByDeepLink) — NOT the sessions panel. The panel affordance
+ *      this step used to click ("Open sessions panel" / "Open session:
+ *      <title>") was redesigned away (see openSessionByDeepLink's doc
+ *      comment above); the deep link is the current deterministic seam and
+ *      drives the same real WS attach + replay the old button click did.
+ *   8. Wait for replay to complete (done frame) — folded into step 7 via
+ *      openSessionByDeepLink, which itself waits for the composer to
+ *      re-enable, so there is no separate step 8 call here.
  *
  * Returns the session ID and title so callers can reference them in assertions.
  */
@@ -181,8 +223,7 @@ export async function seedAndOpenSession(
 
   seedTranscript(sessionId, entries)
 
-  await openSession(page, sessionTitle)
-  await waitForReplayDone(page)
+  await openSessionByDeepLink(page, sessionId)
 
   return { sessionId, sessionTitle }
 }

@@ -15,7 +15,7 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { seedAndOpenSession } from './fixtures/session-setup'
+import { seedAndOpenSession, openSessionByDeepLink } from './fixtures/session-setup'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -58,7 +58,7 @@ test(
     // inside turn 2's assistant message bubble (its DOM ancestor is
     // turn 2's data-message-id). This test catches that exact regression.
 
-    const { sessionTitle } = await seedAndOpenSession(page, 'multi-turn-render-t110', [
+    const { sessionId } = await seedAndOpenSession(page, 'multi-turn-render-t110', [
       // Turn 1
       {
         id: 'user-t110-1',
@@ -72,7 +72,7 @@ test(
         role: 'assistant',
         content: 'First response with a tool call.',
         timestamp: new Date(Date.now() - 9000).toISOString(),
-        agent_id: 'main',
+        agent_id: 'mia',
         tool_calls: [
           {
             id: 'tc-turn1-shell',
@@ -97,7 +97,7 @@ test(
         role: 'assistant',
         content: 'Second response with a different tool call.',
         timestamp: new Date(Date.now() - 7000).toISOString(),
-        agent_id: 'main',
+        agent_id: 'mia',
         tool_calls: [
           {
             id: 'tc-turn2-fslist',
@@ -173,21 +173,29 @@ test(
       `fs.list badge must be inside turn-2's message bubble (${turn2MsgId}), got: ${fslistBadgeAncestor}`,
     ).toBe(turn2MsgId)
 
-    // Step 3: Reload the page (simulates re-opening the session from history)
+    // Step 3: Reopen the session via its deep-link route (simulates re-opening
+    // the session from history — a fresh navigation to /#/sessions/{id}, same
+    // as a second click on a session-list entry would produce). The old
+    // "reload '/' -> click 'Open sessions panel' -> click 'Open session:
+    // <title>'" flow is stale: neither accessible name exists in current
+    // src/ after the SearchModal redesign (see session-setup.ts's
+    // openSessionByDeepLink doc comment).
+    //
+    // The page is ALREADY parked on /#/sessions/{sessionId} at this point —
+    // seedAndOpenSession's own last step left it there, and a REST-created
+    // session has no workspace_id so nothing has redirected it away since.
+    // A goto() to that identical hash URL is a same-document navigation (no
+    // reload, no route remount), and SessionRoute's attach effect guard
+    // skips a session that's already active — so calling
+    // openSessionByDeepLink directly here would be a no-op: no WS attach, no
+    // replay, and Step 4 below would just vacuously re-assert Step 2's
+    // still-live DOM. `page.goto('/')` targets a fragment-free URL, which
+    // forces a full page reload (all SPA state wiped), so the subsequent
+    // deep link is a genuine cold attach + replay — mirroring the pattern
+    // replay-fidelity.spec.ts uses before its own reopen (goto('/') then
+    // openSession) to force the same real remount.
     await page.goto('/')
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-
-    // Reopen the session via the sessions panel
-    await page.getByRole('button', { name: 'Open sessions panel' }).click()
-    const sessionBtn = page
-      .getByRole('button', { name: new RegExp(`Open session: ${sessionTitle}`, 'i') })
-      .first()
-    await expect(sessionBtn).toBeVisible({ timeout: 10_000 })
-    await sessionBtn.click()
-
-    // Wait for replay to complete
-    const input = page.locator('textarea')
-    await expect(input.first()).toBeEnabled({ timeout: 30_000 })
+    await openSessionByDeepLink(page, sessionId)
 
     // Step 4: After replay, re-assert badge DOM ancestry
     await expect(assistants).toHaveCount(2, { timeout: 15_000 })

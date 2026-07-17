@@ -227,7 +227,10 @@ export function agedTranscript(
   opts?: AgedTranscriptOptions,
 ): void {
   const normalizedId = syntheticSessionID(sessionId);
-  const agentId = 'main';
+  // 'mia' — the seeded default of the 4-base roster. The historical 'main'
+  // id no longer resolves to any agent, which flips the session to
+  // agent_removed/read-only instead of a normal replay-able session.
+  const agentId = 'mia';
   const messageCount = opts?.messageCount ?? 4;
 
   const targetDate = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
