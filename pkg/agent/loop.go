@@ -1484,7 +1484,13 @@ func registerSharedTools(
 				time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
 			)
 			agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
-			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Home))
+			// ADR-046 FR-009: install_skill targets the fixed, install-wide
+			// GLOBAL skills directory ($OMNIPUS_HOME/skills) — the SAME
+			// directory every agent's own SkillsLoader searches (see
+			// globalSkillsDir's doc comment in context.go) — never
+			// agent.Home, so a skill installed by one agent is discoverable
+			// by every other agent.
+			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,
@@ -1711,7 +1717,10 @@ func registerSharedTools(
 				// pkg/policy.builtinToolPolicies entry is advisory; that path is
 				// test-only, not a live dispatch gate.)
 				evaluateEnabled := cfg.Sandbox.BrowserEvaluateEnabled
-				mgr, regErr := browser.RegisterTools(agent.Tools, browserCfg, browserSSRF, evaluateEnabled)
+				mgr, regErr := browser.RegisterTools(
+					agent.Tools, browserCfg, browserSSRF, evaluateEnabled,
+					agent.Home, cfg.Agents.Defaults.RestrictToWorkspace,
+				)
 				if regErr != nil {
 					logger.ErrorCF("agent", "Failed to register browser tools — "+
 						"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",

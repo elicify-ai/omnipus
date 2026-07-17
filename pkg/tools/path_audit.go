@@ -1,10 +1,10 @@
 // Package tools — path-guard audit emission helpers ( / ).
 //
 // This file owns the audit-logging side-effect that every file/exec tool's
-// Execute path emits when validatePathWithAllowPaths (or the equivalent
-// shell.go cwd / guard-command path check) rejects a request. The shape of
-// each entry follows — fields go into Entry.Details (no top-level
-// schema change to pkg/audit.Entry).
+// Execute path emits when ResolvePath (or the equivalent shell.go cwd /
+// guard-command path check) rejects a request. The shape of each entry
+// follows — fields go into Entry.Details (no top-level schema change to
+// pkg/audit.Entry).
 //
 // Reason heuristic ( — caller side, not validator side):
 //
@@ -57,14 +57,16 @@ const (
 // (ErrCarveOut/ErrOutsideScope/ErrPathInvalid), so the primary
 // classification is now an errors.Is type switch rather than string
 // sniffing. The legacy string-sniffing fallback below is kept for
-// `validatorErr` values that are NOT one of those sentinels — the shape
-// validatePathWithAllowPaths and the shell guardCommand path checker still
-// produce for the tools this ADR-046 wave does not migrate (send_file.go;
-// web_serve.go via ValidateWorkspacePath) — so their denials keep
-// classifying correctly too. `allowPathsLen` is the number of configured
-// AllowReadPaths/AllowWritePaths entries — it discriminates "outside
-// workspace, no allow-list configured" from "outside workspace, allow-list
-// configured but no entry matched" for that legacy path only.
+// `validatorErr` values that are NOT one of those sentinels — the shape the
+// shell guardCommand path checker still produces (bash's in-command
+// absolute-path scan, a defense-in-depth layer distinct from ResolvePath's
+// own cwd resolution) — so its denials keep classifying correctly too. Every
+// path-taking tool's own path argument (send_file.go/web_serve.go included,
+// as of the ADR-046 defects wave) now resolves through ResolvePath and hits
+// the typed-sentinel branch above instead. `allowPathsLen` is the number of
+// configured AllowReadPaths/AllowWritePaths entries — it discriminates
+// "outside workspace, no allow-list configured" from "outside workspace,
+// allow-list configured but no entry matched" for that legacy path only.
 //
 // Pure function — no side effects, safe to call without locks.
 func classifyPathDenialReason(validatorErr error, allowPathsLen int) string {
@@ -131,8 +133,8 @@ func canonicalDeniedPath(path string) string {
 // `auditLog` is the *audit.Logger handed to the tool via SetAuditLogger;
 // pass nil to skip emission silently.
 //
-// `validatorErr` is the original error from validatePathWithAllowPaths
-// (or shell guardCommand). Must be non-nil — callers gate on this.
+// `validatorErr` is the original error from ResolvePath (or shell
+// guardCommand). Must be non-nil — callers gate on this.
 //
 // `allowPathsLen` is len(allowPaths) at the call site and is used for the
 // reason heuristic
