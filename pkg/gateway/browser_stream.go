@@ -577,6 +577,22 @@ func (o *BrowserVideoOrchestrator) ensureStreamLocked(
 // error. The caller MUST hold the agent gate. Blocking CDP work runs with the
 // agent gate held (serializing only this agent's cold-start) but NOT the
 // orchestrator mu.
+// auditBringupFailed records a cold-start bring-up failure (serve / launch /
+// capture) as a stream-lifecycle failure event, so a bring-up that never
+// reaches the running state is as visible in the audit trail as a mid-stream
+// failure or a kill-switch teardown (FR-024). The manual unwind paths in
+// startStreamLocked can't use failStreamLocked — no *videoStream exists yet.
+func (o *BrowserVideoOrchestrator) auditBringupFailed(streamID, agentID, codec, stage string, err error) {
+	o.auditStream(audit.EventBrowserLiveVideoStreamFailed, audit.SeverityWarn, map[string]any{
+		"stream_id": streamID,
+		"agent_id":  agentID,
+		"codec":     codec,
+		"stage":     stage,
+		"reason":    "bringup_failed",
+		"error":     err.Error(),
+	})
+}
+
 func (o *BrowserVideoOrchestrator) startStreamLocked(
 	p AttachParams,
 	codec string,
@@ -587,6 +603,7 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(
 
 	origin, pageURL, serveStop, err := o.encoderServer.Serve()
 	if err != nil {
+		o.auditBringupFailed(streamID, p.AgentID, codec, "serve_encoder_page", err)
 		o.ingest.EndStream(streamID)
 		return nil, fmt.Errorf("serve encoder page: %w", err)
 	}
@@ -598,6 +615,7 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(
 		o.encoderLaunchCfg(string(token), streamID, codec, pageURL, origin, hasAudio),
 	)
 	if err != nil {
+		o.auditBringupFailed(streamID, p.AgentID, codec, "launch_encoder_page", err)
 		serveStop()
 		o.ingest.EndStream(streamID)
 		return nil, fmt.Errorf("launch encoder page: %w", err)
@@ -605,6 +623,7 @@ func (o *BrowserVideoOrchestrator) startStreamLocked(
 
 	capture, err := o.startCaptureAt(p.AgentCtx, streamID, width, height)
 	if err != nil {
+		o.auditBringupFailed(streamID, p.AgentID, codec, "start_capture", err)
 		_ = encTab.Close()
 		serveStop()
 		o.ingest.EndStream(streamID)
