@@ -35,3 +35,24 @@ Feature: the live browser panel streams the agent's Chrome as real video (WebCod
 - Drive the SPA via Playwright MCP against a running gateway; assert on the canvas element, the unavailable-state text, control behavior, and console (zero errors; WS reconnect warnings OK).
 - For [A2] rows, run against a gateway with the full stack on `ci-omnipus` (Xvfb + PulseAudio + full Chrome installed as in the Gate-0 setup).
 - File every deviation as a finding with repro steps; the lead fixes and re-runs the affected rows.
+
+---
+
+## Run 1 — Option-B "gate-dormant" increment (2026-07-17)
+
+Scope note: per the operator's Option-B decision (ADR-044 §6.0.4), this increment ships the feature **dormant** (sidecars unwired → NotCapable/headless-shell/unavailable-state). Executed against the `754036d6`/`cd91d541` binary on an internal-port gateway via Playwright MCP + curl. The [A2] real-headful-video rows require the sidecar-wiring increment on `ci-omnipus` and are **deferred**, as is U-10 [DEV] (iPad, EC-4).
+
+| Row | Result | Evidence / Notes |
+|---|---|---|
+| **U-7** unsupported/absent video | **PASS** | Live panel resolves to the exact generic string **"Live view needs a video-capable browser"** (FR-007); chrome controls (address bar, back/refresh, tabs) operable; **no JPEG, no blank, no infinite spinner**; 0 console errors. Screenshot: `uat-U7-U8-unavailable-state.png`. |
+| **U-8** non-video-capable (dormant) install | **PASS (UI)** | Dormant classifier → unavailable state renders correctly, no crash. "Agent browsing still works" leg depends on Chrome install, which the **U-12 finding below** was blocking — now fixed. |
+| **U-9** operator kill-switch | **PASS (logic)** | FR-020 hermetically covered (`SetVideoEnabled(false)` teardown + reload wiring); no active stream to tear down in a dormant/no-Chrome pod. UI toggle deferred to the video increment. |
+| **U-15** ingest/CDP security | **PASS (unit) + adversarial probe** | `--remote-debugging-pipe` only, never a fixed `--remote-debugging-port` (no TCP CDP surface); ingest is loopback-only + single-connection capability token. Covered by `security_launch_test.go`; adversarial live probe run this cycle. |
+| General SPA health | **PASS** | Login → chat → open browser panel: **0 console errors** throughout; the round-2 SPA changes (SF-H1 decode-error→unavailable, GC-5 zero-len, comment fixes) integrate cleanly in a real browser. |
+| U-1..U-6, U-11, U-13, U-14, U-16, U-17 | **DEFERRED [A2]** | Require real headful Chrome on Xvfb + PulseAudio → next increment on `ci-omnipus`. |
+| U-10 | **DEFERRED [DEV]** | iPad Safari, EC-4, operator device. |
+
+### Findings
+
+- **UAT-1 (BLOCKER, FIXED — `cd91d541`): Chrome download broken on every real install.** The round-1 SF1 integrity check read only `header.Get("X-Goog-Hash")` (first value). Real `storage.googleapis.com` sends **two** `X-Goog-Hash` lines — `crc32c=...` **first**, then `md5=...` — so the verifier saw only crc32c, found no md5, and hard-rejected the download (`integrity check failed: X-Goog-Hash header present but carries no md5 checksum: "crc32c=XqmS2Q=="`). This broke Chrome installation on every fresh install (U-12), and with it all agent browsing (U-8) and the whole video feature (U-1..). Missed by 16 reviewer passes + CI because tests set a single md5-only header. Fixed to scan all `X-Goog-Hash` lines; regression test `TestVerifyGoogHashMD5_MultipleHeaderLines` added. This is the headline UAT outcome.
+- **UAT-2 (observation, FIXED — `754036d6`): cold bring-up failures were not audited.** Surfaced while adding timeout coverage; `startStreamLocked` unwound manually without an audit record. Added `auditBringupFailed` + regression test.
