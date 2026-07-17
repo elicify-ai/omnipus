@@ -100,7 +100,7 @@ async function gotoAboutTab(page: import('@playwright/test').Page) {
 //      When the page fully renders
 //      Then [data-testid="omnipus-logo"] is visible
 //      And the img element has a non-empty src attribute
-//      And alt text is "Omnipus logo"
+//      And alt text is "omnipus.ai logo"
 //
 // Traces to: E2E-6 / AC1
 
@@ -122,7 +122,9 @@ test('About tab: omnipus-logo img is visible with non-empty src', async ({ page 
   expect(src!.length).toBeGreaterThan(0)
 
   // ── Alt text confirms the correct logo, not an un-styled fallback.
-  await expect(logoImg).toHaveAttribute('alt', 'Omnipus logo')
+  // Ground truth: src/components/settings/AboutSection.tsx renders
+  // alt="omnipus.ai logo" (not "Omnipus logo").
+  await expect(logoImg).toHaveAttribute('alt', 'omnipus.ai logo')
 })
 
 // ── E2E-6: github link is elicify-ai ─────────────────────────────────────────
