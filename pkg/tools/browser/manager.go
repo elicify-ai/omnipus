@@ -25,19 +25,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
-// DebugPort was the fixed loopback TCP port the managed Chromium bound its
-// DevTools WebSocket to. CRIT-001 (live-browser-video-streaming / ADR-044
-// §6.0.3) eliminated the TCP CDP surface entirely: managed Chrome now speaks CDP
-// over an inherited fd 3/4 pipe (--remote-debugging-pipe via pkg/tools/browser/
-// cdppipe), with NO TCP port, NO /json HTTP endpoint, and NO ws:// URL.
-//
-// The constant is RETAINED only for the gateway's sandbox layer
-// (pkg/gateway/sandbox_apply.go), whose Landlock 9223 bind/connect rules are
-// removed in the same wave by the gateway owner; it is no longer used by any
-// browser launch or preflight path. Do not add new references — there is no port
-// to bind or dial anymore.
-const DebugPort = 9223
-
 // BrowserConfig holds browser automation configuration.
 // Mapped from config.json: tools.browser.*
 type BrowserConfig struct {
