@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -126,7 +128,7 @@ func TestBash_CancelCascade_KillsOwnedBackgroundSessions(t *testing.T) {
 		CancelScope{SessionID: "sess-bg-cascade"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) int {
+			KillBackgroundSessions: func(sessionID string) (int, int) {
 				return sm.KillAllForSession(sessionID)
 			},
 		},
@@ -136,8 +138,8 @@ func TestBash_CancelCascade_KillsOwnedBackgroundSessions(t *testing.T) {
 
 	got, getErr := sm.Get("bg-1")
 	require.NoError(t, getErr)
-	assert.Equal(t, "done", got.GetStatus(),
-		"the background session owned by the canceled chat session must be killed")
+	assert.Equal(t, "canceled", got.GetStatus(),
+		"the background session owned by the canceled chat session must be killed and relabeled canceled")
 
 	assert.Equal(t, countBefore+1, sm.KilledBackgroundSessionsCount(),
 		"FR-B14: the kill counter must increment so the cascade is observable without a subsequent poll")
@@ -183,7 +185,7 @@ func TestBash_CancelCascade_NoOpWhenNothingToKill(t *testing.T) {
 		CancelScope{SessionID: "sess-bg-noop"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) int {
+			KillBackgroundSessions: func(sessionID string) (int, int) {
 				return sm.KillAllForSession(sessionID)
 			},
 		},
@@ -235,7 +237,7 @@ func TestBash_CancelCascade_DoesNotAffectOtherSessions(t *testing.T) {
 		CancelScope{SessionID: "sess-A"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) int {
+			KillBackgroundSessions: func(sessionID string) (int, int) {
 				return sm.KillAllForSession(sessionID)
 			},
 		},
@@ -245,38 +247,205 @@ func TestBash_CancelCascade_DoesNotAffectOtherSessions(t *testing.T) {
 
 	gotA, err := sm.Get("bg-A")
 	require.NoError(t, err)
-	assert.Equal(t, "done", gotA.GetStatus(), "session A's background work must be killed")
+	assert.Equal(t, "canceled", gotA.GetStatus(), "session A's background work must be killed and relabeled canceled")
 
 	gotB, err := sm.Get("bg-B")
 	require.NoError(t, err)
 	assert.Equal(t, "running", gotB.GetStatus(), "session B's background work must be left untouched")
 }
 
-// TestBash_CancelCascade_HookNotCalledWhenNoActiveTurn verifies that a
-// double-cancel-style no-op (no active turn claimed, ClaimCancel never
-// succeeds) does not reach PHASE A at all, so KillBackgroundSessions is never
-// invoked — matching RequestCancel's existing "Fired: false" short-circuit for
-// unmatched sessions (regression guard: the new hook must not change today's
-// no-active-turn behavior).
-func TestBash_CancelCascade_HookNotCalledWhenNoActiveTurn(t *testing.T) {
+// TestBash_CancelCascade_HookCalledEvenWithNoActiveTurn is the regression
+// test for the root-cause bug this fix closes: a `bash
+// run_in_background=true` call's turn ends immediately (the tool call
+// returns right away), so by the time a user later clicks Cancel to stop the
+// still-running background job, there is no active turn left for
+// GetActiveTurnHookForSession to find — ClaimCancel never runs, wasFired is
+// false. Before this fix, RequestCancel's wasFired-gated early return meant
+// hooks.KillBackgroundSessions was NEVER reached in this scenario: a silent
+// no-op that left the background process (and its process group) running
+// forever. This test previously encoded the bug (asserted the hook was NOT
+// called); it now asserts the opposite — the hook IS called for a
+// resolvable session even with no active turn — while confirming the
+// turn-cancel state machine itself still correctly reports Fired: false
+// (there genuinely is no turn to cancel).
+func TestBash_CancelCascade_HookCalledEvenWithNoActiveTurn(t *testing.T) {
 	t.Parallel()
 
 	al := newCancelTestAgentLoop(t)
-	// Deliberately do not register any turnState for this session.
+	// Wire a real audit logger (7-reviewer gate finding: the no-active-turn
+	// tests in this file previously left al.auditLogger nil, so
+	// EventTurnCancelBackgroundKilled — the audit event RequestCancel emits
+	// for the unconditional background-kill cascade, independent of
+	// wasFired/Fired — had ZERO test coverage) so we can assert it fires
+	// even on this no-active-turn path.
+	auditDir := t.TempDir()
+	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
+	// Deliberately do not register any turnState for this session — this is
+	// the real "background work outlived its turn" state a completed
+	// run_in_background=true call leaves behind.
 
 	called := false
+	var gotSessionID string
 	outcome, err := al.RequestCancel(
 		context.Background(),
 		CancelScope{SessionID: "sess-never-active"},
 		CancelCanceller{UserID: "alice", Channel: "web"},
 		CancelHooks{
-			KillBackgroundSessions: func(sessionID string) int {
+			KillBackgroundSessions: func(sessionID string) (int, int) {
 				called = true
-				return 0
+				gotSessionID = sessionID
+				// A non-zero killed count (rather than 0,0) so this test can
+				// also exercise/assert the audit-emission gate (killed>0 ||
+				// failed>0) below — a hook returning (0,0) would correctly
+				// suppress the audit event as a no-op cancel, which is NOT
+				// what this test is verifying.
+				return 1, 0
 			},
 		},
 	)
 	require.NoError(t, err)
-	assert.False(t, outcome.Fired, "no active turn means no claim, so the cancel does not fire")
-	assert.False(t, called, "KillBackgroundSessions must not be invoked when no active turn is claimed")
+	assert.False(t, outcome.Fired,
+		"no active turn means no claim, so the turn-cancel state machine itself does not fire")
+	assert.True(t, called, "KillBackgroundSessions must be invoked even when no active turn is claimed — "+
+		"this is the fix for the background-shell-never-canceled bug")
+	assert.Equal(t, "sess-never-active", gotSessionID, "the hook must receive the resolved sessionID")
+	assert.Equal(t, 1, outcome.BackgroundSessionsKilled,
+		"CancelOutcome must carry the killed count even when Fired is false")
+	assert.Equal(t, 0, outcome.BackgroundSessionsFailed)
+
+	records := readCancelAuditRecords(t, auditDir)
+	var found bool
+	for _, r := range records {
+		if r.Event != audit.EventTurnCancelBackgroundKilled {
+			continue
+		}
+		found = true
+		assert.Equal(t, "sess-never-active", r.Fields["session_id"],
+			"background_killed audit event must carry the resolved session_id")
+		killed, ok := r.Fields["background_sessions_killed"]
+		require.True(t, ok, "background_killed audit event must carry background_sessions_killed")
+		assert.InDelta(t, float64(1), killed, 0)
+	}
+	assert.True(t, found, "expected a turn.cancel.background_killed audit event even though no "+
+		"active turn existed — this is the audit-trail gap the cascade's own doc comment describes")
+}
+
+// TestBash_CancelCascade_KillsRealBackgroundProcessWithNoActiveTurn drives
+// the exact end-to-end scenario the bug report identified, using a REAL
+// tools.ProcessSession registered against a tools.SessionManager rather than
+// a boolean callback flag: a background bash session owned by S is still
+// "running", NO active turn is registered for S (its turn already ended),
+// and the user cancels S. Before the fix, RequestCancel would early-return
+// before ever calling hooks.KillBackgroundSessions, so the background
+// process would keep running (silently) forever. After the fix, the process
+// must actually be killed and relabeled "canceled" even though
+// outcome.Fired is false.
+func TestBash_CancelCascade_KillsRealBackgroundProcessWithNoActiveTurn(t *testing.T) {
+	t.Parallel()
+
+	al := newCancelTestAgentLoop(t)
+	// Wire a real audit logger — see the identical note in
+	// TestBash_CancelCascade_HookCalledEvenWithNoActiveTurn above; this test
+	// additionally exercises the REAL KillAllForSession path (not a stubbed
+	// count), so it is the strongest coverage of the audit event actually
+	// firing with a genuine kill.
+	auditDir := t.TempDir()
+	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
+	// Deliberately do not register any turnState for "sess-bg-orphaned" — the
+	// background job's own turn already finished by the time Cancel fires.
+
+	sm := tools.NewSessionManager()
+	bgSession := newRunningBackgroundSession("bg-orphaned", "sess-bg-orphaned", 999993001)
+	sm.Add(bgSession)
+
+	outcome, err := al.RequestCancel(
+		context.Background(),
+		CancelScope{SessionID: "sess-bg-orphaned"},
+		CancelCanceller{UserID: "alice", Channel: "web"},
+		CancelHooks{
+			KillBackgroundSessions: func(sessionID string) (int, int) {
+				return sm.KillAllForSession(sessionID)
+			},
+		},
+	)
+	require.NoError(t, err)
+	assert.False(t, outcome.Fired, "no active turn exists, so the turn-cancel state machine itself does not fire")
+
+	got, getErr := sm.Get("bg-orphaned")
+	require.NoError(t, getErr)
+	assert.True(t, got.IsDone(),
+		"the background process must be killed even though RequestCancel's own turn-cancel state machine never fired")
+	assert.Equal(t, "canceled", got.GetStatus(),
+		"KillAllForSession must relabel to the canceled terminal status even on this no-active-turn path")
+	assert.Equal(t, 1, outcome.BackgroundSessionsKilled,
+		"CancelOutcome must carry the killed count even when Fired is false")
+
+	records := readCancelAuditRecords(t, auditDir)
+	var found bool
+	for _, r := range records {
+		if r.Event != audit.EventTurnCancelBackgroundKilled {
+			continue
+		}
+		found = true
+		assert.Equal(t, "sess-bg-orphaned", r.Fields["session_id"],
+			"background_killed audit event must carry the resolved session_id")
+		killed, ok := r.Fields["background_sessions_killed"]
+		require.True(t, ok, "background_killed audit event must carry background_sessions_killed")
+		assert.InDelta(t, float64(1), killed, 0)
+	}
+	assert.True(t, found, "expected a turn.cancel.background_killed audit event for this REAL "+
+		"kill even though no active turn existed")
+}
+
+// TestAgentLoop_Close_ReapsSharedSessionManagerBackgroundSessions is the
+// integration-level regression test for AgentLoop.Close()'s shutdown reaper
+// (pkg/agent/loop.go, ~"Shutdown reaper: kill every still-running background
+// bash/exec session"): Close() reaches into tools.GetSharedSessionManager()
+// — a PROCESS-WIDE singleton, NOT scoped to this *AgentLoop, see the
+// load-bearing precondition comment at that call site — and kills every
+// still-running background session. Before this test, the actual
+// Close()->singleton wiring itself had NO coverage: every other test in this
+// file drives SessionManager.KillAll/KillAllForSession directly against a
+// throwaway tools.NewSessionManager(), never through a real AgentLoop.Close()
+// call reaching the ACTUAL shared manager the production shutdown path uses.
+//
+// Deliberately NOT t.Parallel() and deliberately does NOT use
+// newCancelTestAgentLoop (which registers its own t.Cleanup(func(){
+// al.Close() }) — this test calls Close() itself, exactly once, in the test
+// body, so it can assert on the shared SessionManager immediately afterward
+// without a second Close() call on the same *AgentLoop landing concurrently
+// or racing this one's assertions. Not parallel because it registers a
+// session directly on the process-wide shared singleton and observes it
+// deterministically right after Close() — running concurrently with other
+// tests that also reach the shared manager (e.g. via their own
+// AgentLoop.Close() in t.Cleanup) would not be incorrect (SessionManager is
+// internally mutex-safe) but adds unnecessary timing noise to a test whose
+// whole point is to observe ONE specific kill.
+func TestAgentLoop_Close_ReapsSharedSessionManagerBackgroundSessions(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+
+	sm := tools.GetSharedSessionManager()
+	sess := newRunningBackgroundSession("close-reaper-session", "unused-owner-for-close-test", 999994001)
+	sm.Add(sess)
+	t.Cleanup(func() { sm.Remove("close-reaper-session") })
+
+	al.Close()
+
+	got, err := sm.Get("close-reaper-session")
+	require.NoError(t, err)
+	assert.True(t, got.IsDone(),
+		"AgentLoop.Close() must reap every still-running session on the shared, process-wide SessionManager")
 }

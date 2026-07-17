@@ -143,13 +143,10 @@ describe('api request: X-CSRF-Token header uses decoded cookie value', () => {
       new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     )
     vi.stubGlobal('fetch', fetchSpy)
-    // Provide a valid auth token so getAuthHeaders() doesn't skip the header.
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
-    sessionStorage.clear()
     restoreCookie()
   })
 
@@ -176,6 +173,156 @@ describe('api request: X-CSRF-Token header uses decoded cookie value', () => {
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const headers = new Headers(init.headers as HeadersInit)
     expect(headers.get('X-CSRF-Token')).toBe('rawtoken_123')
+  })
+})
+
+// ── US-5 / FR-010 — cookie auth: credentials:'include', no Authorization
+// header, CSRF read fresh per request, 403-CSRF → GET-then-retry-once ──────────
+//
+// Traces to: docs/internal/specs/preview-on-main-listener-spec.md
+//   S8 (no JS token), S9/S10 (cookie + bearer paths), S11/S12 (CSRF required +
+//   POST-first recovery), TDD #18 (TestCSRFPostFirstRecovery).
+
+describe('api request: cookie auth (US-5 / FR-010)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    localStorage.clear()
+    restoreCookie()
+  })
+
+  it('sends credentials:"include" on a GET request', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse([]))
+    const { fetchAgents } = await import('./api')
+    await fetchAgents()
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.credentials).toBe('include')
+  })
+
+  it('sends credentials:"include" on a state-changing POST request', async () => {
+    stubCookie('__Host-csrf=test-csrf-token')
+    fetchSpy.mockResolvedValueOnce(makeOkResponse({ success: true }))
+    const { changePassword } = await import('./api')
+    await changePassword('old-pw', 'new-pw')
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.credentials).toBe('include')
+  })
+
+  it('never sends an Authorization header, even when a legacy token key is present in storage', async () => {
+    // Simulate a pre-migration leftover key (e.g. from a browser that never
+    // reloaded after upgrade) — the SPA must not read it (US-5 Non-Behavior:
+    // MUST NOT store/read the auth token).
+    sessionStorage.setItem('omnipus_auth_token', 'leftover-token')
+    localStorage.setItem('omnipus_auth_token', 'leftover-token')
+    fetchSpy.mockResolvedValueOnce(makeOkResponse([]))
+
+    const { fetchAgents } = await import('./api')
+    await fetchAgents()
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const headers = new Headers(init.headers as HeadersInit)
+    expect(headers.get('Authorization')).toBeNull()
+  })
+
+  it('reads the CSRF cookie fresh on each request — a value change between two calls is reflected on the second, not cached from the first', async () => {
+    // A Response body can only be read once — use a fresh instance per call
+    // (a shared mockResolvedValue would make the second .json() call fail).
+    fetchSpy
+      .mockResolvedValueOnce(makeOkResponse({ success: true }))
+      .mockResolvedValueOnce(makeOkResponse({ success: true }))
+    const { changePassword } = await import('./api')
+
+    stubCookie('__Host-csrf=first-token')
+    await changePassword('old-pw', 'new-pw')
+    const [, init1] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(new Headers(init1.headers as HeadersInit).get('X-CSRF-Token')).toBe('first-token')
+
+    // Cookie rotates (e.g. server re-minted it) — no caller-side action other
+    // than the cookie jar changing.
+    stubCookie('__Host-csrf=second-token')
+    await changePassword('old-pw', 'new-pw2')
+    const [, init2] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect(new Headers(init2.headers as HeadersInit).get('X-CSRF-Token')).toBe('second-token')
+  })
+
+  it('r4-MAJ-004: a 403 with a CSRF-specific body triggers a GET re-mint then retries the original request once, succeeding', async () => {
+    stubCookie('__Host-csrf=stale-token')
+    const csrfFailure = new Response(JSON.stringify({ error: 'csrf token mismatch' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    })
+    fetchSpy
+      .mockResolvedValueOnce(csrfFailure) // original POST — rejected
+      .mockResolvedValueOnce(makeOkResponse({ onboarding_complete: true })) // GET /state remint trigger
+      .mockResolvedValueOnce(makeOkResponse({ success: true })) // retried POST — succeeds
+
+    const { changePassword } = await import('./api')
+    const result = await changePassword('old-pw', 'new-pw')
+
+    expect(result).toEqual({ success: true })
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
+    const [url1, init1] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const [url2] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    const [url3, init3] = fetchSpy.mock.calls[2] as [string, RequestInit]
+    expect(url1).toContain('/api/v1/auth/change-password')
+    expect((init1.method ?? '').toUpperCase()).toBe('POST')
+    expect(url2).toContain('/api/v1/state')
+    expect(url3).toContain('/api/v1/auth/change-password')
+    expect((init3.method ?? '').toUpperCase()).toBe('POST')
+  })
+
+  it('does not loop more than once: a CSRF 403 that persists after the retry surfaces the failure', async () => {
+    stubCookie('__Host-csrf=stale-token')
+    const csrfFailure = new Response(JSON.stringify({ error: 'csrf cookie missing' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    })
+    fetchSpy
+      .mockResolvedValueOnce(csrfFailure) // original POST — rejected
+      .mockResolvedValueOnce(makeOkResponse({ onboarding_complete: true })) // GET remint
+      .mockResolvedValueOnce(csrfFailure) // retried POST — STILL rejected
+
+    const { changePassword } = await import('./api')
+    await expect(changePassword('old-pw', 'new-pw')).rejects.toMatchObject({ status: 403 })
+
+    // Exactly 3 calls (original + remint GET + one retry) — never a second retry.
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
+  })
+
+  it('does NOT retry a generic (non-CSRF) 403 — e.g. a permission/RBAC denial', async () => {
+    stubCookie('__Host-csrf=test-csrf-token')
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const { changePassword } = await import('./api')
+    await expect(changePassword('old-pw', 'new-pw')).rejects.toMatchObject({ status: 403 })
+
+    // Only the original call — no GET re-mint, no retry, for a 403 whose body
+    // doesn't indicate a CSRF failure.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry a CSRF 403 on a safe GET (only state-changing methods retry)', async () => {
+    stubCookie('__Host-csrf=test-csrf-token')
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'csrf cookie missing' }), { status: 403, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const { fetchAgents } = await import('./api')
+    await expect(fetchAgents()).rejects.toMatchObject({ status: 403 })
+
+    // GET is not state-changing — no retry logic applies, whatever the body says.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -212,7 +359,6 @@ describe('Security API helpers', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -405,55 +551,119 @@ describe('Security API helpers', () => {
 
 })
 
-// ── F-34 — isPreviewListenerEnabled accessor ───────────────────────────────────
+// ── US-8/FR-015 — isPreviewEnabled accessor ─────────────────────────────────────
 //
-// preview_listener_enabled is an optional bool where undefined semantically
-// means "true" (old gateway versions that predate the field always ran the
-// preview listener). Reading the field directly risks treating undefined as
-// falsy; the accessor encapsulates this polarity safely.
+// preview_enabled is an optional bool where undefined semantically means
+// "true" (old gateway versions that predate the field always served
+// previews). Reading the field directly risks treating undefined as falsy;
+// the accessor encapsulates this polarity safely. Renamed from the retired
+// isPreviewListenerEnabled/preview_listener_enabled (ADR-044: the separate
+// preview listener/port/origin are gone — /preview/ lives on the main
+// gateway listener, gated only by this live boolean).
 //
-// Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md — F-34 polarity accessor
+// Traces to: docs/internal/specs/preview-on-main-listener-spec.md — US-8, FR-015
 
-describe('isPreviewListenerEnabled', () => {
+describe('isPreviewEnabled', () => {
   it('returns true when info is undefined (old gateway — no field present)', async () => {
-    // Traces to: chat-served-iframe-preview-spec.md — F-34: undefined → true
-    const { isPreviewListenerEnabled } = await import('./api')
-    expect(isPreviewListenerEnabled(undefined)).toBe(true)
+    const { isPreviewEnabled } = await import('./api')
+    expect(isPreviewEnabled(undefined)).toBe(true)
   })
 
-  it('returns true when preview_listener_enabled is undefined (field absent on new gateway)', async () => {
-    // Traces to: chat-served-iframe-preview-spec.md — F-34: field absent → true
-    const { isPreviewListenerEnabled } = await import('./api')
+  it('returns true when preview_enabled is undefined (field absent on new gateway)', async () => {
+    const { isPreviewEnabled } = await import('./api')
     // Cast: AboutInfo requires version/go_version/os/arch/uptime_seconds in type,
-    // but the function only reads preview_listener_enabled — partial is safe here.
+    // but the function only reads preview_enabled — partial is safe here.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(isPreviewListenerEnabled({ preview_listener_enabled: undefined } as any)).toBe(true)
+    expect(isPreviewEnabled({ preview_enabled: undefined } as any)).toBe(true)
   })
 
-  it('returns true when preview_listener_enabled is explicitly true', async () => {
-    // Traces to: chat-served-iframe-preview-spec.md — F-34: true → true
-    const { isPreviewListenerEnabled } = await import('./api')
+  it('returns true when preview_enabled is explicitly true', async () => {
+    const { isPreviewEnabled } = await import('./api')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(isPreviewListenerEnabled({ preview_listener_enabled: true } as any)).toBe(true)
+    expect(isPreviewEnabled({ preview_enabled: true } as any)).toBe(true)
   })
 
-  it('returns false when preview_listener_enabled is explicitly false', async () => {
-    // Traces to: chat-served-iframe-preview-spec.md — F-34: false → false
-    const { isPreviewListenerEnabled } = await import('./api')
+  it('returns false when preview_enabled is explicitly false', async () => {
+    const { isPreviewEnabled } = await import('./api')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(isPreviewListenerEnabled({ preview_listener_enabled: false } as any)).toBe(false)
+    expect(isPreviewEnabled({ preview_enabled: false } as any)).toBe(false)
   })
 
   it('differentiation: true and false inputs produce different outputs', async () => {
     // Anti-shortcut: proves the function is not always returning true or false.
-    const { isPreviewListenerEnabled } = await import('./api')
+    const { isPreviewEnabled } = await import('./api')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const whenEnabled = isPreviewListenerEnabled({ preview_listener_enabled: true } as any)
+    const whenEnabled = isPreviewEnabled({ preview_enabled: true } as any)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const whenDisabled = isPreviewListenerEnabled({ preview_listener_enabled: false } as any)
+    const whenDisabled = isPreviewEnabled({ preview_enabled: false } as any)
     expect(whenEnabled).toBe(true)
     expect(whenDisabled).toBe(false)
     expect(whenEnabled).not.toBe(whenDisabled)
+  })
+})
+
+// ── AboutInfoSchema — preview_enabled replaces preview_port/preview_origin/
+// preview_listener_enabled (US-8/FR-015) ─────────────────────────────────────
+
+describe('fetchAboutInfo / AboutInfoSchema — preview_enabled contract (US-8)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function aboutResponse(overrides: Record<string, unknown> = {}) {
+    return new Response(
+      JSON.stringify({
+        version: '1.0.0',
+        go_version: 'go1.22.3',
+        os: 'linux',
+        arch: 'amd64',
+        uptime_seconds: 42,
+        ...overrides,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  it('accepts a response with preview_enabled: true', async () => {
+    fetchSpy.mockResolvedValueOnce(aboutResponse({ preview_enabled: true }))
+    const { fetchAboutInfo } = await import('./api')
+    const info = await fetchAboutInfo()
+    expect(info.preview_enabled).toBe(true)
+  })
+
+  it('accepts a response with preview_enabled: false', async () => {
+    fetchSpy.mockResolvedValueOnce(aboutResponse({ preview_enabled: false }))
+    const { fetchAboutInfo } = await import('./api')
+    const info = await fetchAboutInfo()
+    expect(info.preview_enabled).toBe(false)
+  })
+
+  it('accepts a response with preview_enabled absent (old-gateway back-compat)', async () => {
+    fetchSpy.mockResolvedValueOnce(aboutResponse())
+    const { fetchAboutInfo } = await import('./api')
+    const info = await fetchAboutInfo()
+    expect(info.preview_enabled).toBeUndefined()
+  })
+
+  it('does NOT surface the retired preview_port/preview_origin/preview_listener_enabled fields', async () => {
+    // A gateway that still sent the old fields (shouldn't happen post-migration,
+    // but proves the schema doesn't silently resurrect them) — extra JSON keys
+    // are simply ignored by z.object(), not merged into the parsed result.
+    fetchSpy.mockResolvedValueOnce(
+      aboutResponse({ preview_port: 5001, preview_origin: 'https://old.example.com', preview_listener_enabled: true }),
+    )
+    const { fetchAboutInfo } = await import('./api')
+    const info = await fetchAboutInfo()
+    expect((info as unknown as Record<string, unknown>).preview_port).toBeUndefined()
+    expect((info as unknown as Record<string, unknown>).preview_origin).toBeUndefined()
+    expect((info as unknown as Record<string, unknown>).preview_listener_enabled).toBeUndefined()
   })
 })
 
@@ -573,7 +783,6 @@ describe('request() with Zod schema — validation errors', () => {
     resetApiSchemaErrorCount()
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie2('__Host-csrf=test-csrf-token')
   })
 
@@ -687,7 +896,6 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     // fetchSessionMessages is a GET, no CSRF needed — but setting the cookie
     // avoids CSRF guard triggering on any incidental state-changing helpers.
     stubCookieLocal('__Host-csrf=test-csrf-token')
@@ -978,7 +1186,6 @@ describe('updateConfig: sends wire shape to backend', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal2('__Host-csrf=test-csrf-token')
   })
 
@@ -1084,7 +1291,6 @@ describe('fetchCredentials: string[] → CredentialKey[] transform (fix-T BUG 2)
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -1161,7 +1367,6 @@ describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -1258,7 +1463,6 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal3('__Host-csrf=test-csrf-token')
   })
 
@@ -1375,7 +1579,6 @@ describe('rotateGatewayToken: schema validation', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal4('__Host-csrf=test-csrf-token')
   })
 
@@ -1454,7 +1657,6 @@ describe('validEnum / _configCoercionCount', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
   })
 
   afterEach(() => {
@@ -1572,7 +1774,6 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     resetConfigCoercionCount()
   })
 
@@ -1744,7 +1945,6 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookie('__Host-csrf=test-csrf-token')
   })
 
@@ -1893,7 +2093,6 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
   beforeEach(() => {
     fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
     stubCookieLocal5('__Host-csrf=test-csrf-token')
   })
 

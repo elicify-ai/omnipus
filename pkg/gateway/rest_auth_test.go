@@ -800,6 +800,42 @@ func TestHandleLogout_Success(t *testing.T) {
 	assert.Equal(t, "", userMap["token_hash"], "token_hash must be empty after logout")
 }
 
+// TestHandleLogout_DevBypassUser_ClearsCookiesNo500 proves that a logout by the
+// synthetic dev_mode_bypass identity ("_dev_bypass", which checkBearerAuth
+// injects when gateway.dev_mode_bypass=true and no Bearer header is present)
+// clears the browser cookies and returns 204 — instead of 500 "user not found"
+// (the identity has no Gateway.Users row). This mirrors the CLI-token
+// synthetic-identity path and is what makes the SPA's cookie-only UI logout
+// clear the session cookie under the e2e harness (which always runs with
+// dev_mode_bypass=true). Regression guard for ADR-044 FR-020 / auth.spec.ts (d).
+func TestHandleLogout_DevBypassUser_ClearsCookiesNo500(t *testing.T) {
+	api, _ := newTestRestAPIWithUser(t, "realadmin", "password123")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	// Inject the synthetic bypass identity — deliberately NOT a Gateway.Users row.
+	req = injectUser(req, "_dev_bypass")
+	w := httptest.NewRecorder()
+
+	api.HandleLogout(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code,
+		"logout by the synthetic _dev_bypass identity must return 204, not 500")
+
+	// Both browser cookies must be expired (cleared value), so the browser drops
+	// them from the jar — the exact behavior auth.spec.ts (d) asserts.
+	var sawSessionCleared, sawCSRFCleared bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "omnipus-session" && c.Value == "" {
+			sawSessionCleared = true
+		}
+		if (c.Name == "__Host-csrf" || c.Name == "csrf") && c.Value == "" {
+			sawCSRFCleared = true
+		}
+	}
+	assert.True(t, sawSessionCleared, "omnipus-session cookie must be cleared on bypass-user logout")
+	assert.True(t, sawCSRFCleared, "CSRF cookie must be cleared on bypass-user logout")
+}
+
 // TestHandleLogout_TokenNoLongerValid verifies that after logout the token cannot
 // be used to authenticate: HandleValidateToken returns 401 when no user is in context.
 // BDD: Given a logged-out user (context has no UserContextKey),

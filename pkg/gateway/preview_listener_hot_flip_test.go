@@ -4,25 +4,17 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// T2.23: PreviewListenerHotFlip — runtime transition from enabled to disabled.
+// T2.23 → ADR-044 (preview-on-main-listener v5): under the OLD design,
+// /preview/ lived on a separate listener wired once at boot, so a runtime
+// toggle of preview_listener_enabled could never take effect without a
+// restart (see git history for the old BLOCKED test this file used to hold,
+// tracked under issue #155). ADR-044 replaces that with a single main-mux
+// registration plus a LIVE gateway.preview_enabled check inside HandlePreview
+// itself (FR-006). This file now proves the hot-flip actually works: no
+// restart, no re-registration, and — critically — a running dev server is
+// NOT force-killed when preview is disabled (US-4 AS-4).
 //
-// BDD Scenario: "Runtime hot-flip of preview_listener_enabled disables /preview/ on main mux"
-//
-// Given a gateway with preview_listener_enabled=true and /preview/ registered on the main mux,
-// When the config is updated to preview_listener_enabled=false and a reload is triggered,
-// Then GET /preview/<agent>/<token>/ must return 404 from the main mux.
-//
-// Gap note: the current gateway implementation wires the preview listener at boot time
-// (gateway.go ~L1031-L1343). The decision is computed once from cfg.Gateway.IsPreviewListenerEnabled()
-// before the mux is built and listeners started. There is no runtime mechanism to un-register
-// /preview/ from the main mux after a config change — the preview routes are baked into the
-// http.ServeMux at startup, and http.ServeMux does not support handler removal.
-//
-// Status: BLOCKED — runtime hot-flip of preview routes is not implemented in v0.1.
-// Boot-time disabled coverage is in preview_disabled_test.go (T2.22).
-// Tracked under issue #155 for v0.2.
-//
-// Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 4 (Rank-8)
+// Traces to: preview-on-main-listener-spec.md FR-006, FR-007, US-4, S5, S7.
 
 package gateway
 
@@ -36,109 +28,120 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
-// TestPreviewListenerHotFlip_EnabledToDisabled documents the boot-time
-// enable → runtime-disable transition gap.
-//
-// The test proves the enabled-at-boot state works correctly, then documents
-// that a runtime disable is not yet implemented. Once the gateway implements
-// mux-level hot-flip (v0.2 / #155), this test should be promoted to a real
-// assertion and the t.Skip replaced with a full reload cycle.
-//
-// Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 4 (Rank-8)
-func TestPreviewListenerHotFlip_EnabledToDisabled(t *testing.T) {
-	// -----------------------------------------------------------------------
-	// Step 1: Prove the enabled state — preview mux serves /preview/ (200).
-	// This is a differentiation test: two requests from two mux states produce
-	// two different HTTP status codes, proving neither is hardcoded.
-	// -----------------------------------------------------------------------
+// TestPreviewToggleHotReload verifies FR-006/FR-007 (US-4, S5, S7): toggling
+// gateway.preview_enabled at runtime flips /preview/'s behavior on the very
+// next request — no restart, no mux re-registration — and disabling it does
+// NOT tear down an already-running dev server (it stays registered and would
+// still be reachable the instant preview is re-enabled).
+func TestPreviewToggleHotReload(t *testing.T) {
+	api, _ := newPreviewRouteTestAPI(t)
+
+	// Register a real dev-server-backed token so we can prove the underlying
+	// registration survives the disable step untouched.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("dev server alive"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	reg := sandbox.NewDevServerRegistry()
+	t.Cleanup(reg.Close)
+	api.devServers = reg
+	devReg, err := reg.Register("hotflip-agent", upstreamPort(t, upstream.URL), 0 /*pid*/, "npm run dev", 10)
+	require.NoError(t, err)
+
+	mainMux := http.NewServeMux()
+	api.registerPreviewEndpoints(&testMuxRegistrar{mux: mainMux})
+	srv := httptest.NewServer(mainMux)
+	t.Cleanup(srv.Close)
+
+	path := "/preview/hotflip-agent/" + devReg.Token + "/"
+
+	// Step 1: enabled (default) — the mux/registration is set up exactly
+	// ONCE, before any of the toggling below.
+	resp1, err := http.Get(srv.URL + path)
+	require.NoError(t, err)
+	_ = resp1.Body.Close()
+	require.Equal(t, http.StatusOK, resp1.StatusCode,
+		"step 1: preview must serve 200 while enabled (no code change since registration)")
+
+	// Step 2: disable live. No re-registration, no restart — just flip the
+	// config field the same way a PUT /api/v1/config/gateway would.
+	api.agentLoop.GetConfig().Gateway.PreviewEnabled = boolPtr(false)
+
+	resp2, err := http.Get(srv.URL + path)
+	require.NoError(t, err)
+	_ = resp2.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp2.StatusCode,
+		"step 2: /preview/ must 404 immediately after preview_enabled=false — no restart required")
+
+	// Step 2b: the dev-server registration itself must survive the disable
+	// untouched — disabling preview_enabled must NOT force-kill running dev
+	// servers (US-4 AS-4). Lookup still finds it in the registry.
+	stillRegistered := reg.Lookup(devReg.Token)
+	require.NotNil(t, stillRegistered,
+		"step 2b: disabling preview_enabled must not unregister/kill the running dev server")
+	assert.Equal(t, "hotflip-agent", stillRegistered.AgentID)
+
+	// Step 2c: the upstream dev server process (simulated by the httptest
+	// server) is still reachable directly — proving it was never killed, only
+	// made unreachable THROUGH the gateway's /preview/ gate.
+	directResp, err := http.Get(upstream.URL)
+	require.NoError(t, err)
+	_ = directResp.Body.Close()
+	assert.Equal(t, http.StatusOK, directResp.StatusCode,
+		"step 2c: the dev server process itself must still be running (not force-killed)")
+
+	// Step 3: re-enable live. The SAME registration (never re-created) must
+	// serve immediately — proving the toggle is genuinely live, not a
+	// one-way trip requiring a fresh registration/restart.
+	api.agentLoop.GetConfig().Gateway.PreviewEnabled = boolPtr(true)
+
+	resp3, err := http.Get(srv.URL + path)
+	require.NoError(t, err)
+	_ = resp3.Body.Close()
+	assert.Equal(t, http.StatusOK, resp3.StatusCode,
+		"step 3: /preview/ must serve again immediately after preview_enabled=true — no restart, same registration")
+}
+
+// TestPreviewToggleHotReload_StaticToken mirrors the above for a static-file
+// (Tier 1) registration rather than a dev-server (Tier 3) one, so the
+// hot-flip contract is proven for both registry types HandlePreview consults.
+func TestPreviewToggleHotReload_StaticToken(t *testing.T) {
 	api, ss := newPreviewRouteTestAPI(t)
 
 	workDir := t.TempDir()
-	indexPath := filepath.Join(workDir, "index.html")
-	require.NoError(t, os.WriteFile(indexPath, []byte("<h1>hotflip test</h1>"), 0o644))
-
-	token, _, err := ss.Register("hotflip-agent", workDir, time.Hour)
-	require.NoError(t, err, "token registration must succeed")
-
-	previewMux := http.NewServeMux()
-	api.registerPreviewEndpoints(&testPreviewMuxRegistrar{mux: previewMux})
-	previewSrv := httptest.NewServer(previewMux)
-	t.Cleanup(previewSrv.Close)
-
-	path := "/preview/hotflip-agent/" + token + "/"
-
-	// Enabled state: preview mux must serve 200.
-	resp, err := http.Get(previewSrv.URL + path)
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "index.html"), []byte("static hotflip"), 0o644))
+	token, _, err := ss.Register("hotflip-static-agent", workDir, time.Hour)
 	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"T2.23-step1: preview mux must serve 200 when enabled (differentiation baseline)")
 
-	// -----------------------------------------------------------------------
-	// Step 2: Document the runtime hot-flip gap.
-	//
-	// The gateway builds the preview mux once at startup; there is no mechanism
-	// to remove already-registered handlers from an http.ServeMux. A "hot-flip"
-	// would require either:
-	//   (a) Wrapping the mux in a swappable atomic pointer, or
-	//   (b) Restarting the preview listener.
-	// Neither is implemented in v0.1.
-	//
-	// Until #155 ships this feature, we document the gap as BLOCKED rather than
-	// t.Skip (which would be invisible). The test above already proves the
-	// enabled path works; the only untested surface is the disabled transition.
-	// -----------------------------------------------------------------------
-	t.Skip("BLOCKED: runtime hot-flip of preview_listener_enabled from true→false not yet " +
-		"implemented. The preview mux is built once at boot (gateway.go ~L1031). " +
-		"http.ServeMux does not support handler removal. " +
-		"Fix: wrap preview mux in atomic.Pointer[http.ServeMux] and hot-swap on reload. " +
-		"Tracked under issue #155 for v0.2.")
-}
-
-// TestPreviewListenerHotFlip_DisabledAtBoot_RemainsDisabled verifies that a
-// preview listener disabled at boot cannot be re-enabled by a config change
-// without a restart. This is the symmetric case: disabled-at-boot → runtime
-// enable is also not supported and produces consistent 404s throughout.
-//
-// This test passes today and is a correctness guard.
-// Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 4 (Rank-8)
-func TestPreviewListenerHotFlip_DisabledAtBoot_RemainsDisabled(t *testing.T) {
-	// Build a main mux WITHOUT preview endpoints (preview_listener_enabled=false at boot).
 	mainMux := http.NewServeMux()
-	mainMux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"endpoint not found"}`))
-	})
-	mainMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("SPA"))
-	})
+	api.registerPreviewEndpoints(&testMuxRegistrar{mux: mainMux})
+	srv := httptest.NewServer(mainMux)
+	t.Cleanup(srv.Close)
 
-	mainSrv := httptest.NewServer(mainMux)
-	t.Cleanup(mainSrv.Close)
+	path := "/preview/hotflip-static-agent/" + token + "/index.html"
 
-	// Confirm /preview/ is absent before any config change.
-	previewPath := "/preview/some-agent/some-token/"
-	resp1, err := http.Get(mainSrv.URL + previewPath)
+	resp1, err := http.Get(srv.URL + path)
 	require.NoError(t, err)
 	_ = resp1.Body.Close()
-	// Must NOT return 401/403 from HandlePreview — it's not registered.
-	assert.NotEqual(t, http.StatusUnauthorized, resp1.StatusCode,
-		"preview path must not trigger HandlePreview auth when disabled at boot")
+	require.Equal(t, http.StatusOK, resp1.StatusCode)
 
-	// Simulate a "config change" by noting that the mux is immutable — no
-	// registration happened and none can happen. The preview path still falls
-	// through to the SPA catch-all.
-	resp2, err := http.Get(mainSrv.URL + previewPath)
+	api.agentLoop.GetConfig().Gateway.PreviewEnabled = boolPtr(false)
+	resp2, err := http.Get(srv.URL + path)
 	require.NoError(t, err)
 	_ = resp2.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp2.StatusCode,
+		"static-mode /preview/ must also 404 immediately when disabled")
 
-	// Both requests produce the same status (SPA catch-all).
-	// Differentiation: the same disabled path consistently returns the same
-	// non-preview status across multiple requests.
-	assert.Equal(t, resp1.StatusCode, resp2.StatusCode,
-		"disabled preview path must consistently return the same status across requests")
+	api.agentLoop.GetConfig().Gateway.PreviewEnabled = boolPtr(true)
+	resp3, err := http.Get(srv.URL + path)
+	require.NoError(t, err)
+	_ = resp3.Body.Close()
+	assert.Equal(t, http.StatusOK, resp3.StatusCode,
+		"static-mode /preview/ must serve again immediately when re-enabled")
 }

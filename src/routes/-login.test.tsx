@@ -66,8 +66,8 @@ vi.mock('./authValidation', () => ({
 
 // --- auth store mock ---
 vi.mock('@/store/auth', () => ({
-  useAuthStore: (selector: (s: { setToken: ReturnType<typeof vi.fn> }) => unknown) =>
-    selector({ setToken: vi.fn() }),
+  useAuthStore: (selector: (s: { setUsername: ReturnType<typeof vi.fn> }) => unknown) =>
+    selector({ setUsername: vi.fn() }),
 }))
 
 // Load the login component once for all tests (avoids repeated transform cost).
@@ -197,10 +197,11 @@ describe('#27 — _app beforeLoad redirects to /onboarding before auth check', (
       throw new Error('[BLOCKED] beforeLoad is not a function — test gate failed above should have caught this')
     }
 
-    // sessionStorage is empty → no auth token → the auth branch would also throw,
-    // but the onboarding branch MUST fire first (before auth).
-    // Because fetchAppState resolves with onboarding_complete:false the call
-    // should throw (or return a redirect) before ever reaching the token check.
+    // Auth is cookie-based now (no JS-visible token) — checkTokenValidity is
+    // mocked to resolve 'ok' unconditionally, so it too would let the call
+    // through. The onboarding branch MUST still fire FIRST regardless:
+    // because fetchAppState resolves with onboarding_complete:false, the call
+    // should throw (or return a redirect) before ever reaching the auth check.
     let thrown: unknown = null
     try {
       await beforeLoad()

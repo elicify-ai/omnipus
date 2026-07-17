@@ -79,17 +79,23 @@ func delegationEdgeToWire(e storedDelegationEdge) gen.WorkspaceDelegationEdge {
 // inherits when its own depth is unset — no new depth logic here, purely
 // exposing that existing value so the frontend can always pre-fill/display a
 // concrete number instead of an ambiguous blank/"∞" state.
+//
+// FIX 4 (7-reviewer gate, TeamSet derivation drift): the team union used to be
+// re-derived inline here (no TrimSpace, no empty-guard), which could diverge
+// from validateTaskAgentID's team check (rest_tasks.go), the ONLY other
+// consumer of workspace team membership — that one already goes through the
+// canonical workspaceTeamSet(ws) wrapper over workspace.TeamSet. The frontend
+// now treats this wire response's team[] as load-bearing (Team tab), so a
+// silent divergence here would show a team list that doesn't match what
+// task-assignment validation actually enforces. Sourcing from the same
+// wrapper closes that gap — this is now the SAME derivation as
+// validateTaskAgentID's, not a parallel one.
 func workspaceDelegationToWire(ws storedWorkspace, defaultDepth int) gen.WorkspaceDelegation {
 	edges := make([]gen.WorkspaceDelegationEdge, 0, len(ws.Delegation))
-	teamSet := make(map[string]struct{}, len(ws.CoreTeam)+2*len(ws.Delegation))
-	for _, id := range ws.CoreTeam {
-		teamSet[id] = struct{}{}
-	}
 	for _, e := range ws.Delegation {
 		edges = append(edges, delegationEdgeToWire(e))
-		teamSet[e.FromAgent] = struct{}{}
-		teamSet[e.ToAgent] = struct{}{}
 	}
+	teamSet := workspaceTeamSet(ws)
 	team := make([]string, 0, len(teamSet))
 	for id := range teamSet {
 		team = append(team, id)
@@ -284,12 +290,19 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 	return edges
 }
 
-// defaultWorkspaceTeam returns the default workspace roster (M6): the 4 base
-// agents plus the seeded specialist subagents (Planner / Explorer / Researcher).
-// Only agents that actually exist in the config are included, so a lite/custom
-// roster never produces a dangling team member.
+// defaultWorkspaceTeam returns the default workspace roster for a fresh
+// install / new workspace with no explicit core_team: every agent the product
+// delivers on install (coreagent.All — 4 base chat agents + general Worker +
+// Planner/Explorer/Researcher specialists), filtered to IDs that actually
+// exist in the live config so a lite/custom roster never produces a dangling
+// team member.
+//
+// Worker is intentionally included. Omitting it used to drop every →worker
+// seed edge in seedEdgesForTeam (both endpoints must be on-team), so Jim/Mia/
+// Ava/Ray could not delegate to Worker on a pristine default workspace even
+// though coreagent.SeedDelegationEdges defines those edges. That was UAT
+// DEF-001 (2026-07-13).
 func defaultWorkspaceTeam(cfg *config.Config) []string {
-	want := []string{"mia", "jim", "ava", "ray", "planner", "explorer", "researcher"}
 	if cfg == nil {
 		return nil
 	}
@@ -297,8 +310,13 @@ func defaultWorkspaceTeam(cfg *config.Config) []string {
 	for i := range cfg.Agents.List {
 		present[cfg.Agents.List[i].ID] = true
 	}
-	team := make([]string, 0, len(want))
-	for _, id := range want {
+	// Display order follows coreagent.All() so the Team tab matches the
+	// Agents library seed order (Mia first, then Jim/Ava/Ray, Worker, then
+	// the three specialists).
+	all := coreagent.All()
+	team := make([]string, 0, len(all))
+	for _, a := range all {
+		id := string(a.ID)
 		if present[id] {
 			team = append(team, id)
 		}
@@ -311,6 +329,18 @@ func defaultWorkspaceTeam(cfg *config.Config) []string {
 // core_team only inherits the default edges relevant to the agents it actually
 // includes (no dangling edge to an agent the operator left out). A nil/empty team
 // yields no edges.
+//
+// FIX 7 (7-reviewer gate, silent edge drop): a dropped edge used to leave no
+// trace at all — an operator who left an agent off a fresh workspace's team
+// (the exact DEF-001 scenario this function's own defaultWorkspaceTeam
+// doc-comment references) would see fewer seeded edges with no logged reason.
+// slog.Debug here at DROP time (not the caller) so every drop is accounted
+// for regardless of which call site invokes this — this is intentionally
+// routine/expected (an operator choosing a partial roster on purpose is not
+// an anomaly), so Debug matches the package's existing idiom for
+// "expected, narrowing" filtering decisions rather than Warn, which this
+// package reserves for actual failures (e.g. audit-log write errors, file
+// write errors below).
 func seedEdgesForTeam(edges []storedDelegationEdge, team []string) []storedDelegationEdge {
 	if len(team) == 0 || len(edges) == 0 {
 		return nil
@@ -323,7 +353,11 @@ func seedEdgesForTeam(edges []storedDelegationEdge, team []string) []storedDeleg
 	for _, e := range edges {
 		if member[e.FromAgent] && member[e.ToAgent] {
 			out = append(out, e)
+			continue
 		}
+		slog.Debug("seedEdgesForTeam: dropping default delegation edge — endpoint not on team",
+			"from_agent", e.FromAgent, "to_agent", e.ToAgent,
+			"from_on_team", member[e.FromAgent], "to_on_team", member[e.ToAgent])
 	}
 	if len(out) == 0 {
 		return nil

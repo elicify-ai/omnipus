@@ -92,7 +92,7 @@ test(
     }
 
     // Navigate to Command Center and open the task detail
-    await page.goto(`${BASE_URL}/#/command-center`)
+    await page.goto(`${BASE_URL}/#/tasks`)
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
 
     // Find and click the task

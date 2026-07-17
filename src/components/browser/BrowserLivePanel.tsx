@@ -33,14 +33,10 @@ export function BrowserLivePanel() {
   // Pop-out opens a fullscreen tab for the SAME session/agent — the one
   // remaining non-docked layout (the operator's "open in new tab" path).
   const handlePopOut = () => {
-    // The auth token lives in sessionStorage (per-tab, for XSS hygiene)
-    // which window.open'd tabs do NOT inherit — so the pop-out would
-    // land on the login screen. Briefly mirror the token into
-    // localStorage as a same-origin hand-off; the /browser-live route
-    // migrates it back into sessionStorage and purges this copy on
-    // mount (see browser-live.tsx).
-    const token = sessionStorage.getItem('omnipus_auth_token')
-    if (token) localStorage.setItem('omnipus_auth_token', token)
+    // Auth is a same-origin `omnipus-session` HttpOnly cookie (ADR-044) —
+    // the window.open'd tab is same-origin, so the browser attaches the
+    // cookie to its requests and the WS handshake automatically. No
+    // token hand-off is needed.
     const params = new URLSearchParams({
       session: browserPanel.sessionId,
       agent: browserPanel.agentId,

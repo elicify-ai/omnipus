@@ -42,39 +42,23 @@
  * CLAUDE.md — "E2E tests always target the embedded SPA (Go binary)".
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
-import { fileURLToPath } from 'url'
 import { expect, test } from '@playwright/test'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
-// ── Auth helper ───────────────────────────────────────────────────────────────
-
-/**
- * Read the bearer token from the Playwright storageState file that global-setup
- * wrote. Avoids calling POST /api/v1/auth/login which would rotate the admin's
- * token_hash and invalidate the storageState token for all subsequent page tests
- * (causing them to land on the login screen).
- *
- * The SPA stores the bearer under the key 'omnipus_auth_token' in localStorage.
- * Playwright's storageState JSON layout:
- *   { origins: [{ origin: "http://localhost:6060", localStorage: [{name, value}] }] }
- */
-function readStorageStateToken(): string {
-  const authFile = path.join(__dirname, 'fixtures/.auth/admin.json')
-  const state = JSON.parse(fs.readFileSync(authFile, 'utf-8')) as {
-    origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>
-  }
-  const token = state.origins
-    ?.flatMap((o) => o.localStorage ?? [])
-    .find((e) => e.name === 'omnipus_auth_token')?.value
-  if (!token) throw new Error('omnipus_auth_token not found in storageState — check global-setup')
-  return token
-}
+// ── Auth ──────────────────────────────────────────────────────────────────────
+//
+// ADR-044 / US-5 (2026-07-15): the SPA no longer stores or reads a JS-visible
+// bearer token — auth is the browser-managed `omnipus-session` HttpOnly cookie
+// (see pkg/gateway/middleware/session_cookie.go). global-setup.ts no longer
+// writes an `omnipus_auth_token` entry into the Playwright storageState file
+// (there is nothing to write; the cookie is invisible to JS). Playwright's
+// `request` fixture is built from the project's `storageState` (see
+// playwright.config.ts `use.storageState`), so it automatically carries the
+// real `omnipus-session` cookie global-setup captured from a genuine login —
+// no Authorization header is needed for this GET. GET is a safe/read method,
+// so no CSRF token is needed either (CSRF only gates state-changing verbs —
+// see stateChangingMethods in pkg/gateway/middleware/csrf.go).
 
 // ── AC2: API-level assertion (SC-101) ─────────────────────────────────────────
 // Independent test against the real /api/v1/tools — not a mock.
@@ -88,14 +72,13 @@ function readStorageStateToken(): string {
 test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including bash and search_web', async ({
   request,
 }) => {
-  // Read the bearer token from the storageState file written by global-setup.
-  // We never call POST /api/v1/auth/login here — doing so rotates the admin's
-  // token_hash, invalidating the storageState token for all subsequent page tests.
-  const token = readStorageStateToken()
-
-  const toolsRes = await request.get(`${BASE_URL}/api/v1/tools`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+  // No explicit auth header: the `request` fixture's context was created from
+  // storageState, which already carries the real omnipus-session cookie
+  // global-setup.ts captured from a genuine POST /api/v1/auth/login. We never
+  // call POST /api/v1/auth/login here ourselves — doing so would rotate the
+  // admin's session_token_hash, invalidating the storageState cookie for all
+  // subsequent page tests.
+  const toolsRes = await request.get(`${BASE_URL}/api/v1/tools`)
   expect(toolsRes.ok(), `GET /api/v1/tools failed: ${toolsRes.status()}`).toBe(true)
 
   const tools = (await toolsRes.json()) as Array<{ name: string; category?: string }>

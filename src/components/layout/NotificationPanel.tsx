@@ -16,7 +16,7 @@ import { logError } from '@/lib/telemetry'
 // #264 — header notification center (right-side Sheet). Lists notifications
 // newest-first; unread items are visually distinct (surface-2 background + a
 // severity-colored dot). Clicking an item marks it read and navigates to its
-// click-through target (session id → that session; else schedule id → Command Center).
+// click-through target (session id → that session; else schedule id → Board via /tasks).
 
 const SEVERITY_COLOR: Record<NotifItem['severity'], string> = {
   info: 'var(--color-accent)',
@@ -68,7 +68,7 @@ export function NotificationPanel() {
     if (item.sessionId) {
       void navigate({ to: '/sessions/$sessionId', params: { sessionId: item.sessionId } })
     } else if (item.scheduleId) {
-      void navigate({ to: '/command-center' })
+      void navigate({ to: '/tasks' })
     }
   }
 

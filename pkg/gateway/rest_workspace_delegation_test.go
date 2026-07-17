@@ -515,34 +515,28 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	require.Len(t, wss, 1)
 	ws := wss[0]
 	assert.True(t, ws.IsDefault)
-	// defaultWorkspaceTeam's hardcoded roster (pre-existing, untouched by
-	// ADR-037) deliberately excludes the general-purpose worker from the
-	// default workspace team — only the 4 base agents + the 3 specialists.
-	// seedEdgesForTeam then drops any edge whose endpoint is off-team, so
-	// every →worker edge in the coreagent seed matrix is filtered out below.
+	// Full install roster: every agent coreagent delivers on a fresh install
+	// (4 base + Worker + 3 specialists). Worker must be on-team so the
+	// coreagent →worker seed edges survive seedEdgesForTeam (UAT DEF-001).
 	assert.ElementsMatch(t,
-		[]string{"mia", "jim", "ava", "ray", "planner", "explorer", "researcher"},
+		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher"},
 		ws.CoreTeam)
 
-	// Edges: the coreAgentDelegation seed matrix restricted to the default
-	// team (no "worker" node) — Jim→ava/ray (Jim→worker dropped, off-team),
-	// Mia→worker and Ava→worker dropped entirely (their only seeded target),
-	// Ray→researcher (Ray→worker dropped), Planner→explorer/researcher.
-	require.Len(t, ws.Delegation, 5)
+	// Edges: full coreAgentDelegation matrix with Worker on-team —
+	// Jim→ava/ray/worker, Mia→worker, Ava→worker, Ray→worker/researcher,
+	// Planner→explorer/researcher.
+	require.Len(t, ws.Delegation, 9)
 	byPair := make(map[string]storedDelegationEdge, len(ws.Delegation))
 	for _, e := range ws.Delegation {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
 	for _, want := range []string{
-		"jim->ava", "jim->ray",
-		"ray->researcher",
+		"jim->ava", "jim->ray", "jim->worker",
+		"mia->worker", "ava->worker",
+		"ray->worker", "ray->researcher",
 		"planner->explorer", "planner->researcher",
 	} {
 		assert.Contains(t, byPair, want, "expected seeded edge %s", want)
-	}
-	for _, notWant := range []string{"jim->worker", "mia->worker", "ava->worker", "ray->worker"} {
-		assert.NotContains(t, byPair, notWant,
-			"edge %s must be dropped — worker is not on the default workspace team", notWant)
 	}
 
 	// Jim's SEED modes are still 3-valued (task, background, await —
@@ -569,6 +563,74 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 		assert.NotEqual(t, "explorer", e.FromAgent, "explorer must not have a seeded outgoing edge")
 		assert.NotEqual(t, "researcher", e.FromAgent, "researcher must not have a seeded outgoing edge")
 	}
+}
+
+// TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges (T3,
+// pr-test-analyzer / UAT DEF-001 regression coverage) proves the partial-roster
+// scenario end-to-end through ensureDefaultWorkspace: a config that omits ONE
+// agent (researcher) from the full coreagent roster must (a) exclude it from
+// the seeded workspace TEAM, and (b) drop ONLY the delegation edges that
+// reference it — every other edge in the coreAgentDelegation matrix must
+// survive untouched. This exercises the FULL pipeline
+// (defaultWorkspaceTeam -> defaultWorkspaceDelegationEdges -> seedEdgesForTeam
+// -> ensureDefaultWorkspace), unlike the sibling unit test
+// TestSeedEdgesForTeam_PartialRosterDropsOffTeamEdge above, which hand-builds
+// its edge list directly rather than deriving it from a real config — that
+// one pins seedEdgesForTeam's own filtering logic; this one pins the whole
+// seeding path a fresh/lite install actually exercises.
+func TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "mia", Type: config.AgentTypeCore},
+				{ID: "jim", Type: config.AgentTypeCore},
+				{ID: "ava", Type: config.AgentTypeCore},
+				{ID: "ray", Type: config.AgentTypeCore},
+				{ID: "worker", Type: config.AgentTypeWorker},
+				{ID: "planner", Type: config.AgentTypeWorker},
+				{ID: "explorer", Type: config.AgentTypeWorker},
+				// "researcher" deliberately omitted — a partial-roster
+				// install (e.g. a lite build or an operator-trimmed config)
+				// without the researcher specialist.
+			},
+		},
+	}
+	require.NoError(t, ensureDefaultWorkspace(home, "alice", cfg))
+
+	wss, err := listWorkspaceFiles(home)
+	require.NoError(t, err)
+	require.Len(t, wss, 1)
+	ws := wss[0]
+	assert.True(t, ws.IsDefault)
+
+	// (a) team excludes the missing agent — never a dangling roster entry.
+	assert.ElementsMatch(t,
+		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer"},
+		ws.CoreTeam)
+	assert.NotContains(t, ws.CoreTeam, "researcher")
+
+	// (b) only researcher's edges are dropped — every other edge from the
+	// full-roster matrix (see TestDefaultWorkspaceSeeder_TeamAndEdges) survives
+	// exactly as seeded.
+	byPair := make(map[string]storedDelegationEdge, len(ws.Delegation))
+	for _, e := range ws.Delegation {
+		byPair[e.FromAgent+"->"+e.ToAgent] = e
+		assert.NotEqual(t, "researcher", e.FromAgent, "researcher is off-team — must not appear as a from_agent")
+		assert.NotEqual(t, "researcher", e.ToAgent, "researcher is off-team — must not appear as a to_agent")
+	}
+	for _, want := range []string{
+		"jim->ava", "jim->ray", "jim->worker",
+		"mia->worker", "ava->worker",
+		"ray->worker", "planner->explorer",
+	} {
+		assert.Contains(t, byPair, want, "expected surviving seeded edge %s", want)
+	}
+	// The two edges that reference researcher must be gone entirely, not
+	// dangling with an unresolvable endpoint.
+	assert.NotContains(t, byPair, "ray->researcher")
+	assert.NotContains(t, byPair, "planner->researcher")
+	assert.Len(t, ws.Delegation, 7, "9 full-roster edges minus the 2 that reference the missing researcher")
 }
 
 // TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed verifies the

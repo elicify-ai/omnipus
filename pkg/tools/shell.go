@@ -978,7 +978,7 @@ func (t *ExecTool) runBackground(
 		Command:        command,
 		Background:     true,
 		StartTime:      time.Now().Unix(),
-		Status:         "running",
+		Status:         StatusRunning,
 		OwnerSessionID: ownerSessionID,
 	}
 
@@ -1059,16 +1059,17 @@ func (t *ExecTool) runBackground(
 	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
 
 	// FR-B3: enforce timeout_seconds identically for background as for
-	// foreground. Fires session.Kill() (the same primitive
-	// SessionManager.KillAllForSession uses) and relabels the outcome
-	// "timeout" so pollers/AsyncNotifier can distinguish it from an explicit
+	// foreground. Fires session.KillAndRelabel(StatusTimeout) (the same kill
+	// primitive SessionManager.KillAllForSession uses, atomically relabeled
+	// to "timeout" in ONE lock acquisition — see KillAndRelabel's doc
+	// comment) so pollers/AsyncNotifier can distinguish it from an explicit
 	// kill or a natural exit.
 	if timeoutSeconds > 0 {
 		go func() {
 			timer := time.NewTimer(time.Duration(timeoutSeconds) * time.Second)
 			defer timer.Stop()
 			<-timer.C
-			if killErr := session.Kill(); killErr != nil {
+			if killErr := session.KillAndRelabel(StatusTimeout); killErr != nil {
 				if !errors.Is(killErr, ErrSessionDone) {
 					slog.Warn("bash: background timeout kill failed",
 						"session_id", sessionID, "pid", session.PID, "error", killErr)
@@ -1076,24 +1077,27 @@ func (t *ExecTool) runBackground(
 						t.killAuditFn(session.PID, killErr, "bash_background_timeout")
 					}
 				}
-				return
 			}
-			session.SetStatus("timeout")
 		}()
 	}
 
 	// Completion goroutine: the single place that knows the process has
 	// actually exited and pipes are drained. It claims "done" only if no
-	// other path (explicit kill, timeout) already claimed a terminal status
-	// — see session.Kill()'s own atomic running-check for why this is race
-	// free (MIN-002). This is also FR-B9's sole notification point: it fires
-	// cb exactly once, regardless of which of the four outcomes occurred.
+	// other path (explicit action=kill, timeout_seconds guard, or a
+	// RequestCancel kill cascade — see KillAndRelabel) already claimed a
+	// terminal status — see KillAndRelabel's own atomic running-check for why
+	// this is race free (MIN-002). This is also FR-B9's sole notification
+	// point: it fires cb exactly once, regardless of which of the four
+	// outcomes occurred (done, killed, timeout, canceled —
+	// backgroundCompletionResult's switch below must handle all four
+	// explicitly; a missed case previously let "canceled" fall through to a
+	// misleading generic-failure summary, see that function's doc comment).
 	go func() {
 		pipeWG.Wait()
 		waitErr := cmd.Wait()
 
 		session.mu.Lock()
-		if session.Status == "running" {
+		if session.Status == StatusRunning {
 			if cmd.ProcessState != nil {
 				session.ExitCode = cmd.ProcessState.ExitCode()
 			} else {
@@ -1103,7 +1107,7 @@ func (t *ExecTool) runBackground(
 				}
 				session.ExitCode = -1
 			}
-			session.Status = "done"
+			session.Status = StatusDone
 		}
 		finalStatus := session.Status
 		finalExitCode := session.ExitCode
@@ -1121,7 +1125,7 @@ func (t *ExecTool) runBackground(
 
 	resp := ExecResponse{
 		SessionID: sessionID,
-		Status:    "running",
+		Status:    string(StatusRunning),
 	}
 	data, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
@@ -1136,24 +1140,45 @@ func (t *ExecTool) runBackground(
 }
 
 // backgroundCompletionResult builds the ToolResult passed to cb when a
-// background session reaches a terminal state (FR-B9).
-func backgroundCompletionResult(sessionID, status string, exitCode int, output string) *ToolResult {
+// background session reaches a terminal state (FR-B9). There are exactly
+// four possible terminal outcomes for a background bash session — a natural
+// exit (StatusDone), an explicit action=kill (StatusKilled), the
+// timeout_seconds guard firing (StatusTimeout), and a RequestCancel kill
+// cascade (StatusCanceled, see SessionManager.KillAllForSession) — and this
+// switch MUST handle all four explicitly. Before this switch added the
+// StatusCanceled case, a canceled background job fell through to the
+// default branch and was misreported to the LLM/user as a generic failure
+// ("finished (exit code N)", IsError:true) instead of an intentional,
+// user-initiated cancellation.
+func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode int, output string) *ToolResult {
 	if output == "" {
 		output = "(no output)"
 	}
 	var summary string
+	isError := true
 	switch status {
-	case "timeout":
+	case StatusTimeout:
 		summary = fmt.Sprintf("Background session %s timed out.\n\n%s", sessionID, output)
-	case "killed":
+	case StatusKilled:
 		summary = fmt.Sprintf("Background session %s was killed.\n\n%s", sessionID, output)
+	case StatusCanceled:
+		summary = fmt.Sprintf("Background session %s was canceled.\n\n%s", sessionID, output)
+		isError = false
+	case StatusDone:
+		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
+		isError = false
 	default:
+		// Unexpected status reaching this switch (e.g. StatusRunning/
+		// StatusExited, which should never be the FINAL status a completion
+		// goroutine observes) — keep the same generic-failure fallback the
+		// pre-existing default case used, so an unforeseen future status
+		// still produces a safe (loud, not silently-successful) result.
 		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
 	}
 	return &ToolResult{
 		ForLLM:  summary,
 		ForUser: summary,
-		IsError: status != "done",
+		IsError: isError,
 	}
 }
 
@@ -1223,8 +1248,9 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 // executeKill terminates a running background session. MIN-002: if the
 // process already exited naturally (a race between an earlier poll and this
 // kill call), it reports the REAL final status instead of a false "killed" —
-// session.IsDone() is checked BEFORE any kill attempt, and session.Kill()
-// itself atomically no-ops (ErrSessionDone) if it lost that race.
+// session.IsDone() is checked BEFORE any kill attempt, and
+// session.KillAndRelabel itself atomically no-ops (ErrSessionDone) if it lost
+// that race.
 func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 	session, sessionID, errResult := t.getSessionArg(args)
 	if errResult != nil {
@@ -1235,7 +1261,11 @@ func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 		return t.sessionActionResult(sessionID, session)
 	}
 
-	if err := session.Kill(); err != nil {
+	// KillAndRelabel kills AND relabels to StatusKilled atomically under one
+	// lock acquisition — no separate SetStatus call, no gap for a concurrent
+	// poller to observe the generic "done" before the more specific "killed"
+	// label lands.
+	if err := session.KillAndRelabel(StatusKilled); err != nil {
 		if errors.Is(err, ErrSessionDone) {
 			// Raced: the process exited naturally between our IsDone() check
 			// and this Kill() call. Report the real final status, not an error.
@@ -1246,9 +1276,6 @@ func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
 		}
 		return ErrorResult(fmt.Sprintf("failed to kill session: %v", err))
 	}
-	// session.Kill() succeeded and set Status="done" atomically; relabel to
-	// "killed" so pollers can distinguish an explicit kill from a natural exit.
-	session.SetStatus("killed")
 
 	return t.sessionActionResult(sessionID, session)
 }

@@ -11,7 +11,7 @@ interface DefaultWorkspaceRedirectProps {
 
 /**
  * Resolves the default workspace and redirects to one of its tabs. Used by the
- * folded-away top-level routes (global chat "/", /tasks, /command-center,
+ * folded-away top-level routes (global chat "/", /tasks,
  * /automations) so old deep links land in the right place inside a workspace.
  *
  * Resolution order: the is_default workspace → the first workspace → "/" stays

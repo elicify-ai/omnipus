@@ -80,6 +80,26 @@ const DELEGATION: WorkspaceDelegation = {
   default_depth: 3,
 }
 
+// stubCsrfCookie / restoreCsrfCookie — mirrors the pattern in api.test.ts.
+// jsdom exposes document.cookie as an unconfigurable getter/setter that
+// simulates a real cookie jar; we override it with Object.defineProperty so
+// the F3 beacon test (below) exercises the SAME getCsrfCookie()/
+// readCSRFCookie() path production `beaconFlush` calls, proving the
+// X-CSRF-Token header is actually populated from a real cookie rather than
+// just asserting a shape that would stay green if the header were dropped.
+function stubCsrfCookie(value: string) {
+  Object.defineProperty(document, 'cookie', {
+    configurable: true,
+    get: () => value,
+  })
+}
+
+function restoreCsrfCookie() {
+  // jsdom reinstates its own descriptor when we delete the override.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  delete (document as any).cookie
+}
+
 // ── Mocks ───────────────────────────────────────────────────────────────────
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -451,6 +471,11 @@ describe('WorkspaceTeamTab', () => {
     const fetchSpy = vi
       .spyOn(window, 'fetch')
       .mockResolvedValue(new Response('{}', { status: 200 }))
+    // A real CSRF cookie so beaconFlush's getCsrfCookie()/readCSRFCookie()
+    // call has something to read — proves the X-CSRF-Token header on the
+    // keepalive PUTs comes from an actual cookie, not just present-by-shape.
+    const CSRF_TOKEN = 'f3-test-csrf-token'
+    stubCsrfCookie(`__Host-csrf=${CSRF_TOKEN}`)
 
     renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
@@ -482,13 +507,29 @@ describe('WorkspaceTeamTab', () => {
 
     const [coreTeamCall, edgesCall] = fetchSpy.mock.calls
     expect(coreTeamCall[0]).toBe('/api/v1/workspaces/ws-1')
-    expect(coreTeamCall[1]).toMatchObject({ method: 'PUT', keepalive: true })
+    expect(coreTeamCall[1]).toMatchObject({
+      method: 'PUT',
+      keepalive: true,
+      credentials: 'include',
+    })
+    // Regression guard: the keepalive PUT must carry the CSRF double-submit
+    // header (M3 round-1 fix) — a bare `toMatchObject({method, keepalive})`
+    // would stay green even if `credentials`/the header were silently
+    // dropped from `beaconFlush`/`putKeepalive`, since neither is checked.
+    const coreTeamHeaders = coreTeamCall[1]?.headers as Record<string, string>
+    expect(coreTeamHeaders['X-CSRF-Token']).toBe(CSRF_TOKEN)
     expect(JSON.parse(coreTeamCall[1]?.body as string)).toEqual({
       core_team: ['mia', 'jim', 'planner', 'ray'],
     })
 
     expect(edgesCall[0]).toBe('/api/v1/workspaces/ws-1/delegation')
-    expect(edgesCall[1]).toMatchObject({ method: 'PUT', keepalive: true })
+    expect(edgesCall[1]).toMatchObject({
+      method: 'PUT',
+      keepalive: true,
+      credentials: 'include',
+    })
+    const edgesHeaders = edgesCall[1]?.headers as Record<string, string>
+    expect(edgesHeaders['X-CSRF-Token']).toBe(CSRF_TOKEN)
     const edgesBody = JSON.parse(edgesCall[1]?.body as string) as {
       edges: Array<{ from_agent: string; to_agent: string }>
     }
@@ -498,6 +539,7 @@ describe('WorkspaceTeamTab', () => {
       ]),
     )
 
+    restoreCsrfCookie()
     fetchSpy.mockRestore()
   })
 

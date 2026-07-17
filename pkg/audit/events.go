@@ -126,10 +126,47 @@ const (
 	// (FR-19, FR-20, FR-21).
 	EventTurnCancelStuck = "turn.cancel.stuck"
 
+	// EventTurnCancelBackgroundKilled — INFO. RequestCancel invoked
+	// hooks.KillBackgroundSessions for a resolvable sessionID and records the
+	// count killed (may be 0 — a session with no background work). Emitted
+	// UNCONDITIONALLY whenever the hook fires, independent of whether an
+	// active turn was found/claimed (ClaimCancel's wasFired) — this is
+	// deliberately decoupled from EventTurnCancelAttempt/EventTurnCancelled
+	// because a `bash run_in_background=true` call's own turn ends
+	// immediately, well before a user later cancels the still-running
+	// background job; by then there is no active turn to claim, so this is
+	// the ONLY audit record of that cancel's background-kill cascade. See
+	// pkg/agent/cancel.go's RequestCancel doc comment for the full root-cause
+	// writeup.
+	EventTurnCancelBackgroundKilled = "turn.cancel.background_killed"
+
 	// EventCancelAbusePattern — WARN. A single canceller (user + channel)
 	// sent >= 10 cancel requests within 60 seconds, suggesting runaway client
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
+
+	// EventTurnOrphanTimeout — INFO. The orphan-foreground-turn watchdog
+	// (ADR-045) fired: a webchat session's grace period elapsed with no
+	// client reattaching, no surviving Critical/background delegate was found
+	// on the session, and nobody had reconnected — so the watchdog handed the
+	// session's root turn to al.RequestCancel (the SAME cancellation state
+	// machine every other cancel surface uses), attributed to
+	// "system:orphan-watchdog" via CancelCanceller rather than a real
+	// user/channel canceller. Emitted immediately BEFORE the RequestCancel
+	// call, so the audit trail always records WHY a cancel was triggered even
+	// if RequestCancel itself no-ops (turn already finished) or errors.
+	// Distinct from — and normally followed by — RequestCancel's OWN
+	// EventTurnCancelAttempt (always) and EventTurnCancelled (unless the root
+	// turn finishes naturally in the narrow gap before RequestCancel claims it,
+	// in which case the reap is a logged no-op — see reapOrphanForegroundTurn),
+	// which carry the full
+	// graceful->hard->detached escalation, approval auto-deny,
+	// background-session kill, and transcript writes uniformly with every
+	// other cancel surface. There is no separate turn.orphan_hard_aborted
+	// event (retired 2026-07 redesign) — RequestCancel's own turn_canceled
+	// event (cancel_method: "hard") is the single source of truth for how a
+	// reaped orphan turn actually terminated.
+	EventTurnOrphanTimeout = "turn.orphan_timeout"
 
 	// EventBrowserLiveControlTaken — INFO (Decision=allow) or WARN
 	// (Decision=deny). A /api/v1/browser/ws viewer requested interactive

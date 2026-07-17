@@ -10,6 +10,20 @@ defaults:
     shell: bash
 
 jobs:
+  e2e-shard-check:
+    name: E2E shard plan check
+    # Fast, dependency-free drift guard that runs on EVERY PR (not just e2e-triggering
+    # ones): fails if any tests/e2e/*.spec.ts is unassigned in tests/e2e/shards.json (it
+    # would silently never run) or the plan references a deleted spec. Same check the
+    # e2e-plan job runs before building the matrix, but with no `needs:` so it gives
+    # immediate feedback and still covers PRs whose paths skip the heavy e2e chain.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Verify every e2e spec is assigned to exactly one shard
+        run: scripts/e2e-shards.sh check
+
   cli-verb-guard:
     name: CLI Removed-Verb Guard
     # US-11 AC4 (FR-013): fail if any removed CLI verb reappears in infra.
@@ -454,72 +468,45 @@ jobs:
             -run '^(TestBootUnder1Second|TestPerTurnSLO|TestNoTranscriptDataLoss|TestMediaResolveSLO|TestCompactionBoundsMemory)$' \
             -timeout 5m -v ./tests/perf/...
 
+  # Emits the E2E shard matrix from tests/e2e/shards.json (the single source of truth,
+  # also consumed by deploy/ci-worker/runci.sh). `check` FAILS the workflow if any spec on
+  # disk is unassigned (it would silently never run) or the plan references a deleted spec,
+  # so the matrix and the runci.sh fan-out can never drift from the specs on disk.
+  e2e-plan:
+    name: E2E shard plan
+    runs-on: ubuntu-latest
+    needs: [test]
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Compute shard matrix from tests/e2e/shards.json
+        id: plan
+        run: |
+          set -euo pipefail
+          scripts/e2e-shards.sh check
+          echo "matrix=$(scripts/e2e-shards.sh matrix)" >> "$GITHUB_OUTPUT"
+
   playwright:
     name: E2E — ${{ matrix.group }}
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, e2e-plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # LLM Group A: chat is the single heaviest test file (9 LLM calls).
-          # Isolated so it doesn't block the other LLM groups.
-          - group: llm-chat
-            specs: >-
-              tests/e2e/chat.spec.ts
-          # LLM Group B: medium-weight agent-to-agent flows (delegate, handoff, cancel, hot-reload).
-          - group: llm-agents
-            specs: >-
-              tests/e2e/subagent.spec.ts
-              tests/e2e/handoff.spec.ts
-              tests/e2e/cancel-cross-channel.spec.ts
-              tests/e2e/hot-reload.spec.ts
-          # LLM Group C: light-LLM tests (1–3 calls each, feature-flag checks).
-          - group: llm-light
-            specs: >-
-              tests/e2e/bug-regression.spec.ts
-              tests/e2e/channels-routing.spec.ts
-              tests/e2e/command-center.spec.ts
-              tests/e2e/media.spec.ts
-              tests/e2e/open-in-chat.spec.ts
-              tests/e2e/settings.spec.ts
-          # Non-LLM Group A: real-gateway UI flows (no OpenRouter calls).
-          - group: ui
-            specs: >-
-              tests/e2e/accessibility.spec.ts
-              tests/e2e/agents.spec.ts
-              tests/e2e/auth.spec.ts
-              tests/e2e/burst-resilience.spec.ts
-              tests/e2e/contract-counters.spec.ts
-              tests/e2e/idle-no-reconnect.spec.ts
-              tests/e2e/multi-turn-render.spec.ts
-              tests/e2e/replay-fidelity.spec.ts
-              tests/e2e/retention.spec.ts
-              tests/e2e/security-tools.spec.ts
-              tests/e2e/sidebar.spec.ts
-              tests/e2e/skills.spec.ts
-              tests/e2e/user-crud.spec.ts
-              tests/e2e/ws-reconnect.spec.ts
-              tests/e2e/xss.spec.ts
-          # Non-LLM Group B: deterministic/config-surface tests (no OpenRouter calls).
-          - group: stubs
-            specs: >-
-              tests/e2e/about.spec.ts
-              tests/e2e/api-errors.spec.ts
-              tests/e2e/fresh-install.spec.ts
-              tests/e2e/iframe-preview-5xx.spec.ts
-              tests/e2e/iframe-preview-warmup.spec.ts
-              tests/e2e/mcp-add.spec.ts
-              tests/e2e/profile-fontsize.spec.ts
-              tests/e2e/providers.spec.ts
-              tests/e2e/serve-iframe.spec.ts
-              tests/e2e/settings-gateway.spec.ts
-              tests/e2e/version-drift.spec.ts
-              tests/e2e/web-serve-canonical.spec.ts
-              tests/e2e/web-serve-malformed.spec.ts
-              tests/e2e/whatsapp-qr.spec.ts
+      # Groups, key slots, and spec lists come from tests/e2e/shards.json via the e2e-plan
+      # job — NOT hardcoded here — so pr.yml and deploy/ci-worker/runci.sh cannot drift.
+      matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     env:
       OMNIPUS_HOME: /tmp/omnipus-e2e
+      # Per-shard LLM keys — runner-agnostic (secrets inject identically on a GitHub-hosted
+      # or an external/self-hosted runner). _B/_C are OPTIONAL: unset ⇒ the "Resolve shard
+      # LLM key" step falls back to key A, so a repo with only OPENROUTER_API_KEY_CI still
+      # runs (every shard uses key A, i.e. today's single-key behavior). Pinning each
+      # concurrent LLM shard to its own key keeps them off one shared rate-limit window.
+      OPENROUTER_KEY_A: ${{ secrets.OPENROUTER_API_KEY_CI }}
+      OPENROUTER_KEY_B: ${{ secrets.OPENROUTER_API_KEY_CI_B }}
+      OPENROUTER_KEY_C: ${{ secrets.OPENROUTER_API_KEY_CI_C }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -582,6 +569,27 @@ jobs:
           rm -rf /tmp/omnipus-e2e
           mkdir -p /tmp/omnipus-e2e
 
+      - name: Resolve shard LLM key
+        # Map this shard's key_slot (from shards.json) to an OpenRouter key and expose it to
+        # every later step as OPENROUTER_API_KEY_CI via $GITHUB_ENV — so the seed/onboard/
+        # verify/test steps below need no per-step secret wiring. Slots b/c fall back to key A
+        # when their secret is unset, so the workflow still runs with only the primary key
+        # configured (every shard on key A = today's single-key behavior). add-mask keeps the
+        # resolved value out of logs (a/b/c are registered secrets and thus already masked).
+        run: |
+          set -euo pipefail
+          case "${{ matrix.key_slot }}" in
+            b) KEY="${OPENROUTER_KEY_B:-$OPENROUTER_KEY_A}" ;;
+            c) KEY="${OPENROUTER_KEY_C:-$OPENROUTER_KEY_A}" ;;
+            *) KEY="${OPENROUTER_KEY_A}" ;;
+          esac
+          if [ -z "$KEY" ]; then
+            echo "::error::No OpenRouter key resolved for slot '${{ matrix.key_slot }}'. Set the OPENROUTER_API_KEY_CI secret (and optionally _B / _C)." >&2
+            exit 1
+          fi
+          echo "::add-mask::$KEY"
+          echo "OPENROUTER_API_KEY_CI=$KEY" >> "$GITHUB_ENV"
+
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
         # agents.defaults.model_name must match one provider entry's model_name.
@@ -639,7 +647,7 @@ jobs:
           set -euo pipefail
           ./omnipus credentials set OPENROUTER_API_KEY "${OPENROUTER_API_KEY_CI}"
         env:
-          OPENROUTER_API_KEY_CI: ${{ secrets.OPENROUTER_API_KEY_CI }}
+          # OPENROUTER_API_KEY_CI is set per-shard in "Resolve shard LLM key" via $GITHUB_ENV.
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
 
       - name: Start gateway
@@ -647,8 +655,22 @@ jobs:
         # The PID is captured so the teardown step can kill it cleanly.
         # --allow-empty permits gateway boot without a fully configured provider,
         # which is needed in case the credential seed step is extended in future.
+        #
+        # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): the orphan-
+        # foreground-turn watchdog only arms when the LAST WebSocket watcher on
+        # a session disconnects, so a short 20s grace here reaps a genuinely
+        # leaked (finished-tab) live turn quickly without ever touching an
+        # open-tab turn or a transcript-seeded replay test (those have no live
+        # turn to begin with). This is the fix for the "Group-A variance"
+        # family of load-dependent failures: a Playwright test that navigates
+        # away mid-turn without clicking Stop used to leave a real agent loop
+        # running indefinitely, queuing against the shared OpenRouter
+        # rate-limit window and starving later tests' tool calls. Production
+        # default (300s) is untouched — this override applies only to the e2e
+        # gateway process.
         run: |
           OMNIPUS_MASTER_KEY=${{ secrets.OMNIPUS_MASTER_KEY_CI }} \
+            OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
             ./omnipus start --allow-empty > /tmp/omnipus.log 2>&1 &
           GATEWAY_PID=$!
           echo "${GATEWAY_PID}" > /tmp/omnipus.pid
@@ -689,15 +711,13 @@ jobs:
                 -H 'Content-Type: application/json' \
                 -d @- \
                 > /dev/null
-        env:
-          OPENROUTER_API_KEY_CI: ${{ secrets.OPENROUTER_API_KEY_CI }}
+        # OPENROUTER_API_KEY_CI comes from "Resolve shard LLM key" (per-shard, via $GITHUB_ENV).
 
       # T0.4: Preflight — fail fast if OPENROUTER_API_KEY_CI is unset.
       # This catches mis-configured CI runs before any Playwright step executes,
       # giving a clear error message instead of per-test LLM timeout failures.
       - name: Verify OPENROUTER_API_KEY_CI is set
-        env:
-          OPENROUTER_API_KEY_CI: ${{ secrets.OPENROUTER_API_KEY_CI }}
+        # Resolved per-shard in "Resolve shard LLM key" and inherited via $GITHUB_ENV.
         run: |
           set -euo pipefail
           if [ -z "${OPENROUTER_API_KEY_CI:-}" ]; then
@@ -712,9 +732,9 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
+        # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
         env:
           OMNIPUS_URL: http://localhost:6060
-          OPENROUTER_API_KEY_CI: ${{ secrets.OPENROUTER_API_KEY_CI }}
         run: npx playwright test ${{ matrix.specs }}
 
       - name: Upload Playwright artifacts

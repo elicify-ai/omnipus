@@ -328,8 +328,9 @@ func (a *restAPI) loadWorkspace(w http.ResponseWriter, id string) (storedWorkspa
 
 // ensureDefaultWorkspace checks if the default workspace exists; if not, creates it.
 // Seeds one workspace named "My Workspace" (FR-1.6, US-6) pre-populated with the
-// default team (4 base agents + Planner/Explorer/Researcher specialists) and the
-// default delegation edges derived from the seeded per-agent trust graph (M5/M6).
+// full install roster (every agent coreagent delivers — 4 base + Worker +
+// Planner/Explorer/Researcher) and the default delegation edges derived from
+// the seeded per-agent trust graph (M5/M6), including Jim/Mia/Ava/Ray→Worker.
 // Idempotent: if a workspace with is_default=true already exists, this is a no-op.
 // Thread-safe: serialized by defaultWorkspaceSeedMu to prevent TOCTOU double-seed
 // when two gateway boots race (e.g. rapid restart or dual-process test).
@@ -363,9 +364,10 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 		UpdatedAt: now,
 	}
 	// Seed delegation edges restricted to the default team so the graph's nodes
-	// and edges stay consistent (no edge to an off-team agent like the generic
-	// worker). The Planner→Explorer/Researcher specialist edges survive because
-	// all three are on the default team.
+	// and edges stay consistent (no edge to an agent not on the team). With the
+	// full install roster (including Worker) this keeps Jim→Worker and the other
+	// coreagent seed edges; seedEdgesForTeam still drops edges if a lite install
+	// omitted an endpoint agent from config.
 	seedEdges := seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
 	// Defense-in-depth: validate each seeded edge so no unvalidated edge is ever
 	// persisted. The source is the trusted compiled-in roster so failures are
@@ -578,8 +580,9 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if req.CoreTeam != nil {
 		ws.CoreTeam = deduplicateStrings(*req.CoreTeam)
 	} else {
-		// No explicit team: seed the default roster (4 base + specialists) so a
-		// fresh workspace works out of the box (M6), mirroring My Workspace.
+		// No explicit team: seed the full install roster (base + Worker +
+		// specialists) so a fresh workspace works out of the box (M6), mirroring
+		// My Workspace.
 		ws.CoreTeam = defaultWorkspaceTeam(cfg)
 	}
 	// Seed default delegation edges from each team agent's seeded role (M5),

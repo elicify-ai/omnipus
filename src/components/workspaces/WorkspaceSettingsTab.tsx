@@ -34,11 +34,11 @@ interface WorkspaceSettingsTabProps {
 }
 
 // Item 4 / item 10: same inline auth-token read the rest of the app uses
-// (sessionStorage preferred, localStorage fallback — see AgentProfile's
-// flushAuthToken and WorkspaceTeamTab's readAuthToken for the sibling
-// pattern). No shared accessor exists (getAuthHeaders is module-private in
-// src/lib/api.ts), so this is the established convention rather than a
-// new one.
+// (sessionStorage preferred, localStorage fallback — see WorkspaceTeamTab's
+// readAuthToken for the sibling pattern; the hook's own built-in flush now
+// rides the CSRF header instead, post-ADR-044). No shared accessor exists
+// (getAuthHeaders is module-private in src/lib/api.ts), so this is the
+// established convention rather than a new one.
 function readAuthToken(): string | undefined {
   if (typeof sessionStorage === 'undefined') return undefined
   return (
