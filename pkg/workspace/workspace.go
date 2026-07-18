@@ -14,7 +14,8 @@ package workspace
 // JSON tag rules (must stay stable — the files are the long-term store):
 //
 //	id, name, description, status, pinned, pin_order, core_team, repository,
-//	owner, is_default, setup_pending, delegation, created_at, updated_at
+//	owner, is_default, setup_pending, delegation, member_configs, created_at,
+//	updated_at
 //
 // Delegation is the typed form shared with delegation.go's DelegationEdge.
 // Adding a new field here requires a matching JSON tag and must be

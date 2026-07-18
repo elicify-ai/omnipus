@@ -1258,6 +1258,52 @@ func TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending(t *
 	assert.False(t, stored.SetupPending, "on-disk setup_pending must be false for an explicit-team workspace")
 }
 
+// TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending is
+// the final-gate Test-reviewer MAJOR regression: an explicit but EMPTY
+// core_team array ("core_team": []) must be treated exactly like an absent
+// core_team (nil) — i.e. "unspecified" — NOT as "deliberately no team".
+// Before this fix, req.CoreTeam != nil was true for a zero-length slice, so
+// the explicit-team branch ran with an empty team and setup_pending left
+// false, producing a permanently teamless workspace: no agent was ever on
+// the team to run the setup interview and no code path would ever set
+// setup_pending=true for it afterward.
+// BDD:
+//
+//	Given a config with the full base roster (mia/jim/ava/ray/worker) registered,
+//	When POST /api/v1/workspaces is called with "core_team": [] (present but empty),
+//	Then 201 with core_team=["ava"] and setup_pending=true in the wire response
+//	(identical outcome to omitting core_team entirely), and the persisted
+//	on-disk file agrees, with no delegation edges (mirrors the no-core_team case).
+func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"EmptyTeamWorkspace","core_team":[]}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "POST /workspaces must return 201; body=%s", w.Body.String())
+	var ws gen.Workspace
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
+
+	require.NotNil(t, ws.CoreTeam, "core_team must be present in the wire response")
+	assert.Equal(t, []string{"ava"}, *ws.CoreTeam,
+		"an explicit EMPTY core_team must be treated as unspecified and seed ONLY Ava, "+
+			"exactly like an absent core_team")
+	require.NotNil(t, ws.SetupPending, "setup_pending must be present in the wire response")
+	assert.True(t, *ws.SetupPending,
+		"setup_pending must be true — an explicit empty core_team must never produce a "+
+			"permanently teamless, non-setup_pending workspace")
+
+	stored, err := readWorkspaceFile(api.homePath, ws.Id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ava"}, stored.CoreTeam, "on-disk core_team must match the wire response")
+	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
+	assert.Empty(t, stored.Delegation, "no delegation edges expected for the Ava-only seed team")
+}
+
 // TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a Unit A
 // regression: the auto-created boot default workspace ("My Workspace",
 // ensureDefaultWorkspace) is UNCHANGED by the Ava-only seed introduced for
