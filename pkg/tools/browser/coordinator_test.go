@@ -183,6 +183,98 @@ func TestCoordinator_Shutdown_IsSoleKill(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ADR-048 fix-wave: LiveSessionAgents (condition-2 multi-agent capture
+// fence) and captureSharedContextResolved/SetCaptureSharedContext
+// (condition-1 config knob). Fast, no-Chrome unit coverage — the coordinator
+// and manager fields these tests read are populated by direct literal
+// construction (same package), never by a real Register()/Chrome launch.
+// ---------------------------------------------------------------------------
+
+// TestBrowserCoordinator_LiveSessionAgents_OnlyCountsAgentsWithOpenTabs
+// proves the ADR-048 condition-2 fence's "cheapest honest signal": an agent
+// registered on the coordinator but with ZERO open tabs (never actually
+// browsed anything yet) must NOT count as having a "live browser session" —
+// only OpenTabCount()>0 agents do.
+func TestBrowserCoordinator_LiveSessionAgents_OnlyCountsAgentsWithOpenTabs(t *testing.T) {
+	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
+
+	mgrWithTab := &BrowserManager{
+		sessions: map[string]*sessionEntry{
+			DefaultSessionID: {tabs: []*tabEntry{{}}},
+		},
+	}
+	mgrNoTabs := &BrowserManager{sessions: map[string]*sessionEntry{}}
+	mgrNilEntry := (*BrowserManager)(nil)
+
+	coord.mu.Lock()
+	coord.managers["agent-with-tab"] = mgrWithTab
+	coord.managers["agent-no-tabs"] = mgrNoTabs
+	coord.managers["agent-nil-mgr"] = mgrNilEntry
+	coord.mu.Unlock()
+
+	got := coord.LiveSessionAgents()
+	if len(got) != 1 || got[0] != "agent-with-tab" {
+		t.Fatalf("LiveSessionAgents() = %v, want exactly [\"agent-with-tab\"]", got)
+	}
+}
+
+// TestBrowserCoordinator_LiveSessionAgents_EmptyWhenNoneLive covers the
+// zero/one-agent cases the fence must NOT trip on: no agents at all, and
+// exactly one agent with a live session (single-agent is always allowed —
+// v1's fence is specifically "more than one").
+func TestBrowserCoordinator_LiveSessionAgents_EmptyWhenNoneLive(t *testing.T) {
+	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
+	if got := coord.LiveSessionAgents(); len(got) != 0 {
+		t.Fatalf("LiveSessionAgents() on an empty coordinator = %v, want empty", got)
+	}
+
+	coord.mu.Lock()
+	coord.managers["solo-agent"] = &BrowserManager{
+		sessions: map[string]*sessionEntry{DefaultSessionID: {tabs: []*tabEntry{{}}}},
+	}
+	coord.mu.Unlock()
+
+	got := coord.LiveSessionAgents()
+	if len(got) != 1 || got[0] != "solo-agent" {
+		t.Fatalf("LiveSessionAgents() with one live agent = %v, want exactly [\"solo-agent\"]", got)
+	}
+}
+
+// TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride proves
+// ADR-048 condition 1's promotion from OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
+// to config: SetCaptureSharedContext drives the resolved value, and the env
+// var — when non-empty — is an explicit override that wins regardless of
+// the configured value, in EITHER direction. CaptureSharedContextEnabled
+// (the capability classifier's read path) and captureSharedContextResolved
+// (Register's own read path) must never disagree.
+func TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride(t *testing.T) {
+	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
+
+	if coord.CaptureSharedContextEnabled() {
+		t.Fatal("a freshly-constructed coordinator must default to shared-context capture DISABLED (config drives it explicitly, no implicit default)")
+	}
+
+	coord.SetCaptureSharedContext(true)
+	if !coord.CaptureSharedContextEnabled() {
+		t.Fatal("CaptureSharedContextEnabled() must reflect SetCaptureSharedContext(true)")
+	}
+	if !coord.captureSharedContextResolved() {
+		t.Fatal("captureSharedContextResolved() must agree with CaptureSharedContextEnabled()")
+	}
+
+	t.Setenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT", "0")
+	if coord.CaptureSharedContextEnabled() {
+		t.Fatal("a non-empty env override (\"0\") must win over the configured true value")
+	}
+
+	coord.SetCaptureSharedContext(false)
+	t.Setenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT", "1")
+	if !coord.CaptureSharedContextEnabled() {
+		t.Fatal("a non-empty env override (\"1\") must win over the configured false value")
+	}
+}
+
 // Ownership marker round-trip (M2 primitive): the coordinator can write+read
 // its own marker; a stale/foreign pid is detected as not-alive.
 func TestCoordinator_OwnershipMarker_RoundTrip(t *testing.T) {

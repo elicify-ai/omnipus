@@ -1738,6 +1738,12 @@ func registerSharedTools(
 				} else {
 					al.browserCoordinator.ApplyRuntimeConfig(browserCfg, cfg.Tools.Browser.MaxTotalTabs)
 				}
+				// ADR-048 condition 1: thread tools.browser.capture_shared_context
+				// through to the coordinator on every fresh-seed AND reload pass —
+				// SetCaptureSharedContext (not NewBrowserCoordinator's constructor
+				// args) so this stays a single call site regardless of which
+				// branch above ran.
+				al.browserCoordinator.SetCaptureSharedContext(cfg.Tools.Browser.CaptureSharedContext)
 				coordinator := al.browserCoordinator
 				al.mu.Unlock()
 				mgr, regErr := browser.RegisterTools(agent.Tools, browserCfg, browserSSRF, evaluateEnabled)

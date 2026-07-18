@@ -155,16 +155,19 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// doc comment.
 	lastInputErrorMessage string
 
-	// webrtcAgentID/webrtcCapture track this connection's attached WebRTC
-	// viewer (ADR-047 D4, wave-plan W2-A) — separate from the JPEG
-	// screencast attachment above (sessionID/mgr), since both paths can be
-	// active simultaneously on the SAME connection per ADR-047 D3 (JPEG
-	// keeps running as the automatic fallback tier while WebRTC streams).
-	// webrtcAgentID != "" iff a browser_webrtc_offer has succeeded and not
-	// yet been torn down (viewer detach, connection close, or a stream
+	// webrtc tracks this connection's attached WebRTC viewer (ADR-047 D4,
+	// wave-plan W2-A) — separate from the JPEG screencast attachment above
+	// (sessionID/mgr), since both paths can be active simultaneously on the
+	// SAME connection per ADR-047 D3 (JPEG keeps running as the automatic
+	// fallback tier while WebRTC streams). A single nullable pointer rather
+	// than a (webrtcAgentID string, webrtcCapture *browser.CaptureSession)
+	// field pair (fix-wave simplification): the two were always set and
+	// cleared together, so the pair could represent an illegal
+	// half-set/half-nil state the type system did nothing to prevent.
+	// webrtc != nil iff a browser_webrtc_offer has succeeded and not yet
+	// been torn down (viewer detach, connection close, or a stream
 	// failure).
-	webrtcAgentID string
-	webrtcCapture *browser.CaptureSession
+	webrtc *webrtcAttachment
 }
 
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
@@ -192,6 +195,14 @@ type BrowserWSHandler struct {
 	// WS handler so a browser_capture_hello can locate the CaptureSession
 	// its token belongs to.
 	captures *captureRegistry
+
+	// viewerConns is the fix-wave per-viewer registry (browser_webrtc.go's
+	// webrtcViewerConn) letting the encoder-liveness watchdog and the
+	// data-channel input sink reach a WebRTC-attached viewer's main WS
+	// connection from a goroutine other than that connection's own
+	// readLoop. Keyed by viewerID; zero value (unstored sync.Map) is ready
+	// to use.
+	viewerConns sync.Map
 }
 
 // newBrowserWSHandler constructs a BrowserWSHandler. allowedOrigin is the
@@ -435,7 +446,7 @@ func (h *BrowserWSHandler) readLoop(
 		if state.mgr != nil && state.sessionID != "" {
 			h.detach(state.mgr, state.sessionID, viewerID, userID)
 		}
-		if state.webrtcAgentID != "" && state.webrtcCapture != nil {
+		if state.webrtc != nil {
 			h.detachWebRTCViewer(&state, viewerID)
 		}
 	}()
@@ -498,7 +509,7 @@ func (h *BrowserWSHandler) readLoop(
 			h.handleTabAction(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
 			h.handleDetach(wc, &state, viewerID, userID)
-			if state.webrtcAgentID != "" && state.webrtcCapture != nil {
+			if state.webrtc != nil {
 				h.detachWebRTCViewer(&state, viewerID)
 			}
 		case string(generated.WsFrameTypeBrowserWebrtcOffer):

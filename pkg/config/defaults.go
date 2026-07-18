@@ -453,6 +453,14 @@ func DefaultConfig() *Config {
 				// WebRTCStunServer="" for host-candidates-only.
 				WebRTCEnabled:    true,
 				WebRTCStunServer: "stun:stun.l.google.com:19302",
+				// ADR-048 condition 1/Option A: default TRUE — WebRTC capture
+				// requires the agent's session to share Chrome's default
+				// browser context (see CaptureSharedContext's doc comment on
+				// BrowserToolConfig for the full isolation warning). Operators
+				// who need real cross-agent cookie isolation can set this
+				// false; the JPEG browser_screencast fallback keeps working
+				// either way.
+				CaptureSharedContext: true,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{

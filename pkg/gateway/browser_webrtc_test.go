@@ -40,6 +40,7 @@ import (
 type fakeRelay struct {
 	mu            sync.Mutex
 	closedViewers []string
+	closeCalls    int
 }
 
 func (f *fakeRelay) HandleIngestOffer(sdp string) (string, error) { return "ingest-answer", nil }
@@ -54,7 +55,21 @@ func (f *fakeRelay) CloseViewer(viewerID string) {
 func (f *fakeRelay) SignalRecapture()                  {}
 func (f *fakeRelay) SendToViewer(string, []byte) error { return nil }
 func (f *fakeRelay) Stats() webrtc.Stats               { return webrtc.Stats{} }
-func (f *fakeRelay) Close() error                      { return nil }
+func (f *fakeRelay) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalls++
+	return nil
+}
+
+// closeCount reports how many times Close() has been called (fix-wave
+// watchdog test: proves the watchdog does not double-stop a session that
+// already stopped for another reason).
+func (f *fakeRelay) closeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closeCalls
+}
 
 // fakeEncoderStarter never touches real chromedp — it just counts
 // invocations and either returns a bare cancelable context or startErr.
@@ -138,7 +153,7 @@ func TestHandleWebRTCOffer_GateLadder_DisabledByConfig(t *testing.T) {
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "webrtc_enabled=false must report available=false")
 	require.Equal(t, "disabled", got.Reason)
-	require.Empty(t, state.webrtcAgentID, "no viewer must be registered on the disabled path")
+	require.Nil(t, state.webrtc, "no viewer must be registered on the disabled path")
 }
 
 func TestHandleWebRTCOffer_GateLadder_InvalidFrame(t *testing.T) {
@@ -252,7 +267,7 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
 	require.Equal(t, "not_capable", got.Reason)
-	require.Empty(t, state.webrtcAgentID)
+	require.Nil(t, state.webrtc)
 }
 
 // TestHandleWebRTCOffer_CapableButLaunchFails plants a fake (non-functional,
@@ -280,6 +295,12 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
+		// ADR-048 condition 3 (CaptureVideoCapability): the config-literal
+		// test harness bypasses config.DefaultConfig()'s CaptureSharedContext
+		// default (true) — set explicitly so the gate ladder reaches the
+		// "start" branch this test actually exercises instead of stopping at
+		// not_capable.
+		cfg.Tools.Browser.CaptureSharedContext = true
 	})
 	t.Cleanup(handler.Wait)
 
@@ -331,11 +352,10 @@ func TestHandleWebRTCOffer_DetachClearsViewerState(t *testing.T) {
 	require.NoError(t, err)
 	cs.AddViewer("viewer-1")
 
-	state := browserConnState{webrtcAgentID: defaultAgent.ID, webrtcCapture: cs}
+	state := browserConnState{webrtc: &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}}
 	handler.detachWebRTCViewer(&state, "viewer-1")
 
-	require.Empty(t, state.webrtcAgentID)
-	require.Nil(t, state.webrtcCapture)
+	require.Nil(t, state.webrtc)
 	require.Equal(t, 0, cs.ViewerCount())
 	relay.mu.Lock()
 	closed := append([]string(nil), relay.closedViewers...)
