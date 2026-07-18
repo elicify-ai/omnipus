@@ -45,6 +45,8 @@ import {
   HandGrabbing,
   Plus,
   Robot,
+  SpeakerHigh,
+  SpeakerSlash,
   SpinnerGap,
   WarningCircle,
   X,
@@ -60,10 +62,13 @@ import {
   framePixelToDeviceCoords,
   isPrintableKey,
   mapClientToDevice,
+  mapClientToDeviceVideo,
   mapClientToFramePixels,
   mapMouseButton,
   scaleCropToImagePixels,
+  type DeviceCoords,
   type FrameCropRect,
+  type RectLike,
 } from '@/lib/browserLiveCoords'
 import { resolveOmniboxInput } from '@/lib/browserLiveUrl'
 import { submitAnnotation, AnnotationBusyError } from '@/lib/browserAnnotate'
@@ -97,6 +102,32 @@ export interface BrowserLiveViewProps {
    */
   canAnnotate?: boolean
   className?: string
+  /**
+   * WebRTC build (wave-plan W1-F) — a live WebRTC MediaStream for the
+   * agent's active tab, or `null`/`undefined` (the default) to keep today's
+   * JPEG-screencast `<img>` sink exactly as-is. Wave 1 ships ONLY this
+   * groundwork: no signaling exists yet, so no caller passes a non-null
+   * stream — a Wave-2 agent wires `browserLiveWs.ts`'s offer/answer
+   * exchange and threads the resulting track's MediaStream down through
+   * this prop (or a small dedicated context, if a future host needs it
+   * without prop-drilling — this component doesn't care which). When set,
+   * a `<video>` element replaces the `<img>` as the render sink, coordinate
+   * mapping switches to the video-dimension variant (`mapClientToDeviceVideo`
+   * — `browserLiveCoords.ts`), and the annotate-crop path draws from the
+   * video frame instead of the JPEG bitmap. JPEG screencast frames keep
+   * flowing underneath regardless (ADR: v1 keeps both paths active while a
+   * live view is attached — instant fallback) — `frame`/`frameRef` stays the
+   * "is a live session actually attached" signal for both sinks.
+   */
+  mediaStream?: MediaStream | null
+  /**
+   * Whether the stream carries an audio track — gates the mute/unmute
+   * toolbar button (only shown in video mode when true). Ignored while
+   * `mediaStream` is null. Defaults to `false` (no audio control shown)
+   * rather than inferring it from the stream itself, since a Wave-2 caller
+   * may know this before the track metadata is fully available.
+   */
+  hasAudio?: boolean
 }
 
 /** ADR-040 D2/D6 — the three (+ one) mutually-exclusive visual/control states. */
@@ -223,6 +254,58 @@ interface PendingAnnotation { // not-wire-format: local annotate-popover state, 
   point: { x: number; y: number }
 }
 
+/**
+ * Shared canvas-crop implementation for annotate-a-region (ADR-039 D-B1/B2),
+ * used by BOTH the JPEG `<img>` sink and the WebRTC build's `<video>` sink
+ * (W1-F) — draws `source` (already confirmed by the caller to have a live
+ * decoded frame available: `img.complete`/`naturalWidth` or a video's
+ * `readyState`/`videoWidth`) into an offscreen canvas and returns a cropped
+ * PNG File with the exact same output contract regardless of sink.
+ *
+ * Reuses `scaleCropToImagePixels` (browserLiveCoords.ts) for the
+ * frame-space→natural-pixel-space scale correction in BOTH cases rather than
+ * duplicating it: for the img sink this corrects for the screencast JPEG's
+ * fixed downscale cap (see cropFrameToFile's own doc comment); for the video
+ * sink there is no such cap, but the SAME correction still guards against a
+ * recapture-driven resolution change landing between when the crop rect was
+ * computed (drag-start `frameWidth`/`frameHeight`) and when this draw
+ * actually runs (the video's CURRENT `naturalWidth`/`naturalHeight`) — see
+ * browserLiveCoords.test.ts's "video-mode reuse" coverage. A no-drift call
+ * (the common case for both sinks) is a scale-1 no-op either way.
+ *
+ * Exceptions from drawImage/getContext (e.g. IndexSizeError on a degenerate
+ * zero-width/height rect, or a tainted canvas) are swallowed to null — this
+ * is awaited from finalizeSelection, itself invoked fire-and-forget (`void
+ * finalizeSelection(...)` from the pointerup handler), so an uncaught
+ * rejection here would surface as an unhandled promise rejection with no
+ * toast and a frozen selection box; returning null instead routes through
+ * finalizeSelection's existing `if (!file) return fail()` path.
+ */
+async function drawCropToPngFile(
+  source: CanvasImageSource,
+  naturalWidth: number,
+  naturalHeight: number,
+  rect: FrameCropRect,
+  frameWidth: number,
+  frameHeight: number,
+): Promise<File | null> {
+  const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, naturalWidth, naturalHeight)
+  const { x: sx, y: sy, width: sw, height: sh } = src
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(sw)
+    canvas.height = Math.round(sh)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) return null
+    return new File([blob], 'annotation.png', { type: 'image/png' })
+  } catch {
+    return null
+  }
+}
+
 export function BrowserLiveView({
   sessionId,
   agentId,
@@ -230,10 +313,17 @@ export function BrowserLiveView({
   onClose,
   canAnnotate = false,
   className,
+  mediaStream = null,
+  hasAudio = false,
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
+  // WebRTC build (W1-F) — bound to the <video> sink's srcObject via the
+  // effect below whenever `mediaStream` is set. Null while the JPEG <img>
+  // sink is active (mediaStream null) since the <video> element itself isn't
+  // rendered then — see the sink-switch JSX further down.
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   // WCAG 2.1.2 fix — Escape-releases-the-wheel focus target: handleKeyDown's
   // Escape branch moves focus here once driving ends, so the user lands
   // somewhere useful instead of on a container that just stopped capturing
@@ -329,6 +419,13 @@ export function BrowserLiveView({
   const moveFlushScheduledRef = useRef(false)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
+  // WebRTC build (W1-F) — starts MUTED (autoplay-safe: browsers block
+  // autoplaying audio without a prior user gesture; the video itself still
+  // autoplays fine muted). Flipped by the mute/unmute toolbar button, which
+  // only renders in video mode with hasAudio — that click IS the user
+  // gesture that makes unmuting reliable. Local component state only (no
+  // persistence yet — out of scope for this wave).
+  const [videoMuted, setVideoMuted] = useState(true)
   const [statusState, setStatusState] = useState<LiveStatus>('connecting')
   // The human-readable text carried on the latest browser_status frame (set
   // whenever state === 'error' — already-controlled, take-control-disabled,
@@ -772,6 +869,68 @@ export function BrowserLiveView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, agentId])
 
+  // ── WebRTC build (W1-F) — bind the <video> sink's srcObject imperatively.
+  // React has no `srcObject` JSX prop (it's a DOM property, not an
+  // attribute) — this is the standard pattern. Re-runs whenever `mediaStream`
+  // changes (a fresh stream after reconnect/recapture must rebind the SAME
+  // <video> element rather than relying on a remount) AND whenever the
+  // <video> element itself transitions between mounted/unmounted (`frame !==
+  // null` — the JSX below only renders the <video> at all once `frame` is
+  // truthy, mirroring the wheel-listener effect's own `frame !== null`
+  // dependency further down for the identical reason). Without the second
+  // dependency, a `mediaStream` that was ALREADY set on the render where
+  // `frame` first flips true would bind against a stale `videoRef.current ===
+  // null` (captured before the element existed) and never re-run, since
+  // `mediaStream`'s identity didn't change on that render — the first frame
+  // would leave the video sink with no stream bound at all. No-ops whenever
+  // the element isn't currently mounted (mediaStream null → the <img> sink
+  // renders instead, see the JSX below — videoRef.current is null then).
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    video.srcObject = mediaStream ?? null
+  }, [mediaStream, frame !== null])
+
+  // ── WebRTC build (W1-F) — the single "which sink's dimensions do
+  // coordinate-mapping and annotate-crop use right now" resolver. Video wins
+  // whenever a stream is attached AND the <video> element has actually
+  // reported its intrinsic size (`videoWidth`/`videoHeight` — 0 until the
+  // `loadedmetadata` event fires); otherwise falls back to the JPEG
+  // screencast frame exactly as before. `page_scale` is omitted (implicitly
+  // 1) for the video branch — see mapClientToDeviceVideo's doc comment
+  // (browserLiveCoords.ts) for why tabCapture has no analogous factor to
+  // divide out. Stable identity except when the `mediaStream` prop itself
+  // changes — safe to call from any handler/effect below.
+  const activeFrameDims = useCallback((): { width: number; height: number; pageScale?: number; video: boolean } | null => {
+    const video = videoRef.current
+    if (mediaStream && video && video.videoWidth > 0 && video.videoHeight > 0) {
+      return { width: video.videoWidth, height: video.videoHeight, video: true }
+    }
+    const f = frameRef.current
+    if (f) return { width: f.width, height: f.height, pageScale: f.page_scale, video: false }
+    return null
+  }, [mediaStream])
+
+  // ── WebRTC build (W1-F) — the ONE place a client-space pointer coordinate
+  // is turned into the device-space coordinate CDP dispatch/BrowserInputFrame
+  // expects, for EITHER sink. Replaces four previously-duplicated
+  // `mapClientToDevice(e.clientX, e.clientY, rect, frameRef.current.width,
+  // frameRef.current.height, frameRef.current.page_scale)` call sites (wheel/
+  // pointerMove/pointerDown/pointerUp below) with one routed call — so the
+  // video-vs-JPEG branch can never drift between handlers. Returns exactly
+  // what mapClientToDevice would have returned when `mediaStream` is null
+  // (activeFrameDims's fallback branch reads the identical frameRef fields),
+  // preserving byte-identical JPEG-mode behavior.
+  const mapPointerToDeviceCoords = useCallback(
+    (clientX: number, clientY: number, rect: RectLike): DeviceCoords | null => {
+      const dims = activeFrameDims()
+      if (!dims) return null
+      if (dims.video) return mapClientToDeviceVideo(clientX, clientY, rect, dims.width, dims.height)
+      return mapClientToDevice(clientX, clientY, rect, dims.width, dims.height, dims.pageScale)
+    },
+    [activeFrameDims],
+  )
+
   // ── ADR-040 D2 refactor — the single "can this event reach the remote tab"
   // gate. Every handler below (wheel/pointerMove/pointerUp/keyDown/keyUp)
   // consults this instead of re-deriving its own agentWorking/controlling
@@ -804,14 +963,7 @@ export function BrowserLiveView({
       if (!canDispatchInput(false) || !frameRef.current) return
       e.preventDefault()
       const rect = el!.getBoundingClientRect()
-      const device = mapClientToDevice(
-        e.clientX,
-        e.clientY,
-        rect,
-        frameRef.current.width,
-        frameRef.current.height,
-        frameRef.current.page_scale,
-      )
+      const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
       if (!device) return
       wsRef.current?.sendInput({
         kind: 'wheel',
@@ -824,7 +976,7 @@ export function BrowserLiveView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [frame !== null, canDispatchInput])
+  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords])
 
   // ── mouse_move RAF coalescing ────────────────────────────────────────────
   // Native pointermove fires far faster than the backend's input rate limiter
@@ -990,13 +1142,27 @@ export function BrowserLiveView({
     setAnnotateMode(true)
   }, [annotateMode, isControlling, handleCancelAnnotation, setPendingTake])
 
-  // Crops the CURRENTLY-RENDERED screencast frame's <img> to a PNG File
-  // (mirrors the canvas pattern in media-actions.ts's fetchImagePng). Reads
-  // the live <img> at call time (not a stale snapshot) so the crop always
-  // reflects exactly what the user was looking at when they finished the
-  // drag/click.
+  // Crops the CURRENTLY-RENDERED sink — the JPEG <img> (default) or, in
+  // WebRTC video mode (W1-F), the <video> element — to a PNG File (mirrors
+  // the canvas pattern in media-actions.ts's fetchImagePng). Reads the live
+  // element at call time (not a stale snapshot) so the crop always reflects
+  // exactly what the user was looking at when they finished the drag/click.
   const cropFrameToFile = useCallback(
     async (rect: FrameCropRect, frameWidth: number, frameHeight: number): Promise<File | null> => {
+      // WebRTC build (W1-F) — video-mode source. `readyState >= 2`
+      // (HAVE_CURRENT_DATA) mirrors the img path's `img.complete` check
+      // below: both mean "there is an actual decoded frame available to
+      // draw right now," not just "the element exists in the DOM." Draws
+      // from `videoWidth`/`videoHeight` — same output contract as the img
+      // path (a cropped PNG File), same scale-correction math
+      // (`drawCropToPngFile` below reuses `scaleCropToImagePixels` for
+      // both sinks rather than duplicating it — see that function's own
+      // doc comment for why a video-mode drift case still needs it).
+      if (mediaStream && videoRef.current) {
+        const video = videoRef.current
+        if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null
+        return drawCropToPngFile(video, video.videoWidth, video.videoHeight, rect, frameWidth, frameHeight)
+      }
       const img = imgRef.current
       if (!img || !img.complete || img.naturalWidth === 0) return null
       // UAT finding (blank crop): `rect` is in frame-METADATA space
@@ -1010,34 +1176,12 @@ export function BrowserLiveView({
       // height axis). Using `rect` directly as the drawImage SOURCE rect then
       // reads an out-of-bounds/misaligned region of the smaller bitmap →
       // drawImage draws nothing → a transparent (blank white/black) crop.
-      // Scale the source rect from frame space into the img's actual
-      // natural-pixel space; the destination canvas is sized to that native
-      // region so we capture at the JPEG's true resolution.
-      const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, img.naturalWidth, img.naturalHeight)
-      const { x: sx, y: sy, width: sw, height: sh } = src
-      // Reviewer finding: drawImage/getContext can throw synchronously (e.g.
-      // IndexSizeError on a degenerate zero-width/height rect, or a tainted
-      // canvas) — this function is awaited from finalizeSelection, which is
-      // itself invoked fire-and-forget (`void finalizeSelection(...)` from the
-      // pointerup handler), so an uncaught rejection here would surface as an
-      // unhandled promise rejection with no toast and a frozen selection box.
-      // Returning null on ANY failure routes through finalizeSelection's
-      // existing `if (!file) return fail()` path instead.
-      try {
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.round(sw)
-        canvas.height = Math.round(sh)
-        const ctx = canvas.getContext('2d')
-        if (!ctx) return null
-        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
-        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-        if (!blob) return null
-        return new File([blob], 'annotation.png', { type: 'image/png' })
-      } catch {
-        return null
-      }
+      // `drawCropToPngFile` scales the source rect from frame space into the
+      // img's actual natural-pixel space; the destination canvas is sized to
+      // that native region so we capture at the JPEG's true resolution.
+      return drawCropToPngFile(img, img.naturalWidth, img.naturalHeight, rect, frameWidth, frameHeight)
     },
-    [],
+    [mediaStream],
   )
 
   // Finalizes a drag/click selection into a pendingAnnotation (crop + open
@@ -1056,24 +1200,31 @@ export function BrowserLiveView({
         useUiStore.getState().addToast({ message: 'Could not capture that region — try again.', variant: 'error' })
         resetSelection()
       }
-      const frame = frameRef.current
-      if (!frame) return fail()
-      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, frame.width, frame.height)
-      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, frame.width, frame.height)
+      // WebRTC build (W1-F): activeFrameDims() resolves to the <video>'s
+      // videoWidth/videoHeight (page_scale 1) in video mode, or the JPEG
+      // frame's width/height/page_scale otherwise — the SAME resolver the
+      // pointer/wheel handlers use, so the crop rect computed here always
+      // matches the sink cropFrameToFile actually draws from. Reduces to
+      // exactly the old `frameRef.current` read/gate when mediaStream is
+      // null (byte-identical JPEG-mode behavior).
+      const dims = activeFrameDims()
+      if (!dims) return fail()
+      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, dims.width, dims.height)
+      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, dims.width, dims.height)
       if (!startPx || !endPx) return fail()
-      const cropRect = computeCropRect(startPx, endPx, frame.width, frame.height)
+      const cropRect = computeCropRect(startPx, endPx, dims.width, dims.height)
       if (!cropRect) return fail()
 
-      const file = await cropFrameToFile(cropRect, frame.width, frame.height)
+      const file = await cropFrameToFile(cropRect, dims.width, dims.height)
       if (!file) return fail()
       const center = framePixelToDeviceCoords(
         cropRect.x + cropRect.width / 2,
         cropRect.y + cropRect.height / 2,
-        frame.page_scale,
+        dims.pageScale,
       )
       setPendingAnnotation({ file, previewUrl: URL.createObjectURL(file), point: center })
     },
-    [cropFrameToFile, resetSelection],
+    [cropFrameToFile, resetSelection, activeFrameDims],
   )
 
   // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ───────────────────
@@ -1196,18 +1347,11 @@ export function BrowserLiveView({
     // Local cursor overlay updates immediately every event — only the
     // network send is throttled, so the synthetic cursor still tracks the
     // pointer at full native resolution.
-    const device = mapClientToDevice(
-      e.clientX,
-      e.clientY,
-      rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
-    )
+    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
     pendingMoveRef.current = { x: device.x, y: device.y, modifiers: computeModifiers(e) }
     scheduleMoveFlush()
-  }, [scheduleMoveFlush, annotateMode, canDispatchInput])
+  }, [scheduleMoveFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
 
   // Focuses the frame container (so keyboard input starts flowing) and
   // best-effort captures the pointer so a drag that leaves the container
@@ -1280,14 +1424,7 @@ export function BrowserLiveView({
     if (!frameRef.current || !containerRef.current) return
     focusAndCapturePointer(e)
     const rect = containerRef.current.getBoundingClientRect()
-    const device = mapClientToDevice(
-      e.clientX,
-      e.clientY,
-      rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
-    )
+    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
     wsRef.current?.sendInput({
       kind: 'mouse_down',
@@ -1296,7 +1433,7 @@ export function BrowserLiveView({
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded])
+  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded, mapPointerToDeviceCoords])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -1321,14 +1458,7 @@ export function BrowserLiveView({
     implicitDriveRef.current = false
     if (!canDispatchInput(wasImplicitDrive) || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
-    const device = mapClientToDevice(
-      e.clientX,
-      e.clientY,
-      rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
-    )
+    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
     wsRef.current?.sendInput({
       kind: 'mouse_up',
@@ -1337,7 +1467,7 @@ export function BrowserLiveView({
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [annotateMode, finalizeSelection, canDispatchInput])
+  }, [annotateMode, finalizeSelection, canDispatchInput, mapPointerToDeviceCoords])
 
   const handleSendAnnotation = useCallback(() => {
     const annotation = pendingAnnotation
@@ -1588,6 +1718,25 @@ export function BrowserLiveView({
             {annotateMode ? 'Exit annotate' : 'Annotate'}
           </button>
         )}
+        {/* WebRTC build (W1-F) — mute/unmute toggle. Shown ONLY in video mode
+            (mediaStream set) with an audio track present (hasAudio) — mirrors
+            the Annotate button's opt-in gating pattern above. The <video>
+            sink itself always starts muted (autoplay-safe); this click IS
+            the user gesture that makes unmuting reliable. No signaling wave
+            wires a real stream yet, so this never renders until Wave 2. */}
+        {mediaStream && hasAudio && (
+          <button tabIndex={0}
+            type="button"
+            onClick={() => setVideoMuted((m) => !m)}
+            aria-label={videoMuted ? 'Unmute audio' : 'Mute audio'}
+            title={videoMuted ? 'Unmute audio' : 'Mute audio'}
+            aria-pressed={!videoMuted}
+            data-testid="browser-live-mute-toggle"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          >
+            {videoMuted ? <SpeakerSlash size={15} /> : <SpeakerHigh size={15} />}
+          </button>
+        )}
         {/* Pin toggle retired 2026-07-16 (operator direction, amends ADR-040
             D4): the panel is ALWAYS docked when open — there is no overlay
             layout to pin/unpin between. Fullscreen is the pop-out below. */}
@@ -1821,13 +1970,39 @@ export function BrowserLiveView({
             onKeyUp={handleKeyUp}
             onDragStart={(e) => e.preventDefault()}
           >
-            <img
-              ref={imgRef}
-              src={`data:image/jpeg;base64,${frame.data}`}
-              alt="Live browser session"
-              draggable={false}
-              className="block h-auto max-h-full w-auto max-w-full select-none"
-            />
+            {/* WebRTC build (W1-F) — sink swap: a <video> bound to
+                `mediaStream` replaces the JPEG <img> IN PLACE whenever a
+                stream is attached; falls straight back to the <img> when
+                `mediaStream` is null (the default, and the only case any
+                caller exercises until Wave 2 wires signaling) — byte-
+                identical to the pre-W1-F render in that case. Sizing mirrors
+                the <img> (object-contain within the panel). Starts muted
+                (autoplay-safe) — see the mute toggle button in the header
+                above and the srcObject-binding effect earlier in this
+                component. No <track> captions: this is a live remote-control
+                surface (mirrors the agent's own screen), not authored video
+                content — same rationale the <img>'s plain alt text already
+                reflects. */}
+            {mediaStream ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted={videoMuted}
+                aria-label="Live browser session"
+                data-testid="browser-live-video"
+                className="block h-auto max-h-full w-auto max-w-full select-none object-contain"
+              />
+            ) : (
+              <img
+                ref={imgRef}
+                src={`data:image/jpeg;base64,${frame.data}`}
+                alt="Live browser session"
+                draggable={false}
+                className="block h-auto max-h-full w-auto max-w-full select-none"
+                data-testid="browser-live-img"
+              />
+            )}
             {/* Synthetic cursor removed — the native cursor is used directly
                 when driving (more accurate, no double-cursor). The agent's
                 pointer is visible in the screencast image itself. */}
