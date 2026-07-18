@@ -1,4 +1,4 @@
-// chat.workspace-setup-kickoff.test.ts — Unit C: the SPA auto-triggers
+// chat.workspace-setup-kickoff.test.ts — the SPA auto-triggers
 // Ava's (or the workspace's core_team lead's) workspace-setup interview the
 // first time a freshly-created workspace (server-seeded
 // `setup_pending: true`) is opened.
@@ -9,7 +9,7 @@
 // the backend records this turn's kickoff frame as a SYSTEM-role transcript
 // entry (a centered pill on replay), not a user message.
 //
-// Traces to: Unit C spec (SPA auto-triggers Ava's workspace-setup interview
+// Traces to: the SPA auto-triggers Ava's workspace-setup interview
 // on a workspace's first open).
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -43,13 +43,13 @@ function resetStore() {
       lastUserMessageAt: null,
       cancelStage: null,
       lastReceivedEventTime: null,
-      // Fix 2/3: reset the in-flight-kickoff tracker and the offline
+      // Reset the in-flight-kickoff tracker and the offline
       // queues between tests — zustand's setState merges, so a value left
       // by a prior test in this file would otherwise bleed into the next.
       pendingKickoff: null,
       outboundQueue: [],
       pendingDrainQueue: [],
-      // Fix 3: kickoffAttemptStatus is also module-level store state now —
+      // kickoffAttemptStatus is also module-level store state now —
       // reset it too (clearStreamingState() above, called before this
       // setState, may itself have just written a 'failed' entry for
       // whatever kickoff was outstanding at the end of the PREVIOUS test).
@@ -260,7 +260,7 @@ describe('chat store — sendWorkspaceSetupKickoff', () => {
     expect(useConnectionStore.getState().connectionError).toMatch(/could not start/i)
   })
 
-  it('never records the "__pending" sentinel in sessionByWorkspace (Fix 1)', () => {
+  it('never records the "__pending" sentinel in sessionByWorkspace', () => {
     connectMock(true)
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE_ID })
@@ -298,7 +298,7 @@ describe('chat store — sendWorkspaceSetupKickoff', () => {
   })
 })
 
-describe('chat store — sendMessage never records "__pending" either (Fix 1)', () => {
+describe('chat store — sendMessage never records "__pending" either', () => {
   it('does NOT write a sessionByWorkspace descriptor for the optimistic "__pending" no-session turn', () => {
     connectMock(true)
     act(() => {
@@ -314,7 +314,7 @@ describe('chat store — sendMessage never records "__pending" either (Fix 1)', 
   })
 })
 
-describe('chat store — sendWorkspaceSetupKickoff full rollback + retry (Fix 2)', () => {
+describe('chat store — sendWorkspaceSetupKickoff full rollback + retry', () => {
   it('resets activeSessionId to null and clears pendingKickoff on send failure, unblocking a retry', () => {
     connectMock(false)
     act(() => {
@@ -342,7 +342,7 @@ describe('chat store — sendWorkspaceSetupKickoff full rollback + retry (Fix 2)
   })
 })
 
-describe('chat store — sendMessage composer guard for a stuck "__pending" session (Fix 2)', () => {
+describe('chat store — sendMessage composer guard for a stuck "__pending" session', () => {
   it('treats a stuck "__pending" + not-streaming session as no-active-session: fresh turn, no session_id on the wire', () => {
     const mockSend = connectMock(true)
     act(() => {
@@ -378,7 +378,7 @@ describe('chat store — sendMessage composer guard for a stuck "__pending" sess
   })
 })
 
-describe('chat store — kickoff rejection via ErrorFrame (Fix 2)', () => {
+describe('chat store — kickoff rejection via ErrorFrame', () => {
   it('fully cleans up when the server rejects the kickoff as a DUPLICATE (already-ran, benign) — informational toast', () => {
     const mockSend = connectMock(true)
     act(() => {
@@ -401,7 +401,7 @@ describe('chat store — kickoff rejection via ErrorFrame (Fix 2)', () => {
     expect(useChatStore.getState().messages).toHaveLength(0)
     expect(useChatStore.getState().isStreaming).toBe(false)
 
-    // Fix 3: this is the DUPLICATE case (message matches /already/i) — a
+    // This is the DUPLICATE case (message matches /already/i) — a
     // benign, informational toast pointing at the sessions list, NOT the
     // generic "could not start" warning wording (that's reserved for a
     // GENUINE failure — see the sibling test below).
@@ -442,7 +442,7 @@ describe('chat store — kickoff rejection via ErrorFrame (Fix 2)', () => {
     expect(toasts.some((t) => /already ran/i.test(t.message))).toBe(false)
   })
 
-  it('marks kickoffAttemptStatus "failed" for the rejected workspace (Fix 3)', () => {
+  it('marks kickoffAttemptStatus "failed" for the rejected workspace', () => {
     connectMock(true)
     act(() => {
       kickoff()
@@ -470,7 +470,7 @@ describe('chat store — kickoff rejection via ErrorFrame (Fix 2)', () => {
   })
 })
 
-describe('chat store — late session_started ack across workspaces (Fix 3)', () => {
+describe('chat store — late session_started ack across workspaces', () => {
   it('does NOT foreground the kickoff session when the user navigated to a different workspace before the ack', () => {
     connectMock(true)
     act(() => {
@@ -560,7 +560,8 @@ describe('chat store — late session_started ack across workspaces (Fix 3)', ()
 
     expect(useSessionStore.getState().activeSessionId).toBe('sess-plain-1')
     // frame.agent_id (AGENT_ID) is what the ack carries — unrelated to the
-    // kickoff's own agentId, confirming this path is untouched by Fix 3.
+    // kickoff's own agentId, confirming this path is unaffected by the
+    // kickoff-specific handling exercised in the tests above.
     expect(useSessionStore.getState().sessionByWorkspace[WORKSPACE_ID]).toEqual({
       id: 'sess-plain-1',
       type: 'chat',
@@ -570,7 +571,7 @@ describe('chat store — late session_started ack across workspaces (Fix 3)', ()
   })
 })
 
-describe('chat store — Fix 1: disconnect terminally clears the kickoff slot', () => {
+describe('chat store — disconnect terminally clears the kickoff slot', () => {
   it('clearStreamingState (WS disconnect) clears pendingKickoff, drops the orphaned __pending bucket, and marks kickoffAttemptStatus failed', () => {
     connectMock(true)
     act(() => {
@@ -587,8 +588,8 @@ describe('chat store — Fix 1: disconnect terminally clears the kickoff slot', 
     expect(useChatStore.getState().pendingKickoff).toBeNull()
     expect(useChatStore.getState().sessionsById['__pending']).toBeUndefined()
     expect(useChatStore.getState().kickoffAttemptStatus[WORKSPACE_ID]).toBe('failed')
-    // Fix 1: deliberately quiet — no toast, and activeSessionId is left
-    // exactly as it was. Resetting it to null on RECONNECT is Fix 2's job
+    // Deliberately quiet — no toast, and activeSessionId is left
+    // exactly as it was. Resetting it to null on RECONNECT is a separate job
     // (OmnipusRuntimeProvider.reattachActiveSession), not this
     // disconnect-time cleanup.
     expect(useSessionStore.getState().activeSessionId).toBe('__pending')
@@ -606,7 +607,7 @@ describe('chat store — Fix 1: disconnect terminally clears the kickoff slot', 
   })
 })
 
-describe('chat store — Fix 1: untagged reject after navigation does not misattribute', () => {
+describe('chat store — untagged reject after navigation does not misattribute', () => {
   it('clears the slot quietly and does NOT disturb an unrelated conversation that is now foreground', () => {
     connectMock(true)
     act(() => {
@@ -618,7 +619,7 @@ describe('chat store — Fix 1: untagged reject after navigation does not misatt
     expect(useSessionStore.getState().activeSessionId).toBe('__pending')
 
     // The user navigates away to a different workspace before the kickoff's
-    // ack arrives (mirrors the Fix 3 "late session_started ack" test setup).
+    // ack arrives (mirrors the "late session_started ack" test setup above).
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: 'ws-other' })
       useSessionStore.getState().startNewSession()
@@ -669,7 +670,7 @@ describe('chat store — Fix 1: untagged reject after navigation does not misatt
   })
 })
 
-describe('chat store — Fix 1: a session-TAGGED error is never a kickoff reject', () => {
+describe('chat store — a session-TAGGED error is never a kickoff reject', () => {
   it('a tagged error frame leaves pendingKickoff untouched and runs the generic C8 handling instead, even while a kickoff is pending', () => {
     const SID = 'ordinary-session-tagged'
     connectMock(true)
@@ -697,7 +698,7 @@ describe('chat store — Fix 1: a session-TAGGED error is never a kickoff reject
   })
 })
 
-describe('chat store — Fix 1: collision guard prevents the __pending bucket hijack', () => {
+describe('chat store — collision guard prevents the __pending bucket hijack', () => {
   it('sendMessage enqueues (does not send, does not create a second __pending bucket) while a kickoff is pending', () => {
     const mockSend = connectMock(true)
     act(() => {

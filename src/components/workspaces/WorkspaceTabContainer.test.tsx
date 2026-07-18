@@ -112,7 +112,7 @@ vi.mock('@/components/chat/ChatControls', () => ({
   ChatControls: () => <div data-testid="chat-controls-mock">ChatControls</div>,
 }))
 
-// Workspace-setup kickoff (Unit C) — mocked to a no-op. This suite covers
+// Workspace-setup kickoff — mocked to a no-op. This suite covers
 // the container's OWN layout/session-lifecycle concerns, not the kickoff
 // mechanics (those have dedicated coverage in
 // src/hooks/useWorkspaceSetupKickoff.test.ts and
@@ -275,7 +275,7 @@ describe('WorkspaceTabContainer — session lifecycle (Bug 1 regression)', () =>
   })
 })
 
-describe('WorkspaceTabContainer — useWorkspaceSetupKickoff wiring (Unit C)', () => {
+describe('WorkspaceTabContainer — useWorkspaceSetupKickoff wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockPathname = '/workspaces/ws-1/chat'

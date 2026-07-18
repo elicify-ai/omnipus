@@ -918,13 +918,13 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			if v, ok := f.Metadata["workspace_id"].(string); ok {
 				workspaceID = strings.TrimSpace(v)
 			}
-			// Workspace-setup kickoff (Unit B): the SPA sends this flag on a
+			// Workspace-setup kickoff: the SPA sends this flag on a
 			// workspace's first open so the server records the trigger as a
 			// system-role transcript entry (not a user bubble), clears
 			// SetupPending exactly once, and gives the session a clean title —
 			// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
 			//
-			// Fix 3: kickoff intent is signaled by KEY PRESENCE, not a loose
+			// Kickoff intent is signaled by KEY PRESENCE, not a loose
 			// type assertion — see parseSetupKickoffMetadata's doc comment. A
 			// key that IS present but not exactly boolean true is rejected
 			// outright instead of ever reaching handleChatMessage as a normal
@@ -1320,8 +1320,8 @@ func (h *WSHandler) handleChatMessage(
 
 	// A workspace-setup kickoff is only meaningful against a real, resolved
 	// workspace — either the id was absent to begin with, or the M4 check
-	// above just blanked it as unknown. Reject outright (Fix 3: was "demote to
-	// a normal message", which used to persist the kickoff instruction as a
+	// above just blanked it as unknown. Reject outright (this used to "demote
+	// to a normal message", which persisted the kickoff instruction as a
 	// fake user-authored transcript entry and session title) — no session is
 	// minted, nothing is published.
 	if setupKickoff && workspaceID == "" {
@@ -1375,9 +1375,9 @@ func (h *WSHandler) handleChatMessage(
 		}
 	}
 
-	// Fix 7: a kickoff-flagged frame with no usable session store (a
+	// A kickoff-flagged frame with no usable session store (a
 	// degenerate configuration, not the normal path) must be REJECTED like
-	// every other kickoff-cannot-complete case (Fix 3) rather than silently
+	// every other kickoff-cannot-complete case rather than silently
 	// falling through to the no-store tail below, which would publish the
 	// raw kickoff instruction to the bus as an ordinary message.
 	if setupKickoff && store == nil {
@@ -1400,7 +1400,7 @@ func (h *WSHandler) handleChatMessage(
 		// Workspace-setup kickoff idempotency guard: clear SetupPending exactly
 		// once, under the per-workspace lock (workspace.LockID). ANY outcome
 		// other than a clean consume — duplicate (already ran) or a read/write
-		// failure against the workspace file — is REJECTED outright (Fix 3): no
+		// failure against the workspace file — is REJECTED outright: no
 		// session minted, no transcript entry written, nothing published.
 		if setupKickoff {
 			outcome, wsName, wsDescription := h.consumeWorkspaceSetupKickoff(workspaceID)
@@ -1448,7 +1448,7 @@ func (h *WSHandler) handleChatMessage(
 			meta, err := store.NewSession(session.SessionTypeChat, "webchat", targetAgentID)
 			if err != nil {
 				slog.Error("ws: could not create session", "error", err)
-				// Fix 2: a successful kickoff consume just cleared SetupPending —
+				// A successful kickoff consume just cleared SetupPending —
 				// if minting the session then fails, the one-time interview would
 				// otherwise be silently lost. Best-effort restore.
 				if setupKickoff {
@@ -1588,7 +1588,7 @@ func (h *WSHandler) handleChatMessage(
 				// hydration attributes this entry to her on a fresh turn.
 				entry.Type = session.EntryTypeSystem
 				entry.Role = "system"
-				// Fix 4: the PERSISTED/REPLAYED entry carries neutral, fixed
+				// The PERSISTED/REPLAYED entry carries neutral, fixed
 				// content — never the client-supplied kickoff instruction, and
 				// not even the SERVER-BUILT one either (session replay renders
 				// this as a system pill). The turn itself is instead driven by
@@ -1757,7 +1757,7 @@ const (
 	kickoffDuplicate
 	// kickoffFailed means the workspace file could not be read, or the cleared
 	// flag could not be persisted — the caller must reject the frame outright
-	// (Fix 3: this used to "demote" to a normal message instead, silently
+	// (this used to "demote" to a normal message instead, silently
 	// persisting the kickoff instruction as a fake user-authored transcript
 	// entry). SetupPending is left untouched on disk in this case, so a later
 	// workspace open can retry the kickoff.

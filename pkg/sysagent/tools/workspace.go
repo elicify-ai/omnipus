@@ -248,7 +248,7 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	// setup-kickoff consumer, or another concurrent tool call cannot
 	// interleave with this update. workspace.LockID's own doc comment names
 	// this tool's create/update/delete paths as required callers; this was a
-	// gap left over from the earlier fix wave that wired the lock into every
+	// gap left over from an earlier fix that wired the lock into every
 	// gateway workspace writer but not this tool.
 	unlock := workspacepkg.LockID(id)
 	defer unlock()
@@ -306,7 +306,7 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	}
 
 	// Auto-seed default delegation edges for newly added core_team members
-	// (fix wave, ADR-037 gap). Per ADR-037 the per-workspace Delegation[] edge
+	// (closes an ADR-037 gap). Per ADR-037 the per-workspace Delegation[] edge
 	// graph is the SOLE runtime delegation authority and is fail-closed (no
 	// edge ⇒ deny). Default edges used to be seeded ONLY at workspace
 	// creation (pkg/gateway's defaultWorkspaceDelegationEdges); this tool had
@@ -759,8 +759,8 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 	// best-effort cleanup that never touches workspaces/{id}.json, so
 	// holding the lock across a potentially large recursive os.RemoveAll
 	// buys no correctness benefit and would needlessly block a
-	// shard-colliding kickoff's WS readLoop. Mirrors the gateway's Fix 1
-	// (amended) restructure in handleWorkspaceDelete.
+	// shard-colliding kickoff's WS readLoop. Mirrors the same lock-scoping
+	// restructure in the gateway's handleWorkspaceDelete.
 	unlock := workspacepkg.LockID(id)
 
 	// Guard: verify the workspace exists before any irreversible mutations.

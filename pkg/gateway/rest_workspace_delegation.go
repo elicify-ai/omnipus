@@ -165,7 +165,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Fix 1: serialize the full load-modify-write cycle against this workspace
+	// Serialize the full load-modify-write cycle against this workspace
 	// ID (see the matching comment on handleWorkspacePut) so a racing kickoff
 	// consume, PUT, or delete cannot interleave with this delegation write.
 	unlock := workspace.LockID(id)

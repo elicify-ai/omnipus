@@ -202,7 +202,7 @@ func TestCoreAgentPromptsDifferentiation(t *testing.T) {
 }
 
 // TestAvaPromptContainsWorkspaceSetupInterview verifies Ava's compiled prompt
-// carries the workspace-setup kickoff interview instructions (Unit B): the
+// carries the workspace-setup kickoff interview instructions: the
 // plain (user-role) message announcing a new workspace's team needs setting
 // up must produce a first-person greeting from Ava, followed by a short
 // interview and the update_workspace/create_agent team-assembly steps. The

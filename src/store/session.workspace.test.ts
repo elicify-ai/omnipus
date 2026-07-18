@@ -110,7 +110,7 @@ describe('sessionByWorkspace — written by startNewSession', () => {
   })
 })
 
-describe('setActiveSession — never records the "__pending" sentinel (Fix 1)', () => {
+describe('setActiveSession — never records the "__pending" sentinel', () => {
   beforeEach(resetAll)
 
   it('does NOT write a sessionByWorkspace descriptor when sessionId is "__pending"', () => {
@@ -152,7 +152,7 @@ describe('setActiveSession — never records the "__pending" sentinel (Fix 1)', 
   })
 })
 
-describe('enterWorkspaceChat — legacy "__pending" descriptor (Fix 1 defense-in-depth)', () => {
+describe('enterWorkspaceChat — legacy "__pending" descriptor (defense-in-depth)', () => {
   beforeEach(resetAll)
 
   it('starts fresh instead of attaching when the stored descriptor id is "__pending"', () => {
