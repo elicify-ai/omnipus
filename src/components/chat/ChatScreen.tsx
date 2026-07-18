@@ -454,14 +454,17 @@ function wouldToolCallBeVisible(
  * delegate, undefined otherwise (unresolvable agentId included — an unknown
  * agent must not be guessed as either kind).
  *
- * Unlike useRunningActivity.ts's resolveSpanAgentId, this does NOT apply the
- * originating-delegate-call fallback for native named-target delegation: that
- * workaround exists to fix which agent's AVATAR/NAME displays (the backend
- * leaves `agent_id` as the parent's for native dispatch — see that file's
- * doc comment), but per `pkg/agent/subturn.go`'s own comment, external-CLI
- * dispatch is exactly the one case that DOES get `agent.ID` reassigned to
- * the real target — so `span.agentId` alone is already reliable for the
- * native-vs-3p classification this needs.
+ * Unlike useRunningActivity.ts's resolveSpanAgentId, this does NOT apply that
+ * hook's originating-delegate-call fallback — and doesn't need to.
+ * resolveSpanAgentId exists to fix which agent's AVATAR/NAME displays, where
+ * getting the exact agent wrong is visibly wrong; resolveSpanAgentType only
+ * needs the delegate's KIND (native vs subagent_3p), which it derives by
+ * resolving `span.agentId` against the agents list. Per ADR-032, agent
+ * identity flows from the resolved target for BOTH dispatch kinds —
+ * `spawnSubTurn` (pkg/agent/subturn.go) sets `agent.ID = execSource.ID`
+ * unconditionally, native or external-CLI, with no per-dispatch-kind
+ * exception — so `span.agentId` reliably carries the resolved delegate id
+ * here regardless of which kind it turns out to be.
  */
 function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'native' | undefined {
   if (!span.agentId) return undefined
