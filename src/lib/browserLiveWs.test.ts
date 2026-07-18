@@ -47,6 +47,8 @@ function makeCallbacks() {
     onScreencast: vi.fn(),
     onStatus: vi.fn(),
     onTabs: vi.fn(),
+    onWebRTCAnswer: vi.fn(),
+    onWebRTCState: vi.fn(),
     onError: vi.fn(),
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),
@@ -192,6 +194,45 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
     expect(callbacks.onStatus).not.toHaveBeenCalled()
   })
 
+  it('routes a browser_webrtc_answer frame to onWebRTCAnswer', () => {
+    const callbacks = makeCallbacks()
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
+    conn.connect()
+    openSocket()
+
+    const frame = { type: 'browser_webrtc_answer', session_id: 'sess-1', sdp: 'v=0...' }
+    lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
+
+    expect(callbacks.onWebRTCAnswer).toHaveBeenCalledWith(frame)
+    expect(callbacks.onScreencast).not.toHaveBeenCalled()
+    expect(callbacks.onWebRTCState).not.toHaveBeenCalled()
+  })
+
+  it('routes a browser_webrtc_state frame to onWebRTCState', () => {
+    const callbacks = makeCallbacks()
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
+    conn.connect()
+    openSocket()
+
+    const frame = { type: 'browser_webrtc_state', available: true, has_audio: true, active: true }
+    lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
+
+    expect(callbacks.onWebRTCState).toHaveBeenCalledWith(frame)
+    expect(callbacks.onWebRTCAnswer).not.toHaveBeenCalled()
+  })
+
+  it('routes a browser_webrtc_state{available:false, reason} frame to onWebRTCState verbatim', () => {
+    const callbacks = makeCallbacks()
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
+    conn.connect()
+    openSocket()
+
+    const frame = { type: 'browser_webrtc_state', available: false, reason: 'lite_build' }
+    lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
+
+    expect(callbacks.onWebRTCState).toHaveBeenCalledWith(frame)
+  })
+
   it('drops a chat-only frame type (e.g. done) — not relevant to this socket', () => {
     const callbacks = makeCallbacks()
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
@@ -287,6 +328,26 @@ describe('BrowserLiveWsConnection — outbound sends', () => {
     expect(sentFrames()).toEqual([
       { type: 'browser_tab_action', session_id: 'sess-1', agent_id: 'agent-1', action: 'open' },
     ])
+  })
+
+  it('sendWebRTCOffer sends a browser_webrtc_offer frame carrying session_id/agent_id/sdp', () => {
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    lastWsInstance.send.mockClear()
+
+    conn.sendWebRTCOffer('v=0...')
+
+    expect(sentFrames()).toEqual([
+      { type: 'browser_webrtc_offer', session_id: 'sess-1', agent_id: 'agent-1', sdp: 'v=0...' },
+    ])
+  })
+
+  it('sendWebRTCOffer is a no-op (returns false) when the socket is not open', () => {
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
+    conn.connect()
+    lastWsInstance.readyState = 3 // CLOSED
+    expect(conn.sendWebRTCOffer('v=0...')).toBe(false)
   })
 
   it('detach() sends a browser_detach frame carrying the session id', () => {
@@ -421,6 +482,47 @@ describe('parseBrowserFrame', () => {
   it('rejects a client-direction frame type (browser_input) — this socket never receives one', () => {
     expect(
       parseBrowserFrame(JSON.stringify({ type: 'browser_input', kind: 'mouse_move', modifiers: 0 })),
+    ).toBeNull()
+  })
+
+  it('rejects a client-direction frame type (browser_webrtc_offer) — this socket only sends that one, never receives it', () => {
+    expect(
+      parseBrowserFrame(JSON.stringify({ type: 'browser_webrtc_offer', agent_id: 'a1', session_id: 's1', sdp: 'v=0...' })),
+    ).toBeNull()
+  })
+
+  it('accepts a valid browser_webrtc_answer payload', () => {
+    const payload = { type: 'browser_webrtc_answer', session_id: 's1', sdp: 'v=0...' }
+    expect(parseBrowserFrame(JSON.stringify(payload))).toEqual(payload)
+  })
+
+  it('rejects a browser_webrtc_answer payload missing the required sdp field', () => {
+    expect(parseBrowserFrame(JSON.stringify({ type: 'browser_webrtc_answer', session_id: 's1' }))).toBeNull()
+  })
+
+  it('accepts a valid browser_webrtc_state payload (available:true with audio/active)', () => {
+    const payload = { type: 'browser_webrtc_state', available: true, has_audio: true, active: true }
+    expect(parseBrowserFrame(JSON.stringify(payload))).toEqual(payload)
+  })
+
+  it('accepts a valid browser_webrtc_state payload (available:false with a reason)', () => {
+    const payload = { type: 'browser_webrtc_state', available: false, reason: 'not_capable' }
+    expect(parseBrowserFrame(JSON.stringify(payload))).toEqual(payload)
+  })
+
+  it('rejects a browser_webrtc_state payload missing the required available field', () => {
+    expect(parseBrowserFrame(JSON.stringify({ type: 'browser_webrtc_state', reason: 'error' }))).toBeNull()
+  })
+
+  it('rejects a browser_webrtc_state payload with an out-of-enum reason value', () => {
+    expect(
+      parseBrowserFrame(JSON.stringify({ type: 'browser_webrtc_state', available: false, reason: 'not_a_real_reason' })),
+    ).toBeNull()
+  })
+
+  it('rejects a browser_webrtc_state payload with an unknown extra property (schema is .strict())', () => {
+    expect(
+      parseBrowserFrame(JSON.stringify({ type: 'browser_webrtc_state', available: true, bogus: 'nope' })),
     ).toBeNull()
   })
 })
