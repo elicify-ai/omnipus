@@ -4,6 +4,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -165,6 +166,35 @@ func (r *AgentRegistry) IsWorker(agentID string) bool {
 		return false
 	}
 	return agent.IsWorker()
+}
+
+// IsExternalCLI reports whether agentID resolves to a subagent_3p (external
+// CLI runner: claude-code/codex/opencode) delegation target — i.e.
+// runner.ResolveDispatch classifies the agent's own Subagents.Executor
+// config as runner.DispatchKindExternalCLI, the same resolution
+// pkg/agent/subturn.go's spawnSubTurn performs before choosing between the
+// native and runExternalCLISubTurn dispatch paths (see executorConfigOf).
+// Returns false (native) for an unknown agent, an agent with no executor
+// override, an unresolvable executor config, or an empty agentID — matching
+// spawnSubTurn's own "nil/unset -> native" default.
+//
+// Satisfies the tools.DelegateAgentRegistry interface used by DelegateTool
+// (W2: action:"status" live-progress scoping — a running subagent_3p task
+// never gets an in-flight transcript snapshot, since external-CLI dispatch
+// is batch/report-on-completion by design) without an import cycle.
+func (r *AgentRegistry) IsExternalCLI(agentID string) bool {
+	if agentID == "" {
+		return false
+	}
+	agent, ok := r.GetAgent(agentID)
+	if !ok || agent == nil {
+		return false
+	}
+	kind, err := runner.ResolveDispatch(executorConfigOf(agent))
+	if err != nil {
+		return false
+	}
+	return kind == runner.DispatchKindExternalCLI
 }
 
 // Close releases resources held by all registered agents and clears the map (M9).
