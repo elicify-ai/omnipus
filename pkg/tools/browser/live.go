@@ -309,6 +309,59 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 	lv.detach(viewerID)
 }
 
+// PauseScreencast stops the underlying CDP screencast for sessionID WITHOUT
+// touching any attached viewer's registration or the cached lastFrame
+// (ADR-047 fix-wave finding 3: WebRTC media covering every attached viewer
+// makes the JPEG screencast pure wasted pod CPU — the UAT symptom "inputs
+// feel dead / choppy under heavy video" traced to pod CPU saturation). A
+// no-op (returns false) if no live view exists for sessionID, the
+// screencast isn't currently active, or it is already paused. The caller
+// (pkg/tools/browser's CaptureSession.ReconcileScreencast) decides WHEN
+// pausing is appropriate; this method only performs the mechanical stop.
+func (r *LiveViewRegistry) PauseScreencast(sessionID string) bool {
+	sessionID = resolveSessionID(sessionID)
+	lv, ok := r.lookup(sessionID)
+	if !ok {
+		return false
+	}
+	return lv.pauseScreencast()
+}
+
+// ResumeScreencast restarts the CDP screencast for sessionID if it was
+// paused by PauseScreencast and at least one viewer is still attached to
+// resume it for (ADR-047 fix-wave finding 3). A no-op (returns false) if no
+// live view exists for sessionID, the screencast wasn't paused, or nobody
+// is attached — the next Attach will start a fresh screencast normally in
+// that case.
+func (r *LiveViewRegistry) ResumeScreencast(sessionID string) bool {
+	sessionID = resolveSessionID(sessionID)
+	lv, ok := r.lookup(sessionID)
+	if !ok {
+		return false
+	}
+	return lv.resumeScreencast()
+}
+
+// AttachedViewerIDs returns a snapshot of the viewer IDs currently attached
+// to sessionID's JPEG live view (ADR-047 fix-wave finding 3) — used by
+// CaptureSession.ReconcileScreencast to check whether EVERY JPEG-attached
+// viewer also has a WebRTC attachment before pausing the screencast. Empty
+// (not an error) if no live view exists for sessionID.
+func (r *LiveViewRegistry) AttachedViewerIDs(sessionID string) []string {
+	sessionID = resolveSessionID(sessionID)
+	lv, ok := r.lookup(sessionID)
+	if !ok {
+		return nil
+	}
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	out := make([]string, 0, len(lv.viewers))
+	for id := range lv.viewers {
+		out = append(out, id)
+	}
+	return out
+}
+
 // Input dispatches a viewer input event via CDP, but ONLY when viewerID
 // currently holds control of sessionID (ADR-038 D6). Returns an error
 // (nothing is applied) when the viewer doesn't hold control, no live view is
@@ -414,6 +467,20 @@ type LiveView struct {
 	// (which never comes on an idle page). Guarded by mu.
 	lastFrame  *LiveFrame
 	controller string // viewerID holding control; "" = uncontrolled
+
+	// pausedForWebRTC (ADR-047 fix-wave finding 3, pod-CPU-saturation UAT:
+	// "inputs feel dead / choppy under heavy video") is true when the CDP
+	// screencast was deliberately stopped by PauseScreencast because WebRTC
+	// media already covers every currently-attached viewer, rather than
+	// through the normal ref-counted detach() path. attach() treats this
+	// the SAME as the piggyback (already-active) case -- register the new
+	// viewer and replay lastFrame immediately, but do NOT restart the CDP
+	// screencast -- so a late-attaching viewer's frame!=null gate is
+	// satisfied without undoing the pause. It is the CALLER's job (the
+	// browser package's CaptureSession.ReconcileScreencast, invoked
+	// whenever either viewer set changes) to call ResumeScreencast if that
+	// new viewer turns out to be JPEG-only.
+	pausedForWebRTC bool
 
 	// Rate limiting: input can only ever come from the single controller at a
 	// time, so one shared counter per LiveView is sufficient — no per-viewer
@@ -529,12 +596,18 @@ func (lv *LiveView) attach(
 	}
 	controlledByOther := lv.controller != "" && lv.controller != viewerID
 
-	if lv.isActiveLocked() {
+	if lv.isActiveLocked() || lv.pausedForWebRTC {
 		// Screencast already running — this viewer piggybacks on it. Replay the
 		// last delivered frame so it renders the current page immediately rather
 		// than waiting for the next repaint (which may never come on an idle
 		// page — the "Waiting for the first frame…" hang a pop-out / second
 		// panel would otherwise show).
+		//
+		// ADR-047 fix-wave finding 3: pausedForWebRTC takes the SAME branch
+		// even though isActiveLocked() is false while paused (PauseScreencast
+		// nils listenCtx exactly like a real stop) — a late-attaching viewer
+		// gets the cached frame immediately without undoing the pause; see
+		// pausedForWebRTC's doc comment for who is responsible for resuming.
 		cached := lv.lastFrame
 		lv.mu.Unlock()
 		if cached != nil {
@@ -1171,6 +1244,127 @@ func (lv *LiveView) detach(viewerID string) {
 			"session_id": lv.sessionID,
 		})
 	}
+}
+
+// pauseScreencast is PauseScreencast's LiveView-level implementation
+// (ADR-047 fix-wave finding 3). Mirrors detach()'s teardown sequence exactly
+// (nil the shared listen state under lock, then unsubscribe, then ask CDP to
+// stop — bounded via lv.runCDP, no LiveView lock held across the CDP call,
+// per the ADR-038 deadlock discipline every CDP call site in this file
+// observes) but deliberately leaves lv.viewers/statusSinks/controlSinks/
+// tabsSinks/lastFrame untouched and sets pausedForWebRTC instead of clearing
+// viewer registrations — a paused screencast still has viewers, it just
+// isn't capturing frames for them right now.
+func (lv *LiveView) pauseScreencast() bool {
+	lv.mu.Lock()
+	if lv.pausedForWebRTC || !lv.isActiveLocked() {
+		lv.mu.Unlock()
+		return false
+	}
+	stopListen := lv.stopListen
+	tabCtx := lv.tabCtx
+	lv.listenCtx = nil
+	lv.stopListen = nil
+	lv.pausedForWebRTC = true
+	lv.mu.Unlock()
+
+	stopListen()
+	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), page.StopScreencast()); err != nil {
+		logger.WarnCF("browser", "live view: pause screencast (WebRTC covering every viewer) — stop failed", map[string]any{
+			"error":      err.Error(),
+			"session_id": lv.sessionID,
+		})
+	}
+	return true
+}
+
+// resumeScreencast is ResumeScreencast's LiveView-level implementation
+// (ADR-047 fix-wave finding 3). Mirrors attach()'s screencast-start sequence
+// exactly (no LiveView lock held across any CDP call, BringToFront before
+// StartScreencast — see attach()'s doc comment for the full-Chrome
+// hidden-target rationale). A no-op if this LiveView was never paused, or if
+// the last viewer detached before this could run (in which case
+// pausedForWebRTC is simply cleared so a future Attach starts a normal fresh
+// screencast rather than silently staying "paused" forever with nobody
+// watching).
+func (lv *LiveView) resumeScreencast() bool {
+	lv.mu.Lock()
+	if !lv.pausedForWebRTC {
+		lv.mu.Unlock()
+		return false
+	}
+	if len(lv.viewers) == 0 {
+		lv.pausedForWebRTC = false
+		lv.mu.Unlock()
+		return false
+	}
+	lv.pausedForWebRTC = false
+	lv.mu.Unlock()
+
+	tabCtx, err := lv.mgr.Session(lv.sessionID)
+	if err != nil {
+		// Nothing to resume onto — e.g. the browsing context is mid-recreation
+		// after a crash. watchForUnexpectedDeath (armed the last time the
+		// screencast was genuinely active) already handles notifying attached
+		// viewers if the tab context died out from under them; there is
+		// nothing further to do here since pausedForWebRTC is already cleared
+		// above (not re-armed — a future Attach or another ReconcileScreencast
+		// call will retry the resume normally).
+		logger.WarnCF("browser", "live view: resume screencast — cannot resolve session", map[string]any{
+			"error":      err.Error(),
+			"session_id": lv.sessionID,
+		})
+		return false
+	}
+
+	lv.mu.Lock()
+	if lv.isActiveLocked() || len(lv.viewers) == 0 {
+		// Superseded by a concurrent Attach/rebind that already installed a
+		// fresh epoch, or the last viewer left while Session() above was
+		// resolving — nothing left for this call to do.
+		lv.mu.Unlock()
+		return false
+	}
+	lv.tabCtx = tabCtx
+	listenCtx, cancel := context.WithCancel(tabCtx)
+	lv.listenCtx = listenCtx
+	lv.stopListen = cancel
+	lv.mu.Unlock()
+
+	ackCtx := tabCtx
+	chromedp.ListenTarget(listenCtx, func(ev any) {
+		lv.handleScreencastEvent(ackCtx, ev)
+	})
+	go lv.runAckWorker(ackCtx, listenCtx)
+
+	err = lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return page.BringToFront().Do(ctx)
+		}),
+		page.StartScreencast().
+			WithFormat(page.ScreencastFormatJpeg).
+			WithQuality(screencastQuality).
+			WithMaxWidth(screencastMaxWidth).
+			WithMaxHeight(screencastMaxHeight).
+			WithEveryNthFrame(screencastEveryNthFrame),
+	)
+	if err != nil {
+		logger.WarnCF("browser", "live view: resume screencast — start failed", map[string]any{
+			"error":      err.Error(),
+			"session_id": lv.sessionID,
+		})
+		lv.mu.Lock()
+		if lv.listenCtx == listenCtx {
+			cancel()
+			lv.listenCtx = nil
+			lv.stopListen = nil
+		}
+		lv.mu.Unlock()
+		return false
+	}
+
+	go lv.watchForUnexpectedDeath(listenCtx)
+	return true
 }
 
 // LiveInputErrorKind classifies a LiveViewRegistry.Input / dispatchInput

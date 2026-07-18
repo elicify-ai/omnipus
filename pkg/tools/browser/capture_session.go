@@ -510,15 +510,19 @@ func (cs *CaptureSession) requestControl(action string, reason *string) {
 
 // AddViewer registers viewerID as an attached WebRTC viewer, canceling any
 // pending grace-stop timer (wave-plan W2-A item 4). Idempotent for an
-// already-registered viewerID.
+// already-registered viewerID. Fix-wave finding 3: also recomputes whether
+// the JPEG screencast should now be paused (this new WebRTC viewer may be
+// the one that makes every JPEG-attached viewer WebRTC-covered) — see
+// ReconcileScreencast.
 func (cs *CaptureSession) AddViewer(viewerID string) {
 	cs.mu.Lock()
-	defer cs.mu.Unlock()
 	cs.viewers[viewerID] = struct{}{}
 	if cs.stopTimer != nil {
 		cs.stopTimer.Stop()
 		cs.stopTimer = nil
 	}
+	cs.mu.Unlock()
+	cs.ReconcileScreencast()
 }
 
 // RemoveViewer unregisters viewerID. If no viewers remain, arms a
@@ -526,7 +530,12 @@ func (cs *CaptureSession) AddViewer(viewerID string) {
 // item 4: "stopped on last detach with a ~30s grace timer") — giving a
 // viewer that's merely reloading the panel a window to reconnect without
 // tearing down and re-provisioning the whole encoder page. A subsequent
-// AddViewer within the grace window cancels the timer.
+// AddViewer within the grace window cancels the timer. Fix-wave finding 3:
+// also recomputes the JPEG screencast pause state — a departing WebRTC
+// viewer (e.g. its ICE connection failed and it fell back to JPEG per
+// ADR-047 D3's per-viewer degradation) may be the one still attached to the
+// JPEG live view, which must resume the screencast for it. See
+// ReconcileScreencast.
 func (cs *CaptureSession) RemoveViewer(viewerID string) {
 	cs.mu.Lock()
 	delete(cs.viewers, viewerID)
@@ -535,6 +544,54 @@ func (cs *CaptureSession) RemoveViewer(viewerID string) {
 		cs.stopTimer = time.AfterFunc(captureGracePeriod, cs.Stop)
 	}
 	cs.mu.Unlock()
+	cs.ReconcileScreencast()
+}
+
+// ReconcileScreencast recomputes whether the agent's JPEG screencast
+// (pkg/tools/browser/live.go) should be paused (ADR-047 fix-wave finding 3,
+// UAT: "inputs feel dead / choppy under heavy video" traced to pod CPU
+// saturation from running BOTH the CDP screencast and the WebRTC encoder
+// simultaneously). Paused when this session has at least one WebRTC viewer
+// AND the relay reports video actually flowing (Stats().HasVideo) AND EVERY
+// viewer currently attached to the JPEG live view (cs.mgr.Live().
+// AttachedViewerIDs) is ALSO one of this session's own WebRTC viewers — i.e.
+// nobody is relying on the JPEG stream for pixels right now. Resumed in
+// every other case: this session has stopped, no WebRTC viewers yet, video
+// not flowing yet, or at least one JPEG-only (mixed-viewer, e.g. a
+// per-viewer ICE fallback per ADR-047 D3) attachment remains.
+//
+// Called from this session's own viewer-set changes (AddViewer/RemoveViewer/
+// Stop above) AND exported for the gateway to call from
+// browser_ws.go's handleAttach/detach when the JPEG-viewer set changes on
+// ITS side instead — a plain browser_attach/browser_detach that never
+// touches WebRTC at all is invisible to this session otherwise. A safe no-op
+// if cs.mgr is nil (NewCaptureSessionWithDeps(nil, ...) is a documented,
+// supported test-construction pattern — see its doc comment).
+func (cs *CaptureSession) ReconcileScreencast() {
+	if cs.mgr == nil {
+		return
+	}
+	live := cs.mgr.Live()
+
+	cs.mu.Lock()
+	stopped := cs.stopped
+	webrtcViewers := make(map[string]struct{}, len(cs.viewers))
+	for id := range cs.viewers {
+		webrtcViewers[id] = struct{}{}
+	}
+	cs.mu.Unlock()
+
+	if stopped || len(webrtcViewers) == 0 || !cs.relay.Stats().HasVideo {
+		live.ResumeScreencast(DefaultSessionID)
+		return
+	}
+	for _, id := range live.AttachedViewerIDs(DefaultSessionID) {
+		if _, ok := webrtcViewers[id]; !ok {
+			live.ResumeScreencast(DefaultSessionID)
+			return
+		}
+	}
+	live.PauseScreencast(DefaultSessionID)
 }
 
 // ViewerCount returns the current number of attached WebRTC viewers.
@@ -596,6 +653,14 @@ func (cs *CaptureSession) Stop() {
 	if cs.mgr != nil {
 		cs.mgr.ClearCaptureSession(cs)
 	}
+	// Fix-wave finding 3: unconditionally resume the JPEG screencast now
+	// that WebRTC capture has stopped entirely. ReconcileScreencast's own
+	// cs.stopped check (true by this point, set at the top of Stop()) always
+	// resolves to "resume" here regardless of cs.viewers' stale contents
+	// (Stop() deliberately does not clear cs.viewers — see ViewerIDs' doc
+	// comment), and safely no-ops if cs.mgr is nil (test-constructed
+	// sessions).
+	cs.ReconcileScreencast()
 	cs.logf("capture[%s]: stopped", cs.agentID)
 	if onStopped != nil {
 		onStopped()

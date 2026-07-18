@@ -134,7 +134,118 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 const ICE_BAD_GRACE_MS = 10000;
 const PING_BEACON_INTERVAL_MS = 15000;
 
+// DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"): the
+// tabCapture MediaStream has no bandwidth ceiling of its own, so an
+// unconstrained VP8 encoder will burn as much CPU/bandwidth as the content
+// demands -- a major contributor to the reported pod-CPU-saturation/choppy-
+// input UAT symptom under heavy (video-playing) pages. 2 Mbps is generous
+// for a 1280x720 browsing UI (comfortably covers text and moving video
+// alike) while giving the encoder a real ceiling to degrade against.
+// Overridable per-install via window.__omnipusCapture.maxVideoBitrate
+// (bits/sec) for future config -- see readConfig's doc comment for the
+// injection mechanism; unset/invalid falls back to this default.
+const DEFAULT_MAX_VIDEO_BITRATE_BPS = 2000000;
+
+// OFFER_ANSWER_TIMEOUT_MS (fix-wave finding 4, review-flagged gap): before
+// this fix, a browser_capture_offer whose browser_capture_answer never
+// arrived (dropped frame, gateway-side error the encoder never learns about
+// any other way) left this page silently wedged in 'offering' state
+// forever -- the WS itself stays open, so neither the ICE watchdog
+// (startWatchdogOnce, which only fires once a PeerConnection ICE state
+// exists) nor the reconnect-on-close path (scheduleReconnect) ever engages.
+// Closing the WS on timeout routes through the SAME 'close' handler every
+// other disconnect uses, so the existing backoff/reconnect logic below
+// (scheduleReconnect) is what actually recovers -- no new recovery path.
+const OFFER_ANSWER_TIMEOUT_MS = 10000;
+let offerAnswerTimer = null;
+
+// armOfferAnswerTimeout captures the CURRENT ws instance so a stale timer
+// (one armed before a reconnect already replaced `ws` with a fresh
+// connection) can never close a healthy, unrelated newer connection --
+// without this guard, a timer that fires just as scheduleReconnect's own
+// backoff already replaced `ws` would incorrectly kill the brand new
+// connection instead of being the no-op it should be.
+function armOfferAnswerTimeout() {
+  clearOfferAnswerTimeout();
+  const forWs = ws;
+  offerAnswerTimer = setTimeout(() => {
+    offerAnswerTimer = null;
+    if (ws !== forWs) return; // superseded by a newer connection -- stale, ignore
+    window.__omnipusState.lastError = 'offer-answer timeout: no browser_capture_answer received';
+    record('offer-answer timeout: no browser_capture_answer within ' + OFFER_ANSWER_TIMEOUT_MS + 'ms, forcing reconnect');
+    try {
+      forWs.close();
+    } catch (e) {
+      /* ignore */
+    }
+  }, OFFER_ANSWER_TIMEOUT_MS);
+}
+
+function clearOfferAnswerTimeout() {
+  if (offerAnswerTimer) {
+    clearTimeout(offerAnswerTimer);
+    offerAnswerTimer = null;
+  }
+}
+
+// applyVideoSenderConstraints (fix-wave finding 4) caps the video sender's
+// bitrate and sets encoding hints AFTER pc.addTrack has created its
+// RTCRtpSender for videoTrack. Errors are logged, not thrown -- a failed
+// setParameters/contentHint assignment should degrade to "uncapped
+// bitrate", not abort the whole capture/offer flow.
+function applyVideoSenderConstraints(pc, videoTrack) {
+  const sender = pc.getSenders().find((s) => s.track === videoTrack);
+  if (!sender) {
+    warn('applyVideoSenderConstraints: no RTCRtpSender found for the video track');
+    return;
+  }
+
+  const cfg = window.__omnipusCapture || {};
+  const maxBitrate =
+    typeof cfg.maxVideoBitrate === 'number' && cfg.maxVideoBitrate > 0 ? cfg.maxVideoBitrate : DEFAULT_MAX_VIDEO_BITRATE_BPS;
+
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    params.encodings[0].maxBitrate = maxBitrate;
+    // degradationPreference 'balanced' (not 'maintain-framerate' or
+    // 'maintain-resolution'): the captured tab can be anything from a
+    // text-heavy page (wants resolution to stay legible) to video playback
+    // (wants framerate to stay smooth) -- committing to either extreme
+    // permanently sacrifices the other content type. 'balanced' lets the
+    // encoder trade resolution/framerate against CURRENT conditions instead
+    // of a fixed bias, which pairs with this bitrate cap and the gateway's
+    // screencast-pause fix (ADR-047 fix-wave finding 3, which removes the
+    // competing CDP JPEG screencast's CPU draw while WebRTC is active) to
+    // keep the CPU/bandwidth budget under control without a permanent
+    // quality cliff for whichever content type ISN'T currently on screen.
+    params.degradationPreference = 'balanced';
+    sender.setParameters(params).catch((e) => {
+      warn('applyVideoSenderConstraints: setParameters failed', e);
+    });
+  } catch (e) {
+    warn('applyVideoSenderConstraints: getParameters/setParameters failed', e);
+  }
+
+  // contentHint 'motion' (not 'detail'): asks the VP8 encoder to favor
+  // smooth motion over per-frame sharpness -- directly addresses this
+  // fix-wave's reported freeze/choppiness symptoms on real video content.
+  // Tradeoff: text-heavy (non-video) pages may render very slightly softer
+  // under 'motion' than 'detail' would produce. Accepted for now given the
+  // UAT content was video playback; a future per-page-adaptive hint (e.g.
+  // detecting an actively-playing <video> element vs a static page) is
+  // possible but out of scope for this fix.
+  try {
+    videoTrack.contentHint = 'motion';
+  } catch (e) {
+    warn('applyVideoSenderConstraints: setting contentHint failed', e);
+  }
+}
+
 function teardownCapture() {
+  clearOfferAnswerTimeout();
   try {
     if (currentPC) currentPC.close();
   } catch (e) {
@@ -267,12 +378,21 @@ async function runCaptureAndOffer() {
   currentPC = pc;
   stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
+  // Fix-wave finding 4: cap bitrate + set encoding hints on the video
+  // sender now that addTrack has created it. Video-only (audio/Opus has no
+  // equivalent overdrive risk here).
+  const videoTrack = stream.getVideoTracks()[0];
+  if (videoTrack) {
+    applyVideoSenderConstraints(pc, videoTrack);
+  }
+
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   await waitIceGatheringComplete(pc);
 
   record('runCaptureAndOffer: sending browser_capture_offer');
   sendFrame({ type: 'browser_capture_offer', sdp: pc.localDescription.sdp });
+  armOfferAnswerTimeout();
 }
 
 // ---- signaling ----------------------------------------------------------------
@@ -332,6 +452,11 @@ async function handleWsMessage(raw) {
 
   switch (msg.type) {
     case 'browser_capture_answer':
+      // Clear the offer-answer timeout as soon as a response arrives at
+      // all -- even if setRemoteDescription below then fails, that's a
+      // different (already-logged) failure class, not the "silently
+      // wedged, no server response" case armOfferAnswerTimeout guards.
+      clearOfferAnswerTimeout();
       if (!currentPC) {
         warn('browser_capture_answer received with no active PeerConnection, ignoring');
         return;
@@ -471,71 +596,6 @@ function stopPingBeacon() {
     pingBeaconTimer = null;
   }
 }
-
-// window.__omnipusMeasureAudioRMS is a debug/verification helper (like
-// window.__omnipusState above) — it is never used by the production
-// signaling flow. It samples the currently-captured audio track's RMS
-// level over `durationMs` milliseconds, for external verification (CDP
-// Runtime.evaluate) that tabCapture is delivering real, non-silent audio
-// samples rather than silence or a stalled track.
-//
-// Uses AnalyserNode.getFloatTimeDomainData polling (NOT a
-// ScriptProcessorNode wired to ac.destination) — this is the pattern
-// wv1-spike-results.md's Q2 spike proved works for a live tabCapture
-// MediaStreamTrack. A ScriptProcessorNode requires an active render pull
-// reaching ac.destination to receive non-silent buffers; in a headless
-// context whose AudioContext starts 'suspended', that pull can end up
-// delivering the callback on schedule with all-zero buffers. AnalyserNode
-// polling has no such dependency on the destination graph.
-//
-// KNOWN LIMITATION (found during W1-E real-Chrome verification, not in the
-// original spike): once currentStream's audio track has been added to an
-// RTCPeerConnection via pc.addTrack() (which runCaptureAndOffer does
-// immediately after capture), a NEW MediaStreamSource wrapping that same
-// track reads back all-zero samples here, even though the track is
-// genuinely live and the PC forwards real RTP once negotiated (proven by
-// wv1-spike-results.md Q3/Q4 measuring RMS on the FAR end after a real
-// answer+ICE connect). So this helper only reads real levels when called
-// BEFORE the capture flow reaches pc.addTrack() — i.e. there is no window
-// to call it usefully after __omnipusStart() has already run to
-// completion. It remains useful for a caller that captures independently
-// (see the verification harness's "raw pre-PC audio RMS probe" for the
-// pattern) or for future debugging hooks with an earlier call site.
-window.__omnipusMeasureAudioRMS = async function (durationMs) {
-  if (!currentStream || currentStream.getAudioTracks().length === 0) {
-    throw new Error('no active audio track to measure');
-  }
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  await audioCtx.resume();
-  try {
-    const source = audioCtx.createMediaStreamSource(new MediaStream(currentStream.getAudioTracks()));
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-    source.connect(analyser);
-
-    const buf = new Float32Array(analyser.fftSize);
-    const samples = [];
-    const pollIntervalMs = 100;
-    const iterations = Math.max(1, Math.round(durationMs / pollIntervalMs));
-    for (let i = 0; i < iterations; i++) {
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
-      analyser.getFloatTimeDomainData(buf);
-      let sumSquares = 0;
-      for (let j = 0; j < buf.length; j++) sumSquares += buf[j] * buf[j];
-      samples.push(Math.sqrt(sumSquares / buf.length));
-    }
-
-    const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
-    const max = Math.max(...samples);
-    return { rms: mean, rmsMax: max, samples, sampleCount: samples.length };
-  } finally {
-    try {
-      audioCtx.close();
-    } catch (e) {
-      /* ignore */
-    }
-  }
-};
 
 // ---- entry point ------------------------------------------------------------
 

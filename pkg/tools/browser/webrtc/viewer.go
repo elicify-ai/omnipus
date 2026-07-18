@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -58,14 +59,14 @@ func (s *Session) HandleViewerOffer(viewerID string, sdpOffer string) (answer st
 		_ = pc.Close()
 		return "", fmt.Errorf("webrtc: viewer %s: add video track: %w", prefix, addErr)
 	} else {
-		go drainRTCP(sender)
+		go s.drainViewerRTCP(prefix, sender)
 	}
 	if audioTrack != nil {
 		if sender, addErr := pc.AddTrack(audioTrack); addErr != nil {
 			_ = pc.Close()
 			return "", fmt.Errorf("webrtc: viewer %s: add audio track: %w", prefix, addErr)
 		} else {
-			go drainRTCP(sender)
+			go s.drainViewerRTCP(prefix, sender)
 		}
 	} else {
 		s.logf("%s no audio track yet, answering video-only", prefix)
@@ -183,14 +184,34 @@ func (s *Session) CloseViewer(viewerID string) {
 	}
 }
 
-// drainRTCP reads and discards RTCP on an outgoing RTPSender so its buffer
-// never blocks -- standard Pion requirement for any sender not otherwise
-// inspected.
-func drainRTCP(sender *webrtc.RTPSender) {
+// drainViewerRTCP reads RTCP on one viewer's outgoing RTPSender (video or
+// audio) so its buffer never blocks -- standard Pion requirement for any
+// sender not otherwise inspected -- AND, unlike the plain discard this
+// replaced, inspects every packet for a PictureLossIndication or
+// FullIntraRequest: the browser's own decoder generates these on packet
+// loss to ask for a fresh keyframe. Before this fix that feedback dead-ended
+// here (the fix-wave's CRIT finding: "video froze while audio kept
+// playing" -- exactly what happens when a viewer loses a keyframe reference
+// and never gets a new one to resync). It is forwarded to the ingest
+// connection via forwardPLIThrottled, throttled ACROSS ALL viewers combined
+// so a storm of loss reports from several viewers can't force the encoder
+// into a constant-keyframe death spiral.
+func (s *Session) drainViewerRTCP(prefix string, sender *webrtc.RTPSender) {
 	buf := make([]byte, 1500)
 	for {
-		if _, _, err := sender.Read(buf); err != nil {
+		n, _, err := sender.Read(buf)
+		if err != nil {
 			return
+		}
+		pkts, unmarshalErr := rtcp.Unmarshal(buf[:n])
+		if unmarshalErr != nil {
+			continue
+		}
+		for _, pkt := range pkts {
+			switch pkt.(type) {
+			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+				s.forwardPLIThrottled(prefix)
+			}
 		}
 	}
 }

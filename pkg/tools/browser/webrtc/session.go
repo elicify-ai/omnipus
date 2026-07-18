@@ -6,10 +6,22 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 )
+
+// pliForwardMinInterval throttles viewer-triggered PLI/FIR forwarding to the
+// ingest connection (drainViewerRTCP -> forwardPLIThrottled, viewer.go) to
+// at most once per interval ACROSS EVERY attached viewer combined -- a PLI
+// storm from N viewers all reporting loss around the same time would
+// otherwise force the encoder into constant keyframes, collapsing bitrate
+// exactly when the network is already struggling (fix-wave finding 1; see
+// forwardPLIThrottled's doc comment in ingest.go). A var (not const) purely
+// as a test seam, mirroring audioGraceTimeout/captureGracePeriod's
+// established pattern in this package.
+var pliForwardMinInterval = 750 * time.Millisecond
 
 // Available reports whether this build compiles in the real Pion-backed
 // Session (true here; false in stub.go's lite build). Exported so a caller
@@ -80,6 +92,14 @@ type Session struct {
 	audioSeq atomic.Uint32
 
 	connSeq atomic.Int64
+
+	// pliForwardMu/lastPLIForwardAt implement pliForwardMinInterval's
+	// cross-viewer throttle for viewer-triggered PLI/FIR forwarding -- see
+	// forwardPLIThrottled in ingest.go. Deliberately a SEPARATE lock from mu
+	// (which sendPLI itself takes internally) so a viewer's RTCP-drain
+	// goroutine calling this never contends with the ingest/attach hot path.
+	pliForwardMu     sync.Mutex
+	lastPLIForwardAt time.Time
 }
 
 // viewerConn tracks one attached viewer's PeerConnection plus its "input"

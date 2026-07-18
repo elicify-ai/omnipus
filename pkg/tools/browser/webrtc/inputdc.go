@@ -4,9 +4,18 @@ package webrtc
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/pion/webrtc/v4"
 )
+
+// inputQueueCapacity bounds one viewer's pending input-event backlog
+// (fix-wave finding 2c). 64 is generous for a live cursor/keystream under
+// normal dispatch latency (Q4 spike: p95 CDP round trip ~21ms, so a
+// consumer keeping pace drains this in well under a second even at a heavy
+// input rate) while still bounding memory for a viewer whose sink has
+// genuinely wedged.
+const inputQueueCapacity = 64
 
 // wireInputDataChannel is called from a viewer PeerConnection's
 // OnDataChannel callback when the browser's "input" data channel arrives.
@@ -21,12 +30,36 @@ import (
 // Every reply this package sends (SendToViewer) therefore uses SendText,
 // never Send. Incoming binary frames are logged and dropped rather than
 // forwarded, since the browser side of this protocol only ever sends text.
+//
+// Fix-wave finding 2c (dispatch ordering): messages are handed to a single,
+// PER-VIEWER serialized queue/worker (enqueueInput/runInputQueue) rather
+// than the previous "go s.sink(viewerID, raw)" spawned fresh per message.
+// Pion invokes OnMessage serially per data channel, but that guarantee was
+// being thrown away the instant each message got its own goroutine --
+// nothing serialized WHICH goroutine's sink call actually ran first once
+// more than one was in flight, so a slow dispatch for an EARLIER message
+// (the gateway's real CDP round trip) could complete after a fast dispatch
+// for a LATER one, delivering e.g. keydown/keyup out of order to the CDP
+// layer. The queue+worker preserves order while still never letting a slow
+// sink block Pion's own OnMessage callback: enqueueInput is non-blocking
+// (drops the OLDEST queued event under backpressure, mirroring live.go's
+// queueAck coalescing pattern -- a live cursor/key stream that has fallen
+// behind is more useful caught up on the FRESHEST state than stalled
+// replaying a backlog), and the worker goroutine that actually calls
+// s.sink runs independently of Pion's dispatch goroutine.
 func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataChannel) {
+	queue := make(chan []byte, inputQueueCapacity)
+	var closeQueueOnce sync.Once
+	closeQueue := func() { closeQueueOnce.Do(func() { close(queue) }) }
+
+	go s.runInputQueue(viewerID, queue)
+
 	dc.OnOpen(func() {
 		s.logf("%s input data channel OPEN (label=%s)", prefix, dc.Label())
 	})
 	dc.OnClose(func() {
 		s.logf("%s input data channel closed", prefix)
+		closeQueue()
 	})
 	dc.OnError(func(err error) {
 		s.logf("%s input data channel error: %v", prefix, err)
@@ -40,18 +73,51 @@ func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataC
 			return
 		}
 		// Copy before handing off: Pion may reuse/release the underlying
-		// buffer once OnMessage returns, and dispatch runs in its own
-		// goroutine below.
+		// buffer once OnMessage returns, and the queue worker consumes this
+		// asynchronously.
 		raw := make([]byte, len(msg.Data))
 		copy(raw, msg.Data)
-		// Dispatch off the Pion callback goroutine so a slow InputSink (the
-		// gateway's CDP round trip) never blocks delivery of the NEXT
-		// data-channel message -- Pion invokes OnMessage serially per data
-		// channel. This package does not itself guarantee cross-message
-		// ordering once handed to the sink; the gateway's dispatch path
-		// (LiveInput's controller lock) is responsible for that if needed.
-		go s.sink(viewerID, raw)
+		s.enqueueInput(prefix, viewerID, queue, raw)
 	})
+}
+
+// enqueueInput pushes raw onto queue without ever blocking the caller (Pion's
+// own OnMessage callback -- see wireInputDataChannel's doc comment): if the
+// queue is full, the OLDEST queued item is dropped to make room, not the new
+// one, mirroring live.go's queueAck coalescing discipline. Logged at
+// Session's normal logf (the gateway's webrtcRelayLogf classifies a line
+// with neither "failed" nor "warning" in it to Debug, matching the fix's
+// "log drops at Debug" requirement).
+func (s *Session) enqueueInput(prefix, viewerID string, queue chan []byte, raw []byte) {
+	for {
+		select {
+		case queue <- raw:
+			return
+		default:
+			select {
+			case <-queue:
+				s.logf("%s input queue full for viewer %s, dropped oldest queued event", prefix, viewerID)
+			default:
+			}
+		}
+	}
+}
+
+// runInputQueue is the single goroutine that drains one viewer's input data-
+// channel queue and invokes the Session's InputSink for each message IN
+// ORDER, until queue is closed (dc.OnClose) -- draining whatever remains
+// queued first so a viewer's very last few input events right before
+// disconnect are not silently discarded. A slow InputSink call here (the
+// gateway's real CDP round trip) only delays the NEXT queued message for
+// THIS viewer; it never blocks Pion's OnMessage callback (enqueueInput is
+// always non-blocking) and never blocks any OTHER viewer's own queue
+// (each data channel gets its own worker/queue pair).
+func (s *Session) runInputQueue(viewerID string, queue chan []byte) {
+	for raw := range queue {
+		if s.sink != nil {
+			s.sink(viewerID, raw)
+		}
+	}
 }
 
 // SendToViewer sends msg (typically a JSON ack or state frame the gateway
