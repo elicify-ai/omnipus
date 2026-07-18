@@ -724,6 +724,7 @@ type Workspace = {
   repository?: string | undefined;
   task_count: number;
   is_default?: boolean | undefined;
+  setup_pending?: boolean | undefined;
   created_at: string;
   updated_at: string;
   owner?: string | undefined;
@@ -2269,6 +2270,7 @@ export const Workspace: z.ZodType<Workspace> = z
     repository: z.string().optional(),
     task_count: z.number().int(),
     is_default: z.boolean().optional(),
+    setup_pending: z.boolean().optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),

@@ -247,6 +247,10 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 		t := true
 		wire.IsDefault = &t
 	}
+	if w.SetupPending {
+		sp := true
+		wire.SetupPending = &sp
+	}
 	if w.Description != "" {
 		wire.Description = &w.Description
 	}
@@ -580,10 +584,13 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if req.CoreTeam != nil {
 		ws.CoreTeam = deduplicateStrings(*req.CoreTeam)
 	} else {
-		// No explicit team: seed the full install roster (base + Worker +
-		// specialists) so a fresh workspace works out of the box (M6), mirroring
-		// My Workspace.
-		ws.CoreTeam = defaultWorkspaceTeam(cfg)
+		// No explicit team: new user-created workspaces start with only Ava on
+		// the team — she interviews the user and builds out the rest of the
+		// team herself (the setup_pending flow). This deliberately does NOT
+		// mirror ensureDefaultWorkspace's full-roster seed, which remains
+		// reserved for the auto-created boot default workspace ("My Workspace").
+		ws.CoreTeam = newWorkspaceSetupTeam(cfg)
+		ws.SetupPending = true
 	}
 	// Seed default delegation edges from each team agent's seeded role (M5),
 	// restricted to edges whose endpoints are both on this workspace's team so a

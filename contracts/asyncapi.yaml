@@ -1023,6 +1023,10 @@ components:
             value is sent as `metadata.model_name` so the server routes
             THIS turn to the chosen model. The server falls back to the
             agent's `model` config when this field is absent.
+            `workspace_setup_kickoff` (boolean): when true, the server treats
+            this message as the one-time workspace setup kickoff for
+            `metadata.workspace_id` — recorded as a system-role transcript
+            entry, and the workspace's `setup_pending` flag is cleared.
           properties:
             model_name:
               type: string

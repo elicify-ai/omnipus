@@ -14,7 +14,7 @@ package workspace
 // JSON tag rules (must stay stable — the files are the long-term store):
 //
 //	id, name, description, status, pinned, pin_order, core_team, repository,
-//	owner, is_default, delegation, created_at, updated_at
+//	owner, is_default, setup_pending, delegation, created_at, updated_at
 //
 // Delegation is the typed form shared with delegation.go's DelegationEdge.
 // Adding a new field here requires a matching JSON tag and must be
@@ -39,6 +39,15 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 
 	// IsDefault is true only for the auto-created default workspace (FR-1.6).
 	IsDefault bool `json:"is_default,omitempty"`
+
+	// SetupPending is true while this workspace's initial team-setup interview
+	// has not yet run. Set server-side at creation when the default (Ava-only)
+	// roster was auto-seeded (handleWorkspacePost's implicit-core_team branch);
+	// cleared server-side when the setup kickoff turn is accepted (the
+	// metadata.workspace_setup_kickoff MessageFrame flag, see contracts/asyncapi.yaml).
+	// Always false for the auto-created default workspace (ensureDefaultWorkspace)
+	// and for any workspace created with an explicit core_team.
+	SetupPending bool `json:"setup_pending,omitempty"`
 
 	// Delegation is the per-workspace delegation graph (M5): the directed edges
 	// that authorize who-delegates-to-whom on this workspace. This is the
