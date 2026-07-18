@@ -63,6 +63,7 @@ export interface MessageFrame {
   media?: Array<string>;
   metadata?: {
     model_name?: string;
+    workspace_id?: string;
     workspace_setup_kickoff?: boolean;
     [key: string]: unknown;
   };

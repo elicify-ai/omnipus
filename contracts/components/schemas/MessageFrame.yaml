@@ -107,10 +107,11 @@ properties:
         type: boolean
         description: >
           One-time marker that this message is the workspace-setup kickoff
-          turn for `metadata.workspace_id`. When true, the server records a
-          system-role transcript entry and clears that workspace's
-          `setup_pending` flag exactly once (idempotency-guarded); a
-          duplicate kickoff (workspace already past setup) is rejected with
-          an error frame rather than silently re-running. Absent/false for
-          ordinary messages.
+          turn for `metadata.workspace_id`. When true, the server treats the
+          frame as the one-time workspace-setup kickoff — the frame's
+          `content` is ignored and replaced by a server-composed
+          instruction; a system-role entry is recorded; the workspace's
+          `setup_pending` flag is cleared exactly once (idempotency-guarded);
+          duplicate and malformed kickoffs are rejected with an error frame.
+          Absent/false for ordinary messages.
         example: true
