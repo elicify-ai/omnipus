@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
@@ -27,6 +28,24 @@ func workspaceID(t *testing.T, body string) string {
 		t.Fatalf("create_workspace response missing 'id' field: %s", body)
 	}
 	return id
+}
+
+// newTestDepsWithHomeAndAgents behaves like newTestDepsWithHome but also seeds
+// the live config's Agents.List with the given IDs (ID field only) — required
+// for delegation-edge auto-seed tests now that seedDelegationEdgesForNewMembers
+// presence-filters candidates against Deps.GetCfg().Agents.List (fix wave
+// consensus finding #3): a core_team entry naming an agent absent from the
+// live config must never seed an edge for it, so any test that expects a
+// specific edge to be auto-seeded must first put that edge's endpoints in the
+// config, exactly as a real install (SeedConfig-populated Agents.List) would.
+func newTestDepsWithHomeAndAgents(t *testing.T, agentIDs ...string) (*systools.Deps, string) {
+	t.Helper()
+	deps, home := newTestDepsWithHome(t)
+	cfg := deps.GetCfg()
+	for _, id := range agentIDs {
+		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: id})
+	}
+	return deps, home
 }
 
 // TestWorkspaceUpdate_PreservesDelegationGraph proves update_workspace does NOT
@@ -687,7 +706,7 @@ func modesOf(edge map[string]any) []string {
 // the 2-value trust-edge vocabulary ([task, direct]) per edgeModeCategory,
 // and that depth (unset for Jim/Ava's seed) stays absent.
 func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
-	deps, home := newTestDepsWithHome(t)
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
 	id := "01KW60SEED0000000000000001"
 	wsPath := filepath.Join(home, "workspaces", id+".json")
 	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
@@ -768,7 +787,7 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 // pre-existing edge (and its original modes) is left exactly as-is, while
 // the genuinely new edges (jim→ava, ava→worker) are still added.
 func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
-	deps, home := newTestDepsWithHome(t)
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
 	id := "01KW60SEED0000000000000002"
 	wsPath := filepath.Join(home, "workspaces", id+".json")
 	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
@@ -828,7 +847,7 @@ func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
 // because researcher is off team) and must NOT resurrect ava→worker, even
 // though both ava and worker are still on the team.
 func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
-	deps, home := newTestDepsWithHome(t)
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "worker", "ray")
 	id := "01KW60SEED0000000000000003"
 	wsPath := filepath.Join(home, "workspaces", id+".json")
 	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
@@ -983,6 +1002,294 @@ func TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC(t *testing.T) {
 	if len(team) != 2 {
 		t.Errorf("core_team should now have 2 members, got %v", team)
 	}
+}
+
+// TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig verifies fix wave
+// consensus finding #3: seedDelegationEdgesForNewMembers must presence-filter
+// candidate edges against the live config's Agents.List, not trust core_team
+// blindly. Config here only registers "ava" and "jim" — "worker" is added to
+// core_team but deliberately absent from config (modeling a deleted agent, or
+// a stale/typo'd core_team entry that happens to collide with the compiled
+// "worker" seed key). Team [ava] → [ava, jim, worker]: jim→ava must still be
+// seeded (both endpoints present in config), but jim→worker and ava→worker
+// must NOT be seeded — "worker" is absent from config even though it is
+// present on core_team and matches a real coreagent.SeedDelegationEdges key.
+func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim") // "worker" NOT registered in config
+	id := "01KW60SEED0000000000000006"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Presence Filter Test",
+		"status": "active",
+		"core_team": ["ava"],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava", "jim", "worker"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	edges := delegationEdgesFromDisk(t, home, id)
+	if findEdge(edges, "jim", "ava") == nil {
+		t.Errorf("expected jim→ava edge to be seeded (both endpoints present in config), got %v", edges)
+	}
+	if findEdge(edges, "jim", "worker") != nil {
+		t.Error("jim→worker must NOT be seeded — worker is absent from the live config")
+	}
+	if findEdge(edges, "ava", "worker") != nil {
+		t.Error("ava→worker must NOT be seeded — worker is absent from the live config")
+	}
+	if len(edges) != 1 {
+		t.Errorf("expected exactly 1 seeded edge (jim→ava), got %d: %v", len(edges), edges)
+	}
+}
+
+// TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges
+// verifies fix wave consensus finding #7: a single update_workspace call that
+// both adds and removes core_team members in one shot. Team
+// [ava, jim, worker] (with pre-existing edges jim→ava, jim→worker, ava→worker,
+// as if seeded by an earlier call) → [ava, worker, ray] (jim removed, ray
+// added). Expected: ray→worker is seeded (the addition, both endpoints on the
+// NEW team and present in config) while ray→researcher is dropped (researcher
+// is not on the team); the edges referencing removed member jim
+// (jim→ava, jim→worker) survive un-GC'd, unchanged, per the tool's existing
+// (unchanged by this fix) no-GC-on-removal behavior
+// (workspaceDelegationTeamSet unions core_team with existing edge endpoints).
+//
+// Adapted from the fix wave's literal `[ava,jim,worker] → [ava,ray]` example:
+// with worker also removed, NEITHER ava's nor ray's compiled seed target
+// (worker for ava; worker/researcher for ray) would remain on the new team,
+// so that exact composition seeds zero new edges and cannot demonstrate the
+// "addition seeds a real edge" half of this test. Keeping worker on the new
+// team is the smallest change that preserves the "combined add+remove in one
+// call" scenario while still producing a demonstrable ray-involving seed.
+func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker", "ray")
+	id := "01KW60SEED0000000000000007"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Combined Add Remove Test",
+		"status": "active",
+		"core_team": ["ava", "jim", "worker"],
+		"delegation": [
+			{"from_agent":"jim","to_agent":"ava","modes":["task","direct"]},
+			{"from_agent":"jim","to_agent":"worker","modes":["task","direct"]},
+			{"from_agent":"ava","to_agent":"worker","modes":["task","direct"]}
+		],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove jim, add ray — in one call.
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava", "worker", "ray"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	m := parseSuccess(t, res.ForLLM)
+	note, _ := m["delegation_seeded"].(string)
+	if !strings.Contains(note, "ray") {
+		t.Errorf("delegation_seeded note = %q, want it to mention ray", note)
+	}
+
+	edges := delegationEdgesFromDisk(t, home, id)
+
+	// The addition: ray→worker seeded (both endpoints on NEW team + in config).
+	if findEdge(edges, "ray", "worker") == nil {
+		t.Errorf("expected ray→worker edge to be seeded, got %v", edges)
+	}
+	// ray→researcher dropped — researcher is not on the team.
+	if findEdge(edges, "ray", "researcher") != nil {
+		t.Error("ray→researcher must be dropped — researcher is not on the team")
+	}
+
+	// Edges referencing the removed member (jim) survive un-GC'd.
+	if findEdge(edges, "jim", "ava") == nil {
+		t.Error("jim→ava must survive un-GC'd even though jim was removed from core_team")
+	}
+	if findEdge(edges, "jim", "worker") == nil {
+		t.Error("jim→worker must survive un-GC'd even though jim was removed from core_team")
+	}
+
+	// The pre-existing ava→worker edge is untouched (neither endpoint newly added).
+	avaWorker := findEdge(edges, "ava", "worker")
+	if avaWorker == nil {
+		t.Fatal("expected the pre-existing ava→worker edge to survive")
+	}
+	if modes := modesOf(avaWorker); len(modes) != 2 {
+		t.Errorf("pre-existing ava→worker edge must be left untouched, got modes=%v", modes)
+	}
+
+	if len(edges) != 4 {
+		t.Errorf("expected exactly 4 edges (3 pre-existing + 1 new ray→worker), got %d: %v", len(edges), edges)
+	}
+}
+
+// ---- update_workspace: SetupPending completion (fix wave finding #2) ----
+
+// TestWorkspaceUpdate_InstallingTeamClearsSetupPending verifies that setting a
+// non-empty core_team on a workspace with SetupPending=true clears the flag
+// and notes it in the tool result. Scenario: a workspace was created via REST
+// with SetupPending left true (the normal "Ava interviews the user on first
+// open" flow), but the user asks Ava, in a different chat, to staff it
+// directly via update_workspace before ever opening that workspace's chat.
+// Installing the team through this tool call IS the setup completing.
+func TestWorkspaceUpdate_InstallingTeamClearsSetupPending(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava")
+	id := "01KW60SETUP000000000000001"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Setup Pending Test",
+		"status": "active",
+		"core_team": ["ava"],
+		"setup_pending": true,
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	m := parseSuccess(t, res.ForLLM)
+	if note, _ := m["setup_completed"].(string); note == "" {
+		t.Error("expected a setup_completed note in the success result when SetupPending was cleared")
+	}
+
+	if setupPendingFromDisk(t, home, id) {
+		t.Error("SetupPending must be false on disk after a core_team update installs a team")
+	}
+}
+
+// TestWorkspaceUpdate_NoCoreTeamArg_SetupPendingUntouched verifies that an
+// update with NO core_team argument at all (e.g. a plain rename) must never
+// touch SetupPending, even if it is currently true.
+func TestWorkspaceUpdate_NoCoreTeamArg_SetupPendingUntouched(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava")
+	id := "01KW60SETUP000000000000002"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Setup Pending Untouched Test",
+		"status": "active",
+		"core_team": ["ava"],
+		"setup_pending": true,
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":   id,
+		"name": "Renamed Setup Pending Test",
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	m := parseSuccess(t, res.ForLLM)
+	if note, hasNote := m["setup_completed"]; hasNote {
+		t.Errorf("no core_team arg was supplied — setup_completed note should be absent, got %v", note)
+	}
+
+	if !setupPendingFromDisk(t, home, id) {
+		t.Error("SetupPending must stay true — no core_team arg was supplied")
+	}
+}
+
+// TestWorkspaceUpdate_CoreTeamOnNonPending_NoOp verifies that setting
+// core_team on a workspace whose SetupPending is already false is a no-op on
+// the flag (stays false, no setup_completed note) — this fix only fires when
+// it actually FLIPS the flag.
+func TestWorkspaceUpdate_CoreTeamOnNonPending_NoOp(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim")
+	id := "01KW60SETUP000000000000003"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Non Pending Test",
+		"status": "active",
+		"core_team": ["ava"],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava", "jim"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	m := parseSuccess(t, res.ForLLM)
+	if note, hasNote := m["setup_completed"]; hasNote {
+		t.Errorf("workspace was never setup_pending — setup_completed note should be absent, got %v", note)
+	}
+
+	if setupPendingFromDisk(t, home, id) {
+		t.Error("SetupPending must remain false — it was never true to begin with")
+	}
+}
+
+// setupPendingFromDisk reads workspaces/<id>.json and returns its
+// "setup_pending" bool field (false if absent — matches the omitempty tag).
+func setupPendingFromDisk(t *testing.T, home, id string) bool {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+	if err != nil {
+		t.Fatalf("read workspace file: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("workspace JSON unparseable: %v", err)
+	}
+	sp, _ := raw["setup_pending"].(bool)
+	return sp
 }
 
 // ---- delete_workspace ----

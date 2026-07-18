@@ -323,12 +323,42 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 		added := teamDiffAdded(oldTeam, w.CoreTeam)
 		if len(added) > 0 {
 			ceiling := workspaceDelegationDepthCeiling(t.deps)
-			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, w.Delegation, ceiling)
+			configPresent := configAgentPresenceSet(t.deps)
+			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, w.Delegation, ceiling, configPresent)
 			if len(seeded) > 0 {
 				w.Delegation = append(w.Delegation, seeded...)
 				delegationSeedNote = seededEdgesSummary(seeded, added)
 			}
 		}
+	}
+
+	// Clear SetupPending when this update installs a non-empty team (fix
+	// wave, final-gate consensus finding #2). Scenario: a workspace is
+	// created via REST with SetupPending left true (the normal "Ava will
+	// interview the user on first open" flow — see rest_workspaces.go's
+	// handleWorkspaceCreate), but before the user ever opens that
+	// workspace's chat the user instead asks Ava, in a DIFFERENT chat, to
+	// staff it directly via this tool. If SetupPending survived that,
+	// first-open would still fire the setup-kickoff interview later —
+	// possibly greeting the user as whichever agent leads core_team[0]
+	// (not necessarily Ava, and not necessarily chat-eligible at all) —
+	// over a team that has already been built. Installing a team through
+	// this tool call IS the setup completing, so it must clear the flag
+	// itself; nothing else observes "team assembled via update_workspace"
+	// to clear it on this tool's behalf.
+	//
+	// Gated on coreTeamChanged (never fires on a core_team-less update —
+	// e.g. a plain rename must never touch the flag) and on the update
+	// actually producing a non-empty team (an update that clears core_team
+	// to empty is not "setup", it's un-staffing — SetupPending should stay
+	// as-is so a later real staffing attempt, tool or first-open, still
+	// gets a chance to run). A no-op (flag already false) leaves
+	// setupCompletedNote empty, so the response note only appears when this
+	// call is the one that actually flipped it.
+	var setupCompletedNote string
+	if coreTeamChanged && len(w.CoreTeam) > 0 && w.SetupPending {
+		w.SetupPending = false
+		setupCompletedNote = "workspace setup marked complete"
 	}
 
 	// Defensive delegation-edge validation (security boundary — fail closed).
@@ -379,6 +409,9 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	if delegationSeedNote != "" {
 		resp["delegation_seeded"] = delegationSeedNote
 	}
+	if setupCompletedNote != "" {
+		resp["setup_completed"] = setupCompletedNote
+	}
 	return tools.NewToolResult(successJSON(resp))
 }
 
@@ -410,10 +443,17 @@ func teamDiffAdded(oldTeam, newTeam []string) []string {
 // This is a DELIBERATE, INDEPENDENT copy of agent.EdgeModeCategory
 // (pkg/agent/loop.go), not a shared call: pkg/agent/loop.go already imports
 // pkg/sysagent/tools (as systools), so the reverse import here would create
-// an import cycle. pkg/gateway's defaultWorkspaceDelegationEdges has the
-// exact same collapse logic and the same "deliberate independent
-// replication" precedent (its own doc comment explains why it doesn't share
-// a helper with pkg/agent either). Keep this in lock-step with
+// an import cycle. pkg/gateway does NOT have a comparable independent copy —
+// pkg/gateway already imports pkg/agent extensively, so its
+// defaultWorkspaceDelegationEdges CALLS agent.EdgeModeCategory directly
+// (pkg/gateway/rest_workspace_delegation.go) instead of replicating the
+// collapse. The only other place this exact loop is replayed independently
+// is the gateway's own parity test,
+// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed
+// (pkg/gateway/rest_workspace_delegation_test.go), which deliberately
+// re-derives the expected edge set without going through
+// defaultWorkspaceDelegationEdges so it can catch a regression in that
+// function's transformation logic. Keep this in lock-step with
 // agent.EdgeModeCategory if that mapping ever changes.
 func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 	switch mode {
@@ -441,6 +481,18 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 // A candidate edge is included iff ALL of:
 //   - both endpoints are members of newTeam (an edge never reaches outside
 //     the team being saved);
+//   - both endpoints are present in the live agent config (configPresent,
+//     built from Deps.GetCfg().Agents.List — see configAgentPresenceSet).
+//     newTeam is caller-supplied (a workspace's stored core_team, or the
+//     tool's raw core_team argument) and is never itself validated against
+//     the roster, while coreagent.SeedDelegationEdges keys off a compiled
+//     constant ID string ("jim", "ava", "worker", ...) rather than looking
+//     the agent up in cfg — so without this check a core_team entry that
+//     names a deleted-but-still-seed-keyed agent (or a stale/typo'd ID that
+//     happens to collide with a seed key) would still produce a persisted
+//     edge naming a nonexistent agent. Mirrors the gateway's own
+//     presence-map pattern (defaultWorkspaceDelegationEdges iterates
+//     cfg.Agents.List directly for its `from` side);
 //   - at least one endpoint is in `added` (edges wholly among PRE-EXISTING
 //     members are never re-added — a prior deliberate removal of that edge
 //     via the Team tab's delegation PUT stays removed, even though the
@@ -453,11 +505,37 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 //   - the candidate edge passes workspace.DelegationEdge.Validate against
 //     newTeam and ceiling. An invalid candidate is dropped and logged, never
 //     escalated to a failure of the whole update.
+//
+// Two deliberate semantics worth calling out explicitly:
+//
+//  1. Remove-then-re-add RE-SEEDS. If a member is removed from core_team in
+//     one update and re-added in a later one, it is — from this function's
+//     point of view — indistinguishable from a brand-new addition: its
+//     default edges are seeded again (bounded to the compiled matrix, and
+//     only for edges whose OTHER endpoint is currently on the team). This is
+//     intentional, not a gap the "never resurrect a removed edge" rule
+//     above is supposed to close — that rule only protects edges among
+//     members that stayed on the team the whole time. Re-adding a member is
+//     itself an affirmative action visible in the Team tab, so re-seeding
+//     its defaults is the expected, reviewable outcome.
+//
+//  2. The REST PUT path (pkg/gateway's handleWorkspaceDelegationPut) does
+//     NOT call this or any equivalent auto-seed logic. That endpoint is the
+//     Team tab UI's save path: the UI reads the CURRENT graph, lets a human
+//     edit it, and PUTs back the COMPLETE edge list it computed — auto-seeding
+//     there would mean the tool silently reintroducing edges the human just
+//     deleted in the same save, or duplicating ones they kept. Auto-seeding
+//     is scoped to update_workspace (this tool, primarily driven by Ava's
+//     workspace-setup interview) and workspace creation
+//     (defaultWorkspaceDelegationEdges) — the two paths that only ever GROW
+//     a team programmatically and have no "human just edited the graph
+//     directly" step to clobber.
 func seedDelegationEdgesForNewMembers(
 	newTeam []string,
 	added []string,
 	existing []workspacepkg.DelegationEdge,
 	ceiling int,
+	configPresent map[string]bool,
 ) []workspacepkg.DelegationEdge {
 	if len(added) == 0 || len(newTeam) == 0 {
 		return nil
@@ -477,6 +555,9 @@ func seedDelegationEdgesForNewMembers(
 
 	var out []workspacepkg.DelegationEdge
 	for _, from := range newTeam {
+		if !configPresent[from] {
+			continue
+		}
 		dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(from))
 		if dp == nil || len(dp.To) == 0 {
 			continue
@@ -502,6 +583,9 @@ func seedDelegationEdgesForNewMembers(
 			}
 			to := ref.ID
 			if !teamSet[to] {
+				continue
+			}
+			if !configPresent[to] {
 				continue
 			}
 			if !addedSet[from] && !addedSet[to] {
@@ -559,6 +643,38 @@ func seededEdgesSummary(seeded []workspacepkg.DelegationEdge, added []string) st
 	}
 	sort.Strings(names)
 	return fmt.Sprintf("seeded %d default delegation edge(s) for: %s", len(seeded), strings.Join(names, ", "))
+}
+
+// configAgentPresenceSet returns the set of agent IDs present in the live
+// config's Agents.List, for use as seedDelegationEdgesForNewMembers's
+// configPresent filter. Mirrors the gateway's presence-map pattern: pkg/gateway's
+// defaultWorkspaceDelegationEdges iterates cfg.Agents.List directly for its
+// `from` side, so a from-agent absent from the live roster can never seed a
+// stale edge there. seedDelegationEdgesForNewMembers instead iterates the
+// caller-supplied newTeam (a workspace's core_team, which is never itself
+// validated against the roster), so without this presence check a stale or
+// typo'd core_team entry that happens to collide with a compiled
+// coreagent.SeedDelegationEdges key ("jim", "ava", "worker", ...) could still
+// seed an edge naming an agent that no longer exists in config.
+//
+// A nil Deps/GetCfg/Config (test scaffolding without a wired config) yields
+// an empty set — every candidate is excluded rather than trusting an unknown
+// roster, matching this codebase's "no default-policy fallback" convention
+// (CLAUDE.md Hard Constraint #6): presence is explicit, seeded data, never a
+// permissive code branch.
+func configAgentPresenceSet(d *Deps) map[string]bool {
+	present := make(map[string]bool)
+	if d == nil || d.GetCfg == nil {
+		return present
+	}
+	cfg := d.GetCfg()
+	if cfg == nil {
+		return present
+	}
+	for i := range cfg.Agents.List {
+		present[cfg.Agents.List[i].ID] = true
+	}
+	return present
 }
 
 // workspaceDelegationDepthCeilingFallback mirrors the gateway's
@@ -634,16 +750,22 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 			"confirm must be true to delete a workspace", ""))
 	}
 
-	// Serialize the whole read-check-cascade-remove cycle against this
-	// workspace ID (workspace.LockID), mirroring the gateway's
-	// handleWorkspaceDelete: a racing kickoff consume, PUT, or
-	// delegation-PUT must not be able to read/write the workspace file while
-	// this irreversible delete is in flight.
+	// Serialize the read-check-cascade-remove cycle against this workspace ID
+	// (workspace.LockID), mirroring the gateway's handleWorkspaceDelete: a
+	// racing kickoff consume, PUT, or delegation-PUT must not be able to
+	// read/write the workspace file while this irreversible delete is in
+	// flight. Released explicitly (no defer) the moment the authoritative
+	// workspace JSON is gone (Step 2) — Step 3's directory sweep is
+	// best-effort cleanup that never touches workspaces/{id}.json, so
+	// holding the lock across a potentially large recursive os.RemoveAll
+	// buys no correctness benefit and would needlessly block a
+	// shard-colliding kickoff's WS readLoop. Mirrors the gateway's Fix 1
+	// (amended) restructure in handleWorkspaceDelete.
 	unlock := workspacepkg.LockID(id)
-	defer unlock()
 
 	// Guard: verify the workspace exists before any irreversible mutations.
 	if _, err := readWorkspaceFromDisk(t.deps.Home, id); err != nil {
+		unlock()
 		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
 			"Use list_workspaces to see available workspaces"))
 	}
@@ -651,6 +773,7 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 	// Step 1: cascade-delete tasks
 	tasks, err := listEntities[unifiedTask](tasksDir(t.deps.Home))
 	if err != nil {
+		unlock()
 		slog.Error("sysagent: workspace cascade delete: failed to list tasks", "workspace_id", id, "error", err)
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", "could not list tasks for cascade delete: "+err.Error(), ""))
 	}
@@ -669,10 +792,16 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 		}
 	}
 
-	// Step 2: delete the workspace file.
+	// Step 2: delete the workspace file. This is the authoritative delete —
+	// still under the lock.
 	if err := deleteEntity(workspacesDir(t.deps.Home), id); err != nil {
+		unlock()
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
+
+	// The workspace file is gone — release the lock now. Step 3 below is
+	// best-effort cascade cleanup that does not touch workspaces/{id}.json.
+	unlock()
 
 	// Step 3: best-effort cascade of per-workspace directory (AGENT.md / memory room).
 	// The JSON removal above is the authoritative delete; a stale directory is not fatal.
