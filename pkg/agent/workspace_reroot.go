@@ -71,7 +71,12 @@ func resolveTurnWorkDirOrRefuse(agentID, optWorkspaceID string) (string, error) 
 			"turn refused: invalid workspace id resolving work dir",
 			map[string]any{"agent_id": agentID, "workspace_id": wsID, "error": idErr.Error()},
 		)
-		return "", fmt.Errorf("workspace work dir unavailable for agent_id=%s workspace_id=%s: %w", agentID, wsID, idErr)
+		return "", fmt.Errorf(
+			"workspace work dir unavailable for agent_id=%s workspace_id=%s: %w",
+			agentID,
+			wsID,
+			idErr,
+		)
 	}
 
 	if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
@@ -80,7 +85,12 @@ func resolveTurnWorkDirOrRefuse(agentID, optWorkspaceID string) (string, error) 
 			"turn refused: could not create workspace work dir",
 			map[string]any{"agent_id": agentID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
 		)
-		return "", fmt.Errorf("workspace work dir unavailable for agent_id=%s workspace_id=%s: %w", agentID, wsID, mkErr)
+		return "", fmt.Errorf(
+			"workspace work dir unavailable for agent_id=%s workspace_id=%s: %w",
+			agentID,
+			wsID,
+			mkErr,
+		)
 	}
 
 	return wsDir, nil

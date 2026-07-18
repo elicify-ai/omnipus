@@ -7,6 +7,7 @@
 // returns exactly these sentinels so callers (and path_audit.go's
 // classifyPathDenialReason) can classify a denial with errors.Is instead of
 // sniffing an error message string.
+
 package tools
 
 import (

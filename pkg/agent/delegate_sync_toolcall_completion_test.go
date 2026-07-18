@@ -184,7 +184,7 @@ func TestRunTurn_SyncDelegate_PersistsResultOnReload(t *testing.T) {
 				continue
 			}
 			found = true
-			require.Equalf(t, "success", string(tc.Status),
+			require.Equalf(t, "success", tc.Status,
 				"sync delegate should have completed successfully; got %+v", tc)
 			require.NotNilf(t, tc.Result,
 				"W4 sync path: the persisted delegate tool_call Result must be populated, not nil "+

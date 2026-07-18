@@ -47,7 +47,15 @@ func TestEffectiveFSPolicy_ReturnsConsistentPolicyShape(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			policy, err := EffectiveFSPolicy(context.Background(), agentHome, tc.turnWorkDir, tc.restrict, home, "agent-mia", "workspace-w1")
+			policy, err := EffectiveFSPolicy(
+				context.Background(),
+				agentHome,
+				tc.turnWorkDir,
+				tc.restrict,
+				home,
+				"agent-mia",
+				"workspace-w1",
+			)
 			if err != nil {
 				t.Fatalf("EffectiveFSPolicy: %v", err)
 			}
@@ -175,14 +183,22 @@ func TestFSPolicy_Validate(t *testing.T) {
 	})
 
 	t.Run("agent-home-rooted WorkDir passes", func(t *testing.T) {
-		p := FSPolicy{WorkDir: filepath.Join(home, "agents", "self"), Scope: FSScopeConfined, CarveOuts: buildCarveOuts(home)}
+		p := FSPolicy{
+			WorkDir:   filepath.Join(home, "agents", "self"),
+			Scope:     FSScopeConfined,
+			CarveOuts: buildCarveOuts(home),
+		}
 		if err := p.Validate(); err != nil {
 			t.Errorf("expected a well-formed agent-home-rooted policy to pass Validate, got: %v", err)
 		}
 	})
 
 	t.Run("workspace-rooted WorkDir passes", func(t *testing.T) {
-		p := FSPolicy{WorkDir: filepath.Join(home, "workspaces", "w1", "work"), Scope: FSScopeConfined, CarveOuts: buildCarveOuts(home)}
+		p := FSPolicy{
+			WorkDir:   filepath.Join(home, "workspaces", "w1", "work"),
+			Scope:     FSScopeConfined,
+			CarveOuts: buildCarveOuts(home),
+		}
 		if err := p.Validate(); err != nil {
 			t.Errorf("expected a well-formed workspace-rooted policy to pass Validate, got: %v", err)
 		}
@@ -209,12 +225,25 @@ func TestFSScope_P1NeverReturnsReservedValues(t *testing.T) {
 
 	for _, restrict := range []bool{true, false} {
 		for _, turnWorkDir := range []string{"", dir} {
-			policy, err := EffectiveFSPolicy(context.Background(), dir, turnWorkDir, restrict, home, "some-agent", "some-workspace")
+			policy, err := EffectiveFSPolicy(
+				context.Background(),
+				dir,
+				turnWorkDir,
+				restrict,
+				home,
+				"some-agent",
+				"some-workspace",
+			)
 			if err != nil {
 				t.Fatalf("EffectiveFSPolicy(restrict=%v, turnWorkDir=%q): %v", restrict, turnWorkDir, err)
 			}
 			if policy.Scope == FSScopeAsk || policy.Scope == FSScopeAllow {
-				t.Fatalf("P1 policy returned reserved scope %q for restrict=%v turnWorkDir=%q", policy.Scope, restrict, turnWorkDir)
+				t.Fatalf(
+					"P1 policy returned reserved scope %q for restrict=%v turnWorkDir=%q",
+					policy.Scope,
+					restrict,
+					turnWorkDir,
+				)
 			}
 			if policy.Scope != FSScopeConfined && policy.Scope != FSScopeUnrestricted {
 				t.Fatalf("unexpected scope %q for restrict=%v turnWorkDir=%q", policy.Scope, restrict, turnWorkDir)

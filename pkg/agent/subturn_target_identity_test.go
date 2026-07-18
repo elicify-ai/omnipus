@@ -144,8 +144,13 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 	// keyed off the TARGET's identity — never the parent's workspace, and
 	// never the target's raw agent.Home (workerWorkspace) either.
 	if opts[0].WorkDir != wantWorkDir {
-		t.Errorf("WorkDir = %q, want the TARGET worker's own workspace's work/ dir %q (not the parent's %q, not the target's raw Home %q)",
-			opts[0].WorkDir, wantWorkDir, parentWorkspace, workerWorkspace)
+		t.Errorf(
+			"WorkDir = %q, want the TARGET worker's own workspace's work/ dir %q (not the parent's %q, not the target's raw Home %q)",
+			opts[0].WorkDir,
+			wantWorkDir,
+			parentWorkspace,
+			workerWorkspace,
+		)
 	}
 	if opts[0].Model != "claude-sonnet-4.6" {
 		t.Errorf("Model = %q, want the TARGET worker's own configured model %q",

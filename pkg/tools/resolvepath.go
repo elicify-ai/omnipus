@@ -21,6 +21,7 @@
 // dimension but are NOT consulted for any decision here (Constraint #6: no
 // invented default, no early branch on a scope this package doesn't yet
 // implement).
+
 package tools
 
 import (

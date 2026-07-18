@@ -31,7 +31,10 @@ func TestCarveOut_AnchoredOnOmnipusHome_NotWorkingDir(t *testing.T) {
 			want bool
 		}{
 			{filepath.Join(home, "agents", "other", "SOUL.md"), true},
-			{filepath.Join(home, "agents", "self", "SOUL.md"), true}, // own home NOT within WorkDir here -> still a carve-out
+			{
+				filepath.Join(home, "agents", "self", "SOUL.md"),
+				true,
+			}, // own home NOT within WorkDir here -> still a carve-out
 			{filepath.Join(home, "master.key"), true},
 			{filepath.Join(home, "credentials.json"), true},
 			{filepath.Join(home, "workspaces", "other", "work", "x"), true},

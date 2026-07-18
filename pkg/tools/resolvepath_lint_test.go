@@ -156,7 +156,8 @@ func scanDirForRawFSIO(t *testing.T, dir string, allowlist map[string]string) []
 					pos := fset.Position(call.Pos())
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: direct filepath.EvalSymlinks call outside ResolvePath — route through ResolvePath+PathHandle instead",
-						filepath.Base(pos.Filename), pos.Line,
+						filepath.Base(pos.Filename),
+						pos.Line,
 					))
 				}
 			}
@@ -182,7 +183,7 @@ func TestFSTools_NoDirectFilesystemIO(t *testing.T) {
 	toolsDir := filepath.Dir(thisFile)
 	browserDir := filepath.Join(toolsDir, "browser")
 
-	var violations []string
+	violations := make([]string, 0, 2)
 	violations = append(violations, scanDirForRawFSIO(t, toolsDir, allowlistedRawFSFiles)...)
 	violations = append(violations, scanDirForRawFSIO(t, browserDir, allowlistedRawFSFilesBrowser)...)
 

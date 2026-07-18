@@ -516,7 +516,14 @@ func TestHostRW_Read_PermissionDenied(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.Chmod(protected, 0o644) // ensure cleanup
 
-	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "read_file", "", FSOpRead, protected)
+	handle, err := ResolvePath(
+		context.Background(),
+		unrestrictedPolicy(t, workDir),
+		"read_file",
+		"",
+		FSOpRead,
+		protected,
+	)
 	assert.NoError(t, err)
 	defer handle.Close()
 
@@ -563,7 +570,14 @@ func TestHostRW_Write_ParentDirMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "a", "b", "c", "file.txt")
 
-	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "write_file", "", FSOpWrite, target)
+	handle, err := ResolvePath(
+		context.Background(),
+		unrestrictedPolicy(t, workDir),
+		"write_file",
+		"",
+		FSOpWrite,
+		target,
+	)
 	assert.NoError(t, err)
 	defer handle.Close()
 
@@ -601,7 +615,14 @@ func TestHostRW_Write(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "atomic_test.txt")
 	testData := []byte("atomic test content")
 
-	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "write_file", "", FSOpWrite, testFile)
+	handle, err := ResolvePath(
+		context.Background(),
+		unrestrictedPolicy(t, workDir),
+		"write_file",
+		"",
+		FSOpWrite,
+		testFile,
+	)
 	assert.NoError(t, err)
 	defer handle.Close()
 

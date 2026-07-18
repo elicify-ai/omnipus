@@ -494,7 +494,7 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.PermissionDeniedResult("browser_screenshot", err, err.Error())
 	}
 	defer handle.Close()
-	if err := handle.WriteFile(buf); err != nil {
+	if err = handle.WriteFile(buf); err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to save: %s", err))
 	}
 	// RealPath is the ONE documented exception to "never hand back a bare
