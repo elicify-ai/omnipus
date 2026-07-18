@@ -174,9 +174,17 @@ func (r *AgentRegistry) IsWorker(agentID string) bool {
 // config as runner.DispatchKindExternalCLI, the same resolution
 // pkg/agent/subturn.go's spawnSubTurn performs before choosing between the
 // native and runExternalCLISubTurn dispatch paths (see executorConfigOf).
-// Returns false (native) for an unknown agent, an agent with no executor
-// override, an unresolvable executor config, or an empty agentID — matching
-// spawnSubTurn's own "nil/unset -> native" default.
+// Returns false for an unknown/empty agentID or a nil executor; a
+// ResolveDispatch error is also reported false.
+//
+// NOTE: this does NOT mirror spawnSubTurn — an unresolved target actually
+// dispatches with the parent's own executor (spawnSubTurn falls back to
+// baseAgent, subturn.go ~L537-565), and a ResolveDispatch error there FAILS
+// the delegation outright (subturn.go ~L1173-1179) rather than defaulting to
+// native. So a parent configured as external-CLI delegating to an
+// unknown/empty target is misclassified native here. Accepted for W2's scope
+// (Is3P only gates whether to attempt a native transcript snapshot; the
+// mislabeled task fails fast and degrades gracefully).
 //
 // Satisfies the tools.DelegateAgentRegistry interface used by DelegateTool
 // (W2: action:"status" live-progress scoping — a running subagent_3p task

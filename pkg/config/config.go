@@ -3321,6 +3321,19 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// boot-frozen public_url contract. Runs before validateBootConfig so the
 	// auto-detected value is still subject to the same well-formed-URL check
 	// as an operator-supplied one.
+	//
+	// Scope (Constraint #1, single-binary/pure-Go core with no vendor
+	// lock-in): the GENERIC, platform-agnostic override for every operator —
+	// reverse-proxy, bare metal, any cloud — is OMNIPUS_GATEWAY_PUBLIC_URL
+	// (or gateway.public_url in config.json), bound via the PublicURL
+	// struct tag's `env:"OMNIPUS_GATEWAY_PUBLIC_URL"` and resolved by
+	// env.Parse before this function ever runs, so it ALWAYS wins over the
+	// check below (see the `if strings.TrimSpace(cfg.Gateway.PublicURL) ==
+	// ""` guard). DEVPOD_PREVIEW_URL is deliberately narrower: a
+	// devpod-platform-specific CONVENIENCE fallback that only fires for
+	// zero-config pods on that one platform — it is read nowhere else in the
+	// codebase and must stay that way; it is not, and must never become, the
+	// primary mechanism.
 	if strings.TrimSpace(cfg.Gateway.PublicURL) == "" {
 		if previewURL := strings.TrimSpace(os.Getenv("DEVPOD_PREVIEW_URL")); previewURL != "" {
 			cfg.Gateway.PublicURL = previewURL

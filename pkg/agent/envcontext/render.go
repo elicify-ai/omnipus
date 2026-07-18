@@ -88,7 +88,9 @@ func render(p Provider, workspaceOverride string) string {
 	// item that's a URL, not a filesystem path — it's where pages the agent
 	// serves (e.g. via serve_web) are reachable from OUTSIDE the sandbox.
 	if publicURL := strings.TrimSpace(p.PublicURL()); publicURL != "" {
-		fmt.Fprintf(&sb, "- Public URL (externally reachable base for pages you serve, e.g. via serve_web): %s\n", publicURL)
+		fmt.Fprintf(&sb,
+			"- Public URL (externally reachable base for pages you serve, e.g. via serve_web): %s\n",
+			publicURL)
 	}
 
 	if len(warnings) > 0 {

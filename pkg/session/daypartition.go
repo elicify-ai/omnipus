@@ -236,6 +236,14 @@ type TranscriptEntry struct {
 // entries while the REST cold-load path did not, so a fresh page load/reopen
 // dumped raw delegate narration — including "[external-cli permission]"
 // lines — into the main chat that a live reconnect never showed).
+//
+// This filtering is deliberately SERVER-SIDE, at both call sites above,
+// applied BEFORE any wire frame is built — never as a client-side/SPA
+// visibility filter. A delegate's raw internal narration (including tool-
+// permission detail) must never cross the wire in the first place; a
+// client-side filter would still leak that content to anyone inspecting
+// network traffic or a stored payload. Do not move or duplicate this check
+// into frontend code.
 func (e TranscriptEntry) IsDelegateChildEntry() bool {
 	return e.ParentSpawnCallID != ""
 }

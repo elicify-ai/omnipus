@@ -1526,11 +1526,14 @@ func registerSharedTools(
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
 			delegateTool.SetSpawner(NewSubTurnSpawner(al))
 			// W2: action:"status" live-progress snapshot for a running native
-			// task. sharedStore mirrors the exact store/registry wiring
-			// getRegistryReader/NewHandoffTool already use just above — a
-			// live func() so hot reloads are reflected, and the same
+			// task. sharedStore mirrors the exact store wiring
+			// NewHandoffTool already uses just above (line ~1469) — the same
 			// *session.UnifiedStore delegated children's transcript entries
-			// are actually written to.
+			// are actually written to. It is a plain value captured once at
+			// registration time (NOT a live func()), so it does not itself
+			// reflect a later hot reload; SetAgentRegistry below is the one
+			// that gets the live func() treatment, since al.GetRegistry() is
+			// invoked fresh on every call.
 			delegateTool.SetSessionStore(sharedStore)
 			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
 			currentAgentID := agentID
