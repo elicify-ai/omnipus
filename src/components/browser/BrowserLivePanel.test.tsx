@@ -116,6 +116,12 @@ describe('BrowserLivePanel (always-docked)', () => {
         '_blank',
         'noopener,noreferrer',
       )
+      // UAT 2026-07-18: popping out HANDS OVER the view — the docked panel
+      // closes (unmount detaches its viewer; the server releases the drive
+      // lock on detach), so the pop-out is never wedged behind this
+      // connection's control lock ("Someone else is driving", dead input).
+      expect(useUiStore.getState().browserPanel).toBeNull()
+      expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
 
       openSpy.mockRestore()
       sessionStorage.clear()

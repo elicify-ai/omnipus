@@ -22,6 +22,22 @@ const gatherTimeout = 10 * time.Second
 // encoder may not have connected yet).
 const waitForTracksTimeout = 5 * time.Second
 
+// audioGraceTimeout bounds how much LONGER waitForTracks keeps waiting for
+// the audio track once video is already present. The viewer PeerConnection
+// has no renegotiation path — whatever tracks exist at answer time are ALL
+// that viewer will ever receive — and the encoder's tabCapture always
+// requests audio (captureext/embedded/encoder.js: audio is mandatory), so on
+// a cold capture start the audio track reliably arrives within milliseconds
+// of video (Chrome's Opus encoder sends packets continuously, silence
+// included). Without this grace the FIRST viewer — the one whose offer
+// triggered the capture start — routinely won its race against the audio
+// track's OnTrack and was answered video-only forever (UAT: "video works,
+// no audio"). Kept short so a hypothetical genuinely audio-less ingest only
+// delays that first answer, never blocks it (video-only remains tolerated,
+// per the W1-C requirement). A var (not const) purely as a test seam,
+// mirroring browser.captureGracePeriod.
+var audioGraceTimeout = 2 * time.Second
+
 // HandleIngestOffer is the signaling entry point for the ENCODER leg: the
 // headless-Chrome tabCapture page (or, in tests, a fake Pion "encoder")
 // offers its captured video (+ optional audio) track here. Non-trickle: this
@@ -254,20 +270,35 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 
 // waitForTracks polls for the shared local tracks to exist, up to timeout.
 // Video is mandatory (returns ok=false if it never arrives); audio is
-// optional -- per the W1-C requirement ("one video + one audio track
-// expected but tolerate video-only"), this returns ok=true as soon as video
-// is present even if audio never shows up, so a video-only capture (e.g. the
-// tab had no audio permission) still serves viewers.
+// expected but ultimately optional -- per the W1-C requirement ("one video +
+// one audio track expected but tolerate video-only"). Because the viewer leg
+// has no renegotiation (tracks attached at answer time are final for that
+// viewer), video alone is NOT immediately good enough: once video is
+// present, this keeps waiting up to audioGraceTimeout longer for audio (the
+// two OnTrack firings are normally milliseconds apart -- the grace only
+// actually elapses for a genuinely audio-less ingest) and only then answers
+// video-only. This mirrors the WV1 spike's waitForTracks, which waited for
+// BOTH tracks -- relaxing it to video-only-immediately is what introduced
+// the first-viewer no-audio race (UAT 2026-07-18).
 func (s *Session) waitForTracks(timeout time.Duration) (video, audio *webrtc.TrackLocalStaticRTP, ok bool) {
 	deadline := time.Now().Add(timeout)
+	var audioDeadline time.Time // armed once video is first observed
 	for {
 		s.mu.Lock()
 		v, a := s.videoTrack, s.audioTrack
 		s.mu.Unlock()
-		if v != nil {
+		if v != nil && a != nil {
 			return v, a, true
 		}
-		if time.Now().After(deadline) {
+		now := time.Now()
+		if v != nil {
+			if audioDeadline.IsZero() {
+				audioDeadline = now.Add(audioGraceTimeout)
+			}
+			if now.After(audioDeadline) {
+				return v, a, true // audio never arrived within the grace -- answer video-only
+			}
+		} else if now.After(deadline) {
 			return v, a, false
 		}
 		time.Sleep(50 * time.Millisecond)

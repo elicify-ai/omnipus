@@ -49,6 +49,21 @@ export function BrowserLivePanel() {
     // the fragment, not the path, or the router ignores it and falls to
     // the default route. Must be `/#/browser-live?…`, not `/browser-live?…`.
     window.open(`/#/browser-live?${params.toString()}`, '_blank', 'noopener,noreferrer')
+    // UAT 2026-07-18 ("fullscreen inputs don't work"): the pop-out is a
+    // SECOND viewer connection, and the control lock is first-come/no-preempt
+    // (live.go TakeControl, ADR-038 D6). Leaving the docked panel mounted
+    // kept its WS+PC alive — and if it held (or later took) the drive lock,
+    // the pop-out was permanently "Someone else is driving": every
+    // pointer/keyboard event bailed out (BrowserLiveView handlePointerDown's
+    // other-driving guard + takeWheelIfNeeded's controlledByOtherRef guard).
+    // Popping out therefore HANDS OVER the view: close the docked panel,
+    // whose unmount cleanup detaches its viewer — and the server releases
+    // the lock on detach (LiveViewRegistry.Detach: "releases control if
+    // viewerID currently holds it") — so the pop-out can take the wheel.
+    // (window.open with 'noopener' returns null by spec, so success can't be
+    // checked here; a user-gesture open is not popup-blocked in practice,
+    // and re-opening the panel is one "Watch live" click if it ever is.)
+    closeBrowserPanel()
   }
 
   return (
