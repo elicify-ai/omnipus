@@ -56,15 +56,19 @@ func newExecPathTestConfig(t *testing.T, root string) BrowserConfig {
 }
 
 // seedManagedBinary creates a fake managed-install binary at the on-disk
-// layout EnsureChromium/findInstalledBinary expect
-// (<installRoot>/<version>/<cftDownloadID>-<platform>/<binaryName>) so
-// resolveExecPath's managed fallback finds it without ever touching the
-// network. Returns the seeded binary's absolute path.
+// layout EnsureChromium/findInstalledBuild expect for the current
+// platform's default build (selectDownloadBuild — full "chrome" on linux,
+// since EnsureChromium resolves a SPECIFIC requested build per-build, not a
+// detect-either lookup across both flavors) so resolveExecPath's managed
+// fallback finds it without ever touching the network. Returns the seeded
+// binary's absolute path.
 func seedManagedBinary(t *testing.T, installRoot, platform string) string {
 	t.Helper()
-	versionDir := filepath.Join(installRoot, "131.0.6778.108", cftDownloadID+"-"+platform)
+	build := selectDownloadBuild()
+	versionDir := filepath.Join(installRoot, "131.0.6778.108", build.subdir(platform))
 	require.NoError(t, os.MkdirAll(versionDir, 0o755))
-	binPath := filepath.Join(versionDir, headlessShellBinaryName())
+	binPath := filepath.Join(versionDir, build.binaryPath())
+	require.NoError(t, os.MkdirAll(filepath.Dir(binPath), 0o755))
 	writeExecutable(t, binPath, "#!/bin/sh\nexit 0\n")
 	return binPath
 }
@@ -270,11 +274,22 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zip", func(w http.ResponseWriter, _ *http.Request) {
+		// downloadFile now verifies the GCS-standard X-Goog-Hash checksum
+		// before trusting the download (verifyGoogHashMD5) — set it here so
+		// this fixture's fake zip response passes integrity verification,
+		// same as installer_test.go's googHashMD5Header helper.
+		w.Header().Set("X-Goog-Hash", googHashMD5Header(zipBytes))
 		_, _ = w.Write(zipBytes)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
+	// Deliberately no cftFullChromeDownloadID entry: on linux this exercises
+	// EnsureChromiumBuild's "preferred build missing from manifest" fallback
+	// to chrome-headless-shell (selectDownloadBuild requests full chrome
+	// first); off linux, selectDownloadBuild already requests
+	// chrome-headless-shell directly. Either way resolution lands on the
+	// headless-shell zip fixture below.
 	manifest := cftManifest{
 		Channels: map[string]struct {
 			Version   string                              `json:"version"`
