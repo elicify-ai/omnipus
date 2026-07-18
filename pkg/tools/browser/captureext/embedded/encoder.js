@@ -142,7 +142,7 @@ const PING_BEACON_INTERVAL_MS = 15000;
 // for a 1280x720 browsing UI (comfortably covers text and moving video
 // alike) while giving the encoder a real ceiling to degrade against.
 // Overridable per-install via window.__omnipusCapture.maxVideoBitrate
-// (bits/sec) for future config -- see readConfig's doc comment for the
+// (bits/sec) for future config -- see the file header for the
 // injection mechanism; unset/invalid falls back to this default.
 const DEFAULT_MAX_VIDEO_BITRATE_BPS = 2000000;
 
@@ -343,8 +343,30 @@ async function captureActiveTabStream() {
   return stream;
 }
 
+// DEFAULT_STUN_SERVER is the fallback used only when the gateway injecting
+// this page's config predates the `stunServer` key entirely (back-compat).
+const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302';
+
+// resolveIceServers implements window.__omnipusCapture.stunServer's
+// tri-state contract (fix-wave, LOW -- previously this hardcoded the Google
+// public STUN server unconditionally, ignoring operator config):
+//   - a non-empty string  -> use exactly that STUN server (operator config)
+//   - an empty string (''), i.e. the key IS present but deliberately blank
+//     -> host-candidates-only, no STUN server at all (iceServers: [])
+//   - the key absent entirely (an older gateway build that predates this
+//     config, or a verification harness that injects window.__omnipusCapture
+//     without it) -> fall back to DEFAULT_STUN_SERVER, matching this file's
+//     pre-fix-wave behavior exactly (back-compat).
+function resolveIceServers() {
+  const cfg = window.__omnipusCapture || {};
+  if (typeof cfg.stunServer === 'string') {
+    return cfg.stunServer === '' ? [] : [{ urls: cfg.stunServer }];
+  }
+  return [{ urls: DEFAULT_STUN_SERVER }];
+}
+
 function newPeerConnection() {
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  const pc = new RTCPeerConnection({ iceServers: resolveIceServers() });
   pc.oniceconnectionstatechange = () => {
     window.__omnipusState.iceState = pc.iceConnectionState;
     record('ice state -> ' + pc.iceConnectionState);
@@ -415,11 +437,29 @@ async function handleControlFrame(msg) {
   record('control frame: action=' + action + (msg.reason ? ' reason=' + msg.reason : ''));
 
   if (action === 'recapture') {
+    const forWs = ws;
     try {
       await runCaptureAndOffer();
     } catch (e) {
       window.__omnipusState.lastError = String(e);
       record('recapture FAILED: ' + e);
+      // fix-wave (HIGH): without closing the socket here, a failed
+      // recapture left the ping beacon running forever with no way for the
+      // gateway to ever learn capture died -- the panel would freeze
+      // permanently (never recovers, never retries). Closing routes through
+      // the SAME 'close' handler every other disconnect uses, so the
+      // existing scheduleReconnect backoff/reconnect loop -- the documented
+      // recovery path -- is what actually recovers; no new recovery path is
+      // introduced. Guard against closing a newer socket, matching
+      // armOfferAnswerTimeout's forWs pattern above, in case a reconnect
+      // already replaced `ws` while this recapture attempt was in flight.
+      if (ws === forWs) {
+        try {
+          forWs.close();
+        } catch (closeErr) {
+          /* ignore */
+        }
+      }
     }
     return;
   }
@@ -478,9 +518,13 @@ async function handleWsMessage(raw) {
 
     case 'error':
       // ErrorFrame (contracts/components/schemas/ErrorFrame.yaml) — server
-      // -> client, does NOT terminate the connection. Surface it for
-      // debugging; the gateway is expected to close the connection
-      // separately if the error was fatal (e.g. an invalid hello token).
+      // -> client. Surface it for debugging. NOTE this is NOT what an
+      // invalid hello token produces — a rejected hello closes the
+      // connection with NO frame at all (see this file's header doc
+      // comment: "success is silent ... the only observable signal for a
+      // REJECTED hello is the WS closing"). The one actual producer of this
+      // frame is a rejected browser_capture_offer: the gateway sends this
+      // frame, THEN closes the connection.
       window.__omnipusState.lastError = msg.message || 'error frame with no message';
       record('server error frame: ' + window.__omnipusState.lastError);
       break;
@@ -503,6 +547,7 @@ function connectOnce(cfg) {
     sendFrame({ type: 'browser_capture_hello', token: cfg.token, ext_version: extVersion() });
     startWatchdogOnce();
     startPingBeacon();
+    const forWs = ws;
 
     // browser_capture_hello is client -> server only (no ack frame) — a
     // rejected token surfaces as the gateway closing the connection, not a
@@ -514,6 +559,21 @@ function connectOnce(cfg) {
       window.__omnipusState.lastError = String(e);
       setStatus('error');
       record('initial capture FAILED: ' + e);
+      // fix-wave (HIGH): without closing the socket here, an initial capture
+      // failure (no capturable tab, getUserMedia denied, etc.) left the page
+      // silently wedged in 'error' forever -- the ping beacon kept running
+      // and the gateway had no way to learn capture never started. Closing
+      // engages the SAME scheduleReconnect backoff/reconnect loop as every
+      // other disconnect (the documented recovery path) -- a fresh connect
+      // re-attempts capture. Guard against closing a newer socket, matching
+      // armOfferAnswerTimeout's forWs pattern above.
+      if (ws === forWs) {
+        try {
+          forWs.close();
+        } catch (closeErr) {
+          /* ignore */
+        }
+      }
     }
   });
 

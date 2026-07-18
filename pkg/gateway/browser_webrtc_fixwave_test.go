@@ -343,14 +343,14 @@ func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
 	// first step is a pure in-memory session lookup that fails before any
 	// CDP call).
 
-	handler, _ := newBrowserWSTestHandler(t, nil)
+	handler, al := newBrowserWSTestHandler(t, nil)
 	t.Cleanup(handler.Wait)
 
 	wc := newTestBrowserWSConn()
 	handler.registerWebRTCViewerConn("viewer-nonbenign", wc, "sess-nonbenign")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-nonbenign") })
 
-	sink := handler.webrtcInputSink(mgr)
+	sink := handler.webrtcInputSink(mgr, al.GetConfig())
 	x, y := 1.0, 2.0
 	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move", X: &x, Y: &y}
 	raw, err := json.Marshal(inputFrame)
@@ -403,7 +403,7 @@ func TestWebrtcInputSink_ViewerIdentityArbitration_ControllerVsNonController(t *
 	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewerA"),
 		"TakeControl for the first-ever controller of a session must succeed")
 
-	handler, _ := newBrowserWSTestHandler(t, nil)
+	handler, al := newBrowserWSTestHandler(t, nil)
 	t.Cleanup(handler.Wait)
 
 	wcA := newTestBrowserWSConn()
@@ -414,7 +414,7 @@ func TestWebrtcInputSink_ViewerIdentityArbitration_ControllerVsNonController(t *
 	handler.registerWebRTCViewerConn("viewerB", wcB, "sess-arb")
 	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewerB") })
 
-	sink := handler.webrtcInputSink(mgr)
+	sink := handler.webrtcInputSink(mgr, al.GetConfig())
 	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move"}
 	raw, err := json.Marshal(inputFrame)
 	require.NoError(t, err)

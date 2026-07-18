@@ -610,29 +610,6 @@ func (c *BrowserCoordinator) CaptureSharedContextEnabled() bool {
 	return c.captureSharedContextResolved()
 }
 
-// LiveSessionAgents returns the agentIDs of every registered manager that
-// currently has at least one open tab — the cheapest honest signal this
-// coordinator has for ADR-048 condition 2's multi-agent capture fence: in
-// shared-default-context capture mode the encoder always captures the
-// globally-active tab, so a SECOND agent's live tab makes which agent a
-// viewer actually sees ambiguous. The gateway's capture-start path
-// (browser_webrtc.go) denies starting a NEW capture session whenever this
-// returns more than one agent besides the one requesting capture.
-// Best-effort/racy by nature (a tab can open/close between this snapshot and
-// the caller's decision) — acceptable because the fence only needs to catch
-// the common, sustained multi-agent-browsing case, not a momentary overlap.
-func (c *BrowserCoordinator) LiveSessionAgents() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]string, 0, len(c.managers))
-	for id, mgr := range c.managers {
-		if mgr != nil && mgr.OpenTabCount() > 0 {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
 // TryOpenTab atomically checks the global tab budget AND reserves a slot under
 // ONE coordinator lock — so concurrent openers at the boundary see exactly one
 // winner (I-1/W3/C1, spec round-2 MAJ-007). It counts live tabs
@@ -726,12 +703,17 @@ func (c *BrowserCoordinator) KillCount() int {
 // shared Chrome via CDP Extensions.loadUnpacked — requires the running Chrome
 // to have been launched with --remote-debugging-pipe (always true here) and
 // --enable-unsafe-extension-debugging (managedExecAllocatorOpts adds it
-// whenever cfg.ExtensionID is set). WebRTC build hook (W1-A item 3): exposed
-// for the gateway's future encoder-extension wiring (recapture/reload
-// scenarios) — nothing in this package calls it except launchChrome's
-// best-effort auto-load below. Returns the extension id Chrome assigned,
-// which should match cfg.ExtensionID when the manifest pins a "key" (wave-plan
-// key decision 1).
+// whenever cfg.ExtensionID is set). Two callers: launchChrome's best-effort
+// auto-load below (fires once, right after the shared Chrome first comes up),
+// and capture_session.go's defaultEncoderStarter (fix-wave comment
+// correction — an earlier version of this doc comment claimed "nothing in
+// this package calls it except launchChrome's ... auto-load," which stopped
+// being true once WebRTC capture landed: defaultEncoderStarter re-checks
+// coord.LoadedExtensionID() on every capture-session Start() and calls this
+// again whenever it doesn't match captureext.ExtensionID — e.g. a crash-
+// relaunch that lost the previously-loaded extension state). Returns the
+// extension id Chrome assigned, which should match cfg.ExtensionID when the
+// manifest pins a "key" (wave-plan key decision 1).
 func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	rootCtx := c.rootCtx
@@ -789,10 +771,14 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 }
 
 // rootContext returns the shared Chrome's pipe root context (nil when Chrome
-// is not live). W3 e2e: the capture encoder page MUST be created as a child
-// of this context — i.e. in the DEFAULT browser context — because Chrome
-// refuses to load chrome-extension:// pages inside CDP-created browser
-// contexts (net::ERR_BLOCKED_BY_CLIENT) even with Extensions.loadUnpacked's
+// is not live). W3 e2e: the WebRTC capture EXTENSION'S ENCODER PAGE (the CDP
+// target capture_session.go's defaultEncoderStarter navigates to
+// chrome-extension://<id>/encoder.html — not to be confused with the
+// unrelated /api/v1/browser/capture-ingest HTTP/WS endpoint, which is a
+// gateway route, not a CDP context) MUST be created as a child of THIS
+// context — i.e. in the DEFAULT browser context — because Chrome refuses to
+// load chrome-extension:// pages inside CDP-created browser contexts
+// (net::ERR_BLOCKED_BY_CLIENT) even with Extensions.loadUnpacked's
 // enableInIncognito:true, which only grants the extension VISIBILITY/capture
 // of those contexts' tabs, not page hosting inside them (verified against
 // real Chrome 150 — see capture_session.go's defaultEncoderStarter).

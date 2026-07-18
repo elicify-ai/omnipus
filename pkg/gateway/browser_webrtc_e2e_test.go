@@ -452,16 +452,18 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 		enc          *e2eFakeEncoder
 		mintedToken  string
 		ingestURL    string
+		stunServer   string
 		starterCalls int
 	}
 	pumpStop := make(chan struct{})
 	t.Cleanup(func() { close(pumpStop) })
 
-	fakeStarter := browser.EncoderStarter(func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL string) (context.Context, context.CancelFunc, error) {
+	fakeStarter := browser.EncoderStarter(func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
 		encMu.Lock()
 		encState.starterCalls++
 		encState.mintedToken = tokenHex
 		encState.ingestURL = ingestURL
+		encState.stunServer = stunServer
 		encMu.Unlock()
 
 		enc, startErr := startE2EFakeEncoder(ingestURL, tokenHex)
@@ -486,7 +488,7 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	// ensureCaptureSession wires up in production — no production code was
 	// changed to make this observable.
 	var dcFramesObserved atomic.Int32
-	realSink := handler.webrtcInputSink(mgr)
+	realSink := handler.webrtcInputSink(mgr, al.GetConfig())
 	sink := webrtc.InputSink(func(viewerID string, raw []byte) {
 		realSink(viewerID, raw)
 		dcFramesObserved.Add(1)
@@ -571,11 +573,14 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	starterCalls := encState.starterCalls
 	mintedToken := encState.mintedToken
 	ingestURL := encState.ingestURL
+	stunServer := encState.stunServer
 	encMu.Unlock()
 	require.Equal(t, 1, starterCalls, "EncoderStarter must be invoked exactly once (one active stream per agent)")
 	require.Equal(t, cs.TokenHex(), mintedToken, "EncoderStarter must receive the SAME token ValidateToken checks against")
 	require.Contains(t, ingestURL, fmt.Sprintf(":%d/api/v1/browser/capture-ingest", port),
 		"EncoderStarter must receive the production-computed ingest URL, pointed at THIS test's own listener")
+	require.Empty(t, stunServer,
+		"EncoderStarter must receive the configured stunServer verbatim (this test leaves WebRTCStunServer empty — host-only ICE)")
 
 	e2eSetAnswer := func(pc *pion.PeerConnection, sdp string) {
 		require.NoError(t, pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: sdp}))

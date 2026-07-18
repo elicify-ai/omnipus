@@ -100,7 +100,7 @@ func (f *fakeRelay) closeCount() int {
 // chromedp: it just counts invocations and returns either a canceled-on-cancel
 // bare context or the configured error.
 func fakeEncoderStarter(callCount *int32, startErr error) EncoderStarter {
-	return func(_ context.Context, _ *BrowserManager, _, _ string) (context.Context, context.CancelFunc, error) {
+	return func(_ context.Context, _ *BrowserManager, _, _, _ string) (context.Context, context.CancelFunc, error) {
 		atomic.AddInt32(callCount, 1)
 		if startErr != nil {
 			return nil, nil, startErr
@@ -238,7 +238,7 @@ func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *
 	coord.loadedExtensionID = captureext.ExtensionID
 	coord.mu.Unlock()
 
-	_, _, err := defaultEncoderStarter(context.Background(), mgr, "deadbeef", "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
+	_, _, err := defaultEncoderStarter(context.Background(), mgr, "deadbeef", "ws://127.0.0.1:1/api/v1/browser/capture-ingest", "")
 	if err == nil {
 		t.Fatal("expected an error when the coordinator has no live root context")
 	}
@@ -267,7 +267,7 @@ func TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget(t *testing.T) 
 	cancelCalled := make(chan struct{})
 	var cancelOnce sync.Once
 
-	starter := EncoderStarter(func(context.Context, *BrowserManager, string, string) (context.Context, context.CancelFunc, error) {
+	starter := EncoderStarter(func(context.Context, *BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
 		close(startCalled)
 		<-releaseStart // block until the test releases it, simulating a slow chromedp.Run
 		tabCtx, cancel := context.WithCancel(context.Background())
@@ -688,6 +688,84 @@ func TestCaptureSession_ViewerIDs_SnapshotAndSurvivesStop(t *testing.T) {
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ViewerIDs() after Stop() = %v, want still %v (Stop must not clear cs.viewers)", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix-wave CRIT (reviewer 1, conf 88): Shutdown()/invalidateConnection() must
+// stop an orphaned CaptureSession rather than leaving it (and its encoder
+// tab, living in the coordinator's own root context — see
+// defaultEncoderStarter — outside anything these teardown paths otherwise
+// cancel) running forever, unstoppable once the manager itself is gone.
+// ---------------------------------------------------------------------------
+
+func TestBrowserManager_Shutdown_StopsOrphanedCaptureSession(t *testing.T) {
+	m := newReconcileTestManager(t)
+
+	relay := &fakeRelay{}
+	var calls int32
+	cs, err := NewCaptureSessionWithDeps(m, "agent-shutdown", relay, fakeEncoderStarter(&calls, nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+	if _, err := m.EnsureCaptureSession(func() (*CaptureSession, error) { return cs, nil }); err != nil {
+		t.Fatalf("EnsureCaptureSession: %v", err)
+	}
+	if m.CaptureSession() != cs {
+		t.Fatal("manager did not register the capture session via EnsureCaptureSession")
+	}
+
+	var stoppedCalled int32
+	cs.SetOnStopped(func() { atomic.AddInt32(&stoppedCalled, 1) })
+
+	m.Shutdown()
+
+	if got := atomic.LoadInt32(&stoppedCalled); got != 1 {
+		t.Fatalf("SetOnStopped callback fired %d times after Shutdown(), want exactly 1 — CaptureSession was not stopped", got)
+	}
+	if m.CaptureSession() != nil {
+		t.Fatal("CaptureSession() is still non-nil after Shutdown() stopped it — ClearCaptureSession did not run")
+	}
+	if got := relay.closeCount(); got != 1 {
+		t.Fatalf("relay.Close called %d times, want 1 (Stop() must have torn down the relay)", got)
+	}
+}
+
+// TestBrowserManager_Shutdown_NoCaptureSessionIsNoop proves the new guard is
+// safe on a manager that never had a WebRTC capture session at all (the
+// common case) — m.CaptureSession() returning nil must not panic or alter
+// Shutdown's existing behavior.
+func TestBrowserManager_Shutdown_NoCaptureSessionIsNoop(t *testing.T) {
+	m := newReconcileTestManager(t)
+	m.Shutdown() // must not panic
+	if m.CaptureSession() != nil {
+		t.Fatal("CaptureSession() on a manager that never had one should stay nil after Shutdown")
+	}
+}
+
+func TestBrowserManager_InvalidateConnection_StopsOrphanedCaptureSession(t *testing.T) {
+	m := newReconcileTestManager(t)
+
+	relay := &fakeRelay{}
+	var calls int32
+	cs, err := NewCaptureSessionWithDeps(m, "agent-invalidate", relay, fakeEncoderStarter(&calls, nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+	if _, err := m.EnsureCaptureSession(func() (*CaptureSession, error) { return cs, nil }); err != nil {
+		t.Fatalf("EnsureCaptureSession: %v", err)
+	}
+
+	var stoppedCalled int32
+	cs.SetOnStopped(func() { atomic.AddInt32(&stoppedCalled, 1) })
+
+	m.invalidateConnection()
+
+	if got := atomic.LoadInt32(&stoppedCalled); got != 1 {
+		t.Fatalf("SetOnStopped callback fired %d times after invalidateConnection(), want exactly 1", got)
+	}
+	if m.CaptureSession() != nil {
+		t.Fatal("CaptureSession() is still non-nil after invalidateConnection() stopped it")
 	}
 }
 

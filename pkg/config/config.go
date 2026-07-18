@@ -3078,10 +3078,21 @@ type BrowserToolConfig struct {
 	// this enabled, the shared default context's encoder captures whichever
 	// tab is GLOBALLY active, not necessarily the attached agent's tab. When
 	// more than one agent currently holds a live browser session, WHICH
-	// agent's tab a viewer sees is ambiguous — the gateway's capture-start
-	// path (pkg/gateway/browser_webrtc.go) therefore DENIES starting a new
-	// capture session while a second agent already has one, rather than
-	// silently showing a human the wrong agent's page.
+	// agent's tab a viewer sees can be ambiguous — but a blanket "deny a new
+	// capture whenever ANY other agent has a live session" fence (the
+	// original ADR-048 shape) made the panel permanently video-less in the
+	// most ordinary single-user flow, so the gateway's capture-start path
+	// (pkg/gateway/browser_webrtc.go's handleWebRTCOffer) was re-scoped
+	// (2026-07-18 UAT fix-wave) to: bring the REQUESTING agent's tab to
+	// front before the encoder resolves its target (deterministically binds
+	// THIS agent's tab even with other agents' windows present — see
+	// capture_session.go's Start/bringAgentTabToFront), DENY starting a new
+	// capture only when another agent's capture session is still ACTIVELY
+	// VIEWED (ViewerCount() > 0 — a genuine, real-time focus conflict), and
+	// silently SUPERSEDE (Stop) any other agent's viewerless leftover
+	// session instead of denying against it. Single-agent-viewed-at-a-time
+	// is still the v1 invariant; only the ambient "another agent merely has
+	// a session" trigger was removed.
 	//
 	// OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT is kept as a non-empty-string
 	// override ("1"/"0") of this field, for tests and operators who need to

@@ -5,9 +5,18 @@ package browser
 // capture extension's chrome-extension://<id>/encoder.html target, created in
 // the DEFAULT browser context — Chrome refuses extension pages inside
 // CDP-created contexts, see defaultEncoderStarter — resolving the agent's tab
-// via encoder.js's chrome.tabs.query, which sees the agent-context tabs
-// because the extension is loaded enableInIncognito — see coordinator.go's
-// LoadExtension doc comment) plus the Pion SFU relay Session that backs it. One CaptureSession exists per agent
+// via encoder.js's chrome.tabs.query. Fix-wave comment correction: an
+// earlier version of this paragraph attributed that resolution to the
+// extension being loaded enableInIncognito, but ADR-048 established
+// (real Chrome 150) that enableInIncognito only grants the extension
+// VISIBILITY into per-agent CDP-created contexts' tabs, never CAPTURABILITY
+// of them — see coordinator.go's LoadExtension doc comment. The actual
+// mechanism that lets encoder.js resolve the RIGHT tab is
+// tools.browser.capture_shared_context (ADR-048 condition 1): when enabled,
+// the agent's OWN session is also bootstrapped into this SAME default
+// context the encoder page lives in, so chrome.tabs.query and
+// chrome.tabCapture both operate on a tab that is genuinely in-context, no
+// cross-context visibility trick required) plus the Pion SFU relay Session that backs it. One CaptureSession exists per agent
 // (BrowserManager.capture), created lazily on the first WebRTC-capable
 // viewer offer and torn down on last-viewer-detach (after a grace period) or
 // on browser death (live.go's watchForUnexpectedDeath) or manager Shutdown.
@@ -41,9 +50,11 @@ import (
 const captureTokenBytes = 32
 
 // captureStartTimeout bounds the encoder-page inject+navigate CDP round trip
-// (Start's chromedp.Run call) — generous for a cold managed-Chrome extension
-// load, but bounded so a wedged CDP transport can't hang a viewer's offer
-// forever.
+// — NOT Start() itself (Start contains no chromedp.Run call of its own), but
+// the EncoderStarter it invokes: defaultEncoderStarter derives its own
+// runCtx from this constant around its chromedp.Run(injectScript, Navigate)
+// call, below. Generous for a cold managed-Chrome extension load, but
+// bounded so a wedged CDP transport can't hang a viewer's offer forever.
 const captureStartTimeout = 20 * time.Second
 
 // captureGracePeriod is how long a CaptureSession stays alive with zero
@@ -75,10 +86,15 @@ type RelaySession interface {
 // Page.addScriptToEvaluateOnNewDocument BEFORE navigating to
 // chrome-extension://<id>/encoder.html, and returns the resulting tab's
 // chromedp context + its cancel func (canceling it closes just that one CDP
-// target). Exported purely as a test-injection seam (mirrors this package's
-// existing createTabFn/pipeLauncher/listTargets testability pattern) —
-// production code always uses defaultEncoderStarter.
-type EncoderStarter func(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL string) (tabCtx context.Context, tabCancel context.CancelFunc, err error)
+// target). stunServer is the configured tools.browser.webrtc_stun_server
+// value (empty = omit — see captureInjectPayload's StunServer field), threaded
+// through so the encoder's own browser-side RTCPeerConnection can be
+// configured with the same ICE policy the Go-side Pion relay uses (fix-wave
+// LOW finding: this was previously never passed to the encoder page at all).
+// Exported purely as a test-injection seam (mirrors this package's existing
+// createTabFn/pipeLauncher/listTargets testability pattern) — production code
+// always uses defaultEncoderStarter.
+type EncoderStarter func(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL, stunServer string) (tabCtx context.Context, tabCancel context.CancelFunc, err error)
 
 // CaptureSession owns one agent's WebRTC capture stream end to end: the
 // encoder-page CDP target, the minted ingest capability token, the Pion SFU
@@ -93,17 +109,28 @@ type CaptureSession struct {
 	relay        RelaySession
 	startEncoder EncoderStarter
 	token        []byte // captureTokenBytes random bytes, minted once in NewCaptureSession*
+	// stunServer is threaded into every startEncoder call (see EncoderStarter's
+	// doc comment) — set once from cfg.StunServer by NewCaptureSession
+	// (production), empty for NewCaptureSessionWithDeps callers (tests) unless
+	// they choose to care about it.
+	stunServer string
 
 	mu sync.Mutex
 	// startOnce/startErr collapse concurrent Start() callers into exactly one
 	// startEncoder invocation — see Start's doc comment.
-	startOnce   sync.Once
-	startErr    error
-	extVersion  string
-	lastPingAt  time.Time
-	tabCtx      context.Context
-	tabCancel   context.CancelFunc
-	started     bool
+	startOnce  sync.Once
+	startErr   error
+	extVersion string
+	lastPingAt time.Time
+	tabCtx     context.Context
+	tabCancel  context.CancelFunc
+	started    bool
+	// starting is true only for the narrow window between Start() entering
+	// its one-time startOnce.Do body and cs.startEncoder returning (success
+	// or failure) — see IsStarting's doc comment for why the gateway's
+	// ADR-048 condition-2 fence needs to distinguish this from both "never
+	// started" and "fully started."
+	starting    bool
 	stopped     bool
 	ingestSend  func(action string, reason *string) error
 	ingestClose func()
@@ -138,7 +165,9 @@ func NewCaptureSession(mgr *BrowserManager, agentID string, cfg webrtc.Config, s
 		return nil, fmt.Errorf("capture session: mint token: %w", err)
 	}
 	relay := webrtc.NewSession(cfg, sink, logf)
-	return newCaptureSessionWithDeps(mgr, agentID, relay, defaultEncoderStarter, token, logf), nil
+	cs := newCaptureSessionWithDeps(mgr, agentID, relay, defaultEncoderStarter, token, logf)
+	cs.stunServer = cfg.StunServer
+	return cs, nil
 }
 
 // NewCaptureSessionWithDeps is the fully-injectable constructor: relay
@@ -174,16 +203,21 @@ func newCaptureSessionWithDeps(mgr *BrowserManager, agentID string, relay RelayS
 }
 
 // captureInjectPayload is the exact shape encoder.js's readConfig() expects
-// at window.__omnipusCapture — {token, ingestUrl} (see
+// at window.__omnipusCapture — {token, ingestUrl, stunServer} (see
 // pkg/tools/browser/captureext/embedded/encoder.js's readConfig doc
 // comment). Not a cross-gateway-boundary wire type in the Constraint #8
 // sense (it never round-trips through pkg/gateway's REST/WS surface — it is
 // injected directly into a CDP-driven page via
 // Page.addScriptToEvaluateOnNewDocument), so a package-local struct here is
-// correct, not a lint violation.
+// correct, not a lint violation. StunServer (fix-wave LOW finding) carries
+// the configured tools.browser.webrtc_stun_server value through to the
+// encoder's own browser-side RTCPeerConnection config — omitted entirely
+// (not an empty string) when unset, matching token/ingestUrl's always-
+// present shape only where a value actually exists.
 type captureInjectPayload struct {
-	Token     string `json:"token"`
-	IngestURL string `json:"ingestUrl"`
+	Token      string `json:"token"`
+	IngestURL  string `json:"ingestUrl"`
+	StunServer string `json:"stunServer,omitempty"`
 }
 
 // defaultEncoderStarter is the production EncoderStarter: it ensures the
@@ -196,8 +230,9 @@ type captureInjectPayload struct {
 // target the agent/user never see), injects window.__omnipusCapture BEFORE
 // navigating (Page.addScriptToEvaluateOnNewDocument runs before any of the
 // target document's own scripts, per its CDP doc comment), then navigates to
-// chrome-extension://<captureext.ExtensionID>/encoder.html.
-func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL string) (context.Context, context.CancelFunc, error) {
+// chrome-extension://<captureext.ExtensionID>/encoder.html. stunServer (may
+// be empty) is forwarded into the injected captureInjectPayload verbatim.
+func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
 	if mgr == nil {
 		return nil, nil, fmt.Errorf("capture session: no browser manager")
 	}
@@ -253,7 +288,7 @@ func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, i
 		return nil, nil, fmt.Errorf("capture session: create encoder target: %w", err)
 	}
 
-	payload, err := json.Marshal(captureInjectPayload{Token: tokenHex, IngestURL: ingestURL})
+	payload, err := json.Marshal(captureInjectPayload{Token: tokenHex, IngestURL: ingestURL, StunServer: stunServer})
 	if err != nil {
 		tab.cancel()
 		return nil, nil, fmt.Errorf("capture session: marshal inject payload: %w", err)
@@ -301,7 +336,16 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 	ranNow := false
 	cs.startOnce.Do(func() {
 		ranNow = true
-		tabCtx, tabCancel, startErr := cs.startEncoder(ctx, cs.mgr, hex.EncodeToString(cs.token), ingestURL)
+		cs.mu.Lock()
+		cs.starting = true
+		cs.mu.Unlock()
+		defer func() {
+			cs.mu.Lock()
+			cs.starting = false
+			cs.mu.Unlock()
+		}()
+
+		tabCtx, tabCancel, startErr := cs.startEncoder(ctx, cs.mgr, hex.EncodeToString(cs.token), ingestURL, cs.stunServer)
 		if startErr != nil {
 			cs.mu.Lock()
 			cs.startErr = startErr
@@ -392,9 +436,28 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 			cs.logf("capture[%s]: bring agent tab to front: resolve session: %v", cs.agentID, err)
 			return
 		}
-		// Honor the caller's ctx cancellation too (Start's ctx), without
-		// making runCtx a child of it — tabCtx must stay the chromedp
-		// parent so the run targets the agent tab.
+		// Fix-wave MED (reviewer 6): cs.mgr.Session() above can block for a
+		// while on a cold shared-Chrome launch — long enough for THIS
+		// capture session to have been superseded/Stop()'d by a newer one in
+		// the meantime (e.g. another agent's offer won the ADR-048
+		// condition-2 fence, see config.go's CaptureSharedContext doc
+		// comment). Re-check before stealing window focus: a late-firing
+		// BringToFront from an already-stopped session would steal focus
+		// from whichever agent's tab is now legitimately active, for a
+		// capture that is dead either way.
+		cs.mu.Lock()
+		stopped := cs.stopped
+		cs.mu.Unlock()
+		if stopped {
+			cs.logf("capture[%s]: bring agent tab to front: session already stopped, skipping (would have stolen window focus for nothing)", cs.agentID)
+			return
+		}
+		// runCtx is deliberately derived from tabCtx alone, NOT from ctx —
+		// tabCtx must stay the chromedp parent so the run actually targets
+		// the agent's tab. The caller's ctx (Start's ctx) is honored a
+		// different way: the outer select below races this goroutine's own
+		// "done" signal against ctx.Done() directly, rather than by
+		// threading ctx into runCtx here.
 		runCtx, cancel := context.WithTimeout(tabCtx, bringToFrontTimeout)
 		defer cancel()
 		if runErr := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
@@ -403,6 +466,10 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 			cs.logf("capture[%s]: bring agent tab to front failed (capture may fall back to first-tab resolution): %v", cs.agentID, runErr)
 		}
 	}()
+	// This select is what actually honors ctx's cancellation (Start's ctx)
+	// and bringToFrontTimeout — both race directly against the goroutine
+	// above completing, independent of whatever context that goroutine's own
+	// runCtx was derived from.
 	select {
 	case <-done:
 	case <-time.After(bringToFrontTimeout):
@@ -421,6 +488,27 @@ func (cs *CaptureSession) Relay() RelaySession {
 // AgentID returns the agent this capture session belongs to.
 func (cs *CaptureSession) AgentID() string {
 	return cs.agentID
+}
+
+// IsStarting reports whether Start() is currently in the middle of its
+// one-time encoder-page startup — true only for the narrow window between
+// Start() being invoked and its cs.startEncoder call returning (success or
+// failure); false before Start() is ever called AND false again once it has
+// completed (successfully or not). Fix-wave HIGH (mid-startup supersede
+// snipe): used by the gateway's ADR-048 condition-2 fence
+// (browser_webrtc.go's handleWebRTCOffer) to avoid superseding (Stop()-ing)
+// another agent's capture session that is still starting. Stop() during this
+// window is already SAFE — Start's own "stopped while starting" branch tears
+// down cleanly (see TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget)
+// — but not FAIR: an unrelated agent's fence check would otherwise be able
+// to abort a legitimate, already-in-flight capture start before its own
+// first viewer even gets a chance to register (AddViewer only happens once
+// Start AND HandleViewerOffer both succeed, so a starting session always
+// LOOKS viewerless to ViewerCount()).
+func (cs *CaptureSession) IsStarting() bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.starting
 }
 
 // ValidateToken reports whether candidateHex (the token field of an inbound

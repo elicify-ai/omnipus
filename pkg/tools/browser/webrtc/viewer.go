@@ -93,8 +93,17 @@ func (s *Session) HandleViewerOffer(viewerID string, sdpOffer string) (answer st
 	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
 		s.logf("%s peer connection state -> %s", prefix, st.String())
 		switch st {
-		case webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateDisconnected:
+		case webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateFailed:
+			// Terminal, unrecoverable states: evict immediately.
 			s.removeViewer(viewerID, pc)
+		case webrtc.PeerConnectionStateDisconnected:
+			// Disconnected is often transient (a brief Wi-Fi blip Pion's own
+			// ICE agent recovers from without ever reaching Failed) -- evict
+			// only if it hasn't recovered within disconnectGracePeriod. See
+			// scheduleDisconnectEviction's doc comment for the full fix-wave
+			// CRIT rationale (removeViewer previously never closed the PC at
+			// all on ANY of these three states, leaking it).
+			s.scheduleDisconnectEviction(viewerID, pc)
 		}
 	})
 
@@ -150,21 +159,67 @@ func (s *Session) HandleViewerOffer(viewerID string, sdpOffer string) (answer st
 	return local.SDP, nil
 }
 
+// disconnectGracePeriod bounds how long a viewer PeerConnection may sit in
+// the Disconnected state -- a transient, often-recoverable ICE blip (e.g. a
+// brief Wi-Fi drop) that Pion's own ICE agent can recover from on its own
+// without ever reaching Failed -- before this package gives up on it.
+// Fix-wave CRIT design decision: Disconnected must NOT be evicted
+// immediately like Failed/Closed (that would cost a full session/encoder
+// re-negotiation for every momentary network hiccup), but it also must not
+// be tracked forever: if the state hasn't recovered to Connected within this
+// window, treat it the same as an outright failure. A var (not const) purely
+// as a test seam, mirroring captureGracePeriod's established pattern in the
+// sibling pkg/tools/browser package.
+var disconnectGracePeriod = 10 * time.Second
+
+// scheduleDisconnectEviction arms a one-shot timer for a viewer
+// PeerConnection that just entered the Disconnected state (see
+// disconnectGracePeriod's doc comment for the design rationale). When the
+// timer fires it re-checks pc's CURRENT state: if the connection has
+// recovered to Connected in the meantime, this is a no-op and the viewer is
+// left alone; otherwise (still Disconnected, or it worsened) it is evicted
+// and closed exactly like a Failed/Closed connection via removeViewer.
+// Multiple Disconnected callbacks for the same pc (Pion can re-fire) simply
+// arm multiple redundant, harmless timers -- removeViewer's own
+// cur.pc==pc registry check makes eviction idempotent.
+func (s *Session) scheduleDisconnectEviction(viewerID string, pc *webrtc.PeerConnection) {
+	time.AfterFunc(disconnectGracePeriod, func() {
+		if pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
+			return
+		}
+		s.removeViewer(viewerID, pc)
+	})
+}
+
 // removeViewer drops viewerID from the registry, but only if the entry still
 // points at pc -- guards against a stale close callback firing after the
 // viewer has already been replaced (HandleViewerOffer reconnect) or removed
-// (CloseViewer).
+// (CloseViewer). Also closes pc asynchronously (fix-wave CRIT: this
+// previously only deleted the map entry, leaking the PeerConnection itself
+// plus its two drainViewerRTCP goroutines, its runInputQueue goroutine
+// (inputdc.go), and its UDP sockets on every ICE-terminal-state transition
+// -- see OnConnectionStateChange's call sites above). Close is idempotent
+// (Pion tolerates redundant calls), matching the same close-guarded-by-
+// registry-membership pattern HandleViewerOffer's same-viewerID replacement
+// already uses (:79-83 above).
 func (s *Session) removeViewer(viewerID string, pc *webrtc.PeerConnection) {
 	s.viewersMu.Lock()
 	cur, exists := s.viewers[viewerID]
-	if exists && cur.pc == pc {
+	stillCurrent := exists && cur.pc == pc
+	if stillCurrent {
 		delete(s.viewers, viewerID)
 	}
 	count := len(s.viewers)
 	s.viewersMu.Unlock()
-	if exists && cur.pc == pc {
-		s.logf("[viewer/%s] disconnected, count now %d", viewerID, count)
+	if !stillCurrent {
+		return
 	}
+	s.logf("[viewer/%s] disconnected, count now %d", viewerID, count)
+	go func() {
+		if cerr := pc.Close(); cerr != nil {
+			s.logf("[viewer/%s] removeViewer: close failed: %v", viewerID, cerr)
+		}
+	}()
 }
 
 // CloseViewer closes and removes the viewer connection for viewerID, if any.

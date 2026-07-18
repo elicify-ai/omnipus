@@ -41,6 +41,11 @@ type fakeRelay struct {
 	mu            sync.Mutex
 	closedViewers []string
 	closeCalls    int
+	// stats is returned by Stats() (fix-wave HIGH: the watchdog RTP-progress
+	// staleness test needs a settable VideoPackets/HasVideo so it can hold
+	// packet counts frozen across ticks — zero value matches every existing
+	// caller's prior "always webrtc.Stats{}" expectation).
+	stats webrtc.Stats
 }
 
 func (f *fakeRelay) HandleIngestOffer(sdp string) (string, error) { return "ingest-answer", nil }
@@ -54,7 +59,19 @@ func (f *fakeRelay) CloseViewer(viewerID string) {
 }
 func (f *fakeRelay) SignalRecapture()                  {}
 func (f *fakeRelay) SendToViewer(string, []byte) error { return nil }
-func (f *fakeRelay) Stats() webrtc.Stats               { return webrtc.Stats{} }
+func (f *fakeRelay) Stats() webrtc.Stats {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stats
+}
+
+// setStats installs a new Stats() return value (fix-wave watchdog test seam).
+func (f *fakeRelay) setStats(s webrtc.Stats) {
+	f.mu.Lock()
+	f.stats = s
+	f.mu.Unlock()
+}
+
 func (f *fakeRelay) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -74,7 +91,7 @@ func (f *fakeRelay) closeCount() int {
 // fakeEncoderStarter never touches real chromedp — it just counts
 // invocations and either returns a bare cancelable context or startErr.
 func fakeEncoderStarter(callCount *int32, startErr error) browser.EncoderStarter {
-	return func(context.Context, *browser.BrowserManager, string, string) (context.Context, context.CancelFunc, error) {
+	return func(context.Context, *browser.BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
 		atomic.AddInt32(callCount, 1)
 		if startErr != nil {
 			return nil, nil, startErr

@@ -196,6 +196,21 @@ type BrowserWSHandler struct {
 	// its token belongs to.
 	captures *captureRegistry
 
+	// captureFenceMu serializes handleWebRTCOffer's ADR-048 condition-2
+	// fence-check + ensure/registry-set sequence (fix-wave HIGH, TOCTOU
+	// fix): without it, two DIFFERENT agents' very first viewer offers could
+	// both observe every OTHER agent's capture session as absent/viewerless
+	// (h.captures.otherSessions is a point-in-time snapshot) and both
+	// proceed to start a capture session, defeating the single-capture
+	// invariant the fence exists to enforce. Held ONLY across the cheap
+	// fence-check + ensureCaptureSession call (registers/reuses the
+	// CaptureSession object, no CDP round trip) — released BEFORE
+	// cs.Start(), whose encoder-page CDP round trip can take up to
+	// captureStartTimeout (20s), so concurrent offers for an agent that
+	// already has a registered session (the common multi-viewer case) are
+	// never serialized behind an unrelated agent's slow start.
+	captureFenceMu sync.Mutex
+
 	// viewerConns is the fix-wave per-viewer registry (browser_webrtc.go's
 	// webrtcViewerConn) letting the encoder-liveness watchdog and the
 	// data-channel input sink reach a WebRTC-attached viewer's main WS
