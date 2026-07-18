@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -557,7 +558,12 @@ func TestSessionViewerLegReplacement_SameViewerID_OldPCClosedNewPCFlows(t *testi
 	waitCond(t, testWait, "new leg to receive video RTP after replacement", func() bool {
 		return viewer2.videoPkts.Load() > videoBefore+5
 	})
-	waitCond(t, testWait, "new leg to receive audio RTP after replacement", func() bool { return viewer2.audioPkts.Load() > 5 })
+	waitCond(
+		t,
+		testWait,
+		"new leg to receive audio RTP after replacement",
+		func() bool { return viewer2.audioPkts.Load() > 5 },
+	)
 
 	// (c) exactly one viewer registered for viewerID throughout — never 2.
 	if got := sess.Stats().Viewers; got != 1 {
@@ -844,7 +850,12 @@ func TestSessionViewerPLIForwardedToIngestThrottled(t *testing.T) {
 	})
 	afterFirst := pliCount.Load()
 	if afterFirst != baseline+1 {
-		t.Fatalf("pliCount after one viewer PLI = %d, want exactly baseline+1=%d (baseline=%d)", afterFirst, baseline+1, baseline)
+		t.Fatalf(
+			"pliCount after one viewer PLI = %d, want exactly baseline+1=%d (baseline=%d)",
+			afterFirst,
+			baseline+1,
+			baseline,
+		)
 	}
 
 	// A rapid burst of further viewer PLIs, all well within
@@ -858,7 +869,11 @@ func TestSessionViewerPLIForwardedToIngestThrottled(t *testing.T) {
 
 	afterBurst := pliCount.Load()
 	if afterBurst != afterFirst {
-		t.Fatalf("pliCount after a rapid 10-write burst = %d, want unchanged at %d (the throttle should have suppressed all 10)", afterBurst, afterFirst)
+		t.Fatalf(
+			"pliCount after a rapid 10-write burst = %d, want unchanged at %d (the throttle should have suppressed all 10)",
+			afterBurst,
+			afterFirst,
+		)
 	}
 }
 
@@ -923,11 +938,20 @@ func TestSessionSenderReportForwardedWithRewrittenSSRC(t *testing.T) {
 	got := viewer.senderReports()[0]
 	wantSSRC := viewer.videoSSRC.Load()
 	if got.SSRC != wantSSRC {
-		t.Errorf("forwarded Sender Report SSRC = %d, want the viewer's own negotiated video SSRC %d (not the encoder's %d)",
-			got.SSRC, wantSSRC, encoderVideoSSRC)
+		t.Errorf(
+			"forwarded Sender Report SSRC = %d, want the viewer's own negotiated video SSRC %d (not the encoder's %d)",
+			got.SSRC,
+			wantSSRC,
+			encoderVideoSSRC,
+		)
 	}
-	if got.NTPTime != sr.NTPTime || got.RTPTime != sr.RTPTime || got.PacketCount != sr.PacketCount || got.OctetCount != sr.OctetCount {
-		t.Errorf("forwarded Sender Report fields = %+v, want the source fields untouched (only SSRC rewritten): source=%+v", got, sr)
+	if got.NTPTime != sr.NTPTime || got.RTPTime != sr.RTPTime || got.PacketCount != sr.PacketCount ||
+		got.OctetCount != sr.OctetCount {
+		t.Errorf(
+			"forwarded Sender Report fields = %+v, want the source fields untouched (only SSRC rewritten): source=%+v",
+			got,
+			sr,
+		)
 	}
 }
 
@@ -959,7 +983,12 @@ func TestSessionIngestReplacementFailureLeavesPreviousConnectionIntact(t *testin
 	}
 	setAnswer(t, viewer.pc, answerV)
 
-	waitCond(t, testWait, "viewer to receive video RTP from the first encoder", func() bool { return viewer.videoPkts.Load() > 5 })
+	waitCond(
+		t,
+		testWait,
+		"viewer to receive video RTP from the first encoder",
+		func() bool { return viewer.videoPkts.Load() > 5 },
+	)
 	videoBefore := viewer.videoPkts.Load()
 
 	// A malformed "recapture" offer -- SetRemoteDescription must fail
@@ -973,12 +1002,19 @@ func TestSessionIngestReplacementFailureLeavesPreviousConnectionIntact(t *testin
 	// The FIRST (still healthy) encoder's media must keep flowing to the
 	// already-attached viewer, proving its connection was never torn down
 	// by the failed replacement attempt.
-	waitCond(t, testWait, "viewer to keep receiving video from the ORIGINAL encoder after a failed replacement attempt", func() bool {
-		return viewer.videoPkts.Load() > videoBefore+5
-	})
+	waitCond(
+		t,
+		testWait,
+		"viewer to keep receiving video from the ORIGINAL encoder after a failed replacement attempt",
+		func() bool {
+			return viewer.videoPkts.Load() > videoBefore+5
+		},
+	)
 
 	if stats := sess.Stats(); stats.VideoCodec == "" {
-		t.Error("Stats().VideoCodec empty after a failed ingest replacement -- the original ingest connection's track info should be untouched")
+		t.Error(
+			"Stats().VideoCodec empty after a failed ingest replacement -- the original ingest connection's track info should be untouched",
+		)
 	}
 
 	// A LEGITIMATE second ingest must still be able to replace the first
@@ -1076,7 +1112,13 @@ func TestSessionInputDataChannelPreservesOrderUnderSlowSink(t *testing.T) {
 	defer mu.Unlock()
 	for i, s := range seen {
 		if s != i {
-			t.Fatalf("sink received out-of-order sequence at index %d: got seq=%d, want seq=%d (full sequence: %v)", i, s, i, seen)
+			t.Fatalf(
+				"sink received out-of-order sequence at index %d: got seq=%d, want seq=%d (full sequence: %v)",
+				i,
+				s,
+				i,
+				seen,
+			)
 		}
 	}
 }
@@ -1129,10 +1171,6 @@ func TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsA
 	}
 	setAnswer(t, enc.pc, offerE)
 
-	// Baseline BEFORE the viewer connection exists -- what the goroutine
-	// count is expected to return to once the server has fully cleaned up.
-	baseline := runtime.NumGoroutine()
-
 	const viewerID = "viewer-client-vanishes"
 	viewer := newFakeViewer(t, true)
 
@@ -1170,23 +1208,61 @@ func TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsA
 		t.Fatalf("viewer.pc.Close(): %v", closeErr)
 	}
 
-	const disconnectDetectWait = 45 * time.Second
-	waitCond(t, disconnectDetectWait, "server to evict the viewer after the client vanished without signaling", func() bool {
-		return sess.Stats().Viewers == 0
-	})
+	// 60s (4x the nominal ~15s combined ICE-disconnected-detection +
+	// disconnectGracePeriod window documented above) — bumped from the
+	// original 45s (only 3x margin) after it flaked on a GitHub-hosted
+	// runner at 45.36s: shared/throttled CI CPU and network jitter can slow
+	// Pion's ICE state-machine transitions well past what this pod's own
+	// margin covers. Still a hard bound (no production timeout changes),
+	// just enough slack to stop timeout luck from deciding the outcome on a
+	// loaded runner.
+	const disconnectDetectWait = 60 * time.Second
+	waitCond(
+		t,
+		disconnectDetectWait,
+		"server to evict the viewer after the client vanished without signaling",
+		func() bool {
+			return sess.Stats().Viewers == 0
+		},
+	)
 
 	if sendErr := sess.SendToViewer(viewerID, []byte("x")); sendErr == nil {
-		t.Error("SendToViewer after the client-initiated disconnect: want error, got nil (registry entry should be gone)")
+		t.Error(
+			"SendToViewer after the client-initiated disconnect: want error, got nil (registry entry should be gone)",
+		)
 	}
 
-	// The leak proof: every goroutine this viewer's server-side PC owned
-	// (two drainViewerRTCP readers, one runInputQueue worker) must have
-	// actually exited -- not just the map entry vanished -- which only
-	// happens if the server's PeerConnection was really Close()d, not merely
-	// forgotten about. A small tolerance absorbs unrelated goroutine churn
-	// elsewhere in the test binary.
-	const goroutineTolerance = 3
-	waitCond(t, disconnectDetectWait, "server goroutine count to return to its pre-viewer baseline (no leaked PC/RTCP/input-queue goroutines)", func() bool {
-		return runtime.NumGoroutine() <= baseline+goroutineTolerance
-	})
+	// The leak proof: both of this viewer's server-side goroutines --
+	// drainViewerRTCP (x2, video+audio) and runInputQueue (inputdc.go) --
+	// must have actually exited, not just the registry entry vanished,
+	// which only happens if the server's PeerConnection was really
+	// Close()d, not merely forgotten about.
+	//
+	// This checks for the ABSENCE of those two functions' frames in a full
+	// stack dump, rather than a raw total-process-goroutine-count delta
+	// against a pre-viewer baseline (the original fix-wave version of this
+	// assertion). The count-based version flaked hard in practice -- a 90s
+	// wait and even a 240s soak both left the total 10-17 goroutines above
+	// baseline, PERMANENTLY (not converging with more time). Isolating the
+	// leftovers via a full stack dump traced them to pion's OWN internal
+	// ICE-agent/DTLS/mDNS teardown goroutines for the vanished client's
+	// PeerConnection (github.com/pion/ice, github.com/pion/dtls,
+	// github.com/pion/mdns) -- not to drainViewerRTCP/runInputQueue, which
+	// were already confirmed absent well before the raw count ever
+	// stabilized. That's a pion library characteristic (its Close() does
+	// not synchronously tear down every internal goroutine) outside this
+	// package's control, not a regression of the CRIT fix this test guards;
+	// asserting on the two SPECIFIC functions this test actually cares
+	// about is both more precise and immune to that noise.
+	waitCond(
+		t,
+		disconnectDetectWait,
+		"drainViewerRTCP/runInputQueue goroutines to actually exit (not just the registry entry to vanish)",
+		func() bool {
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			dump := string(buf[:n])
+			return !strings.Contains(dump, ".drainViewerRTCP(") && !strings.Contains(dump, ".runInputQueue(")
+		},
+	)
 }

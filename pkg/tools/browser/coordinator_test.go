@@ -63,7 +63,7 @@ func resolveTestBinary(t *testing.T) string {
 var (
 	sharedTestBinHeadlessShellOnce sync.Once
 	sharedTestBinHeadlessShell     string
-	sharedTestBinHeadlessShellErr  error
+	errSharedTestBinHeadlessShell  error
 )
 
 // resolveTestBinaryHeadlessShell resolves chrome-headless-shell specifically
@@ -96,11 +96,11 @@ func resolveTestBinaryHeadlessShell(t *testing.T) string {
 				return
 			}
 		}
-		sharedTestBinHeadlessShell, sharedTestBinHeadlessShellErr = EnsureChromiumBuild(
+		sharedTestBinHeadlessShell, errSharedTestBinHeadlessShell = EnsureChromiumBuild(
 			context.Background(), filepath.Join(t.TempDir(), "chromium-headless-shell"), headlessShellBuild())
 	})
-	if sharedTestBinHeadlessShellErr != nil {
-		t.Skipf("no managed chrome-headless-shell for D2 spike: %v", sharedTestBinHeadlessShellErr)
+	if errSharedTestBinHeadlessShell != nil {
+		t.Skipf("no managed chrome-headless-shell for D2 spike: %v", errSharedTestBinHeadlessShell)
 	}
 	return sharedTestBinHeadlessShell
 }
@@ -271,7 +271,9 @@ func TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride(t *testing
 	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
 
 	if coord.CaptureSharedContextEnabled() {
-		t.Fatal("a freshly-constructed coordinator must default to shared-context capture DISABLED (config drives it explicitly, no implicit default)")
+		t.Fatal(
+			"a freshly-constructed coordinator must default to shared-context capture DISABLED (config drives it explicitly, no implicit default)",
+		)
 	}
 
 	coord.SetCaptureSharedContext(true)
@@ -324,7 +326,10 @@ func TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtx
 		t.Fatalf("Register: %v", err)
 	}
 	if browserCtxID != "" {
-		t.Fatalf("Register in shared-context mode must return an EMPTY browserCtxID (default context), got %q", browserCtxID)
+		t.Fatalf(
+			"Register in shared-context mode must return an EMPTY browserCtxID (default context), got %q",
+			browserCtxID,
+		)
 	}
 
 	realRoot, ok := coord.RootContext()
@@ -337,10 +342,15 @@ func TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtx
 		t.Fatal("expected both contexts to resolve to a live *chromedp.Browser")
 	}
 	if brRoot.Browser != brReturned.Browser {
-		t.Fatal("Register's returned rootCtx must resolve to the coordinator's OWN shared Browser (coord.rootCtx), not a per-agent one")
+		t.Fatal(
+			"Register's returned rootCtx must resolve to the coordinator's OWN shared Browser (coord.rootCtx), not a per-agent one",
+		)
 	}
 	if coord.contextCount() != 0 {
-		t.Fatalf("shared-context mode must NOT create a per-agent browser context; contextCount() = %d, want 0", coord.contextCount())
+		t.Fatalf(
+			"shared-context mode must NOT create a per-agent browser context; contextCount() = %d, want 0",
+			coord.contextCount(),
+		)
 	}
 }
 

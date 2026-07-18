@@ -83,6 +83,10 @@ func TestForwardPLIThrottled_ForwardsAgainAfterInterval(t *testing.T) {
 	s.pliForwardMu.Unlock()
 
 	if !second.After(first) {
-		t.Fatalf("forwardPLIThrottled did not forward again once the interval elapsed: first=%v second=%v", first, second)
+		t.Fatalf(
+			"forwardPLIThrottled did not forward again once the interval elapsed: first=%v second=%v",
+			first,
+			second,
+		)
 	}
 }

@@ -198,8 +198,13 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 
 	mgr, ok := h.agentLoop.BrowserManagerForAgent(frame.AgentId)
 	if !ok {
-		wc.sendCriticalGen(sessionErrorStatus(sessID,
-			fmt.Sprintf("no browser manager for agent %q (browser tools may not be registered for this agent)", frame.AgentId)),
+		wc.sendCriticalGen(sessionErrorStatus(
+			sessID,
+			fmt.Sprintf(
+				"no browser manager for agent %q (browser tools may not be registered for this agent)",
+				frame.AgentId,
+			),
+		),
 			dropContext(sessID, viewerID, "webrtc-offer-no-manager"))
 		return
 	}
@@ -250,11 +255,25 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 			}
 			if otherCS.ViewerCount() > 0 {
 				h.captureFenceMu.Unlock()
-				slog.Warn("browser-webrtc: capture denied — another agent's capture session is actively viewed (ADR-048 condition 2, shared default-context capture is single-capture in v1)",
-					"agent_id", frame.AgentId, "other_live_agent_id", other)
+				slog.Warn(
+					"browser-webrtc: capture denied — another agent's capture session is actively viewed (ADR-048 condition 2, shared default-context capture is single-capture in v1)",
+					"agent_id",
+					frame.AgentId,
+					"other_live_agent_id",
+					other,
+				)
 				h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "error")
-				h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStartFailed,
-					map[string]any{"session_id": sessID, "reason": "multi_agent_capture_denied", "other_agent_id": other})
+				h.auditStream(
+					userID,
+					frame.AgentId,
+					audit.SeverityWarn,
+					audit.EventBrowserWebRTCStreamStartFailed,
+					map[string]any{
+						"session_id":     sessID,
+						"reason":         "multi_agent_capture_denied",
+						"other_agent_id": other,
+					},
+				)
 				return
 			}
 			slog.Info("browser-webrtc: superseding another agent's viewerless capture session",
@@ -299,7 +318,15 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		// registered on the relay — CloseViewer is idempotent-safe (a no-op
 		// if HandleViewerOffer never got far enough to register one).
 		cs.Relay().CloseViewer(viewerID)
-		slog.Warn("browser-webrtc: viewer offer failed", "error", offerErr, "agent_id", frame.AgentId, "viewer_id", viewerID)
+		slog.Warn(
+			"browser-webrtc: viewer offer failed",
+			"error",
+			offerErr,
+			"agent_id",
+			frame.AgentId,
+			"viewer_id",
+			viewerID,
+		)
 		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "error")
 		return
 	}
@@ -334,9 +361,9 @@ func webrtcUnavailableReason(cfg *config.Config, mgr *browser.BrowserManager) st
 	if !webrtc.Available {
 		return "lite_build"
 	}
-	cap := mgr.CaptureVideoCapability()
-	if !cap.Capable {
-		slog.Warn("browser-webrtc: video capability not_capable", "reason", cap.Reason, "agent_id", mgr.AgentID())
+	videoCap := mgr.CaptureVideoCapability()
+	if !videoCap.Capable {
+		slog.Warn("browser-webrtc: video capability not_capable", "reason", videoCap.Reason, "agent_id", mgr.AgentID())
 		return "not_capable"
 	}
 	return ""
@@ -419,7 +446,12 @@ func (h *BrowserWSHandler) announceWebRTCAvailability(
 }
 
 // sendWebRTCState builds and sends a browser_webrtc_state frame.
-func (h *BrowserWSHandler) sendWebRTCState(wc *browserWSConn, sessID, viewerID string, available, active, hasAudio bool, reason string) {
+func (h *BrowserWSHandler) sendWebRTCState(
+	wc *browserWSConn,
+	sessID, viewerID string,
+	available, active, hasAudio bool,
+	reason string,
+) {
 	f := generated.BrowserWebRTCStateFrame{
 		Type:      string(generated.WsFrameTypeBrowserWebrtcState),
 		Available: available,
@@ -514,8 +546,17 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 				haveBaseline = false
 			}
 			if stallTicks >= encoderLivenessVideoStallTicks {
-				slog.Warn("browser-webrtc: encoder liveness watchdog — video RTP has not advanced across consecutive checks with an attached viewer, stopping capture session",
-					"agent_id", agentID, "video_packets", stats.VideoPackets, "stall_ticks", stallTicks, "check_interval", encoderLivenessCheckInterval)
+				slog.Warn(
+					"browser-webrtc: encoder liveness watchdog — video RTP has not advanced across consecutive checks with an attached viewer, stopping capture session",
+					"agent_id",
+					agentID,
+					"video_packets",
+					stats.VideoPackets,
+					"stall_ticks",
+					stallTicks,
+					"check_interval",
+					encoderLivenessCheckInterval,
+				)
 				cs.Stop()
 				return
 			}
@@ -525,8 +566,15 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 				continue // encoder hasn't bound the ingest connection yet
 			}
 			if time.Since(last) > encoderLivenessStaleAfter {
-				slog.Warn("browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session",
-					"agent_id", agentID, "last_ping_at", last, "stale_after", encoderLivenessStaleAfter)
+				slog.Warn(
+					"browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session",
+					"agent_id",
+					agentID,
+					"last_ping_at",
+					last,
+					"stale_after",
+					encoderLivenessStaleAfter,
+				)
 				cs.Stop()
 				return
 			}
@@ -540,7 +588,11 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 // both the registry and the manager once it stops AND push a
 // browser_webrtc_state to any still-attached viewers (fix 3), and starting
 // the encoder-liveness watchdog (fix 3).
-func (h *BrowserWSHandler) ensureCaptureSession(mgr *browser.BrowserManager, agentID string, cfg *config.Config) (*browser.CaptureSession, error) {
+func (h *BrowserWSHandler) ensureCaptureSession(
+	mgr *browser.BrowserManager,
+	agentID string,
+	cfg *config.Config,
+) (*browser.CaptureSession, error) {
 	return mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) {
 		webrtcCfg := webrtc.Config{StunServer: cfg.Tools.Browser.WebRTCStunServer}
 		sink := h.webrtcInputSink(mgr, cfg)
@@ -619,7 +671,11 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 		if cfg.Gateway.ValidateInbound {
 			if errMsg, serverErr := ValidateInboundFrameJSON("BrowserInputFrame", raw); errMsg != "" {
 				if serverErr {
-					slog.Debug("browser-webrtc: inbound schema unavailable, dropping input data-channel frame", "viewer_id", viewerID)
+					slog.Debug(
+						"browser-webrtc: inbound schema unavailable, dropping input data-channel frame",
+						"viewer_id",
+						viewerID,
+					)
 				} else {
 					slog.Debug("browser-webrtc: input data-channel frame schema validation failed, dropping",
 						"error", errMsg, "viewer_id", viewerID)
@@ -687,7 +743,12 @@ func (h *BrowserWSHandler) surfaceWebRTCInputError(viewerID, kind string, dispat
 }
 
 // auditStream emits a WebRTC stream lifecycle audit entry.
-func (h *BrowserWSHandler) auditStream(userID, agentID string, sev audit.Severity, event string, fields map[string]any) {
+func (h *BrowserWSHandler) auditStream(
+	userID, agentID string,
+	sev audit.Severity,
+	event string,
+	fields map[string]any,
+) {
 	al := h.agentLoop.AuditLogger()
 	if al == nil {
 		return
@@ -849,7 +910,11 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 	}
 
 	var hello generated.BrowserCaptureHelloFrame
-	if jsonErr := json.Unmarshal(data, &hello); jsonErr != nil || hello.Type != string(generated.WsFrameTypeBrowserCaptureHello) {
+	if jsonErr := json.Unmarshal(
+		data,
+		&hello,
+	); jsonErr != nil ||
+		hello.Type != string(generated.WsFrameTypeBrowserCaptureHello) {
 		h.auditIngestRejected(remoteAddr, "not_hello")
 		return
 	}
@@ -919,7 +984,13 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 		case string(generated.WsFrameTypeBrowserCaptureOffer):
 			var offerFrame generated.BrowserCaptureOfferFrame
 			if jsonErr := json.Unmarshal(data, &offerFrame); jsonErr != nil {
-				slog.Debug("capture-ingest: dropping unparseable browser_capture_offer frame", "error", jsonErr, "agent_id", agentID)
+				slog.Debug(
+					"capture-ingest: dropping unparseable browser_capture_offer frame",
+					"error",
+					jsonErr,
+					"agent_id",
+					agentID,
+				)
 				continue
 			}
 			answer, offerErr := cs.HandleIngestOffer(offerFrame.Sdp)
@@ -937,7 +1008,13 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 					Type:    string(generated.WsFrameTypeError),
 					Message: fmt.Sprintf("capture ingest offer failed: %s", offerErr),
 				}); sendErr != nil {
-					slog.Warn("capture-ingest: send error frame to encoder failed", "error", sendErr, "agent_id", agentID)
+					slog.Warn(
+						"capture-ingest: send error frame to encoder failed",
+						"error",
+						sendErr,
+						"agent_id",
+						agentID,
+					)
 				}
 				return
 			}
@@ -950,7 +1027,13 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 		case string(generated.WsFrameTypeBrowserCaptureControl):
 			var ctrlFrame generated.BrowserCaptureControlFrame
 			if jsonErr := json.Unmarshal(data, &ctrlFrame); jsonErr != nil {
-				slog.Debug("capture-ingest: dropping unparseable browser_capture_control frame", "error", jsonErr, "agent_id", agentID)
+				slog.Debug(
+					"capture-ingest: dropping unparseable browser_capture_control frame",
+					"error",
+					jsonErr,
+					"agent_id",
+					agentID,
+				)
 				continue
 			}
 			if ctrlFrame.Action == "ping" {

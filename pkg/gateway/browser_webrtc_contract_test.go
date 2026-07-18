@@ -124,7 +124,13 @@ func TestWebRTCFrameSchemasRoundTrip(t *testing.T) {
 			// Positive: the generated struct's own JSON validates cleanly.
 			errMsg, serverErr := ValidateInboundFrameJSON(tc.schema, validData)
 			require.False(t, serverErr, "schema compile must succeed for %s", tc.schema)
-			assert.Empty(t, errMsg, "a realistic, valid %s must validate cleanly against its schema; got: %s", tc.schema, errMsg)
+			assert.Empty(
+				t,
+				errMsg,
+				"a realistic, valid %s must validate cleanly against its schema; got: %s",
+				tc.schema,
+				errMsg,
+			)
 
 			var asMap map[string]any
 			require.NoError(t, json.Unmarshal(validData, &asMap))
@@ -136,18 +142,35 @@ func TestWebRTCFrameSchemasRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			errMsg, serverErr = ValidateInboundFrameJSON(tc.schema, badTypeData)
 			require.False(t, serverErr)
-			assert.NotEmpty(t, errMsg, "%s with type=%q (wrong const) must be REJECTED, not silently accepted", tc.schema, "not_a_real_frame_type")
+			assert.NotEmpty(
+				t,
+				errMsg,
+				"%s with type=%q (wrong const) must be REJECTED, not silently accepted",
+				tc.schema,
+				"not_a_real_frame_type",
+			)
 
 			// Negative 2: missing required field (the key itself removed,
 			// not merely zero-valued — see file doc comment).
 			missingField := webrtcContractCloneMap(asMap)
-			require.Contains(t, missingField, tc.requiredField, "sanity: field must be present in the valid payload before deletion")
+			require.Contains(
+				t,
+				missingField,
+				tc.requiredField,
+				"sanity: field must be present in the valid payload before deletion",
+			)
 			delete(missingField, tc.requiredField)
 			missingData, err := json.Marshal(missingField)
 			require.NoError(t, err)
 			errMsg, serverErr = ValidateInboundFrameJSON(tc.schema, missingData)
 			require.False(t, serverErr)
-			assert.NotEmpty(t, errMsg, "%s with required field %q REMOVED must be REJECTED, not silently accepted", tc.schema, tc.requiredField)
+			assert.NotEmpty(
+				t,
+				errMsg,
+				"%s with required field %q REMOVED must be REJECTED, not silently accepted",
+				tc.schema,
+				tc.requiredField,
+			)
 		})
 	}
 }

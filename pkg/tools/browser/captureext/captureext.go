@@ -92,7 +92,7 @@ func ManifestExtensionID() (string, error) {
 		return "", fmt.Errorf("captureext: read embedded manifest.json: %w", err)
 	}
 	var doc manifestKeyDoc
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	if err = json.Unmarshal(raw, &doc); err != nil {
 		return "", fmt.Errorf("captureext: parse embedded manifest.json: %w", err)
 	}
 	if doc.Key == "" {
@@ -125,7 +125,7 @@ func Seed(destRoot string) (dir string, err error) {
 	}
 
 	parent := filepath.Dir(destDir)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
+	if err = os.MkdirAll(parent, 0o755); err != nil {
 		return "", fmt.Errorf("captureext: create parent dir %q: %w", parent, err)
 	}
 

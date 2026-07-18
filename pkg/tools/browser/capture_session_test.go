@@ -238,7 +238,13 @@ func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *
 	coord.loadedExtensionID = captureext.ExtensionID
 	coord.mu.Unlock()
 
-	_, _, err := defaultEncoderStarter(context.Background(), mgr, "deadbeef", "ws://127.0.0.1:1/api/v1/browser/capture-ingest", "")
+	_, _, err := defaultEncoderStarter(
+		context.Background(),
+		mgr,
+		"deadbeef",
+		"ws://127.0.0.1:1/api/v1/browser/capture-ingest",
+		"",
+	)
 	if err == nil {
 		t.Fatal("expected an error when the coordinator has no live root context")
 	}
@@ -267,16 +273,18 @@ func TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget(t *testing.T) 
 	cancelCalled := make(chan struct{})
 	var cancelOnce sync.Once
 
-	starter := EncoderStarter(func(context.Context, *BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
-		close(startCalled)
-		<-releaseStart // block until the test releases it, simulating a slow chromedp.Run
-		tabCtx, cancel := context.WithCancel(context.Background())
-		wrappedCancel := func() {
-			cancelOnce.Do(func() { close(cancelCalled) })
-			cancel()
-		}
-		return tabCtx, wrappedCancel, nil
-	})
+	starter := EncoderStarter(
+		func(context.Context, *BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
+			close(startCalled)
+			<-releaseStart // block until the test releases it, simulating a slow chromedp.Run
+			tabCtx, cancel := context.WithCancel(context.Background())
+			wrappedCancel := func() {
+				cancelOnce.Do(func() { close(cancelCalled) })
+				cancel()
+			}
+			return tabCtx, wrappedCancel, nil
+		},
+	)
 
 	cs := newTestCaptureSession(t, relay, starter)
 
@@ -299,7 +307,9 @@ func TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget(t *testing.T) 
 	cs.Stop()
 	select {
 	case <-cancelCalled:
-		t.Fatal("tabCancel fired from Stop() itself before startEncoder even returned — precondition of this test is violated")
+		t.Fatal(
+			"tabCancel fired from Stop() itself before startEncoder even returned — precondition of this test is violated",
+		)
 	default:
 	}
 
@@ -572,7 +582,9 @@ func TestBrowserManager_CaptureSessionRegistryLifecycle(t *testing.T) {
 		t.Fatalf("EnsureCaptureSession (second call): %v", err)
 	}
 	if cs1 != cs2 {
-		t.Fatal("EnsureCaptureSession constructed a second session — must reuse the existing one (one active stream per agent)")
+		t.Fatal(
+			"EnsureCaptureSession constructed a second session — must reuse the existing one (one active stream per agent)",
+		)
 	}
 	if built != 1 {
 		t.Fatalf("newFn invoked %d times, want exactly 1", built)
@@ -721,7 +733,10 @@ func TestBrowserManager_Shutdown_StopsOrphanedCaptureSession(t *testing.T) {
 	m.Shutdown()
 
 	if got := atomic.LoadInt32(&stoppedCalled); got != 1 {
-		t.Fatalf("SetOnStopped callback fired %d times after Shutdown(), want exactly 1 — CaptureSession was not stopped", got)
+		t.Fatalf(
+			"SetOnStopped callback fired %d times after Shutdown(), want exactly 1 — CaptureSession was not stopped",
+			got,
+		)
 	}
 	if m.CaptureSession() != nil {
 		t.Fatal("CaptureSession() is still non-nil after Shutdown() stopped it — ClearCaptureSession did not run")

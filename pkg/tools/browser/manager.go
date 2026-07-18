@@ -392,7 +392,7 @@ func (m *BrowserManager) InstallRoot() string {
 }
 
 // VideoCapability classifies this manager's live-view WebRTC video capability
-// (ADR-047), honouring the operator's exec_path override: a full Chrome
+// (ADR-047), honoring the operator's exec_path override: a full Chrome
 // pinned via tools.browser.exec_path is video-capable even though no managed
 // full-Chrome download exists under the install root (W3 e2e finding — the
 // install-root-only check wrongly classified such hosts not_capable and
@@ -462,24 +462,6 @@ func (m *BrowserManager) EnsureCaptureSession(newFn func() (*CaptureSession, err
 	}
 	m.capture = cs
 	return cs, nil
-}
-
-// defaultSessionBrowserCtx returns the DefaultSessionID session's browserCtx
-// (the long-lived chromedp handle OpenTab reuses to append sibling tabs — see
-// its doc comment), or nil if that session has no browsing context yet.
-// WebRTC build (W2-A): defaultEncoderStarter uses this to create the
-// encoder-page target as a sibling of the agent's own tab, in the SAME
-// browser context/window, WITHOUT registering it in m.sessions[...].tabs
-// (unlike OpenTab, whose whole point is to add a tab the agent/user tab
-// strip shows).
-func (m *BrowserManager) defaultSessionBrowserCtx() context.Context {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	se, ok := m.sessions[DefaultSessionID]
-	if !ok {
-		return nil
-	}
-	return se.browserCtx
 }
 
 // ClearCaptureSession drops this manager's CaptureSession reference,
