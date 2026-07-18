@@ -225,7 +225,7 @@ type MessageFrame struct {
 	Content string  `json:"content"`
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
 	Media []string `json:"media,omitempty"`
-	// Optional per-message metadata. Phase 1 (FR-010) adds `model_name`: when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes THIS turn to the chosen model. The server falls back to the agent's `model` config when this field is absent. `workspace_setup_kickoff` (boolean): when true, the server treats this message as the one-time workspace setup kickoff for `metadata.workspace_id` — recorded as a system-role transcript entry, and the workspace's `setup_pending` flag is cleared.
+	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace setup kickoff for `metadata.workspace_id`.
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	SessionId *string        `json:"session_id,omitempty"`
 	Type      string         `json:"type"`

@@ -381,7 +381,7 @@ lint-wire-types:
 # root. Always use `tsc -b --noEmit` here and in CI. See F6 / npm run typecheck.
 verify-contracts: gen-contracts lint-wire-types
 	npx tsc -b --noEmit
-	git diff --exit-code -- contracts/ pkg/api/generated/ src/lib/api/generated/
+	git diff --exit-code -- contracts/ pkg/api/generated/ src/lib/api/generated/ pkg/gateway/inboundschemas/
 
 ## help: Show this help message
 help:

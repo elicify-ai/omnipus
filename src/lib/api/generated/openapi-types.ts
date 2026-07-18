@@ -7338,10 +7338,10 @@ export interface components {
              */
             is_default?: boolean;
             /**
-             * @description True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise.
+             * @description True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
              * @example false
              */
-            setup_pending?: boolean;
+            readonly setup_pending?: boolean;
             /**
              * Format: date-time
              * @description RFC3339 UTC creation timestamp
