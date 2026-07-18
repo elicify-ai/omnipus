@@ -1,0 +1,305 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WV1 Spike Q3 — E2E viewer (video + audio)</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; margin: 16px; background: #111; color: #eee; }
+  h1 { font-size: 18px; }
+  #start-btn { padding: 16px 32px; font-size: 20px; cursor: pointer; background: #2a6; color: #fff; border: none; border-radius: 6px; }
+  #start-btn:disabled { background: #444; cursor: default; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .col { flex: 1; min-width: 380px; }
+  fieldset { border: 1px solid #444; margin-bottom: 12px; }
+  video { width: 100%; max-width: 480px; background: #000; border: 1px solid #444; }
+  .stat { font-family: monospace; background: #1c1c1c; padding: 8px; border-radius: 4px; margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
+  pre.log { background: #000; color: #6f6; padding: 8px; height: 220px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; }
+  pre.serverlog { background: #000; color: #6cf; padding: 8px; height: 220px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; }
+  textarea#report { width: 100%; height: 260px; font-family: monospace; font-size: 12px; background: #1c1c1c; color: #eee; border: 1px solid #444; }
+  #audio-rms-live { font-size: 20px; }
+</style>
+</head>
+<body>
+<h1>WV1 Spike Q3 — end-to-end viewer (headless tab capture &#8594; WebRTC &#8594; Pion relay &#8594; here)</h1>
+
+<fieldset>
+  <legend>Start</legend>
+  <button id="start-btn">Start viewing</button>
+  <span id="status"></span>
+</fieldset>
+
+<div class="row">
+  <div class="col">
+    <h3>Video</h3>
+    <video id="v" playsinline controls autoplay></video>
+    <div>Resolution: <span id="resolution" class="stat">(not connected)</span></div>
+    <div>Video inbound-rtp: <div id="video-stats" class="stat">(not connected)</div></div>
+    <h3>Audio</h3>
+    <div>Live RMS (WebAudio AnalyserNode on received track): <span id="audio-rms-live">-</span></div>
+    <div>Audio inbound-rtp: <div id="audio-stats" class="stat">(not connected)</div></div>
+    <h3>Connection</h3>
+    <div>ICE connection state: <span id="ice-state" class="stat">(not started)</span></div>
+    <div>ICE gathering state: <span id="gather-state" class="stat">(not started)</span></div>
+    <div>Selected candidate pair: <div id="selected-pair" class="stat">(not connected)</div></div>
+  </div>
+  <div class="col">
+    <h3>Browser-side log</h3>
+    <pre class="log" id="log"></pre>
+    <h3>Server-side log (GET /serverlog, polled 1s)</h3>
+    <pre class="serverlog" id="serverlog"></pre>
+  </div>
+</div>
+
+<h3>Copy-pasteable report (auto-updated)</h3>
+<button id="copy-btn">Select All (then Ctrl/Cmd-C)</button>
+<textarea id="report" readonly></textarea>
+
+<script>
+'use strict';
+let pc = null;
+let inboundStream = new MediaStream();
+let statsTimer = null;
+let lastVideoStats = null;
+let rmsHistory = [];
+let audioCtx = null;
+let analyser = null;
+let analyserBuf = null;
+let selectedPairText = '(not connected)';
+let videoStatsText = '(not connected)';
+let audioStatsText = '(not connected)';
+let resolutionText = '(not connected)';
+
+function nowTs() {
+  return new Date().toISOString().split('T')[1].replace('Z', '');
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent += `[${nowTs()}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+  updateReport();
+}
+
+async function start() {
+  document.getElementById('start-btn').disabled = true;
+  document.getElementById('status').textContent = 'connecting...';
+  log('=== Start viewing clicked ===');
+
+  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  pc.ontrack = (e) => {
+    log(`ontrack: kind=${e.track.kind} id=${e.track.id} readyState=${e.track.readyState}`);
+    inboundStream.addTrack(e.track);
+    document.getElementById('v').srcObject = inboundStream;
+    if (e.track.kind === 'audio') setupAudioAnalyser(e.track);
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    log(`ICE connection state -> ${pc.iceConnectionState}`);
+    document.getElementById('ice-state').textContent = pc.iceConnectionState;
+    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+      document.getElementById('status').textContent = 'CONNECTED';
+    }
+    updateReport();
+  };
+  pc.onicegatheringstatechange = () => {
+    log(`ICE gathering state -> ${pc.iceGatheringState}`);
+    document.getElementById('gather-state').textContent = pc.iceGatheringState;
+    updateReport();
+  };
+  pc.onconnectionstatechange = () => {
+    log(`Peer connection state -> ${pc.connectionState}`);
+    updateReport();
+  };
+
+  let offer;
+  try {
+    offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+  } catch (err) {
+    log(`ERROR creating/setting local offer: ${err}`);
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+
+  await waitForGatheringComplete(pc);
+  log('Local ICE gathering complete, POSTing offer to /viewer-offer');
+
+  let res;
+  try {
+    res = await fetch('/viewer-offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    });
+  } catch (err) {
+    log(`ERROR posting offer: ${err}`);
+    document.getElementById('status').textContent = 'offer POST failed';
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    log(`viewer-offer POST failed: HTTP ${res.status}: ${body}`);
+    document.getElementById('status').textContent = `offer failed (${res.status}) — retry in a few seconds`;
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+  const answer = await res.json();
+  log(`Answer received from server (${answer.sdp.length} bytes SDP)`);
+  try {
+    await pc.setRemoteDescription(answer);
+    log('Remote description (answer) applied');
+  } catch (err) {
+    log(`ERROR applying remote description: ${err}`);
+    return;
+  }
+
+  statsTimer = setInterval(pollStats, 1000);
+}
+
+function waitForGatheringComplete(pc) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    function check() {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', check);
+        clearTimeout(timer);
+        resolve();
+      }
+    }
+    pc.addEventListener('icegatheringstatechange', check);
+    const timer = setTimeout(() => {
+      pc.removeEventListener('icegatheringstatechange', check);
+      log('WARNING: gathering did not reach complete within 10s, proceeding with partial candidates');
+      resolve();
+    }, 10000);
+  });
+}
+
+function setupAudioAnalyser(track) {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume().catch(() => {});
+  const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  src.connect(analyser);
+  analyserBuf = new Float32Array(analyser.fftSize);
+  requestAnimationFrame(sampleRms);
+}
+
+function sampleRms() {
+  if (analyser) {
+    analyser.getFloatTimeDomainData(analyserBuf);
+    let s = 0;
+    for (let i = 0; i < analyserBuf.length; i++) s += analyserBuf[i] * analyserBuf[i];
+    const rms = Math.sqrt(s / analyserBuf.length);
+    const t = performance.now();
+    rmsHistory.push({ t, rms });
+    while (rmsHistory.length && t - rmsHistory[0].t > 12000) rmsHistory.shift();
+    document.getElementById('audio-rms-live').textContent = rms.toFixed(4);
+  }
+  requestAnimationFrame(sampleRms);
+}
+
+function computeAudioPulseSummary() {
+  if (rmsHistory.length < 10) return '(insufficient audio samples yet)';
+  const values = rmsHistory.map((x) => x.rms);
+  const min = Math.min(...values), max = Math.max(...values);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const threshold = min + (max - min) * 0.5;
+  const peaks = [];
+  let above = false;
+  for (const smp of rmsHistory) {
+    if (smp.rms > threshold && !above) { peaks.push(smp.t); above = true; }
+    else if (smp.rms <= threshold) { above = false; }
+  }
+  const intervals = [];
+  for (let i = 1; i < peaks.length; i++) intervals.push(((peaks[i] - peaks[i - 1]) / 1000).toFixed(2));
+  return `min=${min.toFixed(4)} max=${max.toFixed(4)} mean=${mean.toFixed(4)} peakCount=${peaks.length} interPeakIntervalsSec=[${intervals.join(', ')}] (expect ~1.00s apart if metronome audio is arriving live)`;
+}
+
+async function pollStats() {
+  if (!pc) return;
+  const stats = await pc.getStats();
+  stats.forEach((report) => {
+    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+      const now = { framesDecoded: report.framesDecoded, ts: report.timestamp };
+      let fps = null;
+      if (lastVideoStats && now.ts > lastVideoStats.ts) {
+        const dt = (now.ts - lastVideoStats.ts) / 1000;
+        const df = now.framesDecoded - lastVideoStats.framesDecoded;
+        if (dt > 0) fps = df / dt;
+      }
+      lastVideoStats = now;
+      videoStatsText = `framesDecoded=${report.framesDecoded} fps=${fps !== null ? fps.toFixed(1) : '?'} frameWidth=${report.frameWidth || '?'} frameHeight=${report.frameHeight || '?'} packetsReceived=${report.packetsReceived || 0} packetsLost=${report.packetsLost || 0} jitter=${(report.jitter || 0).toFixed(4)}`;
+      resolutionText = `${report.frameWidth || '?'}x${report.frameHeight || '?'}`;
+      document.getElementById('video-stats').textContent = videoStatsText;
+      document.getElementById('resolution').textContent = resolutionText;
+    }
+    if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+      audioStatsText = `packetsReceived=${report.packetsReceived || 0} audioLevel=${report.audioLevel !== undefined ? report.audioLevel.toFixed(4) : '?'} totalAudioEnergy=${report.totalAudioEnergy !== undefined ? report.totalAudioEnergy.toFixed(6) : '?'} totalSamplesDuration=${report.totalSamplesDuration !== undefined ? report.totalSamplesDuration.toFixed(2) : '?'} jitter=${(report.jitter || 0).toFixed(4)}`;
+      document.getElementById('audio-stats').textContent = audioStatsText;
+    }
+    if (report.type === 'candidate-pair' && report.state === 'succeeded' && (report.nominated || report.selected)) {
+      const local = stats.get(report.localCandidateId);
+      const remote = stats.get(report.remoteCandidateId);
+      selectedPairText = `local: type=${local ? local.candidateType : '?'} proto=${local ? local.protocol : '?'} ${local ? (local.address || local.ip) : '?'}:${local ? local.port : '?'}  <->  remote: type=${remote ? remote.candidateType : '?'} proto=${remote ? remote.protocol : '?'} ${remote ? (remote.address || remote.ip) : '?'}:${remote ? remote.port : '?'}`;
+      document.getElementById('selected-pair').textContent = selectedPairText;
+    }
+  });
+  updateReport();
+}
+
+async function fetchServerLog() {
+  try {
+    const res = await fetch('/serverlog');
+    const text = await res.text();
+    const el = document.getElementById('serverlog');
+    const wasAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+    el.textContent = text;
+    if (wasAtBottom) el.scrollTop = el.scrollHeight;
+  } catch (e) { /* ignore transient fetch errors */ }
+  updateReport();
+}
+setInterval(fetchServerLog, 1000);
+fetchServerLog();
+
+function updateReport() {
+  const lines = [];
+  lines.push('=== WV1 Spike Q3 viewer report ===');
+  lines.push(`generated: ${new Date().toISOString()}`);
+  lines.push(`ICE connection state: ${document.getElementById('ice-state').textContent}`);
+  lines.push(`ICE gathering state: ${document.getElementById('gather-state').textContent}`);
+  lines.push(`Selected candidate pair: ${selectedPairText}`);
+  lines.push(`Resolution: ${resolutionText}`);
+  lines.push(`Video stats: ${videoStatsText}`);
+  lines.push(`Audio stats: ${audioStatsText}`);
+  lines.push(`Audio RMS pulse summary (last 12s): ${computeAudioPulseSummary()}`);
+  lines.push('');
+  lines.push('--- Browser-side log ---');
+  lines.push(document.getElementById('log').textContent);
+  lines.push('--- Server-side log ---');
+  lines.push(document.getElementById('serverlog').textContent);
+  document.getElementById('report').value = lines.join('\n');
+}
+
+document.getElementById('start-btn').addEventListener('click', start);
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const ta = document.getElementById('report');
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand('copy');
+    document.getElementById('status').textContent = 'report copied (or select-all done, Ctrl/Cmd-C to copy)';
+  } catch (e) {
+    document.getElementById('status').textContent = 'select-all done, press Ctrl/Cmd-C to copy';
+  }
+});
+
+updateReport();
+</script>
+</body>
+</html>

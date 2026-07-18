@@ -1,0 +1,299 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WV1 Spike Q1 — Pion/Browser WebRTC connectivity</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; margin: 16px; background: #111; color: #eee; }
+  h1 { font-size: 18px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .col { flex: 1; min-width: 380px; }
+  fieldset { border: 1px solid #444; margin-bottom: 12px; }
+  button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
+  .stat { font-family: monospace; background: #1c1c1c; padding: 8px; border-radius: 4px; margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
+  pre.log { background: #000; color: #6f6; padding: 8px; height: 260px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; }
+  pre.serverlog { background: #000; color: #6cf; padding: 8px; height: 260px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; }
+  textarea#report { width: 100%; height: 220px; font-family: monospace; font-size: 12px; background: #1c1c1c; color: #eee; border: 1px solid #444; }
+  label { margin-right: 12px; }
+  .ok { color: #6f6; }
+  .warn { color: #fc6; }
+</style>
+</head>
+<body>
+<h1>WV1 Spike Q1 — Pion ↔ Browser WebRTC connectivity (no TURN)</h1>
+
+<fieldset>
+  <legend>Mode</legend>
+  <label><input type="radio" name="mode" value="default" checked> DEFAULT (public STUN, normal UDP ICE)</label>
+  <label><input type="radio" name="mode" value="hostonly"> HOST-ONLY (no STUN, host candidates only)</label>
+  <label><input type="radio" name="mode" value="icetcp"> ICE-TCP (STUN + passive ICE-TCP on :8081)</label>
+  <br><br>
+  <button id="connect-btn">Connect</button>
+  <span id="status"></span>
+</fieldset>
+
+<div class="row">
+  <div class="col">
+    <h3>Live state</h3>
+    <div>ICE connection state: <span id="ice-state" class="stat">(not started)</span></div>
+    <div>ICE gathering state: <span id="gather-state" class="stat">(not started)</span></div>
+    <div>Data channel RTT: <span id="rtt" class="stat">(no pings yet)</span></div>
+    <div>Selected candidate pair (browser getStats): <div id="selected-pair" class="stat">(not connected)</div></div>
+    <div>Local candidates gathered (browser):</div>
+    <div id="candidates" class="stat">(none yet)</div>
+  </div>
+  <div class="col">
+    <h3>Browser-side log</h3>
+    <pre class="log" id="log"></pre>
+    <h3>Server-side log (GET /serverlog, polled 1s)</h3>
+    <pre class="serverlog" id="serverlog"></pre>
+  </div>
+</div>
+
+<h3>Copy-pasteable report (auto-updated)</h3>
+<button id="copy-btn">Select All (then Ctrl/Cmd-C)</button>
+<textarea id="report" readonly></textarea>
+
+<script>
+let pc = null;
+let dc = null;
+let pingSeq = 0;
+let pingTimestamps = {};
+let localCandidates = [];
+let lastRTT = '(no pings yet)';
+let selectedPairText = '(not connected)';
+let connectStartTime = null;
+
+function nowTs() {
+  return new Date().toISOString().split('T')[1].replace('Z','');
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent += `[${nowTs()}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+  updateReport();
+}
+
+async function connect() {
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  connectStartTime = performance.now();
+  log(`=== Connecting with mode=${mode} ===`);
+  document.getElementById('status').textContent = `connecting (${mode})...`;
+  localCandidates = [];
+  document.getElementById('candidates').textContent = '(none yet)';
+  document.getElementById('selected-pair').textContent = '(not connected)';
+  selectedPairText = '(not connected)';
+
+  const config = { iceServers: [] };
+  if (mode === 'default' || mode === 'icetcp') {
+    config.iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  }
+  // hostonly: iceServers stays empty -> host candidates only.
+
+  pc = new RTCPeerConnection(config);
+
+  pc.oniceconnectionstatechange = () => {
+    log(`ICE connection state -> ${pc.iceConnectionState}`);
+    document.getElementById('ice-state').textContent = pc.iceConnectionState;
+    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+      document.getElementById('status').textContent = 'CONNECTED';
+      setTimeout(showSelectedPair, 500);
+    }
+    if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'closed') {
+      document.getElementById('status').textContent = `ICE ${pc.iceConnectionState}`;
+    }
+    updateReport();
+  };
+
+  pc.onicegatheringstatechange = () => {
+    log(`ICE gathering state -> ${pc.iceGatheringState}`);
+    document.getElementById('gather-state').textContent = pc.iceGatheringState;
+    updateReport();
+  };
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      const c = e.candidate;
+      const line = `type=${c.type} proto=${c.protocol} addr=${c.address || '?'} port=${c.port} candidate="${c.candidate}"`;
+      log(`Local candidate (browser): ${line}`);
+      localCandidates.push(line);
+      document.getElementById('candidates').textContent = localCandidates.join('\n');
+    } else {
+      log('Local candidate gathering complete (browser, null candidate signal)');
+    }
+    updateReport();
+  };
+
+  pc.onconnectionstatechange = () => {
+    log(`Peer connection state -> ${pc.connectionState}`);
+    updateReport();
+  };
+
+  dc = pc.createDataChannel('ping');
+  dc.onopen = () => {
+    log('Data channel OPEN — starting 1s ping loop (runs 90s+)');
+    startPinging();
+  };
+  dc.onclose = () => log('Data channel closed');
+  dc.onerror = (e) => log(`Data channel error: ${JSON.stringify(e && e.message ? e.message : e)}`);
+  dc.onmessage = (e) => {
+    const seq = e.data;
+    const sentTs = pingTimestamps[seq];
+    if (sentTs !== undefined) {
+      const rtt = (performance.now() - sentTs).toFixed(1);
+      lastRTT = `${rtt} ms (seq ${seq}, elapsed ${(  (performance.now()-connectStartTime)/1000 ).toFixed(1)}s since connect)`;
+      document.getElementById('rtt').textContent = lastRTT;
+      delete pingTimestamps[seq];
+      updateReport();
+    }
+  };
+
+  let offer;
+  try {
+    offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+  } catch (err) {
+    log(`ERROR creating/setting local offer: ${err}`);
+    return;
+  }
+
+  await waitForGatheringComplete(pc);
+  log('Local ICE gathering complete, POSTing offer to /offer');
+
+  let res;
+  try {
+    res = await fetch('/q1/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type, mode: mode }),
+    });
+  } catch (err) {
+    log(`ERROR posting offer: ${err}`);
+    document.getElementById('status').textContent = 'offer POST failed';
+    return;
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    log(`Offer POST failed: HTTP ${res.status}: ${body}`);
+    document.getElementById('status').textContent = `offer failed (${res.status})`;
+    return;
+  }
+  const answer = await res.json();
+  log(`Answer received from server (${answer.sdp.length} bytes SDP)`);
+  try {
+    await pc.setRemoteDescription(answer);
+    log('Remote description (answer) applied');
+  } catch (err) {
+    log(`ERROR applying remote description: ${err}`);
+  }
+}
+
+function waitForGatheringComplete(pc) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') {
+      resolve();
+      return;
+    }
+    function check() {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', check);
+        clearTimeout(timer);
+        resolve();
+      }
+    }
+    pc.addEventListener('icegatheringstatechange', check);
+    // Fallback in case gathering never signals complete (e.g. STUN unreachable).
+    const timer = setTimeout(() => {
+      pc.removeEventListener('icegatheringstatechange', check);
+      log('WARNING: gathering did not reach complete within 10s, proceeding with partial candidates');
+      resolve();
+    }, 10000);
+  });
+}
+
+function startPinging() {
+  setInterval(() => {
+    if (dc && dc.readyState === 'open') {
+      pingSeq++;
+      pingTimestamps[String(pingSeq)] = performance.now();
+      dc.send(String(pingSeq));
+    }
+  }, 1000);
+}
+
+async function showSelectedPair() {
+  if (!pc) return;
+  const stats = await pc.getStats();
+  let found = false;
+  stats.forEach((report) => {
+    if (report.type === 'candidate-pair' && (report.state === 'succeeded') && (report.nominated || report.selected)) {
+      const local = stats.get(report.localCandidateId);
+      const remote = stats.get(report.remoteCandidateId);
+      const localAddr = local ? (local.address || local.ip) : '?';
+      const remoteAddr = remote ? (remote.address || remote.ip) : '?';
+      const text = `local: type=${local ? local.candidateType : '?'} proto=${local ? local.protocol : '?'} ${localAddr}:${local ? local.port : '?'}  <->  remote: type=${remote ? remote.candidateType : '?'} proto=${remote ? remote.protocol : '?'} ${remoteAddr}:${remote ? remote.port : '?'}`;
+      document.getElementById('selected-pair').textContent = text;
+      selectedPairText = text;
+      log(`SELECTED PAIR (browser getStats): ${text}`);
+      found = true;
+    }
+  });
+  if (!found) {
+    log('showSelectedPair: no succeeded+nominated candidate-pair found yet, will not retry automatically');
+  }
+  updateReport();
+}
+
+async function fetchServerLog() {
+  try {
+    const res = await fetch('/serverlog');
+    const text = await res.text();
+    const el = document.getElementById('serverlog');
+    const wasAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+    el.textContent = text;
+    if (wasAtBottom) el.scrollTop = el.scrollHeight;
+  } catch (e) { /* ignore transient fetch errors */ }
+  updateReport();
+}
+setInterval(fetchServerLog, 1000);
+fetchServerLog();
+
+function updateReport() {
+  const mode = document.querySelector('input[name="mode"]:checked') ? document.querySelector('input[name="mode"]:checked').value : '(none selected)';
+  const lines = [];
+  lines.push('=== WV1 Spike Q1 report ===');
+  lines.push(`generated: ${new Date().toISOString()}`);
+  lines.push(`mode: ${mode}`);
+  lines.push(`ICE connection state: ${document.getElementById('ice-state').textContent}`);
+  lines.push(`ICE gathering state: ${document.getElementById('gather-state').textContent}`);
+  lines.push(`DC ping RTT: ${lastRTT}`);
+  lines.push(`Selected candidate pair (browser): ${selectedPairText}`);
+  lines.push('');
+  lines.push('--- Browser local candidates ---');
+  lines.push(localCandidates.length ? localCandidates.join('\n') : '(none)');
+  lines.push('');
+  lines.push('--- Browser-side log ---');
+  lines.push(document.getElementById('log').textContent);
+  lines.push('--- Server-side log ---');
+  lines.push(document.getElementById('serverlog').textContent);
+  document.getElementById('report').value = lines.join('\n');
+}
+
+document.getElementById('connect-btn').addEventListener('click', connect);
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const ta = document.getElementById('report');
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand('copy');
+    document.getElementById('status').textContent = 'report copied (or select-all done, Ctrl/Cmd-C to copy)';
+  } catch (e) {
+    document.getElementById('status').textContent = 'select-all done, press Ctrl/Cmd-C to copy';
+  }
+});
+
+updateReport();
+</script>
+</body>
+</html>
