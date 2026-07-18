@@ -356,6 +356,7 @@ func TestHandleChatMessage_StampsWorkspaceOnSession(t *testing.T) {
 		nil,         // mediaRefs
 		"",          // modelName
 		wantWS,      // workspaceID (active workspace)
+		false,       // setupKickoff
 		wc,
 	)
 

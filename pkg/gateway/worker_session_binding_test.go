@@ -498,6 +498,7 @@ func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
 		nil,             // mediaRefs
 		"",              // modelName (no per-turn override)
 		"",              // workspaceID (no active workspace)
+		false,           // setupKickoff
 		wc,
 	)
 
