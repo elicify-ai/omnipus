@@ -165,6 +165,70 @@ func TestSeed_ContentIntegrity(t *testing.T) {
 	}
 }
 
+// TestSeed_EncoderJS_ContentGuards is a deliberately brittle, cheap interim
+// guard over the seeded encoder.js content — QA regression-wave item 6.
+// These are string/regex assertions against generated JS, not behavioral
+// tests (there is no headless-Chrome harness in this package), so they are
+// EXPECTED to need updating whenever encoder.js's implementation legitimately
+// changes; each sub-check is commented with the specific fix/finding it
+// guards so a future editor knows what would silently regress if the
+// assertion were just deleted rather than updated.
+func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
+	destRoot := t.TempDir()
+	dir, err := Seed(destRoot)
+	if err != nil {
+		t.Fatalf("Seed() error: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "encoder.js"))
+	if err != nil {
+		t.Fatalf("read seeded encoder.js: %v", err)
+	}
+	content := string(raw)
+
+	// (a) letterbox regression guard (W3 fix 5): min==max dimension pinning
+	// MUST sit inside the SAME getUserMedia video.mandatory block as
+	// chromeMediaSourceId — pinning min/max on an unrelated stream request
+	// would silently stop constraining the capture surface to the tab's own
+	// viewport, reintroducing black bars either side of the encoded frame.
+	// Anchored on a regex over the mandatory block itself (order-sensitive,
+	// not just "all four substrings exist somewhere in the file") rather than
+	// four independent Contains checks, so a refactor that moved minWidth/
+	// minHeight to some OTHER, unrelated stream request would still fail
+	// this guard.
+	videoMandatoryBlock := regexp.MustCompile(
+		`chromeMediaSource:\s*'tab',\s*chromeMediaSourceId:\s*streamId,\s*minWidth:\s*capW,\s*minHeight:\s*capH,\s*maxWidth:\s*capW,\s*maxHeight:\s*capH,`,
+	)
+	if !videoMandatoryBlock.MatchString(content) {
+		t.Error("encoder.js: expected chromeMediaSourceId immediately followed by minWidth/minHeight/maxWidth/maxHeight " +
+			"(all pinned to capW/capH) in the SAME video.mandatory getUserMedia block — letterbox regression guard (W3 fix 5)")
+	}
+
+	// (b) offer-answer timeout arm (fix-wave C, review-flagged gap): a
+	// browser_capture_offer sent with no browser_capture_answer response
+	// must eventually force a reconnect rather than hang the encoder page
+	// forever. Checks both the constant/arm function AND the actual
+	// setTimeout wiring, not just the string "OFFER_ANSWER_TIMEOUT_MS"
+	// appearing anywhere (which could be a stale, disconnected declaration).
+	if !strings.Contains(content, "const OFFER_ANSWER_TIMEOUT_MS") {
+		t.Error("encoder.js: missing OFFER_ANSWER_TIMEOUT_MS constant (fix-wave C offer-answer timeout)")
+	}
+	if !strings.Contains(content, "function armOfferAnswerTimeout") {
+		t.Error("encoder.js: missing armOfferAnswerTimeout() (fix-wave C offer-answer timeout)")
+	}
+	if !regexp.MustCompile(`setTimeout\(\s*\(\)\s*=>\s*\{[^}]*offer-answer timeout`).MatchString(content) {
+		t.Error("encoder.js: armOfferAnswerTimeout must actually arm a setTimeout whose callback reports an " +
+			"\"offer-answer timeout\" — found the constant/function names but not the wired setTimeout call")
+	}
+
+	// (c) removed scaffolding stays removed: __omnipusMeasureAudioRMS was a
+	// diagnostic-only audio-RMS measurement hook from earlier debugging that
+	// was deliberately stripped — it must never silently creep back in via a
+	// copy-paste from an old branch/backup.
+	if strings.Contains(content, "__omnipusMeasureAudioRMS") {
+		t.Error("encoder.js: __omnipusMeasureAudioRMS scaffolding must stay removed (was diagnostic-only, already stripped)")
+	}
+}
+
 // TestSeed_Idempotent verifies a second Seed call to the same destRoot is a
 // no-op: it returns the same directory without error, and pre-existing
 // content is left untouched (including a deliberately "corrupted" file, to

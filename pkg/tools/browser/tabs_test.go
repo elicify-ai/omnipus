@@ -100,12 +100,37 @@ func TestSession_FollowsActiveTabAfterSwitch(t *testing.T) {
 	// OpenTab makes the new tab active — Session() must now return ITS
 	// context, not the first tab's (ADR-041 D1: "Session always returns the
 	// ACTIVE tab's context").
+	//
+	// PRE-EXISTING DATA RACE FIX (confirmed via -race on base 9d31e106):
+	// firstCtx/secondCtx/thirdCtx are real chromedp contexts (fakeTabFactory
+	// builds them via chromedp.NewContext(context.Background()), same as
+	// production createTab) — chromedp.NewContext starts a background
+	// goroutine (chromedp.go's "go func() { <-ctx.Done(); ... }") that reads
+	// and CASes the context's internal done-channel pointer the moment its
+	// parent is ever Done. require.NotEqual/assert.Equal fall through to
+	// testify's ObjectsAreEqual -> reflect.DeepEqual for non-[]byte types,
+	// which recursively walks the context's UNEXPORTED fields via
+	// reflect.Value.IsNil() on that very same memory — a genuine data race
+	// against that goroutine, reproduced here:
+	//   WARNING: DATA RACE
+	//   Write at ... by chromedp.NewContext.func1 (context.(*valueCtx).Done)
+	//   Previous read at ... by reflect.Value.IsNil (via testify's
+	//   ObjectsAreEqual -> reflect.DeepEqual, called from this test's
+	//   require.NotEqual)
+	// The fix: never deep-compare a context.Context's internals at all —
+	// this test only ever wants OBJECT IDENTITY ("is this the SAME tab's
+	// context"), which the language's own `==`/`!=` on the context.Context
+	// interface already gives for free: chromedp.NewContext's returned
+	// value is ultimately a *context.valueCtx wrapping a *context.cancelCtx
+	// (both pointer types), so `==`/`!=` is a plain, race-free pointer
+	// comparison — it never dereferences into the struct's fields the way
+	// reflect.DeepEqual does, so the background goroutine's writes are
+	// never observed by this comparison at all.
 	secondCtx, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
-	require.NotEqual(
+	assert.True(
 		t,
-		firstCtx,
-		secondCtx,
+		firstCtx != secondCtx,
 		"Session must follow the active tab, not stay pinned to the first tab created",
 	)
 
@@ -114,7 +139,7 @@ func TestSession_FollowsActiveTabAfterSwitch(t *testing.T) {
 	require.NoError(t, err)
 	thirdCtx, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
-	assert.Equal(t, firstCtx, thirdCtx, "Session must follow SwitchTab back to tab 0")
+	assert.True(t, firstCtx == thirdCtx, "Session must follow SwitchTab back to tab 0")
 }
 
 func TestSession_MaxTabsCap_ReturnsError(t *testing.T) {
