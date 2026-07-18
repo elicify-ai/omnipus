@@ -1,8 +1,9 @@
 # ADR-048: Live-browser capture requires the DEFAULT browser context — amends ADR-047 D2 and ADR-043 D2
 
-- **Status:** **Proposed** — 2026-07-18. Architect recommendation: Option A. **Operator
-  ratification REQUIRED before the epic merges** (this record reverses an accepted
-  isolation property; see Consequences).
+- **Status:** **Accepted — 2026-07-18** (operator: Daniel Piatkowski — "the shared
+  cookie jar is currently ok"; Option A ratified for v1). Option B (per-agent Chrome
+  instances, real isolation) is tracked for later in
+  [#509](https://github.com/elicify-ai/omnipus/issues/509).
 - **Amends:** ADR-047 D2 (capture context topology) and ADR-043 D2/D4/D7 (per-agent
   isolation becomes conditional on capture mode).
 - **Deciders:** Daniel Piatkowski (operator) — pending; architect (recommendation).
