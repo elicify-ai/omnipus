@@ -564,7 +564,20 @@ func (lv *LiveView) attach(
 	go lv.runAckWorker(ackCtx, listenCtx)
 
 	// No lock held here — see the deadlock postmortem above.
+	//
+	// Page.bringToFront BEFORE StartScreencast (W3 e2e finding): in FULL
+	// Chrome --headless=new (the WebRTC-capable build ADR-047 D2 switched
+	// managed launches to), Page.startScreencast succeeds but delivers ZERO
+	// EventScreencastFrame for a target the compositor considers hidden —
+	// and CDP-created targets start hidden there. chrome-headless-shell (the
+	// pre-WebRTC managed build this path was spike-proven on, see the tuning
+	// consts' doc) rendered every target regardless, which is why this was
+	// never needed before. Measured on real Chrome 150: 0 frames in 4s on an
+	// animating page without bringToFront; ~60fps with it.
 	err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return page.BringToFront().Do(ctx)
+		}),
 		page.StartScreencast().
 			WithFormat(page.ScreencastFormatJpeg).
 			WithQuality(screencastQuality).
@@ -848,7 +861,14 @@ func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Contex
 	go lv.runAckWorker(ackCtx, listenCtx)
 
 	// No lock held here — see the deadlock postmortem above attach().
+	// Page.bringToFront before StartScreencast: same full-Chrome
+	// --headless=new requirement as attach() — a newly-activated tab is
+	// hidden to the compositor until brought to front, and a hidden target
+	// produces zero screencast frames (see attach()'s comment).
 	err := lv.runCDP(newCtx, lv.mgr.PageTimeout(),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return page.BringToFront().Do(ctx)
+		}),
 		page.StartScreencast().
 			WithFormat(page.ScreencastFormatJpeg).
 			WithQuality(screencastQuality).

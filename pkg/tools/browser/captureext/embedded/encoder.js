@@ -180,12 +180,45 @@ async function captureActiveTabStream() {
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
   record('captureActiveTabStream: got streamId');
 
+  // W3 e2e finding: WITHOUT explicit size constraints, tabCapture delivers
+  // its default 4:3 (800x600) frame and LETTERBOXES the (16:9, 1280x720)
+  // tab viewport into it — black bars top/bottom, and the viewer's
+  // videoWidth/Height no longer matches the page's CSS pixel space, which
+  // breaks the wave-plan key-decision-8 assumption ("tab capture delivers
+  // device pixels of the tab viewport, page_scale 1.0") that the SPA's
+  // click/coordinate mapping relies on. Pin min==max to the captured tab's
+  // own viewport size (chrome.tabs.get(...).width/height, CSS px — DPR is 1
+  // in the managed headless Chrome) so the capture surface IS the viewport,
+  // 1:1, no bars. Fallback 1280x720 matches the coordinator's
+  // --window-size default.
+  let capW = 1280;
+  let capH = 720;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab && tab.width && tab.height) {
+      capW = tab.width;
+      capH = tab.height;
+    }
+  } catch (e) {
+    warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
+  }
+  record('captureActiveTabStream: capture size ' + capW + 'x' + capH);
+
   // Self-consume: no processing constraints needed — tabCapture's defaults
   // are clean (AGC/EC/NS default OFF), unlike getDisplayMedia. See
   // wv1-spike-results.md Q2.
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
-    video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
+    video: {
+      mandatory: {
+        chromeMediaSource: 'tab',
+        chromeMediaSourceId: streamId,
+        minWidth: capW,
+        minHeight: capH,
+        maxWidth: capW,
+        maxHeight: capH,
+      },
+    },
   });
 
   window.__omnipusState.videoTracks = stream.getVideoTracks().map((t) => ({ label: t.label, settings: t.getSettings() }));

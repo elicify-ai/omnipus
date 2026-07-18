@@ -489,7 +489,7 @@ func (h *BrowserWSHandler) readLoop(
 
 		switch typ.Type {
 		case string(generated.WsFrameTypeBrowserAttach):
-			h.handleAttach(wc, &state, viewerID, userID, data)
+			h.handleAttach(wc, &state, viewerID, userID, data, cfg)
 		case string(generated.WsFrameTypeBrowserInput):
 			h.handleInput(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserControl):
@@ -535,6 +535,7 @@ func (h *BrowserWSHandler) handleAttach(
 	state *browserConnState,
 	viewerID, userID string,
 	data []byte,
+	cfg *config.Config,
 ) {
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
@@ -652,6 +653,12 @@ func (h *BrowserWSHandler) handleAttach(
 		SessionId:         &chatSessionID,
 		ControlledByOther: &cbo,
 	}, dropContext(chatSessionID, viewerID, "attach-ok"))
+
+	// ADR-047: announce WebRTC availability for this fresh attach — the SPA
+	// only sends its offer after an available:true state frame (see
+	// announceWebRTCAvailability's doc for why omitting this deadlocks the
+	// upgrade handshake and strands the panel on JPEG).
+	h.announceWebRTCAvailability(wc, mgr, chatSessionID, viewerID, cfg)
 }
 
 // handleInput dispatches a viewer input event, gated by the LiveView's
