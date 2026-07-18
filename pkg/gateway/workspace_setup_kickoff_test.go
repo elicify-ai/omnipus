@@ -10,7 +10,9 @@
 // open. handleChatMessage must: record the trigger as a system-role transcript
 // entry (not a user bubble), clear the workspace's setup_pending flag exactly
 // once (idempotency guard), give the session a fixed "Workspace setup" title,
-// and otherwise run the turn normally so Ava's greeting streams live.
+// build the driving turn instruction SERVER-SIDE from the workspace's own
+// name/description (never the client-supplied content), and otherwise run
+// the turn normally so Ava's greeting streams live.
 //
 // See contracts/asyncapi.yaml metadata.workspace_setup_kickoff and
 // pkg/workspace/workspace.go Workspace.SetupPending.
@@ -18,13 +20,17 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -39,10 +45,21 @@ import (
 // under home.
 func writeSetupKickoffWorkspaceRecord(t *testing.T, home, id string, setupPending bool) {
 	t.Helper()
+	writeSetupKickoffWorkspaceRecordNamed(t, home, id, setupPending, "", "")
+}
+
+// writeSetupKickoffWorkspaceRecordNamed is writeSetupKickoffWorkspaceRecord
+// plus an explicit name/description, for tests that assert the SERVER-BUILT
+// kickoff instruction (built from the workspace's own name/description, never
+// client-supplied content — see buildWorkspaceKickoffInstruction).
+func writeSetupKickoffWorkspaceRecordNamed(t *testing.T, home, id string, setupPending bool, name, description string) {
+	t.Helper()
 	dir := filepath.Join(home, "workspaces")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	rec := map[string]any{
 		"id":            id,
+		"name":          name,
+		"description":   description,
 		"is_default":    false,
 		"setup_pending": setupPending,
 		"created_at":    time.Now().UTC().Format(time.RFC3339),
@@ -53,9 +70,10 @@ func writeSetupKickoffWorkspaceRecord(t *testing.T, home, id string, setupPendin
 	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), data, 0o644))
 }
 
-// drainErrorFrame drains wc.sendCh (non-blocking) and returns the first
-// error-type frame found, or nil if none arrived.
-func drainErrorFrame(wc *wsConn) *replayFrameDecoder {
+// drainFrameOfType drains wc.sendCh (non-blocking) and returns the first
+// frame of the given type found, or nil if none arrived. Frames of other
+// types encountered along the way are discarded (not put back).
+func drainFrameOfType(wc *wsConn, frameType string) *replayFrameDecoder {
 	for {
 		select {
 		case raw := <-wc.sendCh:
@@ -63,7 +81,7 @@ func drainErrorFrame(wc *wsConn) *replayFrameDecoder {
 			if err := json.Unmarshal(raw, &f); err != nil {
 				continue
 			}
-			if f.Type == string(generated.WsFrameTypeError) {
+			if f.Type == frameType {
 				fCopy := f
 				return &fCopy
 			}
@@ -73,34 +91,133 @@ func drainErrorFrame(wc *wsConn) *replayFrameDecoder {
 	}
 }
 
+// drainErrorFrame drains wc.sendCh (non-blocking) and returns the first
+// error-type frame found, or nil if none arrived.
+func drainErrorFrame(wc *wsConn) *replayFrameDecoder {
+	return drainFrameOfType(wc, string(generated.WsFrameTypeError))
+}
+
+// assertNoSessionMinted asserts that no session_id was tracked for chatID,
+// i.e. no session was minted (or a minted session was fully rolled back) for
+// a rejected/failed kickoff.
+func assertNoSessionMinted(t *testing.T, handler *WSHandler, chatID string) {
+	t.Helper()
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	assert.Empty(t, handler.sessionIDs[chatID], "a rejected/rolled-back kickoff must not leave a tracked session")
+}
+
+// newTestWSHandlerForKickoffAudit is newTestWSHandlerForModelName plus a real
+// audit logger (Sandbox.AuditLog = true) wired to homePath/system/, and
+// handler.home set to the SAME homePath so workspace records
+// (homePath/workspaces/), sessions (homePath/sessions/), and audit
+// (homePath/system/) all live under one root — mirroring how the real
+// gateway wires home == agent-loop homePath. Used by the tests that assert
+// on the workspace.setup_consumed audit entry (Fix 6).
+func newTestWSHandlerForKickoffAudit(t *testing.T, msgBus *bus.MessageBus) (*WSHandler, string) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	homePath := t.TempDir()
+	workspaceDir := filepath.Join(homePath, "workspace")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o700))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspaceDir,
+				ModelName: "test-default-model",
+				MaxTokens: 4096,
+			},
+		},
+		Sandbox: config.OmnipusSandboxConfig{AuditLog: true},
+	}
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	handler := newWSHandler(msgBus, al, "")
+	t.Cleanup(handler.Wait)
+	handler.home = homePath
+	return handler, homePath
+}
+
+// readAuditRecords scans every *.jsonl file under homePath/system/ and
+// returns every decoded record. Returns nil (not an error) if the system
+// directory doesn't exist yet — a test asserting "no audit record was
+// written" is a valid outcome, not a setup bug.
+func readAuditRecords(t *testing.T, homePath string) []map[string]any {
+	t.Helper()
+	systemDir := filepath.Join(homePath, "system")
+	entries, err := os.ReadDir(systemDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		require.NoError(t, err)
+	}
+	var records []map[string]any
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		f, err := os.Open(filepath.Join(systemDir, entry.Name()))
+		require.NoError(t, err)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			var rec map[string]any
+			if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+				continue
+			}
+			records = append(records, rec)
+		}
+		require.NoError(t, scanner.Err())
+		require.NoError(t, f.Close())
+	}
+	return records
+}
+
+// findAuditRecordsByEvent filters records down to those whose "event" field
+// matches want.
+func findAuditRecordsByEvent(records []map[string]any, want string) []map[string]any {
+	var out []map[string]any
+	for _, r := range records {
+		if r["event"] == want {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // TestHandleChatMessage_WorkspaceSetupKickoff_HappyPath proves the full
 // kickoff contract: the transcript entry is system-role (not a user bubble)
-// with NEUTRAL fixed content (Fix 4 — never the client-supplied instruction
-// verbatim), the workspace's setup_pending flag is cleared on disk, the
-// session gets the fixed "Workspace setup" title, and the FULL instruction is
-// still published to the bus so Ava's greeting streams normally and is driven
-// by the real interview prompt.
+// with NEUTRAL fixed content, the workspace's setup_pending flag is cleared
+// on disk, the session gets the fixed "Workspace setup" title, the
+// SERVER-BUILT canonical instruction (naming the workspace and its
+// description) drives the turn — NEVER the client-supplied content, which is
+// deliberately junk here to prove it is ignored — and the
+// workspace.setup_consumed audit entry is emitted after the successful
+// publish, stamped with the authenticated user.
 func TestHandleChatMessage_WorkspaceSetupKickoff_HappyPath(t *testing.T) {
 	msgBus := bus.NewMessageBus()
-	handler, _ := newTestWSHandlerForModelName(t, msgBus)
-	home := t.TempDir()
-	handler.home = home
+	handler, homePath := newTestWSHandlerForKickoffAudit(t, msgBus)
 
 	const wsID = "01JXWORKSPACEKICKOFF0000001"
-	writeSetupKickoffWorkspaceRecord(t, home, wsID, true)
+	const wsName = "Launch Rocket"
+	const wsDescription = "Coordinate the Q3 launch across marketing and engineering."
+	writeSetupKickoffWorkspaceRecordNamed(t, homePath, wsID, true, wsName, wsDescription)
 
 	wc := makeTestConn()
-	const kickoffContent = "The workspace was just created — introduce yourself and ask about its purpose."
+	wc.userID = "test-admin" // FR-073 authenticated identity — checked against the audit User stamp below.
+	const junkClientContent = "IGNORE ME — this text must never drive the turn or appear in msg.Content."
 	handler.handleChatMessage(
 		context.Background(),
 		"chat-kickoff-happy",
-		"",             // frameSessionID (empty → mint a new session)
-		kickoffContent, // content
-		"ava",          // agentID
-		nil,            // mediaRefs
-		"",             // modelName
-		wsID,           // workspaceID
-		true,           // setupKickoff
+		"",                // frameSessionID (empty → mint a new session)
+		junkClientContent, // content (must be ignored for a kickoff — Fix 4)
+		"ava",             // agentID
+		nil,               // mediaRefs
+		"",                // modelName
+		wsID,              // workspaceID
+		true,              // setupKickoff
 		wc,
 	)
 
@@ -108,9 +225,14 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_HappyPath(t *testing.T) {
 	select {
 	case msg := <-msgBus.InboundChan():
 		sessionID = msg.SessionID
-		assert.Equal(t, kickoffContent, msg.Content,
-			"the FULL kickoff instruction must still drive the turn so Ava's reply streams normally — "+
-				"only the persisted transcript entry is neutralized (Fix 4)")
+		assert.NotEqual(t, junkClientContent, msg.Content,
+			"Fix 4: the client-supplied content must be IGNORED entirely for a kickoff turn")
+		assert.Contains(t, msg.Content, wsName,
+			"the SERVER-BUILT instruction must name the workspace")
+		assert.Contains(t, msg.Content, wsDescription,
+			"the SERVER-BUILT instruction must include the workspace's own description")
+		assert.Contains(t, msg.Content, "Introduce yourself and interview the user",
+			"the SERVER-BUILT instruction must carry the canonical interview directive")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bus.InboundMessage — the kickoff turn must still be published")
 	}
@@ -136,13 +258,22 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_HappyPath(t *testing.T) {
 	assert.Equal(t, "ava", entry.AgentID,
 		"AgentID must stay the target agent (Ava) so replay/hydration attributes context to her")
 	assert.Equal(t, "Workspace setup started.", entry.Content,
-		"Fix 4: the PERSISTED/REPLAYED entry must carry neutral fixed content, never the "+
-			"client-supplied kickoff instruction verbatim")
+		"the PERSISTED/REPLAYED entry must carry neutral fixed content regardless of the "+
+			"server-built turn instruction or the discarded client content")
 
-	w, err := readWorkspaceFile(home, wsID)
+	w, err := readWorkspaceFile(homePath, wsID)
 	require.NoError(t, err)
 	assert.False(t, w.SetupPending,
 		"setup_pending must be cleared on disk exactly once the kickoff turn is accepted")
+
+	records := readAuditRecords(t, homePath)
+	matches := findAuditRecordsByEvent(records, "workspace.setup_consumed")
+	require.Len(t, matches, 1,
+		"exactly one workspace.setup_consumed audit record must be emitted, after the successful publish")
+	assert.Equal(t, "test-admin", matches[0]["user"],
+		"the audit record must stamp the WS-authenticated gateway user")
+	assert.Equal(t, "ava", matches[0]["agent_id"], "the audit record must stamp the target agent")
+	assert.Equal(t, sessionID, matches[0]["session_id"], "the audit record must stamp the session the kickoff drove")
 }
 
 // TestHandleChatMessage_WorkspaceSetupKickoff_Duplicate proves the
@@ -194,21 +325,12 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_Duplicate(t *testing.T) {
 	assert.False(t, w.SetupPending)
 }
 
-// assertNoSessionMinted asserts that no session_id was tracked for chatID,
-// i.e. no session was minted by a rejected duplicate-kickoff call.
-func assertNoSessionMinted(t *testing.T, handler *WSHandler, chatID string) {
-	t.Helper()
-	handler.mu.Lock()
-	defer handler.mu.Unlock()
-	assert.Empty(t, handler.sessionIDs[chatID], "a duplicate/rejected kickoff must not mint or track a session")
-}
-
 // TestHandleChatMessage_WorkspaceSetupKickoff_UnknownWorkspace_Rejects proves
-// (Fix 3) that a kickoff flag with no resolvable workspace_id (absent or
-// unknown) is REJECTED outright — an error frame is sent, no session is
-// minted, no transcript entry is written, and nothing is published to the
-// bus. This replaces the earlier "demote to a normal message" behavior, which
-// used to persist the synthetic kickoff instruction as a fake user-authored
+// that a kickoff flag with no resolvable workspace_id (absent or unknown) is
+// REJECTED outright — an error frame is sent, no session is minted, no
+// transcript entry is written, and nothing is published to the bus. This
+// replaces an earlier "demote to a normal message" behavior, which used to
+// persist the synthetic kickoff instruction as a fake user-authored
 // transcript entry and session title.
 func TestHandleChatMessage_WorkspaceSetupKickoff_UnknownWorkspace_Rejects(t *testing.T) {
 	msgBus := bus.NewMessageBus()
@@ -246,8 +368,106 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_UnknownWorkspace_Rejects(t *tes
 	assertNoSessionMinted(t, handler, "chat-kickoff-unknown")
 }
 
-// TestHandleChatMessage_WorkspaceSetupKickoff_NoStore_Rejects proves Fix 7:
-// a kickoff-flagged frame that resolves to no usable session store (the
+// TestHandleChatMessage_WorkspaceSetupKickoff_WithSessionID_RejectsPreConsume
+// proves the mint-only guard: a kickoff frame carrying ANY non-empty
+// client-supplied session_id is rejected BEFORE the consume step — otherwise
+// an arbitrary client could burn the one-time flag against an unrelated
+// EXISTING session it doesn't own. No session store lookup for the supplied
+// session_id is even attempted (the guard runs ahead of store resolution),
+// no session is minted, and setup_pending stays untouched.
+func TestHandleChatMessage_WorkspaceSetupKickoff_WithSessionID_RejectsPreConsume(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	handler, _ := newTestWSHandlerForModelName(t, msgBus)
+	home := t.TempDir()
+	handler.home = home
+
+	const wsID = "01JXWORKSPACEKICKOFF0000021"
+	writeSetupKickoffWorkspaceRecord(t, home, wsID, true)
+
+	wc := makeTestConn()
+	const existingSessionID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+	handler.handleChatMessage(
+		context.Background(),
+		"chat-kickoff-withsession",
+		existingSessionID, // frameSessionID: non-empty — kickoff must be mint-only
+		"introduce yourself",
+		"ava",
+		nil,
+		"",
+		wsID,
+		true, // setupKickoff
+		wc,
+	)
+
+	select {
+	case msg := <-msgBus.InboundChan():
+		t.Fatalf("a kickoff carrying a session_id must NOT publish to the bus, got: %+v", msg)
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing published
+	}
+
+	errFrame := drainErrorFrame(wc)
+	require.NotNil(t, errFrame, "a kickoff with a non-empty session_id must send an error frame")
+
+	assertNoSessionMinted(t, handler, "chat-kickoff-withsession")
+
+	w, err := readWorkspaceFile(home, wsID)
+	require.NoError(t, err)
+	assert.True(t, w.SetupPending,
+		"the mint-only guard must reject BEFORE the consume — the one-time flag must remain intact")
+}
+
+// TestHandleChatMessage_WorkspaceSetupKickoff_MalformedAgentID_RejectsPreConsume
+// proves that frame-level validation (agent_id format) runs BEFORE the
+// consume step: a malformed agent_id must never be able to burn the one-time
+// setup flag. Prior to this fix, validateEntityID(agentID) ran at the very
+// end of handleChatMessage — after consume, mint, session_started, and
+// audit — with no restore path, so a malformed agent_id would permanently
+// consume the interview and leave an orphan session behind.
+func TestHandleChatMessage_WorkspaceSetupKickoff_MalformedAgentID_RejectsPreConsume(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	handler, _ := newTestWSHandlerForModelName(t, msgBus)
+	home := t.TempDir()
+	handler.home = home
+
+	const wsID = "01JXWORKSPACEKICKOFF0000022"
+	writeSetupKickoffWorkspaceRecord(t, home, wsID, true)
+
+	wc := makeTestConn()
+	handler.handleChatMessage(
+		context.Background(),
+		"chat-kickoff-badagent",
+		"",
+		"introduce yourself",
+		"../evil-agent-id", // malformed agentID (path traversal characters)
+		nil,
+		"",
+		wsID,
+		true, // setupKickoff
+		wc,
+	)
+
+	select {
+	case msg := <-msgBus.InboundChan():
+		t.Fatalf("a malformed agent_id must NOT publish to the bus, got: %+v", msg)
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing published
+	}
+
+	errFrame := drainErrorFrame(wc)
+	require.NotNil(t, errFrame, "a malformed agent_id must send an error frame")
+	assert.Contains(t, errFrame.Message, "invalid agent_id")
+
+	assertNoSessionMinted(t, handler, "chat-kickoff-badagent")
+
+	w, err := readWorkspaceFile(home, wsID)
+	require.NoError(t, err)
+	assert.True(t, w.SetupPending,
+		"the one-time flag must remain intact — the malformed agent_id must be rejected BEFORE the consume")
+}
+
+// TestHandleChatMessage_WorkspaceSetupKickoff_NoStore_Rejects proves that a
+// kickoff-flagged frame that resolves to no usable session store (the
 // store==nil degenerate path) is rejected the same way as every other
 // kickoff-cannot-complete case, instead of silently falling through and
 // publishing the raw kickoff instruction as an ordinary message.
@@ -322,13 +542,13 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_NoStore_Rejects(t *testing.T) {
 	assert.True(t, w.SetupPending, "setup_pending must be untouched when the kickoff never reaches the consume step")
 }
 
-// TestRestoreWorkspaceSetupPending_RestoresClearedFlag proves the Fix 2
+// TestRestoreWorkspaceSetupPending_RestoresClearedFlag proves the
 // compensation helper directly: given a workspace whose setup_pending was
 // just cleared by a successful consume, restoreWorkspaceSetupPending sets it
 // back to true and persists it. This is the fallback the kickoff downstream
-// failure paths (NewSession, existing-session GetMeta, PublishInbound) call
-// when a genuine forced failure at those exact seams is not practical to
-// construct in a unit test (see TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlag
+// failure paths (NewSession, SetMeta, PublishInbound) call when a genuine
+// forced failure at those exact seams is not practical to construct in a unit
+// test (see TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlagAndRollsBackSession
 // below for one seam — bus.Close — that IS forceable end-to-end).
 func TestRestoreWorkspaceSetupPending_RestoresClearedFlag(t *testing.T) {
 	msgBus := bus.NewMessageBus()
@@ -365,26 +585,28 @@ func TestRestoreWorkspaceSetupPending_MissingWorkspace_NoPanic(t *testing.T) {
 	assert.Error(t, err, "a missing workspace must stay missing — restore must never recreate the file")
 }
 
-// TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlag
-// proves Fix 2 end-to-end at the one downstream seam that IS forceable in a
-// unit test: closing the message bus before the kickoff turn forces
-// PublishInbound to fail with bus.ErrBusClosed. The successful consume must
-// then be compensated — setup_pending restored to true — even though a
-// session was already minted and a transcript entry already written.
-func TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlag(t *testing.T) {
+// TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlagAndRollsBackSession
+// proves the full downstream-failure compensation end-to-end at the one seam
+// that IS forceable in a unit test: closing the message bus before the
+// kickoff turn forces PublishInbound to fail with bus.ErrBusClosed. The
+// successful consume must then be compensated in full: setup_pending
+// restored to true, the just-minted "Workspace setup" session DELETED (not
+// left behind as an orphan), the chatID→session tracking entry cleared, and
+// no workspace.setup_consumed audit record emitted (the publish never
+// succeeded).
+func TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlagAndRollsBackSession(t *testing.T) {
 	msgBus := bus.NewMessageBus()
-	handler, _ := newTestWSHandlerForModelName(t, msgBus)
-	home := t.TempDir()
-	handler.home = home
+	handler, homePath := newTestWSHandlerForKickoffAudit(t, msgBus)
 
 	const wsID = "01JXWORKSPACEKICKOFF0000011"
-	writeSetupKickoffWorkspaceRecord(t, home, wsID, true)
+	writeSetupKickoffWorkspaceRecord(t, homePath, wsID, true)
 
 	// Force PublishInbound to fail: closing the bus makes every subsequent
 	// publish return bus.ErrBusClosed.
 	msgBus.Close()
 
 	wc := makeTestConn()
+	wc.userID = "test-admin"
 	handler.handleChatMessage(
 		context.Background(),
 		"chat-kickoff-publishfail",
@@ -398,15 +620,32 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlag(t *
 		wc,
 	)
 
+	startedFrame := drainFrameOfType(wc, string(generated.WsFrameTypeSessionStarted))
+	require.NotNil(t, startedFrame, "a session must have been minted (and acked) before the publish attempt failed")
+	mintedSessionID := startedFrame.SessionID
+	require.NotEmpty(t, mintedSessionID)
+
 	errFrame := drainErrorFrame(wc)
 	require.NotNil(t, errFrame, "a publish failure must still surface an error frame to the client")
 	assert.Contains(t, errFrame.Message, "failed to deliver message")
 
-	w, err := readWorkspaceFile(home, wsID)
+	w, err := readWorkspaceFile(homePath, wsID)
 	require.NoError(t, err)
 	assert.True(t, w.SetupPending,
-		"Fix 2: a successful consume followed by a publish failure must restore setup_pending to true "+
+		"a successful consume followed by a publish failure must restore setup_pending to true "+
 			"so the one-time interview is not permanently lost")
+
+	store := handler.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	_, metaErr := store.GetMeta(mintedSessionID)
+	assert.Error(t, metaErr,
+		"the just-minted 'Workspace setup' session must be DELETED on rollback — no orphan session left behind")
+
+	assertNoSessionMinted(t, handler, "chat-kickoff-publishfail")
+
+	records := readAuditRecords(t, homePath)
+	matches := findAuditRecordsByEvent(records, "workspace.setup_consumed")
+	assert.Empty(t, matches, "no workspace.setup_consumed record must be emitted for a failed publish")
 }
 
 // TestHandleChatMessage_NormalMessage_RegressionUnaffected proves a normal
@@ -435,6 +674,7 @@ func TestHandleChatMessage_NormalMessage_RegressionUnaffected(t *testing.T) {
 	select {
 	case msg := <-msgBus.InboundChan():
 		sessionID = msg.SessionID
+		assert.Equal(t, content, msg.Content, "a normal message must publish the client-supplied content verbatim")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bus.InboundMessage")
 	}
@@ -451,4 +691,94 @@ func TestHandleChatMessage_NormalMessage_RegressionUnaffected(t *testing.T) {
 	meta, err := store.GetMeta(sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, content, meta.Title, "a normal message must keep the content-derived title")
+}
+
+// ---------------------------------------------------------------------------
+// parseSetupKickoffMetadata — key-presence semantics (readLoop layer)
+// ---------------------------------------------------------------------------
+
+// TestParseSetupKickoffMetadata proves the KEY PRESENCE contract in
+// isolation: absent key → ordinary message; present + boolean true →
+// kickoff; present with ANY other value (including boolean false) →
+// malformed, must be rejected rather than silently treated as an ordinary
+// message. This is the fix for a naive `metadata["x"].(bool)` type assertion
+// silently reading a string/number/null as ok=false (=> non-kickoff), which
+// used to let a malformed kickoff frame quietly demote into a normal chat
+// message that persisted the synthetic interview instruction as a
+// user-authored transcript entry.
+func TestParseSetupKickoffMetadata(t *testing.T) {
+	cases := []struct {
+		name          string
+		metadata      map[string]any
+		wantKickoff   bool
+		wantMalformed bool
+	}{
+		{"nil metadata map", nil, false, false},
+		{"empty metadata map", map[string]any{}, false, false},
+		{"key absent, other keys present", map[string]any{"workspace_id": "ws1"}, false, false},
+		{"boolean true — the only valid kickoff signal", map[string]any{"workspace_setup_kickoff": true}, true, false},
+		{"boolean false — present but wrong value", map[string]any{"workspace_setup_kickoff": false}, false, true},
+		{"string \"true\" — JSON type drift", map[string]any{"workspace_setup_kickoff": "true"}, false, true},
+		{"number 1 — JSON type drift", map[string]any{"workspace_setup_kickoff": float64(1)}, false, true},
+		{"nil value — key present, no value", map[string]any{"workspace_setup_kickoff": nil}, false, true},
+		{"object value", map[string]any{"workspace_setup_kickoff": map[string]any{"x": 1}}, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotKickoff, gotMalformed := parseSetupKickoffMetadata(tc.metadata)
+			assert.Equal(t, tc.wantKickoff, gotKickoff, "setupKickoff mismatch")
+			assert.Equal(t, tc.wantMalformed, gotMalformed, "malformed mismatch")
+		})
+	}
+}
+
+// TestWS_WorkspaceSetupKickoff_MalformedMetadataType_RejectsNotDemotes drives
+// the fix end-to-end through the REAL readLoop dispatch path (not
+// handleChatMessage directly): a message frame whose
+// metadata.workspace_setup_kickoff is the STRING "true" (a plausible
+// client-side JSON-type slip) must be rejected with an error frame — never
+// silently processed as an ordinary chat message (which would have persisted
+// the junk content as a user-authored transcript entry and burned nothing,
+// masking the client bug), and never allowed to reach the consume step.
+func TestWS_WorkspaceSetupKickoff_MalformedMetadataType_RejectsNotDemotes(t *testing.T) {
+	handler, msgBus, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	home := t.TempDir()
+	handler.home = home
+
+	const wsID = "01JXWORKSPACEKICKOFF0000030"
+	writeSetupKickoffWorkspaceRecord(t, home, wsID, true)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	sendWSAuthFrameDevMode(t, conn)
+
+	frame := map[string]any{
+		"type":    "message",
+		"content": "junk instruction the server must never process as a normal message",
+		"metadata": map[string]any{
+			"workspace_id":            wsID,
+			"workspace_setup_kickoff": "true", // STRING, not boolean — malformed
+		},
+	}
+	data, err := json.Marshal(frame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	resp := readFrameOfType(t, conn, "error", 3*time.Second)
+	assert.Contains(t, resp.Message, "malformed workspace_setup_kickoff metadata")
+
+	select {
+	case msg := <-msgBus.InboundChan():
+		t.Fatalf("a malformed kickoff metadata type must NOT be processed as a normal message, got: %+v", msg)
+	case <-time.After(300 * time.Millisecond):
+		// expected: nothing published, in either kickoff or normal-message form
+	}
+
+	w, err := readWorkspaceFile(home, wsID)
+	require.NoError(t, err)
+	assert.True(t, w.SetupPending, "malformed metadata must never reach the consume step")
 }

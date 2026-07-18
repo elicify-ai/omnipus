@@ -923,7 +923,22 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			// system-role transcript entry (not a user bubble), clears
 			// SetupPending exactly once, and gives the session a clean title —
 			// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
-			setupKickoff, _ := f.Metadata["workspace_setup_kickoff"].(bool)
+			//
+			// Fix 3: kickoff intent is signaled by KEY PRESENCE, not a loose
+			// type assertion — see parseSetupKickoffMetadata's doc comment. A
+			// key that IS present but not exactly boolean true is rejected
+			// outright instead of ever reaching handleChatMessage as a normal
+			// message.
+			setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
+			if malformedKickoff {
+				slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
+					"chat_id", chatID, "value", f.Metadata["workspace_setup_kickoff"])
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "malformed workspace_setup_kickoff metadata",
+				})
+				continue
+			}
 			h.handleChatMessage(
 				ctx, chatID, sessionID, f.Content, agentID, f.Media,
 				modelName, workspaceID, setupKickoff, wc,
@@ -1081,6 +1096,39 @@ func wsFrameSchemaName(frameType string) string {
 	}
 }
 
+// parseSetupKickoffMetadata decides whether a MessageFrame's
+// metadata.workspace_setup_kickoff (contracts/asyncapi.yaml) signals a
+// workspace-setup kickoff, based on KEY PRESENCE rather than a loose type
+// assertion.
+//
+// A naive `metadata["workspace_setup_kickoff"].(bool)` type assertion
+// silently reads ANY non-bool value — the string "true", a JSON number, an
+// object — as ok=false, which used to make setupKickoff=false and silently
+// demote a malformed kickoff frame into an ordinary chat message: the
+// synthetic interview instruction would then persist as a user-authored
+// transcript entry with a content-derived title, instead of ever being
+// recognized as an attempted (but malformed) kickoff.
+//
+// Returns (setupKickoff=false, malformed=false) when the key is absent
+// entirely — an ordinary message, handled normally. Returns
+// (setupKickoff=true, malformed=false) only when the key is present AND its
+// value is the JSON boolean true. Returns (setupKickoff=false,
+// malformed=true) for every other case where the key IS present — including
+// an explicit `false` — signaling the caller to reject the frame outright
+// (error frame, never processed as a normal message) rather than silently
+// falling back to non-kickoff handling.
+func parseSetupKickoffMetadata(metadata map[string]any) (setupKickoff bool, malformed bool) {
+	raw, present := metadata["workspace_setup_kickoff"]
+	if !present {
+		return false, false
+	}
+	b, isBool := raw.(bool)
+	if !isBool || !b {
+		return false, true
+	}
+	return true, false
+}
+
 // handleChatMessage mints a new session when frame.SessionID is empty, records
 // every user message to the transcript, and publishes the message to the bus.
 //
@@ -1098,25 +1146,60 @@ func wsFrameSchemaName(frameType string) string {
 // consumeWorkspaceSetupKickoff's caller below) rather than a user bubble, the
 // workspace's SetupPending flag is cleared exactly once under the per-workspace
 // lock (workspace.LockID, idempotency-guarded), and the minted session is given
-// the fixed title "Workspace setup" instead of a content-derived one. The bus
-// publish still carries the FULL client-supplied instruction so Ava's turn is
-// driven correctly — only the persisted/replayed transcript entry is neutral.
+// the fixed title "Workspace setup" instead of a content-derived one.
 //
-// ANY kickoff-flagged frame that cannot complete the kickoff — an unresolved
-// workspace_id, a duplicate (SetupPending already false), or a consume
-// read/write failure — is REJECTED outright with an error frame: no session is
-// minted, no transcript entry is written, and nothing is published to the bus.
-// This replaces an earlier "demote to a normal message" behavior, which used
-// to persist the synthetic kickoff instruction as a fake user-authored
-// transcript entry and session title. Flag state is left untouched on a
-// read/write failure (so a later workspace open can retry) and cleared only on
-// the success path.
+// A kickoff frame is MINT-ONLY: any frame carrying setupKickoff=true AND a
+// non-empty client-supplied session_id is rejected before the consume step
+// (an arbitrary client would otherwise be able to burn the one-time flag
+// against an unrelated EXISTING session it doesn't own). This makes the
+// "existing session" branch below unreachable for a kickoff — it only ever
+// runs for a normal message.
+//
+// The turn's driving prompt (msg.Content published to the bus) is built
+// SERVER-SIDE from the workspace's own Name/Description (read during the
+// consume) — the client-supplied `content` is IGNORED entirely for a kickoff
+// frame. This closes a forensics gap (an arbitrary client instruction would
+// otherwise silently drive Ava's first turn on a new workspace) and a
+// stale-SPA/i18n drift risk (an older or translated client sending a
+// different template). The persisted/replayed transcript entry stays the
+// separate neutral "Workspace setup started." string regardless.
+//
+// ANY kickoff-flagged frame that cannot complete the kickoff — a
+// non-empty session_id, an unresolved workspace_id, a duplicate (SetupPending
+// already false), or a consume read/write failure — is REJECTED outright with
+// an error frame: no session is minted, no transcript entry is written, and
+// nothing is published to the bus. This replaces an earlier "demote to a
+// normal message" behavior, which used to persist the synthetic kickoff
+// instruction as a fake user-authored transcript entry and session title.
+// Flag state is left untouched on a read/write failure (so a later workspace
+// open can retry) and cleared only on the success path. Every frame-level
+// validation (agent_id / session_id format) runs BEFORE the consume so a
+// malformed frame can never burn the one-time flag with no way to recover it.
 //
 // If a downstream step fails AFTER a successful consume — minting the new
-// session, looking up an existing session's meta, or publishing to the bus —
-// the consumed SetupPending flag is best-effort RESTORED to true (see
-// restoreWorkspaceSetupPending) so the one-time setup interview is not
-// permanently lost to a transient persistence/bus failure.
+// session, persisting its title/owner/workspace stamp, or publishing to the
+// bus — the consumed SetupPending flag is best-effort RESTORED to true (see
+// restoreWorkspaceSetupPending) AND the just-minted session is deleted (see
+// rollbackKickoffSession) so the one-time setup interview is not permanently
+// lost, and a repeated failure does not accumulate orphan empty "Workspace
+// setup" sessions. The workspace.setup_consumed audit entry is emitted only
+// AFTER a successful publish — never before — so it never records a false
+// positive for a turn that was actually rolled back.
+//
+// Two failure windows are accepted as out of scope for this in-process
+// compensation (both are inherent to the file-based, no-distributed-
+// transaction design and are not treated as bugs):
+//
+//  1. A process crash between the consume-persist (SetupPending written to
+//     disk) and the bus publish loses the interview permanently — there is no
+//     durable outbox to replay from across a restart, only the in-memory
+//     restore/rollback path above, which cannot run if the process is gone.
+//  2. The commit point for "the kickoff succeeded" is a successful publish,
+//     not a successful TURN. If Ava's turn itself errors after the message
+//     was accepted by the bus, the flag stays consumed and SetupPending
+//     does not revert — recovery at that point is conversational (the
+//     operator can just ask her to continue) rather than a retriggerable
+//     kickoff.
 func (h *WSHandler) handleChatMessage(
 	ctx context.Context,
 	chatID string,
@@ -1157,7 +1240,71 @@ func (h *WSHandler) handleChatMessage(
 		return
 	}
 
+	// Validate the raw client-supplied agent_id format HERE, before any of the
+	// workspace-kickoff consume/mint/audit work below. The previous placement
+	// of this check (immediately before the bus publish, at the very end of
+	// the function) ran AFTER the kickoff flag had already been consumed —
+	// a malformed agent_id would permanently burn the one-time setup
+	// interview and leave behind an orphan minted session plus a false
+	// "consumed" audit entry, with no compensation path. Every frame-level
+	// validation must complete before the consume step is ever reached.
+	if agentID != "" {
+		if err := validateEntityID(agentID); err != nil {
+			slog.Warn("ws: invalid agent_id in message frame; rejecting", "agent_id", agentID, "error", err)
+			var sidPtr *string
+			if frameSessionID != "" {
+				sidCopy := frameSessionID
+				sidPtr = &sidCopy
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				Message:   "invalid agent_id",
+				SessionId: sidPtr,
+			})
+			return
+		}
+	}
+
 	sessionID := frameSessionID
+
+	// Validate the client-supplied session_id format up front too — same
+	// rationale as the agent_id hoist above: this used to run only inside the
+	// "existing session" branch further down, well after the kickoff consume.
+	// A malformed session_id therefore no longer has any path to burning the
+	// flag before being rejected.
+	if sessionID != "" {
+		if err := validation.EntityID(sessionID); err != nil {
+			slog.Warn("ws: invalid session_id in message frame", "session_id", sessionID, "error", err)
+			sidCopy := sessionID
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				Message:   "invalid session_id format",
+				SessionId: &sidCopy,
+			})
+			return
+		}
+	}
+
+	// A workspace-setup kickoff is MINT-ONLY: a frame that carries BOTH
+	// setupKickoff and a non-empty client-supplied session_id is rejected
+	// before the consume step. Without this guard an arbitrary client could
+	// attach workspace_setup_kickoff=true to a message addressed at an
+	// unrelated EXISTING session (untested, wrong owner, wrong workspace) and
+	// burn the one-time flag against it. Rejecting this combination removes
+	// the "existing session" branch as a reachable path for a kickoff — see
+	// the (sessionID == "") mint branch below, which is the only path a
+	// kickoff can now take.
+	if setupKickoff && sessionID != "" {
+		slog.Warn("ws: workspace setup kickoff with a client-supplied session_id — rejecting",
+			"chat_id", chatID, "session_id", sessionID)
+		sidCopy := sessionID
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			Message:   "workspace setup could not be started",
+			SessionId: &sidCopy,
+		})
+		return
+	}
 
 	// M4: validate the client-supplied workspace_id at the binding boundary
 	// before it is ever stamped onto session meta. A bad/stale/typo'd id would
@@ -1243,6 +1390,12 @@ func (h *WSHandler) handleChatMessage(
 		return
 	}
 
+	// kickoffInstruction holds the SERVER-BUILT driving prompt for a kickoff
+	// turn (see doc comment above) — populated only when setupKickoff is true
+	// and the consume below succeeds. The client-supplied `content` is never
+	// used as msg.Content for a kickoff turn.
+	var kickoffInstruction string
+
 	if store != nil {
 		// Workspace-setup kickoff idempotency guard: clear SetupPending exactly
 		// once, under the per-workspace lock (workspace.LockID). ANY outcome
@@ -1250,7 +1403,8 @@ func (h *WSHandler) handleChatMessage(
 		// failure against the workspace file — is REJECTED outright (Fix 3): no
 		// session minted, no transcript entry written, nothing published.
 		if setupKickoff {
-			switch h.consumeWorkspaceSetupKickoff(workspaceID) {
+			outcome, wsName, wsDescription := h.consumeWorkspaceSetupKickoff(workspaceID)
+			switch outcome {
 			case kickoffDuplicate:
 				sidCopy := sessionID
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
@@ -1268,7 +1422,25 @@ func (h *WSHandler) handleChatMessage(
 				})
 				return
 			case kickoffConsumed:
-				// Proceed — SetupPending is now cleared on disk.
+				// Proceed — SetupPending is now cleared on disk. Build the
+				// SERVER-CANONICAL driving instruction from the workspace's
+				// own name/description now, while it's in hand — the
+				// client-supplied `content` is never used for a kickoff turn.
+				kickoffInstruction = buildWorkspaceKickoffInstruction(wsName, wsDescription)
+			default:
+				// Defensive: a future kickoffOutcome value this switch doesn't
+				// know about must never silently fall through as if it were
+				// kickoffConsumed — reject outright, same as every other
+				// kickoff-cannot-complete case.
+				slog.Warn("ws: workspace setup kickoff: unrecognized outcome — rejecting",
+					"workspace_id", workspaceID, "outcome", outcome)
+				sidCopy := sessionID
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:      string(generated.WsFrameTypeError),
+					Message:   "workspace setup could not be started",
+					SessionId: &sidCopy,
+				})
+				return
 			}
 		}
 		if sessionID == "" {
@@ -1316,6 +1488,23 @@ func (h *WSHandler) handleChatMessage(
 				metaPatch.WorkspaceID = &wsCopy
 			}
 			if err := store.SetMeta(meta.ID, metaPatch); err != nil {
+				if setupKickoff {
+					// A kickoff turn that fails to persist its title/owner/
+					// workspace stamp would run UNBOUND from the workspace
+					// that triggered it — worse than a plain warn-and-continue.
+					// Treat this as a hard failure: restore the flag, delete
+					// the just-minted orphan session, and reject before the
+					// session_started ack (below) is ever sent.
+					slog.Warn(
+						"ws: workspace setup kickoff: could not persist session title/owner/workspace — rejecting",
+						"session_id", meta.ID, "error", err)
+					h.rollbackKickoffSession(store, workspaceID, meta.ID, chatID)
+					sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+						Type:    string(generated.WsFrameTypeError),
+						Message: "workspace setup could not be started",
+					})
+					return
+				}
 				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
 			}
 			// Ack the new session_id so the SPA can associate all subsequent frames.
@@ -1329,27 +1518,17 @@ func (h *WSHandler) handleChatMessage(
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeSessionStarted), startedFrame)
 		} else {
-			// Validate client-supplied session_id format.
-			if err := validation.EntityID(sessionID); err != nil {
-				slog.Warn("ws: invalid session_id in message frame", "session_id", sessionID, "error", err)
-				sidCopy := sessionID
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:      string(generated.WsFrameTypeError),
-					Message:   "invalid session_id format",
-					SessionId: &sidCopy,
-				})
-				return
-			}
+			// This branch — an existing, client-supplied session_id — is
+			// reachable only by a NORMAL (non-kickoff) message: the mint-only
+			// guard near the top of this function already rejected any
+			// setupKickoff frame carrying a non-empty session_id, and format
+			// was already validated up front there too. No kickoff-restore
+			// compensation is needed here as a result.
+			//
 			// Validate that the session actually exists in the store.
 			existingMeta, err := store.GetMeta(sessionID)
 			if err != nil {
 				slog.Warn("ws: session not found", "session_id", sessionID, "error", err)
-				// Fix 2: same compensation as the NewSession failure above — a
-				// successful kickoff consume must not be silently lost to a
-				// downstream failure.
-				if setupKickoff {
-					h.restoreWorkspaceSetupPending(workspaceID)
-				}
 				sidCopy := sessionID
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 					Type:      string(generated.WsFrameTypeError),
@@ -1410,33 +1589,22 @@ func (h *WSHandler) handleChatMessage(
 				entry.Type = session.EntryTypeSystem
 				entry.Role = "system"
 				// Fix 4: the PERSISTED/REPLAYED entry carries neutral, fixed
-				// content — never the client-supplied kickoff instruction
-				// verbatim (session replay renders it as a system pill). The
-				// full instruction still drives the turn via msg.Content below,
-				// which is built from `content`, not from this entry.
+				// content — never the client-supplied kickoff instruction, and
+				// not even the SERVER-BUILT one either (session replay renders
+				// this as a system pill). The turn itself is instead driven by
+				// the SERVER-BUILT kickoffInstruction via msg.Content below —
+				// see turnContent — never by this entry or by `content`.
 				entry.Content = "Workspace setup started."
 			}
 			if err := store.AppendTranscript(sessionID, entry); err != nil {
 				slog.Warn("ws: could not record user message", "session_id", sessionID, "error", err)
 			}
-			// Fix 6: audit the kickoff consume now that the session it drove is
-			// known. Mirrors the workspace.create/workspace.update audit calls in
-			// rest_workspaces.go — best-effort, never blocks the turn.
-			if setupKickoff {
-				if auditor := h.agentLoop.AuditLogger(); auditor != nil {
-					if err := auditor.Log(&audit.Entry{
-						Event:    "workspace.setup_consumed",
-						Decision: audit.DecisionAllow,
-						Details: map[string]any{
-							"workspace_id": workspaceID,
-							"session_id":   sessionID,
-						},
-					}); err != nil {
-						slog.Warn("ws: workspace setup kickoff: audit write failed",
-							"workspace_id", workspaceID, "session_id", sessionID, "error", err)
-					}
-				}
-			}
+			// The workspace.setup_consumed audit entry is emitted further
+			// below, AFTER a successful bus publish — not here. Emitting it
+			// at this point (the previous placement) ran before the publish
+			// that could still fail, producing a false "consumed" audit
+			// record even on a failure that had just restored the flag and
+			// rolled back this very session.
 		}
 	}
 
@@ -1483,6 +1651,15 @@ func (h *WSHandler) handleChatMessage(
 		}
 	}
 
+	// The turn is driven by the client-supplied content EXCEPT for a kickoff,
+	// which uses the SERVER-BUILT canonical instruction assembled above from
+	// the workspace's own name/description — the client-supplied content is
+	// discarded entirely for a kickoff turn (see doc comment).
+	turnContent := content
+	if setupKickoff {
+		turnContent = kickoffInstruction
+	}
+
 	msg := bus.InboundMessage{
 		Channel: "webchat",
 		Sender: bus.SenderInfo{
@@ -1498,21 +1675,14 @@ func (h *WSHandler) handleChatMessage(
 		// unset there) — the audit stamp then stays empty rather than guessing.
 		GatewayUserID: wc.userID,
 		ChatID:        chatID,
-		Content:       content,
+		Content:       turnContent,
 		SessionID:     sessionID,
 		Media:         acceptedMedia,
 	}
 	if agentID != "" {
-		if err := validateEntityID(agentID); err != nil {
-			slog.Warn("ws: invalid agent_id in message frame; rejecting", "agent_id", agentID, "error", err)
-			sidCopy := sessionID
-			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:      string(generated.WsFrameTypeError),
-				Message:   "invalid agent_id",
-				SessionId: &sidCopy,
-			})
-			return
-		}
+		// Format already validated up front, before the kickoff consume step
+		// (see the check next to the worker-agent guard near the top of this
+		// function) — no re-validation needed here.
 		msg.Metadata = map[string]string{"agent_id": agentID}
 	}
 	// FR-010: forward per-turn model override to the bus so the agent loop's
@@ -1531,11 +1701,13 @@ func (h *WSHandler) handleChatMessage(
 	defer cancel()
 	if err := h.msgBus.PublishInbound(pubCtx, msg); err != nil {
 		slog.Warn("ws: failed to publish message", "error", err)
-		// Fix 2: same compensation as the earlier session-mint/lookup failures
-		// — a successful kickoff consume must not be silently lost just
-		// because the bus publish that was supposed to drive Ava's turn failed.
+		// Same compensation as the earlier session-mint/SetMeta failures — a
+		// successful kickoff consume must not be silently lost just because
+		// the bus publish that was supposed to drive Ava's turn failed. Also
+		// deletes the just-minted "Workspace setup" session so a repeated
+		// failure does not accumulate orphan empty sessions.
 		if setupKickoff {
-			h.restoreWorkspaceSetupPending(workspaceID)
+			h.rollbackKickoffSession(store, workspaceID, sessionID, chatID)
 		}
 		sidCopy := sessionID
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
@@ -1543,6 +1715,32 @@ func (h *WSHandler) handleChatMessage(
 			Message:   fmt.Sprintf("failed to deliver message: %v", err),
 			SessionId: &sidCopy,
 		})
+		return
+	}
+
+	// Audit the kickoff consume only AFTER a successful publish — the turn is
+	// now genuinely running (the commit point; see the two accepted-tradeoff
+	// notes in the doc comment above). Emitting this before publish (the
+	// previous placement) produced a false "consumed" audit entry even on a
+	// publish failure that had just restored the flag and rolled back the
+	// session. Mirrors the workspace.create/workspace.update audit calls in
+	// rest_workspaces.go — best-effort, never blocks the turn.
+	if setupKickoff {
+		if auditor := h.agentLoop.AuditLogger(); auditor != nil {
+			if err := auditor.Log(&audit.Entry{
+				Event:     "workspace.setup_consumed",
+				Decision:  audit.DecisionAllow,
+				AgentID:   targetAgentID,
+				SessionID: sessionID,
+				User:      wc.userID,
+				Details: map[string]any{
+					"workspace_id": workspaceID,
+				},
+			}); err != nil {
+				slog.Warn("ws: workspace setup kickoff: audit write failed",
+					"workspace_id", workspaceID, "session_id", sessionID, "error", err)
+			}
+		}
 	}
 }
 
@@ -1577,7 +1775,15 @@ const (
 // readWorkspaceFile either sees the workspace fully intact or (post-delete)
 // fails with errWorkspaceNotFound, which this function maps to kickoffFailed
 // — it never recreates the file.
-func (h *WSHandler) consumeWorkspaceSetupKickoff(workspaceID string) kickoffOutcome {
+//
+// On a kickoffConsumed outcome, also returns the workspace's Name and
+// Description (read under the same lock, from the same on-disk record that
+// was just consumed) so the caller can build the SERVER-CANONICAL turn
+// instruction from them instead of trusting client-supplied content. Both
+// are empty strings for a non-consumed outcome.
+func (h *WSHandler) consumeWorkspaceSetupKickoff(
+	workspaceID string,
+) (outcome kickoffOutcome, name string, description string) {
 	unlock := workspace.LockID(workspaceID)
 	defer unlock()
 
@@ -1585,21 +1791,66 @@ func (h *WSHandler) consumeWorkspaceSetupKickoff(workspaceID string) kickoffOutc
 	if err != nil {
 		slog.Warn("ws: workspace setup kickoff: could not read workspace file — rejecting",
 			"workspace_id", workspaceID, "error", err)
-		return kickoffFailed
+		return kickoffFailed, "", ""
 	}
 	if !w.SetupPending {
 		slog.Warn("ws: workspace setup kickoff: setup already ran — rejecting duplicate",
 			"workspace_id", workspaceID)
-		return kickoffDuplicate
+		return kickoffDuplicate, "", ""
 	}
 	w.SetupPending = false
 	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeWorkspaceFile(h.home, w); err != nil {
 		slog.Warn("ws: workspace setup kickoff: could not persist cleared setup_pending — rejecting",
 			"workspace_id", workspaceID, "error", err)
-		return kickoffFailed
+		return kickoffFailed, "", ""
 	}
-	return kickoffConsumed
+	return kickoffConsumed, w.Name, w.Description
+}
+
+// buildWorkspaceKickoffInstruction assembles the SERVER-CANONICAL prompt that
+// drives a workspace-setup kickoff turn, from the workspace's own name and
+// (optional) description — never from client-supplied content. See the
+// handleChatMessage doc comment for why: an arbitrary client instruction
+// driving Ava's first turn on a new workspace is a forensics gap and an
+// i18n/stale-SPA drift risk that a fixed, server-built prompt closes.
+func buildWorkspaceKickoffInstruction(name, description string) string {
+	instruction := fmt.Sprintf("The workspace %q was just created.", name)
+	if desc := strings.TrimSpace(description); desc != "" {
+		instruction += fmt.Sprintf(" Its description: %s.", desc)
+	}
+	instruction += " Introduce yourself and interview the user about this workspace's purpose" +
+		" so you can determine which agents and skills its team needs, then set up the team."
+	return instruction
+}
+
+// rollbackKickoffSession undoes a partially-completed workspace-setup kickoff
+// after a post-mint failure (SetMeta or PublishInbound): it restores the
+// workspace's SetupPending flag (best-effort, see restoreWorkspaceSetupPending)
+// AND deletes the just-minted "Workspace setup" session so a repeated
+// failure does not accumulate orphan empty sessions — mirroring the
+// rollbackCreatedSessions precedent in rest_workspaces.go. Also clears the
+// chatID→sessionID tracking entry if it still points at the session being
+// deleted, so a subsequent frame on the same connection does not resolve to
+// a session that no longer exists.
+//
+// store may be nil (defensive only — every call site already holds a
+// non-nil store by construction) and sessionID may be empty (the NewSession-
+// failure path has nothing to delete yet); both are treated as "nothing to
+// roll back beyond the flag restore".
+func (h *WSHandler) rollbackKickoffSession(store *session.UnifiedStore, workspaceID, sessionID, chatID string) {
+	h.restoreWorkspaceSetupPending(workspaceID)
+	if store != nil && sessionID != "" {
+		if err := store.DeleteSession(sessionID); err != nil {
+			slog.Warn("ws: workspace setup kickoff: rollback session delete failed",
+				"session_id", sessionID, "error", err)
+		}
+	}
+	h.mu.Lock()
+	if h.sessionIDs[chatID] == sessionID {
+		delete(h.sessionIDs, chatID)
+	}
+	h.mu.Unlock()
 }
 
 // restoreWorkspaceSetupPending re-sets workspaceID's SetupPending flag to true
