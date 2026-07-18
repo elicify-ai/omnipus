@@ -314,7 +314,7 @@ function _parseServerFrame(data: unknown): ServerFrame | null {
     if (import.meta.env.DEV) {
       const meta = (raw as { metadata?: unknown }).metadata
       if (meta && typeof meta === 'object') {
-        const known = new Set(['model_name'])
+        const known = new Set(['model_name', 'workspace_id', 'workspace_setup_kickoff'])
         const extras = Object.keys(meta as Record<string, unknown>).filter((k) => !known.has(k))
         if (extras.length > 0) {
           // eslint-disable-next-line no-console

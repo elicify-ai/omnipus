@@ -25,6 +25,7 @@ export const MessageFrame = z
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
+      workspace_id: z.string().min(1).max(128).optional(),
       workspace_setup_kickoff: z.boolean().optional(),
     })
     .passthrough().optional(),

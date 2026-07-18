@@ -1037,16 +1037,31 @@ components:
                 falls back to agent config otherwise. Empty string is
                 treated as absent.
               example: "z-ai/glm-5-turbo"
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+              description: >
+                Active workspace this chat belongs to (M4 workspace→turn binding).
+                When the user sends a message from a workspace chat, the SPA sets
+                this so the server tags the session with the workspace and any task
+                the agent creates during the turn (task_create / delegation) lands on
+                THIS workspace's board instead of the agent's default workspace.
+                Stamped onto the session meta on first use; absent for the global
+                (non-workspace) chat, where created tasks fall back to the default
+                workspace.
+              example: "01JXDEFAULT000000000000001"
             workspace_setup_kickoff:
               type: boolean
               description: >
-                One-time marker that this message is the workspace-setup
-                kickoff turn for `metadata.workspace_id`. When true, the
-                server records a system-role transcript entry and clears
-                that workspace's `setup_pending` flag exactly once
-                (idempotency-guarded); a duplicate kickoff is rejected with
-                an error frame rather than silently re-running. Absent/false
-                for ordinary messages.
+                One-time marker that this message is the workspace-setup kickoff
+                turn for `metadata.workspace_id`. When true, the server treats the
+                frame as the one-time workspace-setup kickoff — the frame's
+                `content` is ignored and replaced by a server-composed
+                instruction; a system-role entry is recorded; the workspace's
+                `setup_pending` flag is cleared exactly once (idempotency-guarded);
+                duplicate and malformed kickoffs are rejected with an error frame.
+                Absent/false for ordinary messages.
               example: true
 
     CancelFrame:
