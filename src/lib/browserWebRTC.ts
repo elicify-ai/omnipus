@@ -22,7 +22,9 @@
 // own PC/data-channel state and tell the caller via `onFallback(reason)` so
 // the caller can drop back to rendering the JPEG `<img>` sink. Triggers:
 //   - a `browser_webrtc_state{available:false}` frame while offering/connected
-//   - no answer within `answerTimeoutMs` (default 5s) of sending the offer
+//   - no answer within the current answer timeout of sending the offer (see
+//     `hasConnectedOnce`/`firstAnswerTimeoutMs` below — it is NOT always
+//     `answerTimeoutMs`)
 //   - ICE connection state 'failed'
 //   - ICE connection state 'disconnected' for longer than `disconnectedGraceMs`
 //     (default 5s) without recovering to 'connected'/'completed'
@@ -30,6 +32,21 @@
 // fallback. If that retry also falls back, no further automatic retry is
 // scheduled — the caller must call `start()` again (a fresh re-attach) to
 // re-arm it. `start()` always resets the one-shot retry budget.
+//
+// Answer-timeout duration (fix-wave, MED — reviewer finding 4): the gateway's
+// legitimate COLD START (capture start ~20s + bringToFront ~5s + tracks wait)
+// can run past 25s worst case, well past the regular `answerTimeoutMs`
+// (default 5s) — a plain 5s timeout on a cold start is a FALSE fallback that
+// then connects fine on its own retry, degrading the panel to JPEG and
+// showing a spurious warning for no reason. `hasConnectedOnce` (a public,
+// read-only, lifetime flag — never reset once true, not per-attempt) is what
+// decides which timeout governs any given negotiation: false (this instance
+// has never once reached 'connected') uses the generous `firstAnswerTimeoutMs`
+// (default 30s); true (it connected before, so THIS failure is a genuine
+// degradation of a previously-working stream, not a slow cold start) uses the
+// regular short `answerTimeoutMs`. This applies to every attempt made while
+// still cold — including the one automatic retry above, if that retry also
+// starts from `hasConnectedOnce === false`.
 
 import type { BrowserWebRTCStateFrame } from '@/lib/api/generated/asyncapi-types'
 
@@ -50,8 +67,18 @@ export interface BrowserWebRTCSessionOptions {
    */
   pcFactory?: () => RTCPeerConnection
   /** ms to wait for `applyAnswer` after the offer is actually sent (i.e.
-   * after ICE gathering completes) before falling back. Default 5000. */
+   * after ICE gathering completes) before falling back. Default 5000. Only
+   * governs a negotiation attempt made AFTER this session has connected at
+   * least once (`hasConnectedOnce === true`) — see `firstAnswerTimeoutMs`
+   * for the cold-start case, and the class-level doc comment above for why
+   * the split exists. */
   answerTimeoutMs?: number
+  /** ms to wait for `applyAnswer` on a negotiation attempt made BEFORE this
+   * session has ever reached 'connected' (`hasConnectedOnce === false`) —
+   * i.e. the cold-start case. Default 30000 (fix-wave, MED: the gateway's
+   * legitimate cold start can take 25s+, well past the regular
+   * `answerTimeoutMs` default of 5s). */
+  firstAnswerTimeoutMs?: number
   /** ms an ICE `disconnected` state is tolerated before falling back.
    * Default 5000. */
   disconnectedGraceMs?: number
@@ -68,6 +95,7 @@ export interface BrowserWebRTCSessionOptions {
 
 const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
+const DEFAULT_FIRST_ANSWER_TIMEOUT_MS = 30000
 const DEFAULT_DISCONNECTED_GRACE_MS = 5000
 const DEFAULT_RETRY_DELAY_MS = 15000
 const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 3000
@@ -79,9 +107,19 @@ function defaultPcFactory(): RTCPeerConnection {
 export class BrowserWebRTCSession {
   private readonly pcFactory: () => RTCPeerConnection
   private readonly answerTimeoutMs: number
+  private readonly firstAnswerTimeoutMs: number
   private readonly disconnectedGraceMs: number
   private readonly retryDelayMs: number
   private readonly iceGatheringTimeoutMs: number
+  /** Lifetime flag (never reset once true) — has this session's PC EVER
+   * reached ICE 'connected'/'completed', across every attempt this instance
+   * has ever made? Backs both the answer-timeout duration choice
+   * (`_startAnswerTimeout`) and the public `hasConnectedOnce` getter, which
+   * BrowserLiveView.tsx reads to decide whether an 'answer-timeout' fallback
+   * is a cold-start false positive (never connected — stay quiet) or a
+   * genuine degradation of a previously-working stream (connected before —
+   * warn the user). */
+  private _hasConnectedOnce = false
 
   private pc: RTCPeerConnection | null = null
   private inputChannel: RTCDataChannel | null = null
@@ -111,6 +149,7 @@ export class BrowserWebRTCSession {
   constructor(options: BrowserWebRTCSessionOptions = {}) {
     this.pcFactory = options.pcFactory ?? defaultPcFactory
     this.answerTimeoutMs = options.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS
+    this.firstAnswerTimeoutMs = options.firstAnswerTimeoutMs ?? DEFAULT_FIRST_ANSWER_TIMEOUT_MS
     this.disconnectedGraceMs = options.disconnectedGraceMs ?? DEFAULT_DISCONNECTED_GRACE_MS
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
     this.iceGatheringTimeoutMs = options.iceGatheringTimeoutMs ?? DEFAULT_ICE_GATHERING_TIMEOUT_MS
@@ -118,6 +157,16 @@ export class BrowserWebRTCSession {
 
   get state(): BrowserWebRTCState {
     return this._state
+  }
+
+  /** True once this session's PC has EVER reached ICE 'connected'/'completed'
+   * — a lifetime flag, never reset by a later fallback/retry. See the
+   * class-level doc comment's "Answer-timeout duration" section for why this
+   * exists: BrowserLiveView.tsx reads it to distinguish a cold-start false
+   * positive from a genuine stream degradation on an 'answer-timeout'
+   * fallback. */
+  get hasConnectedOnce(): boolean {
+    return this._hasConnectedOnce
   }
 
   // ── Observer registration — single-slot (one owner per session, matching
@@ -353,6 +402,7 @@ export class BrowserWebRTCSession {
         this._clearAnswerTimeout()
         this._clearDisconnectedTimer()
         this._setState('connected')
+        this._hasConnectedOnce = true
       } else if (iceState === 'failed') {
         this._fallback('ice-failed')
       } else if (iceState === 'disconnected') {
@@ -372,10 +422,15 @@ export class BrowserWebRTCSession {
 
   private _startAnswerTimeout(): void {
     this._clearAnswerTimeout()
+    // fix-wave (MED): a cold-start attempt (never connected before) gets the
+    // generous firstAnswerTimeoutMs; once this session has connected at
+    // least once, a later negotiation (e.g. after an ICE failure) reverts to
+    // the short, regular answerTimeoutMs — see the class-level doc comment.
+    const timeoutMs = this._hasConnectedOnce ? this.answerTimeoutMs : this.firstAnswerTimeoutMs
     this.answerTimeoutTimer = setTimeout(() => {
       this.answerTimeoutTimer = null
       if (this._state === 'offering') this._fallback('answer-timeout')
-    }, this.answerTimeoutMs)
+    }, timeoutMs)
   }
 
   private _clearAnswerTimeout(): void {

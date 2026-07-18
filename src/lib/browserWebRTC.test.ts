@@ -263,7 +263,10 @@ describe('BrowserWebRTCSession — start()/retry-timer race (HIGH, fix-wave B)',
         return asRTCPeerConnection(pc)
       }
       const onFallback = vi.fn()
-      const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 20, retryDelayMs: 1000 })
+      // This is a cold-start (never-connected) negotiation, so
+      // firstAnswerTimeoutMs — not answerTimeoutMs — governs it (fix-wave,
+      // MED); set both to the same 20ms.
+      const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 20, firstAnswerTimeoutMs: 20, retryDelayMs: 1000 })
       machine.onFallback(onFallback)
 
       // First attempt — never answered, falls back on the 20ms answer
@@ -353,7 +356,12 @@ describe('BrowserWebRTCSession — fallback triggers', () => {
     const onFallback = vi.fn()
     const machine = new BrowserWebRTCSession({
       pcFactory: () => asRTCPeerConnection(pc),
+      // This is a first-ever (cold-start) negotiation, so firstAnswerTimeoutMs
+      // — not answerTimeoutMs — is what actually governs it (fix-wave, MED);
+      // set both to the same short value so this test still exercises "falls
+      // back after the configured timeout" without caring which field wins.
       answerTimeoutMs: 20,
+      firstAnswerTimeoutMs: 20,
       retryDelayMs: 100_000,
     })
     machine.onFallback(onFallback)
@@ -448,6 +456,129 @@ describe('BrowserWebRTCSession — fallback triggers', () => {
   })
 })
 
+describe('BrowserWebRTCSession — hasConnectedOnce + extended first-attempt answer timeout (MED, fix-wave — cold-start false positive)', () => {
+  it('hasConnectedOnce is false until ICE first reaches "connected", then stays true even through a later fallback', async () => {
+    const pc = makeFakePc()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+    expect(machine.hasConnectedOnce).toBe(false)
+
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+    expect(machine.hasConnectedOnce).toBe(false)
+
+    machine.applyAnswer('sdp')
+    await flush()
+    pc.iceConnectionState = 'connected'
+    pc.oniceconnectionstatechange?.()
+    expect(machine.state).toBe('connected')
+    expect(machine.hasConnectedOnce).toBe(true)
+
+    // It's a lifetime flag, not a per-attempt one — BrowserLiveView.tsx
+    // relies on this to distinguish a genuine degradation of a
+    // previously-working stream from a cold start.
+    pc.iceConnectionState = 'failed'
+    pc.oniceconnectionstatechange?.()
+    expect(machine.state).toBe('fallback')
+    expect(machine.hasConnectedOnce).toBe(true)
+  })
+
+  it('uses the extended firstAnswerTimeoutMs default (30s) — not the regular 5s answerTimeoutMs default — for the very first negotiation attempt', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = makeFakePc()
+      const onFallback = vi.fn()
+      const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+      machine.onFallback(onFallback)
+      machine.start(vi.fn())
+      await vi.advanceTimersByTimeAsync(0)
+      pc.iceGatheringState = 'complete'
+      pc.onicegatheringstatechange?.()
+      await vi.advanceTimersByTimeAsync(0)
+
+      await vi.advanceTimersByTimeAsync(5000) // the regular default -- a cold start must survive this
+      expect(onFallback).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(25000) // now past the 30s cold-start allowance
+      expect(onFallback).toHaveBeenCalledWith('answer-timeout')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('honors an explicit firstAnswerTimeoutMs override on the first attempt, ignoring answerTimeoutMs entirely', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = makeFakePc()
+      const onFallback = vi.fn()
+      const machine = new BrowserWebRTCSession({
+        pcFactory: () => asRTCPeerConnection(pc),
+        firstAnswerTimeoutMs: 12345,
+        answerTimeoutMs: 20, // must NOT govern the first attempt
+      })
+      machine.onFallback(onFallback)
+      machine.start(vi.fn())
+      await vi.advanceTimersByTimeAsync(0)
+      pc.iceGatheringState = 'complete'
+      pc.onicegatheringstatechange?.()
+      await vi.advanceTimersByTimeAsync(0)
+
+      await vi.advanceTimersByTimeAsync(12344)
+      expect(onFallback).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(onFallback).toHaveBeenCalledWith('answer-timeout')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reverts to the regular (short) answerTimeoutMs for a negotiation retry AFTER the session has already connected once', async () => {
+    vi.useFakeTimers()
+    try {
+      const pcs: FakePc[] = []
+      const pcFactory = () => {
+        const p = makeFakePc()
+        pcs.push(p)
+        return asRTCPeerConnection(p)
+      }
+      const onFallback = vi.fn()
+      const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 500, retryDelayMs: 10 })
+      machine.onFallback(onFallback)
+
+      machine.start(vi.fn())
+      await vi.advanceTimersByTimeAsync(0)
+      pcs[0].iceGatheringState = 'complete'
+      pcs[0].onicegatheringstatechange?.()
+      await vi.advanceTimersByTimeAsync(0)
+      machine.applyAnswer('sdp')
+      await vi.advanceTimersByTimeAsync(0)
+      pcs[0].iceConnectionState = 'connected'
+      pcs[0].oniceconnectionstatechange?.()
+      expect(machine.hasConnectedOnce).toBe(true)
+
+      // Force a fallback, which arms the one-shot automatic retry.
+      pcs[0].iceConnectionState = 'failed'
+      pcs[0].oniceconnectionstatechange?.()
+      expect(onFallback).toHaveBeenCalledWith('ice-failed')
+
+      await vi.advanceTimersByTimeAsync(10) // the retry fires, creating pcs[1]
+      expect(pcs).toHaveLength(2)
+      pcs[1].iceGatheringState = 'complete'
+      pcs[1].onicegatheringstatechange?.()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // The retry's own answer timeout must be the SHORT 500ms default, not
+      // the 30s cold-start allowance -- hasConnectedOnce is already true.
+      await vi.advanceTimersByTimeAsync(499)
+      expect(onFallback).toHaveBeenCalledTimes(1) // still just the ice-failed one
+      await vi.advanceTimersByTimeAsync(1)
+      expect(onFallback).toHaveBeenCalledTimes(2)
+      expect(onFallback).toHaveBeenLastCalledWith('answer-timeout')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('BrowserWebRTCSession — single automatic retry', () => {
   it('retries exactly once after a fallback, then stops retrying until start() is called again', async () => {
     const pcs: FakePc[] = []
@@ -460,8 +591,10 @@ describe('BrowserWebRTCSession — single automatic retry', () => {
     // Well-separated windows so a real-timer check-in falls unambiguously
     // either "after the answer timeout but before the retry" or "after the
     // retry" — answerTimeoutMs=15, retryDelayMs=80 (retry fires at ~95ms
-    // after the offer is sent).
-    const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 15, retryDelayMs: 80 })
+    // after the offer is sent). Both attempts here happen before the machine
+    // has ever connected, so firstAnswerTimeoutMs (not answerTimeoutMs) is
+    // what actually governs both — set to the same 15ms (fix-wave, MED).
+    const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 15, firstAnswerTimeoutMs: 15, retryDelayMs: 80 })
     machine.onFallback(onFallback)
 
     machine.start(vi.fn())
@@ -497,7 +630,10 @@ describe('BrowserWebRTCSession — single automatic retry', () => {
       return asRTCPeerConnection(pc)
     }
     const onFallback = vi.fn()
-    const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 15, retryDelayMs: 1_000_000 })
+    // Both start() calls here are cold-start (never-connected) negotiations,
+    // so firstAnswerTimeoutMs governs — set to match answerTimeoutMs (15ms)
+    // (fix-wave, MED).
+    const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 15, firstAnswerTimeoutMs: 15, retryDelayMs: 1_000_000 })
     machine.onFallback(onFallback)
 
     machine.start(vi.fn())
@@ -725,7 +861,10 @@ describe('BrowserWebRTCSession — stop()', () => {
     const onFallback = vi.fn()
     const machine = new BrowserWebRTCSession({
       pcFactory: () => asRTCPeerConnection(pc),
+      // Cold-start (never-connected) negotiation — firstAnswerTimeoutMs
+      // governs, so set it to match answerTimeoutMs (fix-wave, MED).
       answerTimeoutMs: 10,
+      firstAnswerTimeoutMs: 10,
       retryDelayMs: 20,
     })
     machine.onFallback(onFallback)
