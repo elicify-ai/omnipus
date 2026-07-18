@@ -7,6 +7,7 @@ import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
+import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
 
@@ -97,6 +98,14 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   const workspace =
     workspaces.find((w) => w.id === workspaceId) ??
     archivedWorkspaces.find((w) => w.id === workspaceId)
+
+  // Unit C: auto-triggers the workspace-setup interview on first open.
+  // Called unconditionally (before the early returns below) so hook order
+  // stays stable across renders regardless of loading/error state — the
+  // hook itself no-ops until `workspace` resolves and `setup_pending` is
+  // true. Fires regardless of which tab is active, matching enterWorkspaceChat
+  // above (chat state lives in the store, not the currently-mounted tab).
+  useWorkspaceSetupKickoff(workspace)
 
   if (workspaceId === 'inbox') return null
 
