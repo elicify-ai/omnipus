@@ -3029,6 +3029,27 @@ type BrowserToolConfig struct {
 	// refused with browser_status(error) even though the screencast itself
 	// still streams.
 	TakeControlEnabled bool `json:"take_control_enabled" env:"OMNIPUS_TOOLS_BROWSER_TAKE_CONTROL_ENABLED"`
+	// WebRTCEnabled gates the ADR-047 WebRTC media path (audio+video via the
+	// gateway's Pion SFU relay) on top of LiveViewEnabled. Defaults to true.
+	// Post-auth gate, same posture as LiveViewEnabled: this does NOT affect
+	// whether /api/v1/browser/ws or /api/v1/browser/capture-ingest exist —
+	// both are always registered. Setting this false only changes what
+	// happens after a viewer attaches: the gateway reports
+	// browser_webrtc_state{available:false, reason:"disabled"} and never
+	// starts a capture session or answers a browser_webrtc_offer, so every
+	// viewer stays on the JPEG browser_screencast fallback tier (ADR-047
+	// D3). Lite builds (-tags lite) compile the Pion relay out entirely
+	// (ADR-047 D7) and behave as if this were false regardless of its
+	// configured value (reason:"lite_build").
+	WebRTCEnabled bool `json:"webrtc_enabled" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_ENABLED"`
+	// WebRTCStunServer is the STUN server URI (e.g.
+	// "stun:stun.l.google.com:19302") the gateway's Pion relay uses for ICE
+	// candidate gathering on both the viewer and capture-ingest legs.
+	// Defaults to "stun:stun.l.google.com:19302". An empty string disables
+	// STUN and restricts ICE to host candidates only (loopback-adjacent
+	// deployments, or operators who want zero external network dependency
+	// at the cost of NAT traversal). See ADR-047 D1.
+	WebRTCStunServer string `json:"webrtc_stun_server" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_STUN_SERVER"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled

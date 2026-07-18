@@ -1,0 +1,30 @@
+title: BrowserCaptureControlFrame
+description: >
+  Bidirectional control frame on the /api/v1/browser/capture-ingest
+  channel. Server (gateway) → client (extension) for `recapture` (the
+  agent's active tab changed — chrome.tabs.query({active:true}) must be
+  re-bound, the onTabsChanged/rebindScreencast analog for the WebRTC path,
+  ADR-047 D2) and `shutdown` (the capture session is ending — last viewer
+  detached past the grace period, or the gateway is stopping the stream);
+  client (extension) → server (gateway) for `ping`, the encoder page's
+  periodic health beacon / reconnect-watchdog signal. `reason` is an
+  optional human-readable note (e.g. why shutdown was requested).
+type: object
+required:
+  - type
+  - action
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_capture_control
+  action:
+    type: string
+    enum:
+      - recapture
+      - shutdown
+      - ping
+  reason:
+    type: string
+    maxLength: 512
+    description: Optional human-readable context for the action (e.g. shutdown cause).

@@ -1,0 +1,24 @@
+title: BrowserCaptureAnswerFrame
+description: >
+  Server (gateway) → client (capture extension). Pion SDP answer to a
+  browser_capture_offer, completing the ingest leg's non-trickle
+  offer/answer exchange. Once applied, the encoder page's tabCapture
+  MediaStream (video, plus audio when the tab produces sound) flows into
+  the gateway's shared TrackLocalStaticRTP tracks for relay to viewers.
+  See ADR-047 D1/D2.
+type: object
+required:
+  - type
+  - sdp
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_capture_answer
+  sdp:
+    type: string
+    minLength: 1
+    maxLength: 131072
+    description: >-
+      Complete SDP answer (application/sdp body) from the gateway's Pion
+      ingest PeerConnection, ICE-gathering-complete (non-trickle).

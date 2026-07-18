@@ -151,6 +151,8 @@ channels:
         $ref: '#/components/messages/BrowserDetachFrame'
       BrowserTabActionFrame:
         $ref: '#/components/messages/BrowserTabActionFrame'
+      BrowserWebRTCOfferFrame:
+        $ref: '#/components/messages/BrowserWebRTCOfferFrame'
       # ── Server → client ───────────────────────────────────────────────────────
       ErrorFrame:
         $ref: '#/components/messages/ErrorFrame'
@@ -160,6 +162,41 @@ channels:
         $ref: '#/components/messages/BrowserStatusFrame'
       BrowserTabsFrame:
         $ref: '#/components/messages/BrowserTabsFrame'
+      BrowserWebRTCAnswerFrame:
+        $ref: '#/components/messages/BrowserWebRTCAnswerFrame'
+      BrowserWebRTCStateFrame:
+        $ref: '#/components/messages/BrowserWebRTCStateFrame'
+
+  browserCaptureIngest:
+    address: /api/v1/browser/capture-ingest
+    description: >
+      Capture-ingest channel (ADR-047 D2/D6). A loopback-only WebSocket
+      between the gateway and the gateway-owned tabCapture MV3 extension's
+      encoder page (chrome-extension://<id>/encoder.html) running inside
+      the managed headless Chrome — never exposed to agents or reachable
+      from outside the host. Not a trust boundary by network position
+      alone: every connection authenticates with a per-stream capability
+      token (browser_capture_hello) minted by the gateway and injected via
+      CDP Page.addScriptToEvaluateOnNewDocument. Carries the ingest leg's
+      non-trickle SDP offer/answer and lifecycle control (recapture on
+      active-tab switch, shutdown, health-check ping).
+    servers:
+      - $ref: '#/servers/gateway'
+    messages:
+      # ── Client (extension) → server (gateway) ───────────────────────────────
+      BrowserCaptureHelloFrame:
+        $ref: '#/components/messages/BrowserCaptureHelloFrame'
+      BrowserCaptureOfferFrame:
+        $ref: '#/components/messages/BrowserCaptureOfferFrame'
+      # ── Server (gateway) → client (extension) ────────────────────────────────
+      ErrorFrame:
+        $ref: '#/components/messages/ErrorFrame'
+      BrowserCaptureAnswerFrame:
+        $ref: '#/components/messages/BrowserCaptureAnswerFrame'
+      # ── Bidirectional: server→client (recapture/shutdown) and
+      #    client→server (ping health beacon) both carry this same frame ──────
+      BrowserCaptureControlFrame:
+        $ref: '#/components/messages/BrowserCaptureControlFrame'
 
 operations:
   # ── Client → server (action: send from SPA perspective) ─────────────────────
@@ -578,6 +615,103 @@ operations:
     messages:
       - $ref: '#/channels/browser/messages/BrowserTabsFrame'
 
+  sendBrowserWebRTCOffer:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Offer to start (or restart) WebRTC media for this live-browser
+      connection. Sent after browser_attach, once browser_webrtc_state has
+      reported available=true. The server responds with
+      browser_webrtc_answer, or a browser_webrtc_state frame reporting why
+      it could not honour the offer. See ADR-047 D1/D4.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserWebRTCOfferFrame'
+
+  receiveBrowserWebRTCAnswer:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Pion SDP answer to a browser_webrtc_offer. Once applied, the SPA's
+      viewer PeerConnection begins receiving media (and the "input" data
+      channel opens for viewer input). See ADR-047 D1/D4.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserWebRTCAnswerFrame'
+
+  receiveBrowserWebRTCState:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    summary: >
+      Availability / lifecycle state for the WebRTC media path: whether the
+      SPA may offer WebRTC at all, whether it is currently active, and
+      whether the captured tab currently has audio. The JPEG
+      browser_screencast path keeps streaming regardless, so this frame
+      only ever moves the SPA between "prefer WebRTC" and "fall back to
+      JPEG" — it never gates baseline browsing. See ADR-047 D1/D3.
+    messages:
+      - $ref: '#/channels/browser/messages/BrowserWebRTCStateFrame'
+
+  # ── Capture-ingest channel (ADR-047 D2/D6) ──────────────────────────────────
+
+  sendBrowserCaptureHello:
+    action: send
+    channel:
+      $ref: '#/channels/browserCaptureIngest'
+    summary: >
+      Authenticate the capture-ingest connection. Must be the first frame
+      sent by the encoder page after the connection opens. The gateway
+      validates the per-stream capability token and audits the outcome;
+      an invalid/missing/expired token closes the connection. See
+      ADR-047 D6.
+    messages:
+      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureHelloFrame'
+
+  sendBrowserCaptureOffer:
+    action: send
+    channel:
+      $ref: '#/channels/browserCaptureIngest'
+    summary: >
+      SDP offer from the encoder page's self-consuming tabCapture
+      PeerConnection, sent after a successful browser_capture_hello. The
+      gateway responds with browser_capture_answer. See ADR-047 D1/D2.
+    messages:
+      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureOfferFrame'
+
+  receiveBrowserCaptureAnswer:
+    action: receive
+    channel:
+      $ref: '#/channels/browserCaptureIngest'
+    summary: >
+      Pion SDP answer to a browser_capture_offer. Once applied, the
+      encoder page's captured media (video, plus audio when present)
+      flows into the gateway's shared relay tracks. See ADR-047 D1/D2.
+    messages:
+      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureAnswerFrame'
+
+  sendBrowserCaptureControl:
+    action: send
+    channel:
+      $ref: '#/channels/browserCaptureIngest'
+    summary: >
+      Gateway → encoder page control command: recapture (the agent's
+      active tab changed and the tabCapture stream must be re-bound) or
+      shutdown (the capture session is ending). See ADR-047 D2.
+    messages:
+      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureControlFrame'
+
+  receiveBrowserCaptureControl:
+    action: receive
+    channel:
+      $ref: '#/channels/browserCaptureIngest'
+    summary: >
+      Encoder page → gateway health beacon (action=ping), sent
+      periodically so the gateway's reconnect watchdog can detect a stuck
+      or crashed encoder page. See ADR-047 D2.
+    messages:
+      - $ref: '#/channels/browserCaptureIngest/messages/BrowserCaptureControlFrame'
+
 components:
   messages:
     # ── Client → server messages ───────────────────────────────────────────────
@@ -912,6 +1046,64 @@ components:
       payload:
         $ref: '#/components/schemas/BrowserTabsFrame'
 
+    BrowserWebRTCOfferFrame:
+      name: BrowserWebRTCOfferFrame
+      title: browser_webrtc_offer
+      summary: Viewer SDP offer to start/restart WebRTC media for the live browser (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserWebRTCOfferFrame'
+
+    BrowserWebRTCAnswerFrame:
+      name: BrowserWebRTCAnswerFrame
+      title: browser_webrtc_answer
+      summary: Pion SDP answer to a viewer WebRTC offer (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserWebRTCAnswerFrame'
+
+    BrowserWebRTCStateFrame:
+      name: BrowserWebRTCStateFrame
+      title: browser_webrtc_state
+      summary: WebRTC media path availability / active / audio state for the live browser (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserWebRTCStateFrame'
+
+    # ── Capture-ingest channel messages (ADR-047 D2/D6) ────────────────────────
+
+    BrowserCaptureHelloFrame:
+      name: BrowserCaptureHelloFrame
+      title: browser_capture_hello
+      summary: Authenticate the capture-ingest connection with a per-stream capability token (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserCaptureHelloFrame'
+
+    BrowserCaptureOfferFrame:
+      name: BrowserCaptureOfferFrame
+      title: browser_capture_offer
+      summary: SDP offer from the encoder page's tabCapture PeerConnection (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserCaptureOfferFrame'
+
+    BrowserCaptureAnswerFrame:
+      name: BrowserCaptureAnswerFrame
+      title: browser_capture_answer
+      summary: Pion SDP answer to the encoder page's capture offer (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserCaptureAnswerFrame'
+
+    BrowserCaptureControlFrame:
+      name: BrowserCaptureControlFrame
+      title: browser_capture_control
+      summary: Bidirectional capture control — recapture/shutdown (server → client) or ping health beacon (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserCaptureControlFrame'
+
   schemas:
     WsFrameType:
       title: WsFrameType
@@ -958,6 +1150,13 @@ components:
         - browser_status
         - browser_tab_action
         - browser_tabs
+        - browser_webrtc_offer
+        - browser_webrtc_answer
+        - browser_webrtc_state
+        - browser_capture_hello
+        - browser_capture_offer
+        - browser_capture_answer
+        - browser_capture_control
 
     AuthFrame:
       title: AuthFrame
@@ -2437,3 +2636,285 @@ components:
               active:
                 type: boolean
                 description: True for the active tab (mirrors active_index).
+
+    # ── Browser WebRTC signaling (ADR-047 D1/D4) ────────────────────────────────
+
+    BrowserWebRTCOfferFrame:
+      title: BrowserWebRTCOfferFrame
+      description: >
+        Client → server. Viewer SDP offer to start (or restart) a WebRTC
+        media session for a session's live browser, sent on the existing
+        /api/v1/browser/ws channel after browser_attach. Non-trickle: the
+        SPA gathers all ICE candidates locally before sending, so `sdp` is
+        the complete offer. The gateway's Pion relay (ADR-047 D1) treats
+        agent_id as the binding key exactly like browser_attach (ADR-043
+        per-agent browser contexts) — it ensures/creates that agent's
+        capture session (starting the tabCapture encoder page on first
+        WebRTC-capable viewer offer, ADR-047 D2) and creates a new viewer
+        PeerConnection fed from the shared media tracks. session_id is
+        correlation-only, echoed back on browser_webrtc_answer /
+        browser_webrtc_state. See ADR-047 D1/D4.
+      type: object
+      required:
+        - type
+        - agent_id
+        - session_id
+        - sdp
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_webrtc_offer
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Agent whose BrowserManager/capture session this offer targets.
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            The client's chat session id, carried for context/correlation
+            and logging only — echoed back on browser_webrtc_answer /
+            browser_webrtc_state so the client can match them to this
+            offer. Does not select the browsing context; agent_id is the
+            binding key (mirrors BrowserAttachFrame).
+        sdp:
+          type: string
+          minLength: 1
+          maxLength: 131072
+          description: >-
+            Complete SDP offer (application/sdp body), gathered with ICE
+            candidates already resolved (non-trickle, ADR-047 D4).
+
+    BrowserWebRTCAnswerFrame:
+      title: BrowserWebRTCAnswerFrame
+      description: >
+        Server → client. Pion SDP answer to a browser_webrtc_offer, sent
+        once the gateway's relay has created the viewer PeerConnection and
+        gathered its own ICE candidates (non-trickle — the answer is
+        complete, no separate candidate frames follow). See ADR-047 D1/D4.
+      type: object
+      required:
+        - type
+        - sdp
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_webrtc_answer
+        session_id:
+          type: string
+          maxLength: 128
+          description: >-
+            Echoes the session_id from the triggering browser_webrtc_offer,
+            for client-side correlation only.
+        sdp:
+          type: string
+          minLength: 1
+          maxLength: 131072
+          description: >-
+            Complete SDP answer (application/sdp body) from the gateway's
+            Pion viewer PeerConnection, ICE-gathering-complete (non-trickle).
+
+    BrowserWebRTCStateFrame:
+      title: BrowserWebRTCStateFrame
+      description: >
+        Server → client. Availability / lifecycle state for the WebRTC
+        media path on a live-browser connection, distinct from the general
+        lifecycle carried by browser_status. `available` tells the SPA
+        whether it may attempt a browser_webrtc_offer at all (feature flag
+        off, platform/build not capable, or a runtime error takes it out of
+        service); `active` tells the SPA whether a WebRTC session is
+        currently flowing media for this connection. Per ADR-047 D3, the
+        JPEG browser_screencast path keeps running unconditionally as the
+        automatic fallback tier — the SPA falls back to it whenever
+        available=false or active drops to false after being true (e.g.
+        ICE failure), with no separate error frame needed. See ADR-047
+        D1/D3/D7 (lite builds compile WebRTC out entirely).
+      type: object
+      required:
+        - type
+        - available
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_webrtc_state
+        session_id:
+          type: string
+          maxLength: 128
+          description: >-
+            Echoes the session_id from the triggering browser_webrtc_offer
+            / browser_attach, for client-side correlation only.
+        available:
+          type: boolean
+          description: >-
+            True if the gateway currently offers WebRTC for this
+            connection (the webrtc_enabled config flag is on, the
+            platform/build supports it, and no runtime error has taken it
+            out of service). False means the SPA must not send
+            browser_webrtc_offer and should rely on the JPEG
+            browser_screencast path only.
+        reason:
+          type: string
+          enum:
+            - disabled
+            - not_capable
+            - lite_build
+            - error
+          description: >-
+            Present when available=false (or when active unexpectedly
+            drops to false): disabled = tools.browser.webrtc_enabled is
+            off; not_capable = platform/managed-Chrome capability
+            classification is below WebRTC eligibility (ADR-047 D5, e.g.
+            chrome-headless-shell only, no full Chrome); lite_build =
+            binary built with -tags lite (Pion compiled out, ADR-047 D7);
+            error = a runtime failure (capture/encoder/ICE) took the
+            WebRTC path out of service for this session.
+        has_audio:
+          type: boolean
+          description: >-
+            True if the active (or about-to-be-offered) media includes an
+            audio track from the captured tab. Absent/false when audio is
+            unavailable or not yet known.
+        active:
+          type: boolean
+          description: >-
+            True while a WebRTC PeerConnection for this viewer is
+            currently connected and flowing media. False (or absent) means
+            the viewer is on the JPEG fallback tier, whether by choice, by
+            availability, or after an ICE/connection failure.
+
+    # ── Capture-ingest channel (ADR-047 D2/D6) ──────────────────────────────────
+
+    BrowserCaptureHelloFrame:
+      title: BrowserCaptureHelloFrame
+      description: >
+        Client (capture extension) → server (gateway). First frame on the
+        loopback-only /api/v1/browser/capture-ingest WebSocket, analogous
+        to AuthFrame on the public channels. `token` is the per-stream
+        capability token the gateway minted for this capture session and
+        injected into the extension's encoder page out-of-band via CDP
+        Page.addScriptToEvaluateOnNewDocument — never a URL query param,
+        never recoverable from the CDP transport. Loopback is NOT a trust
+        boundary (a co-tenant process could reach it), so this token is
+        mandatory; the gateway audits any hello with a
+        missing/invalid/expired token as a rejected ingest-auth attempt and
+        closes the connection. See ADR-047 D6.
+      type: object
+      required:
+        - type
+        - token
+        - ext_version
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_capture_hello
+        token:
+          type: string
+          minLength: 16
+          maxLength: 256
+          description: >-
+            Opaque per-stream capability token minted by the gateway for
+            this capture session (not the SPA bearer auth token — a
+            distinct, single-purpose credential scoped to one ingest
+            connection). See ADR-047 D6.
+        ext_version:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: >-
+            The capture extension's manifest version string, reported so
+            the gateway can log/reject a mismatched build (e.g. after a
+            seeded extension upgrade) without guessing from behavior.
+
+    BrowserCaptureOfferFrame:
+      title: BrowserCaptureOfferFrame
+      description: >
+        Client (capture extension) → server (gateway). SDP offer from the
+        encoder page's self-consuming tabCapture PeerConnection (ADR-047
+        D2), sent after a successful browser_capture_hello. Non-trickle:
+        the encoder page gathers all ICE candidates before sending, so
+        `sdp` is the complete offer. The gateway's Pion relay answers with
+        browser_capture_answer and publishes the resulting media/audio
+        tracks to every attached viewer PC. See ADR-047 D1/D2/D6.
+      type: object
+      required:
+        - type
+        - sdp
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_capture_offer
+        sdp:
+          type: string
+          minLength: 1
+          maxLength: 131072
+          description: >-
+            Complete SDP offer (application/sdp body) from the encoder
+            page's ingest PeerConnection, ICE-gathering-complete
+            (non-trickle).
+
+    BrowserCaptureAnswerFrame:
+      title: BrowserCaptureAnswerFrame
+      description: >
+        Server (gateway) → client (capture extension). Pion SDP answer to
+        a browser_capture_offer, completing the ingest leg's non-trickle
+        offer/answer exchange. Once applied, the encoder page's tabCapture
+        MediaStream (video, plus audio when the tab produces sound) flows
+        into the gateway's shared TrackLocalStaticRTP tracks for relay to
+        viewers. See ADR-047 D1/D2.
+      type: object
+      required:
+        - type
+        - sdp
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_capture_answer
+        sdp:
+          type: string
+          minLength: 1
+          maxLength: 131072
+          description: >-
+            Complete SDP answer (application/sdp body) from the gateway's
+            Pion ingest PeerConnection, ICE-gathering-complete
+            (non-trickle).
+
+    BrowserCaptureControlFrame:
+      title: BrowserCaptureControlFrame
+      description: >
+        Bidirectional control frame on the /api/v1/browser/capture-ingest
+        channel. Server (gateway) → client (extension) for `recapture`
+        (the agent's active tab changed — chrome.tabs.query({active:true})
+        must be re-bound, the onTabsChanged/rebindScreencast analog for
+        the WebRTC path, ADR-047 D2) and `shutdown` (the capture session
+        is ending — last viewer detached past the grace period, or the
+        gateway is stopping the stream); client (extension) → server
+        (gateway) for `ping`, the encoder page's periodic health beacon /
+        reconnect-watchdog signal. `reason` is an optional human-readable
+        note (e.g. why shutdown was requested).
+      type: object
+      required:
+        - type
+        - action
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_capture_control
+        action:
+          type: string
+          enum:
+            - recapture
+            - shutdown
+            - ping
+        reason:
+          type: string
+          maxLength: 512
+          description: Optional human-readable context for the action (e.g. shutdown cause).

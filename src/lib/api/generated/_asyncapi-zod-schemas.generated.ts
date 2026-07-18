@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
 
 export const AuthFrame = z
   .object({
@@ -502,6 +502,64 @@ export const BrowserTabsFrame = z
   })
   .strict();
 
+export const BrowserWebRTCOfferFrame = z
+  .object({
+    type: z.literal("browser_webrtc_offer"),
+    agent_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(128),
+    sdp: z.string().min(1).max(131072),
+  })
+  .strict();
+
+export const BrowserWebRTCAnswerFrame = z
+  .object({
+    type: z.literal("browser_webrtc_answer"),
+    session_id: z.string().max(128).optional(),
+    sdp: z.string().min(1).max(131072),
+  })
+  .strict();
+
+export const BrowserWebRTCStateFrame = z
+  .object({
+    type: z.literal("browser_webrtc_state"),
+    session_id: z.string().max(128).optional(),
+    available: z.boolean(),
+    reason: z.enum(["disabled", "not_capable", "lite_build", "error"]).optional(),
+    has_audio: z.boolean().optional(),
+    active: z.boolean().optional(),
+  })
+  .strict();
+
+export const BrowserCaptureHelloFrame = z
+  .object({
+    type: z.literal("browser_capture_hello"),
+    token: z.string().min(16).max(256),
+    ext_version: z.string().min(1).max(32),
+  })
+  .strict();
+
+export const BrowserCaptureOfferFrame = z
+  .object({
+    type: z.literal("browser_capture_offer"),
+    sdp: z.string().min(1).max(131072),
+  })
+  .strict();
+
+export const BrowserCaptureAnswerFrame = z
+  .object({
+    type: z.literal("browser_capture_answer"),
+    sdp: z.string().min(1).max(131072),
+  })
+  .strict();
+
+export const BrowserCaptureControlFrame = z
+  .object({
+    type: z.literal("browser_capture_control"),
+    action: z.enum(["recapture", "shutdown", "ping"]),
+    reason: z.string().max(512).optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -545,6 +603,13 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserStatusFrame,
   BrowserTabActionFrame,
   BrowserTabsFrame,
+  BrowserWebRTCOfferFrame,
+  BrowserWebRTCAnswerFrame,
+  BrowserWebRTCStateFrame,
+  BrowserCaptureHelloFrame,
+  BrowserCaptureOfferFrame,
+  BrowserCaptureAnswerFrame,
+  BrowserCaptureControlFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;
