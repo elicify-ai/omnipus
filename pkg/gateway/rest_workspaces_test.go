@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // contextWithUser returns a new context that carries the given username (as a
@@ -1348,4 +1349,139 @@ func TestHandleWorkspacePut_PreservesSetupPending(t *testing.T) {
 	stored, err := readWorkspaceFile(api.homePath, created.Id)
 	require.NoError(t, err)
 	assert.True(t, stored.SetupPending, "on-disk setup_pending must survive an unrelated PUT")
+}
+
+// newTestRestAPIWithoutAva builds a restAPI whose config roster deliberately
+// omits Ava (mirrors newTestRestAPIWithAvaRoster minus the "ava" entry) — used
+// to exercise the Fix 5 SetupPending gate: newWorkspaceSetupTeam returns an
+// empty seed when Ava is absent from the live config (e.g. a lite/custom
+// install), and handleWorkspacePost must not mark such a workspace
+// setup_pending, since nothing would ever be able to run the interview and
+// clear the flag.
+func newTestRestAPIWithoutAva(t *testing.T) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			List: []config.AgentConfig{
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
+				{ID: "ray", Name: "Ray", Type: config.AgentTypeCore},
+				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
+			},
+		},
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
+
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir,
+		taskStore:     task.New(filepath.Join(tmpDir, "tasks")),
+		taskLock:      task.TaskFileLock,
+	}
+}
+
+// TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending is the Fix 5
+// regression: POST /api/v1/workspaces with no explicit core_team, against a
+// config that does NOT include Ava, must seed an EMPTY core_team AND leave
+// setup_pending false/absent — never setup_pending=true with an empty team,
+// which would strand the workspace forever (no agent is ever available to run
+// the interview and clear the flag).
+// BDD:
+//
+//	Given a config roster with no Ava,
+//	When POST /api/v1/workspaces is called with no core_team field,
+//	Then 201 with core_team absent/empty and setup_pending absent/false in the
+//	wire response, and the same on disk.
+func TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending(t *testing.T) {
+	api := newTestRestAPIWithoutAva(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"NoAvaWorkspace"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "POST /workspaces must return 201; body=%s", w.Body.String())
+	var ws gen.Workspace
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
+
+	assert.Nil(t, ws.CoreTeam, "core_team must be absent/empty in the wire response when Ava is not in the config")
+	assert.Nil(t, ws.SetupPending,
+		"setup_pending must be absent/false when the auto-seed produced an empty team (Fix 5)")
+
+	stored, err := readWorkspaceFile(api.homePath, ws.Id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.CoreTeam, "on-disk core_team must be empty")
+	assert.False(t, stored.SetupPending,
+		"on-disk setup_pending must be false — an empty team must never be left setup_pending forever")
+}
+
+// TestHandleWorkspacePut_SerializesAgainstWorkspaceLock is the Fix 1
+// concurrency regression: handleWorkspacePut must acquire workspace.LockID(id)
+// for its full load-modify-write cycle, so a concurrent holder of that same
+// lock (standing in for the WS setup-kickoff consumer, which acquires the
+// identical lock — see consumeWorkspaceSetupKickoff) blocks the PUT until the
+// lock is released. This is a deterministic interleaving test (no -race
+// dependency): the test itself holds the lock, confirms the PUT goroutine has
+// NOT completed while it's held, releases, and confirms the PUT then
+// completes with the expected result.
+func TestHandleWorkspacePut_SerializesAgainstWorkspaceLock(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	wsID := createWorkspaceViaAPI(t, api, "LockRaceWorkspace", "")
+
+	// Simulate an in-flight kickoff consume (or any other workspace writer)
+	// holding the per-workspace lock.
+	unlock := workspace.LockID(wsID)
+
+	type result struct {
+		code int
+		body string
+	}
+	done := make(chan result, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID,
+			strings.NewReader(`{"name":"LockRaceWorkspace-Renamed"}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/workspaces/" + wsID
+		api.HandleWorkspaces(w, r)
+		done <- result{code: w.Code, body: w.Body.String()}
+	}()
+
+	// The PUT must NOT complete while the lock is held.
+	select {
+	case res := <-done:
+		unlock()
+		t.Fatalf("PUT completed while the workspace lock was held (code=%d, body=%s) — "+
+			"handleWorkspacePut is not serializing on workspace.LockID", res.code, res.body)
+	case <-time.After(150 * time.Millisecond):
+		// expected: still blocked
+	}
+
+	unlock()
+
+	// Now that the lock is released, the PUT must complete promptly.
+	select {
+	case res := <-done:
+		require.Equal(t, http.StatusOK, res.code, "PUT must succeed once the lock is released; body=%s", res.body)
+		var updated gen.Workspace
+		require.NoError(t, json.Unmarshal([]byte(res.body), &updated))
+		assert.Equal(t, "LockRaceWorkspace-Renamed", updated.Name)
+	case <-time.After(2 * time.Second):
+		t.Fatal("PUT did not complete after the workspace lock was released")
+	}
+
+	stored, err := readWorkspaceFile(api.homePath, wsID)
+	require.NoError(t, err)
+	assert.Equal(t, "LockRaceWorkspace-Renamed", stored.Name)
 }
