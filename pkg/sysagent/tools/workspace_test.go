@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
@@ -615,6 +616,372 @@ func TestWorkspaceUpdate_InvalidStatus(t *testing.T) {
 	errBlock, _ := m["error"].(map[string]any)
 	if errBlock["code"] != "INVALID_INPUT" {
 		t.Errorf("code = %v, want INVALID_INPUT", errBlock["code"])
+	}
+}
+
+// ---- update_workspace: delegation-edge auto-seed (fix wave) ----
+//
+// update_workspace previously had no way to grow the per-workspace
+// delegation graph (ADR-037's sole runtime delegation authority, fail-closed:
+// no edge ⇒ deny). These tests prove the auto-seed added by this fix wave:
+// core_team changes seed the compiled-in default edges for NEWLY ADDED
+// members only, never re-adding an edge among pre-existing members (so a
+// deliberate prior removal via the Team tab stays removed) and never
+// duplicating an edge that already exists.
+
+// delegationEdgesFromDisk reads workspaces/<id>.json and returns its
+// "delegation" array as []map[string]any for assertions.
+func delegationEdgesFromDisk(t *testing.T, home, id string) []map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+	if err != nil {
+		t.Fatalf("read workspace file: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("workspace JSON unparseable: %v", err)
+	}
+	rawEdges, _ := raw["delegation"].([]any)
+	out := make([]map[string]any, 0, len(rawEdges))
+	for _, e := range rawEdges {
+		em, ok := e.(map[string]any)
+		if !ok {
+			t.Fatalf("delegation entry is not an object: %v", e)
+		}
+		out = append(out, em)
+	}
+	return out
+}
+
+// findEdge returns the edge with the given from/to, or nil if absent.
+func findEdge(edges []map[string]any, from, to string) map[string]any {
+	for _, e := range edges {
+		if e["from_agent"] == from && e["to_agent"] == to {
+			return e
+		}
+	}
+	return nil
+}
+
+// modesOf extracts an edge's "modes" field as []string (nil if absent).
+func modesOf(edge map[string]any) []string {
+	raw, _ := edge["modes"].([]any)
+	if raw == nil {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, m := range raw {
+		if s, ok := m.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers verifies scenario 1:
+// team [ava] → update to [ava, jim, worker] seeds exactly the three edges
+// whose endpoints are both on the new team AND touch a newly added member
+// (jim→ava, jim→worker, ava→worker) — jim→ray is dropped because ray is off
+// team, even though it's part of Jim's compiled-in seed. Also asserts Jim's
+// 3-value seed vocabulary ([task, background, await]) collapses+dedupes to
+// the 2-value trust-edge vocabulary ([task, direct]) per edgeModeCategory,
+// and that depth (unset for Jim/Ava's seed) stays absent.
+func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	id := "01KW60SEED0000000000000001"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Seed Test",
+		"status": "active",
+		"core_team": ["ava"],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava", "jim", "worker"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	// Success result should mention the seeded edges (Ava can relay it).
+	m := parseSuccess(t, res.ForLLM)
+	note, _ := m["delegation_seeded"].(string)
+	if note == "" {
+		t.Fatal("expected a delegation_seeded note in the success result, got none")
+	}
+	if !strings.Contains(note, "jim") || !strings.Contains(note, "worker") {
+		t.Errorf("delegation_seeded note = %q, want it to mention jim and worker", note)
+	}
+
+	edges := delegationEdgesFromDisk(t, home, id)
+	if len(edges) != 3 {
+		t.Fatalf("expected exactly 3 seeded edges, got %d: %v", len(edges), edges)
+	}
+	if findEdge(edges, "jim", "ray") != nil {
+		t.Error("jim→ray must be dropped — ray is not on the team")
+	}
+
+	jimAva := findEdge(edges, "jim", "ava")
+	if jimAva == nil {
+		t.Fatal("expected jim→ava edge")
+	}
+	jimWorker := findEdge(edges, "jim", "worker")
+	if jimWorker == nil {
+		t.Fatal("expected jim→worker edge")
+	}
+	avaWorker := findEdge(edges, "ava", "worker")
+	if avaWorker == nil {
+		t.Fatal("expected ava→worker edge (worker is newly added, even though ava pre-existed)")
+	}
+
+	// Jim's seed [task, background, await] must collapse+dedupe to [task, direct].
+	wantModes := map[string]bool{"task": true, "direct": true}
+	for name, edge := range map[string]map[string]any{"jim→ava": jimAva, "jim→worker": jimWorker} {
+		modes := modesOf(edge)
+		if len(modes) != 2 {
+			t.Errorf("%s modes = %v, want exactly 2 (task, direct)", name, modes)
+		}
+		for _, mo := range modes {
+			if !wantModes[mo] {
+				t.Errorf("%s modes = %v contains unexpected mode %q", name, modes, mo)
+			}
+		}
+		if _, hasDepth := edge["depth"]; hasDepth {
+			t.Errorf("%s: depth should be absent (Jim's seed has no depth), got %v", name, edge["depth"])
+		}
+	}
+}
+
+// TestWorkspaceUpdate_SeedDedupesExistingEdge verifies scenario 2: when
+// jim→worker already exists on disk before the update, applying the same
+// core_team update as the previous test does NOT duplicate it — the
+// pre-existing edge (and its original modes) is left exactly as-is, while
+// the genuinely new edges (jim→ava, ava→worker) are still added.
+func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	id := "01KW60SEED0000000000000002"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Dedup Test",
+		"status": "active",
+		"core_team": ["ava"],
+		"delegation": [
+			{"from_agent":"jim","to_agent":"worker","modes":["task"]}
+		],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava", "jim", "worker"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	edges := delegationEdgesFromDisk(t, home, id)
+	count := 0
+	for _, e := range edges {
+		if e["from_agent"] == "jim" && e["to_agent"] == "worker" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 jim→worker edge (no duplicate), got %d in %v", count, edges)
+	}
+	jimWorker := findEdge(edges, "jim", "worker")
+	if modes := modesOf(jimWorker); len(modes) != 1 || modes[0] != "task" {
+		t.Errorf("pre-existing jim→worker edge must be left untouched, got modes=%v", modes)
+	}
+
+	// The genuinely new edges must still be added.
+	if findEdge(edges, "jim", "ava") == nil {
+		t.Error("expected jim→ava edge to be seeded")
+	}
+	if findEdge(edges, "ava", "worker") == nil {
+		t.Error("expected ava→worker edge to be seeded")
+	}
+}
+
+// TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge verifies scenario 3:
+// a team of [ava, worker] with NO ava→worker edge (modeling a user's earlier
+// deliberate removal of that edge via the Team tab) — adding ray to the team
+// must seed only ray-involving edges (ray→worker; ray→researcher is dropped
+// because researcher is off team) and must NOT resurrect ava→worker, even
+// though both ava and worker are still on the team.
+func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	id := "01KW60SEED0000000000000003"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "No Resurrect Test",
+		"status": "active",
+		"core_team": ["ava", "worker"],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava", "worker", "ray"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	edges := delegationEdgesFromDisk(t, home, id)
+	if findEdge(edges, "ava", "worker") != nil {
+		t.Error("ava→worker must NOT be resurrected — neither endpoint is newly added")
+	}
+	if findEdge(edges, "ray", "researcher") != nil {
+		t.Error("ray→researcher must be dropped — researcher is not on the team")
+	}
+	rayWorker := findEdge(edges, "ray", "worker")
+	if rayWorker == nil {
+		t.Fatalf("expected ray→worker edge to be seeded, got edges=%v", edges)
+	}
+	if len(edges) != 1 {
+		t.Errorf("expected exactly 1 seeded edge (ray→worker), got %d: %v", len(edges), edges)
+	}
+}
+
+// TestWorkspaceUpdate_NoCoreTeamArg_DelegationUntouched verifies scenario 4:
+// an update that does not include core_team at all must leave the existing
+// delegation graph completely unchanged.
+func TestWorkspaceUpdate_NoCoreTeamArg_DelegationUntouched(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	id := "01KW60SEED0000000000000004"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Untouched Test",
+		"status": "active",
+		"core_team": ["ava", "jim"],
+		"delegation": [
+			{"from_agent":"jim","to_agent":"ava","modes":["task"]}
+		],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Update only the name — no core_team key present in args at all.
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":   id,
+		"name": "Renamed Untouched Test",
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	m := parseSuccess(t, res.ForLLM)
+	if _, hasNote := m["delegation_seeded"]; hasNote {
+		t.Errorf(
+			"no core_team arg was supplied — delegation_seeded note should be absent, got %v",
+			m["delegation_seeded"],
+		)
+	}
+
+	edges := delegationEdgesFromDisk(t, home, id)
+	if len(edges) != 1 {
+		t.Fatalf("expected the pre-existing 1 edge to survive untouched, got %d: %v", len(edges), edges)
+	}
+	if edges[0]["from_agent"] != "jim" || edges[0]["to_agent"] != "ava" {
+		t.Errorf("edge changed: got %v", edges[0])
+	}
+}
+
+// TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC verifies scenario 5: an
+// update that only REMOVES a core_team member adds no new edges (added is
+// empty, so the auto-seed never runs), and documents the tool's existing
+// (unchanged by this fix) behavior of NOT garbage-collecting edges that
+// reference the removed member — workspaceDelegationTeamSet unions core_team
+// with existing edge endpoints, so a stale edge continues to validate and
+// survives the write untouched.
+func TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	id := "01KW60SEED0000000000000005"
+	wsPath := filepath.Join(home, "workspaces", id+".json")
+	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+		"id": "` + id + `",
+		"name": "Removal Test",
+		"status": "active",
+		"core_team": ["ava", "jim", "worker"],
+		"delegation": [
+			{"from_agent":"jim","to_agent":"ava","modes":["task","direct"]},
+			{"from_agent":"jim","to_agent":"worker","modes":["task","direct"]},
+			{"from_agent":"ava","to_agent":"worker","modes":["task","direct"]}
+		],
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove "worker" from core_team — no additions.
+	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":        id,
+		"core_team": []any{"ava", "jim"},
+	})
+	if res.IsError {
+		t.Fatalf("update_workspace failed: %s", res.ForLLM)
+	}
+
+	m := parseSuccess(t, res.ForLLM)
+	if _, hasNote := m["delegation_seeded"]; hasNote {
+		t.Errorf("a removal-only update must not seed edges, got delegation_seeded=%v", m["delegation_seeded"])
+	}
+
+	edges := delegationEdgesFromDisk(t, home, id)
+	if len(edges) != 3 {
+		t.Fatalf(
+			"removal-only update must not GC existing edges (unchanged pre-existing behavior), got %d: %v",
+			len(edges),
+			edges,
+		)
+	}
+	if findEdge(edges, "jim", "ava") == nil || findEdge(edges, "jim", "worker") == nil ||
+		findEdge(edges, "ava", "worker") == nil {
+		t.Errorf("all 3 pre-existing edges must survive unchanged, got %v", edges)
+	}
+
+	team, _ := m["core_team"].([]any)
+	if len(team) != 2 {
+		t.Errorf("core_team should now have 2 members, got %v", team)
 	}
 }
 
