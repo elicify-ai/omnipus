@@ -201,6 +201,30 @@ func TestCoreAgentPromptsDifferentiation(t *testing.T) {
 		"Mia and Ray must have different compiled prompts")
 }
 
+// TestAvaPromptContainsWorkspaceSetupInterview verifies Ava's compiled prompt
+// carries the workspace-setup kickoff interview instructions (Unit B): the
+// system message announcing a new workspace's team needs setting up must
+// produce a first-person greeting from Ava, followed by a short interview and
+// the update_workspace/create_agent team-assembly steps.
+//
+// Traces to: contracts/asyncapi.yaml metadata.workspace_setup_kickoff,
+// pkg/workspace/workspace.go Workspace.SetupPending.
+func TestAvaPromptContainsWorkspaceSetupInterview(t *testing.T) {
+	avaPrompt := coreagent.GetPrompt("ava")
+	require.NotEmpty(t, avaPrompt)
+
+	assert.Contains(t, avaPrompt, "## Workspace setup interview",
+		"Ava's prompt must have a dedicated section for the workspace-setup kickoff")
+	assert.Contains(t, avaPrompt, "workspace-setup kickoff",
+		"the section must name the kickoff trigger so Ava recognizes the system message")
+	assert.Contains(t, avaPrompt, "Hi, I'm Ava",
+		"Ava's first reply on kickoff must greet in first person")
+	assert.Contains(t, avaPrompt, "update_workspace",
+		"the interview must end in setting the workspace's core_team via update_workspace")
+	assert.Contains(t, avaPrompt, "create_agent",
+		"the interview must cover creating specialists that don't already exist")
+}
+
 // TestGetPromptUnknownID verifies GetPrompt returns empty string for unknown IDs.
 // Callers fall back to SOUL.md on disk when the empty string is returned.
 //
