@@ -28,6 +28,7 @@ type mockProvider struct {
 	workspacePath  string
 	omnipusHome    string
 	activeWarnings []string
+	publicURL      string
 }
 
 func (m *mockProvider) Platform() (envcontext.Platform, error) {
@@ -46,6 +47,7 @@ func (m *mockProvider) OmnipusHome() string   { return m.omnipusHome }
 func (m *mockProvider) ActiveWarnings() []string {
 	return m.activeWarnings
 }
+func (m *mockProvider) PublicURL() string { return m.publicURL }
 
 // ---------------------------------------------------------------------------
 // #49 — TestEnvironmentProvider_PlatformFromRuntime
@@ -538,6 +540,78 @@ func TestRender_ContainsRequiredSections(t *testing.T) {
 			t.Errorf("preamble missing required section %q; got:\n%s", section, out)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRender_PublicURL
+// Traces to: W5 — surface the reachable public URL in the ## Environment
+// preamble so the agent knows its externally-reachable base (e.g. for
+// pages it serves via serve_web). The line is rendered only when the
+// Provider can derive a URL; a wildcard-bind provider with no
+// gateway.public_url (PublicURL() == "") omits it entirely rather than
+// showing a misleading value.
+// ---------------------------------------------------------------------------
+
+func TestRender_PublicURL(t *testing.T) {
+	t.Run("non-empty PublicURL is rendered", func(t *testing.T) {
+		p := &mockProvider{
+			sandboxMode:   "fallback",
+			networkPolicy: envcontext.NetworkPolicy{OutboundAllowed: true},
+			workspacePath: "/workspace/agent",
+			omnipusHome:   "/home/.omnipus",
+			publicURL:     "https://pod-omnipus.fly.dev",
+		}
+		out := envcontext.Render(p, "")
+
+		if !strings.Contains(out, "https://pod-omnipus.fly.dev") {
+			t.Errorf("Render() missing public URL %q; got:\n%s", "https://pod-omnipus.fly.dev", out)
+		}
+		if !strings.Contains(out, "Public URL") {
+			t.Errorf("Render() missing a 'Public URL' line; got:\n%s", out)
+		}
+	})
+
+	t.Run("empty PublicURL omits the line", func(t *testing.T) {
+		p := &mockProvider{
+			sandboxMode:   "fallback",
+			networkPolicy: envcontext.NetworkPolicy{OutboundAllowed: true},
+			workspacePath: "/workspace/agent",
+			omnipusHome:   "/home/.omnipus",
+			publicURL:     "",
+		}
+		out := envcontext.Render(p, "")
+
+		if strings.Contains(out, "Public URL") {
+			t.Errorf("Render() must omit the 'Public URL' line when Provider.PublicURL() is empty; got:\n%s", out)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestDefaultProvider_PublicURL
+// Traces to: W5 — DefaultProvider.PublicURL() must reflect the same
+// resolution middleware.CanonicalGatewayOrigin uses for CORS/CSP/WS-origin
+// and web_serve/preview link base (ADR-044), so the agent's preamble never
+// disagrees with what those surfaces actually enforce/emit.
+// ---------------------------------------------------------------------------
+
+func TestDefaultProvider_PublicURL(t *testing.T) {
+	t.Run("reflects configured gateway.public_url", func(t *testing.T) {
+		cfg := &config.Config{}
+		cfg.Gateway.PublicURL = "https://pod-omnipus.fly.dev"
+
+		p := envcontext.NewDefaultProvider(cfg, nil, "/tmp/ws")
+		if got := p.PublicURL(); got != "https://pod-omnipus.fly.dev" {
+			t.Errorf("DefaultProvider.PublicURL() = %q, want %q", got, "https://pod-omnipus.fly.dev")
+		}
+	})
+
+	t.Run("empty when config has no public_url and a wildcard/empty host", func(t *testing.T) {
+		p := envcontext.NewDefaultProvider(minimalConfig(), nil, "/tmp/ws")
+		if got := p.PublicURL(); got != "" {
+			t.Errorf("DefaultProvider.PublicURL() = %q, want empty for a zero-value config", got)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

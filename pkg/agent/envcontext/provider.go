@@ -37,6 +37,15 @@ type Provider interface {
 	WorkspacePath() string
 	OmnipusHome() string
 	ActiveWarnings() []string
+	// PublicURL returns the externally-reachable base origin for the main
+	// gateway listener (config.Gateway.PublicURL, resolved the same way
+	// canonicalGatewayOrigin does for CORS/CSP/WS-origin and for the
+	// preview/serve_web link base) so the agent knows where pages it serves
+	// (e.g. via serve_web) are actually reachable from outside the sandbox.
+	// Returns "" when no reachable origin can be derived (e.g. a wildcard
+	// bind with no gateway.public_url set) — the renderer omits the line
+	// entirely in that case rather than showing a misleading value.
+	PublicURL() string
 }
 
 // Render is the canonical preamble renderer. Returns "" when p is nil, which

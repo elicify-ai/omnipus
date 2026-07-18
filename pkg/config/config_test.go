@@ -1738,3 +1738,87 @@ func TestConfig_IsPreviewEnabled_NilPointerExplicit(t *testing.T) {
 		t.Errorf("(&Config{}).IsPreviewEnabled() = %v, want true (field-level default)", got)
 	}
 }
+
+// writeMinimalLoadableConfig writes a config.json that LoadConfig can load
+// without error (valid version/agents-defaults/gateway block), with
+// gateway.public_url set to publicURL (empty string omits the key entirely,
+// matching an operator who never configured it).
+func writeMinimalLoadableConfig(t *testing.T, publicURL string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	publicURLLine := ""
+	if publicURL != "" {
+		publicURLLine = `,
+			"public_url": "` + publicURL + `"`
+	}
+
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096}
+		},
+		"gateway": {
+			"host": "127.0.0.1",
+			"port": 5000` + publicURLLine + `
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return cfgPath
+}
+
+// TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL covers the W0
+// boot-time auto-detection: LoadConfig fills an unset gateway.public_url
+// from $DEVPOD_PREVIEW_URL so canonicalGatewayOrigin (and therefore
+// serve_web/preview links and the agent's own reachable-URL preamble, W5)
+// resolve to the pod's externally-reachable origin instead of the
+// unreachable http://localhost:5000 default. An operator-set value must
+// never be overridden, and when neither source is present the field must
+// stay empty (existing wildcard-bind/derive-from-host:port behavior is
+// untouched).
+func TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL(t *testing.T) {
+	t.Run("empty public_url + DEVPOD_PREVIEW_URL set resolves to env value", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want auto-detected %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
+
+	t.Run("operator-set public_url wins over DEVPOD_PREVIEW_URL", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		cfgPath := writeMinimalLoadableConfig(t, "https://operator.example.com")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://operator.example.com" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want operator value %q (must never be overridden by env auto-detect)",
+				cfg.Gateway.PublicURL, "https://operator.example.com")
+		}
+	})
+
+	t.Run("both empty stays empty", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want empty (no operator value, no env value)",
+				cfg.Gateway.PublicURL)
+		}
+	})
+}
