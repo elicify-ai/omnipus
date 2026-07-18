@@ -67,7 +67,7 @@ func FuzzIsCarveOut(f *testing.F) {
 		"../../etc/passwd",
 		"/omnh/agents/../credentials.json",
 		"/omnh/agents/self/SOUL.md\x00",
-		"工作/データ/файл.txt",
+		"工作/データ/файл.txt", //nolint:gosmopolitan // intentional non-ASCII fuzz seed
 		`\\server\share\x`,
 		string([]byte{0x00, 0x01, 0xff}),
 	}
@@ -86,10 +86,14 @@ func FuzzIsCarveOut(f *testing.F) {
 		mu.Lock()
 		defer mu.Unlock()
 		if !sawTrue {
-			f.Errorf("FuzzIsCarveOut corpus never produced a true verdict — IsCarveOut may have regressed to constant-false")
+			f.Errorf(
+				"FuzzIsCarveOut corpus never produced a true verdict — IsCarveOut may have regressed to constant-false",
+			)
 		}
 		if !sawFalse {
-			f.Errorf("FuzzIsCarveOut corpus never produced a false verdict — IsCarveOut may have regressed to constant-true")
+			f.Errorf(
+				"FuzzIsCarveOut corpus never produced a false verdict — IsCarveOut may have regressed to constant-true",
+			)
 		}
 	})
 
@@ -104,7 +108,8 @@ func FuzzIsCarveOut(f *testing.F) {
 			if !IsCarveOut(known, canaryPolicy) {
 				t.Fatalf(
 					"IsCarveOut(%q) = false under a policy whose WorkDir (%q) is unrelated to any carve-out root — IsCarveOut has regressed to (or towards) constant-false",
-					known, canaryPolicy.WorkDir,
+					known,
+					canaryPolicy.WorkDir,
 				)
 			}
 		}

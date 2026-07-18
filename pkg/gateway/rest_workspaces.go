@@ -484,8 +484,10 @@ func logWorkspacelessAgents(home string, cfg *config.Config) {
 	sort.Strings(workspaceless)
 	slog.Warn(
 		"gateway: configured agents are members of no workspace — they cannot execute a turn until added to a workspace's Team tab (ADR-046 P1, FR-007/008)",
-		"agent_ids", strings.Join(workspaceless, ","),
-		"count", len(workspaceless),
+		"agent_ids",
+		strings.Join(workspaceless, ","),
+		"count",
+		len(workspaceless),
 	)
 }
 

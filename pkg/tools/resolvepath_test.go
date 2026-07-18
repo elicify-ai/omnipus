@@ -26,20 +26,20 @@ import (
 // via the generic tools' own Execute path).
 func confinedPolicy(t *testing.T, workDir string) fspolicy.FSPolicy {
 	t.Helper()
-	real, err := filepath.EvalSymlinks(workDir)
+	realDir, err := filepath.EvalSymlinks(workDir)
 	if err != nil {
 		t.Fatalf("resolve workDir: %v", err)
 	}
-	return fspolicy.FSPolicy{WorkDir: real, Scope: fspolicy.FSScopeConfined}
+	return fspolicy.FSPolicy{WorkDir: realDir, Scope: fspolicy.FSScopeConfined}
 }
 
 func unrestrictedPolicy(t *testing.T, workDir string) fspolicy.FSPolicy {
 	t.Helper()
-	real, err := filepath.EvalSymlinks(workDir)
+	realDir, err := filepath.EvalSymlinks(workDir)
 	if err != nil {
 		t.Fatalf("resolve workDir: %v", err)
 	}
-	return fspolicy.FSPolicy{WorkDir: real, Scope: fspolicy.FSScopeUnrestricted}
+	return fspolicy.FSPolicy{WorkDir: realDir, Scope: fspolicy.FSScopeUnrestricted}
 }
 
 // TestResolvePath_RelativeRootsAtWorkingDir — spec test 2 (FR-004): a
@@ -107,10 +107,10 @@ func TestResolvePath_IOThroughOsRoot_NoTOCTOU(t *testing.T) {
 	defer handle.Close()
 
 	// Swap the link to point OUTSIDE before the actual I/O runs.
-	if err := os.Remove(link); err != nil {
+	if err = os.Remove(link); err != nil {
 		t.Fatalf("remove link: %v", err)
 	}
-	if err := os.Symlink(secretFile, link); err != nil {
+	if err = os.Symlink(secretFile, link); err != nil {
 		t.Fatalf("re-symlink outside: %v", err)
 	}
 
@@ -333,10 +333,10 @@ func TestResolvePath_UnrestrictedScope_CarveOutHoldsUnderRace(t *testing.T) {
 	// TOCTOU: swap the already-resolved host-mode target itself into a
 	// symlink pointing at master.key, AFTER ResolvePath has already
 	// resolved and returned the handle.
-	if err := os.Remove(decoyPath); err != nil {
+	if err = os.Remove(decoyPath); err != nil {
 		t.Fatalf("remove decoy: %v", err)
 	}
-	if err := os.Symlink(masterKey, decoyPath); err != nil {
+	if err = os.Symlink(masterKey, decoyPath); err != nil {
 		t.Skipf("symlinks not supported: %v", err)
 	}
 
@@ -357,7 +357,7 @@ func TestResolvePath_UnrestrictedScope_CarveOutHoldsUnderRace(t *testing.T) {
 // under WorkDir exactly like an ASCII one, with no lossy normalization.
 func TestResolvePath_UnicodePathResolvesCorrectly(t *testing.T) {
 	workDir := t.TempDir()
-	rel := filepath.Join("工作", "データ", "файл.txt")
+	rel := filepath.Join("工作", "データ", "файл.txt") //nolint:gosmopolitan // intentional non-ASCII path test input
 	full := filepath.Join(workDir, rel)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatalf("mkdir unicode dir: %v", err)
@@ -409,7 +409,10 @@ func TestResolvePath_EmptyPathDefaultsToWorkDir(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected marker.txt in the WorkDir listing when rawPath defaults to WorkDir, got entries: %v", entries)
+		t.Errorf(
+			"expected marker.txt in the WorkDir listing when rawPath defaults to WorkDir, got entries: %v",
+			entries,
+		)
 	}
 }
 
@@ -478,24 +481,42 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 		tool    string
 		snippet string
 	}{
-		{toolsDir, "filesystem.go", "read_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)`},
-		{toolsDir, "filesystem.go", "write_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`},
-		{toolsDir, "filesystem.go", "list_directory",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)`},
-		{toolsDir, "edit.go", "edit_file / append_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`},
-		{toolsDir, "send_file.go", "send_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.allowPaths)`},
-		{toolsDir, "web_serve.go", "web_serve (static + dev)",
-			`ResolvePath(ctx, policy, ToolNameWebServe, "", FSOpServe, rawPath)`},
-		{toolsDir, "shell.go", "bash (cwd resolution)",
-			`ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)`},
-		{browserDir, "tools.go", "browser_screenshot",
-			`tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)`},
-		{gatewayDir, "rest_workspace.go", "workspace_read (REST handler)",
-			`tools.ResolvePath(r.Context(), policy, "workspace_read", "", tools.FSOpRead, filePath)`},
+		{
+			toolsDir, "filesystem.go", "read_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)`,
+		},
+		{
+			toolsDir, "filesystem.go", "write_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
+		},
+		{
+			toolsDir, "filesystem.go", "list_directory",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)`,
+		},
+		{
+			toolsDir, "edit.go", "edit_file / append_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
+		},
+		{
+			toolsDir, "send_file.go", "send_file",
+			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.allowPaths)`,
+		},
+		{
+			toolsDir, "web_serve.go", "web_serve (static + dev)",
+			`ResolvePath(ctx, policy, ToolNameWebServe, "", FSOpServe, rawPath)`,
+		},
+		{
+			toolsDir, "shell.go", "bash (cwd resolution)",
+			`ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)`,
+		},
+		{
+			browserDir, "tools.go", "browser_screenshot",
+			`tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)`,
+		},
+		{
+			gatewayDir, "rest_workspace.go", "workspace_read (REST handler)",
+			`tools.ResolvePath(r.Context(), policy, "workspace_read", "", tools.FSOpRead, filePath)`,
+		},
 	}
 
 	for _, tc := range cases {

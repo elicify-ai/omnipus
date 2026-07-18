@@ -222,7 +222,10 @@ func TestExternalDispatch_WorkspacelessAgentRefused(t *testing.T) {
 		t.Errorf("expected nil result on refusal, got %+v", res)
 	}
 	if opts := fr.RecordedRunOpts(); len(opts) != 0 {
-		t.Errorf("driver Run called %d times, want 0 — the external CLI must never be spawned for a refused dispatch", len(opts))
+		t.Errorf(
+			"driver Run called %d times, want 0 — the external CLI must never be spawned for a refused dispatch",
+			len(opts),
+		)
 	}
 }
 
@@ -246,7 +249,11 @@ func TestExternalDispatch_MemberWithUnsafeWorkspaceID_Refused(t *testing.T) {
 	// safeID/SafeWorkDir.
 	wsDir := filepath.Join(home, "workspaces")
 	wsJSON := `{"id":"../escape","core_team":["` + ts.agent.ID + `"]}`
-	if err := os.WriteFile(filepath.Join(wsDir, testHarnessWorkspaceMembershipID+".json"), []byte(wsJSON), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(wsDir, testHarnessWorkspaceMembershipID+".json"),
+		[]byte(wsJSON),
+		0o644,
+	); err != nil {
 		t.Fatalf("overwrite harness workspace record: %v", err)
 	}
 
@@ -258,13 +265,19 @@ func TestExternalDispatch_MemberWithUnsafeWorkspaceID_Refused(t *testing.T) {
 		t.Fatal("expected an error for a member with an unsafe workspace id, got nil")
 	}
 	if errors.Is(err, ErrAgentNotWorkspaceMember) {
-		t.Errorf("error = %v, want a SafeWorkDir/traversal error, not ErrAgentNotWorkspaceMember (the agent IS a member)", err)
+		t.Errorf(
+			"error = %v, want a SafeWorkDir/traversal error, not ErrAgentNotWorkspaceMember (the agent IS a member)",
+			err,
+		)
 	}
 	if res != nil {
 		t.Errorf("expected nil result on refusal, got %+v", res)
 	}
 	if opts := fr.RecordedRunOpts(); len(opts) != 0 {
-		t.Errorf("driver Run called %d times, want 0 — the external CLI must never be spawned for a refused dispatch", len(opts))
+		t.Errorf(
+			"driver Run called %d times, want 0 — the external CLI must never be spawned for a refused dispatch",
+			len(opts),
+		)
 	}
 }
 

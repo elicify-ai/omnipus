@@ -114,7 +114,8 @@ func (p FSPolicy) Validate() error {
 		if isWithinOrEqual(cleanRoot, cleanWorkDir) {
 			return fmt.Errorf(
 				"fspolicy: WorkDir %q is at or above the carve-out root %q — this would defeat FR-017's carve-out protection",
-				p.WorkDir, root,
+				p.WorkDir,
+				root,
 			)
 		}
 	}

@@ -174,11 +174,11 @@ func TestFilesystemScope_SymmetricReadAndWrite(t *testing.T) {
 func TestServeWeb_ConfinedRefusesOutsideWork(t *testing.T) {
 	workDir := t.TempDir()
 	outside := t.TempDir()
-	real, err := filepath.EvalSymlinks(workDir)
+	realPath, err := filepath.EvalSymlinks(workDir)
 	if err != nil {
 		t.Fatalf("resolve workDir: %v", err)
 	}
-	policy := fspolicy.FSPolicy{WorkDir: real, Scope: fspolicy.FSScopeConfined}
+	policy := fspolicy.FSPolicy{WorkDir: realPath, Scope: fspolicy.FSScopeConfined}
 
 	_, err = ResolvePath(context.Background(), policy, "serve_web", "", FSOpServe, outside)
 	if err == nil {

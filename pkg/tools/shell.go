@@ -616,11 +616,11 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 	}
 	defer handle.Close()
 
-	real, err := handle.RealPath()
+	realPath, err := handle.RealPath()
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve cwd: %w", err)
 	}
-	return real, nil
+	return realPath, nil
 }
 
 // --- deny-pattern guard ------------------------------------------------------
