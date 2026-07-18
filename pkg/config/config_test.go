@@ -1821,4 +1821,40 @@ func TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL(t *testing.T) {
 				cfg.Gateway.PublicURL)
 		}
 	})
+
+	// Regression (silent-failure audit): a bare pod's FIRST boot has no
+	// config.json at all, so LoadConfig takes the os.IsNotExist ->
+	// DefaultConfig() early-return path. The auto-detect previously ran only
+	// AFTER that early return, so a fresh pod got public_url="" — defeating the
+	// feature's own primary use case. seedPublicURLFromEnv now runs on every
+	// return path, including this one.
+	t.Run("fresh install (no config.json) still auto-detects — the primary use case", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		missingPath := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+		cfg, err := LoadConfig(missingPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("fresh-install cfg.Gateway.PublicURL = %q, want auto-detected %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
+
+	// A trailing slash would make serve_web emit https://host//preview/... —
+	// seedPublicURLFromEnv trims it.
+	t.Run("trailing slash on DEVPOD_PREVIEW_URL is trimmed", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev/")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want trailing slash trimmed %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
 }

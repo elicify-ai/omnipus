@@ -158,6 +158,15 @@ func TestSpawnSubTurn_PersistsDelegateResult_Error(t *testing.T) {
 			require.True(t, ok, "Result must carry a \"text\" key; got %+v", call.Result)
 			assert.Contains(t, text, "SubTurn dispatch rejected",
 				"Result[\"text\"] must carry the dispatch-reject error text")
+			// Silent-failure fix: the dispatch-reject path returns err != nil
+			// but leaves result.IsError false — the persisted "error" flag must
+			// still be set (now derived from err != nil), so a failed delegate
+			// never persists on reload as if it had completed cleanly.
+			isErr, hasErr := call.Result["error"]
+			require.True(t, hasErr,
+				"a failed delegate's Result must carry an \"error\" flag; got %+v", call.Result)
+			assert.Equal(t, true, isErr,
+				"Result[\"error\"] must be true on the dispatch-reject failure path")
 		}
 	}
 	require.True(t, found, "the placeholder ack ToolCall record must still be present")

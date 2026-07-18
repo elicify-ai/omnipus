@@ -3160,6 +3160,39 @@ func LoadConfigWithStoreAndSelfHealHook(
 	return loadConfigInternal(path, store, onSelfHeal)
 }
 
+// seedPublicURLFromEnv fills cfg.Gateway.PublicURL from $DEVPOD_PREVIEW_URL when
+// the operator hasn't set one (via config.json or OMNIPUS_GATEWAY_PUBLIC_URL).
+//
+// Fill-only-when-empty; trailing slash trimmed so `origin + "/preview/…"` can't
+// produce a double slash. In-memory boot seed only (never written back to
+// config.json), preserving ADR-044's boot-frozen public_url contract.
+//
+// Scope (Constraint #1, single-binary core, no vendor lock-in): the GENERIC,
+// platform-agnostic override is OMNIPUS_GATEWAY_PUBLIC_URL
+// (env:"OMNIPUS_GATEWAY_PUBLIC_URL" on PublicURL, resolved by env.Parse) or
+// gateway.public_url in config.json — both always win over this. DEVPOD_PREVIEW_URL
+// is a deliberately narrow devpod-platform CONVENIENCE fallback for zero-config
+// pods; it is read nowhere else and must never become the primary mechanism.
+//
+// MUST be applied on EVERY loadConfigInternal return path — INCLUDING the
+// fresh-install DefaultConfig() paths — because a brand-new pod has no
+// config.json, which is exactly when this needs to fire (otherwise first boot
+// leaves public_url empty and web_serve/preview links fall back to
+// http://localhost:5000, unreachable from outside the pod).
+func seedPublicURLFromEnv(cfg *Config) {
+	if cfg == nil || strings.TrimSpace(cfg.Gateway.PublicURL) != "" {
+		return
+	}
+	previewURL := strings.TrimRight(strings.TrimSpace(os.Getenv("DEVPOD_PREVIEW_URL")), "/")
+	if previewURL == "" {
+		return
+	}
+	cfg.Gateway.PublicURL = previewURL
+	logger.WarnF("gateway.public_url not set; auto-detected from DEVPOD_PREVIEW_URL", map[string]any{
+		"public_url": previewURL,
+	})
+}
+
 func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
 	logger.Debugf("loading config from %s", path)
 
@@ -3167,7 +3200,9 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if err != nil {
 		if os.IsNotExist(err) {
 			logger.WarnF("config file not found, using default config", map[string]any{"path": path})
-			return DefaultConfig(), nil
+			c := DefaultConfig()
+			seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
+			return c, nil
 		}
 		logger.Errorf("failed to read config file: %v", err)
 		return nil, err
@@ -3186,7 +3221,9 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	}
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
-		return DefaultConfig(), nil
+		c := DefaultConfig()
+		seedPublicURLFromEnv(c)
+		return c, nil
 	}
 
 	// Load config based on detected version
@@ -3308,40 +3345,14 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// all config versions.
 	warnAboutExtraUsers(cfg.Gateway.Users)
 
-	// Auto-detect gateway.public_url from the devpod preview URL when the
-	// operator hasn't set one explicitly (via config.json or
-	// OMNIPUS_GATEWAY_PUBLIC_URL — both already resolved above). Cloud
-	// dev-pod platforms (elicify-devpods and similar) expose the pod's
-	// externally-reachable HTTPS URL via $DEVPOD_PREVIEW_URL; without this,
-	// canonicalGatewayOrigin falls back to http://localhost:5000, which is
-	// unreachable from outside the pod, breaking web_serve/preview links and
-	// the agent's own idea of its reachable base URL. Fill-only-when-empty —
-	// never overrides an operator-set value — and never written back to
-	// config.json: this is an in-memory boot seed only, preserving ADR-044's
-	// boot-frozen public_url contract. Runs before validateBootConfig so the
-	// auto-detected value is still subject to the same well-formed-URL check
-	// as an operator-supplied one.
-	//
-	// Scope (Constraint #1, single-binary/pure-Go core with no vendor
-	// lock-in): the GENERIC, platform-agnostic override for every operator —
-	// reverse-proxy, bare metal, any cloud — is OMNIPUS_GATEWAY_PUBLIC_URL
-	// (or gateway.public_url in config.json), bound via the PublicURL
-	// struct tag's `env:"OMNIPUS_GATEWAY_PUBLIC_URL"` and resolved by
-	// env.Parse before this function ever runs, so it ALWAYS wins over the
-	// check below (see the `if strings.TrimSpace(cfg.Gateway.PublicURL) ==
-	// ""` guard). DEVPOD_PREVIEW_URL is deliberately narrower: a
-	// devpod-platform-specific CONVENIENCE fallback that only fires for
-	// zero-config pods on that one platform — it is read nowhere else in the
-	// codebase and must stay that way; it is not, and must never become, the
-	// primary mechanism.
-	if strings.TrimSpace(cfg.Gateway.PublicURL) == "" {
-		if previewURL := strings.TrimSpace(os.Getenv("DEVPOD_PREVIEW_URL")); previewURL != "" {
-			cfg.Gateway.PublicURL = previewURL
-			logger.WarnF("gateway.public_url not set; auto-detected from DEVPOD_PREVIEW_URL", map[string]any{
-				"public_url": previewURL,
-			})
-		}
-	}
+	// Auto-detect gateway.public_url from $DEVPOD_PREVIEW_URL when unset — see
+	// seedPublicURLFromEnv for the full rationale (Constraint #1 / ADR-044).
+	// Runs here before validateBootConfig so the auto-detected value gets the
+	// same well-formed-URL check as an operator-supplied one. NOTE: the same
+	// call also runs on the two fresh-install DefaultConfig() return paths
+	// above — a bare pod's first boot has no config.json at all, which is
+	// exactly when the devpod fallback needs to fire.
+	seedPublicURLFromEnv(cfg)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).

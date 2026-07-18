@@ -1093,9 +1093,15 @@ func spawnSubTurn(
 			case err != nil:
 				toolCallResult = map[string]any{"text": err.Error()}
 			}
-			if result != nil && result.IsError {
+			// Flag the persisted result as an error whenever the sub-turn
+			// failed — keyed off err != nil OR result.IsError. Some failure
+			// paths (e.g. the dispatch-reject at ~L1149) set result.Err/ForLLM
+			// but leave IsError false, so keying off IsError alone would persist
+			// a failed delegate as if it had completed cleanly. Always carry
+			// explanatory text alongside the error flag.
+			if err != nil || (result != nil && result.IsError) {
 				if toolCallResult == nil {
-					toolCallResult = map[string]any{}
+					toolCallResult = map[string]any{"text": "sub-turn reported an error"}
 				}
 				toolCallResult["error"] = true
 			}
