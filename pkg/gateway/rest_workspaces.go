@@ -581,14 +581,19 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		ws.Repository = *req.Repository
 	}
 	cfg := a.agentLoop.GetConfig()
-	if req.CoreTeam != nil {
+	if req.CoreTeam != nil && len(*req.CoreTeam) > 0 {
 		ws.CoreTeam = deduplicateStrings(*req.CoreTeam)
 	} else {
-		// No explicit team: new user-created workspaces start with only Ava on
-		// the team — she interviews the user and builds out the rest of the
-		// team herself (the setup_pending flow). This deliberately does NOT
-		// mirror ensureDefaultWorkspace's full-roster seed, which remains
-		// reserved for the auto-created boot default workspace ("My Workspace").
+		// No explicit team (nil, OR an explicit empty array — an empty array
+		// means "unspecified", not "deliberately no team"; otherwise a caller
+		// sending "core_team": [] would get a permanently teamless workspace
+		// with setup_pending left false and no agent ever available to run the
+		// interview and add members): new user-created workspaces start with
+		// only Ava on the team — she interviews the user and builds out the
+		// rest of the team herself (the setup_pending flow). This deliberately
+		// does NOT mirror ensureDefaultWorkspace's full-roster seed, which
+		// remains reserved for the auto-created boot default workspace
+		// ("My Workspace").
 		ws.CoreTeam = newWorkspaceSetupTeam(cfg)
 		// Fix 5: only mark setup_pending when the seed actually produced a
 		// non-empty team. newWorkspaceSetupTeam returns nil when Ava is absent
@@ -1025,19 +1030,28 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Fix 1: serialize this delete's read-check-remove cycle against this
-	// workspace ID's per-ID lock so a racing kickoff consume cannot read the
-	// workspace after this delete has removed it (readWorkspaceFile then fails
-	// and consumeWorkspaceSetupKickoff correctly rejects — Fix 3 — rather than
-	// the two racing without a lock ever resurrecting the file as a ghost),
-	// and so a racing PUT/delegation-PUT cannot write back a stale copy after
-	// this delete removes the file. Held for the whole handler via defer.
+	// Fix 1 (amended — lock reviewer MINOR): the per-ID lock guards ONLY the
+	// authoritative delete — load/validate, the two HARD cascade steps that
+	// must complete (or abort the whole delete) before the workspace file is
+	// removed, and the file removal itself — so a racing kickoff consume
+	// cannot read the workspace after this delete has removed it
+	// (readWorkspaceFile then fails and consumeWorkspaceSetupKickoff correctly
+	// rejects — Fix 3), and so a racing PUT/delegation-PUT cannot write back a
+	// stale copy after this delete removes the file. It is released
+	// IMMEDIATELY after the workspace file is gone via explicit unlock() calls
+	// at every exit from this section (no defer) — the remaining BEST-EFFORT
+	// cascade (cron jobs, heartbeat sessions, milestones, mailboxes, the
+	// workspace directory RemoveAll) never touches workspaces/{id}.json, so it
+	// does not need to serialize against it; running it after unlock avoids
+	// holding the lock across a potentially multi-second directory RemoveAll
+	// plus config/credential rewrites, which could otherwise block a
+	// shard-colliding kickoff's WS readLoop for no correctness benefit.
 	unlock := workspace.LockID(id)
-	defer unlock()
 
 	// Verify the workspace exists before cascading.
 	ws, ok := a.loadWorkspace(w, id)
 	if !ok {
+		unlock()
 		return
 	}
 
@@ -1045,15 +1059,53 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 
 	// Default workspace cannot be deleted (FR-1.6 delete-protection retained).
 	if ws.IsDefault {
+		unlock()
 		jsonErr(w, http.StatusConflict, "cannot delete the default workspace")
 		return
 	}
 
-	// Cascade: (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
-	// (4) tasks → (5) mailboxes → (6) channel instances → (7) workspace file →
-	// (8) workspace directory.
-	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace before
-	// removing the workspace file. Best-effort (logged on failure).
+	// HARD cascade step (gates the delete — must stay under the lock, before
+	// the workspace file is removed): a task-scan failure aborts the whole
+	// delete with 500.
+	if err := deleteTasksForWorkspace(a.homePath, id); err != nil {
+		unlock()
+		slog.Error("rest: delete workspace: cascade tasks", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
+		return
+	}
+
+	// HARD cascade step (gates the delete — must stay under the lock, before
+	// the workspace file is removed): ADR-029 FR-025/MAJ-005 — disable and
+	// unbind all channel instances bound to this workspace BEFORE removing the
+	// workspace file. If this config write fails the delete aborts with 500,
+	// leaving the workspace + bindings fully consistent (no orphan). Ordering
+	// guarantee: config unbind → workspace file delete.
+	if err := unbindChannelInstancesForWorkspace(a, id); err != nil {
+		unlock()
+		slog.Error("rest: delete workspace: cascade channel unbind", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
+		return
+	}
+
+	// The authoritative delete: remove the workspace JSON file. Still under
+	// the lock — this is the write the lock exists to serialize.
+	path := filepath.Join(a.homePath, "workspaces", id+".json")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		unlock()
+		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	// The workspace file is gone — release the lock now. Everything below is
+	// best-effort cascade cleanup that does not touch workspaces/{id}.json.
+	unlock()
+
+	// Best-effort cascade (order preserved from before this restructure):
+	// (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
+	// (4) mailboxes → (5) workspace directory.
+	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace.
+	// Best-effort (logged on failure).
 	if cs := a.cronService.Load(); cs != nil {
 		releaseHeartbeatJobsForWorkspace(cs, id)
 	}
@@ -1061,39 +1113,17 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// HIGH-1 (FR-023): release standing heartbeat sessions for each member that
 	// had a heartbeat enabled. The sessions live in per-agent session stores (NOT
 	// under the workspace directory), so RemoveAll of the workspace dir does not
-	// remove them. This must run before the workspace file is deleted (we need
-	// member_configs to find which sessions to release). Best-effort per-session.
+	// remove them. ws (loaded above, before unlock) still carries the
+	// member_configs needed to find which sessions to release. Best-effort
+	// per-session.
 	releaseHeartbeatSessionsForWorkspace(a.agentLoop, ws)
 
 	deleteMilestonesForWorkspace(a.homePath, id)
-
-	if err := deleteTasksForWorkspace(a.homePath, id); err != nil {
-		slog.Error("rest: delete workspace: cascade tasks", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
-		return
-	}
 
 	// M11: remove every mailbox (config.mailboxes entry + stored credential)
 	// bound to this workspace. Best-effort (logged on failure, never aborts
 	// the delete) — see removeMailboxesForWorkspace's doc comment.
 	removeMailboxesForWorkspace(a, id)
-
-	// ADR-029 FR-025/MAJ-005: disable and unbind all channel instances bound to
-	// this workspace BEFORE removing the workspace file. If this config write fails
-	// the delete aborts with 500, leaving the workspace + bindings fully consistent
-	// (no orphan). Ordering guarantee: config unbind → workspace file delete.
-	if err := unbindChannelInstancesForWorkspace(a, id); err != nil {
-		slog.Error("rest: delete workspace: cascade channel unbind", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
-		return
-	}
-
-	path := filepath.Join(a.homePath, "workspaces", id+".json")
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
 
 	// Best-effort: remove the per-workspace directory. This now holds more than
 	// AGENT.md and the shared memory room: its work/ subdirectory is also the
@@ -1105,7 +1135,8 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// deleted workspace deletes its own shared working tree) — this comment
 	// update only makes the blast radius explicit; the JSON removal above
 	// remains the authoritative delete, and a stale directory left behind on
-	// a RemoveAll failure is not fatal.
+	// a RemoveAll failure is not fatal. Runs unlocked (see restructure note
+	// above) — it is best-effort and never touches workspaces/{id}.json.
 	wsDir := workspace.WorkspaceDir(a.homePath, id)
 	if err := os.RemoveAll(wsDir); err != nil {
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)
