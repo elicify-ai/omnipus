@@ -62,29 +62,36 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	prefix := fmt.Sprintf("[ingest-%d]", id)
 	s.logf("%s offer received (%d bytes SDP)", prefix, len(sdpOffer))
 
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return "", fmt.Errorf("webrtc: session closed")
+	}
+
 	pc, err := s.buildPeerConnection()
 	if err != nil {
 		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, err)
 	}
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		_ = pc.Close()
-		return "", fmt.Errorf("webrtc: session closed")
-	}
-	old := s.ingestPC
-	s.ingestPC = pc
-	s.mu.Unlock()
-
-	if old != nil {
-		s.logf("%s replacing previous ingest connection", prefix)
-		go func() {
-			if cerr := old.Close(); cerr != nil {
-				s.logf("%s closing previous ingest connection: %v", prefix, cerr)
+	// Fix-wave finding 2b: this new pc is NOT installed as s.ingestPC (and
+	// the OLD ingest connection is NOT closed) until negotiation below has
+	// FULLY succeeded -- SetRemoteDescription/CreateAnswer/
+	// SetLocalDescription all completing and a non-nil answer SDP in hand.
+	// The previous ordering swapped+closed FIRST, so a bad recapture offer
+	// that failed partway through negotiation killed a perfectly healthy
+	// ingest connection for a replacement that never came up, leaving every
+	// attached viewer stranded. installed is flipped true only once the
+	// swap actually happens (see below); every error return before that
+	// point closes THIS pc (which was never installed anywhere) and leaves
+	// the previous ingest connection running untouched.
+	installed := false
+	defer func() {
+		if !installed {
+			if cerr := pc.Close(); cerr != nil {
+				s.logf("%s closing failed new ingest connection: %v", prefix, cerr)
 			}
-		}()
-	}
+		}
+	}()
 
 	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
 		s.logf("%s ICE connection state -> %s", prefix, st.String())
@@ -122,6 +129,29 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	local := pc.LocalDescription()
 	if local == nil {
 		return "", fmt.Errorf("webrtc: ingest %s: no local description after SetLocalDescription", prefix)
+	}
+
+	// Negotiation fully succeeded -- NOW swap the new connection in and
+	// close whatever ingest connection preceded it (if any). Only this late
+	// swap, not the earlier build/negotiate steps, ever tears down a
+	// previously-healthy ingest connection.
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return "", fmt.Errorf("webrtc: session closed")
+	}
+	old := s.ingestPC
+	s.ingestPC = pc
+	s.mu.Unlock()
+	installed = true
+
+	if old != nil {
+		s.logf("%s replacing previous ingest connection", prefix)
+		go func() {
+			if cerr := old.Close(); cerr != nil {
+				s.logf("%s closing previous ingest connection: %v", prefix, cerr)
+			}
+		}()
 	}
 
 	s.logf("%s answer sent to encoder", prefix)
@@ -209,12 +239,30 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 		prefix, kind, codec.MimeType, codec.ClockRate, remote.SSRC(), remote.PayloadType())
 
 	// Drain RTCP on the receiver so its buffer never blocks (standard Pion
-	// requirement for any track we only ever read from).
+	// requirement for any track we only ever read from) -- and, fix-wave
+	// finding 2, inspect every packet for a Sender Report to forward to
+	// every attached viewer (see forwardSenderReport's doc comment for why:
+	// UAT symptom "audio slightly delayed vs video"). Every other RTCP
+	// packet type on this stream (receiver reports, NACKs the interceptor
+	// stack already handles, etc) is simply drained/discarded, exactly as
+	// before.
 	go func() {
 		buf := make([]byte, 1500)
 		for {
-			if _, _, err := receiver.Read(buf); err != nil {
+			n, _, err := receiver.Read(buf)
+			if err != nil {
 				return
+			}
+			pkts, unmarshalErr := rtcp.Unmarshal(buf[:n])
+			if unmarshalErr != nil {
+				continue
+			}
+			for _, pkt := range pkts {
+				sr, ok := pkt.(*rtcp.SenderReport)
+				if !ok {
+					continue
+				}
+				s.forwardSenderReport(prefix, kind, sr)
 			}
 		}
 	}()
@@ -321,6 +369,94 @@ func (s *Session) sendPLI(prefix string) {
 		return
 	}
 	s.logf("%s PLI sent to encoder (ssrc=%d)", prefix, ssrc)
+}
+
+// forwardPLIThrottled is called by drainViewerRTCP (viewer.go) when ANY
+// attached viewer's own decoder reports a PictureLossIndication or
+// FullIntraRequest -- the standard browser-side signal "I lost a reference
+// frame, send me a fresh keyframe." Forwarded to the ingest connection via
+// sendPLI, but throttled to at most once per pliForwardMinInterval ACROSS
+// EVERY viewer combined (fix-wave finding 1, the CRIT "video froze while
+// audio kept playing" UAT symptom): without this dead-ended path, a
+// viewer's own loss-recovery request never reached the encoder at all, so a
+// decoder that lost its keyframe reference stayed frozen until the NEXT
+// unrelated PLI burst (a fresh viewer joining, or a recapture) happened to
+// arrive. The throttle exists so N viewers reporting loss around the same
+// time (a shared network hiccup) can't each independently trigger a PLI,
+// which would force the encoder into a constant-keyframe spiral and
+// collapse bitrate exactly when the network is already struggling.
+func (s *Session) forwardPLIThrottled(prefix string) {
+	s.pliForwardMu.Lock()
+	now := time.Now()
+	if now.Sub(s.lastPLIForwardAt) < pliForwardMinInterval {
+		s.pliForwardMu.Unlock()
+		return
+	}
+	s.lastPLIForwardAt = now
+	s.pliForwardMu.Unlock()
+	s.sendPLI(prefix)
+}
+
+// forwardSenderReport rewrites and forwards an ingest-side RTCP Sender
+// Report to every currently-attached viewer's PeerConnection (fix-wave
+// finding 2, UAT symptom "audio slightly delayed vs video"): Chrome's own
+// WebRTC stack uses a stream's Sender Reports (NTP wall-clock time paired
+// with that stream's RTP timestamp) to align independently-clocked audio
+// and video tracks into one presentation timeline. Without ANY Sender
+// Report ever reaching the viewer -- true before this fix, since the
+// ingest-side RTCP drain simply discarded everything -- the browser falls
+// back to jitter-buffer-only heuristics that can drift out of sync under
+// load.
+//
+// The RTP TIMESTAMP domain forwarded here is unmodified -- this package
+// only ever rewrites RTP sequence numbers (see attachIngestTrack's long
+// comment), never timestamps -- so an SR's RTPTime field stays meaningful
+// as-is. What MUST be rewritten, once per viewer, is the packet's own SSRC
+// field: a browser only accepts (or correctly correlates) an SR whose SSRC
+// matches the SSRC of the RTP stream it is actually receiving, and Pion
+// rewrites every forwarded RTP packet's SSRC to each viewer-binding's own
+// negotiated outgoing SSRC (see TrackLocalStaticRTP.WriteRTP), which is NOT
+// the ingest-side SSRC this Sender Report arrived with.
+func (s *Session) forwardSenderReport(prefix string, kind webrtc.RTPCodecType, sr *rtcp.SenderReport) {
+	s.viewersMu.Lock()
+	conns := make([]*viewerConn, 0, len(s.viewers))
+	for _, vc := range s.viewers {
+		conns = append(conns, vc)
+	}
+	s.viewersMu.Unlock()
+
+	for _, vc := range conns {
+		ssrc, ok := outgoingSSRCForKind(vc.pc, kind)
+		if !ok {
+			continue
+		}
+		out := *sr
+		out.SSRC = ssrc
+		if err := vc.pc.WriteRTCP([]rtcp.Packet{&out}); err != nil {
+			s.logf("%s forward sender report to viewer failed: kind=%s err=%v", prefix, kind, err)
+		}
+	}
+}
+
+// outgoingSSRCForKind returns the SSRC pc negotiated for its outgoing
+// RTPSender of the given kind (video/audio) -- i.e. the SSRC value Pion
+// rewrites every forwarded RTP packet to for THIS specific viewer binding
+// (see forwardSenderReport's doc comment). ok is false if pc has no sender
+// of that kind (e.g. a video-only viewer asked about audio) or the sender
+// has no negotiated encoding yet.
+func outgoingSSRCForKind(pc *webrtc.PeerConnection, kind webrtc.RTPCodecType) (uint32, bool) {
+	for _, sender := range pc.GetSenders() {
+		track := sender.Track()
+		if track == nil || track.Kind() != kind {
+			continue
+		}
+		params := sender.GetParameters()
+		if len(params.Encodings) == 0 {
+			continue
+		}
+		return uint32(params.Encodings[0].SSRC), true
+	}
+	return 0, false
 }
 
 // pliBurstForNewViewer sends an immediate PLI plus one every 3s for 15s so a

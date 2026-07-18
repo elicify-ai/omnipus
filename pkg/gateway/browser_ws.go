@@ -665,6 +665,16 @@ func (h *BrowserWSHandler) handleAttach(
 		ControlledByOther: &cbo,
 	}, dropContext(chatSessionID, viewerID, "attach-ok"))
 
+	// ADR-047 fix-wave finding 3: this new JPEG viewer may be the one that
+	// forces the screencast to resume if WebRTC was paused covering only
+	// the PREVIOUS viewer set (the mixed-viewer case: a fresh browser_attach
+	// with no accompanying WebRTC offer yet, or one whose ICE never
+	// establishes, needs real JPEG frames). A no-op if this agent has no
+	// active WebRTC capture session at all.
+	if cs := mgr.CaptureSession(); cs != nil {
+		cs.ReconcileScreencast()
+	}
+
 	// ADR-047: announce WebRTC availability for this fresh attach — the SPA
 	// only sends its offer after an available:true state frame (see
 	// announceWebRTCAvailability's doc for why omitting this deadlocks the
@@ -1011,6 +1021,14 @@ func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, vi
 	mgr.Live().Detach(browser.DefaultSessionID, viewerID)
 	if wasController {
 		h.auditRelease(userID, chatSessionID, viewerID)
+	}
+	// ADR-047 fix-wave finding 3: this departing JPEG viewer may have been
+	// the last JPEG-only one, allowing the screencast to pause now that
+	// WebRTC covers every remaining viewer. A no-op if this agent has no
+	// active WebRTC capture session. Covers both explicit browser_detach and
+	// readLoop's disconnect cleanup, since both funnel through here.
+	if cs := mgr.CaptureSession(); cs != nil {
+		cs.ReconcileScreencast()
 	}
 }
 

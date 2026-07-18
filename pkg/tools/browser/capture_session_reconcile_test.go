@@ -1,0 +1,339 @@
+package browser
+
+// capture_session_reconcile_test.go — ADR-047 fix-wave finding 3 unit
+// coverage for CaptureSession.ReconcileScreencast's pause/resume DECISION
+// logic and LiveView.pauseScreencast/resumeScreencast's mechanics. Every
+// test here uses a REAL *BrowserManager (via NewBrowserManager, matching
+// TestBrowserManager_Live's pattern) so mgr.Live() is properly wired, but
+// deliberately hand-installs LiveView state exactly the way live_test.go's
+// existing "fake an active screencast" tests do (see
+// TestLiveView_Detach_RefCountsViewers) rather than going through a real
+// browser_attach/mgr.Session() — no real chromedp/Chrome/Pion machinery is
+// touched anywhere in this file, per this fix-wave's "not real Chrome"
+// testing directive. A bogus (non-chromedp) context.Background() tabCtx
+// makes any CDP call this file's code paths might attempt fail fast and
+// harmlessly (established by TestLiveView_Detach_RefCountsViewers), so no
+// scenario here ever blocks or reaches out to a real browser process.
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
+)
+
+// newReconcileTestManager builds a real *BrowserManager (mgr.Live() wired,
+// per NewBrowserManager's contract) without ever starting a real browser —
+// construction is lazy (ADR-038), and none of this file's tests ever call
+// mgr.Session()/any tool that would trigger ensureStarted.
+func newReconcileTestManager(t *testing.T) *BrowserManager {
+	t.Helper()
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatalf("DefaultConfig: %v", err)
+	}
+	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
+	if err != nil {
+		t.Fatalf("NewBrowserManager: %v", err)
+	}
+	return mgr
+}
+
+// fakeActiveScreencast hand-installs an "active screencast, N viewers"
+// LiveView state for sessionID, exactly mirroring live_test.go's
+// TestLiveView_Detach_RefCountsViewers technique -- no chromedp.Run call,
+// no real Chrome. Returns the LiveView for direct assertions.
+func fakeActiveScreencast(mgr *BrowserManager, sessionID string, viewerIDs ...string) *LiveView {
+	lv := mgr.Live().view(sessionID)
+	listenCtx, cancel := context.WithCancel(context.Background())
+	lv.mu.Lock()
+	lv.tabCtx = context.Background()
+	lv.listenCtx = listenCtx
+	lv.stopListen = cancel
+	for _, id := range viewerIDs {
+		lv.viewers[id] = func(LiveFrame) {}
+	}
+	lv.mu.Unlock()
+	return lv
+}
+
+func TestCaptureSession_ReconcileScreencast_PausesWhenWebRTCCoversEveryJPEGViewer(t *testing.T) {
+	mgr := newReconcileTestManager(t)
+	lv := fakeActiveScreencast(mgr, DefaultSessionID, "viewer-1")
+
+	relay := &fakeRelay{stats: webrtc.Stats{HasVideo: true}}
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	// The WebRTC viewer set is EXACTLY the JPEG viewer set ({"viewer-1"}) --
+	// nobody depends on the JPEG stream for pixels once this attaches.
+	cs.AddViewer("viewer-1")
+
+	lv.mu.Lock()
+	paused := lv.pausedForWebRTC
+	active := lv.isActiveLocked()
+	viewerCount := len(lv.viewers)
+	lv.mu.Unlock()
+
+	if !paused {
+		t.Error("ReconcileScreencast: screencast should be PAUSED once WebRTC covers the only JPEG viewer, but pausedForWebRTC=false")
+	}
+	if active {
+		t.Error("ReconcileScreencast: the CDP screencast subscription should have been torn down when paused, but isActiveLocked()=true")
+	}
+	if viewerCount != 1 {
+		t.Errorf("ReconcileScreencast: pausing must not touch viewer registrations, got %d viewers, want 1", viewerCount)
+	}
+}
+
+func TestCaptureSession_ReconcileScreencast_StaysResumedWithAJPEGOnlyViewer(t *testing.T) {
+	mgr := newReconcileTestManager(t)
+	lv := fakeActiveScreencast(mgr, DefaultSessionID, "jpeg-only-viewer", "webrtc-viewer")
+
+	relay := &fakeRelay{stats: webrtc.Stats{HasVideo: true}}
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	// Only "webrtc-viewer" gets a WebRTC attachment -- "jpeg-only-viewer" is
+	// the mixed-viewer case (ADR-047 D3's per-viewer ICE fallback, or simply
+	// a viewer that never sent a browser_webrtc_offer at all) that MUST keep
+	// the screencast running for it.
+	cs.AddViewer("webrtc-viewer")
+
+	lv.mu.Lock()
+	paused := lv.pausedForWebRTC
+	active := lv.isActiveLocked()
+	lv.mu.Unlock()
+
+	if paused {
+		t.Error("ReconcileScreencast: must NOT pause while a JPEG-only viewer remains attached (mixed-viewer case), but pausedForWebRTC=true")
+	}
+	if !active {
+		t.Error("ReconcileScreencast: the screencast must stay running for the JPEG-only viewer, but isActiveLocked()=false")
+	}
+}
+
+func TestCaptureSession_ReconcileScreencast_StaysResumedWhenVideoNotFlowingYet(t *testing.T) {
+	mgr := newReconcileTestManager(t)
+	lv := fakeActiveScreencast(mgr, DefaultSessionID, "viewer-1")
+
+	// HasVideo=false -- the WebRTC viewer attached but the shared video
+	// track hasn't arrived from the ingest yet (see waitForTracks in
+	// ingest.go). Pausing here would black out the ONLY viewer's live view
+	// entirely for however long that takes.
+	relay := &fakeRelay{stats: webrtc.Stats{HasVideo: false}}
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	cs.AddViewer("viewer-1")
+
+	lv.mu.Lock()
+	paused := lv.pausedForWebRTC
+	lv.mu.Unlock()
+
+	if paused {
+		t.Error("ReconcileScreencast: must NOT pause before the relay reports HasVideo=true, but pausedForWebRTC=true")
+	}
+}
+
+// TestCaptureSession_ReconcileScreencast_RemoveViewerResumesDecision proves
+// RemoveViewer recomputes the pause decision (not just AddViewer) using the
+// SAME zero-JPEG-viewers trick TestCaptureSession_ReconcileScreencast_
+// ResumesOnStop uses to stay Chrome-free: with no JPEG viewers ever
+// attached, resumeScreencast's zero-viewers early return fires (clears the
+// flag, no CDP call) rather than its mgr.Session()-dependent happy path. The
+// "a JPEG viewer stays attached and the screencast actually restarts for
+// it" case exercises the exact same resumeScreencast code this file's
+// TestLiveView_PauseScreencast_* tests already cover up to the CDP call —
+// the real restart itself needs a live browser and is left to the existing
+// Chrome-gated E2E suite (browser_e2e_test.go), consistent with this
+// fix-wave's "not real Chrome" testing directive.
+func TestCaptureSession_ReconcileScreencast_RemoveViewerResumesDecision(t *testing.T) {
+	mgr := newReconcileTestManager(t)
+	lv := fakeActiveScreencast(mgr, DefaultSessionID) // zero JPEG viewers
+
+	relay := &fakeRelay{stats: webrtc.Stats{HasVideo: true}}
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	cs.AddViewer("webrtc-only-viewer")
+	lv.mu.Lock()
+	pausedAfterAdd := lv.pausedForWebRTC
+	lv.mu.Unlock()
+	if !pausedAfterAdd {
+		t.Fatal("setup: expected the screencast to pause (no JPEG viewers to keep it running for)")
+	}
+
+	cs.RemoveViewer("webrtc-only-viewer")
+
+	lv.mu.Lock()
+	pausedAfterRemove := lv.pausedForWebRTC
+	lv.mu.Unlock()
+	if pausedAfterRemove {
+		t.Error("ReconcileScreencast: RemoveViewer must resolve to \"resume\" (clear pausedForWebRTC) once no WebRTC viewers remain")
+	}
+}
+
+func TestCaptureSession_ReconcileScreencast_ResumesOnStop(t *testing.T) {
+	mgr := newReconcileTestManager(t)
+	// Deliberately ZERO JPEG viewers here (unlike the other scenarios in
+	// this file) so resumeScreencast's post-Stop() call lands on its
+	// zero-viewers early return (clears the flag, no CDP call) rather than
+	// its mgr.Session()-dependent happy path -- keeps this a pure,
+	// Chrome-free unit test of the "resume on stop" wiring itself.
+	lv := fakeActiveScreencast(mgr, DefaultSessionID)
+
+	relay := &fakeRelay{stats: webrtc.Stats{HasVideo: true}}
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	cs.AddViewer("webrtc-only-viewer")
+	lv.mu.Lock()
+	pausedBeforeStop := lv.pausedForWebRTC
+	lv.mu.Unlock()
+	if !pausedBeforeStop {
+		t.Fatal("setup: expected the screencast to pause (no JPEG viewers to keep it running for)")
+	}
+
+	cs.Stop()
+
+	lv.mu.Lock()
+	pausedAfterStop := lv.pausedForWebRTC
+	lv.mu.Unlock()
+	if pausedAfterStop {
+		t.Error("ReconcileScreencast: Stop() must resume (clear pausedForWebRTC) now that WebRTC capture has stopped entirely")
+	}
+}
+
+// --- LiveView-level mechanics: pauseScreencast/resumeScreencast/attach ---
+// (mirrors live_test.go's hand-built-LiveView convention exactly; kept in
+// this file since it's the fix-wave finding 3 coverage, not a pre-existing
+// live.go concern.)
+
+func TestLiveView_PauseScreencast_StopsSubscriptionKeepsViewers(t *testing.T) {
+	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
+	lv := &LiveView{mgr: mgr, sessionID: "s1", viewers: make(map[string]FrameSink), runCDP: runCDPWithTimeout}
+
+	listenCtx, cancel := context.WithCancel(context.Background())
+	lv.tabCtx = context.Background()
+	lv.listenCtx = listenCtx
+	lv.stopListen = cancel
+	lv.viewers["v1"] = func(LiveFrame) {}
+	lastFrame := &LiveFrame{Seq: 7, Data: "cached"}
+	lv.lastFrame = lastFrame
+
+	if !lv.pauseScreencast() {
+		t.Fatal("pauseScreencast() = false on an active screencast, want true")
+	}
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if !lv.pausedForWebRTC {
+		t.Error("pausedForWebRTC = false after pauseScreencast(), want true")
+	}
+	if lv.isActiveLocked() {
+		t.Error("isActiveLocked() = true after pauseScreencast(), want false (subscription torn down)")
+	}
+	if _, ok := lv.viewers["v1"]; !ok {
+		t.Error("pauseScreencast() removed a viewer registration, want it untouched")
+	}
+	if lv.lastFrame != lastFrame {
+		t.Error("pauseScreencast() cleared the cached lastFrame, want it preserved for late attachers")
+	}
+	if listenCtx.Err() == nil {
+		t.Error("pauseScreencast() did not cancel the listen subscription")
+	}
+}
+
+func TestLiveView_PauseScreencast_NoopWhenNotActive(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	if lv.pauseScreencast() {
+		t.Error("pauseScreencast() = true with no active screencast, want false (no-op)")
+	}
+}
+
+func TestLiveView_PauseScreencast_NoopWhenAlreadyPaused(t *testing.T) {
+	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
+	lv := &LiveView{mgr: mgr, sessionID: "s1", viewers: make(map[string]FrameSink), runCDP: runCDPWithTimeout}
+	listenCtx, cancel := context.WithCancel(context.Background())
+	lv.tabCtx = context.Background()
+	lv.listenCtx = listenCtx
+	lv.stopListen = cancel
+
+	if !lv.pauseScreencast() {
+		t.Fatal("first pauseScreencast() = false, want true")
+	}
+	if lv.pauseScreencast() {
+		t.Error("second pauseScreencast() = true, want false (already paused, idempotent no-op)")
+	}
+}
+
+func TestLiveView_Attach_WhilePausedDeliversCachedFrameWithoutRestartingScreencast(t *testing.T) {
+	lv := &LiveView{
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+	}
+	lv.pausedForWebRTC = true
+	cached := LiveFrame{Seq: 3, Data: "paused-frame"}
+	lv.lastFrame = &cached
+
+	var got *LiveFrame
+	controlledByOther, err := lv.attach(context.Background(), "late-viewer", func(f LiveFrame) { got = &f }, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("attach() while paused: %v", err)
+	}
+	if controlledByOther {
+		t.Error("attach() while paused reported controlled_by_other=true with no controller set")
+	}
+	if got == nil || got.Seq != 3 || got.Data != "paused-frame" {
+		t.Fatalf("attach() while paused did not deliver the cached lastFrame, got %+v", got)
+	}
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if lv.listenCtx != nil {
+		t.Error("attach() while paused started a fresh CDP screencast subscription (listenCtx != nil), want it left alone")
+	}
+	if !lv.pausedForWebRTC {
+		t.Error("attach() while paused cleared pausedForWebRTC, want it untouched -- resuming is the caller's job")
+	}
+	if _, ok := lv.viewers["late-viewer"]; !ok {
+		t.Error("attach() while paused did not register the new viewer")
+	}
+}
+
+func TestLiveView_ResumeScreencast_NoopWhenNotPaused(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	if lv.resumeScreencast() {
+		t.Error("resumeScreencast() = true on a never-paused LiveView, want false (no-op)")
+	}
+}
+
+func TestLiveView_ResumeScreencast_ClearsFlagWhenNoViewersRemain(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+	lv.pausedForWebRTC = true
+
+	if lv.resumeScreencast() {
+		t.Error("resumeScreencast() = true with zero viewers, want false (nothing to resume for)")
+	}
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if lv.pausedForWebRTC {
+		t.Error("resumeScreencast() left pausedForWebRTC=true with zero viewers, want it cleared so a future Attach starts fresh")
+	}
+}
