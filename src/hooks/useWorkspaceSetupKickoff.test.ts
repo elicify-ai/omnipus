@@ -1,4 +1,4 @@
-// useWorkspaceSetupKickoff.test.ts — Unit C trigger-hook coverage.
+// useWorkspaceSetupKickoff.test.ts — trigger-hook coverage.
 //
 // The hook itself owns none of the wire mechanics (that's
 // useChatStore.sendWorkspaceSetupKickoff, covered by
@@ -77,7 +77,7 @@ beforeEach(() => {
   act(() => {
     useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null, activeAgentType: null })
-    // Fix 3: kickoffAttemptStatus is now module-level store state (not a
+    // kickoffAttemptStatus is now module-level store state (not a
     // component-local useRef), so it survives across tests in this file
     // unless explicitly reset — several tests below reuse the same
     // workspace id ('ws-1', 'ws-9', ...), and a leftover 'in-flight' entry
@@ -261,7 +261,7 @@ describe('useWorkspaceSetupKickoff — cache clear after firing', () => {
   })
 
   it('cancelQueries is called for the active-list, archived-list, and detail keys before the optimistic clear lands', async () => {
-    // Fix 4: an in-flight refetch that read the pre-clear (setup_pending:true)
+    // An in-flight refetch that read the pre-clear (setup_pending:true)
     // disk state must be cancelled BEFORE the optimistic setQueryData below —
     // otherwise its (stale) result can land AFTER our write and resurrect the
     // flag, letting a later remount refire the kickoff.
@@ -293,7 +293,7 @@ describe('useWorkspaceSetupKickoff — cache clear after firing', () => {
   })
 })
 
-describe('useWorkspaceSetupKickoff — Fix 4: archived workspaces are skipped', () => {
+describe('useWorkspaceSetupKickoff — archived workspaces are skipped', () => {
   it('does not fire for an archived workspace even when setup_pending is true', async () => {
     const kickoffSpy = vi.fn().mockReturnValue(true)
     act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
@@ -308,9 +308,9 @@ describe('useWorkspaceSetupKickoff — Fix 4: archived workspaces are skipped', 
   })
 })
 
-describe('useWorkspaceSetupKickoff — Fix 4: Set-based fired guard (A → B → A)', () => {
+describe('useWorkspaceSetupKickoff — Set-based fired guard (A → B → A)', () => {
   it('fires for a second, different workspace while the first is still outstanding, but never refires the first', async () => {
-    // Mirrors the real scenario (Fix 3): the store's own sendWorkspaceSetupKickoff
+    // Mirrors the real scenario: the store's own sendWorkspaceSetupKickoff
     // bails while a DIFFERENT kickoff is in flight, so this spy — which always
     // succeeds — stands in for "no other kickoff is pending" at the store
     // level; this test is purely about the HOOK's own per-workspace guard.
@@ -345,7 +345,7 @@ describe('useWorkspaceSetupKickoff — Fix 4: Set-based fired guard (A → B →
   })
 })
 
-describe('useWorkspaceSetupKickoff — Fix 4: agent targeting fallback', () => {
+describe('useWorkspaceSetupKickoff — agent targeting fallback', () => {
   it('prefers "ava" over core_team[0] when both are chat-eligible', async () => {
     const RAY: Agent = makeAgent({ id: 'ray', name: 'Ray', type: 'core', status: 'active' })
     vi.mocked(fetchAgents).mockResolvedValue([RAY, AVA])
@@ -398,7 +398,7 @@ describe('useWorkspaceSetupKickoff — Fix 4: agent targeting fallback', () => {
   })
 })
 
-describe('useWorkspaceSetupKickoff — Fix 3: honest retry after a synchronous send failure', () => {
+describe('useWorkspaceSetupKickoff — honest retry after a synchronous send failure', () => {
   it('releases the guard on !sent, proven by a second fire once conditions re-trigger the effect', async () => {
     const kickoffSpy = vi.fn().mockReturnValueOnce(false).mockReturnValue(true)
     act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
@@ -421,7 +421,7 @@ describe('useWorkspaceSetupKickoff — Fix 3: honest retry after a synchronous s
   })
 })
 
-describe('useWorkspaceSetupKickoff — Fix 3: honest retry after an async server-side rejection', () => {
+describe('useWorkspaceSetupKickoff — honest retry after an async server-side rejection', () => {
   // These tests simulate the ASYNC failure signal directly via
   // `resolveKickoffAttempt` (the same store action chat.ts's own
   // 'error'-frame / disconnect handling calls internally) rather than

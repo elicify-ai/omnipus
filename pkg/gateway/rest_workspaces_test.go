@@ -1142,7 +1142,7 @@ func TestHandleWorkspaces_RepositorySchemeValidation_PUT(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// setup_pending / Ava-only new-workspace seeding tests (Unit A).
+// setup_pending / Ava-only new-workspace seeding tests.
 // ---------------------------------------------------------------------------
 
 // newTestRestAPIWithAvaRoster builds a restAPI whose config registers the full
@@ -1187,7 +1187,7 @@ func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 // POST /api/v1/workspaces with no explicit core_team now seeds ONLY Ava (not
 // the full install roster), sets setup_pending=true, and produces no
 // delegation edges (ava's only coreagent seed edge is ava->worker, and worker
-// is off-team so seedEdgesForTeam drops it — that is intended per Unit A).
+// is off-team so seedEdgesForTeam drops it — that is intended).
 // BDD:
 //
 //	Given a config with the full base roster (mia/jim/ava/ray/worker) registered,
@@ -1258,8 +1258,8 @@ func TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending(t *
 	assert.False(t, stored.SetupPending, "on-disk setup_pending must be false for an explicit-team workspace")
 }
 
-// TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending is
-// the final-gate Test-reviewer MAJOR regression: an explicit but EMPTY
+// TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending is a
+// regression test: an explicit but EMPTY
 // core_team array ("core_team": []) must be treated exactly like an absent
 // core_team (nil) — i.e. "unspecified" — NOT as "deliberately no team".
 // Before this fix, req.CoreTeam != nil was true for a zero-length slice, so
@@ -1304,7 +1304,7 @@ func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *
 	assert.Empty(t, stored.Delegation, "no delegation edges expected for the Ava-only seed team")
 }
 
-// TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a Unit A
+// TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a
 // regression: the auto-created boot default workspace ("My Workspace",
 // ensureDefaultWorkspace) is UNCHANGED by the Ava-only seed introduced for
 // ordinary POST-created workspaces — it must still seed the full install
@@ -1352,11 +1352,10 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	assert.Nil(t, wire.SetupPending, "the wire response must not report setup_pending for the default workspace")
 }
 
-// TestHandleWorkspacePut_PreservesSetupPending is the Unit A regression for
-// item 6: a PUT that only renames a setup_pending workspace must not clear
-// (or otherwise touch) the setup_pending flag — it is cleared exclusively by
-// the (future, wave-2) setup-kickoff turn handler, never by an ordinary field
-// update.
+// TestHandleWorkspacePut_PreservesSetupPending is a regression test: a PUT
+// that only renames a setup_pending workspace must not clear (or otherwise
+// touch) the setup_pending flag — it is cleared exclusively by the
+// setup-kickoff turn handler, never by an ordinary field update.
 // BDD:
 //
 //	Given a workspace created with setup_pending=true (Ava-only seed),
@@ -1399,7 +1398,7 @@ func TestHandleWorkspacePut_PreservesSetupPending(t *testing.T) {
 
 // newTestRestAPIWithoutAva builds a restAPI whose config roster deliberately
 // omits Ava (mirrors newTestRestAPIWithAvaRoster minus the "ava" entry) — used
-// to exercise the Fix 5 SetupPending gate: newWorkspaceSetupTeam returns an
+// to exercise the SetupPending gate: newWorkspaceSetupTeam returns an
 // empty seed when Ava is absent from the live config (e.g. a lite/custom
 // install), and handleWorkspacePost must not mark such a workspace
 // setup_pending, since nothing would ever be able to run the interview and
@@ -1435,8 +1434,8 @@ func newTestRestAPIWithoutAva(t *testing.T) *restAPI {
 	}
 }
 
-// TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending is the Fix 5
-// regression: POST /api/v1/workspaces with no explicit core_team, against a
+// TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending is a
+// regression test: POST /api/v1/workspaces with no explicit core_team, against a
 // config that does NOT include Ava, must seed an EMPTY core_team AND leave
 // setup_pending false/absent — never setup_pending=true with an empty team,
 // which would strand the workspace forever (no agent is ever available to run
@@ -1463,7 +1462,7 @@ func TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending(t *testing.T) {
 
 	assert.Nil(t, ws.CoreTeam, "core_team must be absent/empty in the wire response when Ava is not in the config")
 	assert.Nil(t, ws.SetupPending,
-		"setup_pending must be absent/false when the auto-seed produced an empty team (Fix 5)")
+		"setup_pending must be absent/false when the auto-seed produced an empty team")
 
 	stored, err := readWorkspaceFile(api.homePath, ws.Id)
 	require.NoError(t, err)
@@ -1472,8 +1471,8 @@ func TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending(t *testing.T) {
 		"on-disk setup_pending must be false — an empty team must never be left setup_pending forever")
 }
 
-// TestHandleWorkspacePut_SerializesAgainstWorkspaceLock is the Fix 1
-// concurrency regression: handleWorkspacePut must acquire workspace.LockID(id)
+// TestHandleWorkspacePut_SerializesAgainstWorkspaceLock is a
+// concurrency regression test: handleWorkspacePut must acquire workspace.LockID(id)
 // for its full load-modify-write cycle, so a concurrent holder of that same
 // lock (standing in for the WS setup-kickoff consumer, which acquires the
 // identical lock — see consumeWorkspaceSetupKickoff) blocks the PUT until the

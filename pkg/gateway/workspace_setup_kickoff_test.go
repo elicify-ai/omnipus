@@ -5,7 +5,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // workspace_setup_kickoff_test.go — unit tests for the workspace-setup kickoff
-// turn (Unit B). The SPA sends a normal `message` frame whose metadata carries
+// turn. The SPA sends a normal `message` frame whose metadata carries
 // `workspace_id` plus `workspace_setup_kickoff: true` on a workspace's first
 // open. handleChatMessage must: record the trigger as a system-role transcript
 // entry (not a user bubble), clear the workspace's setup_pending flag exactly
@@ -113,7 +113,7 @@ func assertNoSessionMinted(t *testing.T, handler *WSHandler, chatID string) {
 // (homePath/workspaces/), sessions (homePath/sessions/), and audit
 // (homePath/system/) all live under one root — mirroring how the real
 // gateway wires home == agent-loop homePath. Used by the tests that assert
-// on the workspace.setup_consumed audit entry (Fix 6).
+// on the workspace.setup_consumed audit entry.
 func newTestWSHandlerForKickoffAudit(t *testing.T, msgBus *bus.MessageBus) (*WSHandler, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -212,7 +212,7 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_HappyPath(t *testing.T) {
 		context.Background(),
 		"chat-kickoff-happy",
 		"",                // frameSessionID (empty → mint a new session)
-		junkClientContent, // content (must be ignored for a kickoff — Fix 4)
+		junkClientContent, // content (must be ignored for a kickoff)
 		"ava",             // agentID
 		nil,               // mediaRefs
 		"",                // modelName
@@ -226,7 +226,7 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_HappyPath(t *testing.T) {
 	case msg := <-msgBus.InboundChan():
 		sessionID = msg.SessionID
 		assert.NotEqual(t, junkClientContent, msg.Content,
-			"Fix 4: the client-supplied content must be IGNORED entirely for a kickoff turn")
+			"the client-supplied content must be IGNORED entirely for a kickoff turn")
 		assert.Contains(t, msg.Content, wsName,
 			"the SERVER-BUILT instruction must name the workspace")
 		assert.Contains(t, msg.Content, wsDescription,

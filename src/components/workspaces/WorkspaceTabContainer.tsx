@@ -99,7 +99,7 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     workspaces.find((w) => w.id === workspaceId) ??
     archivedWorkspaces.find((w) => w.id === workspaceId)
 
-  // Unit C: auto-triggers the workspace-setup interview on first open.
+  // Auto-triggers the workspace-setup interview on first open.
   // Called unconditionally (before the early returns below) so hook order
   // stays stable across renders regardless of loading/error state — the
   // hook itself no-ops until `workspace` resolves and `setup_pending` is

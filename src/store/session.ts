@@ -141,7 +141,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }))
     syncForeground()
     // Record real session ids under the current workspace for restore on re-entry.
-    // Fix 1 (kickoff pending-session hardening): the '__pending' sentinel is a
+    // Kickoff pending-session hardening: the '__pending' sentinel is a
     // LOCAL, transient placeholder for a turn that hasn't been acked by the
     // server yet — it is never a real, attachable session id. Recording it
     // here would poison sessionByWorkspace: the next time the user re-enters
@@ -328,7 +328,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
 
     if (descriptor.id === '__pending') {
-      // Fix 1 defense-in-depth: a legacy/pre-fix '__pending' descriptor
+      // Defense-in-depth: a legacy '__pending' descriptor
       // (written before setActiveSession stopped recording the sentinel, or
       // by any future code path that still does) must never be attached to
       // — the server rejects it as an invalid session_id, and

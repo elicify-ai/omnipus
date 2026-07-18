@@ -101,7 +101,7 @@ describe('reattachActiveSession — failed reattach preserves transcript', () =>
   })
 })
 
-describe('reattachActiveSession — Fix 2: "__pending" (mid-kickoff reconnect) never attaches', () => {
+describe('reattachActiveSession — "__pending" (mid-kickoff reconnect) never attaches', () => {
   const WORKSPACE_ID = 'ws-reattach-pending'
 
   beforeEach(() => {

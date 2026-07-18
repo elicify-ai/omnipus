@@ -33,8 +33,8 @@ func workspaceID(t *testing.T, body string) string {
 // newTestDepsWithHomeAndAgents behaves like newTestDepsWithHome but also seeds
 // the live config's Agents.List with the given IDs (ID field only) — required
 // for delegation-edge auto-seed tests now that seedDelegationEdgesForNewMembers
-// presence-filters candidates against Deps.GetCfg().Agents.List (fix wave
-// consensus finding #3): a core_team entry naming an agent absent from the
+// presence-filters candidates against Deps.GetCfg().Agents.List: a core_team
+// entry naming an agent absent from the
 // live config must never seed an edge for it, so any test that expects a
 // specific edge to be auto-seeded must first put that edge's endpoints in the
 // config, exactly as a real install (SeedConfig-populated Agents.List) would.
@@ -638,12 +638,12 @@ func TestWorkspaceUpdate_InvalidStatus(t *testing.T) {
 	}
 }
 
-// ---- update_workspace: delegation-edge auto-seed (fix wave) ----
+// ---- update_workspace: delegation-edge auto-seed ----
 //
 // update_workspace previously had no way to grow the per-workspace
 // delegation graph (ADR-037's sole runtime delegation authority, fail-closed:
-// no edge ⇒ deny). These tests prove the auto-seed added by this fix wave:
-// core_team changes seed the compiled-in default edges for NEWLY ADDED
+// no edge ⇒ deny). These tests prove the auto-seed: core_team changes seed
+// the compiled-in default edges for NEWLY ADDED
 // members only, never re-adding an edge among pre-existing members (so a
 // deliberate prior removal via the Team tab stays removed) and never
 // duplicating an edge that already exists.
@@ -1004,8 +1004,8 @@ func TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC(t *testing.T) {
 	}
 }
 
-// TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig verifies fix wave
-// consensus finding #3: seedDelegationEdgesForNewMembers must presence-filter
+// TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig verifies that
+// seedDelegationEdgesForNewMembers must presence-filter
 // candidate edges against the live config's Agents.List, not trust core_team
 // blindly. Config here only registers "ava" and "jim" — "worker" is added to
 // core_team but deliberately absent from config (modeling a deleted agent, or
@@ -1057,7 +1057,7 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 }
 
 // TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges
-// verifies fix wave consensus finding #7: a single update_workspace call that
+// verifies a single update_workspace call that
 // both adds and removes core_team members in one shot. Team
 // [ava, jim, worker] (with pre-existing edges jim→ava, jim→worker, ava→worker,
 // as if seeded by an earlier call) → [ava, worker, ray] (jim removed, ray
@@ -1068,7 +1068,7 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 // (unchanged by this fix) no-GC-on-removal behavior
 // (workspaceDelegationTeamSet unions core_team with existing edge endpoints).
 //
-// Adapted from the fix wave's literal `[ava,jim,worker] → [ava,ray]` example:
+// Adapted from the simpler `[ava,jim,worker] → [ava,ray]` example:
 // with worker also removed, NEITHER ava's nor ray's compiled seed target
 // (worker for ava; worker/researcher for ray) would remain on the new team,
 // so that exact composition seeds zero new edges and cannot demonstrate the
@@ -1147,7 +1147,7 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	}
 }
 
-// ---- update_workspace: SetupPending completion (fix wave finding #2) ----
+// ---- update_workspace: SetupPending completion ----
 
 // TestWorkspaceUpdate_InstallingTeamClearsSetupPending verifies that setting a
 // non-empty core_team on a workspace with SetupPending=true clears the flag

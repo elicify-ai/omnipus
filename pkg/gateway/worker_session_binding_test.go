@@ -58,7 +58,7 @@ import (
 
 // newWorkerTestRestAPI builds a restAPI whose config holds a base default agent
 // ("mia"), a core Ava agent ("ava" — the sole agent a fresh POST-created
-// workspace's implicit core_team now seeds by default, Unit A), a native
+// workspace's implicit core_team now seeds by default), a native
 // worker ("hans"), a non-worker agent not in any workspace's default team
 // ("otto"), and a subagent_3p (external-CLI) worker ("gustav"). All five are
 // registered in the loop's registry.
@@ -180,7 +180,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 
 	t.Run("worker NOT on workspace team is rejected", func(t *testing.T) {
 		api, _ := newWorkerTestRestAPI(t)
-		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only (Unit A); "hans" absent
+		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only; "hans" absent
 
 		body := fmt.Sprintf(
 			`{"title":"WorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
@@ -200,7 +200,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 
 	t.Run("non-worker NOT on workspace team is also rejected (symmetry)", func(t *testing.T) {
 		api, _ := newWorkerTestRestAPI(t)
-		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only (Unit A); "otto" (non-worker) absent
+		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only; "otto" (non-worker) absent
 
 		body := fmt.Sprintf(
 			`{"title":"NonWorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"otto"}`,
@@ -250,9 +250,9 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 
 	t.Run("differentiation: base agent in default team is accepted (control)", func(t *testing.T) {
 		// Control proving the guard is real (not hardcoded): "ava" is the ONLY
-		// agent newWorkspaceSetupTeam seeds by default (Unit A), so a freshly
+		// agent newWorkspaceSetupTeam seeds by default, so a freshly
 		// created workspace (no explicit core_team) already has her on-team.
-		// (Prior to Unit A this control used "mia" via defaultWorkspaceTeam's
+		// (This control previously used "mia" via defaultWorkspaceTeam's
 		// full base roster; that seed now applies only to the auto-created
 		// boot default workspace, ensureDefaultWorkspace — not to ordinary
 		// POST-created workspaces like this one.)
@@ -352,7 +352,7 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 func TestTaskPost_AgentOnDifferentWorkspaceTeam_Rejected(t *testing.T) {
 	api, _ := newWorkerTestRestAPI(t)
 
-	// wsA keeps the default (Ava-only, Unit A) seed roster — "hans" is not in it.
+	// wsA keeps the default (Ava-only) seed roster — "hans" is not in it.
 	wsA := ensureTestWorkspace(t, api)
 	wsB := createWorkspaceViaAPI(t, api, "TeamWorkspaceB_"+t.Name(), "")
 	setWorkspaceCoreTeam(t, api, wsB, []string{"mia", "hans"})

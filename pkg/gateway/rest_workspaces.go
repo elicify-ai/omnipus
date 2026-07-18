@@ -595,7 +595,7 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		// remains reserved for the auto-created boot default workspace
 		// ("My Workspace").
 		ws.CoreTeam = newWorkspaceSetupTeam(cfg)
-		// Fix 5: only mark setup_pending when the seed actually produced a
+		// Only mark setup_pending when the seed actually produced a
 		// non-empty team. newWorkspaceSetupTeam returns nil when Ava is absent
 		// from the live config (e.g. a lite/custom install) — without this
 		// guard, such an install's workspace would be permanently stuck with
@@ -746,7 +746,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	// Fix 1: serialize the full load-modify-write cycle against this workspace
+	// Serialize the full load-modify-write cycle against this workspace
 	// ID so a concurrent kickoff consume (pkg/gateway/websocket.go), a racing
 	// delete, or a racing delegation PUT cannot interleave with this update —
 	// e.g. resurrecting a just-cleared setup_pending flag with this request's
@@ -1030,13 +1030,13 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Fix 1 (amended — lock reviewer MINOR): the per-ID lock guards ONLY the
+	// The per-ID lock guards ONLY the
 	// authoritative delete — load/validate, the two HARD cascade steps that
 	// must complete (or abort the whole delete) before the workspace file is
 	// removed, and the file removal itself — so a racing kickoff consume
 	// cannot read the workspace after this delete has removed it
 	// (readWorkspaceFile then fails and consumeWorkspaceSetupKickoff correctly
-	// rejects — Fix 3), and so a racing PUT/delegation-PUT cannot write back a
+	// rejects it), and so a racing PUT/delegation-PUT cannot write back a
 	// stale copy after this delete removes the file. It is released
 	// IMMEDIATELY after the workspace file is gone via explicit unlock() calls
 	// at every exit from this section (no defer) — the remaining BEST-EFFORT

@@ -122,7 +122,7 @@ export function reattachActiveSession(
   if (!activeSessionId) {
     return false;
   }
-  // Fix 2 (kickoff pending-session hardening): '__pending' is the LOCAL
+  // Kickoff pending-session hardening: '__pending' is the LOCAL
   // sentinel for an outstanding sendWorkspaceSetupKickoff / sendMessage
   // no-session turn — never a real, attachable session id. Sending
   // `attach_session {session_id: '__pending'}` would be a protocol
@@ -133,9 +133,9 @@ export function reattachActiveSession(
   // Tear the pending state down directly instead of attaching:
   // `abandonPendingKickoff` clears `pendingKickoff`, drops the orphaned
   // '__pending' bucket, and marks the workspace's `kickoffAttemptStatus`
-  // 'failed' (Fix 3, idempotent if clearStreamingState's own disconnect-time
+  // 'failed' (idempotent if clearStreamingState's own disconnect-time
   // call already ran this); resetting `activeSessionId` back to null here
-  // (Fix 1 deliberately does NOT do this on disconnect — see
+  // (deliberately does NOT do this on disconnect — see
   // clearStreamingState's own comment) returns the composer to a fresh,
   // unstuck state. Whether the kickoff needs to retry is decided by server
   // truth: useWorkspaceSetupKickoff's invalidate-on-failure effect re-fires
@@ -202,14 +202,14 @@ function WsLifecycle() {
         // bucket handling) lives in reattachActiveSession so it can be unit
         // tested directly.
         //
-        // Fix 2 (kickoff pending-session hardening): reattach BEFORE
+        // Kickoff pending-session hardening: reattach BEFORE
         // draining the outbound queue. `reattachActiveSession` settles
         // `activeSessionId` first — either sends `attach_session` for a real
-        // session, or (the '__pending' guard added for Fix 2) tears down a
+        // session, or (the '__pending' guard) tears down a
         // dead kickoff's placeholder and resets `activeSessionId` back to
         // null. Draining first used to risk a race: `outboundQueue` can hold
         // a message that collided with a kickoff's `pendingKickoff` slot
-        // (Fix 1's collision guard in sendMessage) while `activeSessionId`
+        // (the collision guard in sendMessage) while `activeSessionId`
         // is still the SAME dead '__pending' sentinel from BEFORE the
         // disconnect — sending that queued message via sendMessage's own
         // '__pending'-collapse guard would mint a BRAND NEW '__pending'

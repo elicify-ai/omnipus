@@ -20,7 +20,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
 export const MAX_MESSAGES_PER_SESSION = 500
 
-// Unit C: kickoff content template for sendWorkspaceSetupKickoff — sent as
+// Kickoff content template for sendWorkspaceSetupKickoff — sent as
 // the (synthetic, never user-visible) first turn of a freshly-created
 // workspace. The backend records the message this content rides on as a
 // SYSTEM-role transcript entry (centered pill on replay), not a user
@@ -819,7 +819,7 @@ interface ChatStore {
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
   /**
-   * Unit C: auto-triggers Ava's (or whichever agent leads the workspace's
+   * Auto-triggers Ava's (or whichever agent leads the workspace's
    * core_team) workspace-setup interview the first time a freshly-created
    * workspace (server-seeded `setup_pending: true`) is opened with no
    * conversation yet. Reuses `sendMessage`'s no-active-session ("new turn")
@@ -850,7 +850,7 @@ interface ChatStore {
     agentType: AgentKind | null
   }) => boolean
   /**
-   * Fix 2/3 (kickoff pending-session hardening): the workspace id of the
+   * Kickoff pending-session hardening: the workspace id of the
    * ONE in-flight `sendWorkspaceSetupKickoff` call, or `null` when no
    * kickoff is outstanding. Set the moment a kickoff frame is handed to
    * `connection.send` successfully; cleared on whichever terminal outcome
@@ -859,29 +859,29 @@ interface ChatStore {
    *     which also uses the recorded workspaceId to decide whether the ack
    *     is still for the workspace the user is currently on, AND whether
    *     the '__pending' placeholder is still the local foreground turn at
-   *     all — Fix 1's plausibility gate).
-   *   - a rejecting, UNTAGGED `error` frame (Fix 1: a kickoff turn never
+   *     all — the plausibility gate).
+   *   - a rejecting, UNTAGGED `error` frame (a kickoff turn never
    *     gets a real session_id, so any tagged error can never be a kickoff
    *     reject) — regardless of whether `activeSessionId` is still
-   *     `'__pending'` at the time (Fix 1's reject-after-navigation
+   *     `'__pending'` at the time (the reject-after-navigation
    *     fall-through covers the case where the user already moved on
    *     locally).
-   *   - a hard WS disconnect (Fix 1) — `clearStreamingState` tears this down
+   *   - a hard WS disconnect — `clearStreamingState` tears this down
    *     via `abandonPendingKickoff` the instant the connection drops, since
    *     no ack can ever arrive on a dead connection.
    *   - a failed `connection.send()` inside `sendWorkspaceSetupKickoff`
-   *     itself (Fix 2's full-rollback branch).
+   *     itself (the full-rollback branch).
    *
    * Also doubles as a single-slot in-flight guard: `sendWorkspaceSetupKickoff`
    * bails while this is non-null, since a second kickoff would collide with
    * the first on the shared `'__pending'` bucket key before either resolves.
    * `sendMessage`'s own no-active-session branch respects the same guard
-   * (Fix 1's collision guard) — it enqueues instead of building a second
+   * — it enqueues instead of building a second
    * `'__pending'` bucket while this is non-null.
    */
   pendingKickoff: { workspaceId: string } | null
   /**
-   * Fix 3 (honest retry): per-workspace kickoff-attempt guard, keyed by
+   * Honest retry: per-workspace kickoff-attempt guard, keyed by
    * workspace id. This is `useWorkspaceSetupKickoff`'s OWN send-time "have I
    * already fired for this workspace" bookkeeping — moved out of a
    * component-local `useRef` (which, once a kickoff terminally failed, had
@@ -913,7 +913,7 @@ interface ChatStore {
    */
   kickoffAttemptStatus: Record<string, 'in-flight' | 'failed'>
   /**
-   * Fix 3: claim the per-workspace kickoff-attempt slot. Called by
+   * Claim the per-workspace kickoff-attempt slot. Called by
    * `useWorkspaceSetupKickoff` immediately BEFORE invoking
    * `sendWorkspaceSetupKickoff`, mirroring the old ref's "claim before send"
    * ordering — a synchronous re-render triggered by the send itself must
@@ -921,17 +921,17 @@ interface ChatStore {
    */
   markKickoffInFlight: (workspaceId: string) => void
   /**
-   * Fix 3: resolve a workspace's kickoff-attempt slot. `'done'` deletes the
+   * Resolve a workspace's kickoff-attempt slot. `'done'` deletes the
    * entry (success, or any other case that no longer needs tracking);
    * `'failed'` marks it so `useWorkspaceSetupKickoff`'s invalidate-on-failure
    * effect fires.
    */
   resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
   /**
-   * Fix 1/2 (kickoff pending-session hardening): full, quiet teardown of an
+   * Kickoff pending-session hardening: full, quiet teardown of an
    * outstanding workspace-setup kickoff — clears `pendingKickoff`, drops the
    * orphaned `'__pending'` bucket (if present), and marks the workspace's
-   * `kickoffAttemptStatus` as `'failed'` (Fix 3). No-op when no kickoff is
+   * `kickoffAttemptStatus` as `'failed'`. No-op when no kickoff is
    * outstanding. Used by `clearStreamingState` (a hard disconnect means no
    * ack for any in-flight kickoff can ever arrive on the dead connection)
    * and by `OmnipusRuntimeProvider.reattachActiveSession` (a reconnect
@@ -1091,9 +1091,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
   /**
    * Remove a bucket entirely (unlike `withBucket`, which can only
    * patch/create). Used for FULL teardown of the `'__pending'` bucket —
-   * kickoff rollback (Fix 2), kickoff rejection cleanup (Fix 2), and the
+   * kickoff rollback, kickoff rejection cleanup, and the
    * "kickoff acked while the user navigated to a different workspace"
-   * branch (Fix 3) — none of which want a lingering empty/errored bucket
+   * branch — none of which want a lingering empty/errored bucket
    * left under the shared `'__pending'` key. No-op if the bucket doesn't
    * exist. Resyncs foreground fields the same way `withBucket` does, so a
    * delete of the CURRENTLY-foreground bucket correctly collapses to
@@ -1111,7 +1111,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
   }
 
   /**
-   * Fix 3: resolve a workspace's `kickoffAttemptStatus` slot. `'done'`
+   * Resolve a workspace's `kickoffAttemptStatus` slot. `'done'`
    * deletes the entry entirely (success needs no further tracking — the
    * server's own `setup_pending:false` already blocks a refire via the
    * hook's ordinary guard); `'failed'` marks it so the hook's
@@ -1130,7 +1130,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
   }
 
   /**
-   * Fix 1/2: full, quiet teardown of an outstanding workspace-setup
+   * Full, quiet teardown of an outstanding workspace-setup
    * kickoff — see the public `abandonPendingKickoff` action's doc comment
    * on the ChatStore interface for the exact contract. No-op when
    * `pendingKickoff` is already null.
@@ -1213,9 +1213,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
     outboundQueue: [],
     pendingDrainQueue: [],
 
-    // Fix 2/3: no kickoff outstanding at store init.
+    // No kickoff outstanding at store init.
     pendingKickoff: null,
-    // Fix 3: no per-workspace kickoff attempts tracked at store init.
+    // No per-workspace kickoff attempts tracked at store init.
     kickoffAttemptStatus: {},
     markKickoffInFlight: (workspaceId) => {
       set((state) => ({
@@ -1785,7 +1785,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     drainOutboundQueue: () => {
       const queue = get().outboundQueue
-      // Fix 1 (kickoff hardening): the early-return used to skip straight
+      // Kickoff hardening: the early-return used to skip straight
       // past `maybeDrainNext()` whenever `outboundQueue` was empty — but
       // several kickoff-terminal cleanup paths (a rejecting error frame, a
       // synchronous send failure, the "wrong workspace" migration) call
@@ -1900,7 +1900,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const { connection, isConnected } = useConnectionStore.getState()
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
-      // Fix 2 composer guard: a '__pending' sentinel with no in-flight
+      // Composer guard: a '__pending' sentinel with no in-flight
       // stream is a STUCK state, not a real session — it means a workspace-
       // setup kickoff started a turn under '__pending' and that turn ended
       // (rejected, rolled back, or otherwise never got its session_started
@@ -2161,7 +2161,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           maybeDrainNext()
         }
       } else {
-        // Fix 1 (kickoff hardening): a workspace-setup kickoff already owns
+        // Kickoff hardening: a workspace-setup kickoff already owns
         // the shared '__pending' bucket key (see `pendingKickoff`'s doc
         // comment). Building a SECOND '__pending' bucket here would collide
         // with — and, since `withBucket` appends rather than replaces,
@@ -2265,7 +2265,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (!connection || !isConnected) return false
       if (isStreaming) return false
       if (activeSessionId !== null) return false
-      // Fix 2/3: a DIFFERENT kickoff is already outstanding (its ack hasn't
+      // A DIFFERENT kickoff is already outstanding (its ack hasn't
       // landed yet — see `pendingKickoff`'s doc comment). This can happen
       // even with `activeSessionId === null` above: the user can navigate
       // away from the workspace that triggered the first kickoff (which
@@ -2286,7 +2286,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         timestamp: new Date().toISOString(),
         status: 'streaming',
         isStreaming: true,
-        // Fix 4: stamp the target agent's identity on the placeholder
+        // Stamp the target agent's identity on the placeholder
         // immediately (mirrors the reconnect/reattach placeholders — see
         // `resolveLastActiveAgentId` in OmnipusRuntimeProvider.tsx) so the
         // thread shows the resolved agent right away instead of waiting for
@@ -2309,7 +2309,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // agent immediately, same as sendMessage's own no-session branch
       // activates '__pending' as foreground.
       useSessionStore.getState().setActiveSession(pendingSid, agentId, agentType)
-      // Fix 2/3: claim the single in-flight-kickoff slot BEFORE sending, so
+      // Claim the single in-flight-kickoff slot BEFORE sending, so
       // a synchronous re-render triggered by the writes above cannot race a
       // second kickoff attempt in behind this one, and so the
       // `session_started`/`error` handlers can find it as soon as either
@@ -2329,7 +2329,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sent = connection.send(payload)
 
       if (!sent) {
-        // Fix 2: FULL rollback — unlike sendMessage's failure rollback
+        // FULL rollback — unlike sendMessage's failure rollback
         // (which keeps a user's typed bubble as a retriable 'error'), a
         // kickoff has no user-typed content to preserve, so tear the whole
         // '__pending' bucket down rather than leaving an empty husk behind.
@@ -2340,14 +2340,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // including the one it's about to attempt now that this call is
         // returning `false`. `abandonPendingKickoffInternal` handles the
         // `pendingKickoff` clear + bucket teardown + `kickoffAttemptStatus`
-        // 'failed' marking (Fix 3) in one place, shared with the disconnect
+        // 'failed' marking in one place, shared with the disconnect
         // and reject-frame cleanup paths below.
         abandonPendingKickoffInternal()
         useSessionStore.getState().setActiveSession(null)
         useConnectionStore.getState().setConnectionError(
           'Could not start the workspace setup interview — connection dropped. Please try again.'
         )
-        // Fix 1: only `drainOutboundQueue()` (not `maybeDrainNext()`) moves
+        // Only `drainOutboundQueue()` (not `maybeDrainNext()`) moves
         // items actually sitting in `outboundQueue` — e.g. a message that
         // collided with THIS kickoff's `pendingKickoff` slot via the
         // collision guard in `sendMessage` — into `pendingDrainQueue` and
@@ -2440,13 +2440,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     clearStreamingState: () => {
-      // Fix 1 (kickoff hardening): a hard disconnect means no ack
+      // Kickoff hardening: a hard disconnect means no ack
       // (session_started or error) can ever arrive on THIS connection for an
       // outstanding workspace-setup kickoff — its '__pending' placeholder
       // turn is dead. Clear the slot and drop the orphaned bucket now
       // (quietly — no toast, no `activeSessionId` change: `activeSessionId`
       // staying at '__pending' until reconnect is handled by
-      // `OmnipusRuntimeProvider.reattachActiveSession`, Fix 2) rather than
+      // `OmnipusRuntimeProvider.reattachActiveSession`) rather than
       // leaving `pendingKickoff` wedged non-null forever, which would
       // otherwise permanently block every future kickoff attempt via
       // `sendWorkspaceSetupKickoff`'s own `pendingKickoff` guard.
@@ -2639,7 +2639,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // Server minted a new session_id in response to a message sent without one.
           const newSid = frame.session_id
 
-          // Fix 3: this ack may be resolving a pending workspace-setup
+          // This ack may be resolving a pending workspace-setup
           // kickoff rather than an ordinary sendMessage no-session turn.
           // Capture + clear `pendingKickoff` up front — this frame always
           // resolves whichever kickoff was outstanding, regardless of which
@@ -2655,7 +2655,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const stillOnOriginatingWorkspace =
             resolvedKickoff === null ||
             useWorkspacesStore.getState().activeWorkspaceId === resolvedKickoff.workspaceId
-          // Fix 1 (plausibility gate): even when still on the originating
+          // Plausibility gate: even when still on the originating
           // workspace, only treat this ack as safe to FOREGROUND when the
           // '__pending' placeholder is STILL the local foreground turn
           // (activeSessionId === '__pending'). If the user has since
@@ -2665,7 +2665,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // `activeSessionId` is that real session's id, not '__pending';
           // forefronting the kickoff's session here would silently evict
           // the session the user actually selected (and, with `sendMessage`'s
-          // no-longer-possible collision — Fix 1's collision guard prevents
+          // no-longer-possible collision — the collision guard prevents
           // a stray plain message from ever sharing the '__pending' bucket
           // with the kickoff — this is the one remaining way a late kickoff
           // ack could still misattribute). Treat it exactly like "wrong
@@ -2675,7 +2675,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             resolvedKickoff === null || useSessionStore.getState().activeSessionId === '__pending'
 
           if (resolvedKickoff && (!stillOnOriginatingWorkspace || !kickoffStillForeground)) {
-            // Fix 3 (late ack, wrong workspace or superseded foreground):
+            // Late ack, wrong workspace, or superseded foreground:
             // do NOT foreground it — leave whatever the user is currently
             // looking at completely alone. Record the real session id under
             // the ORIGINATING workspace's descriptor instead, so a later
@@ -2695,7 +2695,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // the same '__pending' key.
             deleteBucket('__pending')
             queryClient.invalidateQueries({ queryKey: ['sessions'] })
-            // Fix 1: a message that collided with this kickoff's slot (via
+            // A message that collided with this kickoff's slot (via
             // the `sendMessage` collision guard) sits in `outboundQueue` —
             // nothing else will release it now that this kickoff has
             // resolved via this (non-foregrounding) branch.
@@ -2705,7 +2705,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
           // Plain sendMessage ack, OR a kickoff ack while the user is still
           // on the workspace that triggered it — foreground exactly as
-          // before Fix 3 (byte-for-byte unchanged from the pre-fix logic).
+          // before (byte-for-byte unchanged from the pre-fix logic).
           //
           // Register in session store and create the bucket.
           useSessionStore.getState().setActiveSession(newSid, frame.agent_id ?? useSessionStore.getState().activeAgentId)
@@ -3084,12 +3084,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'error':
           {
-            // Fix 2: a kickoff rejection (duplicate kickoff, unknown
+            // A kickoff rejection (duplicate kickoff, unknown
             // workspace, or a server-side kickoff error) is a hard REJECT of
             // a turn that never really started — there is no real session
             // behind it, only the local '__pending' sentinel. A kickoff
             // rejection therefore NEVER carries a session_id on the wire
-            // (there is no real session to tag it with) — Fix 1: a
+            // (there is no real session to tag it with) — a
             // session-TAGGED error frame is by definition never a kickoff
             // reject, so `!frameSessionId` gates the ENTIRE kickoff-error
             // branch (both sub-cases below), never just the still-foreground
@@ -3107,7 +3107,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               // `abandonPendingKickoffInternal` handles the shared cleanup
               // trio for BOTH sub-cases below: clear `pendingKickoff`, drop
               // the orphaned '__pending' bucket, and mark this workspace's
-              // `kickoffAttemptStatus` 'failed' (Fix 3) so
+              // `kickoffAttemptStatus` 'failed' so
               // useWorkspaceSetupKickoff's invalidate-on-failure effect can
               // react and roll back its own premature optimistic
               // setup_pending:false cache write.
@@ -3115,7 +3115,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               console.warn('chat.workspace_setup_kickoff_rejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
               logDiagnostic('chatWorkspaceSetupKickoffRejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
               if (sessionStillPending) {
-                // Fix 2: the kickoff's placeholder is still what the user is
+                // The kickoff's placeholder is still what the user is
                 // looking at — reset the composer back to a normal, empty
                 // state (not to be left as a stuck 'error'-status bubble
                 // under '__pending', which would otherwise poison every
@@ -3137,7 +3137,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                       },
                 )
               }
-              // Fix 1 (reject-after-navigation fall-through): when the
+              // Reject-after-navigation fall-through: when the
               // kickoff's placeholder is NO LONGER the local foreground
               // (the user already navigated away, or attached to a
               // different real session — either resets `activeSessionId`
@@ -3152,7 +3152,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               // foreground — raising a bogus global connection-error banner
               // via the `!targetSid` branch just below).
               //
-              // Fix 1: only `drainOutboundQueue()` (not `maybeDrainNext()`,
+              // Only `drainOutboundQueue()` (not `maybeDrainNext()`,
               // which the ORIGINAL version of this branch used — a bug: it
               // only ever moves `pendingDrainQueue`, never `outboundQueue`,
               // so it never actually freed a message buffered by the
@@ -3785,7 +3785,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             })
             break
           }
-          // Fix 4: widened from 'user' | 'assistant' — the 'turn_canceled'
+          // Widened from 'user' | 'assistant' — the 'turn_canceled'
           // branch above always `break`s, so by this point
           // `replayFrame.role` can only be 'user' | 'assistant' | 'system'
           // | undefined (the wire type's fourth member is excluded by

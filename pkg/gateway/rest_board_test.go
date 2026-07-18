@@ -152,7 +152,7 @@ func ensureTestWorkspace(t *testing.T, api *restAPI) string {
 // checks a task's agent_id against (workspace.TeamSet: core_team ∪ delegation
 // edge endpoints, see rest_tasks.go). Used by task-assignment tests that need
 // an agent other than Ava — the only agent a fresh POST-created workspace's
-// implicit core_team seeds by default (newWorkspaceSetupTeam, Unit A) — to be
+// implicit core_team seeds by default (newWorkspaceSetupTeam) — to be
 // a legitimate assignee. (The full mia/jim/ava/ray/worker/planner/explorer/
 // researcher roster is still seeded by defaultWorkspaceTeam, but that is now
 // reserved for the one auto-created boot default workspace, ensureDefaultWorkspace.)
