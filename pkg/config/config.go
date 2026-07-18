@@ -3308,6 +3308,28 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// all config versions.
 	warnAboutExtraUsers(cfg.Gateway.Users)
 
+	// Auto-detect gateway.public_url from the devpod preview URL when the
+	// operator hasn't set one explicitly (via config.json or
+	// OMNIPUS_GATEWAY_PUBLIC_URL — both already resolved above). Cloud
+	// dev-pod platforms (elicify-devpods and similar) expose the pod's
+	// externally-reachable HTTPS URL via $DEVPOD_PREVIEW_URL; without this,
+	// canonicalGatewayOrigin falls back to http://localhost:5000, which is
+	// unreachable from outside the pod, breaking web_serve/preview links and
+	// the agent's own idea of its reachable base URL. Fill-only-when-empty —
+	// never overrides an operator-set value — and never written back to
+	// config.json: this is an in-memory boot seed only, preserving ADR-044's
+	// boot-frozen public_url contract. Runs before validateBootConfig so the
+	// auto-detected value is still subject to the same well-formed-URL check
+	// as an operator-supplied one.
+	if strings.TrimSpace(cfg.Gateway.PublicURL) == "" {
+		if previewURL := strings.TrimSpace(os.Getenv("DEVPOD_PREVIEW_URL")); previewURL != "" {
+			cfg.Gateway.PublicURL = previewURL
+			logger.WarnF("gateway.public_url not set; auto-detected from DEVPOD_PREVIEW_URL", map[string]any{
+				"public_url": previewURL,
+			})
+		}
+	}
+
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).
 	if err := validateBootConfig(cfg); err != nil {
