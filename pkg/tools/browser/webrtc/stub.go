@@ -2,6 +2,11 @@
 
 package webrtc
 
+// Available is false in a lite build — see session.go's doc comment (the
+// non-lite twin of this var) for why a caller needs this cheap, no-I/O
+// signal.
+var Available = false
+
 // Session is the lite-build stand-in for the real Pion-backed Session
 // (session.go et al, //go:build !lite). Lite builds (-tags lite) deliberately
 // exclude Pion to keep the binary small, matching the whatsmeow/lite gating

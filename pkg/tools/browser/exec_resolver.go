@@ -37,6 +37,19 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/cdppipe"
 )
 
+// InstallRootForProfileDir computes the managed-Chromium install root
+// (installer.go's EnsureChromium/EnsureChromiumFullBuild + capability.go's
+// ClassifyVideoCapability all key off this same directory) from a
+// BrowserConfig's ProfileDir. Extracted from resolveBrowserExecPath's inline
+// computation (WebRTC build W2-A) so callers outside this file — the
+// gateway's WebRTC gate ladder needs the SAME install root
+// ClassifyVideoCapability must inspect, without duplicating (and risking
+// drifting from) this path arithmetic — can compute it identically via
+// BrowserManager.InstallRoot().
+func InstallRootForProfileDir(profileDir string) string {
+	return filepath.Clean(filepath.Join(filepath.Dir(filepath.Clean(profileDir)), "..", "chromium"))
+}
+
 // managedChromeCmdline is the rendered command line + environment for a
 // managed Chrome launch over the CDP pipe transport (cdppipe). It REPLACES
 // the pre-pipe []chromedp.ExecAllocatorOption return: cdppipe drives Chrome
@@ -329,8 +342,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 			return path, nil
 		}
 	}
-	installRoot := filepath.Join(filepath.Dir(filepath.Clean(cfg.ProfileDir)), "..", "chromium")
-	installRoot = filepath.Clean(installRoot)
+	installRoot := InstallRootForProfileDir(cfg.ProfileDir)
 	managedPath, err := EnsureChromium(ctx, installRoot)
 	if err != nil {
 		e.cacheFailure(err)

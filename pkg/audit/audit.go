@@ -151,6 +151,10 @@ func IsValidEventName(e EventName) bool {
 		// Live interactive browser panel events (ADR-038 D6).
 		EventBrowserLiveControlTaken,
 		EventBrowserLiveControlReleased,
+		// WebRTC capture stream events (ADR-047, wave-plan W2-A).
+		EventBrowserWebRTCStreamStarted,
+		EventBrowserWebRTCStreamStopped,
+		EventBrowserWebRTCIngestAuthRejected,
 		// security_change.go.
 		EventSecuritySettingChange,
 		// Misc event names emitted by other packages with stable wire

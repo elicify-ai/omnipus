@@ -1014,6 +1014,12 @@ func wsFrameSchemaName(frameType string) string {
 	// rationale as the 4 ADR-038 browser-live frame types above.
 	case string(generated.WsFrameTypeBrowserTabAction):
 		return "BrowserTabActionFrame"
+	// ADR-047 D4 (wave-plan W2-A): the viewer's WebRTC offer, on this same
+	// browser WS. browser_webrtc.go's handleWebRTCOffer is the actual
+	// caller, same rationale as the ADR-038/ADR-041 browser-live frame types
+	// above.
+	case string(generated.WsFrameTypeBrowserWebrtcOffer):
+		return "BrowserWebRTCOfferFrame"
 	default:
 		return ""
 	}

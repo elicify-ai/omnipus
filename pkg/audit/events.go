@@ -170,6 +170,26 @@ const (
 	// operator asked to delete the credential but it remains encrypted at rest.
 	EventChannelInstanceDeleted = "channel.instance.deleted"
 
+	// EventBrowserWebRTCStreamStarted — INFO. A per-agent WebRTC capture
+	// session's encoder page was successfully started (the FIRST
+	// WebRTC-capable viewer offer for that agent — ADR-047 D2, wave-plan
+	// W2-A). Fields: {agent_id, session_id}.
+	EventBrowserWebRTCStreamStarted = "browser.webrtc.stream_started"
+
+	// EventBrowserWebRTCStreamStopped — INFO. A per-agent WebRTC capture
+	// session fully stopped (last-viewer grace timer, browser death, or
+	// manager shutdown — ADR-047 D2/D3). Fields: {agent_id}.
+	EventBrowserWebRTCStreamStopped = "browser.webrtc.stream_stopped"
+
+	// EventBrowserWebRTCIngestAuthRejected — WARN. A connection to the
+	// loopback-only /api/v1/browser/capture-ingest endpoint was rejected:
+	// either the RemoteAddr was not loopback, or the first frame's
+	// browser_capture_hello token did not match any active CaptureSession's
+	// minted token (ADR-047 D6: "loopback is NOT a trust boundary ... the
+	// gateway audits any hello with a missing/invalid/expired token as a
+	// rejected ingest-auth attempt"). Fields: {remote_addr, reason}.
+	EventBrowserWebRTCIngestAuthRejected = "browser.webrtc.ingest_auth_rejected"
+
 	// EventChannelInstanceConfigured — INFO. An operator created or updated a
 	// channel instance's configuration via PUT /api/v1/channels/{id}/configure
 	// (SEC-23 / #289). Emitted by pkg/gateway/rest.go's configureChannel handler

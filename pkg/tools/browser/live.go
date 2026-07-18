@@ -385,7 +385,16 @@ type LiveView struct {
 	tabCtx     context.Context
 	listenCtx  context.Context // child of tabCtx; canceling it detaches the chromedp.ListenTarget subscription without touching the tab
 	stopListen context.CancelFunc
-	viewers    map[string]FrameSink
+	// lastKnownActiveCtx (ADR-047, wave-plan W2-A item 5) tracks the most
+	// recently observed active-tab context INDEPENDENTLY of tabCtx —
+	// tabCtx only reflects the JPEG screencast's own current binding and
+	// stays nil until a JPEG epoch is ever installed (isActiveLocked/
+	// hasEpochLocked gate on it), so a WebRTC-only session (no JPEG viewer
+	// ever attached) would otherwise never have a reliable "did the active
+	// tab actually change" signal for recapture. Set unconditionally at the
+	// end of every onTabsChanged call; nil only before the first call.
+	lastKnownActiveCtx context.Context
+	viewers            map[string]FrameSink
 	// statusSinks parallels viewers (ADR-038 finding #2): one optional
 	// StatusSink per attached viewerID, notified only on an unexpected
 	// screencast death (watchForUnexpectedDeath), never on a clean Detach.
@@ -630,7 +639,28 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	// child of that tab's own context) by the time this runs, so gating on
 	// "alive" would deterministically skip the rebind this close owes.
 	needsRebind := lv.hasEpochLocked() && lv.tabCtx != newCtx
+	// activeTabChanged (ADR-047, wave-plan W2-A item 5): a JPEG-independent
+	// "did the active tab actually change" signal for the WebRTC recapture
+	// hook below — see lastKnownActiveCtx's doc comment for why this can't
+	// reuse needsRebind/tabCtx. Guarded on lastKnownActiveCtx != nil so the
+	// very first onTabsChanged call (which only establishes the baseline)
+	// never counts as a "change".
+	activeTabChanged := lv.lastKnownActiveCtx != nil && lv.lastKnownActiveCtx != newCtx
+	lv.lastKnownActiveCtx = newCtx
 	lv.mu.Unlock()
+
+	if activeTabChanged {
+		// Notify the agent's WebRTC capture session (if any) that the active
+		// tab changed, so its encoder re-binds chrome.tabCapture to the new
+		// target (wave-plan W2-A item 5: "recapture on active-tab switch").
+		// A no-op when no CaptureSession is active (WebRTC never used, or
+		// this LiveView's session isn't the one CaptureSessions key off —
+		// CaptureSession() is scoped to the manager, not per-sessionID).
+		if cs := lv.mgr.CaptureSession(); cs != nil {
+			cs.Recapture()
+		}
+	}
+
 	if needsRebind {
 		lv.rebindScreencast(newCtx)
 	}
@@ -917,6 +947,18 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 		// why leaving lv.listenCtx exactly as-is (and returning without
 		// broadcasting) is what lets the real rebind proceed correctly.
 		return
+	}
+
+	// ADR-047 / wave-plan W2-A item 5 ("also on browser_status-relevant
+	// lifecycle: browser death -> stop session"): the browsing context is
+	// genuinely gone, so any active WebRTC capture session for this agent
+	// has nothing left to capture — its encoder page's own CDP target died
+	// along with the rest of the browser context. Stop() is idempotent and
+	// safe even if the session already noticed independently.
+	if mgr != nil {
+		if cs := mgr.CaptureSession(); cs != nil {
+			cs.Stop()
+		}
 	}
 
 	lv.mu.Lock()
