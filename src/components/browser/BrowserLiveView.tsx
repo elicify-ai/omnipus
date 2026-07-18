@@ -56,6 +56,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { BrowserLiveWsConnection } from '@/lib/browserLiveWs'
+import { BrowserWebRTCSession } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
@@ -76,7 +77,7 @@ import { useUiStore } from '@/store/ui'
 import { useChatStore } from '@/store/chat'
 import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
-import type { BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
+import type { BrowserInputFrame, BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
 
 export interface BrowserLiveViewProps {
   sessionId: string
@@ -313,10 +314,30 @@ export function BrowserLiveView({
   onClose,
   canAnnotate = false,
   className,
-  mediaStream = null,
-  hasAudio = false,
+  // W2-B: these props remain a caller-facing override/test seam exactly as
+  // W1-F shipped them (see the prop's own doc comment above) — renamed at
+  // the destructuring site so the REST of this component keeps reading the
+  // plain `mediaStream`/`hasAudio` identifiers unchanged (dozens of existing
+  // call sites), now bound to the merged consts just below instead of the
+  // raw props. A caller passing a non-null `mediaStream` still wins outright
+  // (used by BrowserLiveView.webrtcSink.test.tsx to exercise the sink/coord/
+  // annotate-crop machinery without a real signaling round trip); the
+  // default (`null`/omitted) now falls through to THIS component's own
+  // internal WebRTC signaling result instead of forcing JPEG-forever.
+  mediaStream: mediaStreamProp = null,
+  hasAudio: hasAudioProp = false,
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
+  // WebRTC build (W2-B) — the viewer-side PC state machine (browserWebRTC.ts),
+  // one instance per WS-connection effect lifecycle (see that effect further
+  // down), mirroring wsRef's own per-mount lifetime.
+  const webrtcRef = useRef<BrowserWebRTCSession | null>(null)
+  // Mirrors whether the machine's "input" data channel is currently OPEN —
+  // read (never as a dependency) by the stable `dispatchInput` callback
+  // below to decide DC-vs-WS routing without needing to be in anyone's
+  // dependency array, same rationale as every other *Ref mirror in this
+  // file (frameRef, connectedRef, ...).
+  const inputChannelOpenRef = useRef(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   // WebRTC build (W1-F) — bound to the <video> sink's srcObject via the
@@ -419,6 +440,14 @@ export function BrowserLiveView({
   const moveFlushScheduledRef = useRef(false)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
+  // WebRTC build (W2-B) — this component's OWN signaling result (populated
+  // by the machine's onStream/onFallback callbacks and the gateway's
+  // browser_webrtc_state frame — see the WS lifecycle effect further down).
+  // Reset to null/false on fallback AND on transport disconnect (a dropped
+  // WS means the PC's fate is unknown/stale either way — JPEG is always
+  // safe to fall back to, the machine is stopped and re-armed on reconnect).
+  const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null)
+  const [webrtcHasAudio, setWebrtcHasAudio] = useState(false)
   // WebRTC build (W1-F) — starts MUTED (autoplay-safe: browsers block
   // autoplaying audio without a prior user gesture; the video itself still
   // autoplays fine muted). Flipped by the mute/unmute toolbar button, which
@@ -493,6 +522,15 @@ export function BrowserLiveView({
   const [annotateComment, setAnnotateComment] = useState('')
   const [annotateSubmitting, setAnnotateSubmitting] = useState(false)
   const [annotateError, setAnnotateError] = useState<string | null>(null)
+
+  // WebRTC build (W2-B) — the merge point described at the destructuring
+  // site above: an explicit caller-supplied `mediaStreamProp` always wins
+  // (test/override seam); otherwise this component's own internally-driven
+  // signaling result is what every downstream consumer (`activeFrameDims`,
+  // `cropFrameToFile`, the sink JSX, the mute toggle, `dispatchInput`) reads
+  // as `mediaStream`/`hasAudio`, unchanged from their W1-F names.
+  const mediaStream = mediaStreamProp ?? webrtcStream
+  const hasAudio = mediaStreamProp !== null ? hasAudioProp : webrtcHasAudio
 
   const isControlling = statusState === 'controlling'
   // Unified error surface: a transport-level error always wins; otherwise
@@ -767,7 +805,32 @@ export function BrowserLiveView({
 
   // ── WS lifecycle — one connection per mount (host keys this component by
   // `${sessionId}:${agentId}` so a new target always gets a fresh mount). ──
+  // WebRTC build (W2-B): the PC state machine shares this SAME lifecycle —
+  // one `BrowserWebRTCSession` per mount, created/torn down alongside the WS
+  // connection so a fresh (sessionId, agentId) mount (or a WS-level
+  // reconnect within an existing mount, handled by onConnected/onDisconnected
+  // below) always starts from a clean signaling slate.
   useEffect(() => {
+    const machine = new BrowserWebRTCSession()
+    webrtcRef.current = machine
+    machine.onStream((stream) => setWebrtcStream(stream))
+    machine.onInputChannelOpen(() => {
+      inputChannelOpenRef.current = true
+    })
+    machine.onInputChannelClose(() => {
+      inputChannelOpenRef.current = false
+    })
+    // ADR-047 fallback contract: JPEG never stopped running underneath (it's
+    // a wholly separate WS path, untouched here) — this just drops the video
+    // sink back to null so the <img> sink takes over on the next render, and
+    // clears the DC-open flag so dispatchInput routes back to WS immediately
+    // rather than waiting for a stale readyState check to catch up.
+    machine.onFallback(() => {
+      setWebrtcStream(null)
+      setWebrtcHasAudio(false)
+      inputChannelOpenRef.current = false
+    })
+
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
       onScreencast: (f) => setFrame(f),
       // ADR-041 D4 — tab list + active index, broadcast on any
@@ -826,6 +889,26 @@ export function BrowserLiveView({
         // still-true "someone else is driving" back to false.
         if (f.controlled_by_other !== undefined) setControlledByOther(f.controlled_by_other)
       },
+      // ADR-047 (WebRTC build) — the gateway's non-trickle SDP answer to the
+      // offer this connection sent (via the machine's `start` callback
+      // below). Feeding a stale/unexpected answer is harmless — `applyAnswer`
+      // itself no-ops unless the machine is actually `offering`.
+      onWebRTCAnswer: (f) => machine.applyAnswer(f.sdp),
+      // ADR-047 — sent after attach and again on any availability change.
+      // `applyState` handles the "fell over mid-session" fallback path;
+      // starting the machine on an available:true signal is THIS
+      // component's call (wave-plan W2-B wiring note) — `start()` itself is
+      // idempotent while already offering/connected, so a repeated
+      // available:true (e.g. a periodic re-affirmation) is a safe no-op.
+      onWebRTCState: (f) => {
+        setWebrtcHasAudio(f.has_audio ?? false)
+        machine.applyState(f)
+        if (f.available) {
+          machine.start((sdp) => {
+            wsRef.current?.sendWebRTCOffer(sdp)
+          })
+        }
+      },
       onError: (message) => setConnError(message),
       onConnected: () => {
         setConnected(true)
@@ -833,6 +916,17 @@ export function BrowserLiveView({
       },
       onDisconnected: () => {
         setConnected(false)
+        // The WebRTC session's fate is unknown once the signaling transport
+        // that negotiated it drops — stop it outright (closes the PC/DC,
+        // cancels any pending retry) rather than let it linger against a
+        // gateway session that may already be gone. A fresh
+        // `browser_webrtc_state` frame after the WS reconnects (onConnected
+        // fires again, browser_attach re-sent) re-arms it via `start()`
+        // above, exactly like a first attach.
+        machine.stop()
+        setWebrtcStream(null)
+        setWebrtcHasAudio(false)
+        inputChannelOpenRef.current = false
         // The control-lock is server-side and per-connection — once the
         // transport drops, whatever control state we last knew is stale (the
         // human is no longer "driving" anything). Move to the local
@@ -865,6 +959,8 @@ export function BrowserLiveView({
       conn.detach()
       conn.close()
       wsRef.current = null
+      machine.stop()
+      webrtcRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, agentId])
@@ -947,6 +1043,32 @@ export function BrowserLiveView({
     return driveModeRef.current === 'you-driving' || implicitDriveActive
   }, [])
 
+  // ── WebRTC build (W2-B) — the ONE place a `browser_input` payload picks
+  // its transport. Rule (wave-plan W2-B): DC-first (the WebRTC machine's
+  // "input" data channel) when BOTH the video sink is active (`mediaStream`
+  // set — matches the sink-swap/activeFrameDims resolver above) AND that
+  // channel is actually open right now; otherwise the existing WS
+  // `browser_input` path (JPEG mode, or video mode before/between DC
+  // availability). Only pointer/key/wheel/text input kinds ever reach this
+  // function — `navigate`/`navigate_back`/`reload` (control-gated, like
+  // `browser_control`/`browser_tab_action`) stay on WS unconditionally at
+  // their own call sites, matching the gateway's input-frame parsing
+  // (recon-digest.md "Wire payloads..."). A DC send that reports success is
+  // trusted; a DC send that FAILS despite an open readyState (a same-tick
+  // close race) falls through to WS rather than silently dropping the
+  // event — mirrors every other `sendX` failure-recovery pattern in this
+  // file (see e.g. `takeWheelIfNeeded`'s `sendControl('take')` handling).
+  const dispatchInput = useCallback(
+    (input: Omit<BrowserInputFrame, 'type'>): boolean => {
+      if (mediaStream && inputChannelOpenRef.current && webrtcRef.current) {
+        const sent = webrtcRef.current.sendInput(JSON.stringify({ type: 'browser_input', ...input }))
+        if (sent) return true
+      }
+      return wsRef.current?.sendInput(input) ?? false
+    },
+    [mediaStream],
+  )
+
   // ── Native (non-passive) wheel listener — React's synthetic onWheel is
   // passive by default, so preventDefault() inside a JSX handler would warn
   // and no-op. Attached once; reads live state via refs to avoid re-binding
@@ -965,7 +1087,7 @@ export function BrowserLiveView({
       const rect = el!.getBoundingClientRect()
       const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
       if (!device) return
-      wsRef.current?.sendInput({
+      dispatchInput({
         kind: 'wheel',
         x: device.x,
         y: device.y,
@@ -976,7 +1098,7 @@ export function BrowserLiveView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords])
+  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
 
   // ── mouse_move RAF coalescing ────────────────────────────────────────────
   // Native pointermove fires far faster than the backend's input rate limiter
@@ -1001,8 +1123,8 @@ export function BrowserLiveView({
     // while still driving could leak into the tab a frame later, after
     // watch-only has already taken over.
     if (!canDispatchInput(implicitDriveRef.current)) return
-    wsRef.current?.sendInput({ kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers })
-  }, [canDispatchInput])
+    dispatchInput({ kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers })
+  }, [canDispatchInput, dispatchInput])
 
   const scheduleMoveFlush = useCallback(() => {
     if (moveFlushScheduledRef.current) return
@@ -1426,14 +1548,14 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    wsRef.current?.sendInput({
+    dispatchInput({
       kind: 'mouse_down',
       x: device.x,
       y: device.y,
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded, mapPointerToDeviceCoords])
+  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded, mapPointerToDeviceCoords, dispatchInput])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -1460,14 +1582,14 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    wsRef.current?.sendInput({
+    dispatchInput({
       kind: 'mouse_up',
       x: device.x,
       y: device.y,
       button: mapMouseButton(e.button),
       modifiers: computeModifiers(e),
     })
-  }, [annotateMode, finalizeSelection, canDispatchInput, mapPointerToDeviceCoords])
+  }, [annotateMode, finalizeSelection, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
 
   const handleSendAnnotation = useCallback(() => {
     const annotation = pendingAnnotation
@@ -1555,15 +1677,15 @@ export function BrowserLiveView({
     e.preventDefault()
     const modifiers = computeModifiers(e)
     if (isPrintableKey(e)) {
-      wsRef.current?.sendInput({ kind: 'text', text: e.key, modifiers })
+      dispatchInput({ kind: 'text', text: e.key, modifiers })
     } else {
       // key_code (DOM KeyboardEvent.keyCode) is REQUIRED for CDP to actually
       // perform editing/navigation keys (Backspace, Delete, Enter, Tab,
       // arrows) and modifier shortcuts (Ctrl+A/C/V) — key/code alone deliver
       // the event but don't delete/submit/move/select. See ADR-039.
-      wsRef.current?.sendInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers })
+      dispatchInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers })
     }
-  }, [canDispatchInput, releaseWheel])
+  }, [canDispatchInput, releaseWheel, dispatchInput])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!canDispatchInput(false)) return
@@ -1575,9 +1697,9 @@ export function BrowserLiveView({
     // 'text' input is a one-shot insert (no matching key_up — mirrors
     // Input.insertText on the backend, which has no down/up phase).
     if (!isPrintableKey(e)) {
-      wsRef.current?.sendInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
+      dispatchInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
     }
-  }, [canDispatchInput])
+  }, [canDispatchInput, dispatchInput])
 
   // ── ADR-040 D6 — header chip config (icon + text label + colour), derived
   // from `visualState`. Words + icon back up the colour for accessibility
