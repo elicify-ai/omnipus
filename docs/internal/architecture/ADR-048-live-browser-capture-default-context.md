@@ -6,7 +6,7 @@
   [#509](https://github.com/elicify-ai/omnipus/issues/509).
 - **Amends:** ADR-047 D2 (capture context topology) and ADR-043 D2/D4/D7 (per-agent
   isolation becomes conditional on capture mode).
-- **Deciders:** Daniel Piatkowski (operator) — pending; architect (recommendation).
+- **Deciders:** Daniel Piatkowski (operator); architect (recommendation).
 - **Evidence level:** 1 — verified against real Chrome 150 (Wave-3 e2e, commit
   `687c7c6e`) + codebase facts.
 
@@ -36,7 +36,7 @@ partition; the D4 context-persistence-across-reload and D7 per-agent tab budget 
 longer apply per-agent). This directly contradicts ADR-047 §12's assertion that
 "ADR-043 per-agent Chrome contexts — all preserved".
 
-## Decision (v1) — PROPOSED
+## Decision (v1)
 
 **Accept default-context capture for v1** (Option A), scoped to the
 operator-dominant single-browser-agent deployment, with three hard conditions
@@ -69,6 +69,11 @@ warning + audit), and the multi-agent capture-target gap must be closed or fence
    `tools.browser.capture_shared_context`) with an explicit isolation warning in the
    schema doc and Settings UI. An undocumented `os.Getenv` is not an acceptable
    surface for an operator opt-in that voids cookie isolation. `[coordinator.go:266]`
+
+   **Amended 2026-07-18:** the Settings-UI warning surface is DEFERRED to a tracked
+   follow-up for v1 (config-file knob + schema-doc warning shipped; default true per
+   the ratified Option A — note the "operator opt-in" wording above is superseded by
+   the ratified default-on posture).
 2. **Close or fence the multi-agent capture-target gap:** in the shared default
    context the encoder captures the *globally* active tab (`encoder.js:108-120`),
    not the attached agent's tab. With ≥2 browser-capable agents holding live tabs
@@ -76,6 +81,16 @@ warning + audit), and the multi-agent capture-target gap must be closed or fence
    agent can be shown the other's page. v1 fence: deny/stop capture when more than
    one agent has a live browser session (honest state frame + operator log), OR
    wire per-agent tab targeting into `__omnipusCapture`.
+
+   **Amended 2026-07-18 (commit 8aa44b73):** the live-session fence proved
+   over-broad (denied every subsequent capture once any other agent had a session —
+   UAT round-3 black-video root cause). Re-scoped: deny a NEW capture only when
+   another agent's capture session is actively viewed (ViewerCount>0); viewerless
+   grace-period sessions are superseded via Stop(); deterministic tab binding is
+   achieved by Page.bringToFront in CaptureSession.Start (5s-bounded, best-effort)
+   rather than per-agent targeting in `__omnipusCapture`. The deny reaches the
+   viewer as a generic `reason:'error'` state frame; the specific cause is
+   operator-log/audit only (wire enum extension tracked as follow-up).
 3. **The capability classifier must not advertise `Capable=true` when capture
    cannot succeed** (flag off, extension unseeded, etc.) — degradation must be
    explicit, never silent (ADR-047 D3 NFR-A3).

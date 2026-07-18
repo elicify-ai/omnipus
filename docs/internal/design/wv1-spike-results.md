@@ -174,3 +174,5 @@ pending one external run (operator: open `/view`, drive the tab — a connected
 `/q1` data-channel-only test). All YES → amend/supersede ADR-044
 (promote Option B / Pion to Accepted, encode the Q2 recipe + Q1 traversal findings)
 → `/plan-spec` → implement (wave pattern + 7-reviewer gate + UAT).
+
+(Q1 external run resolved 2026-07-18 via operator UAT — see ADR-047 §5 OI-1 resolution.)

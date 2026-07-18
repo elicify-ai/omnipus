@@ -1,5 +1,10 @@
 # ADR-044: Live-browser streaming target architecture — WebCodecs relay over the existing gateway WebSocket
 
+> **SUPERSEDED IN PART by ADR-047 (2026-07-18):** the A2/WebCodecs transport+capture
+> decisions (§6.0–6.4) are superseded by WebRTC/Pion; the R3/M-10 `browser_screencast`
+> contract removal is CANCELLED — JPEG screencast is retained as the automatic
+> fallback tier. Retained as decision history.
+
 - **Status:** **Accepted 2026-07-16** (operator: Daniel Piatkowski); **§6.0 "A2" amendment + §6.0.1 "R3 reconciliation" + §6.0.2 "Gate 0 CI-worker results" are authoritative** over the original §6.1–6.6 body where they differ (newest wins). **Gate 0 partial (2026-07-16, `ci-omnipus`): EC-1 fps PASS at a measured 30 fps (min-spec re-run pending); capture mechanism RESOLVED to CDP `Page.startScreencast` → WebCodecs encoder page (NOT `getDisplayMedia`); EC-2 isolation structural; EC-4 iPad DEFERRED — see §6.0.2. EC-3 CDP-token confidentiality: after round-4 showed "keep port 9223 + Landlock isolation" is kernel-6.7-gated (insecure on most installs), RESOLVED to a pure-Go CDP-over-pipe transport (no TCP surface, kernel-independent) — see §6.0.3 (authoritative, newest).** Amends ADR-038 D3 (JPEG screencast → default becomes the WebCodecs relay; **the dead JPEG message is REMOVED from the contract in v0.3 — R3/M-10; it is NOT a live fallback tier, and there is NO A1 tier. Degradation is an explicit "video-capable browser required" unavailable state**, operator decision 2026-07-16, "Stay A2-only"). The client-side-rendering family was researched as a first-class candidate at operator request and **rejected** — see the companion comparison (`docs/internal/architecture/browser-display-comparison.html`) and the one-line rejections in §6. Implementation remains **gated on the Phase 0 spikes** (§9); acceptance settles direction, not the open mechanical unknowns (G-1..G-5).
 - **Date:** 2026-07-16
 - **Deciders:** Daniel Piatkowski (operator)
