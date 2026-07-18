@@ -184,6 +184,19 @@ type BrowserCoordinator struct {
 	// shutdown flag prevents new launches / crash-relaunch racing with a
 	// Shutdown in progress.
 	shutdown bool
+
+	// captureSharedContext is the ADR-048 condition-1 config knob
+	// (tools.browser.capture_shared_context, default true) promoted from the
+	// former OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT-only experimental flag.
+	// Set via SetCaptureSharedContext (the gateway's agent-loop seed wiring
+	// calls it on every fresh-seed and reload pass); read by Register (which
+	// browsing context an agent's session bootstraps into) and by
+	// CaptureSharedContextEnabled (capability.go's CaptureVideoCapability
+	// ADR-048 condition-3 check). The env var is still honored as an
+	// explicit override layered on top — see captureSharedContextResolved —
+	// for tests and operators who need to force a value without touching
+	// config.json.
+	captureSharedContext bool
 }
 
 // NewBrowserCoordinator constructs a coordinator. homeDir is $OMNIPUS_HOME (the
@@ -246,29 +259,32 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 		return nil, "", err
 	}
 
-	// W3 EXPERIMENTAL — OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT=1 (structural
-	// decision pending, do NOT ship enabled by default): skip the per-agent
-	// CDP browser context and let the agent's manager bootstrap its session
-	// in the DEFAULT browser context (empty browserCtxID → the manager's
-	// bootstrapBrowserCtx omits WithExistingBrowserContext, exactly like the
-	// dedicated-Chrome managed mode). WHY: chrome.tabCapture (the ADR-047 D2
-	// capture mechanism) hard-fails with "Invalid tab specified." for ANY tab
-	// living in a CDP-created browser context — those contexts are
-	// independent off-the-record profiles outside the extension's
-	// include_incognito reach, even with Extensions.loadUnpacked's
-	// enableInIncognito granted (verified against real Chrome 150; the
-	// extension can SEE the tabs via chrome.tabs.query but cannot capture
-	// them). This collides with the ADR-043 per-agent-context isolation
-	// model; until that collision gets an ADR-level decision, this flag
-	// trades per-agent cookie/storage isolation for a capturable agent tab.
-	// Costs while enabled: no CRIT-002 context persistence across reload,
-	// and all agents share the default context's cookie partition.
-	if os.Getenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT") == "1" {
+	// ADR-048 condition 1 (promoted from the former, env-only
+	// OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT experimental flag to the
+	// first-class tools.browser.capture_shared_context config knob, default
+	// true): skip the per-agent CDP browser context and let the agent's
+	// manager bootstrap its session in the DEFAULT browser context (empty
+	// browserCtxID → the manager's bootstrapBrowserCtx omits
+	// WithExistingBrowserContext, exactly like the dedicated-Chrome managed
+	// mode). WHY: chrome.tabCapture (the ADR-047 D2 capture mechanism)
+	// hard-fails with "Invalid tab specified." for ANY tab living in a
+	// CDP-created browser context — those contexts are independent
+	// off-the-record profiles outside the extension's include_incognito
+	// reach, even with Extensions.loadUnpacked's enableInIncognito granted
+	// (verified against real Chrome 150; the extension can SEE the tabs via
+	// chrome.tabs.query but cannot capture them). This REVERSES the ADR-043
+	// per-agent-context isolation model for every agent registered while
+	// enabled (config field doc comment carries the full isolation
+	// warning) — trading per-agent cookie/storage isolation for a
+	// capturable agent tab. Costs while enabled: no CRIT-002 context
+	// persistence across reload, and all agents share the default context's
+	// cookie partition.
+	if c.captureSharedContextResolved() {
 		c.mu.Lock()
 		c.managers[agentID] = mgr
 		rootCtx = c.rootCtx
 		c.mu.Unlock()
-		logger.WarnCF("browser", "coordinator: EXPERIMENTAL default-context capture mode — per-agent browser-context isolation is OFF",
+		logger.WarnCF("browser", "coordinator: shared default-context capture mode is ON (tools.browser.capture_shared_context) — per-agent browser-context isolation is OFF",
 			map[string]any{"agent_id": agentID})
 		return rootCtx, "", nil
 	}
@@ -543,6 +559,80 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTota
 	}
 }
 
+// captureSharedContextResolved returns the effective ADR-048
+// capture_shared_context value: the OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
+// env var, if set to a non-empty string, is an explicit override ("1" ->
+// true, anything else -> false) — kept for tests and operators who need to
+// force a value without touching config.json; otherwise the configured
+// c.captureSharedContext field (set via SetCaptureSharedContext) applies.
+// Both Register (actual context-placement decision) and
+// CaptureSharedContextEnabled (capability classification) call this so the
+// two can never disagree about which mode is actually in effect.
+func (c *BrowserCoordinator) captureSharedContextResolved() bool {
+	if envOverride := os.Getenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT"); envOverride != "" {
+		return envOverride == "1"
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.captureSharedContext
+}
+
+// SetCaptureSharedContext updates the ADR-048 shared-default-context capture
+// mode (config field: tools.browser.capture_shared_context). Called by the
+// gateway's agent-loop seed wiring on every fresh-seed and reload pass so the
+// coordinator's decision is always driven by config, never a bare
+// os.Getenv. A flip after an agent has already registered does not
+// retroactively move that agent's session between browser contexts —
+// Register only decides context placement once, at that agent's first
+// registration — but it DOES take effect for any agent that registers
+// afterward (new agent, or a coordinator that hasn't seen this agentID
+// yet), so unlike headless/exec_path/profile_dir this is not purely
+// restart-only and is not warn-logged as such.
+func (c *BrowserCoordinator) SetCaptureSharedContext(v bool) {
+	c.mu.Lock()
+	old := c.captureSharedContext
+	c.captureSharedContext = v
+	c.mu.Unlock()
+	if old != v {
+		logger.InfoCF("browser", "coordinator: tools.browser.capture_shared_context updated", map[string]any{
+			"old": old,
+			"new": v,
+		})
+	}
+}
+
+// CaptureSharedContextEnabled reports the effective ADR-048
+// capture_shared_context value — the capability classifier
+// (capability.go's CaptureVideoCapability, ADR-048 condition 3) reads this
+// to decide whether WebRTC capture can possibly succeed for an agent
+// attached to this coordinator.
+func (c *BrowserCoordinator) CaptureSharedContextEnabled() bool {
+	return c.captureSharedContextResolved()
+}
+
+// LiveSessionAgents returns the agentIDs of every registered manager that
+// currently has at least one open tab — the cheapest honest signal this
+// coordinator has for ADR-048 condition 2's multi-agent capture fence: in
+// shared-default-context capture mode the encoder always captures the
+// globally-active tab, so a SECOND agent's live tab makes which agent a
+// viewer actually sees ambiguous. The gateway's capture-start path
+// (browser_webrtc.go) denies starting a NEW capture session whenever this
+// returns more than one agent besides the one requesting capture.
+// Best-effort/racy by nature (a tab can open/close between this snapshot and
+// the caller's decision) — acceptable because the fence only needs to catch
+// the common, sustained multi-agent-browsing case, not a momentary overlap.
+func (c *BrowserCoordinator) LiveSessionAgents() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, 0, len(c.managers))
+	for id, mgr := range c.managers {
+		if mgr != nil && mgr.OpenTabCount() > 0 {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // TryOpenTab atomically checks the global tab budget AND reserves a slot under
 // ONE coordinator lock — so concurrent openers at the boundary see exactly one
 // winner (I-1/W3/C1, spec round-2 MAJ-007). It counts live tabs
@@ -657,18 +747,37 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	if rc == nil || rc.Browser == nil {
 		return "", fmt.Errorf("browser: coordinator: shared Chrome browser handle unavailable")
 	}
-	// WithEnableInIncognito(true) (WebRTC build W2-A): every per-agent browser
-	// context this coordinator creates is a raw CDP
+	// WithEnableInIncognito(true) (WebRTC build W2-A, corrected per ADR-048):
+	// every per-agent browser context this coordinator creates is a raw CDP
 	// target.CreateBrowserContext — which cdproto's own doc comment
 	// describes as "similar to an incognito profile" — never the DEFAULT
-	// browser context Extensions.loadUnpacked otherwise scopes to. The
-	// capture extension's encoder page is deliberately opened INSIDE the
-	// capturing agent's own context/window (capture_session.go's
-	// defaultEncoderStarter — required so encoder.js's
-	// chrome.tabs.query({lastFocusedWindow:true}) resolves to that agent's
-	// own tab, not some other agent's), so without this flag Chrome would
-	// refuse to navigate the encoder target to chrome-extension://<id>/... in
-	// any context but the default one.
+	// browser context Extensions.loadUnpacked otherwise scopes to. Without
+	// this flag the extension is confined to the default context and
+	// cannot even SEE (chrome.tabs.query) a tab living in a per-agent CDP
+	// context, let alone capture one.
+	//
+	// This flag grants VISIBILITY only, not capturability: with it,
+	// encoder.js's chrome.tabs.query resolves an agent's tab even when that
+	// tab lives in its own CDP-created context — but ADR-048 proved (real
+	// Chrome 150) that chrome.tabCapture still CANNOT capture a tab living
+	// in a CDP-created browser context at all ("Invalid tab specified."),
+	// regardless of this flag. Separately, the encoder PAGE itself cannot
+	// even be HOSTED inside a CDP-created context (chrome-extension://
+	// navigation there fails net::ERR_BLOCKED_BY_CLIENT) — which is why
+	// capture_session.go's defaultEncoderStarter creates the encoder target
+	// in the coordinator's DEFAULT context, never inside any agent's own
+	// context/window.
+	//
+	// Net effect: this flag alone does not make capture work. Capture only
+	// succeeds when the AGENT's own session also shares the default context
+	// — tools.browser.capture_shared_context (ADR-048 condition 1, see
+	// Register's doc comment above and BrowserCoordinator.
+	// CaptureSharedContextEnabled) — at which point tabCapture is
+	// operating on a tab that is ALSO in the default context, sidestepping
+	// the CDP-context capture restriction entirely. enableInIncognito
+	// remains useful even then: it is what lets the extension's
+	// chrome.tabs.query resolve the RIGHT tab (the attached agent's) among
+	// whichever tabs currently live in the default context.
 	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(rootCtx, rc.Browser))
 	if err != nil {
 		return "", fmt.Errorf("browser: coordinator: Extensions.loadUnpacked failed: %w", err)

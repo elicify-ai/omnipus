@@ -117,6 +117,10 @@ type CaptureSession struct {
 	viewers     map[string]struct{}
 	stopTimer   *time.Timer
 	onStopped   func() // invoked exactly once when Stop() completes (gateway hook for registry cleanup)
+	// done is closed exactly once, when Stop() completes — see Done()'s doc
+	// comment. Lets a caller (the gateway's encoder-liveness watchdog)
+	// select on session lifetime without a redundant onStopped wiring.
+	done chan struct{}
 }
 
 // NewCaptureSession constructs a production CaptureSession: mgr is the
@@ -165,6 +169,7 @@ func newCaptureSessionWithDeps(mgr *BrowserManager, agentID string, relay RelayS
 		startEncoder: startEncoder,
 		token:        token,
 		viewers:      make(map[string]struct{}),
+		done:         make(chan struct{}),
 	}
 }
 
@@ -221,11 +226,19 @@ func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, i
 	// load chrome-extension:// pages inside CDP-created browser contexts —
 	// the navigation fails with net::ERR_BLOCKED_BY_CLIENT even when the
 	// extension was loaded with enableInIncognito:true. That flag grants the
-	// extension VISIBILITY of (and tabCapture access to) the CDP contexts'
-	// tabs; it does not permit hosting extension pages inside them. So the
-	// encoder page lives in the default context and resolves the agent's tab
-	// via encoder.js's tab-selection query (chrome.tabs.query sees the
-	// agent-context tabs thanks to enableInIncognito). Like the previous
+	// extension VISIBILITY of the CDP contexts' tabs (chrome.tabs.query sees
+	// them) — it does NOT permit hosting extension pages inside them, AND
+	// (ADR-048, a separate and more fundamental restriction) it does NOT
+	// make those tabs capturable: chrome.tabCapture still fails "Invalid tab
+	// specified." for any tab living in a CDP-created context, regardless of
+	// this flag. So the encoder page lives in the default context and
+	// resolves the agent's tab via encoder.js's tab-selection query
+	// (chrome.tabs.query sees whichever tabs are in the default context) —
+	// which only finds the agent's OWN tab there when
+	// tools.browser.capture_shared_context is enabled (ADR-048 condition 1,
+	// coordinator.go's Register) and the agent's session was therefore
+	// bootstrapped into this SAME default context, not an isolated
+	// per-agent one. Like the previous
 	// same-context design, the target is deliberately created WITHOUT
 	// mgr.OpenTab so it never appears in the agent's visible tab
 	// strip/MaxTabs budget (and the default context isn't an agent context
@@ -410,6 +423,46 @@ func (cs *CaptureSession) RecordPing() {
 	cs.mu.Unlock()
 }
 
+// LastPingAt returns the timestamp of the most recent
+// browser_capture_control{ping} beacon RecordPing observed — the zero
+// time.Time if none has arrived yet (before BindIngest, or if the encoder
+// never connects at all). Consumed by the gateway's encoder-liveness
+// watchdog (fix-wave finding: this field previously had zero readers, so a
+// wedged/crashed encoder that never disconnects cleanly could leave a
+// capture session "started" forever with no signal to anyone).
+func (cs *CaptureSession) LastPingAt() time.Time {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.lastPingAt
+}
+
+// Done returns a channel that is closed exactly once, when Stop() completes
+// — callers (the gateway's encoder-liveness watchdog) select on this to
+// exit their own per-session goroutine as soon as the session stops, for
+// ANY reason (grace timer, browser death, ensure/start failure, or explicit
+// shutdown), without needing a redundant onStopped-callback wiring of their
+// own.
+func (cs *CaptureSession) Done() <-chan struct{} {
+	return cs.done
+}
+
+// ViewerIDs returns a snapshot of the currently-attached WebRTC viewer IDs.
+// Stop() does not clear cs.viewers (only the relay-side CloseViewer calls
+// happen there), so this remains accurate to call even from inside an
+// onStopped callback — the gateway uses it there to push a final
+// browser_webrtc_state{available:false} frame to every viewer that was
+// still attached when the session stopped, rather than letting them learn
+// of the stop only once their own ICE connection eventually times out.
+func (cs *CaptureSession) ViewerIDs() []string {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	out := make([]string, 0, len(cs.viewers))
+	for id := range cs.viewers {
+		out = append(out, id)
+	}
+	return out
+}
+
 // HandleIngestOffer delegates to the relay's HandleIngestOffer — the
 // encoder page's SDP offer, arriving as a browser_capture_offer frame on the
 // ingest WS.
@@ -515,6 +568,7 @@ func (cs *CaptureSession) Stop() {
 		return
 	}
 	cs.stopped = true
+	close(cs.done)
 	if cs.stopTimer != nil {
 		cs.stopTimer.Stop()
 		cs.stopTimer = nil

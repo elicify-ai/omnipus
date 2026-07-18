@@ -3050,6 +3050,45 @@ type BrowserToolConfig struct {
 	// deployments, or operators who want zero external network dependency
 	// at the cost of NAT traversal). See ADR-047 D1.
 	WebRTCStunServer string `json:"webrtc_stun_server" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_STUN_SERVER"`
+	// CaptureSharedContext promotes the former OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
+	// experimental env flag to a first-class config knob (ADR-048 condition 1).
+	// When true, a browsing agent's own session is bootstrapped in Chrome's
+	// DEFAULT browser context — the same context the WebRTC capture
+	// extension's encoder page always lives in (capture_session.go's
+	// defaultEncoderStarter) — instead of its own isolated, coordinator-owned
+	// CDP browser context (ADR-043 D2). This is required for WebRTC capture to
+	// work AT ALL: chrome.tabCapture cannot capture a tab living in a
+	// CDP-created browser context ("Invalid tab specified."), and an
+	// enableInIncognito-loaded extension gains VISIBILITY of such tabs
+	// (chrome.tabs.query sees them) but never CAPTURABILITY (ADR-048,
+	// verified against real Chrome 150).
+	//
+	// SECURITY / ISOLATION WARNING: enabling this REVERSES ADR-043 D2's
+	// per-agent cookie/localStorage isolation for every agent whose session
+	// lands in the shared default context — all such agents share ONE
+	// cookie/storage partition, and ADR-043 D4's context-persistence-across-
+	// reload and D7's per-agent tab budget no longer apply per-agent. Default
+	// is TRUE (ADR-048 Option A: single-agent-dominant installs are the
+	// common case, and video/audio live-view is a value operators expect out
+	// of the box) — operators who need real cross-agent isolation and are
+	// willing to give up WebRTC capture (the JPEG browser_screencast fallback
+	// keeps working either way, ADR-047 D3) should set this false.
+	//
+	// ADR-048 condition 2 (the multi-agent capture-target gap): even with
+	// this enabled, the shared default context's encoder captures whichever
+	// tab is GLOBALLY active, not necessarily the attached agent's tab. When
+	// more than one agent currently holds a live browser session, WHICH
+	// agent's tab a viewer sees is ambiguous — the gateway's capture-start
+	// path (pkg/gateway/browser_webrtc.go) therefore DENIES starting a new
+	// capture session while a second agent already has one, rather than
+	// silently showing a human the wrong agent's page.
+	//
+	// OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT is kept as a non-empty-string
+	// override ("1"/"0") of this field, for tests and operators who need to
+	// force a value without touching config.json — the coordinator reads
+	// config, never a bare os.Getenv, for its own decision; the env var is
+	// consulted only as an explicit override layered on top.
+	CaptureSharedContext bool `json:"capture_shared_context" env:"OMNIPUS_TOOLS_BROWSER_CAPTURE_SHARED_CONTEXT"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled

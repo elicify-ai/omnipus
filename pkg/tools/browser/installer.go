@@ -27,9 +27,10 @@ const (
 	// cftDownloadID is the CfT manifest key + zip/binary basename for the
 	// chrome-headless-shell build (the graceful-degradation fallback build,
 	// and the default on non-video-capable platforms). Kept as the original
-	// single constant — other packages' tests (execpath_test.go) reference it
-	// directly to seed on-disk fixtures at the pre-dual-download layout, so
-	// its name/value must not change even though EnsureChromium is now
+	// single constant — this package's own tests (execpath_test.go, same
+	// `package browser`, not a different package) reference it directly to
+	// seed on-disk fixtures at the pre-dual-download layout, so its
+	// name/value must not change even though EnsureChromium is now
 	// build-aware.
 	cftDownloadID = "chrome-headless-shell"
 
@@ -242,11 +243,15 @@ func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 // EnsureChromiumFullBuild ensures the full "chrome" build (required for
 // WebRTC tabCapture video+audio) is present under installRoot regardless of
 // platform. This is the same binary EnsureChromium/selectDownloadBuild
-// resolves for the agent on linux; it remains a distinct, explicit entry
-// point used by boot-time prefetch and by ClassifyVideoCapability's
-// video-capable check, since callers there care specifically about the full
-// build's presence regardless of what the agent's own resolution path would
-// fall back to on this platform.
+// resolves for the agent on linux. It is test-only today (execpath_test.go
+// and installer_test.go call it directly to exercise the dual-download
+// paths) — nothing in the boot/gateway path or ClassifyVideoCapability
+// calls it: classification (capability.go's ClassifyVideoCapability) only
+// INSPECTS what's already on disk via findInstalledBuild, it never
+// downloads. Kept as a distinct, explicit entry point (rather than folding
+// into EnsureChromium) because a caller that specifically wants the full
+// build regardless of platform-based selectDownloadBuild fallback logic
+// needs a way to ask for it directly.
 func EnsureChromiumFullBuild(ctx context.Context, installRoot string) (string, error) {
 	return EnsureChromiumBuild(ctx, installRoot, fullChromeBuild())
 }

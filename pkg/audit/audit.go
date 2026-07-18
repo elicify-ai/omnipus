@@ -154,6 +154,7 @@ func IsValidEventName(e EventName) bool {
 		// WebRTC capture stream events (ADR-047, wave-plan W2-A).
 		EventBrowserWebRTCStreamStarted,
 		EventBrowserWebRTCStreamStopped,
+		EventBrowserWebRTCStreamStartFailed,
 		EventBrowserWebRTCIngestAuthRejected,
 		// security_change.go.
 		EventSecuritySettingChange,

@@ -99,7 +99,7 @@ func NewPipeAllocator(
 	}
 
 	// The chromedp context the pipe *Browser will be bound onto. parent must not
-	// already be a chromedp context (the coordinator uses context.Background()).
+	// already be a chromedp context (the managed-Chrome launcher passes context.Background()).
 	ctx, baseCancel := chromedp.NewContext(parent)
 
 	l := &launch{opts: opts, execPath: execPath}

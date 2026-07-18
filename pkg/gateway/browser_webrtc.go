@@ -41,6 +41,22 @@ import (
 // frame (available/active=false + a reason) — it NEVER breaks the JPEG
 // browser_screencast path, which keeps running unconditionally regardless of
 // WebRTC's fate.
+//
+// Fix-wave amendments (ADR-048 default-context capture): a failed capture
+// Start() now tears the session down (fix 1) instead of leaving a sticky
+// broken session; a failed ingest offer now signals the encoder and closes
+// the connection (fix 2); an encoder-liveness watchdog stops a
+// wedged/silent capture session and pushes the state change to attached
+// viewers immediately, on ANY stop cause, rather than making them wait for
+// their own ICE timeout (fix 3); capability classification (fix 4, see
+// capability.go's CaptureVideoCapability) now accounts for the capture
+// extension being seeded and shared-default-context capture being enabled;
+// relay log lines are level-classified instead of always Debug (fix 5); the
+// multi-agent capture-target gap (ADR-048 condition 2) is fenced (fix 6);
+// data-channel input dispatch errors are surfaced to the driving viewer
+// (fix 7); a failed viewer offer now also closes the relay-side viewer PC
+// (fix 8); and the WebRTCEnabled/lite_build/not_capable gate ladder is a
+// single shared classifier (fix 9, webrtcUnavailableReason).
 
 // captureRegistry is the process-wide, per-agent WebRTC CaptureSession
 // registry, shared between the main browser WS handler (which creates
@@ -97,9 +113,44 @@ func (r *captureRegistry) findByToken(candidateHex string) (agentID string, cs *
 // Viewer signaling (existing /api/v1/browser/ws)
 // ---------------------------------------------------------------------------
 
+// webrtcAttachment holds the identity of one connection's attached WebRTC
+// viewer (browserConnState.webrtc, browser_ws.go). A single nullable
+// pointer rather than a (agentID string, capture *browser.CaptureSession)
+// field pair (fix-wave TYPE simplification finding): the two fields were
+// always set and cleared together, so the pair could represent an illegal
+// half-set state (e.g. a non-empty agentID with a nil capture) the type
+// system did nothing to prevent. Both fields non-empty/non-nil together, or
+// the pointer itself is nil — structurally enforced.
+type webrtcAttachment struct {
+	agentID string
+	capture *browser.CaptureSession
+}
+
+// webrtcViewerConn is the per-viewer entry in BrowserWSHandler.viewerConns
+// (fix-wave findings 3 and 7): a concurrent-safe registry the gateway uses
+// to reach a WebRTC-attached viewer's main /api/v1/browser/ws connection
+// from a goroutine that is NOT that connection's own readLoop — the
+// encoder-liveness watchdog (pushing a browser_webrtc_state frame the
+// instant the gateway itself detects the stream died, rather than making
+// the viewer wait ~5s for its own ICE connection state to notice) and the
+// data-channel input sink (surfacing a real input-dispatch error back to
+// the driving viewer, mirroring handleInput's sessionErrorStatus) both need
+// this. Registered on a successful browser_webrtc_offer (the SAME moment
+// browserConnState.webrtc is set), unregistered by detachWebRTCViewer.
+type webrtcViewerConn struct {
+	wc        *browserWSConn
+	sessionID string
+
+	mu         sync.Mutex
+	lastErrAt  time.Time
+	lastErrMsg string
+}
+
 // handleWebRTCOffer processes a browser_webrtc_offer frame (ADR-047 D4). Gate
-// ladder, in order (wave-plan W2-A item 1): WebRTCEnabled -> lite build ->
-// ClassifyVideoCapability -> ensure+start the agent's capture session ->
+// ladder, in order: resolve the agent's BrowserManager -> webrtcUnavailableReason
+// (WebRTCEnabled -> lite build -> capture-capable, ADR-048 condition 3) ->
+// the ADR-048 condition-2 multi-agent capture fence (only when about to
+// start a BRAND NEW session) -> ensure+start the agent's capture session ->
 // HandleViewerOffer. Every rejection sends a browser_webrtc_state frame with
 // available=false and a reason; the JPEG screencast (handleAttach, already
 // running independently) is never touched by any branch here.
@@ -123,15 +174,6 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	}
 	sessID := frame.SessionId
 
-	if !cfg.Tools.Browser.WebRTCEnabled {
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "disabled")
-		return
-	}
-	if !webrtc.Available {
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "lite_build")
-		return
-	}
-
 	mgr, ok := h.agentLoop.BrowserManagerForAgent(frame.AgentId)
 	if !ok {
 		wc.sendCriticalGen(sessionErrorStatus(sessID,
@@ -140,10 +182,31 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		return
 	}
 
-	cap := mgr.VideoCapability()
-	if !cap.Capable {
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "not_capable")
+	if reason := webrtcUnavailableReason(cfg, mgr); reason != "" {
+		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, reason)
 		return
+	}
+
+	// ADR-048 condition 2 (fix 6): the multi-agent capture-target gap. In
+	// shared-default-context capture mode the encoder always captures
+	// whichever tab is GLOBALLY active, not necessarily this agent's — so
+	// with a SECOND agent already holding a live browser session, which
+	// agent a viewer actually sees is ambiguous. Only checked when about to
+	// start a BRAND NEW capture session for this agent (mgr.CaptureSession()
+	// == nil); a second viewer offer for an agent whose session is already
+	// running just joins it, which is always fine regardless of what other
+	// agents are doing.
+	if mgr.CaptureSession() == nil {
+		if coord := mgr.Coordinator(); coord != nil {
+			if other, found := firstOtherLiveAgent(coord.LiveSessionAgents(), frame.AgentId); found {
+				slog.Warn("browser-webrtc: capture denied — shared default-context capture is single-agent in v1 (ADR-048 condition 2)",
+					"agent_id", frame.AgentId, "other_live_agent_id", other)
+				h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "error")
+				h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStartFailed,
+					map[string]any{"session_id": sessID, "reason": "multi_agent_capture_denied", "other_agent_id": other})
+				return
+			}
+		}
 	}
 
 	cs, err := h.ensureCaptureSession(mgr, frame.AgentId, cfg)
@@ -158,8 +221,14 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	if startErr != nil {
 		slog.Error("browser-webrtc: capture session start failed", "error", startErr, "agent_id", frame.AgentId)
 		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "error")
-		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStarted,
+		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStartFailed,
 			map[string]any{"session_id": sessID, "error": startErr.Error()})
+		// Fix 1 (sticky failed capture Start): Stop() is idempotent and its
+		// onStopped hook (ensureCaptureSession, below) clears BOTH the
+		// manager's CaptureSession reference and h.captures' token-lookup
+		// entry, so the NEXT offer for this agent builds a fresh session
+		// instead of reusing this permanently-broken one forever.
+		cs.Stop()
 		return
 	}
 	if justStarted {
@@ -171,13 +240,17 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	answer, offerErr := cs.HandleViewerOffer(viewerID, frame.Sdp)
 	if offerErr != nil {
 		cs.RemoveViewer(viewerID)
+		// Fix 8: a broken/aborted viewer PeerConnection must not stay
+		// registered on the relay — CloseViewer is idempotent-safe (a no-op
+		// if HandleViewerOffer never got far enough to register one).
+		cs.Relay().CloseViewer(viewerID)
 		slog.Warn("browser-webrtc: viewer offer failed", "error", offerErr, "agent_id", frame.AgentId, "viewer_id", viewerID)
 		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "error")
 		return
 	}
 
-	state.webrtcAgentID = frame.AgentId
-	state.webrtcCapture = cs
+	state.webrtc = &webrtcAttachment{agentID: frame.AgentId, capture: cs}
+	h.registerWebRTCViewerConn(viewerID, wc, sessID)
 
 	stats := cs.Stats()
 	wc.sendCriticalGen(generated.BrowserWebRTCAnswerFrame{
@@ -188,21 +261,96 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	h.sendWebRTCState(wc, sessID, viewerID, true, true, stats.HasAudio, "")
 }
 
+// firstOtherLiveAgent returns the first agentID in ids that is NOT exclude —
+// used by the ADR-048 condition-2 multi-agent capture fence to name the
+// other agent in its denial log line.
+func firstOtherLiveAgent(ids []string, exclude string) (string, bool) {
+	for _, id := range ids {
+		if id != exclude {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// webrtcUnavailableReason evaluates the ADR-047 D3 / ADR-048 condition-3
+// gate ladder — WebRTCEnabled -> lite build -> capture-capable — shared by
+// announceWebRTCAvailability (the post-attach announcement) and
+// handleWebRTCOffer (the actual offer-time re-validation) so the two paths
+// can never spell a rejection reason differently (fix 9, SIMPL finding:
+// byte-identical tokens, previously spelled out twice). Returns "" when
+// every gate passes (available=true); otherwise the browser_webrtc_state
+// reason token to send. Logs the capability classifier's operator-only
+// Reason at Warn (fix 4 — never sent to the client, only ever the "not_capable"
+// token is) on every not_capable rejection this function produces — it was
+// previously computed by the classifier and silently discarded.
+func webrtcUnavailableReason(cfg *config.Config, mgr *browser.BrowserManager) string {
+	if !cfg.Tools.Browser.WebRTCEnabled {
+		return "disabled"
+	}
+	if !webrtc.Available {
+		return "lite_build"
+	}
+	cap := mgr.CaptureVideoCapability()
+	if !cap.Capable {
+		slog.Warn("browser-webrtc: video capability not_capable", "reason", cap.Reason, "agent_id", mgr.AgentID())
+		return "not_capable"
+	}
+	return ""
+}
+
 // detachWebRTCViewer tears down a connection's WebRTC viewer attachment
 // (browser_detach, WS close, or connection cleanup) — closes the relay-side
-// viewer PeerConnection and decrements the capture session's viewer count
+// viewer PeerConnection, decrements the capture session's viewer count
 // (RemoveViewer arms the grace-stop timer once it reaches zero, wave-plan
-// W2-A item 4). Independent of the JPEG screencast attachment's own
-// detach(), since both can be active on the same connection.
+// W2-A item 4), and unregisters the viewer from h.viewerConns (fix 3/7's
+// cross-goroutine registry). Independent of the JPEG screencast attachment's
+// own detach(), since both can be active on the same connection.
 func (h *BrowserWSHandler) detachWebRTCViewer(state *browserConnState, viewerID string) {
-	cs := state.webrtcCapture
-	state.webrtcAgentID = ""
-	state.webrtcCapture = nil
-	if cs == nil {
+	att := state.webrtc
+	state.webrtc = nil
+	h.unregisterWebRTCViewerConn(viewerID)
+	if att == nil || att.capture == nil {
 		return
 	}
-	cs.Relay().CloseViewer(viewerID)
-	cs.RemoveViewer(viewerID)
+	att.capture.Relay().CloseViewer(viewerID)
+	att.capture.RemoveViewer(viewerID)
+}
+
+// registerWebRTCViewerConn / unregisterWebRTCViewerConn maintain
+// h.viewerConns (see webrtcViewerConn's doc comment) — the SAME lifecycle
+// as browserConnState.webrtc: registered once handleWebRTCOffer succeeds,
+// unregistered by detachWebRTCViewer.
+func (h *BrowserWSHandler) registerWebRTCViewerConn(viewerID string, wc *browserWSConn, sessionID string) {
+	h.viewerConns.Store(viewerID, &webrtcViewerConn{wc: wc, sessionID: sessionID})
+}
+
+func (h *BrowserWSHandler) unregisterWebRTCViewerConn(viewerID string) {
+	h.viewerConns.Delete(viewerID)
+}
+
+// notifyViewersStreamStopped pushes browser_webrtc_state{available:false,
+// reason:"error"} to every viewer that was still attached when a capture
+// session stopped (fix 3: viewers previously learned of a server-side stop
+// only ~5s later, once their OWN ICE connection state machine noticed the
+// peer was gone). Invoked from the SAME onStopped hook regardless of WHY the
+// session stopped — grace timer, browser death, the encoder-liveness
+// watchdog, or an ensure/start failure (fix 1) — so this one path covers
+// every stop cause. viewerIDs is a snapshot taken via CaptureSession.
+// ViewerIDs(), which remains accurate to read even from inside onStopped
+// (Stop() never clears cs.viewers itself).
+func (h *BrowserWSHandler) notifyViewersStreamStopped(viewerIDs []string) {
+	for _, vid := range viewerIDs {
+		v, ok := h.viewerConns.Load(vid)
+		if !ok {
+			continue
+		}
+		vc, ok := v.(*webrtcViewerConn)
+		if !ok {
+			continue
+		}
+		h.sendWebRTCState(vc.wc, vc.sessionID, vid, false, false, false, "error")
+	}
 }
 
 // announceWebRTCAvailability sends the initial post-attach
@@ -220,16 +368,11 @@ func (h *BrowserWSHandler) announceWebRTCAvailability(
 	sessID, viewerID string,
 	cfg *config.Config,
 ) {
-	switch {
-	case !cfg.Tools.Browser.WebRTCEnabled:
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "disabled")
-	case !webrtc.Available:
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "lite_build")
-	case !mgr.VideoCapability().Capable:
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "not_capable")
-	default:
-		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "")
+	if reason := webrtcUnavailableReason(cfg, mgr); reason != "" {
+		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, reason)
+		return
 	}
+	h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "")
 }
 
 // sendWebRTCState builds and sends a browser_webrtc_state frame.
@@ -251,17 +394,62 @@ func (h *BrowserWSHandler) sendWebRTCState(wc *browserWSConn, sessID, viewerID s
 	wc.sendCriticalGen(f, dropContext(sessID, viewerID, "webrtc-state:"+reason))
 }
 
+// encoderLivenessCheckInterval / encoderLivenessStaleAfter (fix 3):
+// CaptureSession.LastPingAt() previously had zero readers — a wedged or
+// crashed encoder page that never disconnects cleanly (no TCP RST, just
+// silence) could leave a capture session "started" forever with no video
+// ever flowing and no signal to the viewer beyond eventually noticing the
+// picture is frozen. encoder.js's own startPingBeacon sends a
+// browser_capture_control{ping} every 15s; staleAfter is 2x that plus slack
+// so a single missed beacon (a network hiccup) never trips the watchdog —
+// only sustained silence does.
+// vars (not consts) so browser_webrtc_watchdog_test.go can shrink them for a
+// fast, deterministic watchdog test without a real 40s wait — mirrors
+// capture_session.go's captureGracePeriod pattern.
+var (
+	encoderLivenessCheckInterval = 10 * time.Second
+	encoderLivenessStaleAfter    = 40 * time.Second
+)
+
+// watchEncoderLiveness runs for the lifetime of one CaptureSession (fix 3),
+// exiting as soon as cs.Done() closes (Stop(), from ANY cause) so at most
+// one watchdog goroutine is ever live per session. Started exactly once per
+// session by ensureCaptureSession's newFn — the same "exactly once per
+// session" discipline EnsureCaptureSession already guarantees for newFn
+// itself.
+func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agentID string) {
+	ticker := time.NewTicker(encoderLivenessCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-cs.Done():
+			return
+		case <-ticker.C:
+			last := cs.LastPingAt()
+			if last.IsZero() {
+				continue // encoder hasn't bound the ingest connection yet
+			}
+			if time.Since(last) > encoderLivenessStaleAfter {
+				slog.Warn("browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session",
+					"agent_id", agentID, "last_ping_at", last, "stale_after", encoderLivenessStaleAfter)
+				cs.Stop()
+				return
+			}
+		}
+	}
+}
+
 // ensureCaptureSession get-or-creates agentID's CaptureSession (one active
 // stream per agent, wave-plan W2-A item 4), registering it in h.captures so
-// the ingest WS can find it by token, and wiring SetOnStopped to remove it
-// from both the registry and the manager once it stops.
+// the ingest WS can find it by token, wiring SetOnStopped to remove it from
+// both the registry and the manager once it stops AND push a
+// browser_webrtc_state to any still-attached viewers (fix 3), and starting
+// the encoder-liveness watchdog (fix 3).
 func (h *BrowserWSHandler) ensureCaptureSession(mgr *browser.BrowserManager, agentID string, cfg *config.Config) (*browser.CaptureSession, error) {
 	return mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) {
 		webrtcCfg := webrtc.Config{StunServer: cfg.Tools.Browser.WebRTCStunServer}
-		sink := webrtcInputSink(mgr)
-		logf := func(format string, args ...any) {
-			slog.Debug(fmt.Sprintf("browser-webrtc[%s]: "+format, append([]any{agentID}, args...)...))
-		}
+		sink := h.webrtcInputSink(mgr)
+		logf := webrtcRelayLogf(agentID)
 		cs, err := browser.NewCaptureSession(mgr, agentID, webrtcCfg, sink, logf)
 		if err != nil {
 			return nil, err
@@ -271,9 +459,42 @@ func (h *BrowserWSHandler) ensureCaptureSession(mgr *browser.BrowserManager, age
 			h.captures.removeIfCurrent(agentID, cs)
 			audit.Emit(context.Background(), h.agentLoop.AuditLogger(), audit.EventBrowserWebRTCStreamStopped,
 				audit.SeverityInfo, map[string]any{"agent_id": agentID})
+			h.notifyViewersStreamStopped(cs.ViewerIDs())
 		})
+		go h.watchEncoderLiveness(cs, agentID)
 		return cs, nil
 	})
+}
+
+// webrtcRelayLogf builds the log sink passed to browser.NewCaptureSession
+// (forwarded to webrtc.NewSession as the Pion relay's own logf). Fix 5: this
+// was always slog.Debug, so genuinely error-ish relay lines (the webrtc
+// package's ingest.go/viewer.go/session.go log lines carry "failed"/
+// "WARNING" markers on codec registration failures, PLI send failures, RTP
+// forward write failures, and unexpected disconnects — inspected without
+// editing that package, per this fix-wave's file fence) were invisible at
+// any log level an operator would normally have enabled. Classifies by the
+// SAME simple substring markers those log lines already use, rather than
+// duplicating a call-site enumeration that would silently drift the moment
+// that package's log text changes: any line containing "failed" or
+// "warning" (case-insensitive) lands at Warn; every other — purely
+// informational — line (connection-state transitions, "answer sent", RTP
+// forward progress counters) stays at Debug.
+func webrtcRelayLogf(agentID string) func(string, ...any) {
+	return func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		if webrtcRelayLineLooksErrorish(msg) {
+			slog.Warn("browser-webrtc[" + agentID + "]: " + msg)
+			return
+		}
+		slog.Debug("browser-webrtc[" + agentID + "]: " + msg)
+	}
+}
+
+// webrtcRelayLineLooksErrorish is webrtcRelayLogf's classifier.
+func webrtcRelayLineLooksErrorish(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "failed") || strings.Contains(lower, "warning")
 }
 
 // webrtcInputSink builds the webrtc.InputSink for one agent's CaptureSession:
@@ -281,8 +502,11 @@ func (h *BrowserWSHandler) ensureCaptureSession(mgr *browser.BrowserManager, age
 // SAME browserInputFrameToLiveInput helper handleInput uses (wave-plan W2-A
 // item 4 — "convert EXACTLY like browser_ws.go handleInput does"), then
 // dispatch through the identical controller-lock/SSRF/rate-limit gate
-// (browser.LiveViewRegistry.Input) the WS input path uses.
-func webrtcInputSink(mgr *browser.BrowserManager) webrtc.InputSink {
+// (browser.LiveViewRegistry.Input) the WS input path uses. A method on h
+// (fix 7 — was a package-level func) so a real dispatch error can be
+// surfaced back to the driving viewer's main WS connection, mirroring
+// handleInput's sessionErrorStatus — see surfaceWebRTCInputError.
+func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager) webrtc.InputSink {
 	return func(viewerID string, raw []byte) {
 		var frame generated.BrowserInputFrame
 		if err := json.Unmarshal(raw, &frame); err != nil {
@@ -296,8 +520,51 @@ func webrtcInputSink(mgr *browser.BrowserManager) webrtc.InputSink {
 				return
 			}
 			slog.Warn("browser-webrtc: input dispatch failed", "error", err, "viewer_id", viewerID)
+			h.surfaceWebRTCInputError(viewerID, frame.Kind, err)
 		}
 	}
+}
+
+// surfaceWebRTCInputError pushes a browser_status(error) frame to viewerID's
+// main WS connection (looked up via h.viewerConns — the viewer driving over
+// the data channel always has one, registered by handleWebRTCOffer). Fix 7:
+// previously a non-benign DC input dispatch error was logged at Warn
+// server-side and otherwise silently dropped — the WS input path's
+// handleInput surfaces the identical class of failure to the user via
+// sessionErrorStatus, and the DC path had no equivalent. Applies the SAME
+// content-aware throttle discipline handleInput uses (minInputErrorInterval;
+// discrete kinds — navigate/navigate_back/reload — are never throttled) so a
+// dead/crashed tab failing every DC input event can't flood the viewer with
+// one error frame per event. A no-op if viewerID has no registered
+// connection (e.g. the viewer detached between the DC message arriving and
+// this dispatch completing).
+func (h *BrowserWSHandler) surfaceWebRTCInputError(viewerID, kind string, dispatchErr error) {
+	v, ok := h.viewerConns.Load(viewerID)
+	if !ok {
+		return
+	}
+	vc, ok := v.(*webrtcViewerConn)
+	if !ok {
+		return
+	}
+	message := fmt.Sprintf("browser input failed: %s", dispatchErr)
+
+	vc.mu.Lock()
+	now := time.Now()
+	throttled := !inputKindIsDiscrete(kind) &&
+		message == vc.lastErrMsg &&
+		now.Sub(vc.lastErrAt) < minInputErrorInterval
+	if !throttled {
+		vc.lastErrAt = now
+		vc.lastErrMsg = message
+	}
+	vc.mu.Unlock()
+
+	if throttled {
+		return
+	}
+	vc.wc.sendCriticalGen(sessionErrorStatus(vc.sessionID, message),
+		dropContext(vc.sessionID, viewerID, "webrtc-input-error"))
 }
 
 // auditStream emits a WebRTC stream lifecycle audit entry.
@@ -514,8 +781,22 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 			}
 			answer, offerErr := cs.HandleIngestOffer(offerFrame.Sdp)
 			if offerErr != nil {
-				slog.Warn("capture-ingest: ingest offer failed", "error", offerErr, "agent_id", agentID)
-				continue
+				// Fix 2: previously just `continue`d, leaving the encoder
+				// connected with no signal at all that its offer was
+				// rejected — it would sit there until its own reconnect
+				// watchdog eventually gave up. Send the encoder an explicit
+				// ErrorFrame and close the connection so its reconnect
+				// logic (encoder.js) restarts the hello->offer cycle
+				// immediately instead of waiting out that timer.
+				slog.Warn("capture-ingest: ingest offer failed — signaling error to encoder and closing connection",
+					"error", offerErr, "agent_id", agentID)
+				if sendErr := ic.sendJSON(generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: fmt.Sprintf("capture ingest offer failed: %s", offerErr),
+				}); sendErr != nil {
+					slog.Warn("capture-ingest: send error frame to encoder failed", "error", sendErr, "agent_id", agentID)
+				}
+				return
 			}
 			if sendErr := ic.sendJSON(generated.BrowserCaptureAnswerFrame{
 				Type: string(generated.WsFrameTypeBrowserCaptureAnswer),

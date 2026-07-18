@@ -9,6 +9,8 @@ package browser
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -467,6 +469,91 @@ func TestBrowserManager_CaptureSessionRegistryLifecycle(t *testing.T) {
 	}
 	if built != 2 {
 		t.Fatalf("newFn invoked %d times after clear+re-ensure, want 2", built)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix-wave (ADR-048): Done()/LastPingAt()/ViewerIDs() — the encoder-liveness
+// watchdog's primitives (pkg/gateway/browser_webrtc.go's watchEncoderLiveness
+// reads all three).
+// ---------------------------------------------------------------------------
+
+func TestCaptureSession_LastPingAt_ZeroUntilRecorded(t *testing.T) {
+	relay := &fakeRelay{}
+	var calls int32
+	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(&calls, nil))
+
+	if got := cs.LastPingAt(); !got.IsZero() {
+		t.Fatalf("LastPingAt() before any ping/bind = %v, want zero time.Time", got)
+	}
+
+	before := time.Now()
+	cs.RecordPing()
+	after := time.Now()
+
+	got := cs.LastPingAt()
+	if got.Before(before) || got.After(after) {
+		t.Fatalf("LastPingAt() = %v, want between %v and %v", got, before, after)
+	}
+}
+
+func TestCaptureSession_Done_ClosesExactlyOnceOnStop(t *testing.T) {
+	relay := &fakeRelay{}
+	var calls int32
+	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(&calls, nil))
+
+	select {
+	case <-cs.Done():
+		t.Fatal("Done() channel is already closed before Stop() was ever called")
+	default:
+	}
+
+	cs.Stop()
+	select {
+	case <-cs.Done():
+	default:
+		t.Fatal("Done() channel must be closed immediately after Stop() completes")
+	}
+
+	// A second Stop() must not panic (double-close would panic the channel
+	// close, not just be a logic bug) — Stop()'s own cs.stopped guard must
+	// prevent a second close(cs.done).
+	cs.Stop()
+}
+
+func TestCaptureSession_ViewerIDs_SnapshotAndSurvivesStop(t *testing.T) {
+	relay := &fakeRelay{}
+	var calls int32
+	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(&calls, nil))
+
+	if got := cs.ViewerIDs(); len(got) != 0 {
+		t.Fatalf("ViewerIDs() on a fresh session = %v, want empty", got)
+	}
+
+	cs.AddViewer("viewer-a")
+	cs.AddViewer("viewer-b")
+
+	got := cs.ViewerIDs()
+	sort.Strings(got)
+	want := []string{"viewer-a", "viewer-b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ViewerIDs() = %v, want %v", got, want)
+	}
+
+	// Stop() does not clear cs.viewers (only relay.CloseViewer is called per
+	// id) — ViewerIDs() must remain accurate to call from INSIDE an
+	// onStopped callback, which is exactly how the gateway's
+	// notifyViewersStreamStopped (fix 3) uses it: to know who to push a
+	// final browser_webrtc_state to.
+	if _, err := cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	cs.Stop()
+
+	got = cs.ViewerIDs()
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ViewerIDs() after Stop() = %v, want still %v (Stop must not clear cs.viewers)", got, want)
 	}
 }
 
