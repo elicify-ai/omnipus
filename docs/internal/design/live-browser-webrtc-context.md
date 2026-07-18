@@ -1,9 +1,10 @@
 # Live Browser → WebRTC (browser-video-2) — Continuation Context
 
-**Status:** decision made; **WV1 spike executed 2026-07-17 — see `wv1-spike-results.md`
-(Q2 capture-with-audio = YES proven; Q1 connectivity = in-pod pass, external test
-pending operator).** This doc is the single source of
-continuation truth so a fresh session can pick up without prior context.
+**Status:** **FEATURE BUILT AND UAT-PASSED 2026-07-18** — the full WebRTC live-browser
+stack (ADR-047/ADR-048) shipped on this branch across 3 build waves + 4 fix waves;
+operator UAT confirmed video+audio+driving incl. agent-driven browsing and external
+TURN-free traversal. Build plan: `webrtc-build/wave-plan.md`; spike evidence:
+`wv1-spike-results.md`. This doc is retained as decision/continuation history.
 **Branch for the work:** `feature/browser-video-2` (this branch), cut from
 `bugfixes2` @ `eb4de2a2` (clean pre-video base), pushed to origin.
 **Date:** 2026-07-17.
