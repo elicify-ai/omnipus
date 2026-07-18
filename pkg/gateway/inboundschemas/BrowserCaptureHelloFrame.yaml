@@ -1,0 +1,39 @@
+title: BrowserCaptureHelloFrame
+description: >
+  Client (capture extension) → server (gateway). First frame on the
+  loopback-only /api/v1/browser/capture-ingest WebSocket, analogous to
+  AuthFrame on the public channels. `token` is the per-stream capability
+  token the gateway minted for this capture session and injected into the
+  extension's encoder page out-of-band via CDP
+  Page.addScriptToEvaluateOnNewDocument — never a URL query param, never
+  recoverable from the CDP transport. Loopback is NOT a trust boundary (a
+  co-tenant process could reach it), so this token is mandatory; the
+  gateway audits any hello with a missing/invalid/expired token as a
+  rejected ingest-auth attempt and closes the connection. See ADR-047 D6.
+type: object
+required:
+  - type
+  - token
+  - ext_version
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_capture_hello
+  token:
+    type: string
+    minLength: 16
+    maxLength: 256
+    description: >-
+      Opaque per-stream capability token minted by the gateway for this
+      capture session (not the SPA bearer auth token — a distinct,
+      single-purpose credential scoped to one ingest connection). See
+      ADR-047 D6.
+  ext_version:
+    type: string
+    minLength: 1
+    maxLength: 32
+    description: >-
+      The capture extension's manifest version string, reported so the
+      gateway can log/reject a mismatched build (e.g. after a seeded
+      extension upgrade) without guessing from behavior.

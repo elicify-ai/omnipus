@@ -344,6 +344,22 @@ const clientFrames = [
   "BrowserInputFrame",
   "BrowserControlFrame",
   "BrowserDetachFrame",
+  // Browser WebRTC signaling (ADR-047 D1/D4) — client (SPA) → server frame
+  // on the SPA-facing `browser` channel.
+  "BrowserWebRTCOfferFrame",
+  // NOTE: BrowserCapture*Frame schemas (browser_capture_hello/offer/answer/
+  // control) belong to the loopback-only browserCaptureIngest channel
+  // between the gateway and the capture extension's encoder page — the SPA
+  // never connects to that channel. This script has no per-channel scoping
+  // (it unions every components.schemas entry into one flat WsFrame/
+  // ServerFrame/ClientFrame set regardless of channel, same as every prior
+  // schema), so those 4 names are NOT listed here — deliberately, so they
+  // fall into `serverFrames` below and are therefore NEVER treated as a
+  // valid client-direction type the SPA's own outbound path could construct.
+  // They still appear as inert exported types/Zod schemas in the generated
+  // SPA files (dead code, never imported by ws.ts/browserLiveWs.ts) because
+  // the generator has no "exclude from SPA channels" bucket — see ADR-047
+  // W1-D notes.
 ];
 
 lines.push("// ── Client → server frames ──────────────────────────────────────────────────");

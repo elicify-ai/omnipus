@@ -445,6 +445,14 @@ func DefaultConfig() *Config {
 				// entirely; TakeControlEnabled=false keeps it watch-only).
 				LiveViewEnabled:    true,
 				TakeControlEnabled: true,
+				// ADR-047: WebRTC media (audio+video) is on by default as a
+				// progressive enhancement over the always-on JPEG fallback;
+				// operators can disable it (WebRTCEnabled=false) to force
+				// every viewer onto the JPEG tier. Google's public STUN
+				// server is the default so ICE works out of the box; set
+				// WebRTCStunServer="" for host-candidates-only.
+				WebRTCEnabled:    true,
+				WebRTCStunServer: "stun:stun.l.google.com:19302",
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{
