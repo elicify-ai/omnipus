@@ -1796,6 +1796,33 @@ func registerSharedTools(
 					// re-attach — which resolves the NEW manager via
 					// BrowserManagerForAgent. Teardown for ALL entries still
 					// also happens, unconditionally, in Close().
+					//
+					// BOTH calls below run whenever a coordinator exists,
+					// rather than the coordinator branch being a substitute
+					// for prior.Shutdown() as an earlier version of this fix
+					// assumed: an agent configured with an explicit
+					// tools.browser.cdp_url NEVER calls coordinator.Register
+					// in the first place (ensureStarted's CDPURL branch
+					// returns before ever consulting m.coordinator — see
+					// AttachSharedChrome's doc comment), so `prior` in that
+					// mode is absent from the coordinator's c.managers map
+					// and coord.Release(agentID) is a silent no-op for it —
+					// dropConnection never reaches it, Started() never flips
+					// false, and its remote-allocator connection leaks on
+					// every reload (caught by
+					// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager,
+					// which pins CDPURL specifically to exercise this path).
+					// prior.Shutdown() is safe to call unconditionally
+					// alongside coord.Release: it is idempotent (Shutdown /
+					// dropConnection share the same reset logic) and, per
+					// Shutdown's own doc comment, a no-op on Chrome/context
+					// in coordinator mode (m.allocCancel is the no-op stub
+					// ensureStarted installs there) — so CRIT-002 (Chrome +
+					// context survive a reload) is unaffected. coord.Release
+					// still runs whenever coord != nil so the coordinator's
+					// OWN bookkeeping (c.managers entry, tab-budget counts)
+					// stays correct for managers that WERE actually
+					// registered with it.
 					al.mu.Lock()
 					prior := al.browserMgrs[agentID]
 					coord := al.browserCoordinator
@@ -1806,9 +1833,11 @@ func registerSharedTools(
 						// browser context survive for the new manager to
 						// re-adopt.
 						coord.Release(agentID)
-					} else if prior != nil {
-						// No-coordinator test/legacy path: the old manager owns
-						// its own Chrome, so Shutdown actually kills it.
+					}
+					if prior != nil {
+						// Always safe (see doc comment above): kills the
+						// process in the no-coordinator/CDPURL-bypass modes,
+						// no-ops harmlessly in coordinator mode.
 						prior.Shutdown()
 					}
 				}

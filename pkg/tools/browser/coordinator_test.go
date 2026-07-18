@@ -48,6 +48,56 @@ func resolveTestBinary(t *testing.T) string {
 	return sharedTestBin
 }
 
+// sharedTestBinaryHeadlessShell resolves chrome-headless-shell SPECIFICALLY,
+// once, for tests that need old-headless CDP semantics rather than whichever
+// build resolveTestBinary's "detect either, prefer full chrome" resolution
+// (findInstalledBinary) happens to find. See resolveTestBinaryHeadlessShell's
+// doc comment for why that distinction is load-bearing, not cosmetic.
+var (
+	sharedTestBinHeadlessShellOnce sync.Once
+	sharedTestBinHeadlessShell     string
+	sharedTestBinHeadlessShellErr  error
+)
+
+// resolveTestBinaryHeadlessShell resolves chrome-headless-shell specifically
+// — never the full "chrome" build resolveTestBinary/findInstalledBinary
+// prefer by default on Linux (installer.go's dual-download: WebRTC
+// tabCapture needs full Chrome, so the shared install root prefers it once
+// present). D2Spike needs the OTHER build: it drives chromedp's classic
+// TCP-debug-port ExecAllocator (chromedp.NewExecAllocator, not this
+// package's own cdppipe launch path) to prove pure CDP
+// Target.createBrowserContext isolation — a property "old headless" mode
+// (chrome-headless-shell, a dedicated binary precisely because Chrome split
+// old-headless out of the main "chrome" build) supports, but empirically
+// (verified against Chrome 151 here — a full chromeHardeningBaseFlags()
+// pass-through plus a settle delay before the second context reproduces the
+// SAME failure, ruling out both a missing-flag and a timing-race
+// explanation) full "chrome"'s New Headless mode does not: creating a SECOND
+// isolated browser context and navigating in it reliably errors CDP -32000
+// "no browser is open". Reuses installer.go's per-build resolver
+// (EnsureChromiumBuild) so an already-cached chrome-headless-shell install
+// (this codebase's managed root, or resolveTestBinary's own temp-dir
+// fallback from an earlier pre-dual-download install) is found without a
+// network hit; only downloads if genuinely absent.
+func resolveTestBinaryHeadlessShell(t *testing.T) string {
+	t.Helper()
+	sharedTestBinHeadlessShellOnce.Do(func() {
+		if home, err := os.UserHomeDir(); err == nil {
+			installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
+			if bin := findInstalledBuild(installRoot, "linux64", headlessShellBuild()); bin != "" {
+				sharedTestBinHeadlessShell = bin
+				return
+			}
+		}
+		sharedTestBinHeadlessShell, sharedTestBinHeadlessShellErr = EnsureChromiumBuild(
+			context.Background(), filepath.Join(t.TempDir(), "chromium-headless-shell"), headlessShellBuild())
+	})
+	if sharedTestBinHeadlessShellErr != nil {
+		t.Skipf("no managed chrome-headless-shell for D2 spike: %v", sharedTestBinHeadlessShellErr)
+	}
+	return sharedTestBinHeadlessShell
+}
+
 func newCoordinatorTestConfig(t *testing.T) (BrowserConfig, string) {
 	t.Helper()
 	home := t.TempDir()

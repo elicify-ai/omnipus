@@ -32,11 +32,21 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spike needs a real Chrome")
 	}
-	// Reuse the shared cached managed Chrome (resolveTestBinary) instead of
+	// chrome-headless-shell specifically, NOT resolveTestBinary's
+	// "detect-either, prefer full chrome" resolution — this spike drives
+	// chromedp's classic TCP-debug-port ExecAllocator directly (not this
+	// package's own cdppipe launch path) to prove pure CDP
+	// Target.createBrowserContext isolation, a property full "chrome"'s New
+	// Headless mode does not support the same way (verified against Chrome
+	// 151: creating a second isolated browser context + navigating in it
+	// reliably errors CDP -32000 "no browser is open", regardless of launch
+	// flags or a settle delay — see resolveTestBinaryHeadlessShell's doc
+	// comment for the full investigation). Reuses the shared cached managed
+	// chrome-headless-shell (resolveTestBinaryHeadlessShell) instead of
 	// re-downloading ~130MB into a fresh tempdir on every run — the original
 	// EnsureChromium(tempdir) call made this test take minutes + OOM-risk on a
 	// disk/RAM-constrained devpod for no coverage benefit (same binary).
-	binPath := resolveTestBinary(t)
+	binPath := resolveTestBinaryHeadlessShell(t)
 
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(binPath),
