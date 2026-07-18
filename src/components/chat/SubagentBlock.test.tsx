@@ -422,3 +422,55 @@ describe('SubagentBlock sibling blocks', () => {
     expect(header2).toHaveAttribute('aria-expanded', 'true')
   })
 })
+
+// ── W3: 3p (external-CLI) delegates report on completion only ───────────────
+// delegation-visibility spec: external-CLI (subagent_3p) agents are batch —
+// no intermediate output during the run, only a report when finished. A
+// running 3p span must say so; a running native span must not; a completed
+// (terminal) 3p span must show its result normally with no such note.
+
+describe('SubagentBlock — 3p (external-CLI) running notice (W3)', () => {
+  it('a running 3p subagent renders the "no live progress" notice', () => {
+    const span = makeSpan({ status: 'running' })
+    render(<SubagentBlock span={span} agentType="3p" />)
+
+    const notice = screen.getByTestId('subagent-3p-running-notice')
+    expect(notice).toHaveTextContent(/no live progress/i)
+    expect(notice).toHaveTextContent(/finishes/i)
+  })
+
+  it('a running native subagent does NOT render the notice', () => {
+    const span = makeSpan({ status: 'running' })
+    render(<SubagentBlock span={span} agentType="native" />)
+
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
+  })
+
+  it('a running subagent with unresolved agentType (omitted prop) does NOT render the notice', () => {
+    const span = makeSpan({ status: 'running' })
+    render(<SubagentBlock span={span} />)
+
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
+  })
+
+  it('a completed 3p subagent shows its result normally and does NOT render the notice', () => {
+    const span = makeSpan({ status: 'success', steps: [], finalResult: 'External agent finished the task.' })
+    render(<SubagentBlock span={span} agentType="3p" />)
+
+    // No "no live progress" note once terminal.
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
+
+    // Result renders normally, same as any other completed span.
+    fireEvent.click(screen.getByTestId('subagent-collapsed'))
+    const expanded = screen.getByTestId('subagent-expanded')
+    expect(within(expanded).getByText('Final result')).toBeInTheDocument()
+    expect(within(expanded).getByText('External agent finished the task.')).toBeInTheDocument()
+  })
+
+  it('a failed (error) 3p subagent does NOT render the running notice', () => {
+    const span = makeSpan({ status: 'error', steps: [] })
+    render(<SubagentBlock span={span} agentType="3p" />)
+
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
+  })
+})

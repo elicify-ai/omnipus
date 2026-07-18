@@ -49,14 +49,31 @@ function stepCountText(count: number): string {
 
 export interface SubagentBlockProps {
   span: SubagentSpan
+  /**
+   * The delegate's kind, when the caller has resolved it (span.agentId
+   * looked up against the agents list — see ChatScreen.tsx's two render
+   * sites, SubagentSpansRenderer and VirtualAssistantMessageRow). Only
+   * '3p' changes rendering: external-CLI (subagent_3p) delegates are
+   * structurally batch — they emit no intermediate output while running
+   * and only report once finished (W3, delegation-visibility) — so a
+   * RUNNING '3p' span shows an inline notice explaining the silence.
+   * Omitted (or 'native') preserves prior behavior exactly; an
+   * unresolvable agentId is passed through as omitted by the caller
+   * rather than a false '3p'/'native' guess.
+   */
+  agentType?: '3p' | 'native'
 }
 
-export function SubagentBlock({ span }: SubagentBlockProps) {
+export function SubagentBlock({ span, agentType }: SubagentBlockProps) {
   // Expansion state lives in the UI store so live-render → historical-virtualized-render
   // swap (when streaming ends) preserves user-chosen expanded/collapsed state.
   const expanded = useUiStore((s) => Boolean(s.expandedSpans[span.spanId]))
   const toggleSpanExpansion = useUiStore((s) => s.toggleSpanExpansion)
   const isTerminal = span.status !== 'running'
+  // W3: only while a 3p (external-CLI) delegate is still running — it emits
+  // no intermediate output, so without this the row looks silent/stuck. A
+  // completed 3p span (isTerminal) shows its result normally, same as native.
+  const show3pRunningNotice = agentType === '3p' && !isTerminal
 
   // W4-4: narrow to terminal type before accessing durationMs/finalResult.
   const terminal = isTerminal ? (span as SubagentSpanTerminal) : null
@@ -123,6 +140,20 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
           {expanded ? <CaretUp size={12} aria-hidden="true" /> : <CaretDown size={12} aria-hidden="true" />}
         </span>
       </button>
+
+      {/* W3: 3p (external-CLI) delegates are batch — no intermediate output
+          while running, only a report on completion. Shown only while
+          running (never once terminal) so it never contradicts a rendered
+          result. Always visible without expanding — a collapsed running 3p
+          row is exactly the case that reads as silent/stuck otherwise. */}
+      {show3pRunningNotice && (
+        <p
+          data-testid="subagent-3p-running-notice"
+          className="pl-[18px] pb-1 -mt-0.5 text-[10px] text-[var(--color-muted)] font-sans italic"
+        >
+          External agent — no live progress; results appear when it finishes.
+        </p>
+      )}
 
       {/* Expanded body — FR-H-008. Indented quote-block: a thin left accent
           line stands in for the old bordered panel, matching ToolCallBadge's/
