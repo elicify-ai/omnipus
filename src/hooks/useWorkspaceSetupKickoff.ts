@@ -36,20 +36,27 @@ export function useWorkspaceSetupKickoff(workspace: Workspace | undefined): void
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const { chatAgents } = useChatAgents()
 
-  // Keyed by workspace id: fires at most once per workspace per mount of
-  // the containing component. Reset is implicit — a DIFFERENT workspace id
-  // simply doesn't match, so navigating to a new workspace can fire again;
-  // revisiting the SAME workspace after a successful fire is blocked by
-  // `workspace.setup_pending` already being false (cache or server), not by
-  // this ref alone.
-  const firedForWorkspaceId = useRef<string | null>(null)
+  // Fix 4: a SET, not a single id — this component instance can legitimately
+  // fire for more than one workspace over its lifetime (the user navigates
+  // A → B while A's kickoff ack is still outstanding — see chat.ts's
+  // `pendingKickoff` doc comment — and B also needs setup). A single-slot
+  // ref would forget A's entry the moment B fires, letting a later A → B →
+  // A navigation refire A's kickoff a second time even though it's already
+  // in flight or done. Revisiting the SAME workspace after a successful fire
+  // is additionally guarded by `workspace.setup_pending` already being false
+  // (cache or server), independent of Set membership.
+  const firedForWorkspaceIds = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (!workspace) return
+    // Fix 4: never kick off an archived workspace — there is no live team to
+    // interview a user into building, and re-activating a workspace is not
+    // this hook's concern.
+    if (workspace.status !== 'active') return
     if (!workspace.setup_pending) return
     if (!isConnected) return
     if (activeSessionId !== null) return
-    if (firedForWorkspaceId.current === workspace.id) return
+    if (firedForWorkspaceIds.current.has(workspace.id)) return
 
     // Resolve the workspace's lead agent — its core_team's first member, or
     // 'ava' when core_team is unset (matches the Wave 1 seeding default).
@@ -63,7 +70,7 @@ export function useWorkspaceSetupKickoff(workspace: Workspace | undefined): void
     // Claim the guard BEFORE sending — a synchronous re-render triggered by
     // the send itself (setActiveSession, bucket writes) must not re-enter
     // this effect body and fire a second frame.
-    firedForWorkspaceId.current = workspace.id
+    firedForWorkspaceIds.current.add(workspace.id)
 
     const sent = useChatStore.getState().sendWorkspaceSetupKickoff({
       workspaceId: workspace.id,
@@ -74,9 +81,13 @@ export function useWorkspaceSetupKickoff(workspace: Workspace | undefined): void
 
     if (!sent) {
       // The store bailed (offline / mid-stream / a session raced in between
-      // the guard reads above and the store's own re-check) — release the
-      // guard so the next render (e.g. once isConnected flips true) retries.
-      firedForWorkspaceId.current = null
+      // the guard reads above and the store's own re-check, or — Fix 2/3 —
+      // a full rollback after a failed send, or a DIFFERENT kickoff still
+      // outstanding via the store's `pendingKickoff` guard) — release the
+      // guard so a later render (e.g. once isConnected flips true, or once
+      // the other kickoff resolves and something re-renders this component)
+      // retries.
+      firedForWorkspaceIds.current.delete(workspace.id)
       return
     }
 
@@ -88,13 +99,21 @@ export function useWorkspaceSetupKickoff(workspace: Workspace | undefined): void
     // relying on partial-match invalidation). This prevents a remount from
     // re-reading `setup_pending: true` before the server's own state (which
     // the backend clears on accepting this kickoff) is refetched.
+    //
+    // Fix 4: cancelQueries() FIRST for every key this write touches — an
+    // in-flight refetch that read the workspace list/detail from disk
+    // BEFORE this optimistic clear can otherwise land its (stale,
+    // setup_pending:true) result AFTER setQueryData below, silently
+    // resurrecting the flag and letting a later remount refire the kickoff.
     const clearFlag = (list: Workspace[] | undefined) =>
       list?.map((w) => (w.id === workspace.id ? { ...w, setup_pending: false } : w))
-    for (const status of ['active', 'archived'] as const) {
-      queryClient.setQueryData<Workspace[]>(workspacesQueryKeys.list({ status }), clearFlag)
-    }
-    queryClient.setQueryData<Workspace>(workspacesQueryKeys.detail(workspace.id), (w) =>
-      w ? { ...w, setup_pending: false } : w,
-    )
+    const listKeys = (['active', 'archived'] as const).map((status) => workspacesQueryKeys.list({ status }))
+    const detailKey = workspacesQueryKeys.detail(workspace.id)
+    void Promise.all([...listKeys, detailKey].map((key) => queryClient.cancelQueries({ queryKey: key }))).then(() => {
+      for (const key of listKeys) {
+        queryClient.setQueryData<Workspace[]>(key, clearFlag)
+      }
+      queryClient.setQueryData<Workspace>(detailKey, (w) => (w ? { ...w, setup_pending: false } : w))
+    })
   }, [workspace, isConnected, activeSessionId, chatAgents, queryClient])
 }

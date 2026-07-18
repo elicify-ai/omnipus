@@ -248,4 +248,88 @@ describe('useWorkspaceSetupKickoff — cache clear after firing', () => {
     const activeList = client.getQueryData<Workspace[]>(workspacesQueryKeys.list({ status: 'active' }))
     expect(activeList?.find((w) => w.id === 'ws-9')?.setup_pending).toBe(true)
   })
+
+  it('cancelQueries is called for the active-list, archived-list, and detail keys before the optimistic clear lands', async () => {
+    // Fix 4: an in-flight refetch that read the pre-clear (setup_pending:true)
+    // disk state must be cancelled BEFORE the optimistic setQueryData below —
+    // otherwise its (stale) result can land AFTER our write and resurrect the
+    // flag, letting a later remount refire the kickoff.
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const workspace = makeWorkspace({ id: 'ws-cancel', setup_pending: true, core_team: ['ava'] })
+    const client = makeClient()
+    client.setQueryData<Workspace[]>(workspacesQueryKeys.list({ status: 'active' }), [workspace])
+    client.setQueryData<Workspace[]>(workspacesQueryKeys.list({ status: 'archived' }), [])
+    client.setQueryData<Workspace>(workspacesQueryKeys.detail('ws-cancel'), workspace)
+    const cancelSpy = vi.spyOn(client, 'cancelQueries')
+
+    renderHook(() => useWorkspaceSetupKickoff(workspace), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(1) })
+    await waitFor(() => {
+      const detail = client.getQueryData<Workspace>(workspacesQueryKeys.detail('ws-cancel'))
+      expect(detail?.setup_pending).toBe(false)
+    })
+
+    const cancelledKeys = cancelSpy.mock.calls.map((call) =>
+      JSON.stringify((call[0] as { queryKey: unknown }).queryKey),
+    )
+    expect(cancelledKeys).toContain(JSON.stringify(workspacesQueryKeys.list({ status: 'active' })))
+    expect(cancelledKeys).toContain(JSON.stringify(workspacesQueryKeys.list({ status: 'archived' })))
+    expect(cancelledKeys).toContain(JSON.stringify(workspacesQueryKeys.detail('ws-cancel')))
+  })
+})
+
+describe('useWorkspaceSetupKickoff — Fix 4: archived workspaces are skipped', () => {
+  it('does not fire for an archived workspace even when setup_pending is true', async () => {
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const workspace = makeWorkspace({ status: 'archived', setup_pending: true, core_team: ['ava'] })
+    const client = makeClient()
+    renderHook(() => useWorkspaceSetupKickoff(workspace), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => { expect(fetchAgents).toHaveBeenCalled() })
+    expect(kickoffSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('useWorkspaceSetupKickoff — Fix 4: Set-based fired guard (A → B → A)', () => {
+  it('fires for a second, different workspace while the first is still outstanding, but never refires the first', async () => {
+    // Mirrors the real scenario (Fix 3): the store's own sendWorkspaceSetupKickoff
+    // bails while a DIFFERENT kickoff is in flight, so this spy — which always
+    // succeeds — stands in for "no other kickoff is pending" at the store
+    // level; this test is purely about the HOOK's own per-workspace guard.
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const wsA = makeWorkspace({ id: 'ws-a', name: 'Workspace A', setup_pending: true, core_team: ['ava'] })
+    const wsB = makeWorkspace({ id: 'ws-b', name: 'Workspace B', setup_pending: true, core_team: ['ava'] })
+    const client = makeClient()
+
+    const { rerender } = renderHook(({ ws }) => useWorkspaceSetupKickoff(ws), {
+      wrapper: makeWrapper(client),
+      initialProps: { ws: wsA },
+    })
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(1) })
+    expect(kickoffSpy).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: 'ws-a' }))
+
+    // Navigate to a DIFFERENT workspace that also needs setup — the Set
+    // guard must not block this; only same-id refires are blocked.
+    rerender({ ws: wsB })
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(2) })
+    expect(kickoffSpy).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: 'ws-b' }))
+
+    // Navigate back to A. Its prop object still has setup_pending:true (the
+    // hook never mutates its input, and this simulates the cache-not-yet-
+    // refetched window) — a single-slot ref would have forgotten A the
+    // moment B fired, allowing a refire here. The Set guard must not.
+    rerender({ ws: wsA })
+    rerender({ ws: wsA })
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(2) })
+  })
 })
