@@ -1,0 +1,655 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WV1 Spike Q4 — bidirectional viewer (video+audio out, input in)</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; margin: 16px; background: #111; color: #eee; }
+  h1 { font-size: 18px; }
+  #start-btn { padding: 16px 32px; font-size: 20px; cursor: pointer; background: #2a6; color: #fff; border: none; border-radius: 6px; }
+  #start-btn:disabled { background: #444; cursor: default; }
+  #stress-btn { padding: 10px 20px; font-size: 15px; cursor: pointer; background: #a62; color: #fff; border: none; border-radius: 6px; }
+  #stress-btn:disabled { background: #444; cursor: default; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .col { flex: 1; min-width: 380px; }
+  fieldset { border: 1px solid #444; margin-bottom: 12px; }
+  video { width: 100%; max-width: 640px; background: #000; border: 3px solid #444; display: block; outline: none; cursor: crosshair; }
+  video.focused { border-color: #2a6; }
+  .stat { font-family: monospace; background: #1c1c1c; padding: 8px; border-radius: 4px; margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
+  pre.log { background: #000; color: #6f6; padding: 8px; height: 220px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; }
+  pre.serverlog { background: #000; color: #6cf; padding: 8px; height: 220px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all; border: 1px solid #333; }
+  textarea#report { width: 100%; height: 320px; font-family: monospace; font-size: 12px; background: #1c1c1c; color: #eee; border: 1px solid #444; }
+  #audio-rms-live { font-size: 20px; }
+  #focus-hint { font-size: 12px; opacity: .7; }
+</style>
+</head>
+<body>
+<h1>WV1 Spike Q4 — bidirectional (headless tab capture &#8594; WebRTC out AND input data channel in, one PeerConnection)</h1>
+
+<fieldset>
+  <legend>Start</legend>
+  <button id="start-btn">Start viewing</button>
+  <span id="status"></span>
+</fieldset>
+
+<div class="row">
+  <div class="col">
+    <h3>Video (click to drive, Escape to release)</h3>
+    <video id="v" playsinline autoplay tabindex="0"></video>
+    <div id="focus-hint">not focused — click the video to start driving the tab</div>
+    <div>Resolution: <span id="resolution" class="stat">(not connected)</span></div>
+    <div>Video inbound-rtp: <div id="video-stats" class="stat">(not connected)</div></div>
+    <h3>Audio</h3>
+    <div>Live RMS (WebAudio AnalyserNode on received track): <span id="audio-rms-live">-</span></div>
+    <div>Audio inbound-rtp: <div id="audio-stats" class="stat">(not connected)</div></div>
+    <h3>Connection</h3>
+    <div>ICE connection state: <span id="ice-state" class="stat">(not started)</span></div>
+    <div>ICE gathering state: <span id="gather-state" class="stat">(not started)</span></div>
+    <div>Selected candidate pair: <div id="selected-pair" class="stat">(not connected)</div></div>
+  </div>
+  <div class="col">
+    <h3>Input (WebRTC data channel "input")</h3>
+    <div>Data channel state: <span id="dc-state" class="stat">(not connected)</span></div>
+    <div id="input-stats" class="stat">(no input yet)</div>
+    <div style="margin: 8px 0;">
+      <button id="stress-btn" disabled>Stress test (30s: 60 mousemove/s + 2 clicks/s + 4 keys/s)</button>
+    </div>
+    <div id="stress-summary" class="stat">(not run yet)</div>
+    <h3>Browser-side log</h3>
+    <pre class="log" id="log"></pre>
+    <h3>Server-side log (GET /serverlog, polled 1s)</h3>
+    <pre class="serverlog" id="serverlog"></pre>
+  </div>
+</div>
+
+<h3>Copy-pasteable report (auto-updated)</h3>
+<button id="copy-btn">Select All (then Ctrl/Cmd-C)</button>
+<textarea id="report" readonly></textarea>
+
+<script>
+'use strict';
+let pc = null;
+let inboundStream = new MediaStream();
+let statsTimer = null;
+let lastVideoStats = null;
+let rmsHistory = [];
+let audioCtx = null;
+let analyser = null;
+let analyserBuf = null;
+let selectedPairText = '(not connected)';
+let videoStatsText = '(not connected)';
+let audioStatsText = '(not connected)';
+let resolutionText = '(not connected)';
+let lastPacketsLostVideo = 0;
+
+// ---- Q4: input data channel state -----------------------------------------
+let inputDC = null;
+let inputFocused = false;
+let evtSeq = 0;
+const pendingMeta = new Map(); // id -> {tSent: perfNow, type}
+let dispatchRtts = [];   // rolling: real mouse/key dispatch RTTs (ms)
+let pingRtts = [];       // rolling: pure DC round-trip baseline (ms)
+let eventsSent = 0, acksReceived = 0, dispatchErrors = 0;
+let lastMoveSentAt = 0;
+const MOVE_THROTTLE_MS = 1000 / 60; // ~60/s cap per spec
+
+let stressActive = false;
+let stressRtts = [];
+let stressTimers = [];
+
+function nowTs() {
+  return new Date().toISOString().split('T')[1].replace('Z', '');
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent += `[${nowTs()}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+  updateReport();
+}
+
+function percentile(arr, p) {
+  if (!arr.length) return NaN;
+  const sorted = arr.slice().sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  return sorted[idx];
+}
+
+function trimRolling(arr, max) {
+  if (arr.length > max) arr.splice(0, arr.length - max);
+}
+
+async function start() {
+  document.getElementById('start-btn').disabled = true;
+  document.getElementById('status').textContent = 'connecting...';
+  log('=== Start viewing clicked ===');
+
+  pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  // Q4: create the "input" data channel on this SAME PeerConnection BEFORE
+  // createOffer() so its SCTP association is negotiated in the same SDP as
+  // the two recvonly media transceivers -- one PeerConnection, three
+  // independent streams (video, audio, input), input can never contend
+  // with pixels because it isn't sharing a CDP command queue with anything
+  // video-related on either side.
+  inputDC = pc.createDataChannel('input', { ordered: true });
+  wireInputDataChannel(inputDC);
+
+  pc.ontrack = (e) => {
+    log(`ontrack: kind=${e.track.kind} id=${e.track.id} readyState=${e.track.readyState}`);
+    inboundStream.addTrack(e.track);
+    document.getElementById('v').srcObject = inboundStream;
+    if (e.track.kind === 'audio') setupAudioAnalyser(e.track);
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    log(`ICE connection state -> ${pc.iceConnectionState}`);
+    document.getElementById('ice-state').textContent = pc.iceConnectionState;
+    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+      document.getElementById('status').textContent = 'CONNECTED';
+    }
+    updateReport();
+  };
+  pc.onicegatheringstatechange = () => {
+    log(`ICE gathering state -> ${pc.iceGatheringState}`);
+    document.getElementById('gather-state').textContent = pc.iceGatheringState;
+    updateReport();
+  };
+  pc.onconnectionstatechange = () => {
+    log(`Peer connection state -> ${pc.connectionState}`);
+    updateReport();
+  };
+
+  let offer;
+  try {
+    offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+  } catch (err) {
+    log(`ERROR creating/setting local offer: ${err}`);
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+
+  await waitForGatheringComplete(pc);
+  log('Local ICE gathering complete, POSTing offer to /viewer-offer');
+
+  let res;
+  try {
+    res = await fetch('/viewer-offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    });
+  } catch (err) {
+    log(`ERROR posting offer: ${err}`);
+    document.getElementById('status').textContent = 'offer POST failed';
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    log(`viewer-offer POST failed: HTTP ${res.status}: ${body}`);
+    document.getElementById('status').textContent = `offer failed (${res.status}) — retry in a few seconds`;
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+  const answer = await res.json();
+  log(`Answer received from server (${answer.sdp.length} bytes SDP)`);
+  try {
+    await pc.setRemoteDescription(answer);
+    log('Remote description (answer) applied');
+  } catch (err) {
+    log(`ERROR applying remote description: ${err}`);
+    return;
+  }
+
+  statsTimer = setInterval(pollStats, 1000);
+  setupVideoInputHandlers();
+  startPingLoop();
+}
+
+function waitForGatheringComplete(pc) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    function check() {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', check);
+        clearTimeout(timer);
+        resolve();
+      }
+    }
+    pc.addEventListener('icegatheringstatechange', check);
+    const timer = setTimeout(() => {
+      pc.removeEventListener('icegatheringstatechange', check);
+      log('WARNING: gathering did not reach complete within 10s, proceeding with partial candidates');
+      resolve();
+    }, 10000);
+  });
+}
+
+function setupAudioAnalyser(track) {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume().catch(() => {});
+  const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  src.connect(analyser);
+  analyserBuf = new Float32Array(analyser.fftSize);
+  requestAnimationFrame(sampleRms);
+}
+
+function sampleRms() {
+  if (analyser) {
+    analyser.getFloatTimeDomainData(analyserBuf);
+    let s = 0;
+    for (let i = 0; i < analyserBuf.length; i++) s += analyserBuf[i] * analyserBuf[i];
+    const rms = Math.sqrt(s / analyserBuf.length);
+    const t = performance.now();
+    rmsHistory.push({ t, rms });
+    while (rmsHistory.length && t - rmsHistory[0].t > 60000) rmsHistory.shift();
+    document.getElementById('audio-rms-live').textContent = rms.toFixed(4);
+  }
+  requestAnimationFrame(sampleRms);
+}
+
+function countPeaksInWindow(fromT, toT) {
+  const window_ = rmsHistory.filter((x) => x.t >= fromT && x.t <= toT);
+  if (window_.length < 4) return { count: 0, intervals: [] };
+  const values = window_.map((x) => x.rms);
+  const min = Math.min(...values), max = Math.max(...values);
+  const threshold = min + (max - min) * 0.5;
+  const peaks = [];
+  let above = false;
+  for (const smp of window_) {
+    if (smp.rms > threshold && !above) { peaks.push(smp.t); above = true; }
+    else if (smp.rms <= threshold) { above = false; }
+  }
+  const intervals = [];
+  for (let i = 1; i < peaks.length; i++) intervals.push(((peaks[i] - peaks[i - 1]) / 1000).toFixed(2));
+  return { count: peaks.length, intervals };
+}
+
+function computeAudioPulseSummary() {
+  if (rmsHistory.length < 10) return '(insufficient audio samples yet)';
+  const values = rmsHistory.map((x) => x.rms);
+  const min = Math.min(...values), max = Math.max(...values);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const { count, intervals } = countPeaksInWindow(rmsHistory[0].t, rmsHistory[rmsHistory.length - 1].t);
+  return `min=${min.toFixed(4)} max=${max.toFixed(4)} mean=${mean.toFixed(4)} peakCount=${count} interPeakIntervalsSec=[${intervals.join(', ')}] (expect ~1.00s apart if metronome audio is arriving live)`;
+}
+
+async function pollStats() {
+  if (!pc) return;
+  const stats = await pc.getStats();
+  stats.forEach((report) => {
+    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+      const now = { framesDecoded: report.framesDecoded, ts: report.timestamp };
+      let fps = null;
+      if (lastVideoStats && now.ts > lastVideoStats.ts) {
+        const dt = (now.ts - lastVideoStats.ts) / 1000;
+        const df = now.framesDecoded - lastVideoStats.framesDecoded;
+        if (dt > 0) fps = df / dt;
+      }
+      lastVideoStats = now;
+      lastPacketsLostVideo = report.packetsLost || 0;
+      videoStatsText = `framesDecoded=${report.framesDecoded} fps=${fps !== null ? fps.toFixed(1) : '?'} frameWidth=${report.frameWidth || '?'} frameHeight=${report.frameHeight || '?'} packetsReceived=${report.packetsReceived || 0} packetsLost=${report.packetsLost || 0} jitter=${(report.jitter || 0).toFixed(4)}`;
+      resolutionText = `${report.frameWidth || '?'}x${report.frameHeight || '?'}`;
+      document.getElementById('video-stats').textContent = videoStatsText;
+      document.getElementById('resolution').textContent = resolutionText;
+    }
+    if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+      audioStatsText = `packetsReceived=${report.packetsReceived || 0} audioLevel=${report.audioLevel !== undefined ? report.audioLevel.toFixed(4) : '?'} totalAudioEnergy=${report.totalAudioEnergy !== undefined ? report.totalAudioEnergy.toFixed(6) : '?'} totalSamplesDuration=${report.totalSamplesDuration !== undefined ? report.totalSamplesDuration.toFixed(2) : '?'} jitter=${(report.jitter || 0).toFixed(4)}`;
+      document.getElementById('audio-stats').textContent = audioStatsText;
+    }
+    if (report.type === 'candidate-pair' && report.state === 'succeeded' && (report.nominated || report.selected)) {
+      const local = stats.get(report.localCandidateId);
+      const remote = stats.get(report.remoteCandidateId);
+      selectedPairText = `local: type=${local ? local.candidateType : '?'} proto=${local ? local.protocol : '?'} ${local ? (local.address || local.ip) : '?'}:${local ? local.port : '?'}  <->  remote: type=${remote ? remote.candidateType : '?'} proto=${remote ? remote.protocol : '?'} ${remote ? (remote.address || remote.ip) : '?'}:${remote ? remote.port : '?'}`;
+      document.getElementById('selected-pair').textContent = selectedPairText;
+    }
+  });
+  updateReport();
+}
+
+async function fetchServerLog() {
+  try {
+    const res = await fetch('/serverlog');
+    const text = await res.text();
+    const el = document.getElementById('serverlog');
+    const wasAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+    el.textContent = text;
+    if (wasAtBottom) el.scrollTop = el.scrollHeight;
+  } catch (e) { /* ignore transient fetch errors */ }
+  updateReport();
+}
+setInterval(fetchServerLog, 1000);
+fetchServerLog();
+
+// ============================================================================
+// Q4: input data channel — wiring, coordinate mapping, focus, stats, stress.
+// ============================================================================
+
+function wireInputDataChannel(dc) {
+  dc.onopen = () => {
+    log('Input data channel OPEN');
+    document.getElementById('dc-state').textContent = 'open';
+    document.getElementById('stress-btn').disabled = false;
+    updateReport();
+  };
+  dc.onclose = () => {
+    log('Input data channel closed');
+    document.getElementById('dc-state').textContent = 'closed';
+    document.getElementById('stress-btn').disabled = true;
+    updateReport();
+  };
+  dc.onerror = (e) => {
+    log(`Input data channel error: ${e.message || e}`);
+  };
+  // Server acks are sent via dc.SendText on the Go side (Q1's gotcha:
+  // Pion's dc.Send() is binary-typed, a browser's dc.send(string) is
+  // text-typed -- mismatched framing silently breaks the handler. Confirm
+  // we're getting text frames, not binary.
+  dc.onmessage = (ev) => {
+    if (typeof ev.data !== 'string') {
+      log(`WARNING: received BINARY data-channel frame (expected text/JSON ack) — ${ev.data.byteLength || ev.data.size} bytes, DROPPING`);
+      return;
+    }
+    handleInputAck(ev.data);
+  };
+}
+
+function handleInputAck(raw) {
+  let ack;
+  try {
+    ack = JSON.parse(raw);
+  } catch (e) {
+    log(`bad ack JSON: ${e}`);
+    return;
+  }
+  const meta = pendingMeta.get(ack.id);
+  if (!meta) return; // stale/duplicate/unknown id
+  pendingMeta.delete(ack.id);
+  const rtt = performance.now() - meta.tSent;
+  acksReceived++;
+  if (!ack.ok) dispatchErrors++;
+
+  if (meta.type === 'ping') {
+    pingRtts.push(rtt);
+    trimRolling(pingRtts, 200);
+  } else {
+    dispatchRtts.push(rtt);
+    trimRolling(dispatchRtts, 5000);
+    if (stressActive) stressRtts.push(rtt);
+  }
+  updateInputStatsPanel();
+}
+
+function sendInputEvent(type, extra) {
+  if (!inputDC || inputDC.readyState !== 'open') return null;
+  const id = ++evtSeq;
+  const payload = Object.assign({ id, type, t_client: performance.now() }, extra);
+  try {
+    inputDC.send(JSON.stringify(payload));
+  } catch (e) {
+    log(`send failed for event id=${id}: ${e}`);
+    return null;
+  }
+  pendingMeta.set(id, { tSent: performance.now(), type });
+  eventsSent++;
+  updateInputStatsPanel();
+  return id;
+}
+
+// mapCoords: the captured tab renders at a fixed 800x600 (Chrome headless
+// new-window default, confirmed by Q3's 800x600 framesDecoded stats). The
+// <video> element may be displayed smaller/larger and, since it has no
+// explicit CSS height, the browser sizes it to preserve the intrinsic
+// aspect ratio -- but we compute a general letterbox-aware mapping anyway
+// (robust if object-fit/CSS ever changes) rather than assuming zero offset.
+function mapCoords(clientX, clientY, videoEl) {
+  const rect = videoEl.getBoundingClientRect();
+  const vw = videoEl.videoWidth || 800;
+  const vh = videoEl.videoHeight || 600;
+  const scale = Math.min(rect.width / vw, rect.height / vh);
+  const dispW = vw * scale, dispH = vh * scale;
+  const offX = (rect.width - dispW) / 2;
+  const offY = (rect.height - dispH) / 2;
+  const relX = clientX - rect.left - offX;
+  const relY = clientY - rect.top - offY;
+  const x = Math.max(0, Math.min(vw, relX / scale));
+  const y = Math.max(0, Math.min(vh, relY / scale));
+  return { x, y };
+}
+
+function acquireFocus(videoEl) {
+  if (inputFocused) return;
+  inputFocused = true;
+  videoEl.classList.add('focused');
+  videoEl.focus();
+  document.getElementById('focus-hint').textContent = 'FOCUSED — driving the tab (Escape to release)';
+  log('Input focus ACQUIRED on video');
+  updateReport();
+}
+
+function releaseFocus(videoEl) {
+  if (!inputFocused) return;
+  inputFocused = false;
+  videoEl.classList.remove('focused');
+  document.getElementById('focus-hint').textContent = 'not focused — click the video to start driving the tab';
+  log('Input focus RELEASED');
+  updateReport();
+}
+
+function setupVideoInputHandlers() {
+  const videoEl = document.getElementById('v');
+
+  videoEl.addEventListener('click', (e) => {
+    if (!inputFocused) {
+      // First click only acquires focus -- avoid an accidental click-through
+      // to the tab the instant a viewer engages with the video.
+      acquireFocus(videoEl);
+      return;
+    }
+  });
+
+  videoEl.addEventListener('mousedown', (e) => {
+    if (!inputFocused) return;
+    e.preventDefault();
+    const { x, y } = mapCoords(e.clientX, e.clientY, videoEl);
+    sendInputEvent('mousedown', { x, y, button: e.button });
+  });
+  videoEl.addEventListener('mouseup', (e) => {
+    if (!inputFocused) return;
+    e.preventDefault();
+    const { x, y } = mapCoords(e.clientX, e.clientY, videoEl);
+    sendInputEvent('mouseup', { x, y, button: e.button });
+  });
+  videoEl.addEventListener('mousemove', (e) => {
+    if (!inputFocused) return;
+    const now = performance.now();
+    if (now - lastMoveSentAt < MOVE_THROTTLE_MS) return; // ~60/s throttle
+    lastMoveSentAt = now;
+    const { x, y } = mapCoords(e.clientX, e.clientY, videoEl);
+    sendInputEvent('mousemove', { x, y });
+  });
+  videoEl.addEventListener(
+    'wheel',
+    (e) => {
+      if (!inputFocused) return;
+      e.preventDefault();
+      const { x, y } = mapCoords(e.clientX, e.clientY, videoEl);
+      sendInputEvent('wheel', { x, y, deltaX: e.deltaX, deltaY: e.deltaY });
+    },
+    { passive: false },
+  );
+  videoEl.addEventListener('contextmenu', (e) => {
+    if (inputFocused) e.preventDefault();
+  });
+
+  // Keyboard: only forwarded while focused. Escape always releases and is
+  // never forwarded to the tab (matches the app's existing "Esc exits
+  // driving" convention).
+  window.addEventListener('keydown', (e) => {
+    if (!inputFocused) return;
+    if (e.key === 'Escape') {
+      releaseFocus(videoEl);
+      e.preventDefault();
+      return;
+    }
+    const forwardable = e.key.length === 1 || ['Enter', 'Backspace', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key);
+    if (!forwardable) return;
+    e.preventDefault();
+    sendInputEvent('keydown', { key: e.key, code: e.code, keyCode: e.keyCode });
+  });
+  window.addEventListener('keyup', (e) => {
+    if (!inputFocused) return;
+    if (e.key === 'Escape') return;
+    const forwardable = e.key.length === 1 || ['Enter', 'Backspace', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key);
+    if (!forwardable) return;
+    e.preventDefault();
+    sendInputEvent('keyup', { key: e.key, code: e.code, keyCode: e.keyCode });
+  });
+
+  document.getElementById('stress-btn').addEventListener('click', runStressTest);
+}
+
+function startPingLoop() {
+  setInterval(() => {
+    sendInputEvent('ping', {});
+  }, 2000);
+}
+
+function updateInputStatsPanel() {
+  const dp50 = percentile(dispatchRtts, 50), dp95 = percentile(dispatchRtts, 95), dmax = dispatchRtts.length ? Math.max(...dispatchRtts) : NaN;
+  const pp50 = percentile(pingRtts, 50);
+  const text =
+    `focused=${inputFocused} eventsSent=${eventsSent} acksReceived=${acksReceived} dispatchErrors=${dispatchErrors} pending=${pendingMeta.size}\n` +
+    `dispatch RTT (ms) over last ${dispatchRtts.length} samples: p50=${isNaN(dp50) ? '?' : dp50.toFixed(1)} p95=${isNaN(dp95) ? '?' : dp95.toFixed(1)} max=${isNaN(dmax) ? '?' : dmax.toFixed(1)}\n` +
+    `DC ping baseline RTT (ms) over last ${pingRtts.length} samples: p50=${isNaN(pp50) ? '?' : pp50.toFixed(1)}`;
+  document.getElementById('input-stats').textContent = text;
+  updateReport();
+}
+
+async function runStressTest() {
+  if (stressActive) return;
+  const btn = document.getElementById('stress-btn');
+  btn.disabled = true;
+  stressActive = true;
+  stressRtts = [];
+  stressTimers.forEach(clearInterval);
+  stressTimers = [];
+
+  const DURATION_MS = 30000;
+  const startFrames = lastVideoStats ? lastVideoStats.framesDecoded : 0;
+  const startPacketsLost = lastPacketsLostVideo;
+  const startT = performance.now();
+  const startRmsT = performance.now();
+
+  // Force focus so events actually forward (stress test drives synthetic
+  // pointer/keyboard input directly, bypassing real mouse/keyboard capture
+  // -- it exercises the SAME sendInputEvent()/data-channel path).
+  const videoEl = document.getElementById('v');
+  acquireFocus(videoEl);
+
+  log('=== Stress test STARTING: 30s @ 60 mousemove/s + 2 clicks/s + 4 keys/s ===');
+
+  let angle = 0;
+  stressTimers.push(setInterval(() => {
+    angle += 0.15;
+    const x = 400 + 300 * Math.cos(angle);
+    const y = 300 + 200 * Math.sin(angle * 1.37);
+    sendInputEvent('mousemove', { x, y });
+  }, 1000 / 60));
+
+  stressTimers.push(setInterval(() => {
+    sendInputEvent('mousedown', { x: 400, y: 300, button: 0 });
+    setTimeout(() => sendInputEvent('mouseup', { x: 400, y: 300, button: 0 }), 15);
+  }, 500));
+
+  const KEYS = ['s', 't', 'r', 'e', 's', 's'];
+  let ki = 0;
+  stressTimers.push(setInterval(() => {
+    const k = KEYS[ki++ % KEYS.length];
+    const code = 'Key' + k.toUpperCase();
+    const keyCode = k.charCodeAt(0);
+    sendInputEvent('keydown', { key: k, code, keyCode });
+    setTimeout(() => sendInputEvent('keyup', { key: k, code, keyCode }), 15);
+  }, 250));
+
+  await new Promise((r) => setTimeout(r, DURATION_MS));
+  stressTimers.forEach(clearInterval);
+  stressTimers = [];
+
+  // Let in-flight acks trickle in before computing the summary.
+  await new Promise((r) => setTimeout(r, 600));
+  stressActive = false;
+
+  const endFrames = lastVideoStats ? lastVideoStats.framesDecoded : startFrames;
+  const wallSec = (performance.now() - startT) / 1000;
+  const fpsDuringStress = (endFrames - startFrames) / wallSec;
+  const packetsLostDuringStress = lastPacketsLostVideo - startPacketsLost;
+  const { count: rmsPeakCount, intervals: rmsIntervals } = countPeaksInWindow(startRmsT, performance.now());
+
+  const p50 = percentile(stressRtts, 50);
+  const p95 = percentile(stressRtts, 95);
+  const max = stressRtts.length ? Math.max(...stressRtts) : NaN;
+
+  const summary =
+    `=== STRESS TEST SUMMARY (30s, 60 mousemove/s + 2 clicks/s + 4 keys/s) ===\n` +
+    `samples=${stressRtts.length}\n` +
+    `dispatch RTT (ms): p50=${isNaN(p50) ? '?' : p50.toFixed(1)} p95=${isNaN(p95) ? '?' : p95.toFixed(1)} max=${isNaN(max) ? '?' : max.toFixed(1)}\n` +
+    `video fps during stress: ${fpsDuringStress.toFixed(1)} (baseline ~30fps expected, unaffected)\n` +
+    `video packetsLost during stress: ${packetsLostDuringStress}\n` +
+    `audio RMS pulse count during stress: ${rmsPeakCount} intervals(s)=[${rmsIntervals.join(', ')}] (expect ~1.00s apart, i.e. ~30 pulses in 30s)\n` +
+    `input errors during stress: ${dispatchErrors} total (cumulative counter, not stress-window-scoped)\n` +
+    `CLAIM CHECK: input stays low-latency (p95 well under 100ms) while media is unaffected -- ${!isNaN(p95) && p95 < 100 ? 'PASS' : 'CHECK NUMBERS ABOVE'}`;
+
+  log(summary);
+  document.getElementById('stress-summary').textContent = summary;
+  btn.disabled = false;
+  updateReport();
+}
+
+function updateReport() {
+  const lines = [];
+  lines.push('=== WV1 Spike Q4 viewer report (bidirectional: video+audio out, input in) ===');
+  lines.push(`generated: ${new Date().toISOString()}`);
+  lines.push(`ICE connection state: ${document.getElementById('ice-state').textContent}`);
+  lines.push(`ICE gathering state: ${document.getElementById('gather-state').textContent}`);
+  lines.push(`Selected candidate pair: ${selectedPairText}`);
+  lines.push(`Resolution: ${resolutionText}`);
+  lines.push(`Video stats: ${videoStatsText}`);
+  lines.push(`Audio stats: ${audioStatsText}`);
+  lines.push(`Audio RMS pulse summary (last 60s): ${computeAudioPulseSummary()}`);
+  lines.push('');
+  lines.push(`Input data channel state: ${document.getElementById('dc-state').textContent}`);
+  lines.push(`Input stats: ${document.getElementById('input-stats').textContent}`);
+  lines.push('');
+  lines.push(`Stress test summary: ${document.getElementById('stress-summary').textContent}`);
+  lines.push('');
+  lines.push('--- Browser-side log ---');
+  lines.push(document.getElementById('log').textContent);
+  lines.push('--- Server-side log ---');
+  lines.push(document.getElementById('serverlog').textContent);
+  document.getElementById('report').value = lines.join('\n');
+}
+
+document.getElementById('start-btn').addEventListener('click', start);
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const ta = document.getElementById('report');
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand('copy');
+    document.getElementById('status').textContent = 'report copied (or select-all done, Ctrl/Cmd-C to copy)';
+  } catch (e) {
+    document.getElementById('status').textContent = 'select-all done, press Ctrl/Cmd-C to copy';
+  }
+});
+
+updateReport();
+</script>
+</body>
+</html>

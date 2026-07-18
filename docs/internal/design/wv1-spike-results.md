@@ -131,10 +131,46 @@ Build-phase learnings (carry into the ADR/implementation):
 
 ---
 
+## Q4 — bidirectional: responsive input WHILE video+audio stream: **YES (proven in-pod)**
+
+**Verdict: the regression that killed the WebCodecs path cannot occur in this
+architecture — proven by measurement, not tuning.** Input rides its own `"input"`
+data channel on the same PeerConnection; CDP carries ONLY input (video/audio never
+touch it). Spike: `spikes/wv1-webrtc/q4-bidir/` (q3 superset; interactive metronome
+page — click-dots, mousemove trail, text echo, wheel — with the 1Hz beep running).
+
+Measured:
+- **Input dispatch RTT under 30s stress (60 mousemove/s + 2 clicks/s + 4 keys/s,
+  ~2200 events): p50 = 10.9ms, p95 = 21.0ms, max = 88.4ms, 0 errors** — vs the old
+  design's 5000ms+ input timeouts. DC ping baseline ~2.1ms → ~8-9ms is the real CDP
+  round trip, not transport.
+- **Media unaffected during stress:** 29.6fps, `packetsLost=0`, audio pulses still
+  ~1.00s apart. Correctness: 22/22 synthetic events arrived in order; clicks within
+  1px; "hello" typed exactly; wheel accumulated exactly; all visible in the decoded
+  video.
+
+Build learnings (for the ADR/implementation):
+1. **CDP printable-key dispatch requires `text`/`unmodifiedText`** on keyDown or no
+   character is typed (no input/beforeinput events fire).
+2. DC framing gotcha re-confirmed: browser `dc.send(string)` is text-framed — Go
+   must reply `SendText`, or the frame is silently dropped by `onmessage`.
+3. Letterbox-aware viewer→tab coordinate mapping
+   (`min(rect.w/vw, rect.h/vh)` + centering offset) — clicks landed within 1px.
+4. Spike-only scaffolding: Go reaches Chrome CDP via a localhost WS bridge held by
+   the Node launcher (extension loading forces pipe-mode). Real build: Go owns the
+   pipe (port `Extensions.loadUnpacked`-over-pipe into the Omnipus launcher) →
+   dispatch RTT should approach the ~2ms ping baseline.
+5. **Open design item:** single-driver arbitration across concurrent viewers (the
+   product's existing "one driver holds the wheel" doctrine) is NOT exercised by the
+   spike — all viewers' input funnels to one shared CDP session.
+
+---
+
 ## Gate status
 
-Q2 = YES (done). Q3 e2e = YES (done, in-pod). Q1 = pending one external run
-(operator: open `/view` — a connected `srflx/udp` pair there proves traversal with
-real media, superseding the `/q1` data-channel-only test). Both YES → amend/supersede ADR-044
+Q2 = YES. Q3 e2e media = YES. Q4 bidirectional input = YES (all in-pod). Q1 =
+pending one external run (operator: open `/view`, drive the tab — a connected
+`srflx/udp` pair there proves traversal with real media AND input, superseding the
+`/q1` data-channel-only test). All YES → amend/supersede ADR-044
 (promote Option B / Pion to Accepted, encode the Q2 recipe + Q1 traversal findings)
 → `/plan-spec` → implement (wave pattern + 7-reviewer gate + UAT).
