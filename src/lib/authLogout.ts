@@ -5,14 +5,24 @@
 //   - ws.ts           — when the server closes the WebSocket with code 1008
 //                       (policy violation / auth failure)
 //
+// This is the FORCED path: the server has already decided the session is
+// dead (a 401 means the omnipus-session cookie is missing/invalid; a 1008
+// WS close means the handshake auth failed). There is no client-visible
+// token to revoke — auth is the HttpOnly omnipus-session cookie — and no
+// point round-tripping to POST /api/v1/auth/logout when the server already
+// rejected the credential. (Contrast with the user-initiated Sidebar "Sign
+// out" action, which DOES call POST /api/v1/auth/logout — see
+// src/components/layout/Sidebar.tsx — because there the cookie is still
+// valid and must be told to invalidate itself server-side.)
+//
 // Behavior:
-//   1. Clears all omnipus_auth_* keys from sessionStorage AND localStorage.
-//   2. Dynamically imports @/store/auth and calls clearAuth() so the Zustand
-//      store reflects the logged-out state without creating a circular import.
-//      A .catch() ensures an import failure does not surface as an unhandled
-//      rejection — token removal above is sufficient for the hard invariant.
-//   3. Redirects to /login synchronously (on the first call within the window).
-//   4. Debounces repeated calls: a module-level flag suppresses duplicate
+//   1. Dynamically imports @/store/auth and calls clearAuth() so the Zustand
+//      store reflects the logged-out state (clears the display-only
+//      username) without creating a circular import. A .catch() ensures an
+//      import failure does not surface as an unhandled rejection — the
+//      redirect below is sufficient for the hard invariant even if this fails.
+//   2. Redirects to /login synchronously (on the first call within the window).
+//   3. Debounces repeated calls: a module-level flag suppresses duplicate
 //      teardowns within the same 2-second window, so simultaneous triggers
 //      (e.g. a 401 HTTP response + a 1008 WS close arriving at the same tick)
 //      run the teardown exactly once. The redirect fires synchronously on the
@@ -24,11 +34,6 @@ export function forceLogout(): void {
   if (_logoutScheduled) return
   _logoutScheduled = true
 
-  // Clear auth state from both storages (matches the pattern in src/store/auth.ts).
-  sessionStorage.removeItem('omnipus_auth_token')
-  localStorage.removeItem('omnipus_auth_token')
-  localStorage.removeItem('omnipus_auth_username')
-
   // Sync the Zustand auth store if it is already loaded (avoids a circular
   // import by using a dynamic import on the hot path).
   void import('@/store/auth')
@@ -36,7 +41,7 @@ export function forceLogout(): void {
       useAuthStore.getState().clearAuth()
     })
     .catch(() => {
-      // Store not yet loaded — token removal above is sufficient.
+      // Store not yet loaded — the redirect below still runs regardless.
     })
 
   // Reset the flag after 2 seconds so a fresh login can trigger a new logout cycle.

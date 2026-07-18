@@ -832,8 +832,8 @@ describe('WsConnection.send — OPEN-socket throw treated as failed send (#253)'
     const conn = new WsConnection(cbs)
     conn.connect()
 
-    // Drive onopen so the socket reports OPEN (this also sends the auth frame
-    // through the original non-throwing mock send — that must succeed).
+    // Drive onopen so the socket reports OPEN (auth rides the omnipus-session
+    // cookie on the handshake — no client-sent auth frame).
     const ws = (global as { __ws_instances?: { onopen?: () => void }[] }).__ws_instances?.at(-1)
     if (ws?.onopen) ws.onopen()
 

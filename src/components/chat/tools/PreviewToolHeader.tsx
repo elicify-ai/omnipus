@@ -9,6 +9,7 @@
  */
 
 import type { ReactNode } from 'react'
+import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 import { cn } from '@/lib/utils'
 
 export interface PreviewToolHeaderProps {
@@ -20,9 +21,9 @@ export interface PreviewToolHeaderProps {
   label?: string
   /** Element rendered at the far right (status icon or port chip). */
   trailing?: ReactNode
-  /** Whether the tool is still running (drives icon pulse / border colour). */
+  /** Whether the tool is still running (drives the leading status dot/spinner). */
   isRunning: boolean
-  /** Whether the tool completed successfully (drives border / icon colour). */
+  /** Whether the tool completed successfully (drives the leading status dot colour). */
   hasResult: boolean
   /** Optional data-testid for targeted e2e tests. */
   'data-testid'?: string
@@ -37,18 +38,21 @@ export function PreviewToolHeader({
   hasResult,
   'data-testid': testId,
 }: PreviewToolHeaderProps) {
+  // Flat text-line redesign (ticket "Tool components in chat", P2): the old
+  // rounded-t-md/border/bg-surface-1 header frame and status-tinted border
+  // are gone — status lives only in the leading dot/spinner (shared with
+  // GenericToolCall/ToolCallBadge/BashOutput/BrowserTool via
+  // getToolBadgeStatusConfig), never a colored border. The caller-supplied
+  // `icon` still renders alongside it since (unlike those callers) it is the
+  // only thing distinguishing preview kind — WebServeUI passes an
+  // identical `toolName` ("web_serve") for both its static and dev modes.
+  const statusConfig = getToolBadgeStatusConfig(isRunning ? 'running' : hasResult ? 'success' : 'error', {
+    size: 13,
+  })
+
   return (
-    <div
-      data-testid={testId}
-      className={cn(
-        'flex items-center gap-2 px-3 py-2 rounded-t-md border bg-[var(--color-surface-1)]',
-        isRunning
-          ? 'border-[var(--color-border)]'
-          : hasResult
-          ? 'border-[var(--color-success)]/20'
-          : 'border-[var(--color-error)]/20',
-      )}
-    >
+    <div data-testid={testId} className="flex items-center gap-2 py-1 font-mono text-xs">
+      {statusConfig.indicator}
       {icon}
       <span className="text-[var(--color-muted)] font-mono">{toolName}</span>
       {label && (
@@ -56,6 +60,15 @@ export function PreviewToolHeader({
           {label}
         </code>
       )}
+      {/* Status text — every other flat-line row (BashOutput, BrowserTool,
+          BrowserNavigate, GenericToolCall, ToolCallBadge) renders the status
+          label next to its dot/spinner; this header previously computed
+          statusConfig.label and discarded it, leaving PreviewToolHeader the
+          only row with no status-differentiating text (dot color alone is
+          not enough for colorblind users or screen readers — WCAG 1.4.1). */}
+      <span className={cn('shrink-0 text-[var(--color-muted)] font-mono text-[10px]', statusConfig.textClass)}>
+        {statusConfig.label}
+      </span>
       {trailing && <span className="ml-auto shrink-0">{trailing}</span>}
     </div>
   )

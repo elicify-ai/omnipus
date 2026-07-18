@@ -61,7 +61,7 @@ func newTestRestAPIWithHomeAuth(t *testing.T) *restAPI {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -100,7 +100,7 @@ func TestHandleLogin_Success(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -153,7 +153,7 @@ func newRestAPIWithSingleUser(t *testing.T, username, passwordHash string) *rest
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -293,7 +293,7 @@ func TestHandleLogin_DifferentInputProducesDifferentToken(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -352,7 +352,7 @@ func TestHandleLogin_ConcurrentRequests(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -407,7 +407,7 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -546,7 +546,7 @@ func TestHandleLogin_RateLimitBlocksAtLimit(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -617,7 +617,7 @@ func TestHandleLogin_SpoofedXFFDoesNotBypassLoginRateLimit(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080}, // TrustXFF left at its zero-value default: false
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -693,7 +693,7 @@ func TestHandleLogin_DevModeBypass_DenyByDefault(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -741,7 +741,7 @@ func newTestRestAPIWithUser(t *testing.T, username, password string) (*restAPI, 
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -798,6 +798,42 @@ func TestHandleLogout_Success(t *testing.T) {
 	userMap, ok := users[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "", userMap["token_hash"], "token_hash must be empty after logout")
+}
+
+// TestHandleLogout_DevBypassUser_ClearsCookiesNo500 proves that a logout by the
+// synthetic dev_mode_bypass identity ("_dev_bypass", which checkBearerAuth
+// injects when gateway.dev_mode_bypass=true and no Bearer header is present)
+// clears the browser cookies and returns 204 — instead of 500 "user not found"
+// (the identity has no Gateway.Users row). This mirrors the CLI-token
+// synthetic-identity path and is what makes the SPA's cookie-only UI logout
+// clear the session cookie under the e2e harness (which always runs with
+// dev_mode_bypass=true). Regression guard for ADR-044 FR-020 / auth.spec.ts (d).
+func TestHandleLogout_DevBypassUser_ClearsCookiesNo500(t *testing.T) {
+	api, _ := newTestRestAPIWithUser(t, "realadmin", "password123")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	// Inject the synthetic bypass identity — deliberately NOT a Gateway.Users row.
+	req = injectUser(req, "_dev_bypass")
+	w := httptest.NewRecorder()
+
+	api.HandleLogout(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code,
+		"logout by the synthetic _dev_bypass identity must return 204, not 500")
+
+	// Both browser cookies must be expired (cleared value), so the browser drops
+	// them from the jar — the exact behavior auth.spec.ts (d) asserts.
+	var sawSessionCleared, sawCSRFCleared bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "omnipus-session" && c.Value == "" {
+			sawSessionCleared = true
+		}
+		if (c.Name == "__Host-csrf" || c.Name == "csrf") && c.Value == "" {
+			sawCSRFCleared = true
+		}
+	}
+	assert.True(t, sawSessionCleared, "omnipus-session cookie must be cleared on bypass-user logout")
+	assert.True(t, sawCSRFCleared, "CSRF cookie must be cleared on bypass-user logout")
 }
 
 // TestHandleLogout_TokenNoLongerValid verifies that after logout the token cannot
@@ -972,7 +1008,7 @@ func TestHandleLogout_CLITokenAuth_ReturnsNoContent(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -1692,7 +1728,7 @@ func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -1766,7 +1802,7 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -1936,7 +1972,7 @@ func newTestRestAPIForReload(t *testing.T) (*restAPI, *agentLoopWrapper) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},

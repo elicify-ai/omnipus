@@ -102,6 +102,23 @@ var defaultExemptPaths = []string{
 	"/reload",
 }
 
+// defaultExemptPrefixes are path PREFIXES exempt from the CSRF check for ALL
+// methods, unconditionally — unlike defaultExemptPaths (a bootstrap
+// convenience set a caller can opt out of via WithExemptPath), this set
+// encodes a structural security boundary and is always installed regardless
+// of whether the caller customizes the exact-match exempt set.
+//
+//   - /preview/ — the reverse-proxied dev-preview surface (rest_preview.go
+//     HandlePreview). Preview URLs are tokenized
+//     (/preview/<agent>/<token>/…), so an exact-path exemption can never
+//     match; a previewed app must be able to POST through the proxy to its
+//     own dev server without knowing the gateway's CSRF token. This prefix
+//     deliberately does not overlap /api/v1/* — that surface keeps full CSRF
+//     enforcement (FR-012).
+var defaultExemptPrefixes = []string{
+	PreviewPathPrefix,
+}
+
 // stateChangingMethods lists the HTTP verbs that trigger CSRF enforcement.
 // GET/HEAD/OPTIONS are RFC-safe methods and MUST NOT be gated — doing so
 // breaks preflight and simple reads. PATCH is included because it mutates.
@@ -129,9 +146,15 @@ type MismatchReporter func(r *http.Request, sourceIP, route string)
 // from mutating (for example) the exempt-path set after construction:
 // once CSRFMiddleware returns, the configuration is frozen inside a closure.
 type csrfConfig struct {
-	exempt   map[string]struct{}
-	reporter MismatchReporter
-	clientIP func(r *http.Request) string
+	exempt map[string]struct{}
+	// exemptPrefixes holds path PREFIXES exempt from the CSRF check for ALL
+	// methods (e.g. "/preview/"). Unlike exempt (exact match), this set is
+	// always seeded with defaultExemptPrefixes regardless of
+	// customExemptSet — it is a structural boundary, not a bootstrap
+	// convenience the caller can opt out of.
+	exemptPrefixes map[string]struct{}
+	reporter       MismatchReporter
+	clientIP       func(r *http.Request) string
 	// customExemptSet reports whether any WithExemptPath/WithExemptPaths/
 	// WithDefaultExempts option was applied. When false, the default set is
 	// installed at build time.
@@ -280,12 +303,26 @@ func CSRFMiddleware(opts ...Option) func(http.Handler) http.Handler {
 		cfg.exempt = make(map[string]struct{})
 	}
 
+	// defaultExemptPrefixes are ALWAYS installed, unconditionally — this is
+	// a structural security boundary (FR-012), not a bootstrap convenience
+	// gated by customExemptSet like defaultExemptPaths.
+	if cfg.exemptPrefixes == nil {
+		cfg.exemptPrefixes = make(map[string]struct{})
+	}
+	for _, p := range defaultExemptPrefixes {
+		cfg.exemptPrefixes[p] = struct{}{}
+	}
+
 	// Deep-copy the exempt set into a private map so post-construction mutation
 	// of any option argument is impossible. Callers cannot reach `exempt` from
 	// outside this closure.
 	exempt := make(map[string]struct{}, len(cfg.exempt))
 	for k := range cfg.exempt {
 		exempt[k] = struct{}{}
+	}
+	exemptPrefixes := make(map[string]struct{}, len(cfg.exemptPrefixes))
+	for k := range cfg.exemptPrefixes {
+		exemptPrefixes[k] = struct{}{}
 	}
 
 	reporter := cfg.reporter
@@ -296,8 +333,38 @@ func CSRFMiddleware(opts ...Option) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Prefix-exempt routes (e.g. /preview/<agent>/<token>/…) bypass
+			// the CSRF gate ENTIRELY, for ALL methods — checked first so a
+			// preview request never falls into the safe-method re-mint
+			// branch below (FR-002: /preview/ skips CSRF checks outright;
+			// it must not pick up a stray Set-Cookie from this middleware
+			// on a response that a reverse proxy is about to overwrite with
+			// the dev server's own headers). /api/v1/* never matches this
+			// prefix set, so full CSRF enforcement there is unaffected.
+			for prefix := range exemptPrefixes {
+				if strings.HasPrefix(r.URL.Path, prefix) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
 			// Safe methods — RFC 7231 §4.2.1: GET, HEAD, OPTIONS are side-effect-free.
 			if _, safe := stateChangingMethods[r.Method]; !safe {
+				// FR-019: re-mint the CSRF cookie on any safe request that
+				// lacks one. Without this, a returning user with a valid
+				// session but an expired/absent CSRF cookie (session
+				// outlives the CSRF cookie's prior no-MaxAge lifetime, or a
+				// fresh browser profile) has no way to ever acquire one —
+				// every state-changing request 403s forever. Re-minting
+				// ONLY on safe methods preserves the double-submit
+				// invariant: a state-changing request can never mint itself
+				// a fresh token to pass its own check.
+				if csrfCookieValue(r) == "" {
+					if err := IssueCSRFCookie(w, r); err != nil {
+						slog.Warn("csrf: re-mint on safe request failed",
+							"path", r.URL.Path, "method", r.Method, "error", err)
+					}
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -334,12 +401,7 @@ func CSRFMiddleware(opts ...Option) func(http.Handler) http.Handler {
 			// plain-HTTP fallback `csrf` cookie. IssueCSRFCookie picks
 			// which one to issue based on the request that triggered
 			// issuance (TLS → __Host-; HTTP → fallback).
-			var cookieValue string
-			if c, err := r.Cookie(CSRFCookieName); err == nil && c.Value != "" {
-				cookieValue = c.Value
-			} else if c, err := r.Cookie(CSRFCookieNameHTTP); err == nil && c.Value != "" {
-				cookieValue = c.Value
-			}
+			cookieValue := csrfCookieValue(r)
 			if cookieValue == "" {
 				writeCSRFError(w, "csrf cookie missing")
 				return
@@ -362,6 +424,23 @@ func CSRFMiddleware(opts ...Option) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// csrfCookieValue returns the double-submit cookie's value, checking the
+// TLS-only __Host-csrf cookie first and falling back to the plain-HTTP
+// `csrf` cookie. Returns "" if neither is present (or present but empty),
+// which callers treat as "no CSRF cookie on this request" — used both by
+// the state-changing enforcement check and the safe-method re-mint check
+// (FR-019), so the two branches can never disagree about what "has a
+// cookie" means.
+func csrfCookieValue(r *http.Request) string {
+	if c, err := r.Cookie(CSRFCookieName); err == nil && c.Value != "" {
+		return c.Value
+	}
+	if c, err := r.Cookie(CSRFCookieNameHTTP); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return ""
 }
 
 // IssueCSRFCookie generates a fresh 256-bit random token, base64-url encodes
@@ -403,15 +482,20 @@ func IssueCSRFCookie(w http.ResponseWriter, r *http.Request) error {
 			HttpOnly: false,
 			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
+			MaxAge:   SessionCookieMaxAge,
 			// No Domain — __Host- forbids it.
-			// No MaxAge — session cookie; lives until the browser closes.
+			// MaxAge matches the session cookie (24h, FR-019) so a
+			// returning user's CSRF cookie doesn't expire out from under a
+			// still-valid session — see the safe-method re-mint above for
+			// the remaining recovery path if it still somehow goes missing.
 		})
 		return nil
 	}
 
 	// Plain-HTTP fallback. Same SameSite=Strict protection (the invariant
 	// CSRF cares about). HttpOnly=false so the SPA can read it, Path=/ so
-	// it attaches to every endpoint, no Domain / no MaxAge.
+	// it attaches to every endpoint, no Domain. MaxAge matches the session
+	// cookie (24h, FR-019).
 	http.SetCookie(w, &http.Cookie{
 		Name:     CSRFCookieNameHTTP,
 		Value:    token,
@@ -419,6 +503,7 @@ func IssueCSRFCookie(w http.ResponseWriter, r *http.Request) error {
 		HttpOnly: false,
 		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
+		MaxAge:   SessionCookieMaxAge,
 	})
 	return nil
 }

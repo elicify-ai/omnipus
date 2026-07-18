@@ -32,11 +32,19 @@ import (
 //   - browser_switch_tab — make a tab active; tools + live view follow it (ADR-041)
 //   - browser_close_tab  — close a tab; never leaves zero tabs (ADR-041)
 //   - browser_open_tab   — open a NEW tab (does not reuse the current one) and optionally navigate it
+//
+// agentHome is the agent's fixed home directory and restrict maps to
+// fspolicy.FSScopeConfined (true) / FSScopeUnrestricted (false) — both are
+// threaded through solely for ScreenshotTool's ResolvePath-based write
+// (ADR-046 FR-009), mirroring the restrict/agentHome pair every other
+// path-taking tool receives from its own constructor.
 func RegisterTools(
 	registry *tools.ToolRegistry,
 	cfg BrowserConfig,
 	ssrf *security.SSRFChecker,
 	evaluateEnabled bool,
+	agentHome string,
+	restrict bool,
 ) (*BrowserManager, error) {
 	mgr, err := NewBrowserManager(cfg, ssrf)
 	if err != nil {
@@ -46,7 +54,7 @@ func RegisterTools(
 	registry.Register(&NavigateTool{mgr: mgr})
 	registry.Register(&ClickTool{mgr: mgr})
 	registry.Register(&TypeTool{mgr: mgr})
-	registry.Register(&ScreenshotTool{mgr: mgr})
+	registry.Register(&ScreenshotTool{mgr: mgr, agentHome: agentHome, restrict: restrict})
 	registry.Register(&GetTextTool{mgr: mgr})
 	registry.Register(&WaitTool{mgr: mgr})
 	// browser_evaluate is always registered so the LLM sees it; the evaluateEnabled

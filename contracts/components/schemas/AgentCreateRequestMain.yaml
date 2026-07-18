@@ -3,7 +3,7 @@ title: AgentCreateRequestMain
 description: >
   Create a Main agent — a user-defined chat colleague on the Omnipus engine.
   Field set per docs/internal/architecture/agent-types-field-matrix.md: voice
-  and steering_mode are Main-only; executor is absent (Main never has one).
+  is Main-only; executor is absent (Main never has one).
 required:
   - type
   - name
@@ -148,10 +148,3 @@ properties:
     minimum: 0
     description: Maximum number of tool calls allowed per turn.
     example: 50
-  steering_mode:
-    type: string
-    enum:
-      - one-at-a-time
-      - queue-and-process
-    description: Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
-    example: "one-at-a-time"

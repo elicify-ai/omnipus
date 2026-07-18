@@ -165,7 +165,7 @@ test('navigating to a session with tool_call + turn_canceled entries fires no Ap
   // bare page.request.post() 403s on the CSRF guard.
   const createResp = await page.request.post('/api/v1/sessions', {
     headers: await apiHeaders(page),
-    data: { agent_id: 'main', type: 'chat' },
+    data: { agent_id: 'mia', type: 'chat' },
   })
   expect(createResp.status(), 'must be able to create a session').toBe(201)
   const created = await createResp.json()
@@ -184,19 +184,19 @@ test('navigating to a session with tool_call + turn_canceled entries fires no Ap
 
   const ts = new Date().toISOString()
   const lines = [
-    JSON.stringify({ id: 'msg-user-1', role: 'user', content: 'hi', timestamp: ts, agent_id: 'main' }),
+    JSON.stringify({ id: 'msg-user-1', role: 'user', content: 'hi', timestamp: ts, agent_id: 'mia' }),
     JSON.stringify({
       id: 'call_regression_001',
       type: 'tool_call',
       timestamp: ts,
-      agent_id: 'main',
+      agent_id: 'mia',
       tool_calls: [{ id: 'call_regression_001', tool: 'write_file', status: 'success' }],
     }),
     JSON.stringify({
       id: 'cancel_regression_001',
       type: 'turn_canceled',
       timestamp: ts,
-      agent_id: 'main',
+      agent_id: 'mia',
       turn_id: 'turn-T-regression',
       canceled_by_user: 'admin',
       canceled_by_channel: 'webchat',

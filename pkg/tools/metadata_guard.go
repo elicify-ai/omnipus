@@ -7,8 +7,8 @@
 //
 // The guard is case-insensitive over the four canonical names.
 //
-// Security property: the guard runs BEFORE validatePathWithAllowPaths — it
-// resolves the tool's path argument itself (via resolveAbsPath, which applies
+// Security property: the guard runs BEFORE ResolvePath — it resolves the
+// tool's path argument itself (via resolveAbsPath, which applies
 // filepath.EvalSymlinks best-effort) so that "SOUL.md", "./soul.md", an
 // absolute path, a "../"-reentrant path, and a symlink to SOUL.md all trigger
 // the same check. In sandbox-on (os.Root) mode the symlink vector is already

@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"log/slog"
 	mathrand "math/rand"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -759,7 +758,7 @@ type AgentConfig struct {
 	Default     bool              `json:"default,omitempty"`
 	Name        string            `json:"name,omitempty"`
 	Description string            `json:"description,omitempty"`
-	Workspace   string            `json:"workspace,omitempty"`
+	Home        string            `json:"workspace,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
 	// MaxToolIterations caps the LLM/tool rounds PER TURN for this agent
 	// (one chat message, board task, or heartbeat run = one turn; the turn
@@ -1164,7 +1163,7 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
+	Home string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
 	// RestrictToWorkspace and AllowReadOutsideWorkspace are removed from the v1
 	// JSON schema only (FR-001): tags use json:"-" so SaveConfig never
 	// serializes them, and validateRemovedKeys rejects any v1 config JSON that
@@ -2370,7 +2369,7 @@ type ModelConfig struct {
 
 	// Special providers (CLI-based, OAuth, etc.)
 	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
-	Workspace  string `json:"workspace,omitempty"`   // Workspace path for CLI-based providers
+	Home       string `json:"workspace,omitempty"`   // Home path (working directory) for CLI-based providers
 
 	// Optional optimizations
 	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
@@ -2585,27 +2584,49 @@ type GatewayConfig struct {
 	Users         []UserConfig `json:"users,omitempty"           env:"-"` // Per-account bearer-token list (single-user model: holds at most one entry)
 	DevModeBypass bool         `json:"dev_mode_bypass,omitempty" env:"-"` // Opt-in flag to allow unauthenticated access in development. NEVER set to true in production.
 
-	// Preview listener fields (FR-001..FR-005, FR-027, FR-028).
-	// PreviewPort is the port for the preview listener that serves /serve/ and /dev/.
-	// When zero, defaults to Port+1 at boot. Must differ from Port when preview is enabled.
-	PreviewPort int32 `json:"preview_port,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_PORT"`
-	// PreviewHost is the bind host for the preview listener.
-	// When empty, defaults to Host at boot. Operators set to 127.0.0.1 to keep
-	// the preview listener private behind a reverse proxy.
-	PreviewHost string `json:"preview_host,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_HOST"`
-	// PreviewOrigin is the browser-facing origin of the preview listener, used when
-	// a reverse proxy is in front (e.g. "https://preview.omnipus.acme.com").
-	// When set, PreviewListenerEnabled must be true. Must parse as a URL with scheme.
-	PreviewOrigin string `json:"preview_origin,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_ORIGIN"`
 	// PublicURL is the browser-facing origin of the main gateway listener, used when
 	// a reverse proxy is in front (e.g. "https://omnipus.acme.com").
 	// When set, it overrides the Host:Port-derived origin in frame-ancestors CSP directives.
+	// Restart-gated (config.GatewayPublicURL / RestartGatedKeys) because it drives
+	// boot-frozen CORS/CSP/WS-origin fences (ADR-044).
 	PublicURL string `json:"public_url,omitempty" env:"OMNIPUS_GATEWAY_PUBLIC_URL"`
-	// PreviewListenerEnabled controls whether the preview listener is started.
-	// Defaults to true on Linux/macOS/Windows, false on Android/Termux.
-	// Setting false disables the preview listener entirely and forces link-only
-	// rendering in tool UIs (emergency rollback knob).
-	PreviewListenerEnabled *bool `json:"preview_listener_enabled,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_LISTENER_ENABLED"`
+	// PreviewEnabled controls whether /preview/ (served on the main gateway
+	// listener) and serve_web are live. Semantic default is TRUE — a nil value
+	// means enabled. Read live (NOT restart-gated): toggling takes effect on the
+	// next request, no process restart required (ADR-044, FR-006/FR-007).
+	// Setting false 404s /preview/ and errors serve_web immediately; it does NOT
+	// force-kill already-running dev servers (they idle-TTL out).
+	PreviewEnabled *bool `json:"preview_enabled,omitempty" env:"OMNIPUS_GATEWAY_PREVIEW_ENABLED"`
+
+	// OrphanedTurnGraceSeconds bounds an orphaned FOREGROUND (webchat) turn —
+	// one whose last watching WebSocket connection has closed and never
+	// reconnected — to at most this many seconds before the orphan watchdog
+	// (ADR-045, pkg/agent/orphan_watch.go) reaps it. "Reaps" means: hands the
+	// session to al.RequestCancel — the SAME cancellation state machine every
+	// other cancel surface (web SPA Stop button, Tier A /cancel, Tier B
+	// channels, CLI) uses, with its full graceful->hard->detached escalation,
+	// approval auto-deny, background-session kill, and audit/transcript
+	// writes — but ONLY once the watchdog has confirmed (a) a genuine live
+	// ROOT turn still exists, (b) no Critical/background delegate sub-turn is
+	// still alive on the session, and (c) nobody has reconnected. Condition
+	// (b) is what protects a Critical/background delegate: RequestCancel's
+	// own PHASE-B/PHASE-C hard-abort escalation
+	// (InterruptSessionHard/sessionTurnsStillAlive) is SESSION-WIDE by
+	// construction — note PHASE-A/InterruptSession's own graceful cascade is
+	// ALSO session-wide, just harmless there because a Critical delegate is
+	// designed to ignore a mere graceful nudge — so rather than reuse it while
+	// a delegate is still working, the watchdog defers reaping entirely for
+	// that fire; see ADR-045 for the full mechanism.
+	//
+	// nil (unset) resolves to DefaultOrphanedTurnGraceSeconds (now 0 =
+	// DISABLED) via config.ResolveInt — an abandoned tab does NOT cancel its
+	// turn by default; the turn runs to completion (Omnipus is built for
+	// background turns) and only an explicit user Stop cancels. 0 or negative
+	// disables the watchdog entirely (matches the TimeoutSeconds: 0-disabled
+	// convention elsewhere in this file); a positive value opts back in. Read
+	// live (NOT restart-gated, matching GatewayPreviewEnabled's precedent) —
+	// each WS teardown reads the current config fresh when arming.
+	OrphanedTurnGraceSeconds *int `json:"orphaned_turn_grace_seconds,omitempty" env:"OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS"`
 
 	// AuthMismatchLogLevel controls the log level emitted when the gateway
 	// detects an authentication mismatch (e.g. token supplied but does not
@@ -3012,9 +3033,9 @@ type BrowserToolConfig struct {
 	// IMPORTANT: this does NOT control whether the /api/v1/browser/ws route
 	// or HTTP handler exists — that WebSocket endpoint is ALWAYS registered
 	// on the gateway's single listener (see gateway.go's newBrowserWSHandler
-	// call site), unlike gateway.preview_listener_enabled, which really does
-	// start/skip a SECOND TCP listener on gateway.preview_port. Setting this
-	// false only changes what happens AFTER a client connects and
+	// call site). The gateway has exactly one listener: ADR-044 retired the
+	// separate preview listener/port, so /preview/ is now served on this same
+	// main listener too. Setting this false only changes what happens AFTER a client connects and
 	// authenticates: the gateway accepts the WS upgrade as normal, then
 	// refuses the first browser_attach with a browser_status(error) frame
 	// instead of starting a screencast. This is deliberate (ADR-038 D6's
@@ -3210,6 +3231,39 @@ func LoadConfigWithStoreAndSelfHealHook(
 	return loadConfigInternal(path, store, onSelfHeal)
 }
 
+// seedPublicURLFromEnv fills cfg.Gateway.PublicURL from $DEVPOD_PREVIEW_URL when
+// the operator hasn't set one (via config.json or OMNIPUS_GATEWAY_PUBLIC_URL).
+//
+// Fill-only-when-empty; trailing slash trimmed so `origin + "/preview/…"` can't
+// produce a double slash. In-memory boot seed only (never written back to
+// config.json), preserving ADR-044's boot-frozen public_url contract.
+//
+// Scope (Constraint #1, single-binary core, no vendor lock-in): the GENERIC,
+// platform-agnostic override is OMNIPUS_GATEWAY_PUBLIC_URL
+// (env:"OMNIPUS_GATEWAY_PUBLIC_URL" on PublicURL, resolved by env.Parse) or
+// gateway.public_url in config.json — both always win over this. DEVPOD_PREVIEW_URL
+// is a deliberately narrow devpod-platform CONVENIENCE fallback for zero-config
+// pods; it is read nowhere else and must never become the primary mechanism.
+//
+// MUST be applied on EVERY loadConfigInternal return path — INCLUDING the
+// fresh-install DefaultConfig() paths — because a brand-new pod has no
+// config.json, which is exactly when this needs to fire (otherwise first boot
+// leaves public_url empty and web_serve/preview links fall back to
+// http://localhost:5000, unreachable from outside the pod).
+func seedPublicURLFromEnv(cfg *Config) {
+	if cfg == nil || strings.TrimSpace(cfg.Gateway.PublicURL) != "" {
+		return
+	}
+	previewURL := strings.TrimRight(strings.TrimSpace(os.Getenv("DEVPOD_PREVIEW_URL")), "/")
+	if previewURL == "" {
+		return
+	}
+	cfg.Gateway.PublicURL = previewURL
+	logger.WarnF("gateway.public_url not set; auto-detected from DEVPOD_PREVIEW_URL", map[string]any{
+		"public_url": previewURL,
+	})
+}
+
 func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
 	logger.Debugf("loading config from %s", path)
 
@@ -3217,7 +3271,9 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if err != nil {
 		if os.IsNotExist(err) {
 			logger.WarnF("config file not found, using default config", map[string]any{"path": path})
-			return DefaultConfig(), nil
+			c := DefaultConfig()
+			seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
+			return c, nil
 		}
 		logger.Errorf("failed to read config file: %v", err)
 		return nil, err
@@ -3236,7 +3292,9 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	}
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
-		return DefaultConfig(), nil
+		c := DefaultConfig()
+		seedPublicURLFromEnv(c)
+		return c, nil
 	}
 
 	// Load config based on detected version
@@ -3308,8 +3366,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// with an empty home path) and never resolved a relative $OMNIPUS_HOME,
 	// unlike OmnipusHomeDir(). Common case (env unset, real $HOME) is
 	// byte-identical to before.
-	if cfg.Agents.Defaults.Workspace == "" {
-		cfg.Agents.Defaults.Workspace = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
+	if cfg.Agents.Defaults.Home == "" {
+		cfg.Agents.Defaults.Home = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
 	}
 
 	migrateProviderFields(cfg)
@@ -3357,6 +3415,15 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// race a second account's own in-flight login). Runs on every load,
 	// all config versions.
 	warnAboutExtraUsers(cfg.Gateway.Users)
+
+	// Auto-detect gateway.public_url from $DEVPOD_PREVIEW_URL when unset — see
+	// seedPublicURLFromEnv for the full rationale (Constraint #1 / ADR-044).
+	// Runs here before validateBootConfig so the auto-detected value gets the
+	// same well-formed-URL check as an operator-supplied one. NOTE: the same
+	// call also runs on the two fresh-install DefaultConfig() return paths
+	// above — a bare pod's first boot has no config.json at all, which is
+	// exactly when the devpod fallback needs to fire.
+	seedPublicURLFromEnv(cfg)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).
@@ -3485,8 +3552,8 @@ func SaveConfig(path string, cfg *Config) error {
 	return nil
 }
 
-func (c *Config) WorkspacePath() string {
-	return expandHome(c.Agents.Defaults.Workspace)
+func (c *Config) AgentHomeBasePath() string {
+	return expandHome(c.Agents.Defaults.Home)
 }
 
 func expandHome(path string) string {
@@ -3547,119 +3614,63 @@ func (c *Config) ValidateProviders() error {
 	return nil
 }
 
-// previewListenerEnabledDefault returns the platform-appropriate default for
-// gateway.preview_listener_enabled: true on Linux/macOS/Windows, false on Android.
-// Per FR-027 / MR-09.
-func previewListenerEnabledDefault() bool {
-	return runtime.GOOS != "android"
-}
-
-// normaliseIPv6Host strips surrounding brackets from an IPv6 address so that
-// "[::]" and "::" compare as equal. Per FR-028.
-func normaliseIPv6Host(h string) string {
-	h = strings.TrimPrefix(h, "[")
-	h = strings.TrimSuffix(h, "]")
-	return h
-}
-
-// IsPreviewListenerEnabled resolves the effective value of gateway.preview_listener_enabled.
-// Returns the configured value when set; falls back to the platform default
-// (true on Linux/macOS/Windows, false on Android/Termux — FR-027/MR-09).
-func (g *GatewayConfig) IsPreviewListenerEnabled() bool {
-	if g.PreviewListenerEnabled != nil {
-		return *g.PreviewListenerEnabled
-	}
-	return previewListenerEnabledDefault()
-}
-
-// ValidateAndApplyPreviewDefaults validates gateway preview fields and applies
-// computed defaults (preview port derivation, preview host defaulting,
-// warmup timeout default). It MUTATES g in place.
+// IsPreviewEnabled resolves the effective value of gateway.preview_enabled.
+// Read live on every call (ADR-044, FR-006) — not restart-gated. Receiver is
+// *Config (not *GatewayConfig) per the shared cross-agent contract for this
+// feature — callers use cfg.IsPreviewEnabled() directly.
 //
-// Validation order (FR-027c, MR-06, MR-08, MN-01):
-//  1. Main port ∈ [1, 65535]
-//  2. Resolve preview_listener_enabled (default: platform-specific)
-//  3. If preview disabled → skip remaining preview checks
-//  4. Resolve preview_port (field if set, else port+1; overflow → error)
-//  5. preview_port ∈ [1, 65535]
-//  6. preview_port != port (only when preview enabled)
-//  7. Resolve preview_host (default to host); normalise IPv6 brackets
-//  8. If preview_origin set → must parse with scheme
-//  9. If public_url set → must parse with scheme
-//  10. If preview_origin set but preview_listener_enabled=false → error
-func (g *GatewayConfig) ValidateAndApplyPreviewDefaults() error {
-	// 1. Main port range check.
-	if g.Port < 1 || g.Port > 65535 {
-		return fmt.Errorf("gateway.port %d is out of range [1, 65535]", g.Port)
+// Nil-receiver contract (fail-closed, TDA-1): a nil *Config means there is no
+// config to consult at all — e.g. a wiring bug, or a caller invoked before
+// config is loaded — and this returns FALSE. Preview serves agent-workspace
+// files and proxies loopback dev servers over the gateway's main listener;
+// when we cannot even determine whether the feature is enabled, the safe
+// default is to never serve it.
+//
+// This is deliberately DIFFERENT from the field-level default: once a real,
+// non-nil *Config exists, an unset gateway.preview_enabled field still
+// resolves to true via ResolveBool — the feature is on by default for a
+// normal install. Only the "no config at all" case fails closed; "config
+// exists but doesn't mention preview_enabled" does not.
+//
+// Existing call sites written as `cfg == nil || !cfg.IsPreviewEnabled()` are
+// now redundant-but-harmless belt-and-suspenders — the method itself already
+// returns false for a nil cfg — and do not need to change.
+func (c *Config) IsPreviewEnabled() bool {
+	if c == nil {
+		return false
 	}
+	return ResolveBool(c.Gateway.PreviewEnabled, true)
+}
 
-	// 2. Resolve preview_listener_enabled.
-	enabled := g.IsPreviewListenerEnabled()
+// DefaultOrphanedTurnGraceSeconds is the semantic default for
+// gateway.orphaned_turn_grace_seconds when unset (ADR-045). It is 0 —
+// meaning the orphaned-foreground-turn watchdog is DISABLED by default.
+//
+// Omnipus is built to run turns as background work: closing a chat tab (or
+// otherwise dropping the watching WebSocket) must NOT cancel an in-progress
+// turn — the turn keeps running and stops when it is done, and the user can
+// reconnect later to see the result. ONLY an explicit user Stop cancels a
+// turn. Auto-canceling on tab-close (the original ADR-045 5-minute default)
+// contradicted that model and was reversed per operator decision.
+//
+// The watchdog mechanism itself is retained but off unless an operator
+// explicitly opts in with a positive value via config.json
+// (gateway.orphaned_turn_grace_seconds) or
+// OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS. Any value <= 0 keeps it
+// disabled (ArmOrphanForegroundTurnWatch is a no-op).
+const DefaultOrphanedTurnGraceSeconds = 0
 
-	// 3. Skip remaining checks when preview is disabled.
-	if !enabled {
-		// 10. preview_origin requires enabled=true.
-		if g.PreviewOrigin != "" {
-			return fmt.Errorf("preview_origin requires preview_listener_enabled = true")
-		}
-		return nil
+// EffectiveOrphanedTurnGraceSeconds resolves gateway.orphaned_turn_grace_seconds
+// (ADR-045): nil resolves to DefaultOrphanedTurnGraceSeconds; 0 or negative is
+// returned as-is so callers (AgentLoop.ArmOrphanForegroundTurnWatch) can treat
+// it as "watchdog disabled". Read live on every call, matching
+// IsPreviewEnabled's precedent — a nil *Config returns 0 (disabled), the same
+// fail-closed posture as IsPreviewEnabled's fail-closed-false.
+func (c *Config) EffectiveOrphanedTurnGraceSeconds() int {
+	if c == nil {
+		return 0
 	}
-
-	// 4. Resolve preview_port.
-	if g.PreviewPort == 0 {
-		derived := int64(g.Port) + 1
-		if derived > 65535 {
-			return fmt.Errorf(
-				"auto-derived preview port %s is out of range; set gateway.preview_port explicitly",
-				strconv.FormatInt(derived, 10),
-			)
-		}
-		g.PreviewPort = int32(derived)
-	}
-
-	// 5. Preview port range check.
-	if g.PreviewPort < 1 || g.PreviewPort > 65535 {
-		return fmt.Errorf("gateway.preview_port %d is out of range [1, 65535]", g.PreviewPort)
-	}
-
-	// 6. Preview port must differ from main port.
-	if int(g.PreviewPort) == g.Port {
-		return fmt.Errorf("gateway.preview_port must differ from gateway.port")
-	}
-
-	// 7. Resolve preview_host (default to host); normalise IPv6 brackets.
-	if g.PreviewHost == "" {
-		g.PreviewHost = g.Host
-	}
-	// Normalise both sides for the comparison to avoid spurious bind-twice failures
-	// (e.g. "[::] == ::").
-	if normaliseIPv6Host(g.PreviewHost) == normaliseIPv6Host(g.Host) && g.PreviewHost != g.Host {
-		g.PreviewHost = g.Host
-	}
-
-	// 8. preview_origin must parse with scheme if set.
-	if g.PreviewOrigin != "" {
-		u, err := url.Parse(g.PreviewOrigin)
-		if err != nil || u.Scheme == "" {
-			return fmt.Errorf(
-				"gateway.preview_origin %q must be a URL with a scheme (e.g. https://preview.example.com)",
-				g.PreviewOrigin,
-			)
-		}
-	}
-
-	// 9. public_url must parse with scheme if set.
-	if g.PublicURL != "" {
-		u, err := url.Parse(g.PublicURL)
-		if err != nil || u.Scheme == "" {
-			return fmt.Errorf(
-				"gateway.public_url %q must be a URL with a scheme (e.g. https://omnipus.example.com)",
-				g.PublicURL,
-			)
-		}
-	}
-
-	return nil
+	return ResolveInt(c.Gateway.OrphanedTurnGraceSeconds, DefaultOrphanedTurnGraceSeconds)
 }
 
 // ApplyWarmupTimeoutDefault ensures the web_serve dev-mode warmup timeout

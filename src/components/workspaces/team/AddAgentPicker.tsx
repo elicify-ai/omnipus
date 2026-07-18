@@ -10,7 +10,7 @@ import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent } from '@/lib/api'
 import { isWorker } from '@/lib/api'
 import { roleLabel } from './teamGraphModel'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 
 interface AddAgentPickerProps {
   /** Every global agent (the agents cache). */
@@ -108,7 +108,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                   {a.icon ? (
                     <IconRenderer icon={a.icon} size={13} className="text-[var(--color-secondary)]" />
                   ) : (
-                    a.name.charAt(0).toUpperCase()
+                    initialOf(a.name)
                   )}
                 </div>
                 <div className="min-w-0 flex-1">

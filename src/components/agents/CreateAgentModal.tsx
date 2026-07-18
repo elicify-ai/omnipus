@@ -190,7 +190,6 @@ function payloadToCreateRequest(
   if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
   if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
   if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
-  if (payload.steering_mode !== undefined) req.steering_mode = payload.steering_mode
   return req
 }
 

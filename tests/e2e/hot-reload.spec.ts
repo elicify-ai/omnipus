@@ -25,7 +25,9 @@
 // (default: /tmp/omnipus-ci).
 //
 // CSRF handling: we call the login endpoint via fetch() to get a bearer token
-// plus the __Host-csrf cookie, then use page.request for PUT calls with both
+// plus the CSRF cookie (named __Host-csrf over TLS, csrf over the plain HTTP
+// this spec's gateway runs — see requestIsSecure in
+// pkg/gateway/middleware/csrf.go), then use fetch() for PUT calls with both
 // the Authorization header and the X-Csrf-Token header echoing the cookie value.
 //
 // Differentiation guarantee: each test calls PUT with two DIFFERENT values and
@@ -44,6 +46,7 @@ import {
 let handle: GatewayHandle;
 let adminToken = '';
 let csrfToken = '';
+let csrfCookieName = 'csrf';
 
 // This spec manages its own isolated gateway — do NOT use the global storageState.
 // baseURL is not set at module level because the port is resolved at runtime.
@@ -67,12 +70,19 @@ test.beforeAll(async () => {
   const loginBody = (await loginRes.json()) as { token: string };
   adminToken = loginBody.token;
 
-  // Extract __Host-csrf from Set-Cookie.
+  // Extract the CSRF cookie from Set-Cookie. The gateway names this cookie
+  // `__Host-csrf` over TLS and `csrf` over plain HTTP (requestIsSecure in
+  // pkg/gateway/middleware/csrf.go) — this spec's gateway runs over plain
+  // HTTP, so the actual cookie name is `csrf`, not `__Host-csrf`. Capture
+  // whichever name the server actually sent rather than assuming the TLS
+  // flavor, mirroring the SPA's own dual-name read (src/lib/api.ts
+  // readCSRFCookie).
   // On plain HTTP with localhost, Chromium stores Secure cookies because
   // localhost is a "potentially trustworthy origin" (RFC-8252).
   const setCookieHeader = loginRes.headers.get('set-cookie') ?? '';
-  const csrfMatch = setCookieHeader.match(/__Host-csrf=([^;]+)/);
-  csrfToken = csrfMatch?.[1] ?? '';
+  const csrfMatch = setCookieHeader.match(/(?:^|,|\s)(__Host-csrf|csrf)=([^;]+)/);
+  csrfCookieName = csrfMatch?.[1] ?? 'csrf';
+  csrfToken = csrfMatch?.[2] ?? '';
 });
 
 test.afterAll(async () => {
@@ -94,7 +104,7 @@ async function authedPut(
   };
   if (csrfToken) {
     headers['X-Csrf-Token'] = csrfToken;
-    headers['Cookie'] = `__Host-csrf=${csrfToken}`;
+    headers['Cookie'] = `${csrfCookieName}=${csrfToken}`;
   }
   const res = await fetch(`${handle.baseURL}${path}`, {
     method: 'PUT',

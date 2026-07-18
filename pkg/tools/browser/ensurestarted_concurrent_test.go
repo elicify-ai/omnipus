@@ -73,8 +73,11 @@ func TestEnsureStarted_Concurrent_LosersDiscard(t *testing.T) {
 	probeDir := t.TempDir()
 	t.Setenv("BROWSER_TEST_PROBE_DIR", probeDir)
 	binDir := t.TempDir()
-	writeExecutable(t, filepath.Join(binDir, "google-chrome"),
-		"#!/bin/sh\nsleep 0.3\necho $$ >> \"$BROWSER_TEST_PROBE_DIR/probes.log\"\necho 'Chromium 131.0.6778.108'\nexit 0\n")
+	writeExecutable(
+		t,
+		filepath.Join(binDir, "google-chrome"),
+		"#!/bin/sh\nsleep 0.3\necho $$ >> \"$BROWSER_TEST_PROBE_DIR/probes.log\"\necho 'Chromium 131.0.6778.108'\nexit 0\n",
+	)
 	t.Setenv("PATH", binDir)
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
 

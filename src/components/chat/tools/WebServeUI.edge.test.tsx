@@ -5,6 +5,10 @@
  * payload crashes the component. Uses generated types from asyncapi-types.ts
  * where applicable; WebServeResult is a hand-written type in WebServeUI.tsx
  * (flagged in report — see deliverables).
+ *
+ * ADR-044 (preview-on-main-listener): IframePreview no longer reads
+ * /api/v1/about (no separate preview origin/port to resolve), so no
+ * useQuery/fetchAboutInfo mock is needed here anymore.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -18,24 +22,9 @@ vi.mock('@/store/ui', () => ({
   useUiStore: () => ({ addToast: vi.fn() }),
 }))
 
-vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({
-    data: {
-      preview_port: 5001,
-      preview_listener_enabled: true,
-      warmup_timeout_seconds: 60,
-    },
-    isLoading: false,
-  }),
-}))
-
-vi.mock('@/lib/api', () => ({
-  fetchAboutInfo: vi.fn().mockResolvedValue({}),
-}))
-
 beforeEach(() => {
   Object.defineProperty(window, 'location', {
-    value: { hostname: 'localhost', protocol: 'http:' },
+    value: { hostname: 'localhost', protocol: 'http:', origin: 'http://localhost:5000', port: '5000' },
     writable: true,
   })
 })

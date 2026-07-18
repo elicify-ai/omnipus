@@ -35,18 +35,20 @@ func withAdminCtx(r *http.Request) *http.Request {
 }
 
 // bootSnapshot loads the config at configPath the SAME way boot does
-// (LoadConfig + ValidateAndApplyPreviewDefaults + ApplyWarmupTimeoutDefault),
-// returning the resulting *config.Config to use as appliedConfig. This mirrors
-// production: appliedConfig is the boot config WITH computed defaults applied,
-// not the raw on-disk bytes. Centralizing it here guarantees the test's applied
-// side is normalised identically to the handler's persisted side, so a
-// clean-install (applied == persisted) yields an empty diff even for keys that
-// only get a value via boot-time defaults (session.dm_scope, gateway.preview_*).
+// (LoadConfig + ApplyWarmupTimeoutDefault), returning the resulting
+// *config.Config to use as appliedConfig. This mirrors production:
+// appliedConfig is the boot config WITH computed defaults applied, not the
+// raw on-disk bytes. Centralizing it here guarantees the test's applied side
+// is normalised identically to the handler's persisted side, so a
+// clean-install (applied == persisted) yields an empty diff even for keys
+// that only get a value via boot-time defaults (session.dm_scope).
+// gateway.preview_enabled (ADR-044) needs no boot-time normalization here —
+// Config.IsPreviewEnabled() resolves the nil-vs-false default live, on every
+// read, so there is nothing to mirror at snapshot time.
 func bootSnapshot(t *testing.T, configPath string) *config.Config {
 	t.Helper()
 	cfg, err := config.LoadConfig(configPath)
 	require.NoError(t, err)
-	require.NoError(t, cfg.Gateway.ValidateAndApplyPreviewDefaults())
 	cfg.Tools.ApplyWarmupTimeoutDefault()
 	return cfg
 }
@@ -125,22 +127,20 @@ func callPendingRestart(t *testing.T, api *restAPI) *httptest.ResponseRecorder {
 
 // TestHandlePendingRestart_CleanInstallNoPhantomDiff is the core regression
 // guard (FIX A): a fresh-install config.json that contains ONLY the gateway
-// host/port/preview_port and omits session.dm_scope and gateway.preview_host
-// must produce an EMPTY diff. Before the fix, the persisted side was the raw
-// on-disk JSON (no defaults) while appliedConfig had dm_scope and preview_host
-// defaulted, so those fields surfaced as phantom "value → null" changes.
+// host/port and omits session.dm_scope must produce an EMPTY diff. Before the
+// fix, the persisted side was the raw on-disk JSON (no defaults) while
+// appliedConfig had dm_scope defaulted, so that field surfaced as a phantom
+// "value → null" change.
 func TestHandlePendingRestart_CleanInstallNoPhantomDiff(t *testing.T) {
 	// Both applied (boot) and persisted (on-disk) are the SAME clean-install
-	// config: only gateway host/port/preview_port, with NO session.dm_scope and
-	// NO gateway.preview_host (these get computed defaults at boot but are absent
-	// on disk). The handler must normalise the persisted side identically, so the
-	// diff is empty.
+	// config: only gateway host/port, with NO session.dm_scope (it gets a
+	// computed default at boot but is absent on disk). The handler must
+	// normalise the persisted side identically, so the diff is empty.
 	clean := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 	}
 	api := newPendingRestartAPI(t, clean, clean)
@@ -152,14 +152,10 @@ func TestHandlePendingRestart_CleanInstallNoPhantomDiff(t *testing.T) {
 	// The whole point: empty diff on a clean install.
 	assert.Empty(t, diffs, "clean install must yield no pending-restart diff; got %+v", diffs)
 
-	// Belt-and-suspenders: the two defaulted keys must specifically NOT appear.
+	// Belt-and-suspenders: the defaulted key must specifically NOT appear.
 	for _, d := range diffs {
 		assert.NotEqual(t, string(config.SessionDMScope), d.Key,
 			"session.dm_scope must not appear as a phantom diff")
-		assert.NotEqual(t, string(config.GatewayPreviewHost), d.Key,
-			"gateway.preview_host must not appear as a phantom diff")
-		assert.NotEqual(t, string(config.GatewayPreviewPort), d.Key,
-			"gateway.preview_port must not appear as a phantom diff")
 	}
 }
 
@@ -172,18 +168,16 @@ func TestHandlePendingRestart_GenuineChangeStillShows(t *testing.T) {
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 	}
 	// Persisted (on-disk) has gateway.port edited to 8080 after boot.
 	persisted := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(8080),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(8080),
 		},
 	}
 	api := newPendingRestartAPI(t, applied, persisted)
@@ -217,9 +211,8 @@ func TestHandlePendingRestart_GodModeKeysExcluded(t *testing.T) {
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 		"sandbox": map[string]any{},
 	}
@@ -228,9 +221,8 @@ func TestHandlePendingRestart_GodModeKeysExcluded(t *testing.T) {
 	persisted := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 		"sandbox": map[string]any{
 			"god_mode":         true,
@@ -261,18 +253,16 @@ func TestHandlePendingRestart_HostChangeStillShows(t *testing.T) {
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 	}
 	// Persisted (on-disk) has gateway.host edited to 0.0.0.0 after boot.
 	persisted := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "0.0.0.0",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "0.0.0.0",
+			"port": float64(5000),
 		},
 	}
 	api := newPendingRestartAPI(t, applied, persisted)
@@ -299,9 +289,8 @@ func TestHandlePendingRestart_HostUnchangedNoPhantomDiff(t *testing.T) {
 	clean := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 	}
 	api := newPendingRestartAPI(t, clean, clean)
@@ -319,26 +308,23 @@ func TestHandlePendingRestart_HostUnchangedNoPhantomDiff(t *testing.T) {
 // TestHandlePendingRestart_DMScopeNeverPhantom is a focused guard: even when the
 // boot config explicitly sets dm_scope to the default value AND the disk omits
 // it, no diff appears. (Both sides normalize to "per-channel-peer".)
-func TestHandlePendingRestart_DMScopeAndPreviewHostStableAcrossExplicitDefault(t *testing.T) {
-	// Applied (boot) config explicitly carries the defaulted values.
+func TestHandlePendingRestart_DMScopeStableAcrossExplicitDefault(t *testing.T) {
+	// Applied (boot) config explicitly carries the defaulted value.
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"session": map[string]any{"dm_scope": "per-channel-peer"},
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_host": "127.0.0.1",
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 	}
-	// Persisted (on-disk) drops dm_scope and preview_host — both should
-	// re-default to the same values, producing no diff.
+	// Persisted (on-disk) drops dm_scope — it should re-default to the same
+	// value, producing no diff.
 	persisted := map[string]any{
 		"version": float64(config.CurrentVersion),
 		"gateway": map[string]any{
-			"host":         "127.0.0.1",
-			"port":         float64(5000),
-			"preview_port": float64(5001),
+			"host": "127.0.0.1",
+			"port": float64(5000),
 		},
 	}
 	api := newPendingRestartAPI(t, applied, persisted)
@@ -346,7 +332,7 @@ func TestHandlePendingRestart_DMScopeAndPreviewHostStableAcrossExplicitDefault(t
 	w := callPendingRestart(t, api)
 	require.Equal(t, http.StatusOK, w.Code)
 	diffs := decodeDiffs(t, w.Body.Bytes())
-	assert.Empty(t, diffs, "default-valued dm_scope/preview_host must not diff; got %+v", diffs)
+	assert.Empty(t, diffs, "default-valued dm_scope must not diff; got %+v", diffs)
 }
 
 // TestHandlePendingRestart_ListsQueuedChanges verifies that a post-boot change
@@ -497,6 +483,41 @@ func TestRefreshConfigHotAppliesLogLevel(t *testing.T) {
 	// Restore the default level so the global logger state does not leak to
 	// other tests in the package.
 	t.Cleanup(func() { logger.SetLevel(logger.INFO) })
+}
+
+// TestRestartGatedKeys_KeepsPublicURL_DropsPreview is the ADR-044 (preview-on-
+// main-listener) pinning test for US-6/FR-007/FR-014: the four deleted preview
+// keys (gateway.preview_port/preview_host/preview_origin/preview_listener_enabled)
+// must be gone from RestartGatedKeys, while gateway.public_url MUST remain —
+// it drives the boot-frozen CORS/CSP/WS-origin fences (CanonicalGatewayOrigin),
+// so unlike preview_enabled it still requires a restart to take effect.
+func TestRestartGatedKeys_KeepsPublicURL_DropsPreview(t *testing.T) {
+	removedPreviewKeys := []string{
+		"gateway.preview_port",
+		"gateway.preview_host",
+		"gateway.preview_origin",
+		"gateway.preview_listener_enabled",
+	}
+
+	keys := make(map[string]bool, len(RestartGatedKeys))
+	for _, k := range RestartGatedKeys {
+		keys[string(k)] = true
+	}
+
+	for _, removed := range removedPreviewKeys {
+		assert.False(t, keys[removed],
+			"RestartGatedKeys must not contain the removed preview key %q; got %+v", removed, RestartGatedKeys)
+	}
+
+	assert.True(t, keys[string(config.GatewayPublicURL)],
+		"RestartGatedKeys must still contain gateway.public_url (drives boot-frozen origin fences); got %+v",
+		RestartGatedKeys)
+
+	// gateway.preview_enabled (the new live-read toggle) must also be absent —
+	// it is explicitly NOT restart-gated (ADR-044, FR-007).
+	assert.False(t, keys[string(config.GatewayPreviewEnabled)],
+		"RestartGatedKeys must not contain gateway.preview_enabled — it is read live, not restart-gated; got %+v",
+		RestartGatedKeys)
 }
 
 // TestGetAtPath_DottedPath verifies that getAtPath returns the correct value

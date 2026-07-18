@@ -266,7 +266,7 @@ func TestAgentLoop_SteeringMode_ConfiguredFromConfig(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -317,7 +317,7 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -355,7 +355,7 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -633,7 +633,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -748,7 +748,7 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -819,7 +819,7 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -953,7 +953,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -1039,7 +1039,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -1142,7 +1142,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -1320,7 +1320,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -1485,7 +1485,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

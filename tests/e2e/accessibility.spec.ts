@@ -13,7 +13,6 @@ const ROUTES = [
   '/#/',
   '/#/agents',
   '/#/skills',
-  '/#/command-center',
   '/#/settings',
   '/#/settings?tab=about',
 ];

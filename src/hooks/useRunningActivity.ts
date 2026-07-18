@@ -39,7 +39,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
-import type { SpanStep, SubagentSpan } from '@/store/chat'
+import type { SpanStep, SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
 
@@ -57,6 +57,22 @@ export interface AgentActivityItem {
   status: ActivityStatus
   durationMs?: number
   steps: SpanStep[] // populated for native only — empty for 3p (issue #492: no live step detail yet)
+  /**
+   * The span's final result text (terminal spans only) — Fix 2 (2026-07-16):
+   * SubagentBlock's thread card (now hidden from the thread by default) was
+   * the only surface showing this; carried onto the item here so
+   * ActivityPanel's expanded row can render it, matching SubagentBlock's own
+   * "Final result" section (see SubagentBlock.tsx).
+   */
+  finalResult?: string
+  /**
+   * Populated when status === 'interrupted' (terminal spans only) — see
+   * SubagentSpanTerminal.reason. Carried the same way as finalResult (Fix 2)
+   * so ActivityPanel can append the human-readable reason to the row's
+   * status text, mirroring SubagentBlock's own inline reason label. Render
+   * via formatInterruptReason (@/lib/subagentStatus), not this raw value.
+   */
+  interruptReason?: SubagentSpanTerminal['reason']
 }
 
 export interface BashActivityItem {
@@ -379,10 +395,13 @@ export function useRunningActivity(): RunningActivity {
     const effectiveAgentId = resolveSpanAgentId(span, toolCallsById)
     const resolved = resolveAgent(effectiveAgentId, agents)
     // Narrow via the literal comparison (not an aliased boolean) so
-    // `span.durationMs` — only present on the terminal member of the
-    // SubagentSpan union — type-checks in the `false` branch.
-    const finishedDurationMs = span.status === 'running' ? undefined : span.durationMs
-    const durationMs = trackDurationMs(span.spanId, span.status === 'running', finishedDurationMs, firstSeenAtMap)
+    // `span.durationMs`/`finalResult`/`reason` — only present on the
+    // terminal member of the SubagentSpan union — type-check in the `false`
+    // branch.
+    const isSpanRunning = span.status === 'running'
+    const terminal = isSpanRunning ? null : (span as SubagentSpanTerminal)
+    const finishedDurationMs = terminal?.durationMs
+    const durationMs = trackDurationMs(span.spanId, isSpanRunning, finishedDurationMs, firstSeenAtMap)
     const item: AgentActivityItem = {
       kind: 'agent',
       key: span.spanId,
@@ -392,6 +411,8 @@ export function useRunningActivity(): RunningActivity {
       status: span.status,
       durationMs,
       steps: resolved.agentType === '3p' ? [] : span.steps,
+      finalResult: terminal?.finalResult,
+      interruptReason: terminal?.reason,
     }
     if (span.status === 'running') running.push(item)
     else recentlyFinished.push(item)

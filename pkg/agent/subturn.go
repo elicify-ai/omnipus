@@ -276,9 +276,9 @@ func resolveDelegateSoul(al *AgentLoop, agentID string) string {
 			continue
 		}
 		ac := cfg.Agents.List[i]
-		ws := ac.Workspace
+		ws := ac.Home
 		if ws == "" {
-			ws = cfg.Agents.Defaults.Workspace
+			ws = cfg.Agents.Defaults.Home
 		}
 		if ws == "" {
 			return ""
@@ -622,7 +622,7 @@ func spawnSubTurn(
 		Model:                     execModel,
 		Fallbacks:                 execSource.Fallbacks,
 		FallbackModels:            execSource.FallbackModels,
-		Workspace:                 execSource.Workspace,
+		Home:                      execSource.Home,
 		MaxIterations:             execSource.MaxIterations,
 		MaxTokens:                 execSource.MaxTokens,
 		Temperature:               execSource.Temperature,
@@ -1074,6 +1074,37 @@ func spawnSubTurn(
 			// total) ONLY when cfg.Async is true, establishing real
 			// happens-before ordering instead of silently leaving the
 			// placeholder permanent.
+			//
+			// W4: alongside status/duration, also persist the sub-turn's own
+			// OUTPUT onto the same record — result.ForLLM on success (which
+			// already carries a "SubTurn failed: <err>" / "SubTurn dispatch
+			// rejected: <err>" message on the error paths above, since those
+			// set result.ForLLM to the error text directly), falling back to
+			// err.Error() for the rare case result is nil (e.g. the panic-
+			// recover branch above). Without this, the persisted delegate
+			// tool_call carried a terminal status but an empty `result` even
+			// when the sub-turn completed successfully — reload showed no
+			// trace of what the delegate actually produced, unlike the live
+			// WS stream (SubTurnEndPayload).
+			var toolCallResult map[string]any
+			switch {
+			case result != nil && result.ForLLM != "":
+				toolCallResult = map[string]any{"text": result.ForLLM}
+			case err != nil:
+				toolCallResult = map[string]any{"text": err.Error()}
+			}
+			// Flag the persisted result as an error whenever the sub-turn
+			// failed — keyed off err != nil OR result.IsError. Some failure
+			// paths (e.g. the dispatch-reject at ~L1149) set result.Err/ForLLM
+			// but leave IsError false, so keying off IsError alone would persist
+			// a failed delegate as if it had completed cleanly. Always carry
+			// explanatory text alongside the error flag.
+			if err != nil || (result != nil && result.IsError) {
+				if toolCallResult == nil {
+					toolCallResult = map[string]any{"text": "sub-turn reported an error"}
+				}
+				toolCallResult["error"] = true
+			}
 			if parentTS.transcriptStore != nil && parentTS.transcriptSessionID != "" {
 				found, updateErr := updateToolCallStatusWithRetry(
 					parentTS.transcriptStore,
@@ -1082,6 +1113,7 @@ func spawnSubTurn(
 					string(endStatus),
 					subTurnDurationMS,
 					cfg.Async,
+					toolCallResult,
 				)
 				switch {
 				case updateErr != nil:
@@ -1255,9 +1287,14 @@ var updateToolCallStatusRetryDelays = []time.Duration{
 	500 * time.Millisecond,
 }
 
-// updateToolCallStatusWithRetry calls store.UpdateToolCallStatus, retrying
-// with updateToolCallStatusRetryDelays's bounded backoff when async is true
-// and the first attempt finds no matching record yet (found=false, err=nil).
+// updateToolCallStatusWithRetry calls store.UpdateToolCallStatusAndResult,
+// retrying with updateToolCallStatusRetryDelays's bounded backoff when async
+// is true and the first attempt finds no matching record yet (found=false,
+// err=nil). result is forwarded as-is (nil is valid and leaves the existing
+// ToolCall.Result untouched — see UpdateToolCallStatusAndResult's doc
+// comment); passing the delegate sub-turn's own result here (W4) is what lets
+// a session reload's delegate tool_call entry carry the sub-turn's outcome
+// instead of an empty `result`.
 //
 // FIX 4 (confirmed independently by silent-failure-hunter, architect, and
 // code-reviewer): DelegateTool.executeAsync (pkg/tools/delegate.go) launches
@@ -1289,14 +1326,15 @@ func updateToolCallStatusWithRetry(
 	status string,
 	durationMS int64,
 	async bool,
+	result map[string]any,
 ) (found bool, err error) {
-	found, err = store.UpdateToolCallStatus(sessionID, toolCallID, status, durationMS)
+	found, err = store.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, result)
 	if err != nil || found || !async {
 		return found, err
 	}
 	for _, delay := range updateToolCallStatusRetryDelays {
 		time.Sleep(delay)
-		found, err = store.UpdateToolCallStatus(sessionID, toolCallID, status, durationMS)
+		found, err = store.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, result)
 		if err != nil || found {
 			return found, err
 		}

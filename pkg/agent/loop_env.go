@@ -41,7 +41,7 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 			continue
 		}
 
-		provider := envcontext.NewDefaultProvider(cfg, al.sandboxBackend, agentInstance.Workspace)
+		provider := envcontext.NewDefaultProvider(cfg, al.sandboxBackend, agentInstance.Home)
 		cb.WithEnvironmentProvider(provider)
 
 		al.contextBuilderRegistry.Register(agentID, cb)

@@ -40,8 +40,21 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 // ── UI store stub ────────────────────────────────────────────────────────────
 const mockAddToast = vi.fn()
 
+// WorkspaceSettingsTab reads via the SELECTOR pattern (`useUiStore((s) =>
+// s.addToast)`), not `useUiStore()` with no args — the mock must invoke a
+// passed selector against the fake state rather than always returning the
+// whole state object, or `addToast` binds to `{ addToast: fn }` (an object)
+// instead of `fn` itself, and any call site that invokes it throws
+// "addToast is not a function" (surfaces as an unhandled rejection from
+// inside a mutation's onSuccess/onError, since those errors are swallowed
+// into the mutation's own promise chain rather than failing the test
+// directly — see the archive/delete invalidation tests below, which are
+// the first in this file to actually exercise a toast-firing path).
 vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn(() => ({ addToast: mockAddToast })),
+  useUiStore: vi.fn((selector?: (s: { addToast: typeof mockAddToast }) => unknown) => {
+    const state = { addToast: mockAddToast }
+    return selector ? selector(state) : state
+  }),
 }))
 
 // ── API mock — partial passthrough, override the two instructions functions ──
@@ -140,7 +153,11 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
   /**
    * Test 2 — Save on edit
    * After the data loads, changing the textarea triggers updateWorkspaceInstructions
-   * once the useAutoSave debounce (500 ms default) fires.
+   * once the useAutoSave debounce fires. Deliberately updated (echo-race fix,
+   * P2 'Text input Auto save'): the instructions instance's debounce was
+   * raised from the 500ms default to 1500ms (long-form surface — see
+   * WorkspaceSettingsTab.tsx's `useAutoSave` call for the instructions
+   * field), so the advance below and its comment were updated to match.
    */
   it('calls updateWorkspaceInstructions after typing into the textarea', async () => {
     vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'initial text' })
@@ -163,9 +180,9 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     // Before the debounce fires the PUT must not have been sent.
     expect(api.updateWorkspaceInstructions).not.toHaveBeenCalled()
 
-    // Advance past the 500 ms debounce.
+    // Advance past the 1500 ms debounce (deliberately raised from 500ms).
     await act(async () => {
-      vi.advanceTimersByTime(600)
+      vi.advanceTimersByTime(1600)
     })
 
     // Switch back so waitFor can poll.
@@ -240,9 +257,10 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     const textarea = screen.getByRole('textbox', { name: /workspace \/ project instructions/i })
     fireEvent.change(textarea, { target: { value: '' } })
 
-    // Advance past the debounce.
+    // Advance past the 1500 ms debounce (deliberately raised from 500ms —
+    // see Test 2's comment above).
     await act(async () => {
-      vi.advanceTimersByTime(600)
+      vi.advanceTimersByTime(1600)
     })
 
     vi.useRealTimers()
@@ -250,6 +268,314 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     await waitFor(() => {
       expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, '')
     })
+  })
+})
+
+// ── Echo-race regression (P2 'Text input Auto save') ────────────────────────
+//
+// Root cause: the instructions hydration effect (`useEffect(() => {
+// if (instructionsData !== undefined) setInstructionsContent(...) }, [instructionsData])`)
+// had NO dirty guard at all — a save's own `invalidateQueries` refetch
+// landing while the operator kept typing would silently overwrite the
+// textarea with the stale pre-edit content mid-keystroke. Fixed by adding
+// `instructionsDirtyRef` (set on every onChange, cleared only when
+// useAutoSave's `onSaved` reports the save snapshot is still current).
+describe('WorkspaceSettingsTab — instructions echo-race (autosave hydration must never revert an in-flight draft)', () => {
+  it('typing during the save round-trip is never reverted by the invalidate-refetch echo, and the newer text still persists', async () => {
+    // Three GETs: the initial hydration, the invalidate-refetch fired by
+    // save #1 (server genuinely has 'first edit' at that point — but the
+    // operator has ALREADY typed more locally, so this is a stale echo
+    // relative to the live draft), and the invalidate-refetch fired by
+    // save #2 (server now genuinely has the newest text).
+    vi.mocked(api.fetchWorkspaceInstructions).mockReset()
+      .mockResolvedValueOnce({ content: 'initial text' })
+      .mockResolvedValueOnce({ content: 'first edit' })
+      .mockResolvedValue({ content: 'first edit second edit' })
+
+    // Both PUTs are manually controlled so the test can inspect the exact
+    // moment save #1's stale echo lands WHILE save #2 is still queued/in
+    // flight — the precise race window this fix closes.
+    let resolvePut1!: (v: { content: string }) => void
+    const putPromise1 = new Promise<{ content: string }>((r) => { resolvePut1 = r })
+    let resolvePut2!: (v: { content: string }) => void
+    const putPromise2 = new Promise<{ content: string }>((r) => { resolvePut2 = r })
+    vi.mocked(api.updateWorkspaceInstructions).mockReset()
+      .mockReturnValueOnce(putPromise1)
+      .mockReturnValueOnce(putPromise2)
+
+    renderTab()
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('textbox', { name: /workspace \/ project instructions/i }),
+      ).toHaveValue('initial text')
+    })
+
+    vi.useFakeTimers()
+    const textarea = screen.getByRole('textbox', { name: /workspace \/ project instructions/i })
+
+    // First edit — debounce fires, the PUT goes out and stays in flight.
+    fireEvent.change(textarea, { target: { value: 'first edit' } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+
+    // Second edit — the operator keeps typing while the first PUT is still
+    // unresolved. This debounce cycle fires too, but useAutoSave's own
+    // serialization (isSavingRef) queues it (rerunPendingRef) instead of
+    // dispatching a second, concurrent PUT.
+    fireEvent.change(textarea, { target: { value: 'first edit second edit' } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+    expect(textarea).toHaveValue('first edit second edit')
+
+    // Switch to real timers for the async settle/refetch chain below.
+    vi.useRealTimers()
+
+    // Resolve PUT #1. saveFn #1 then awaits its own `invalidateQueries`,
+    // whose refetch resolves with the STALE ("first edit") content — the
+    // server echo of save #1's own payload, landing after the operator
+    // typed more. Save #2 (the queued rerun) starts right behind it and
+    // immediately blocks on the still-unresolved `putPromise2`, giving a
+    // clean checkpoint to inspect the draft mid-race.
+    await act(async () => {
+      resolvePut1({ content: 'first edit' })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchWorkspaceInstructions).toHaveBeenCalledTimes(2)
+    })
+    // Save #2 must already be in flight (queued via useAutoSave's own
+    // serialization) by the time save #1's echo has landed.
+    await waitFor(() => {
+      expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(2)
+    })
+
+    // THE regression assertion: even though the query cache just updated
+    // with the stale "first edit" echo, the textarea must still show the
+    // NEWEST typed text — instructionsDirtyRef stayed armed because
+    // useAutoSave's onSaved reported isCurrent=false for save #1 (the live
+    // draft had already moved on when it resolved).
+    expect(textarea).toHaveValue('first edit second edit')
+
+    // Resolve PUT #2 — the queued re-save persists the newer text, and its
+    // own invalidate-refetch (mocked to return the now-genuinely-current
+    // value) settles cleanly.
+    await act(async () => {
+      resolvePut2({ content: 'first edit second edit' })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchWorkspaceInstructions).toHaveBeenCalledTimes(3)
+    })
+    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(1, WORKSPACE_ID, 'first edit')
+    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(2, WORKSPACE_ID, 'first edit second edit')
+    expect(textarea).toHaveValue('first edit second edit')
+  })
+})
+
+// ── Trim-vs-raw isCurrent gap regression (item 2) ───────────────────────────
+//
+// Root cause: the identity `formData` used to carry TRIMMED values
+// (`name.trim()`, etc.) — the exact object useAutoSave's `isCurrent` deep-
+// compares before vs. after a save's round-trip. If the ONLY thing that
+// changed the live draft during an in-flight save was trailing whitespace
+// (e.g. "New name" -> "New name "), trimmed-vs-trimmed compares EQUAL even
+// though the raw draft the operator is looking at still differs from what
+// was actually sent — `isCurrent` reported true, `identityDirtyRef` cleared,
+// and the next hydration (writing the RAW `workspace.name` prop straight
+// into state) silently stripped the space out from under the operator's
+// cursor. Fixed by carrying RAW values in `formData` and trimming only
+// inside saveFn's wire payload, so `isCurrent` compares raw-to-raw.
+describe('WorkspaceSettingsTab — trim-vs-raw isCurrent gap (name field, trailing-space case)', () => {
+  it('a trailing-space-only edit made while a save is in flight is not lost when the next hydration lands with the server-trimmed name', async () => {
+    vi.mocked(api.updateWorkspace).mockReset()
+    let resolvePut1!: (v: Workspace) => void
+    const putPromise1 = new Promise<Workspace>((r) => { resolvePut1 = r })
+    let resolvePut2!: (v: Workspace) => void
+    const putPromise2 = new Promise<Workspace>((r) => { resolvePut2 = r })
+    vi.mocked(api.updateWorkspace)
+      .mockReturnValueOnce(putPromise1)
+      .mockReturnValueOnce(putPromise2)
+
+    const queryClient = makeClient()
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceSettingsTab workspace={mockWorkspace} />
+      </QueryClientProvider>,
+    )
+
+    const nameInput = await screen.findByLabelText('Name')
+    expect(nameInput).toHaveValue('Test Workspace')
+
+    vi.useFakeTimers()
+
+    // First edit — debounce fires (600ms), the PUT goes out (wire payload
+    // trimmed to "New name") and stays in flight.
+    fireEvent.change(nameInput, { target: { value: 'New name' } })
+    await act(async () => { vi.advanceTimersByTime(700) })
+    expect(api.updateWorkspace).toHaveBeenCalledTimes(1)
+    expect(api.updateWorkspace).toHaveBeenNthCalledWith(
+      1, WORKSPACE_ID, expect.objectContaining({ name: 'New name' }),
+    )
+
+    // Second edit — ONLY a trailing space added while the first PUT is
+    // still unresolved. Trimmed, this is IDENTICAL to what's already in
+    // flight — exactly the case the trim-vs-raw gap mishandled. The
+    // serialized debounce cycle queues a re-run rather than firing a second
+    // concurrent PUT immediately.
+    fireEvent.change(nameInput, { target: { value: 'New name ' } })
+    await act(async () => { vi.advanceTimersByTime(700) })
+    expect(api.updateWorkspace).toHaveBeenCalledTimes(1)
+    expect(nameInput).toHaveValue('New name ')
+
+    vi.useRealTimers()
+
+    // Resolve PUT #1. `onSaved`'s isCurrent must be computed on RAW data —
+    // the live draft ("New name ") no longer raw-equals what was actually
+    // sent ("New name"), so isCurrent is false and identityDirtyRef must
+    // stay armed. The queued re-run (save #2) starts right behind it and
+    // blocks on the still-unresolved putPromise2.
+    await act(async () => {
+      resolvePut1({ ...mockWorkspace, name: 'New name' })
+    })
+    await waitFor(() => {
+      expect(api.updateWorkspace).toHaveBeenCalledTimes(2)
+    })
+
+    // Simulate the parent re-rendering with the server's canonical
+    // (trimmed) name — the exact moment a stale hydration would otherwise
+    // silently strip the space.
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceSettingsTab workspace={{ ...mockWorkspace, name: 'New name' }} />
+      </QueryClientProvider>,
+    )
+
+    // THE regression assertion: the trailing space must survive — the
+    // hydration effect is still blocked by identityDirtyRef, because
+    // raw-to-raw isCurrent correctly reported false for the in-flight save.
+    expect(nameInput).toHaveValue('New name ')
+
+    // Resolve PUT #2 — the queued re-save persists the newer (space-
+    // trailing, trimmed-identical) text; dirty finally clears because this
+    // save's raw snapshot now equals the live draft.
+    await act(async () => {
+      resolvePut2({ ...mockWorkspace, name: 'New name' })
+    })
+    await waitFor(() => {
+      expect(api.updateWorkspace).toHaveBeenCalledTimes(2)
+    })
+    expect(api.updateWorkspace).toHaveBeenNthCalledWith(
+      2, WORKSPACE_ID, expect.objectContaining({ name: 'New name' }),
+    )
+  })
+})
+
+// ── No-op invalidation regression (item 6) ───────────────────────────────────
+//
+// `workspacesQueryKeys.list()` called with no args produces
+// ['workspaces', undefined] — every REAL list query is registered as
+// ['workspaces', {status: 'active'|'archived'}] (see Sidebar.tsx,
+// WorkspaceTabContainer.tsx, etc.), and TanStack Query's partial-match
+// invalidation requires the filter key to be a prefix of the stored key at
+// EVERY index, so `undefined` at index 1 never matches a defined params
+// object there. This pinned the save/archive/delete flows as silent no-ops
+// against every real list query in the app — a save could persist to the
+// server yet a currently-rendered workspace list would never refetch.
+// `['workspaces']` (length 1) is a valid prefix of any 'workspaces'-keyed
+// query, fixing this.
+describe('WorkspaceSettingsTab — no-op invalidation (item 6)', () => {
+  it('invalidates with a bare ["workspaces"] prefix (not .list() with no args) after a name save', async () => {
+    vi.mocked(api.updateWorkspace).mockReset().mockResolvedValue(mockWorkspace)
+
+    const queryClient = makeClient()
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceSettingsTab workspace={mockWorkspace} />
+      </QueryClientProvider>,
+    )
+
+    const nameInput = await screen.findByLabelText('Name')
+    vi.useFakeTimers()
+    fireEvent.change(nameInput, { target: { value: 'Renamed Workspace' } })
+    await act(async () => { vi.advanceTimersByTime(700) })
+    vi.useRealTimers()
+
+    await waitFor(() => {
+      expect(api.updateWorkspace).toHaveBeenCalled()
+    })
+    // The fixed call: a bare ['workspaces'] prefix, NOT ['workspaces',
+    // undefined] (what `workspacesQueryKeys.list()` with no args produces —
+    // that key partial-matches ZERO real queries, see the module comment).
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workspaces'] })
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['workspaces', undefined] })
+  })
+
+  it('invalidates with a bare ["workspaces"] prefix after archiving', async () => {
+    vi.mocked(api.updateWorkspace).mockReset().mockResolvedValue({ ...mockWorkspace, status: 'archived' })
+
+    const queryClient = makeClient()
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceSettingsTab workspace={mockWorkspace} />
+      </QueryClientProvider>,
+    )
+
+    const archiveBtn = await screen.findByRole('button', { name: /archive workspace/i })
+    fireEvent.click(archiveBtn)
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workspaces'] })
+    })
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['workspaces', undefined] })
+  })
+})
+
+// ── Pagehide flush wiring (item 4) ───────────────────────────────────────────
+//
+// The instructions field previously passed neither `flushUrl` nor
+// `beaconFlush` to useAutoSave — a tab close within the 1500ms debounce
+// window silently dropped up to 1500ms of typing. Fixed by wiring a
+// `beaconFlush` that PUTs the same `{content}` shape `updateWorkspaceInstructions`
+// sends, as a `keepalive: true` fetch (so it can survive page teardown).
+describe('WorkspaceSettingsTab — instructions pagehide flush (item 4)', () => {
+  it('keepalive-flushes the pending instructions edit on pagehide before the debounce fires', async () => {
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'initial text' })
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+
+    renderTab()
+
+    const textarea = await screen.findByRole('textbox', { name: /workspace \/ project instructions/i })
+    await waitFor(() => expect(textarea).toHaveValue('initial text'))
+
+    vi.useFakeTimers()
+    fireEvent.change(textarea, { target: { value: 'unsaved edit' } })
+
+    // Fire pagehide WELL before the 1500ms debounce would otherwise save —
+    // this is exactly the tab-close-mid-typing window item 4 closes.
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    vi.useRealTimers()
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `/api/v1/workspaces/${WORKSPACE_ID}/instructions`,
+      expect.objectContaining({
+        method: 'PUT',
+        keepalive: true,
+        body: JSON.stringify({ content: 'unsaved edit' }),
+      }),
+    )
+    // The debounced PUT itself must NOT have fired yet — the flush is a
+    // best-effort SEPARATE keepalive fetch, not a substitute for the
+    // normal save path.
+    expect(api.updateWorkspaceInstructions).not.toHaveBeenCalled()
+
+    fetchSpy.mockRestore()
   })
 })
 

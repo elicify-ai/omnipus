@@ -1,7 +1,8 @@
 // Unit tests for fetchCliDetect + fetchCliValidate (external-executor-cli-
 // path-detection spec). fetchCliDetect (UAT fix): the call MUST go through
-// the authed request() wrapper so the bearer token rides along. The previous
-// raw fetch('/api/v1/system/cli-detect') sent no auth header and 401'd,
+// the request() wrapper so the omnipus-session cookie rides along
+// (credentials:'include' — US-5 / FR-010). The previous raw
+// fetch('/api/v1/system/cli-detect') sent no credentials and 401'd,
 // producing a false "Could not detect installed external CLIs" banner.
 //
 // CliDetect was restructured from booleans (hasClaude/hasCodex/hasOpencode)
@@ -36,7 +37,6 @@ function restoreCookie() {
 }
 
 beforeEach(() => {
-  sessionStorage.setItem('omnipus_auth_token', 'test-token-123')
   stubCookie('__Host-csrf=test-csrf-token')
   fetchSpy = vi.fn().mockResolvedValue(
     new Response(JSON.stringify(DETECT_BODY), {
@@ -48,22 +48,21 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  sessionStorage.clear()
   vi.unstubAllGlobals()
   restoreCookie()
 })
 
 describe('fetchCliDetect — sends auth (UAT fix)', () => {
-  it('hits the cli-detect endpoint with a Bearer Authorization header', async () => {
+  it('hits the cli-detect endpoint with credentials included (cookie auth)', async () => {
     const result = await fetchCliDetect()
 
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/api/v1/system/cli-detect')
 
-    // The bearer token must be present (the bug was a missing auth header).
-    const headers = new Headers(init.headers)
-    expect(headers.get('Authorization')).toBe('Bearer test-token-123')
+    // The omnipus-session cookie must ride along (the bug was a missing
+    // credentials mode, equivalent to the old missing-auth-header bug).
+    expect(init.credentials).toBe('include')
 
     // Parsed + validated against the restructured per-CLI CliDetect schema.
     expect(result).toEqual(DETECT_BODY)

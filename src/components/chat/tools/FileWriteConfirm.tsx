@@ -1,12 +1,5 @@
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  PencilSimple,
-  FloppyDisk,
-  Plus,
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-} from '@phosphor-icons/react'
+import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 import { cn } from '@/lib/utils'
 
 interface WriteFileArgs {
@@ -37,59 +30,48 @@ function byteCount(s?: string): string {
   return `${(bytes / 1024).toFixed(1)} KB`
 }
 
+// Flat text-line design (ticket "Tool components in chat", P2): no card
+// frame — matches GenericToolCall.tsx/toolStatusConfig.tsx. This row is not
+// expandable (write/edit/append have no detail panel), so it's a single flat
+// line: status dot/spinner, op label, path, optional byte-count detail, and
+// a status label. The decorative per-op icon (FloppyDisk/PencilSimple/Plus)
+// is gone — the status dot is the only leading indicator, same as the other
+// rows. Status text (Running.../Done/Failed/Cancelled) is rendered via
+// getToolBadgeStatusConfig like BashOutput does — a dot color alone is not
+// enough to distinguish a failed write from a successful one for
+// colorblind users or screen readers (WCAG 1.4.1).
 function FileOpBlock({
-  icon: Icon,
   label,
   path,
   detail,
   isRunning,
   isError,
+  isCancelled,
 }: {
-  icon: React.ComponentType<{ size?: number | undefined; weight?: import('@phosphor-icons/react').IconWeight | undefined; className?: string | undefined }>
   label: string
   path: string
   detail?: string
   isRunning: boolean
   isError?: boolean
+  isCancelled?: boolean
 }) {
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 12, cancelledVariant: 'muted' }
+  )
   return (
-    <div
-      className={cn(
-        'mt-2 rounded-md border overflow-hidden text-xs',
-        isRunning
-          ? 'border-[var(--color-border)]'
-          : isError
-          ? 'border-[var(--color-error)]/30'
-          : 'border-[var(--color-success)]/20'
+    <div className="mt-2 flex items-center gap-2 py-1 text-xs font-mono">
+      {statusConfig.indicator}
+      <span className="text-[var(--color-muted)] shrink-0">{label}</span>
+      <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
+        {basename(path)}
+      </span>
+      {detail && !isRunning && (
+        <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
       )}
-    >
-      <div className="flex items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)]">
-        <Icon
-          size={13}
-          weight="duotone"
-          className={cn(
-            isRunning ? 'text-[var(--color-accent)]' :
-            isError ? 'text-[var(--color-error)]' :
-            'text-[var(--color-success)]'
-          )}
-        />
-        <span className="text-[var(--color-muted)] shrink-0">{label}</span>
-        <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
-          {basename(path)}
-        </span>
-        <span className="flex items-center gap-1 shrink-0">
-          {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-          ) : isError ? (
-            <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
-          ) : (
-            <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-          )}
-          {detail && !isRunning && (
-            <span className="text-[var(--color-muted)] ml-1">{detail}</span>
-          )}
-        </span>
-      </div>
+      <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+        {statusConfig.label}
+      </span>
     </div>
   )
 }
@@ -99,12 +81,12 @@ function makeWriteFileUI(toolName: string) {
     toolName,
     render: ({ args, status }) => (
       <FileOpBlock
-        icon={FloppyDisk}
         label={toolName}
         path={args?.path ?? '(unknown)'}
         detail={byteCount(args?.content)}
         isRunning={status.type === 'running'}
         isError={status.type === 'incomplete'}
+        isCancelled={isCancelledStatus(status)}
       />
     ),
   })
@@ -119,11 +101,11 @@ export const EditFileConfirmUI = makeAssistantToolUI<EditFileArgs, unknown>({
   toolName: 'edit_file',
   render: ({ args, status }) => (
     <FileOpBlock
-      icon={PencilSimple}
       label="edit_file"
       path={args?.path ?? '(unknown)'}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })
@@ -132,12 +114,12 @@ export const AppendFileConfirmUI = makeAssistantToolUI<AppendFileArgs, unknown>(
   toolName: 'append_file',
   render: ({ args, status }) => (
     <FileOpBlock
-      icon={Plus}
       label="append_file"
       path={args?.path ?? '(unknown)'}
       detail={byteCount(args?.content)}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })

@@ -4,10 +4,18 @@
 // AgentActivityItem, BashActivityItem) — this component is purely prop-driven,
 // no store/query mocking required.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { AgentActivityItem, BashActivityItem } from '@/hooks/useRunningActivity'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+
+beforeEach(() => {
+  act(() => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
+  })
+})
 
 function makeAgentItem(overrides: Partial<AgentActivityItem> = {}): AgentActivityItem {
   return {
@@ -22,6 +30,8 @@ function makeAgentItem(overrides: Partial<AgentActivityItem> = {}): AgentActivit
     status: overrides.status ?? 'running',
     durationMs: overrides.durationMs,
     steps: overrides.steps ?? [],
+    finalResult: overrides.finalResult,
+    interruptReason: overrides.interruptReason,
   }
 }
 
@@ -126,6 +136,237 @@ describe('ActivityPanel — expandable native row', () => {
   })
 })
 
+// ── Fix 2 (2026-07-16): panel carries the final result / interrupt reason ──
+// SubagentBlock's thread card (now hidden from the thread by default) was
+// the only surface showing span.finalResult and a human-readable interrupt
+// reason. useRunningActivity.ts now carries both onto AgentActivityItem so
+// the panel — the durable default-visible surface for this detail — can
+// render them too.
+
+describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
+  it('an expanded finished item shows its final result in a labeled block', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({
+            status: 'success',
+            taskLabel: 'summarize logs',
+            finalResult: 'Found 3 errors in the last hour.',
+          }),
+        ]}
+      />,
+    )
+    const toggle = screen.getByRole('button', { expanded: false })
+    expect(toggle).not.toBeDisabled()
+    fireEvent.click(toggle)
+    expect(screen.getByText('Final result')).toBeInTheDocument()
+    expect(screen.getByText('Found 3 errors in the last hour.')).toBeInTheDocument()
+  })
+
+  it('a finished item with zero steps but a final result is still expandable', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({ status: 'success', steps: [], finalResult: 'done quickly' }),
+        ]}
+      />,
+    )
+    const toggle = screen.getByRole('button', { expanded: false })
+    expect(toggle).not.toBeDisabled()
+    fireEvent.click(toggle)
+    expect(screen.getByText('done quickly')).toBeInTheDocument()
+  })
+
+  it('an expanded interrupted item appends the human-readable reason to the status text', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({
+            status: 'interrupted',
+            taskLabel: 'long task',
+            steps: [],
+            finalResult: 'partial output',
+            interruptReason: 'parent_timeout',
+          }),
+        ]}
+      />,
+    )
+    expect(screen.getByText('interrupted')).toBeInTheDocument()
+    expect(screen.getByText('(parent timed out)')).toBeInTheDocument()
+  })
+
+  // (item 8g, 2026-07-16 fix wave): expansion-with-steps was only ever
+  // exercised for RUNNING items (see "ActivityPanel — expandable native
+  // row" above) — this pins the same behavior for a FINISHED
+  // (recentlyFinished) item, whose steps are just as reachable.
+  it('an expanded finished item shows its (non-load_tool) steps', () => {
+    const visibleStep = {
+      kind: 'tool' as const,
+      tool: { id: 'fin1', call_id: 'fin1', tool: 'fs.list', params: { path: '/tmp' }, status: 'success' as const, result: 'a.txt' },
+    }
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[makeAgentItem({ status: 'success', taskLabel: 'listed files', steps: [visibleStep] })]}
+      />,
+    )
+    const toggle = screen.getByRole('button', { expanded: false })
+    expect(toggle).not.toBeDisabled()
+    fireEvent.click(toggle)
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toHaveAttribute('data-tool', 'fs.list')
+  })
+
+  it('an expanded finished item HIDES a load_tool step by default (non-verbose) but shows other steps', () => {
+    const loadToolStep = {
+      kind: 'tool' as const,
+      tool: { id: 'fin2', call_id: 'fin2', tool: 'load_tool', params: { name: 'web_search' }, status: 'success' as const, result: 'ok' },
+    }
+    const visibleStep = {
+      kind: 'tool' as const,
+      tool: { id: 'fin3', call_id: 'fin3', tool: 'fs.list', params: {}, status: 'success' as const, result: 'a.txt' },
+    }
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[makeAgentItem({ status: 'success', steps: [loadToolStep, visibleStep] })]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badges = screen.getAllByTestId('tool-call-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveAttribute('data-tool', 'fs.list')
+  })
+
+  it('does not render a "Final result" block when the finished item has none', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[
+          makeAgentItem({
+            status: 'success',
+            steps: [{ kind: 'tool', tool: { id: 's1', call_id: 's1', tool: 'fs.list', params: {}, status: 'success', result: 'a.txt' } }],
+          }),
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    expect(screen.queryByText('Final result')).not.toBeInTheDocument()
+  })
+})
+
+// ── Fix 2 (2026-07-16, revised same day): panel-only step visibility ───────
+// The panel is the designated transparency surface for exactly the detail
+// the thread hides by default — its default INVERTS to show everything
+// except `load_tool` (shouldRenderToolCallInPanel, toolVisibility.ts),
+// rather than applying the thread's shouldRenderToolCall hidden-set (which
+// would hide a bash poll/read step, a background delegate dispatch, etc.).
+// ToolCallBadge is told to use this policy via surface="panel" — see
+// ActivityPanel.tsx's step-mapping.
+
+describe('ActivityPanel — panel-only step visibility policy (shows all but load_tool)', () => {
+  function makeToolStep(overrides: Partial<import('@/lib/api').ToolCall & { call_id: string }> = {}) {
+    return {
+      kind: 'tool' as const,
+      tool: {
+        id: overrides.id ?? 'step_1',
+        call_id: overrides.call_id ?? overrides.id ?? 'step_1',
+        tool: overrides.tool ?? 'bash',
+        params: overrides.params ?? {},
+        status: overrides.status ?? 'success' as const,
+        result: overrides.result,
+      },
+    }
+  }
+
+  it('SHOWS a bash {action:"poll"} step — hidden in the thread, but visible here', () => {
+    const pollStep = makeToolStep({ id: 'poll1', call_id: 'poll1', tool: 'bash', params: { action: 'poll' } })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [pollStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('data-tool', 'bash')
+  })
+
+  it('HIDES a load_tool step by default (non-verbose)', () => {
+    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'load_tool' })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [loadToolStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+  })
+
+  it('SHOWS a load_tool step once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'load_tool' })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [loadToolStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('data-tool', 'load_tool')
+  })
+
+  it('SHOWS a failed (error-status) delegate step — the panel is the transparency surface for exactly what the thread hides on failure', () => {
+    const failedDelegateStep = makeToolStep({
+      id: 'd1',
+      call_id: 'd1',
+      tool: 'delegate',
+      params: {},
+      status: 'error',
+      result: { error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' },
+    })
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', steps: [failedDelegateStep] })]}
+        recentlyFinished={[]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const badge = screen.getByTestId('tool-call-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('data-tool', 'delegate')
+  })
+})
+
 describe('ActivityPanel — 3rd-party agent row', () => {
   it('shows the static "no live step detail" notice instead of an expand affordance', () => {
     render(
@@ -170,7 +411,7 @@ describe('ActivityPanel — bash row', () => {
 })
 
 describe('ActivityPanel — remaining status coverage (cancelled/interrupted/timeout)', () => {
-  it('renders a cancelled item with cancelled-specific pill color and label, distinct from error/success', () => {
+  it('renders a cancelled item with a cancelled-specific dot color and label, distinct from error/success', () => {
     render(
       <ActivityPanel
         open
@@ -183,15 +424,18 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
     expect(row).toHaveAttribute('data-status', 'cancelled')
     expect(screen.getByText('cancelled')).toBeInTheDocument()
 
-    const pill = screen.getByText('cancelled').parentElement
-    expect(pill?.className).toContain('--color-cancelled')
-    // Distinct from every other status's pill color.
-    expect(pill?.className).not.toContain('--color-error')
-    expect(pill?.className).not.toContain('--color-success')
-    expect(pill?.className).not.toContain('--color-accent')
+    // Flat-dot design (getSpanStatusDot): the status color lives on the 8px
+    // dot indicator (the label's immediately preceding sibling), not on the
+    // label text itself, which is always muted.
+    const dot = screen.getByText('cancelled').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-cancelled)]')
+    // Distinct from every other status's dot color.
+    expect(dot?.getAttribute('class')).not.toContain('--color-error')
+    expect(dot?.getAttribute('class')).not.toContain('--color-success')
+    expect(dot?.getAttribute('class')).not.toContain('--color-accent')
   })
 
-  it('renders an interrupted item with muted pill color, its own label, and a Prohibit icon', () => {
+  it('renders an interrupted item with a muted dot color and its own label', () => {
     render(
       <ActivityPanel
         open
@@ -204,14 +448,19 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
     expect(row).toHaveAttribute('data-status', 'interrupted')
     expect(screen.getByText('interrupted')).toBeInTheDocument()
 
-    const pill = screen.getByText('interrupted').parentElement
-    expect(pill?.className).toContain('--color-muted')
-    expect(pill?.className).not.toContain('--color-cancelled')
+    const dot = screen.getByText('interrupted').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(dot?.getAttribute('class')).not.toContain('--color-cancelled')
     // Distinct label from every other muted-colored status (timeout).
     expect(screen.queryByText('timed out')).not.toBeInTheDocument()
   })
 
-  it('renders a timeout item with its own label and icon, distinguishable from interrupted despite sharing muted pill color', () => {
+  it('renders a timeout item with its own label, sharing the exact same muted dot as interrupted (label is the sole discriminator under the flat-dot design)', () => {
+    // getSpanStatusDot (src/lib/toolStatusConfig.tsx) collapses the old
+    // pill family's per-status Clock/Prohibit icon distinction into a single
+    // shared muted dot for both 'interrupted' and 'timeout' — see that
+    // file's own unit tests. This test now asserts that documented parity
+    // instead of an icon-glyph difference that no longer exists.
     const { unmount } = render(
       <ActivityPanel
         open
@@ -224,11 +473,11 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
     expect(row).toHaveAttribute('data-status', 'timeout')
     expect(screen.getByText('timed out')).toBeInTheDocument()
 
-    const pill = screen.getByText('timed out').parentElement
-    expect(pill?.className).toContain('--color-muted')
-    // Label is the discriminator vs. interrupted (both use muted color/Prohibit-family treatment).
+    const timeoutDot = screen.getByText('timed out').previousElementSibling
+    expect(timeoutDot?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    // Label is the discriminator vs. interrupted.
     expect(screen.queryByText('interrupted')).not.toBeInTheDocument()
-    const timeoutIconSvg = pill?.querySelector('svg')?.outerHTML
+    const timeoutDotClass = timeoutDot?.getAttribute('class')
 
     unmount()
 
@@ -240,13 +489,11 @@ describe('ActivityPanel — remaining status coverage (cancelled/interrupted/tim
         recentlyFinished={[makeAgentItem({ status: 'interrupted', taskLabel: 'ran too long' })]}
       />,
     )
-    const interruptedPill = screen.getByText('interrupted').parentElement
-    const interruptedIconSvg = interruptedPill?.querySelector('svg')?.outerHTML
+    const interruptedDot = screen.getByText('interrupted').previousElementSibling
 
-    // Icon glyph itself (Clock vs Prohibit) differs even though color class matches.
-    expect(timeoutIconSvg).toBeTruthy()
-    expect(interruptedIconSvg).toBeTruthy()
-    expect(timeoutIconSvg).not.toBe(interruptedIconSvg)
+    // Same dot class for both — no icon/color distinction remains between
+    // interrupted and timeout, only the label text differs.
+    expect(interruptedDot?.getAttribute('class')).toBe(timeoutDotClass)
   })
 })
 
@@ -267,12 +514,12 @@ describe('ActivityPanel — bash-kind error state', () => {
     expect(screen.getByText('failed')).toBeInTheDocument()
     expect(screen.getByText('2.3s')).toBeInTheDocument()
 
-    const pill = screen.getByText('failed').parentElement
-    expect(pill?.className).toContain('--color-error')
-    // Same error-distinct pill color an agent error row gets (kind is irrelevant to status styling) —
+    const dot = screen.getByText('failed').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+    // Same error-distinct dot color an agent error row gets (kind is irrelevant to status styling) —
     // this is the case that surfaces background-bash failures that are otherwise hidden from inline chat.
-    expect(pill?.className).not.toContain('--color-success')
-    expect(pill?.className).not.toContain('--color-muted')
-    expect(pill?.className).not.toContain('--color-cancelled')
+    expect(dot?.getAttribute('class')).not.toContain('--color-success')
+    expect(dot?.getAttribute('class')).not.toContain('--color-muted')
+    expect(dot?.getAttribute('class')).not.toContain('--color-cancelled')
   })
 })

@@ -123,7 +123,6 @@ type Agent = {
   warning?: string | undefined;
   timeout_seconds: number;
   max_tool_iterations: number;
-  steering_mode: "one-at-a-time" | "queue-and-process";
   tools_cfg?: AgentToolsCfg | undefined;
   shell_policy?: AgentShellPolicy | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
@@ -215,7 +214,6 @@ type AgentCreateRequestMain = {
   shell_policy?: AgentShellPolicy | undefined;
   timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
-  steering_mode?: ("one-at-a-time" | "queue-and-process") | undefined;
 };
 type AgentCreateRequestSubagent = {
   type: "Subagent";
@@ -278,7 +276,6 @@ type AgentUpdateRequest = Partial<{
   heartbeat: string;
   timeout_seconds: number;
   max_tool_iterations: number;
-  steering_mode: "one-at-a-time" | "queue-and-process";
   heartbeat_enabled: boolean;
   heartbeat_interval: number;
   shell_policy: Partial<{
@@ -727,6 +724,7 @@ type Workspace = {
   repository?: string | undefined;
   task_count: number;
   is_default?: boolean | undefined;
+  setup_pending?: boolean | undefined;
   created_at: string;
   updated_at: string;
   owner?: string | undefined;
@@ -1182,7 +1180,6 @@ export const Agent: z.ZodType<Agent> = z
     warning: z.string().optional(),
     timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(0),
-    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     tools_cfg: AgentToolsCfg.optional(),
     shell_policy: AgentShellPolicy.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
@@ -1235,7 +1232,6 @@ export const AgentCreateRequestMain =
     shell_policy: AgentShellPolicy.optional(),
     timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
-    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
   z.object({
@@ -1319,7 +1315,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     heartbeat: z.string(),
     timeout_seconds: z.number().int(),
     max_tool_iterations: z.number().int(),
-    steering_mode: z.enum(["one-at-a-time", "queue-and-process"]),
     heartbeat_enabled: z.boolean(),
     heartbeat_interval: z.number().int(),
     shell_policy: z
@@ -1477,9 +1472,7 @@ export const AboutResponse = z.object({
   uptime: z.string(),
   uptime_seconds: z.number().int().gte(0),
   pid: z.number().int(),
-  preview_port: z.number().int(),
-  preview_listener_enabled: z.boolean(),
-  preview_origin: z.string().optional(),
+  preview_enabled: z.boolean(),
   warmup_timeout_seconds: z.number().int().gte(0),
   frame_ancestors_fallback: z.boolean(),
   device_pairing_enabled: z.boolean(),
@@ -2277,6 +2270,7 @@ export const Workspace: z.ZodType<Workspace> = z
     repository: z.string().optional(),
     task_count: z.number().int(),
     is_default: z.boolean().optional(),
+    setup_pending: z.boolean().optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
@@ -2477,7 +2471,7 @@ const endpoints = makeApi([
     method: "get",
     path: "/about",
     alias: "getAbout",
-    description: `Returns version, runtime, uptime, PID, and preview listener fields. Used by the SPA to construct iframe preview URLs (FR-009).
+    description: `Returns version, runtime, uptime, PID, and the live preview_enabled flag. The SPA uses preview_enabled to decide whether to surface preview links, which resolve against the main gateway origin at /preview/ (no separate preview listener/port/origin exists — ADR-044).
 `,
     requestFormat: "json",
     response: AboutResponse,
@@ -2607,7 +2601,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
 `,
     requestFormat: "json",
     parameters: [
@@ -4425,7 +4419,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/preview/:agent_id/:token/:path",
     alias: "getPreview",
-    description: `Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the separate preview listener (default port gateway.port + 1). Unknown or expired tokens return 404. Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection.
+    description: `Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the MAIN gateway listener at the /preview/ path prefix (ADR-044) — there is no separate preview listener/port/origin. Gated by the live gateway.preview_enabled flag: when disabled the endpoint returns 404 with no restart required. Unknown or expired tokens return 404. All HTTP methods are proxied (previewed apps may POST). Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection; the proxy strips inbound Cookie/Authorization and neutralizes reserved Set-Cookie so a previewed app cannot read or plant the gateway session/CSRF cookies.
 `,
     requestFormat: "json",
     parameters: [
@@ -7142,6 +7136,8 @@ export const MessageFrame = z
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
+      workspace_id: z.string().min(1).max(128).optional(),
+      workspace_setup_kickoff: z.boolean().optional(),
     })
     .passthrough().optional(),
   })

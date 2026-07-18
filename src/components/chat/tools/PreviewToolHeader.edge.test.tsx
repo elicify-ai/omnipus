@@ -198,3 +198,104 @@ it('renders a label when provided', () => {
   expect(screen.getByText('run_in_workspace')).toBeInTheDocument()
   expect(screen.getByText('npm run dev')).toBeInTheDocument()
 })
+
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old rounded-t-md/border/bg-surface-1 header frame with a status-tinted
+// border is gone — the header is now a flat text line whose only status
+// color comes from a leading 8px dot (running keeps the spinning icon in the
+// same slot), shared with the other restyled tool rows via
+// getToolBadgeStatusConfig.
+
+describe('PreviewToolHeader — flat text-line status dot', () => {
+  /** The status indicator (dot or spinner) is always the header's first child. */
+  function getIndicatorEl(container: HTMLElement) {
+    return container.firstElementChild?.children[0] as HTMLElement | undefined
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    const { container } = render(
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={true} hasResult={false} />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('not running, has result: indicator is an 8px success-colored dot', () => {
+    const { container } = render(
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} hasResult={true} />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('not running, no result: indicator is an 8px error-colored dot', () => {
+    const { container } = render(
+      <PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} hasResult={false} />
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('the caller-supplied icon still renders alongside the status dot', () => {
+    render(
+      <PreviewToolHeader
+        icon={<Terminal size={13} data-testid="type-icon" />}
+        toolName="web_serve"
+        isRunning={false}
+        hasResult={true}
+      />
+    )
+    expect(screen.getByTestId('type-icon')).toBeInTheDocument()
+  })
+
+  it('running: renders the muted "Running..." status text (label is no longer computed and discarded)', () => {
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={true} hasResult={false} />)
+    expect(screen.getByText('Running...')).toBeInTheDocument()
+  })
+
+  it('not running, has result: renders the muted "Done" status text', () => {
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} hasResult={true} />)
+    expect(screen.getByText('Done')).toBeInTheDocument()
+  })
+
+  it('not running, no result: renders the muted "Failed" status text', () => {
+    render(<PreviewToolHeader icon={<Globe size={13} />} toolName="web_serve" isRunning={false} hasResult={false} />)
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('the header has no card-frame classes — flat/transparent, no rounded-t-md/border/bg-surface-1', () => {
+    render(
+      <PreviewToolHeader
+        icon={<Globe size={13} />}
+        toolName="web_serve"
+        data-testid="webserve-tool-header"
+        isRunning={false}
+        hasResult={true}
+      />
+    )
+    const root = screen.getByTestId('webserve-tool-header')
+    expect(root.className).not.toContain('rounded-t-md')
+    expect(root.className).not.toContain('border')
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('no descendant anywhere in the tree carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1)', () => {
+    render(
+      <PreviewToolHeader
+        icon={<Terminal size={13} />}
+        toolName="web_serve"
+        label="vite dev"
+        data-testid="webserve-tool-header"
+        isRunning={false}
+        hasResult={true}
+      />
+    )
+    const root = screen.getByTestId('webserve-tool-header')
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
+  })
+})

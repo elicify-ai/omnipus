@@ -141,7 +141,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }))
     syncForeground()
     // Record real session ids under the current workspace for restore on re-entry.
-    if (sessionId !== null) {
+    // Kickoff pending-session hardening: the '__pending' sentinel is a
+    // LOCAL, transient placeholder for a turn that hasn't been acked by the
+    // server yet — it is never a real, attachable session id. Recording it
+    // here would poison sessionByWorkspace: the next time the user re-enters
+    // this workspace, enterWorkspaceChat would call attachToSession('__pending'),
+    // which the server rejects ("invalid session_id") after
+    // resetChatBucketForReplay has already wiped the local bucket — repeating
+    // on every re-entry until a full reload. Only ever record real ids.
+    if (sessionId !== null && sessionId !== '__pending') {
       const wsId = useWorkspacesStore.getState().activeWorkspaceId
       if (wsId) {
         set((state) => ({
@@ -313,6 +321,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
     if (descriptor === null) {
       // User previously started fresh in this workspace — honour that choice.
+      if (state.activeSessionId !== null) {
+        state.startNewSession()
+      }
+      return
+    }
+
+    if (descriptor.id === '__pending') {
+      // Defense-in-depth: a legacy '__pending' descriptor
+      // (written before setActiveSession stopped recording the sentinel, or
+      // by any future code path that still does) must never be attached to
+      // — the server rejects it as an invalid session_id, and
+      // resetChatBucketForReplay would have already wiped the bucket for
+      // nothing. Treat exactly like a null descriptor: start fresh instead.
       if (state.activeSessionId !== null) {
         state.startNewSession()
       }

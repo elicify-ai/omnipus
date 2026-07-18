@@ -37,7 +37,7 @@ func newScenarioCfg(t *testing.T) (*config.Config, string) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -150,7 +150,7 @@ func TestScenario5RateLimitFiresOnThirdCall(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

@@ -150,7 +150,6 @@ const AGENT_MIA = {
   soul: '',
   timeout_seconds: 300,
   max_tool_iterations: 25,
-  steering_mode: 'one-at-a-time',
 }
 const AGENTS_FIXTURE = [AGENT_MIA]
 
@@ -709,7 +708,6 @@ test(
         soul: '',
         timeout_seconds: 300,
         max_tool_iterations: 25,
-        steering_mode: 'one-at-a-time',
       },
     ])
 

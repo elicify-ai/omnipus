@@ -11,6 +11,14 @@
  * - Standing badge derives from persisted config values (fetchConfig → ['config'] query).
  * - Badge clears on save of the safe value (queryClient.invalidateQueries clears it).
  * Hot-reload is always on (FR-106); the toggle is removed.
+ *
+ * US-4 / FR-008 (docs/internal/specs/preview-on-main-listener-spec.md, ADR-044):
+ * a live "Preview" toggle bound to `gateway.preview_enabled` (default ON).
+ * This goes through the standard `updateConfig({ gateway: { preview_enabled } })`
+ * path — `frontendToRawConfig` guards each gateway field with `!== undefined`,
+ * so a partial update containing only `preview_enabled` never clobbers
+ * bind_address/port/log_level, and the bind/port/log_level autosave below
+ * (which never sets `preview_enabled`) never clobbers the toggle either.
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
@@ -19,6 +27,7 @@ import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight, Warning } fr
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, getErrorMessage, type Config } from '@/lib/api'
@@ -102,6 +111,50 @@ export function GatewaySection() {
     queryFn: fetchGatewayStatus,
     retry: false,
   })
+
+  // US-4 / FR-008: live "Preview" toggle — persisted value derives from the
+  // same ['config'] query above; tracked with its own dirty ref (mirroring
+  // the bindAddress/port pattern below) so an in-flight toggle isn't clobbered
+  // by a config refetch, but independently of the bind/port/log_level
+  // autosave so neither can clobber the other.
+  const [previewEnabled, setPreviewEnabled] = useState(true)
+  const previewDirtyRef = useRef(false)
+
+  useEffect(() => {
+    if (!config) return
+    if (previewDirtyRef.current) return
+    setPreviewEnabled(config.gateway.preview_enabled ?? true)
+  }, [config])
+
+  const { mutate: savePreview, isPending: previewSaving } = useMutation({
+    mutationFn: (enabled: boolean) =>
+      updateConfig({ gateway: { preview_enabled: enabled } as unknown as Config['gateway'] }),
+    onSuccess: (_data, enabled) => {
+      previewDirtyRef.current = false
+      queryClient.invalidateQueries({ queryKey: ['config'] })
+      addToast({
+        message: enabled
+          ? 'Preview enabled — /preview/ is reachable again'
+          : 'Preview disabled — /preview/ now returns 404',
+        variant: 'success',
+      })
+    },
+    onError: (err: unknown, enabled) => {
+      // Revert the optimistic toggle so the UI reflects the persisted value.
+      previewDirtyRef.current = false
+      setPreviewEnabled(config?.gateway.preview_enabled ?? true)
+      addToast({
+        message: getErrorMessage(err, `Could not ${enabled ? 'enable' : 'disable'} preview`),
+        variant: 'error',
+      })
+    },
+  })
+
+  function handleTogglePreview(next: boolean) {
+    previewDirtyRef.current = true
+    setPreviewEnabled(next)
+    savePreview(next)
+  }
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
@@ -313,6 +366,24 @@ export function GatewaySection() {
               {config.gateway.token.slice(0, 20)}...
             </p>
           )}
+        </div>
+
+        {/* Preview toggle (US-4 / FR-008, ADR-044) */}
+        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-2">
+          <div>
+            <p className="text-sm text-[var(--color-secondary)]">Preview server</p>
+            <p className="text-xs text-[var(--color-muted)]">
+              Serve agent-built dev previews at <span className="font-mono">/preview/</span>. Takes
+              effect immediately — no restart needed.
+            </p>
+          </div>
+          <Switch
+            checked={previewEnabled}
+            onCheckedChange={handleTogglePreview}
+            disabled={previewSaving}
+            aria-label="Preview server"
+            data-testid="preview-server-toggle"
+          />
         </div>
 
         {/* Log level */}

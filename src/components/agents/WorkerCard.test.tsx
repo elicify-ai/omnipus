@@ -34,7 +34,6 @@ function makeWorker(overrides: Partial<Agent> = {}): Agent {
     soul: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
-    steering_mode: 'one-at-a-time',
     ...overrides,
   }
 }

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -143,6 +144,17 @@ func (p *DefaultProvider) WorkspacePath() string {
 // (FR-047).
 func (p *DefaultProvider) OmnipusHome() string {
 	return config.OmnipusHomeDir()
+}
+
+// PublicURL implements Provider. Delegates to
+// middleware.CanonicalGatewayOrigin, the same resolver the CSP/CORS/WS-origin
+// fences and web_serve/preview link base use (ADR-044), so the agent's own
+// idea of "where can this be reached from outside" always matches what those
+// surfaces actually enforce/emit. Returns "" when no origin can be derived
+// (e.g. a wildcard bind with no gateway.public_url configured) — the
+// renderer omits the preamble line in that case.
+func (p *DefaultProvider) PublicURL() string {
+	return middleware.CanonicalGatewayOrigin(p.cfg)
 }
 
 // ActiveWarnings implements Provider. Emits condition-based warnings for:

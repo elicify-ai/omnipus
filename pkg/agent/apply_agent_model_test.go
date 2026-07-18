@@ -20,7 +20,7 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				Provider:          "openai",
 				ModelName:         "local",
 				MaxTokens:         4096,
@@ -90,7 +90,7 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				Provider:          "openai",
 				ModelName:         "local",
 				MaxTokens:         4096,
@@ -138,7 +138,7 @@ func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				Provider:          "openai",
 				ModelName:         "local",
 				MaxTokens:         4096,

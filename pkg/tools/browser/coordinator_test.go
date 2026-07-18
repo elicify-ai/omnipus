@@ -25,7 +25,7 @@ import (
 var (
 	sharedTestBinOnce sync.Once
 	sharedTestBin     string
-	sharedTestBinErr  error
+	errSharedTestBin  error
 )
 
 func resolveTestBinary(t *testing.T) string {
@@ -39,11 +39,18 @@ func resolveTestBinary(t *testing.T) string {
 				return
 			}
 		}
-		// Else download once into a shared temp dir.
-		sharedTestBin, sharedTestBinErr = EnsureChromium(context.Background(), filepath.Join(t.TempDir(), "chromium"))
+		// Else download once into a STABLE shared dir. Deliberately NOT
+		// t.TempDir(): that dir is removed when the FIRST test to hit this
+		// sync.Once finishes, leaving every later test with a dangling
+		// exec_path ("no such file or directory" — seen on the ci-omnipus
+		// worker, where Chrome downloads succeed and these tests really
+		// run). A fixed os.TempDir() path also lets repeat CI runs reuse
+		// the ~130 MB install instead of re-downloading each run.
+		sharedTestBin, errSharedTestBin = EnsureChromium(
+			context.Background(), filepath.Join(os.TempDir(), "omnipus-shared-test-chromium"))
 	})
-	if sharedTestBinErr != nil {
-		t.Skipf("no managed Chrome for coordinator test: %v", sharedTestBinErr)
+	if errSharedTestBin != nil {
+		t.Skipf("no managed Chrome for coordinator test: %v", errSharedTestBin)
 	}
 	return sharedTestBin
 }
@@ -195,10 +202,18 @@ func TestManager_Shutdown_DropsConnectionNotProcess(t *testing.T) {
 	mgr.Shutdown()
 
 	if coord.PID() != pidBefore {
-		t.Fatalf("CRIT-002/C1 VIOLATION: manager.Shutdown() killed the Chrome process (pid %d → %d)", pidBefore, coord.PID())
+		t.Fatalf(
+			"CRIT-002/C1 VIOLATION: manager.Shutdown() killed the Chrome process (pid %d → %d)",
+			pidBefore,
+			coord.PID(),
+		)
 	}
 	if coord.contextCount() != ctxBefore {
-		t.Fatalf("CRIT-002 VIOLATION: manager.Shutdown() changed the agent's browser context count (%d → %d) — context must persist for reload re-adoption", ctxBefore, coord.contextCount())
+		t.Fatalf(
+			"CRIT-002 VIOLATION: manager.Shutdown() changed the agent's browser context count (%d → %d) — context must persist for reload re-adoption",
+			ctxBefore,
+			coord.contextCount(),
+		)
 	}
 	if coord.KillCount() != 0 {
 		t.Fatalf("manager.Shutdown() must not register a Chrome kill; KillCount=%d", coord.KillCount())

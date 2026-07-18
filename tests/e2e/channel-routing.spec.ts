@@ -65,7 +65,6 @@ const AGENT_REQUIRED = {
   soul: 'stub soul',
   timeout_seconds: 300,
   max_tool_iterations: 200,
-  steering_mode: 'one-at-a-time',
 }
 const STUB_AGENTS = [
   { id: 'mia', name: 'Mia', type: 'core', locked: true, ...AGENT_REQUIRED },

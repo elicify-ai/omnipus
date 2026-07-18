@@ -385,14 +385,14 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		return NewAntigravityProvider(), modelID, nil
 
 	case "claude-cli", "claudecli":
-		workspace := cfg.Workspace
+		workspace := cfg.Home
 		if workspace == "" {
 			workspace = "."
 		}
 		return NewClaudeCliProvider(workspace), modelID, nil
 
 	case "codex-cli", "codexcli":
-		workspace := cfg.Workspace
+		workspace := cfg.Home
 		if workspace == "" {
 			workspace = "."
 		}

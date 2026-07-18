@@ -32,7 +32,7 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 // Static import: vi.mock() calls are hoisted before this import, so all mocks
 // are in place when the module resolves. This avoids per-test dynamic import
 // contention that caused intermittent timeouts under full-suite parallel load.
-import { OmnipusComposer } from './ChatScreen'
+import { OmnipusComposer, ChatScreen } from './ChatScreen'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -66,8 +66,16 @@ vi.mock('@assistant-ui/react', () => {
           'data-testid': 'composer-input',
         }),
       // The mock Send button accepts an onClick so test code can wire
-      // up the assistant-ui onNew path. In production, ComposerPrimitive.Send
-      // calls composer.send() internally — the onClick prop is a noop there.
+      // up the assistant-ui onNew path. bugfixes3 deferred item 1: in
+      // production ComposerPrimitive.Send now receives a REAL onClick from
+      // ChatScreen.tsx (the send-path client-command interception — mirrors
+      // onSubmit's interceptClientCommand() check) — it is composed with the
+      // internal composer.send() callback via assistant-ui's
+      // composeEventHandlers (checkForDefaultPrevented=true), NOT a noop. This
+      // file doesn't click chat-send in any of its own tests, so the simpler
+      // passthrough here (no defaultPrevented-aware gating of a "send"
+      // callback) is sufficient — see ChatScreen.send-button-intercept.test.tsx
+      // for the dedicated coverage of that composeEventHandlers behavior.
       Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick }: {
         disabled?: boolean; children?: React.ReactNode; className?: string;
         'data-testid'?: string; 'aria-label'?: string; onClick?: () => void
@@ -106,6 +114,7 @@ vi.mock('@assistant-ui/react', () => {
       getState: () => ({ text: '' }),
       setText: vi.fn(),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -160,24 +169,35 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockResolvedValue([
-    { name: 'clear',   label: '/clear',   description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
-    { name: 'help',    label: '/help',    description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
-    { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
-    { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
-    { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
-  ]),
-  fetchSkills: vi.fn().mockResolvedValue([
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  ]),
-  uploadFiles: vi.fn(),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-}))
+// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
+// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
+// doesn't exercise mentions (AgentPicker itself is stubbed below). The
+// workspaces query stays disabled (no activeWorkspaceId set here), so
+// `fetchWorkspaces` is never actually invoked — this just needs to exist so
+// the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockResolvedValue([
+      { name: 'clear',   label: '/clear',   description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
+      { name: 'help',    label: '/help',    description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
+      { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
+      { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
+      { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
+    ]),
+    fetchSkills: vi.fn().mockResolvedValue([
+      { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+      { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+      { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+    ]),
+    uploadFiles: vi.fn(),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+  }
+})
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
@@ -338,6 +358,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)
@@ -489,6 +510,31 @@ describe('OmnipusComposer — model selector store contracts (FR-010)', () => {
 
 })
 
+// ── data-active-session-id contract (fix-wave finding C.2) ────────────────────
+// The root ChatScreen div's data-active-session-id attribute is load-bearing:
+// tests/e2e/fixtures/session-setup.ts's openSessionByDeepLink polls it to
+// confirm the composer is bound to the NEW session (not a stale previous one
+// mid-route-swap) — it must not be silently dropped in a future refactor.
+describe('ChatScreen — data-active-session-id contract', () => {
+  it('root div carries data-active-session-id matching the active session', () => {
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: 'sess_send_test',
+        activeAgentId: 'general-assistant',
+      })
+      // Mark WS replay already completed for this session so ChatScreen's
+      // REST-history-fallback effect short-circuits instead of calling
+      // setMessages off the shared useQuery mock's unstable `[]` reference
+      // every render (that mock returns a fresh array/refetch fn per call,
+      // which isn't this test's concern — it only needs to pin the root
+      // div's data attribute, not exercise history loading).
+      useChatStore.setState({ replayCompletedForSession: 'sess_send_test' })
+    })
+    const { container } = render(<ChatScreen />)
+    expect(container.querySelector('[data-active-session-id="sess_send_test"]')).toBeTruthy()
+  })
+})
+
 // ── Partitioned slash menu (new skill integration) ────────────────────────────
 //
 // The new partitioned menu shows Commands and Skills sections when "/" is typed.
@@ -575,6 +621,7 @@ describe('Partitioned slash menu — Skills section', () => {
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)
@@ -610,6 +657,7 @@ describe('Partitioned slash menu — Skills section', () => {
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)

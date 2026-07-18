@@ -118,6 +118,7 @@ vi.mock('@assistant-ui/react', async () => {
       getText: vi.fn(),
       getState: () => ({ text: '' }),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     }),
     useMessage: () => ({
       content: [],

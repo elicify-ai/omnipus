@@ -56,6 +56,14 @@ var reservedUsernames = map[string]struct{}{
 // with a name reservedUsernames blocks.
 const reservedUsernameMsg = "this username is reserved and cannot be registered"
 
+// issueSessionCookieFn is FR-011's session-cookie issuer, indirected through a
+// package-level var (matching middleware.IssueSessionCookie's signature) so
+// tests can force a failure (e.g. simulating a disk fault mid-onboarding)
+// without needing real filesystem fault injection between the two
+// safeUpdateConfigJSON calls in HandleCompleteOnboarding. Production always
+// resolves to middleware.IssueSessionCookie.
+var issueSessionCookieFn = middleware.IssueSessionCookie
+
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
 // Two-phase commit invariant:
@@ -352,6 +360,37 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// FR-011: issue the omnipus-session cookie bound to the new admin's
+	// username, now that gateway.users has been persisted above (
+	// IssueSessionCookie's configMutator locates the user by username and
+	// requires it to already exist — see session_cookie.go). Deliberately
+	// BEFORE commitOnboarding()/committed=true below: if this fails, we
+	// return 500 without ever marking onboarding complete in state.json, and
+	// the still-false `committed` lets the deferred ReleaseReservation() run
+	// so the client can retry (the mutate closure above is idempotent on a
+	// matching username — see the duplicate-username branch). This is the
+	// r4 MAJ-003 fix — never return 200 without the cookie.
+	if _, err := issueSessionCookieFn(w, r, body.Admin.Username, a.safeUpdateConfigJSON); err != nil {
+		slog.Error("onboarding: issue session cookie failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session init failed")
+		return
+	}
+
+	// Issue the __Host-csrf cookie here too — BEFORE committed=true — so a
+	// cookie-issuance failure fails closed consistently with the session cookie
+	// above (never mark onboarding complete; the still-false `committed` lets the
+	// deferred ReleaseReservation run so the client can retry cleanly). This used
+	// to run AFTER commitOnboarding, so an RNG failure returned 500 for an
+	// onboarding that had actually already committed. The onboarding client has
+	// had no cookie up to this point (/api/v1/onboarding/complete is CSRF-exempt
+	// for exactly that reason — see pkg/gateway/middleware/csrf.go), so it needs
+	// this to make subsequent state-changing requests without a 403. Issue #97.
+	if err := middleware.IssueCSRFCookie(w, r); err != nil {
+		slog.Error("onboarding: issue CSRF cookie failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session init failed")
+		return
+	}
+
 	// config.json written successfully. Now commit state.json (phase 2).
 	// If this fails, the instance is in a recoverable state: next boot
 	// will re-enter onboarding, detect the admin user exists, and succeed.
@@ -372,16 +411,6 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Reload failure is non-fatal — token is on disk and active after next config poll.
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("onboarding: hot-reload after complete failed; token active after next restart", "error", err)
-	}
-
-	// Issue a __Host-csrf cookie so the onboarding client (which up to this
-	// point had no cookie — /api/v1/onboarding/complete is exempt from the
-	// CSRF gate for exactly that reason, see pkg/gateway/middleware/csrf.go)
-	// can make subsequent state-changing requests without a 403. Issue #97.
-	if err := middleware.IssueCSRFCookie(w, r); err != nil {
-		slog.Error("onboarding: issue CSRF cookie failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "session init failed")
-		return
 	}
 
 	slog.Info("onboarding: completed", "username", body.Admin.Username)

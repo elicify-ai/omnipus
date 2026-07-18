@@ -21,18 +21,30 @@ import (
 type InstallSkillTool struct {
 	BaseTool
 	registryMgr *skills.RegistryManager
-	workspace   string
-	mu          sync.Mutex
+	// globalSkillsDir is the fixed, install-wide skills directory
+	// ($OMNIPUS_HOME/skills) — NOT a per-agent/per-turn workspace path.
+	// ADR-046 FR-009: install_skill targets this GLOBAL registry
+	// unconditionally (every agent's own SkillsLoader searches it too, via
+	// pkg/agent.globalSkillsDir — see pkg/skills/loader.go's SkillRoots),
+	// so a skill installed by one agent is discoverable by every other
+	// agent. This is NOT routed through ResolvePath: ResolvePath resolves a
+	// caller-supplied path relative to the turn's effective WORKING
+	// directory, whereas this is always the same fixed global directory
+	// regardless of which agent or turn is calling.
+	globalSkillsDir string
+	mu              sync.Mutex
 }
 
 // NewInstallSkillTool creates a new InstallSkillTool.
 // registryMgr is the shared registry manager (same instance as FindSkillsTool).
-// workspace is the root workspace directory; skills install to {workspace}/skills/{slug}/.
-func NewInstallSkillTool(registryMgr *skills.RegistryManager, workspace string) *InstallSkillTool {
+// globalSkillsDir is the fixed, install-wide skills directory
+// ($OMNIPUS_HOME/skills, see pkg/agent.globalSkillsDir); skills install to
+// {globalSkillsDir}/{slug}/.
+func NewInstallSkillTool(registryMgr *skills.RegistryManager, globalSkillsDir string) *InstallSkillTool {
 	return &InstallSkillTool{
-		registryMgr: registryMgr,
-		workspace:   workspace,
-		mu:          sync.Mutex{},
+		registryMgr:     registryMgr,
+		globalSkillsDir: globalSkillsDir,
+		mu:              sync.Mutex{},
 	}
 }
 
@@ -41,7 +53,7 @@ func (t *InstallSkillTool) Name() string {
 }
 
 func (t *InstallSkillTool) Description() string {
-	return "Install a skill from a registry by slug. Downloads and extracts the skill into the workspace. Use find_skills first to discover available skills."
+	return "Install a skill from a registry by slug. Downloads and extracts the skill into the global skills directory, where it becomes available to every agent. Use find_skills first to discover available skills."
 }
 
 func (t *InstallSkillTool) Scope() ToolScope       { return ScopeGeneral }
@@ -74,7 +86,8 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 
 func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	// Install lock to prevent concurrent directory operations.
-	// Ideally this should be done at a `slug` level, currently, its at a `workspace` level.
+	// Ideally this should be done at a `slug` level, currently, its at the
+	// (single, global) skills-directory level.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -93,8 +106,10 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	version, _ := args["version"].(string)
 	force, _ := args["force"].(bool)
 
-	// Check if already installed.
-	skillsDir := filepath.Join(t.workspace, "skills")
+	// Check if already installed. skillsDir is the fixed GLOBAL skills
+	// directory (ADR-046 FR-009) — NOT a per-agent workspace path — so an
+	// install from one agent is discoverable by every other agent.
+	skillsDir := t.globalSkillsDir
 	targetDir := filepath.Join(skillsDir, slug)
 
 	if !force {

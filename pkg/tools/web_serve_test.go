@@ -22,8 +22,28 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
+
+// boolPtr returns a pointer to b — used to set *bool config fields
+// (e.g. GatewayConfig.PreviewEnabled) in test fixtures.
+func boolPtr(b bool) *bool { return &b }
+
+// testGetConfig returns a getConfig closure (the live-config accessor
+// WebServeTool now takes per FR-005) that always returns a *config.Config
+// with the given Gateway.PublicURL. gateway.preview_enabled defaults to true
+// (nil pointer) unless previewEnabled overrides it explicitly.
+func testGetConfig(publicURL string, previewEnabled *bool) func() *config.Config {
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			PublicURL:      publicURL,
+			PreviewEnabled: previewEnabled,
+		},
+	}
+	return func() *config.Config { return cfg }
+}
 
 // stubServedSubdirs is a minimal ServedSubdirsRegistry for unit tests.
 type stubServedSubdirs struct {
@@ -48,7 +68,7 @@ func newTestWebServeTool(t *testing.T, token string) *WebServeTool {
 	return NewWebServeTool(
 		dir,
 		"test-agent",
-		"http://127.0.0.1:5001",
+		testGetConfig("http://127.0.0.1:5001", nil),
 		stub,
 		nil, // devReg nil — dev mode will return an error
 		WebServeDevConfig{
@@ -128,7 +148,7 @@ func TestWebServeTool_PortOutOfRange(t *testing.T) {
 	tool := NewWebServeTool(
 		dir,
 		"test-agent",
-		"http://127.0.0.1:5001",
+		testGetConfig("http://127.0.0.1:5001", nil),
 		&stubServedSubdirs{token: "tok"},
 		devReg,
 		WebServeDevConfig{
@@ -439,7 +459,7 @@ func TestWebServeTool_DevCommandNotAllowed_ReturnsError(t *testing.T) {
 	tool := NewWebServeTool(
 		dir,
 		"test-agent",
-		"http://127.0.0.1:5001",
+		testGetConfig("http://127.0.0.1:5001", nil),
 		&stubServedSubdirs{token: "tok"},
 		devReg,
 		WebServeDevConfig{
@@ -521,7 +541,7 @@ func TestAuditDevStart_FailClosedOnNilLogger(t *testing.T) {
 	tool := NewWebServeTool(
 		dir,
 		"audit-agent",
-		"http://127.0.0.1:5001",
+		testGetConfig("http://127.0.0.1:5001", nil),
 		&stubServedSubdirs{token: "tok"},
 		devReg,
 		WebServeDevConfig{
@@ -560,7 +580,7 @@ func TestAuditDevDeny_NoIncSkippedOnNilLogger(t *testing.T) {
 	tool := NewWebServeTool(
 		dir,
 		"skip-agent",
-		"http://127.0.0.1:5001",
+		testGetConfig("http://127.0.0.1:5001", nil),
 		&stubServedSubdirs{token: "tok"},
 		nil, // devReg
 		WebServeDevConfig{
@@ -606,4 +626,267 @@ func TestWebServeTool_StaticDurationClamp(t *testing.T) {
 		"duration_seconds": float64(999999), // > 86400 max
 	})
 	assert.False(t, result.IsError, "clamped duration must not error: %s", result.ForLLM)
+}
+
+// --- preview-on-main-listener v5 (ADR-044): FR-005/FR-006, US-3, S1-S3 ---
+
+// TestServeWebPublicURL verifies S1 / US-1 AS-1 / US-3 AS-1: when
+// gateway.public_url is set, serve_web's URL starts with public_url + "/preview/".
+func TestServeWebPublicURL(t *testing.T) {
+	tool := NewWebServeTool(
+		t.TempDir(),
+		"test-agent",
+		testGetConfig("https://pod.example.com", nil), // preview_enabled default true
+		&stubServedSubdirs{token: "pubtok"},
+		nil,
+		WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+		nil,
+		nil,
+		60,
+		86400,
+	)
+	ctx := WithAgentID(context.Background(), "test-agent")
+
+	result := tool.Execute(ctx, map[string]any{"path": "."})
+	require.False(t, result.IsError, "serve_web must succeed: %s", result.ForLLM)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed))
+	urlVal, _ := parsed["url"].(string)
+	assert.True(t, strings.HasPrefix(urlVal, "https://pod.example.com/preview/"),
+		"url %q must start with https://pod.example.com/preview/", urlVal)
+}
+
+// TestServeWebLocalhostURL verifies S2 / US-1 AS-2 / US-3 AS-2: with no
+// public_url, serve_web's URL starts with http://localhost:<gateway.port>/preview/.
+func TestServeWebLocalhostURL(t *testing.T) {
+	getConfig := func() *config.Config {
+		return &config.Config{
+			Gateway: config.GatewayConfig{
+				PublicURL: "", // unset — derive from Host+Port
+				Host:      "localhost",
+				Port:      5000,
+			},
+		}
+	}
+	tool := NewWebServeTool(
+		t.TempDir(),
+		"test-agent",
+		getConfig,
+		&stubServedSubdirs{token: "localtok"},
+		nil,
+		WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+		nil,
+		nil,
+		60,
+		86400,
+	)
+	ctx := WithAgentID(context.Background(), "test-agent")
+
+	result := tool.Execute(ctx, map[string]any{"path": "."})
+	require.False(t, result.IsError, "serve_web must succeed: %s", result.ForLLM)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed))
+	urlVal, _ := parsed["url"].(string)
+	assert.True(t, strings.HasPrefix(urlVal, "http://localhost:5000/preview/"),
+		"url %q must start with http://localhost:5000/preview/", urlVal)
+}
+
+// TestServeWebOriginMatchesCanonical verifies S3 / US-3 AS-3,4: serve_web's
+// host always equals middleware.CanonicalGatewayOrigin(cfg) — it does NOT
+// read public_url "live" (that key is restart-gated, so the origin is
+// boot-stable) — while gateway.preview_enabled IS read live: toggling it
+// false→true flips serve_web from erroring to succeeding on the very next
+// call, with the URL host unchanged throughout.
+func TestServeWebOriginMatchesCanonical(t *testing.T) {
+	cfg := &config.Config{Gateway: config.GatewayConfig{PublicURL: "https://pod.example.com"}}
+	getConfig := func() *config.Config { return cfg }
+
+	tool := NewWebServeTool(
+		t.TempDir(),
+		"test-agent",
+		getConfig,
+		&stubServedSubdirs{token: "origintok"},
+		nil,
+		WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+		nil,
+		nil,
+		60,
+		86400,
+	)
+	ctx := WithAgentID(context.Background(), "test-agent")
+	wantOrigin := middleware.CanonicalGatewayOrigin(cfg)
+	require.NotEmpty(t, wantOrigin, "test fixture must produce a non-empty canonical origin")
+
+	// preview_enabled defaults to true (nil pointer) — first call succeeds.
+	result := tool.Execute(ctx, map[string]any{"path": "."})
+	require.False(t, result.IsError, "serve_web must succeed with preview_enabled defaulted true: %s", result.ForLLM)
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed))
+	urlVal, _ := parsed["url"].(string)
+	assert.True(t, strings.HasPrefix(urlVal, wantOrigin+"/preview/"),
+		"url %q must start with the canonical origin %q", urlVal, wantOrigin)
+
+	// Toggle preview_enabled live to false (simulating a hot-reloaded config
+	// swap, same as gateway.go's SwapConfig) — the very next call must error,
+	// with no restart and no change to the tool's construction.
+	cfg = &config.Config{
+		Gateway: config.GatewayConfig{
+			PublicURL:      "https://pod.example.com",
+			PreviewEnabled: boolPtr(false),
+		},
+	}
+	result = tool.Execute(ctx, map[string]any{"path": "."})
+	require.True(t, result.IsError, "serve_web must error when preview_enabled is live-false")
+	assert.Contains(t, result.ForLLM, "preview disabled")
+
+	// Toggle back to true — works again immediately, host still unchanged
+	// (public_url never moved, matching the "does NOT read public_url live"
+	// contract: the origin is a function of the boot-stable public_url, not
+	// of the live toggle).
+	cfg = &config.Config{
+		Gateway: config.GatewayConfig{
+			PublicURL:      "https://pod.example.com",
+			PreviewEnabled: boolPtr(true),
+		},
+	}
+	result = tool.Execute(ctx, map[string]any{"path": "."})
+	require.False(
+		t,
+		result.IsError,
+		"serve_web must succeed again once preview_enabled flips back true: %s",
+		result.ForLLM,
+	)
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed))
+	urlVal, _ = parsed["url"].(string)
+	assert.True(t, strings.HasPrefix(urlVal, wantOrigin+"/preview/"),
+		"url %q host must remain the canonical origin %q after re-enabling", urlVal, wantOrigin)
+}
+
+// TestServeWebDisabledError verifies US-4 AS-2 / S5: gateway.preview_enabled
+// live-false makes serve_web return an IsError result whose message contains
+// "preview disabled".
+func TestServeWebDisabledError(t *testing.T) {
+	tool := NewWebServeTool(
+		t.TempDir(),
+		"test-agent",
+		testGetConfig("https://pod.example.com", boolPtr(false)),
+		&stubServedSubdirs{token: "disabledtok"},
+		nil,
+		WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+		nil,
+		nil,
+		60,
+		86400,
+	)
+	ctx := WithAgentID(context.Background(), "test-agent")
+
+	result := tool.Execute(ctx, map[string]any{"path": "."})
+	require.True(t, result.IsError, "serve_web must error when preview_enabled is false")
+	assert.Contains(t, result.ForLLM, "preview disabled")
+}
+
+// --- SFH-2: fail-closed when CanonicalGatewayOrigin(cfg) cannot resolve ---
+//
+// wildcardHostsNoPublicURL is the set of gateway.host values that, combined
+// with an unset gateway.public_url, make middleware.CanonicalGatewayOrigin
+// return "" (MR-03 / FR-007e wildcard-bind rule in origin.go). Before the
+// SFH-2 fix, web_serve concatenated that empty origin with the /preview/
+// path and returned a schemeless/hostless URL as a SUCCESS result.
+var wildcardHostsNoPublicURL = []string{"0.0.0.0", "::", "::0"}
+
+// TestServeWebOriginUnresolved_StaticFailsClosed verifies SFH-2: static mode
+// fails closed (IsError, not a relative-path success) when gateway.host is a
+// wildcard bind and gateway.public_url is unset.
+func TestServeWebOriginUnresolved_StaticFailsClosed(t *testing.T) {
+	for _, host := range wildcardHostsNoPublicURL {
+		t.Run(host, func(t *testing.T) {
+			getConfig := func() *config.Config {
+				return &config.Config{
+					Gateway: config.GatewayConfig{
+						PublicURL: "", // unset — CanonicalGatewayOrigin cannot derive a scheme+host
+						Host:      host,
+						Port:      5000,
+					},
+				}
+			}
+			tool := NewWebServeTool(
+				t.TempDir(),
+				"test-agent",
+				getConfig,
+				&stubServedSubdirs{token: "wildcardtok"},
+				nil,
+				WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+				nil,
+				nil,
+				60,
+				86400,
+			)
+			ctx := WithAgentID(context.Background(), "test-agent")
+
+			result := tool.Execute(ctx, map[string]any{"path": "."})
+			require.True(t, result.IsError,
+				"static mode must fail closed when origin cannot be resolved (host=%q); got success: %s",
+				host, result.ForLLM)
+			assert.NotContains(t, result.ForLLM, "preview disabled",
+				"the origin-unresolved error must be distinct from the preview_enabled=false error")
+			assert.Contains(t, result.ForLLM, "public_url",
+				"error must actionably tell the operator to set gateway.public_url")
+		})
+	}
+}
+
+// TestServeWebOriginUnresolved_DevFailsClosed verifies SFH-2 for dev mode:
+// executeDev fails closed when gateway.host is a wildcard bind and
+// gateway.public_url is unset — and does so BEFORE reserving a port or
+// spawning a child (proven here by passing a nil devReg: if the origin check
+// did not fire first, this would instead fail with "registry not
+// configured", not the origin-unresolved message).
+func TestServeWebOriginUnresolved_DevFailsClosed(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("dev mode only reachable on Linux; non-Linux returns Tier3UnsupportedMessage first")
+	}
+	for _, host := range wildcardHostsNoPublicURL {
+		t.Run(host, func(t *testing.T) {
+			getConfig := func() *config.Config {
+				return &config.Config{
+					Gateway: config.GatewayConfig{
+						PublicURL: "",
+						Host:      host,
+						Port:      5000,
+					},
+				}
+			}
+			tool := NewWebServeTool(
+				t.TempDir(),
+				"test-agent",
+				getConfig,
+				&stubServedSubdirs{token: "wildcardtok"},
+				nil, // devReg nil — origin check must fire BEFORE this gate
+				WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+				nil,
+				nil,
+				60,
+				86400,
+			)
+			ctx := WithAgentID(context.Background(), "test-agent")
+
+			result := tool.Execute(ctx, map[string]any{
+				"path":    ".",
+				"command": "vite dev",
+				"port":    float64(18000),
+			})
+			require.True(t, result.IsError,
+				"dev mode must fail closed when origin cannot be resolved (host=%q); got success: %s",
+				host, result.ForLLM)
+			assert.NotContains(t, result.ForLLM, "registry not configured",
+				"origin check must run BEFORE the devReg-nil check (i.e. before any spawn), "+
+					"not surface as a downstream registry error")
+			assert.NotContains(t, result.ForLLM, "preview disabled",
+				"the origin-unresolved error must be distinct from the preview_enabled=false error")
+			assert.Contains(t, result.ForLLM, "public_url",
+				"error must actionably tell the operator to set gateway.public_url")
+		})
+	}
 }

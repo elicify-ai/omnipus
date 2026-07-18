@@ -51,7 +51,7 @@ describe('useAutoSave', () => {
     let data = { name: 'initial' }
 
     const { result, rerender } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', flushAuthToken: 'tok', debounceMs: 10000 }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', debounceMs: 10000 }),
       { initialProps: { d: data } },
     )
 
@@ -70,7 +70,7 @@ describe('useAutoSave', () => {
   it('registers and cleans up flush event listeners', () => {
     const saveFn = vi.fn().mockResolvedValue(undefined)
     const { unmount } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', flushAuthToken: 'tok' }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test' }),
       { initialProps: { d: { name: 'test' } } },
     )
 
@@ -176,7 +176,6 @@ describe('useAutoSave', () => {
       ({ d }) =>
         useAutoSave(d, saveFn, {
           flushUrl: '/api/v1/agents/test',
-          flushAuthToken: 'tok',
           debounceMs: 10000,
           beaconFlush,
         }),
@@ -712,7 +711,7 @@ describe('useAutoSave', () => {
     let data = { v: 1 }
 
     const { rerender } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', flushAuthToken: 'tok', debounceMs: 50 }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test', debounceMs: 50 }),
       { initialProps: { d: data } },
     )
 
@@ -765,7 +764,7 @@ describe('useAutoSave', () => {
     let data = { name: 'initial' }
 
     const { rerender } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test-id', flushAuthToken: 'my-token', debounceMs: 10000 }),
+      ({ d }) => useAutoSave(d, saveFn, { flushUrl: '/api/v1/agents/test-id', debounceMs: 10000 }),
       { initialProps: { d: data } },
     )
 
@@ -783,11 +782,132 @@ describe('useAutoSave', () => {
     expect(init).toMatchObject({
       method: 'PUT',
       keepalive: true,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer my-token' },
+      headers: { 'Content-Type': 'application/json' },
     })
     expect(JSON.parse(init!.body as string)).toEqual({ name: 'changed' })
     // saveFn (the normal doSave() path) must NOT have been called by the
     // beacon — the beacon is a separate, raw fetch, not a doSave() call.
     expect(saveFn).not.toHaveBeenCalled()
+  })
+
+  // ── onSaved / isCurrent semantics (echo-race fix, P2 'Text input Auto
+  // save') ────────────────────────────────────────────────────────────────
+  //
+  // `onSaved(saved, isCurrent)` lets a caller replace a hand-rolled
+  // `isDirtyRef.current = false` (unconditional, and therefore racy) with a
+  // guarded clear: `if (isCurrent) isDirtyRef.current = false`. These tests
+  // pin the two cases directly against the hook, independent of any
+  // consumer component.
+
+  it('onSaved: isCurrent is true when the live data still equals what was just saved (no edit during the round-trip)', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const onSaved = vi.fn()
+    let data = { v: 1 }
+
+    const { rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100, onSaved }),
+      { initialProps: { d: data } },
+    )
+
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(200) })
+
+    expect(saveFn).toHaveBeenCalledTimes(1)
+    expect(onSaved).toHaveBeenCalledTimes(1)
+    expect(onSaved).toHaveBeenLastCalledWith({ v: 2 }, true)
+  })
+
+  it('onSaved: isCurrent is false when the draft changed WHILE the save was in flight (typed-during-save)', async () => {
+    // Mirrors the exact shape of the SOUL echo-race: interaction 1's save
+    // stays in flight; the operator edits again (interaction 2) before it
+    // resolves. `onSaved` must report isCurrent=false for interaction 1's
+    // resolution — a caller using `if (isCurrent) isDirtyRef.current =
+    // false` must NOT clear dirty here, or a hydration effect gated on that
+    // flag would be free to revert the newer, still-unsaved edit.
+    let resolveFirst!: () => void
+    const promiseFirst = new Promise<void>((r) => { resolveFirst = r })
+    const saveFn = vi.fn()
+      .mockReturnValueOnce(promiseFirst)
+      .mockResolvedValueOnce(undefined)
+    const onSaved = vi.fn()
+    let data = { v: 1 }
+
+    const { rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 50, onSaved }),
+      { initialProps: { d: data } },
+    )
+
+    // Interaction 1: fires and stays in flight (unresolved).
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(100) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+    expect(onSaved).not.toHaveBeenCalled()
+
+    // Interaction 2: the operator edits again before interaction 1 settles.
+    // FIX 3's serialization queues this rather than firing a second
+    // concurrent request.
+    data = { v: 3 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(100) })
+    expect(saveFn).toHaveBeenCalledTimes(1)
+
+    // Resolve interaction 1. Its OWN `onSaved` call must report the STALE
+    // payload it actually sent ({ v: 2 }) with isCurrent=false, because the
+    // LIVE draft had already moved on to { v: 3 } by the time it resolved.
+    // The queued re-run (carrying { v: 3 }, already-resolved via
+    // mockResolvedValueOnce) settles right behind it, so flush generously
+    // and assert on the two calls' recorded args rather than an exact
+    // intermediate call count (the two resolutions can land within the same
+    // microtask flush).
+    await act(async () => {
+      resolveFirst()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(saveFn).toHaveBeenCalledTimes(2)
+    expect(onSaved).toHaveBeenCalledTimes(2)
+    expect(onSaved).toHaveBeenNthCalledWith(1, { v: 2 }, false)
+    expect(onSaved).toHaveBeenNthCalledWith(2, { v: 3 }, true)
+  })
+
+  it('onSaved: not called when the save fails', async () => {
+    const saveFn = vi.fn().mockRejectedValue(new Error('boom'))
+    const onSaved = vi.fn()
+    let data = { v: 1 }
+
+    const { rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100, onSaved }),
+      { initialProps: { d: data } },
+    )
+
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(200) })
+
+    expect(saveFn).toHaveBeenCalledTimes(1)
+    expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  it('onSaved: not called when the save is a no-op because the user cancelled a re-auth gate', async () => {
+    const cancelErr = new Error('Re-authentication cancelled')
+    const saveFn = vi.fn().mockRejectedValue(cancelErr)
+    const onSaved = vi.fn()
+    let data = { v: 1 }
+
+    const { result, rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 100, onSaved }),
+      { initialProps: { d: data } },
+    )
+
+    data = { v: 2 }
+    rerender({ d: data })
+    await act(async () => { vi.advanceTimersByTime(200) })
+
+    expect(result.current.status).toBe('idle')
+    expect(onSaved).not.toHaveBeenCalled()
   })
 })

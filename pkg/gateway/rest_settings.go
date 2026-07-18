@@ -582,13 +582,14 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleAbout handles GET /api/v1/about.
-// Returns version, go_version, os, arch, uptime, pid, and preview listener fields.
+// Returns version, go_version, os, arch, uptime, pid, and preview fields.
 //
-// Preview fields added per FR-009:
-//   - preview_port: effective preview listener port (int)
-//   - preview_listener_enabled: whether the preview listener is running (bool)
+// Preview fields per FR-015 (preview-on-main-listener, US-8): the separate
+// preview listener/port/origin are retired — `/preview/` is always served on
+// the main gateway listener. The SPA only needs to know whether preview is
+// currently enabled:
+//   - preview_enabled: whether preview is enabled (bool, cfg.IsPreviewEnabled())
 //   - warmup_timeout_seconds: dev-server warmup timeout from config (int)
-//   - preview_origin: omitted when not set in config (string, omitempty)
 //   - device_pairing_enabled: dark-launched device-pairing feature flag (bool)
 func (a *restAPI) HandleAbout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -610,18 +611,14 @@ func (a *restAPI) HandleAbout(w http.ResponseWriter, r *http.Request) {
 		Uptime:        uptime.String(),
 		UptimeSeconds: int(uptime.Seconds()),
 		Pid:           os.Getpid(),
-		// FR-009: preview listener fields for SPA iframe URL construction.
-		PreviewPort:            int(cfg.Gateway.PreviewPort),
-		PreviewListenerEnabled: cfg.Gateway.IsPreviewListenerEnabled(),
-		WarmupTimeoutSeconds:   int(cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds),
+		// FR-015: preview is served on the main listener; the SPA only needs
+		// to know whether it is currently enabled (no port/origin to report).
+		PreviewEnabled:       cfg.IsPreviewEnabled(),
+		WarmupTimeoutSeconds: int(cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds),
 		// F-8: signals to the SPA that frame-ancestors is '*' (degraded T-04 defense).
 		FrameAncestorsFallback: frameAncestorsFallback,
 		// Dark-launched device-pairing feature — see Sandbox.Experimental.DevicePairingEnabled.
 		DevicePairingEnabled: cfg.Sandbox.Experimental.DevicePairingEnabled,
-	}
-	// preview_origin is optional — only include when the operator set it.
-	if cfg.Gateway.PreviewOrigin != "" {
-		resp.PreviewOrigin = &cfg.Gateway.PreviewOrigin
 	}
 	jsonOK(w, resp)
 }

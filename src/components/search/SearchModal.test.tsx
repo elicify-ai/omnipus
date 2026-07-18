@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SearchModal } from './SearchModal'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
 // jsdom doesn't implement scrollIntoView; SearchModal calls it to keep the
@@ -27,6 +29,21 @@ const mockSelectSession = vi.fn()
 vi.mock('@/components/chat/useSelectSession', () => ({
   useSelectSession: () => mockSelectSession,
 }))
+
+// Session-search enhancement: SearchModal now also calls useNavigate()
+// directly (the workspace-switch arrow), separately from useSelectSession's
+// own router usage above. Mirrors useSelectSession.test.tsx's own mock
+// pattern (importOriginal + override just useNavigate) rather than
+// Sidebar.test.tsx's full hand-rolled replacement — this file doesn't render
+// <Link>, so there's nothing else to stub.
+const mockNavigate = vi.fn()
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -83,7 +100,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     soul: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
-    steering_mode: 'one-at-a-time' as const,
     ...overrides,
   }
 }
@@ -102,6 +118,12 @@ function renderModal() {
   return { ...utils, client }
 }
 
+// Captured once, before any test can override it (see the workspace-switch
+// "does not collapse" test below, which temporarily swaps closeSearchModal
+// for a spy) — restored in beforeEach so that override never leaks into a
+// later test.
+const realCloseSearchModal = useUiStore.getState().closeSearchModal
+
 beforeEach(() => {
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([makeAgent()])
   vi.mocked(fetchWorkspaces).mockReset().mockResolvedValue([makeWorkspace()])
@@ -109,8 +131,12 @@ beforeEach(() => {
   vi.mocked(renameSession).mockReset().mockImplementation(async (id, title) => makeSession({ id, title }))
   vi.mocked(deleteSession).mockReset().mockResolvedValue({ success: true })
   mockSelectSession.mockClear()
+  mockNavigate.mockClear()
   act(() => {
-    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null })
+    // searchModalMode explicitly reset to 'sessions' here — the two-modes
+    // describe block below flips it to 'workspaces' for its own tests, and
+    // without this reset that would leak into whichever test runs next.
+    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'sessions', closeSearchModal: realCloseSearchModal })
     useSessionStore.setState({
       activeSessionId: null,
       activeAgentId: null,
@@ -118,6 +144,7 @@ beforeEach(() => {
       attachedSessionType: null,
       attachedTaskTitle: null,
     })
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
   })
 })
 
@@ -415,5 +442,325 @@ describe('SearchModal — error states', () => {
     await waitFor(() => expect(screen.getByText('Session X')).toBeInTheDocument())
     expect(screen.queryByText('[removed]')).not.toBeInTheDocument()
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0)
+  })
+})
+
+// Session-search enhancement (user-approved): agent sub-headers now always
+// render, even for a single-agent workspace group — previously gated behind
+// `group.agentGroups.length > 1` (SearchModal.tsx).
+describe('SearchModal — agent header visibility (always shown)', () => {
+  it('shows the agent sub-header even for a single-agent workspace group', async () => {
+    // Default fixture: one workspace ("Alpha Workspace"), one agent ("Mia"),
+    // one session — exactly the case the old `length > 1` gate used to hide.
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    expect(screen.getByRole('button', { name: /Mia/ })).toBeInTheDocument()
+  })
+})
+
+// Session-search enhancement (user-approved): a workspace-switch arrow sits
+// at the right end of each real WorkspaceHeader row.
+describe('SearchModal — workspace-switch arrow', () => {
+  it('renders on a real workspace group but not on the Unfiled pseudo-group', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' }),
+      makeSession({ id: 's-2', title: 'Session Two', workspace_id: undefined }),
+    ])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Session Two')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Unfiled' })).toBeInTheDocument()
+
+    const arrows = screen.getAllByTestId('workspace-switch-arrow')
+    expect(arrows).toHaveLength(1)
+    expect(arrows[0]).toHaveAttribute('aria-label', 'Switch to workspace Alpha Workspace')
+    expect(screen.queryByLabelText('Switch to workspace Unfiled')).not.toBeInTheDocument()
+  })
+
+  it('clicking it switches the active workspace, starts a fresh session, navigates, and closes the modal', async () => {
+    const user = userEvent.setup()
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 's-1', activeAgentId: 'agent-1', activeAgentType: 'core' })
+    })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    // setActiveWorkspaceId
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-1')
+    // startNewSession — clears the previously-active session (exactly what
+    // Sidebar's "New chat" workspace-row action does; session.ts's
+    // startNewSession implementation).
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().attachedSessionType).toBeNull()
+    // navigate
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
+    // closes the modal
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+    // Order pin (load-bearing): setActiveWorkspaceId must run BEFORE
+    // startNewSession — startNewSession clears sessionByWorkspace for the
+    // CURRENT workspace, so only the correct order leaves the TARGET
+    // workspace's slot explicitly null (fresh composer, no silent
+    // re-attach). If the two calls were swapped, this key would be
+    // undefined, not null.
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+  })
+
+  it('is a no-op switch on the ALREADY-active workspace — navigates and closes but does not detach the live session', async () => {
+    const user = userEvent.setup()
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+      useSessionStore.setState({ activeSessionId: 's-1', activeAgentId: 'agent-1', activeAgentType: 'core' })
+    })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    // The arrow says "Switch", not "New chat": the live session survives.
+    expect(useSessionStore.getState().activeSessionId).toBe('s-1')
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+  })
+
+  it('does NOT collapse the group — it is a sibling control, not the toggle', async () => {
+    const user = userEvent.setup()
+    // Swap closeSearchModal for a spy that does not actually flip
+    // searchModalOpen, so the panel stays mounted after the click and the
+    // group's expand/collapse state remains observable (clicking the arrow
+    // closes the modal per spec, which would otherwise unmount everything
+    // and make "still expanded" unobservable). Restored in beforeEach.
+    const closeSpy = vi.fn()
+    act(() => { useUiStore.setState({ closeSearchModal: closeSpy }) })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const toggle = screen.getByRole('button', { name: 'Alpha Workspace' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    expect(closeSpy).toHaveBeenCalledTimes(1)
+    // The group is still expanded and its session row still rendered. What
+    // this guards: the arrow must stay a SIBLING of the collapse-toggle
+    // button — nesting it inside the toggle would fire onToggle on every
+    // switch click (and be invalid HTML).
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Session One')).toBeInTheDocument()
+  })
+
+  it('is keyboard reachable (a real <button>) and Enter activates it', async () => {
+    const user = userEvent.setup()
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const arrow = screen.getByTestId('workspace-switch-arrow')
+    expect(arrow.tagName).toBe('BUTTON')
+    arrow.focus()
+    expect(arrow).toHaveFocus()
+
+    await user.keyboard('{Enter}')
+
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
+  })
+})
+
+// Session-search enhancement (user-approved): the search panel opts out of
+// the shared dialog.tsx dim (DialogContent's overlayClassName) so the rest
+// of the screen stays 100% visible while search is open.
+describe('SearchModal — zero backdrop (no dim overlay)', () => {
+  it('renders a transparent overlay — no dim behind the panel', async () => {
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const overlay = screen.getByTestId('dialog-overlay')
+    expect(overlay.className).not.toContain('bg-[var(--color-primary)]/80')
+    expect(overlay.className).toContain('bg-transparent')
+  })
+
+  it('every OTHER dialog keeps the default 80% dim (overlayClassName plumbing must not leak)', () => {
+    // Renders the shared DialogContent directly with no overlayClassName —
+    // the other half of the contract: a regression that defaulted all
+    // overlays to transparent would ship silently without this.
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>plain dialog</DialogTitle>
+        </DialogContent>
+      </Dialog>,
+    )
+    const overlay = screen.getByTestId('dialog-overlay')
+    expect(overlay.className).toContain('bg-[var(--color-primary)]/80')
+    expect(overlay.className).not.toContain('bg-transparent')
+  })
+})
+
+// Session-search TWO MODES (user-required behavior fix): /workspace opens
+// the SAME SearchModal instance in workspace-switch mode — ALL workspaces
+// listed (including zero-session ones), session groups collapsed by
+// default, ArrowUp/Down walks workspace HEADERS (not sessions), Enter
+// switches to the highlighted workspace, typing filters by workspace NAME,
+// and the Unfiled pseudo-group is excluded (it isn't switchable). Every
+// describe block above this one exercises the DEFAULT 'sessions' mode and
+// is left untouched — this block only covers what's different in
+// 'workspaces' mode.
+describe('SearchModal — workspaces mode (workspace switcher)', () => {
+  beforeEach(() => {
+    act(() => { useUiStore.setState({ searchModalMode: 'workspaces' }) })
+  })
+
+  it('lists ALL workspaces including one with zero sessions — each real workspace gets a switch arrow', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' }),
+      makeWorkspace({ id: 'ws-2', name: 'Beta Workspace' }),
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' }),
+    ])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Alpha Workspace' })).toBeInTheDocument())
+    // Beta has zero sessions but must still be listed — sourced from the
+    // full fetchWorkspaces result, not derived from session groups.
+    expect(screen.getByRole('button', { name: 'Beta Workspace' })).toBeInTheDocument()
+
+    const arrows = screen.getAllByTestId('workspace-switch-arrow')
+    expect(arrows).toHaveLength(2)
+    expect(screen.getByLabelText('Switch to workspace Beta Workspace')).toBeInTheDocument()
+  })
+
+  it('the zero-session workspace is Enter-switchable via ArrowDown + Enter', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' }),
+      makeWorkspace({ id: 'ws-2', name: 'Beta Workspace' }),
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' }),
+    ])
+    renderModal()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Beta Workspace' })).toBeInTheDocument())
+
+    const input = screen.getByRole('textbox', { name: 'Filter workspaces' })
+    await user.click(input)
+    // Default highlight is index 0 (Alpha, alphabetically first) — ArrowDown
+    // moves to Beta (index 1, the zero-session workspace).
+    await user.keyboard('{ArrowDown}')
+    await user.keyboard('{Enter}')
+
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-2')
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-2' } })
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+  })
+
+  it('the zero-session workspace\'s switch arrow is clickable directly (not gated on having sessions)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchWorkspaces).mockResolvedValue([makeWorkspace({ id: 'ws-2', name: 'Beta Workspace' })])
+    vi.mocked(fetchSessions).mockResolvedValue([])
+    renderModal()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Beta Workspace' })).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-2')
+    await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+  })
+
+  it('groups start COLLAPSED by default (unlike sessions mode, which starts expanded)', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue([makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' })])
+    vi.mocked(fetchSessions).mockResolvedValue([makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' })])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Alpha Workspace' })).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Alpha Workspace' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Session One')).not.toBeInTheDocument()
+  })
+
+  it('manually expanding a collapsed group still reveals its sessions (peek)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchWorkspaces).mockResolvedValue([makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' })])
+    vi.mocked(fetchSessions).mockResolvedValue([makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' })])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Alpha Workspace' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Alpha Workspace' }))
+
+    expect(screen.getByRole('button', { name: 'Alpha Workspace' })).toHaveAttribute('aria-expanded', 'true')
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+  })
+
+  it('ArrowDown/ArrowUp walk WORKSPACE HEADERS (not sessions) — the highlight moves between headers', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' }),
+      makeWorkspace({ id: 'ws-2', name: 'Beta Workspace' }),
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' }),
+    ])
+    renderModal()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Beta Workspace' })).toBeInTheDocument())
+
+    const alphaHeader = screen.getByRole('button', { name: 'Alpha Workspace' })
+    const betaHeader = screen.getByRole('button', { name: 'Beta Workspace' })
+
+    // Default highlight is index 0 (Alpha) — the "↵" hint sits inside its
+    // own header row, not any session row (sessions mode's SessionRow
+    // highlight is inert here — mode==='sessions' is false).
+    expect(within(alphaHeader).queryByText('↵')).toBeInTheDocument()
+    expect(within(betaHeader).queryByText('↵')).not.toBeInTheDocument()
+
+    const input = screen.getByRole('textbox', { name: 'Filter workspaces' })
+    await user.click(input)
+    await user.keyboard('{ArrowDown}')
+
+    await waitFor(() => expect(within(betaHeader).queryByText('↵')).toBeInTheDocument())
+    expect(within(alphaHeader).queryByText('↵')).not.toBeInTheDocument()
+
+    await user.keyboard('{ArrowUp}')
+
+    await waitFor(() => expect(within(alphaHeader).queryByText('↵')).toBeInTheDocument())
+    expect(within(betaHeader).queryByText('↵')).not.toBeInTheDocument()
+  })
+
+  it('typing filters WORKSPACES by name (not by session title)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
+      makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' }),
+      makeWorkspace({ id: 'ws-2', name: 'Beta Workspace' }),
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([])
+    renderModal()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Beta Workspace' })).toBeInTheDocument())
+
+    const input = screen.getByRole('textbox', { name: 'Filter workspaces' })
+    await user.type(input, 'bet')
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha Workspace' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Beta Workspace' })).toBeInTheDocument()
+  })
+
+  it('excludes the Unfiled pseudo-group — it is not a real workspace and cannot be switched to', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue([makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' })])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', workspace_id: 'ws-1' }),
+      makeSession({ id: 's-2', title: 'Session Two', workspace_id: undefined }),
+    ])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Alpha Workspace' })).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Unfiled' })).not.toBeInTheDocument()
+  })
+
+  it('adapts the title and input placeholder for workspace-switch mode', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValue([makeWorkspace({ id: 'ws-1', name: 'Alpha Workspace' })])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Switch workspace')).toBeInTheDocument())
+    expect(screen.getByPlaceholderText('Filter workspaces by name...')).toBeInTheDocument()
+    expect(screen.queryByText('Search sessions')).not.toBeInTheDocument()
   })
 })

@@ -1,20 +1,30 @@
 // Step1Identity — wizard step ① (Identity).
 //
-// Per spec §5.3-§5.5: color, icon, name, description, model, plus the
-// subagent_3p executor block (cli_path / env_overrides / cli_args). The
-// color + icon editors are lifted from `AgentFormFields.tsx`
-// (`<AvatarColorPicker>`, `<IconPicker>`), the model picker is
-// `<ModelSelector>` (Main + Subagent), and the subagent_3p executor
-// inputs are free-text per the spec wireframe.
+// Per spec §5.3-§5.5: color, icon, name, description, model, fallback
+// models (item 6 reorg — moved from Step3Tools so the editor sits directly
+// adjacent to the primary model field), plus the subagent_3p executor block
+// (cli_path / env_overrides / cli_args). The color + icon editors are
+// lifted from `AgentFormFields.tsx` (`<AvatarColorPicker>`, `<IconPicker>`),
+// the model picker is `<ModelSelector>` (Main + Subagent), and the
+// subagent_3p executor inputs are free-text per the spec wireframe.
 //
 // W4 + W5 testids emitted per the plan's UI table:
 //   wizard-name, wizard-description, wizard-color, wizard-icon, wizard-model,
+//   wizard-add-fallback, wizard-fallback-N (item 6),
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args
 
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   AvatarColorPicker,
   IconPicker,
@@ -27,9 +37,14 @@ import { useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
 import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint, SUPPORTED_CLIS } from '@/lib/cliDetect'
+import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import type { IconName } from '@/lib/agentIcons'
-import type { ExecutorCommandPreviewRequest } from '@/lib/api'
+import type { ExecutorCommandPreviewRequest, FallbackModel } from '@/lib/api'
+import type { Provider } from '@/lib/api/generated/openapi-types'
+import { X } from '@phosphor-icons/react'
 import type { StepProps, WizardCli } from './types'
+
+const MAX_FALLBACKS = 2
 
 const CLI_LABEL: Record<WizardCli, string> = {
   'claude-code': 'claude-code',
@@ -182,6 +197,20 @@ export function Step1Identity({
       </div>
       )}
 
+      {/* Fallback models — item 6 reorg: relocated from Step3Tools so the
+          editor sits directly adjacent to the primary model field above.
+          Hidden for subagent_3p (the external runner manages its own
+          retries — matrix row 16); NOT gated on inheritModel, matching the
+          original Step3Tools behaviour (a native subagent that inherits its
+          primary model may still configure its own fallback chain). */}
+      {!isExternal && (
+        <FallbackEditor
+          payload={payload}
+          setField={setField}
+          providers={connectedProviders as Provider[]}
+        />
+      )}
+
       {/* subagent_3p executor block — rendered in Step 1 so the wireframe
           stays linear (CLI chooser → path → env → args). Re-rendered
           inside `<Advanced />` so it stays editable from the disclosure
@@ -194,6 +223,130 @@ export function Step1Identity({
         />
       )}
     </>
+  )
+}
+
+// ── Fallback editor (item 6 reorg — moved from Step3Tools.tsx) ─────────────
+// Wire shape: `[{model, provider}]`, tried in order, max 2 entries (server
+// rejects more with 400). Mirrors `AgentProfile.tsx`'s edit-form fallback
+// editor so the create wizard and edit flow cannot drift on the wire shape.
+
+interface FallbackEditorProps {
+  payload: StepProps['payload']
+  setField: StepProps['setField']
+  providers: Provider[]
+}
+
+function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
+  const fallbacks = payload.fallback_models ?? []
+  const { lookup: modelToProvider } = useModelToProvider(providers)
+  const providerNameById = new Map(providers.map((p) => [p.id, p.name ?? p.id ?? 'Unknown']))
+
+  function setFallbacks(next: FallbackModel[]) {
+    setField('fallback_models', next.length > 0 ? next : undefined)
+  }
+
+  function addFallback() {
+    if (fallbacks.length >= MAX_FALLBACKS) return
+    setFallbacks([
+      ...fallbacks,
+      { model: '', provider: modelToProvider('') },
+    ])
+  }
+
+  function updateFallback(idx: number, patch: Partial<FallbackModel>) {
+    setFallbacks(
+      fallbacks.map((f, i) => (i === idx ? { ...f, ...patch } : f)),
+    )
+  }
+
+  function removeFallback(idx: number) {
+    setFallbacks(fallbacks.filter((_, i) => i !== idx))
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-sm font-medium">Fallback models (max {MAX_FALLBACKS})</label>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={addFallback}
+          disabled={fallbacks.length >= MAX_FALLBACKS}
+          title={
+            fallbacks.length >= MAX_FALLBACKS
+              ? `Maximum ${MAX_FALLBACKS} fallback models`
+              : undefined
+          }
+          data-testid="wizard-add-fallback"
+          className="h-7 text-xs"
+        >
+          + Add fallback
+        </Button>
+      </div>
+      <p className="text-xs text-[var(--color-muted)]">
+        Each fallback is a {`{model, provider}`} pair. Server rejects more
+        than {MAX_FALLBACKS} with 400.
+      </p>
+      {fallbacks.length === 0 && (
+        <p className="text-xs text-[var(--color-muted)]">No fallbacks configured.</p>
+      )}
+      <div className="space-y-1.5">
+        {fallbacks.map((entry, idx) => (
+          <div
+            key={idx}
+            className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5"
+            data-testid={`wizard-fallback-${idx}`}
+          >
+            <Input
+              value={entry.model}
+              onChange={(e) => {
+                const model = e.target.value
+                updateFallback(idx, {
+                  model,
+                  // Auto-fill the provider from the slug → provider map
+                  // so the user does not have to retype it. Operator can
+                  // override via the explicit picker below.
+                  provider: modelToProvider(model) || entry.provider,
+                })
+              }}
+              placeholder="model slug"
+              className="font-mono text-xs h-7 flex-1"
+              data-testid={`wizard-fallback-model-${idx}`}
+            />
+            <Select
+              value={entry.provider || '__auto__'}
+              onValueChange={(v) => updateFallback(idx, { provider: v === '__auto__' ? '' : v })}
+            >
+              <SelectTrigger
+                className="h-7 px-2 text-xs"
+                data-testid={`wizard-fallback-provider-${idx}`}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__auto__">auto</SelectItem>
+                {providers.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {providerNameById.get(p.id) ?? p.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button tabIndex={0}
+              type="button"
+              onClick={() => removeFallback(idx)}
+              className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+              aria-label={`Remove fallback ${idx + 1}`}
+              data-testid={`wizard-fallback-remove-${idx}`}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 

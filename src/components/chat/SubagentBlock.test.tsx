@@ -3,12 +3,14 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
+import { act } from 'react'
 import userEvent from '@testing-library/user-event'
 import axe from 'axe-core'
 import { SubagentBlock } from './SubagentBlock'
 import type { SubagentSpan, SubagentSpanTerminal, SpanStep } from '@/store/chat'
 import type { ToolCall } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 
 // Reset the shared expandedSpans state so each test starts with all blocks
 // collapsed. Expansion state moved out of component-local useState into
@@ -16,6 +18,9 @@ import { useUiStore } from '@/store/ui'
 // (when streaming ends and the virtualizer takes over) without losing state.
 beforeEach(() => {
   useUiStore.setState({ expandedSpans: {} })
+  act(() => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
+  })
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -119,6 +124,67 @@ describe('SubagentBlock_Expanded_NestedToolCallsInOrder', () => {
     // the raw id is preserved in the expanded chip view.
     expect(badges[0]).toHaveTextContent('List')
     expect(badges[1]).toHaveTextContent('Shell')
+  })
+})
+
+// ── Fix 1/2 (2026-07-16): thread-surface step visibility gating ────────────
+// SubagentBlock's expanded steps render through ToolCallBadge with its
+// default surface='thread' policy (shouldRenderToolCall, toolVisibility.ts)
+// — the SAME hidden-by-default noisy-infra set the top-level thread applies
+// everywhere else (background bash poll/read, background delegate dispatch,
+// load_tool). This is deliberately unchanged by Fix 2's panel-inversion
+// policy, which only applies to ActivityPanel's own ToolCallBadge usage
+// (surface='panel') — see ActivityPanel.test.tsx for that side.
+//
+// Note (item 8h, 2026-07-16 fix wave): the first test below renders
+// SubagentBlock directly with verboseChatEnabled left at this file's
+// beforeEach default (false). In production that combination is currently
+// UNREACHABLE via the thread render path — SubagentBlock's card itself only
+// ever mounts in the thread when verbose chat is on at all
+// (shouldRenderSubagentSpan is verbose-only; gated one level up, at
+// ChatScreen.tsx's SubagentSpansRenderer / visibleSpans, not inside this
+// component). This test still pins the step-level gate as its OWN
+// independent invariant — defense-in-depth for SubagentBlock's internals,
+// not a state a real user can currently reach — so it stays even though the
+// exact prop combination it exercises can't happen through today's default
+// thread flow.
+
+describe('SubagentBlock — thread-surface step visibility (hidden-set gating)', () => {
+  it('a bash {action:"poll"} step renders NO ToolCallBadge, while a sibling visible step still renders', () => {
+    const span = makeSpan({
+      status: 'success',
+      steps: [
+        makeStep({ id: 'poll1', call_id: 'poll1', tool: 'bash', params: { action: 'poll' } }),
+        makeStep({ id: 'read1', call_id: 'read1', tool: 'fs.list', params: { path: '/tmp' } }),
+      ],
+    })
+    render(<SubagentBlock span={span} />)
+    fireEvent.click(screen.getByTestId('subagent-collapsed'))
+
+    const expanded = screen.getByTestId('subagent-expanded')
+    // Only the visible sibling step renders a ToolCallBadge.
+    const badges = within(expanded).getAllByTestId('tool-call-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveAttribute('data-tool', 'fs.list')
+    // The hidden bash-poll step must not leak in under any other testid.
+    expect(within(expanded).queryByText('Run command')).toBeNull()
+  })
+
+  it('the same bash {action:"poll"} step becomes visible once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    const span = makeSpan({
+      status: 'success',
+      steps: [makeStep({ id: 'poll1', call_id: 'poll1', tool: 'bash', params: { action: 'poll' } })],
+    })
+    render(<SubagentBlock span={span} />)
+    fireEvent.click(screen.getByTestId('subagent-collapsed'))
+
+    const expanded = screen.getByTestId('subagent-expanded')
+    const badges = within(expanded).getAllByTestId('tool-call-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveAttribute('data-tool', 'bash')
   })
 })
 
@@ -354,5 +420,57 @@ describe('SubagentBlock sibling blocks', () => {
     fireEvent.click(header1)
     expect(header1).toHaveAttribute('aria-expanded', 'false')
     expect(header2).toHaveAttribute('aria-expanded', 'true')
+  })
+})
+
+// ── W3: 3p (external-CLI) delegates report on completion only ───────────────
+// delegation-visibility spec: external-CLI (subagent_3p) agents are batch —
+// no intermediate output during the run, only a report when finished. A
+// running 3p span must say so; a running native span must not; a completed
+// (terminal) 3p span must show its result normally with no such note.
+
+describe('SubagentBlock — 3p (external-CLI) running notice (W3)', () => {
+  it('a running 3p subagent renders the "no live progress" notice', () => {
+    const span = makeSpan({ status: 'running' })
+    render(<SubagentBlock span={span} agentType="3p" />)
+
+    const notice = screen.getByTestId('subagent-3p-running-notice')
+    expect(notice).toHaveTextContent(/no live progress/i)
+    expect(notice).toHaveTextContent(/finishes/i)
+  })
+
+  it('a running native subagent does NOT render the notice', () => {
+    const span = makeSpan({ status: 'running' })
+    render(<SubagentBlock span={span} agentType="native" />)
+
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
+  })
+
+  it('a running subagent with unresolved agentType (omitted prop) does NOT render the notice', () => {
+    const span = makeSpan({ status: 'running' })
+    render(<SubagentBlock span={span} />)
+
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
+  })
+
+  it('a completed 3p subagent shows its result normally and does NOT render the notice', () => {
+    const span = makeSpan({ status: 'success', steps: [], finalResult: 'External agent finished the task.' })
+    render(<SubagentBlock span={span} agentType="3p" />)
+
+    // No "no live progress" note once terminal.
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
+
+    // Result renders normally, same as any other completed span.
+    fireEvent.click(screen.getByTestId('subagent-collapsed'))
+    const expanded = screen.getByTestId('subagent-expanded')
+    expect(within(expanded).getByText('Final result')).toBeInTheDocument()
+    expect(within(expanded).getByText('External agent finished the task.')).toBeInTheDocument()
+  })
+
+  it('a failed (error) 3p subagent does NOT render the running notice', () => {
+    const span = makeSpan({ status: 'error', steps: [] })
+    render(<SubagentBlock span={span} agentType="3p" />)
+
+    expect(screen.queryByTestId('subagent-3p-running-notice')).toBeNull()
   })
 })

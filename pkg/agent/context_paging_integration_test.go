@@ -658,7 +658,7 @@ func TestBreadcrumb_ZeroLLMCallsViaStubCounter(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				ModelName:         "stub-model",
 				ContextWindow:     128000,
 				MaxTokens:         4096,

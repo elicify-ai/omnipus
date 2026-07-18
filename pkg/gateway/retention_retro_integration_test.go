@@ -187,7 +187,7 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 	loopCfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpHome,
+				Home:      tmpHome,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -198,7 +198,7 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 
 	// Plant a backdated retro under the "main" agent's workspace so the sweep
 	// actually has work to do.  The "main" agent workspace is tmpHome itself
-	// (AgentDefaults.Workspace is used when no per-agent workspace is set).
+	// (AgentDefaults.Home is used when no per-agent workspace is set).
 	mainPrivate := filepath.Join(tmpHome, ".omnipus", "retros")
 	staleDate := now.AddDate(0, 0, -200).UTC().Format("2006-01-02")
 	staleDir := filepath.Join(mainPrivate, staleDate)

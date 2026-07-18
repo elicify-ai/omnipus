@@ -36,20 +36,8 @@ type Tier13Deps struct {
 	// Non-nil when the gateway has initialized it at boot.
 	DevServerRegistry *sandbox.DevServerRegistry
 
-	// GatewayPreviewBaseURL is the base URL of the gateway's PREVIEW
-	// listener, e.g. "http://localhost:3001" or "https://preview.acme.com".
-	// Sourced from cfg.Gateway.PreviewOrigin when set, otherwise computed
-	// from cfg.Gateway.Host + cfg.Gateway.PreviewPort at boot.
-	//
-	// web_serve dev mode uses this to build the absolute
-	// /preview/<agent>/<token>/ URL returned in tool results. bash's
-	// background-session mode ("bash" — ADR-036 unified the retired
-	// "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) does NOT
-	// use this: the equivalent port-exposure/preview-URL capability was
-	// dropped, not ported, when workspace_shell_bg was merged (ADR-036 §3.1)
-	// — bash's background mode is a plain run-in-background + poll/kill
-	// capability with no preview URL. The preview origin is browser-cross-
-	// origin to the SPA's main origin, providing the T-01 mitigation
-	// (parent.localStorage access throws SecurityError).
-	GatewayPreviewBaseURL string
+	// (The former GatewayPreviewBaseURL field was removed by ADR-044: /preview/
+	// is served on the main gateway listener and WebServeTool now derives its
+	// URL live via a getConfig accessor — see tools.NewWebServeTool and
+	// loop.go's wireTier13DepsLocked, which passes al.GetConfig directly.)
 }

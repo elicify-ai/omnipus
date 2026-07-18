@@ -46,6 +46,7 @@ import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { canDropTransition } from '@/components/workspaces/BoardView'
 import { useUiStore } from '@/store/ui'
+import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import {
   Play,
   Copy,
@@ -175,6 +176,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   }, [task?.id, task?.due, task?.trigger?.config?.at_ms])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+
+  // Fix B: the assignee picker is scoped to this task's workspace TEAM
+  // (core_team ∪ delegation edges), mirroring the backend's
+  // validateTaskAgentID gate — see buildTaskAssigneeItems / useWorkspaceTeamIds
+  // for the fallback rules. `task.agent_id` is always passed through as
+  // `currentAssigneeId` so an already-assigned agent that has since fallen off
+  // the team (legacy data) still renders instead of vanishing from its own picker.
+  // F1: `teamError` surfaces a failed team-set fetch as an inline hint next to
+  // the picker (the hook itself logs the failure — see useWorkspaceTeamIds).
+  const { teamIds, isLoading: teamLoading, isError: teamError } = useWorkspaceTeamIds(task?.workspace_id)
 
   const { data: workspaces = [] } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
@@ -484,6 +495,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
   if (!task) return null
 
+  // F3: a persisted task can predate the `workspace_id is required` guard
+  // (pkg/task/store.go::normalize) — normalize() only runs on Create/Update,
+  // never on load (pkg/task/store.go::load is a raw JSON unmarshal with no
+  // validation), so a legacy/hand-edited task.json with an empty
+  // workspace_id loads and renders fine here. validateTaskAgentID
+  // (pkg/gateway/rest_tasks.go) unconditionally 400s ANY agent_id PATCH for
+  // such a task ("task has no workspace_id to validate team membership
+  // against"). Disable the picker instead of offering guaranteed-400 choices.
+  const noWorkspaceForAssignment = !task.workspace_id
+
   const isStartable = task.status === 'inbox' || task.status === 'next' || task.status === 'planning'
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
@@ -638,14 +659,32 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <SmartSelect
           value={task.agent_id ?? '__none__'}
           onValueChange={(val) => doUpdate({ agent_id: val === '__none__' ? '' : val })}
-          placeholder="Unassigned"
+          placeholder={noWorkspaceForAssignment ? 'Unavailable' : teamLoading ? 'Loading team…' : 'Unassigned'}
+          disabled={noWorkspaceForAssignment || teamLoading}
           triggerClassName="h-8 text-xs"
           ariaLabel="Agent"
           items={[
             { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-            ...buildTaskAssigneeItems(agents),
+            ...buildTaskAssigneeItems(agents, {
+              teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
+              currentAssigneeId: task.agent_id,
+            }),
           ]}
         />
+        {/* F3: a workspace-less task would otherwise offer choices the
+            backend guarantees will 400 — disable + explain instead. */}
+        {noWorkspaceForAssignment ? (
+          <p className="text-xs text-[var(--color-muted)] mt-1.5">
+            Task has no workspace — assignment unavailable
+          </p>
+        ) : teamError ? (
+          // F1: a failed team-set fetch degrades to the unscoped roster —
+          // surface that degrade instead of leaving it indistinguishable
+          // from a healthy, unrestricted workspace.
+          <p className="text-xs text-[var(--color-muted)] mt-1.5">
+            Team list unavailable — showing all agents
+          </p>
+        ) : null}
       </Field>
 
       {/* Trigger (editable) */}

@@ -7,6 +7,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -318,6 +319,28 @@ func validateBootConfig(cfg *Config) error {
 				"config error: cfg.Sandbox.Tier3Commands[%d]=%q has only one token %q; "+
 					"entries must specify \"binary subcommand\" (≥2 tokens, e.g. \"remix dev\")",
 				i, entry, tokens[0],
+			)
+		}
+	}
+
+	// --- ADR-044: gateway.public_url must be a well-formed absolute http(s) URL ---
+	// canonicalGatewayOrigin() (pkg/gateway/middleware/origin.go) returns this
+	// value VERBATIM (only TrimSpace'd) and uses it as the web_serve/preview
+	// link base URL, the CSP/CORS/WS-CheckOrigin allowed origin, and the
+	// Origin-match reference. An empty value is valid (the default — origin is
+	// derived from host:port instead); anything else must parse as an absolute
+	// http(s) URL with a host, or it would silently produce broken preview
+	// links and a bogus origin.
+	if pu := strings.TrimSpace(cfg.Gateway.PublicURL); pu != "" {
+		parsed, err := url.Parse(pu)
+		scheme := ""
+		if err == nil {
+			scheme = strings.ToLower(parsed.Scheme)
+		}
+		if err != nil || (scheme != "http" && scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf(
+				"config error: gateway.public_url=%q must be a valid absolute http(s) URL with a host (e.g. https://omnipus.example.com)",
+				pu,
 			)
 		}
 	}

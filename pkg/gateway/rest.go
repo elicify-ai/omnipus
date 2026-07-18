@@ -780,6 +780,26 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// filterDelegateChildEntries drops every transcript entry produced by a CHILD
+// delegation sub-turn (session.TranscriptEntry.IsDelegateChildEntry()) before
+// a REST cold-load response is built. This mirrors pkg/gateway/replay.go's
+// live-reconnect replay filter (same shared predicate, see
+// IsDelegateChildEntry's doc comment) — without it, a fresh page load/reopen
+// of a session that included a delegation dumped the delegate's own raw
+// intermediate narration and final report (plus any "[external-cli
+// permission]" lines) as top-level main-chat bubbles that a live reconnect
+// never showed.
+func filterDelegateChildEntries(entries []session.TranscriptEntry) []session.TranscriptEntry {
+	filtered := make([]session.TranscriptEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDelegateChildEntry() {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
+}
+
 func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
 	store := a.resolveSessionStore(id)
 	if store == nil {
@@ -797,6 +817,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
+	messages = filterDelegateChildEntries(messages)
 	// Detect ghost sessions: if the session references an agent that no longer
 	// exists in the current config, surface agent_removed=true so the frontend
 	// can show the read-only "Agent removed" banner (#103).
@@ -832,6 +853,7 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
+	messages = filterDelegateChildEntries(messages)
 	// Coerce nil → empty slice so JSON marshals as [] not null. The SPA's
 	// fetchSessionMessages validates via z.array(WireMessageSchema), which
 	// rejects null — a fresh session with no transcript would surface as
@@ -1410,11 +1432,11 @@ func inferProviderName(provider, model string) string {
 // Returns (path, error). Callers must handle the error; a non-nil error means the
 // workspace could not be created and the returned path may be unusable.
 func agentWorkspacePath(cfg interface {
-	WorkspacePath() string
+	AgentHomeBasePath() string
 }, agentID, agentWorkspace, omnipusHome string,
 ) (string, error) {
 	if agentWorkspace != "" {
-		// AgentConfig.Workspace may contain "~"; expand it the same way config does.
+		// AgentConfig.Home may contain "~"; expand it the same way config does.
 		if len(agentWorkspace) > 0 && agentWorkspace[0] == '~' {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -1437,7 +1459,7 @@ func agentWorkspacePath(cfg interface {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				slog.Error("rest: agentWorkspacePath: UserHomeDir failed", "error", err)
-				return cfg.WorkspacePath(), fmt.Errorf("UserHomeDir: %w", err)
+				return cfg.AgentHomeBasePath(), fmt.Errorf("UserHomeDir: %w", err)
 			}
 			base = filepath.Join(home, ".omnipus")
 		}
@@ -1453,7 +1475,7 @@ func agentWorkspacePath(cfg interface {
 		}
 		return cleaned, nil
 	}
-	return cfg.WorkspacePath(), nil
+	return cfg.AgentHomeBasePath(), nil
 }
 
 // readSoulMD returns the contents of SOUL.md for the given workspace.
@@ -1489,15 +1511,6 @@ func readAgentFiles(workspace string) (soul, heartbeat string) {
 		heartbeat = string(data)
 	}
 	return soul, heartbeat
-}
-
-// steeringModeOrDefault returns the steering mode string, defaulting to "one-at-a-time"
-// when the configured value is empty.
-func steeringModeOrDefault(mode string) string {
-	if mode == "" {
-		return "one-at-a-time"
-	}
-	return mode
 }
 
 // activeAgentIDSet returns a set of agent IDs that currently have an active turn.
@@ -1576,7 +1589,6 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
-	sm := gen.AgentSteeringMode(steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode))
 	// Effective per-turn tool-round cap: mirror the runtime resolution
 	// (pkg/agent/instance.go) — defaults value when set, else 200 — so the
 	// wire never reports a meaningless 0 (a zeroed default was the visible
@@ -1588,7 +1600,6 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 	return gen.Agent{
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
 		MaxToolIterations: maxIter,
-		SteeringMode:      sm,
 		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul: "",
 	}
@@ -1631,7 +1642,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		if ac.Model != nil && ac.Model.Primary != "" {
 			model = ac.Model.Primary
 		}
-		workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Workspace, a.homePath)
+		workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Home, a.homePath)
 		if wsErr != nil {
 			slog.Warn("rest: listAgents: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 		}
@@ -1688,7 +1699,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if ac.Model != nil && ac.Model.Primary != "" {
 				model = ac.Model.Primary
 			}
-			workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Workspace, a.homePath)
+			workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Home, a.homePath)
 			if wsErr != nil {
 				slog.Warn("rest: getAgent: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 			}
@@ -2097,7 +2108,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// and copies out only the fields that variant actually carries.
 	// AgentCreateRequestSubagent has no Executor field at all;
 	// AgentCreateRequestSubagent3p has no ToolsCfg/Skills/FallbackModels/
-	// ShellPolicy/Voice/SteeringMode/MaxToolIterations
+	// ShellPolicy/Voice/MaxToolIterations
 	// fields — a subagent_3p create supplying any of those is rejected at
 	// decode time, both because the Go type has no matching field and
 	// because the strict decoder refuses to silently drop it.
@@ -2480,7 +2491,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	var createSoulContent string
 	if soul != "" {
 		createSoulContent = strings.TrimSpace(soul)
-		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Workspace, a.homePath)
+		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Home, a.homePath)
 		if wsErr != nil {
 			slog.Error("rest: agentWorkspacePath for create", "agent_id", ac.ID, "error", wsErr)
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
@@ -2840,13 +2851,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 
-	// W2 spec §9.2 row 14: PUT worker with steering_mode=queue-and-process
-	// returns 200 but server forces steering_mode="one-at-a-time". Workers
-	// never queue (they run only via delegation; no concurrent inbound).
-	// Implementation: if the caller sent a non-nil steering_mode and the agent
-	// is a worker, ignore the caller's value and force the stored value to
-	// "one-at-a-time" via the persist block below.
-
 	// W2 spec §3.1 row 16 / §9.2 row 11+15: fallback_models is capped at 2
 	// entries (maxItems: 2). Server-enforced on every PUT/CREATE so a direct
 	// REST caller (not the SPA) cannot smuggle a 3rd entry past the schema.
@@ -3059,7 +3063,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				return fmt.Errorf("agents section not found in config")
 			}
 			// Per-agent fields: name, model, timeout_seconds, max_tool_iterations,
-			// steering_mode, tool_feedback — stored under agents.list[*].
+			// tool_feedback — stored under agents.list[*].
 			list, _ := agents["list"].([]any)
 			agentFound := false
 			for _, entry := range list {
@@ -3126,19 +3130,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 					if req.MaxToolIterations != nil {
 						agentMap["max_tool_iterations"] = *req.MaxToolIterations
-					}
-					if req.SteeringMode != nil {
-						// W2 spec §4.24 / §9.2 row 14: workers are forced to
-						// "one-at-a-time" server-side regardless of the caller's
-						// value. Workers run only via delegation (no concurrent
-						// inbound), so queueing is meaningless. This is a silent
-						// override, not a 400 — the spec calls for 200 with the
-						// stored value forced to one-at-a-time.
-						sm := string(*req.SteeringMode)
-						if foundAgent.IsWorker() {
-							sm = "one-at-a-time"
-						}
-						agentMap["steering_mode"] = sm
 					}
 					// tool_feedback was removed from the wire in W1 (it's now per-channel
 					// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
@@ -3371,7 +3362,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Write SOUL.md, HEARTBEAT.md, and AGENT.md BEFORE triggering reload,
 	// so the new AgentInstance reads the updated files.
 	// Capture agentWorkspace into a local to avoid TOCTOU on cfg.Agents.List (M1).
-	capturedWorkspace := cfg.Agents.List[foundIdx].Workspace
+	capturedWorkspace := cfg.Agents.List[foundIdx].Home
 	workspace, wsErr := agentWorkspacePath(cfg, id, capturedWorkspace, a.homePath)
 	if wsErr != nil {
 		slog.Error("rest: agentWorkspacePath for update", "agent_id", id, "error", wsErr)
@@ -3527,10 +3518,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	if req.MaxToolIterations != nil {
 		ag.MaxToolIterations = *req.MaxToolIterations
-	}
-	if req.SteeringMode != nil {
-		sm := gen.AgentSteeringMode(steeringModeOrDefault(string(*req.SteeringMode)))
-		ag.SteeringMode = sm
 	}
 	jsonOK(w, ag)
 }
@@ -4656,7 +4643,7 @@ func (a *restAPI) HandleUserContext(w http.ResponseWriter, r *http.Request) {
 
 func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	cfg := a.agentLoop.GetConfig()
-	userMDPath := filepath.Join(cfg.WorkspacePath(), "USER.md")
+	userMDPath := filepath.Join(cfg.AgentHomeBasePath(), "USER.md")
 	content := ""
 	if data, err := os.ReadFile(userMDPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -4678,7 +4665,7 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	userMDPath := filepath.Join(cfg.WorkspacePath(), "USER.md")
+	userMDPath := filepath.Join(cfg.AgentHomeBasePath(), "USER.md")
 	if err := fileutil.WriteFileAtomic(userMDPath, []byte(req.Content), 0o600); err != nil {
 		slog.Error("rest: write USER.md", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
@@ -4861,19 +4848,71 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/browser/inspect", a.withAuth(a.HandleBrowserInspect))
 }
 
-// registerPreviewEndpoints registers /preview/ on the preview mux ONLY
-// (FR-005, FR-006). Not registered on the main mux.
+// registerPreviewEndpoints registers /preview/ on the MAIN mux (ADR-044,
+// FR-001/FR-002/FR-003). There is no separate preview listener/mux anymore —
+// /preview/ shares gateway.port with the SPA and /api/v1/*.
 //
-// Auth model: token-only (FR-023). No RequireSessionCookieOrBearer, no
-// RequireMatchingOriginOnStateChanging (FR-023a).
+// Auth model: token-only (FR-023). Registered bare — no withAuth/session
+// wrapping — the URL path token is the credential. (There is also no live
+// Origin-check middleware in this handler chain to opt out of:
+// middleware.RequireMatchingOriginOnStateChanging exists in origin.go as a
+// tested reference helper — FR-023a documents the /preview/ exemption it
+// would need — but it is not wired into gateway.go for ANY route, so this is
+// not something /preview/ specifically forgoes.) It DOES inherit the global
+// configSnapshotMiddleware (and the CSRF middleware, which exempts the
+// /preview/ prefix — see middleware/csrf.go's defaultExemptPrefixes) because
+// those are wrapped around the whole main mux in gateway.go, not per-route.
+// HandlePreview itself checks cfg.IsPreviewEnabled() live on every request
+// and 404s when disabled (FR-006) — toggling it never requires a restart.
 //
 // /preview/ is the unified route for the web_serve tool. The legacy /serve/
 // and /dev/ back-compat handlers (for registrations produced before /preview/
-// landed, 2026-05-04) were removed once the safety window for any such
-// registration closed — registrations are short-lived (max 24h), so nothing
-// minted before the migration could still be valid.
-func (a *restAPI) registerPreviewEndpoints(cm previewHandlerRegistrar) {
-	cm.RegisterPreviewHandler("/preview/", http.HandlerFunc(a.HandlePreview))
+// landed, 2026-05-04) were retired from actually SERVING content once the
+// safety window for any such registration closed — registrations are
+// short-lived (max 24h), so nothing minted before the migration could still
+// be valid. "Retired" here means routing to HandlePreview was removed; it
+// does NOT mean the prefixes were dropped from the mux entirely — see below.
+//
+// Both legacy prefixes remain registered here, but ONLY to a dedicated
+// 404 responder (handleLegacyPreviewRetired) — not to HandlePreview. Without
+// this, an unmatched /serve/... or /dev/... request falls through to the
+// "/" SPA catch-all (embed.go's newSPAHandler), which answers any unknown
+// path with a 200 + index.html. The SPA's own link validator
+// (src/lib/preview-url.ts's PREVIEW_PATH_REGEX) still recognizes /serve/ and
+// /dev/ paths for historical transcript replay, and its warmup probe
+// (IframePreview.tsx) does a same-origin HEAD fetch expecting a genuine
+// non-2xx/3xx status to detect a dead legacy link — a 200-index.html
+// response instead makes it falsely report the (nonexistent) dev server as
+// "ready". Registering these two prefixes on the dynamicServeMux
+// (pkg/channels/dynamic_mux.go) outranks the "/" catch-all for any path
+// under them, since it dispatches by longest matching subtree prefix.
+func (a *restAPI) registerPreviewEndpoints(cm httpHandlerRegistrar) {
+	cm.RegisterHTTPHandler(middleware.PreviewPathPrefix, http.HandlerFunc(a.HandlePreview))
+	cm.RegisterHTTPHandler(legacyServePathPrefix, http.HandlerFunc(handleLegacyPreviewRetired))
+	cm.RegisterHTTPHandler(legacyDevPathPrefix, http.HandlerFunc(handleLegacyPreviewRetired))
+}
+
+// legacyServePathPrefix and legacyDevPathPrefix are the retired back-compat
+// preview prefixes (pre-ADR-044). See registerPreviewEndpoints' doc comment.
+const (
+	legacyServePathPrefix = "/serve/"
+	legacyDevPathPrefix   = "/dev/"
+)
+
+// handleLegacyPreviewRetired answers a GET/HEAD/OPTIONS request under the
+// retired /serve/ or /dev/ preview prefixes with a genuine 404. It exists
+// solely to keep these paths off the "/" SPA catch-all — no legacy token
+// minted before the ADR-044 migration can still be valid (registrations are
+// short-lived, max 24h), so there is nothing to look up or proxy here. A
+// state-changing method (POST/PUT/PATCH/DELETE) never actually reaches this
+// handler: /serve/ and /dev/ are deliberately NOT in the CSRF
+// exempt-prefixes set (middleware/csrf.go's defaultExemptPrefixes, which
+// lists only middleware.PreviewPathPrefix), so the CSRF middleware rejects
+// those methods with 403 first. Either outcome — this handler's 404 or the
+// CSRF middleware's 403 — keeps the retired prefixes off the 200 SPA shell,
+// which is the invariant that matters.
+func handleLegacyPreviewRetired(w http.ResponseWriter, _ *http.Request) {
+	jsonErr(w, http.StatusNotFound, "this preview path prefix has been retired; use /preview/")
 }
 
 // rotateGatewayToken generates a new random bearer token, persists it to config, and returns it.
@@ -4917,17 +4956,11 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, gen.RotateTokenResponse{Token: newToken})
 }
 
-// httpHandlerRegistrar is the subset of channels.Manager used for route registration.
+// httpHandlerRegistrar is the subset of channels.Manager used for route
+// registration on the main mux. registerPreviewEndpoints (ADR-044) uses this
+// same interface — /preview/ no longer has its own registrar/mux.
 type httpHandlerRegistrar interface {
 	RegisterHTTPHandler(pattern string, handler http.Handler)
-}
-
-// previewHandlerRegistrar is the subset of channels.Manager used to register
-// routes on the preview mux (FR-005). Separate from httpHandlerRegistrar so
-// that existing test mocks implementing the main-mux interface do not need to
-// be updated when preview routes are added.
-type previewHandlerRegistrar interface {
-	RegisterPreviewHandler(pattern string, handler http.Handler)
 }
 
 // --- App State ---
@@ -7705,13 +7738,13 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	}
 
 	// Snapshot the WhatsApp store path (if applicable) before the config write.
-	// We derive the default path the same way init.go does: WorkspacePath()/whatsapp/<instanceID>.
+	// We derive the default path the same way init.go does: AgentHomeBasePath()/whatsapp/<instanceID>.
 	// If SessionStorePath is explicitly set, use that; otherwise use the derived default.
 	var stateDir string
 	if chBaseType == "whatsapp" {
 		storePath := inst.SessionStorePath
 		if storePath == "" {
-			storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp", channelID)
+			storePath = filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", channelID)
 		}
 		stateDir = storePath
 	}

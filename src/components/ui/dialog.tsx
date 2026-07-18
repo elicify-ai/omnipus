@@ -15,6 +15,11 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
+    // Stable test hook — lets a caller assert dim-vs-transparent without
+    // fragile arbitrary-value class-string matching (see the `overlayClassName`
+    // opt-out on DialogContent below). Adding an attribute is inert for every
+    // existing consumer.
+    data-testid="dialog-overlay"
     className={cn(
       // Dim only — no backdrop blur (operator direction: the surrounding UI
       // should stay legible behind modals; the 80% Deep Space dim is enough).
@@ -31,10 +36,32 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 // US-2: Dialog panel — card surface style, Liquid Silver text
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+    /**
+     * Per-instance override for the shared DialogOverlay's className. Omit
+     * to keep the standard 80% Deep Space dim (default, unchanged for every
+     * existing caller — backwards compatible).
+     *
+     * First consumer: SearchModal (session-search enhancement, operator
+     * direction) needs the rest of the screen 100% visible while the search
+     * panel is open — no dim, no blur. `cn()` runs this through
+     * tailwind-merge, so passing e.g. "bg-transparent" cleanly wins over the
+     * default `bg-[var(--color-primary)]/80` in DialogOverlay's own class
+     * list (same `bg-*` utility group) without disturbing its other classes
+     * (fixed/inset-0/z-50 positioning, open/close fade animation) — the
+     * overlay element still exists (so outside-click-to-dismiss and the
+     * focus trap are untouched), it just renders invisible.
+     *
+     * Chosen over duplicating this whole Content composition (Portal +
+     * Overlay + Close button + animation classes) directly in SearchModal:
+     * one optional, additive prop here is far less to keep in sync than a
+     * second hand-maintained copy of DialogContent's markup.
+     */
+    overlayClassName?: string
+  }
+>(({ className, children, overlayClassName, ...props }, ref) => (
   <DialogPortal>
-    <DialogOverlay />
+    <DialogOverlay className={overlayClassName} />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(

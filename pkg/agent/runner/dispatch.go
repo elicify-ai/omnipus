@@ -14,10 +14,19 @@ const (
 	DispatchKindNative DispatchKind = "native"
 	// DispatchKindExternalCLI means the task is delegated to an external CLI runner
 	// (Claude Code, Codex, opencode). ACTIVE in v0.1.0: ResolveDispatch returns this
-	// kind for Kind="external-cli". The run executes in a git-worktree-isolated dir
-	// under the external CLI's OWN sandbox (Codex = Landlock/seccomp + Seatbelt;
-	// Claude Code = its permission model); Omnipus adds no new confiner. Consent is
-	// routed best-effort post-hoc (the CLI's own sandbox is the real boundary).
+	// kind for Kind="external-cli". Omnipus adds no new confiner of its own;
+	// consent is routed best-effort post-hoc.
+	//
+	// CORRECTED (FIX 9, 7-reviewer gate): this used to describe the run as
+	// executing "in a git-worktree-isolated dir". ADR-032 removed that —
+	// external-CLI runs now execute directly in the delegate's own persistent
+	// workspace directory (RunOptions.WorkDir), not a disposable copy. The
+	// "external CLI's OWN sandbox" claim is also only partially still true:
+	// codex still enforces a real OS-level boundary (--sandbox
+	// workspace-write, Landlock/seccomp); claude and opencode both now run
+	// with their permission gates unconditionally bypassed (see
+	// driver_claude.go and consent.go's 2026-07-05/issue #488 amendment for
+	// the full history) and enforce nothing of their own.
 	DispatchKindExternalCLI DispatchKind = "external-cli"
 )
 
@@ -68,12 +77,15 @@ func DenyByDefault(requestID string) PermissionDecision {
 //   - Kind="remote-a2a"              → "", ErrRemoteA2AReserved
 //   - any other unknown kind          → "", error
 //
-// external-cli is ACTIVE in v0.1.0: the dispatch site (pkg/agent/subturn.go) runs
-// the external run in a git-worktree-isolated directory under the external CLI's
-// OWN sandbox (the operator decision — Omnipus adds no new kernel confiner). The
-// CLI's permission prompts are routed to the Omnipus consent layer best-effort
-// post-hoc (the CLI's own sandbox + the worktree are the authoritative boundary —
-// see consent.go's POST-HOC CONSENT note).
+// external-cli is ACTIVE in v0.1.0: the dispatch sites (pkg/agent/subturn.go for
+// agent-to-agent delegation, pkg/agent/loop.go's processTaskDirectExternalCLI for
+// task-mode dispatch) run the external CLI directly in the delegate agent's own
+// persistent workspace directory (ADR-032 removed the earlier git-worktree
+// isolation — the operator decision remains that Omnipus adds no new kernel
+// confiner of its own). The CLI's permission prompts are routed to the Omnipus
+// consent layer best-effort post-hoc — see consent.go's POST-HOC CONSENT note,
+// including its 2026-07-05 (issue #488) amendment on which CLI, if any, still
+// enforces a real sandbox of its own (only codex does).
 //
 // This function is the single dispatch gate. All sub-agent dispatch sites MUST
 // call it before choosing an execution path.

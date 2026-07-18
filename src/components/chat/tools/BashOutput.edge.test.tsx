@@ -20,7 +20,7 @@ import { act } from 'react'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 
-type RenderFn = (props: { args: unknown; result: unknown; status: { type: string } }) => React.ReactNode
+type RenderFn = (props: { args: unknown; result: unknown; status: { type: string; reason?: string } }) => React.ReactNode
 
 // vi.hoisted runs before vi.mock factory and before all imports.
 const captured = vi.hoisted(() => ({
@@ -62,6 +62,199 @@ it('registers the canonical bash tool and all 5 legacy aliases', () => {
   expect(WorkspaceShellBgLegacyUI).toBeDefined()
   expect(WorkspaceShellBgDotLegacyUI).toBeDefined()
   expect(captured.bashRender).not.toBeNull()
+})
+
+// ── flat text-line status dot (ticket "Tool components in chat", P2) ────────
+// The old bordered/backgrounded card (rounded-md border overflow-hidden +
+// status-tinted border + bg-surface-1 header) is gone — the row is now a
+// flat text line whose only status color comes from an 8px dot (running
+// keeps the spinning icon in the same slot). The dark terminal output panel
+// keeps its own identity (bg-[#0d1117]) but is no longer wrapped in a
+// bordered outer frame — it now sits behind a border-l-2 left accent line.
+
+describe('bash — flat text-line status dot', () => {
+  /** The toggle button is the first (and only) <button> in the row; its
+   * first child is always the status indicator (dot or spinner). */
+  function getIndicatorEl(container: HTMLElement) {
+    return container.querySelector('button')?.children[0] as HTMLElement | undefined
+  }
+
+  it('running: indicator is the spinning icon, not a dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'sleep 1' },
+        result: null,
+        status: { type: 'running' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('complete (success): indicator is an 8px success-colored dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.tagName.toLowerCase()).toBe('span')
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+    expect(indicator?.getAttribute('class')).toContain('rounded-full')
+  })
+
+  it('incomplete (error): indicator is an 8px error-colored dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'false' },
+        result: 'exit 1',
+        status: { type: 'incomplete' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('the outer container has no card-frame classes — flat/transparent on the thread', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).not.toContain('rounded-md')
+    expect(root.className).not.toContain('border')
+    expect(root.className).not.toContain('overflow-hidden')
+    expect(root.className).not.toContain('bg-[var(--color-surface-1)]')
+  })
+
+  it('the output panel (expanded by default) uses a left accent line, not a full bordered frame', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    // BashOutputBlock defaults to expanded — no click needed.
+    const panel = container.querySelector('.border-l-2') as HTMLElement | null
+    expect(panel).toBeTruthy()
+    expect(panel?.className).not.toContain('border-t')
+  })
+
+  it('the dark terminal output panel keeps its own identity (bg-[#0d1117]) without an outer border', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const terminal = container.querySelector('[class*="0d1117"]') as HTMLElement | null
+    expect(terminal).toBeTruthy()
+    expect(terminal?.className).not.toContain('border')
+  })
+
+  it('cancelled: indicator is an 8px muted-colored dot with a "Cancelled" label, not the red error dot', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container, getByText } = render(
+      captured.bashRender({
+        args: { command: 'sleep 30' },
+        result: null,
+        status: { type: 'incomplete', reason: 'cancelled' },
+      }) as React.ReactElement
+    )
+    const indicator = getIndicatorEl(container)
+    expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+    expect(indicator?.getAttribute('class')).not.toContain('bg-[var(--color-error)]')
+    expect(getByText('Cancelled')).toBeInTheDocument()
+  })
+
+  it('the caret lives INSIDE the toggle button (no unjustified split-out sibling caret)', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const button = container.querySelector('button')!
+    expect(button.querySelector('svg[class*="Caret" i], svg')).toBeTruthy()
+    // The row has exactly one button and no caret rendered as its sibling.
+    expect(container.querySelectorAll('button').length).toBe(1)
+  })
+
+  it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container } = render(
+      captured.bashRender({
+        args: { command: 'echo hi' },
+        result: 'hi\n',
+        status: { type: 'complete' },
+      }) as React.ReactElement
+    )
+    const root = container.firstElementChild as HTMLElement
+    expect(
+      root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
+    ).toBeNull()
+  })
+
+  it('running with no output: the inline "Executing..." spinner keeps animate-spin', () => {
+    if (!captured.bashRender) {
+      expect(BashOutputUI).toBeDefined()
+      return
+    }
+    const { container, getByText } = render(
+      captured.bashRender({
+        args: { command: 'sleep 30' },
+        result: null,
+        status: { type: 'running' },
+      }) as React.ReactElement
+    )
+    expect(getByText('Executing...')).toBeInTheDocument()
+    const spinners = container.querySelectorAll('.animate-spin')
+    // One in the header status indicator, one in the "Executing..." row.
+    expect(spinners.length).toBeGreaterThanOrEqual(2)
+  })
 })
 
 // ── bash (canonical) result edge cases ────────────────────────────────────────
@@ -407,19 +600,37 @@ describe('bash — verbose chat gate', () => {
     expect(container).not.toBeEmptyDOMElement()
   })
 
-  // REGRESSION for the invisible-denial/failure bug: a background bash
-  // dispatch normally hides (see the first test in this describe block), but
-  // an error outcome must override that — a failed background command must
-  // never disappear from the chat transcript just because its args look
-  // like ordinary background dispatch. makeBashUI threads
-  // `isError: status.type === 'incomplete'` into BashOutputBlock, so a
-  // status of 'incomplete' is the real-world error signal here.
-  it('REGRESSION: a background bash run with an error status (incomplete) is NOT hidden', () => {
-    if (!captured.bashRender) {
-      expect(BashOutputUI).toBeDefined()
-      return
-    }
-    const element = captured.bashRender({
+  // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden", asserting the
+  // isError-status ('incomplete') override forced this background dispatch
+  // visible). shouldRenderToolCall's isError override no longer applies to
+  // background bash (poll/read/dispatch) — same LLM-mediated rationale as
+  // delegate (toolVisibility.ts doc comment): the failure is explained by
+  // the calling agent's own response text, and the raw output stays
+  // inspectable in the ActivityPanel. Only verboseChatEnabled brings this
+  // row back into the thread now (see the next test).
+  it('a background bash run with an error status (incomplete) stays HIDDEN — no isError exception for background bash', () => {
+    // (item 8f, 2026-07-16 fix wave): hard-fail if the render fn was never
+    // captured, instead of soft-guarding into a vacuous pass — this is a
+    // NEW regression test added by the visibility-policy fix, so silently
+    // no-op'ing here would mean the test could report green while asserting
+    // nothing at all about the fix it exists to pin.
+    expect(captured.bashRender).toBeDefined()
+    const element = captured.bashRender!({
+      args: { command: 'tail -f log', run_in_background: true },
+      result: 'command not found',
+      status: { type: 'incomplete' },
+    })
+    const { container } = render(element as React.ReactElement)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('...but becomes visible once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    // (item 8f) same hard guard as the test above.
+    expect(captured.bashRender).toBeDefined()
+    const element = captured.bashRender!({
       args: { command: 'tail -f log', run_in_background: true },
       result: 'command not found',
       status: { type: 'incomplete' },

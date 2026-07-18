@@ -1,14 +1,19 @@
 // Regression tests for the queryClient 401 auth-error handler.
 //
 // Guards against:
-//   - 401 response not clearing auth tokens from sessionStorage/localStorage
-//   - 401 response not redirecting to /login
+//   - 401 response not triggering the shared forced-logout teardown
 //   - 401 response being retried (retry storm — should be suppressed)
-//   - Debounce failing: two concurrent 401s firing two redirects
+//   - 403 / non-ApiError failures NOT triggering a forced logout
+//   - Debounce is delegated entirely to forceLogout() (no local double-debounce)
 //
 // Strategy: Create an isolated QueryClient that replicates the _handleAuthError
 // and retry logic from queryClient.ts, so we can drive it without importing the
-// singleton (which has module-level side effects).
+// singleton (which has module-level side effects). `forceLogout` itself (the
+// token/store teardown + redirect + debounce) is mocked here and covered by its
+// own dedicated regression suite in authLogout.test.ts — post ADR-044 (US-5 /
+// FR-010) there is no JS-visible auth token for this handler to clear; auth is
+// the omnipus-session HttpOnly cookie, and _handleAuthError's only job is to
+// recognize a 401 ApiError and hand off to the shared forceLogout() teardown.
 //
 // Traces to: feat/level1-project-task-mgmt — SPA 401 handler regression
 
@@ -16,12 +21,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import { ApiError } from './api'
 
-// ── Mock auth store ───────────────────────────────────────────────────────────
-const mockClearAuth = vi.fn()
-vi.mock('@/store/auth', () => ({
-  useAuthStore: {
-    getState: () => ({ clearAuth: mockClearAuth }),
-  },
+// ── Mock the shared forced-logout helper ─────────────────────────────────────
+const mockForceLogout = vi.fn()
+vi.mock('./authLogout', () => ({
+  forceLogout: () => mockForceLogout(),
 }))
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -29,36 +32,12 @@ vi.mock('@/store/auth', () => ({
 /**
  * Create an isolated QueryClient that replicates the _handleAuthError
  * subscription and retry guard from queryClient.ts.
- *
- * Returns both the client and a reset function to clear the debounce flag
- * between tests (mirrors what the 2-second setTimeout does in production).
  */
 function makeAuthTestClient() {
-  let logoutScheduled = false
-
   function handleAuthError(err: unknown): void {
     if (!(err instanceof ApiError)) return
     if (err.status !== 401) return
-    if (logoutScheduled) return
-    logoutScheduled = true
-
-    sessionStorage.removeItem('omnipus_auth_token')
-    localStorage.removeItem('omnipus_auth_token')
-    localStorage.removeItem('omnipus_auth_username')
-
-    void import('@/store/auth')
-      .then(({ useAuthStore }) => {
-        useAuthStore.getState().clearAuth()
-      })
-      .catch(() => {
-        // Store not yet loaded — token removal above is sufficient.
-      })
-
-    setTimeout(() => { logoutScheduled = false }, 2_000)
-
-    if (typeof window !== 'undefined') {
-      window.location.hash = '/login'
-    }
+    mockForceLogout()
   }
 
   const client = new QueryClient({
@@ -90,10 +69,7 @@ function makeAuthTestClient() {
     }
   })
 
-  return {
-    client,
-    resetDebounce: () => { logoutScheduled = false },
-  }
+  return { client }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -101,29 +77,23 @@ function makeAuthTestClient() {
 describe('queryClient 401 auth-error handler', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // Seed both storages with a token to verify they get cleared.
-    sessionStorage.setItem('omnipus_auth_token', 'sess-tok-abc')
-    localStorage.setItem('omnipus_auth_token', 'local-tok-abc')
-    localStorage.setItem('omnipus_auth_username', 'alice')
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
-    sessionStorage.clear()
-    localStorage.clear()
   })
 
-  it('clears auth tokens from sessionStorage and localStorage on 401', async () => {
+  it('invokes forceLogout on ApiError(401)', async () => {
     // BDD: Given a QueryClient with the auth-error subscription,
     // When a queryFn throws ApiError(401),
-    // Then sessionStorage and localStorage auth keys are removed.
+    // Then the shared forceLogout() teardown is invoked.
     //
-    // Traces to: queryClient.ts _handleAuthError — token cleanup on 401
+    // Traces to: queryClient.ts _handleAuthError — delegates to forceLogout() on 401
     const { client } = makeAuthTestClient()
 
     await expect(
       client.fetchQuery({
-        queryKey: ['test-401-tokens'],
+        queryKey: ['test-401-force-logout'],
         queryFn: () => Promise.reject(new ApiError(401)),
       }),
     ).rejects.toThrow()
@@ -131,50 +101,7 @@ describe('queryClient 401 auth-error handler', () => {
     // Allow the async handler to fire.
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    expect(sessionStorage.getItem('omnipus_auth_token')).toBeNull()
-    expect(localStorage.getItem('omnipus_auth_token')).toBeNull()
-    expect(localStorage.getItem('omnipus_auth_username')).toBeNull()
-  })
-
-  it('sets window.location.hash to /login on 401', async () => {
-    // BDD: Given a QueryClient with the auth-error subscription,
-    // When a queryFn throws ApiError(401),
-    // Then window.location.hash is set to /login.
-    //
-    // Traces to: queryClient.ts _handleAuthError — redirect to /login on 401
-    const { client } = makeAuthTestClient()
-
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-401-redirect'],
-        queryFn: () => Promise.reject(new ApiError(401)),
-      }),
-    ).rejects.toThrow()
-
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    // window.location.hash prepends '#' when read back (browser standard behavior).
-    expect(window.location.hash).toBe('#/login')
-  })
-
-  it('calls clearAuth on the auth store on 401', async () => {
-    // BDD: Given a QueryClient with the auth-error subscription,
-    // When a queryFn throws ApiError(401),
-    // Then useAuthStore.getState().clearAuth() is called.
-    //
-    // Traces to: queryClient.ts _handleAuthError — dynamic import + clearAuth on 401
-    const { client } = makeAuthTestClient()
-
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-401-store'],
-        queryFn: () => Promise.reject(new ApiError(401)),
-      }),
-    ).rejects.toThrow()
-
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(mockClearAuth).toHaveBeenCalledOnce()
+    expect(mockForceLogout).toHaveBeenCalledOnce()
   })
 
   it('does NOT retry a query that fails with ApiError(401)', async () => {
@@ -243,71 +170,60 @@ describe('queryClient 401 auth-error handler', () => {
     expect(queryFn.mock.calls.length).toBeGreaterThan(1)
   })
 
-  it('debounces: second concurrent 401 does NOT clear tokens a second time', async () => {
-    // BDD: Given a 401 was already handled (debounce flag set),
-    // When a second 401 fires within the 2-second window,
-    // Then clearAuth is called only once (not twice) and token storage is NOT re-set.
+  it('invokes forceLogout again on a second, later 401 — debouncing is forceLogout\'s own responsibility, not duplicated here', async () => {
+    // BDD: Given _handleAuthError has no local debounce state of its own,
+    // When two separate ApiError(401) failures occur,
+    // Then forceLogout() is called once per qualifying error — forceLogout's
+    // OWN debounce guard (covered by authLogout.test.ts) is what suppresses a
+    // rapid double-teardown, not this handler.
     //
-    // Traces to: queryClient.ts _handleAuthError debounce — _logoutScheduled flag
+    // Traces to: queryClient.ts _handleAuthError — unconditionally delegates
+    // every 401 to forceLogout(); no duplicate debounce flag here.
     const { client } = makeAuthTestClient()
 
-    // First 401.
     await expect(
       client.fetchQuery({
-        queryKey: ['test-401-debounce-1'],
+        queryKey: ['test-401-second-a'],
         queryFn: () => Promise.reject(new ApiError(401)),
       }),
     ).rejects.toThrow()
-
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(mockClearAuth).toHaveBeenCalledOnce()
+    expect(mockForceLogout).toHaveBeenCalledTimes(1)
 
-    // Re-seed the token to see if the second 401 clears it again.
-    localStorage.setItem('omnipus_auth_token', 'local-tok-second')
-
-    // Second 401 — within the debounce window.
     await expect(
       client.fetchQuery({
-        queryKey: ['test-401-debounce-2'],
+        queryKey: ['test-401-second-b'],
         queryFn: () => Promise.reject(new ApiError(401)),
       }),
     ).rejects.toThrow()
-
     await new Promise((resolve) => setTimeout(resolve, 50))
-
-    // clearAuth must still be called exactly once (debounced).
-    expect(mockClearAuth).toHaveBeenCalledOnce()
+    expect(mockForceLogout).toHaveBeenCalledTimes(2)
   })
 
-  it('does NOT redirect or clear tokens for non-401 ApiError (403 is auth but different behavior)', async () => {
+  it('does NOT invoke forceLogout for non-401 ApiError (403 is auth-adjacent but different behavior)', async () => {
     // BDD: Given a QueryClient with the auth-error subscription,
     // When a queryFn throws ApiError(403) (forbidden, not unauthenticated),
-    // Then sessionStorage is NOT cleared and window.location.hash is NOT changed to /login.
+    // Then forceLogout is NOT invoked.
     //
     // Traces to: queryClient.ts _handleAuthError: if (err.status !== 401) return
     const { client } = makeAuthTestClient()
 
-    const hashBefore = window.location.hash
-
     await expect(
       client.fetchQuery({
-        queryKey: ['test-403-no-redirect'],
+        queryKey: ['test-403-no-force-logout'],
         queryFn: () => Promise.reject(new ApiError(403)),
       }),
     ).rejects.toThrow()
 
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    // 403 must NOT clear tokens or redirect (only 401 does).
-    expect(sessionStorage.getItem('omnipus_auth_token')).toBe('sess-tok-abc')
-    expect(window.location.hash).toBe(hashBefore)
-    expect(mockClearAuth).not.toHaveBeenCalled()
+    expect(mockForceLogout).not.toHaveBeenCalled()
   })
 
-  it('does NOT redirect or clear tokens for a plain Error (not ApiError)', async () => {
+  it('does NOT invoke forceLogout for a plain Error (not ApiError)', async () => {
     // BDD: Given a QueryClient with the auth-error subscription,
     // When a queryFn throws a plain Error,
-    // Then no auth cleanup occurs.
+    // Then forceLogout is NOT invoked.
     //
     // Traces to: queryClient.ts _handleAuthError: if (!(err instanceof ApiError)) return
     const { client } = makeAuthTestClient()
@@ -321,8 +237,6 @@ describe('queryClient 401 auth-error handler', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    expect(sessionStorage.getItem('omnipus_auth_token')).toBe('sess-tok-abc')
-    expect(localStorage.getItem('omnipus_auth_token')).toBe('local-tok-abc')
-    expect(mockClearAuth).not.toHaveBeenCalled()
+    expect(mockForceLogout).not.toHaveBeenCalled()
   })
 })

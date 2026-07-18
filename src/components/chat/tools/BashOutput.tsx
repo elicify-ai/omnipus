@@ -18,17 +18,11 @@
 
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  Terminal,
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
+import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 // ── Args shape ────────────────────────────────────────────────────────────────
 //
@@ -74,12 +68,14 @@ function BashOutputBlock({
   result,
   isRunning,
   isError,
+  isCancelled,
 }: {
   toolName: string
   args: BashArgs
   result: unknown
   isRunning: boolean
   isError?: boolean
+  isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(true)
 
@@ -89,12 +85,20 @@ function BashOutputBlock({
   // canonical `bash` tool name only — the five legacy aliases below
   // (`exec`, `workspace_shell`, `workspace_shell_bg`, and their dotted
   // forms) render OLD, already-persisted transcripts exactly as they were
-  // stored and must NEVER be hidden by this new gate. An error outcome
-  // (the `isError` prop, threaded from status.type === 'incomplete' by
-  // makeBashUI below) always overrides the hide decision — a failed
-  // background dispatch must never disappear just because it looks like
-  // ordinary background dispatch. Must sit after every hook above and
-  // before the JSX return (Rules of Hooks); the hook itself is called
+  // stored and must NEVER be hidden by this new gate. shouldRenderToolCall's
+  // outcome override is per-tool-class (toolVisibility.ts doc comment) and
+  // does NOT apply to bash's poll/read/background-dispatch cases — an error
+  // outcome does not force this row visible; that failure is left to the
+  // calling agent's own response text, with the raw output staying
+  // inspectable in the ActivityPanel slide-out. The `isError` argument
+  // below (threaded from status.type === 'incomplete' by makeBashUI below)
+  // is therefore currently a no-op for bash — kept only so this call site
+  // matches shouldRenderToolCall's uniform 4-argument gate signature, the
+  // same one GenericToolCall/ToolCallBadge call with their own outcome
+  // signal, so a future revision that DOES add a bash-specific exception
+  // (e.g. for `kill`) doesn't need to change this call site's shape, only
+  // toolVisibility.ts's switch. Must sit after every hook above and before
+  // the JSX return (Rules of Hooks); the hook itself is called
   // unconditionally — only the resulting early return is gated on toolName.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   if (
@@ -114,62 +118,60 @@ function BashOutputBlock({
   const label = actionLabel(action, isBackground)
   const output = result != null ? String(result) : ''
 
-  return (
-    <div
-      className={cn(
-        'mt-2 rounded-md border overflow-hidden font-mono text-xs',
-        isRunning
-          ? 'border-[var(--color-border)]'
-          : isError
-          ? 'border-[var(--color-error)]/30 bg-[var(--color-error)]/5'
-          : 'border-[var(--color-success)]/20',
-      )}
-    >
-      {/* Header */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
-        className="flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] hover:bg-[var(--color-surface-3)] transition-colors text-left cursor-pointer"
-        aria-expanded={expanded}
-      >
-        <Terminal
-          size={13}
-          weight="bold"
-          className={cn(
-            isRunning ? 'text-[var(--color-accent)]' :
-            isError ? 'text-[var(--color-error)]' :
-            'text-[var(--color-success)]',
-          )}
-        />
-        <span className="text-[var(--color-muted)] shrink-0">{label}</span>
-        <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0">{command}</span>
-        <span className="flex items-center gap-1 shrink-0">
-          {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-          ) : isError ? (
-            <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
-          ) : (
-            <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-          )}
-          <span className="text-[var(--color-muted)] ml-0.5">
-            {expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
-          </span>
-        </span>
-      </button>
+  // Flat text-line redesign (ticket "Tool components in chat", P2): no
+  // rounded-md/border/overflow-hidden card, no status-tinted border, no
+  // header background — the row is transparent on the thread and the only
+  // status color lives in the leading dot/spinner (shared with
+  // GenericToolCall/ToolCallBadge via getToolBadgeStatusConfig). The
+  // per-tool Terminal glyph is dropped as redundant with the `label` text
+  // ("bash" / "bash poll" / …) it used to sit beside.
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 12, cancelledVariant: 'muted' }
+  )
 
-      {/* Output panel */}
+  return (
+    <div className="mt-2 text-xs font-mono">
+      {/* Header row — a single toggle button; there is no sibling action on
+          this row (unlike BrowserTool/BrowserNavigate's "Watch live"), so
+          the caret lives INSIDE the button and the whole row is one click
+          target. */}
+      <div className="flex w-full items-center gap-2">
+        <button tabIndex={0}
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          className="flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
+          aria-expanded={expanded}
+        >
+          {statusConfig.indicator}
+          <span className="text-[var(--color-muted)] shrink-0">{label}</span>
+          <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0">{command}</span>
+          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+            {statusConfig.label}
+          </span>
+          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+          </span>
+        </button>
+      </div>
+
+      {/* Output panel — indented left-accent block; the dark terminal panel
+          keeps its own identity (bg-[#0d1117]) but is no longer wrapped in
+          an outer bordered frame. */}
       {expanded && (
-        <div className="bg-[#0d1117] border-t border-[var(--color-border)]">
-          {isRunning && !output ? (
-            <div className="px-3 py-2 text-[var(--color-muted)] italic flex items-center gap-2">
-              <ArrowsClockwise size={11} className="animate-spin" />
-              {isBackground ? 'Running in background...' : 'Executing...'}
-            </div>
-          ) : (
-            <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
-              {output || <span className="text-[var(--color-muted)] italic">(no output)</span>}
-            </pre>
-          )}
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1">
+          <div className="bg-[#0d1117] rounded-sm">
+            {isRunning && !output ? (
+              <div className="px-3 py-2 text-[var(--color-muted)] italic flex items-center gap-2">
+                <ArrowsClockwise size={11} className="animate-spin" />
+                {isBackground ? 'Running in background...' : 'Executing...'}
+              </div>
+            ) : (
+              <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+                {output || <span className="text-[var(--color-muted)] italic">(no output)</span>}
+              </pre>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -186,6 +188,7 @@ function makeBashUI(toolName: string) {
         result={result}
         isRunning={status.type === 'running'}
         isError={status.type === 'incomplete'}
+        isCancelled={isCancelledStatus(status)}
       />
     ),
   })

@@ -231,7 +231,7 @@ func TestConfig_BackwardCompat_NoAgentsList(t *testing.T) {
 func TestDefaultConfig_WorkspacePath(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Agents.Defaults.Workspace == "" {
+	if cfg.Agents.Defaults.Home == "" {
 		t.Error("Workspace should not be empty")
 	}
 }
@@ -474,7 +474,7 @@ func TestSaveConfig_FiltersVirtualModels(t *testing.T) {
 func TestConfig_Complete(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Agents.Defaults.Workspace == "" {
+	if cfg.Agents.Defaults.Home == "" {
 		t.Error("Workspace should not be empty")
 	}
 	if cfg.Agents.Defaults.Temperature != nil {
@@ -832,8 +832,8 @@ func TestDefaultConfig_WorkspacePath_Default(t *testing.T) {
 	cfg := DefaultConfig()
 	want := filepath.Join(fakeHome, ".omnipus", "workspace")
 
-	if cfg.Agents.Defaults.Workspace != want {
-		t.Errorf("Default workspace path = %q, want %q", cfg.Agents.Defaults.Workspace, want)
+	if cfg.Agents.Defaults.Home != want {
+		t.Errorf("Default workspace path = %q, want %q", cfg.Agents.Defaults.Home, want)
 	}
 }
 
@@ -843,8 +843,8 @@ func TestDefaultConfig_WorkspacePath_WithOmnipusHome(t *testing.T) {
 	cfg := DefaultConfig()
 	want := filepath.Join("/custom/omnipus/home", "workspace")
 
-	if cfg.Agents.Defaults.Workspace != want {
-		t.Errorf("Workspace path with OMNIPUS_HOME = %q, want %q", cfg.Agents.Defaults.Workspace, want)
+	if cfg.Agents.Defaults.Home != want {
+		t.Errorf("Workspace path with OMNIPUS_HOME = %q, want %q", cfg.Agents.Defaults.Home, want)
 	}
 }
 
@@ -1623,4 +1623,238 @@ func TestLoadConfig_LegacySandboxProfileFields_Ignored(t *testing.T) {
 	if !cfg.Sandbox.AuditLog {
 		t.Error("cfg.Sandbox.AuditLog should be true — must survive alongside the retired default_profile key")
 	}
+}
+
+// TestLoadConfig_LegacyPreviewFields_Ignored is a pinning test for ADR-044
+// (preview-on-main-listener): the separate preview listener and its
+// gateway.preview_port / preview_host / preview_origin / preview_listener_enabled
+// keys were deleted entirely with no back-compat, mirroring the ADR-035
+// SandboxProfile-removal precedent (TestLoadConfig_LegacySandboxProfileFields_Ignored
+// above). LoadConfig has no DisallowUnknownFields on the config-load path, so a
+// persisted config.json from before this change — carrying the four retired
+// preview keys — must still load without error today (unknown keys silently
+// ignored), with gateway.public_url and every other real field intact, and the
+// new gateway.preview_enabled resolving to its semantic default (true) since
+// the legacy config.json never set it.
+func TestLoadConfig_LegacyPreviewFields_Ignored(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096}
+		},
+		"gateway": {
+			"host": "127.0.0.1",
+			"port": 5000,
+			"public_url": "https://pod.example.com",
+			"preview_port": 5001,
+			"preview_host": "127.0.0.1",
+			"preview_origin": "https://preview.example.com",
+			"preview_listener_enabled": false
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig must not error on legacy preview fields, got: %v", err)
+	}
+
+	// Real sibling fields in the same gateway object must survive alongside the
+	// retired preview keys.
+	if cfg.Gateway.Host != "127.0.0.1" {
+		t.Errorf("cfg.Gateway.Host = %q, want %q", cfg.Gateway.Host, "127.0.0.1")
+	}
+	if cfg.Gateway.Port != 5000 {
+		t.Errorf("cfg.Gateway.Port = %d, want 5000", cfg.Gateway.Port)
+	}
+	if cfg.Gateway.PublicURL != "https://pod.example.com" {
+		t.Errorf("cfg.Gateway.PublicURL = %q, want %q — must survive alongside the retired preview keys",
+			cfg.Gateway.PublicURL, "https://pod.example.com")
+	}
+
+	// The retired preview_listener_enabled=false in the legacy JSON must NOT
+	// suppress the new preview_enabled default: the legacy key and the new key
+	// are unrelated on the wire (different JSON names), so a config that never
+	// set preview_enabled resolves to the semantic default (true).
+	if !cfg.IsPreviewEnabled() {
+		t.Error("cfg.IsPreviewEnabled() should be true — the legacy preview_listener_enabled key " +
+			"must not be silently reinterpreted as the new preview_enabled")
+	}
+}
+
+// TestConfig_IsPreviewEnabled verifies the semantics of
+// gateway.preview_enabled (ADR-044, FR-006, TDA-1): a nil *Config RECEIVER
+// fails closed (false — no config to consult); a non-nil *Config with the
+// field unset resolves to the field-level default (true); the field resolves
+// to its explicit value otherwise. The method lives on *Config (not
+// *GatewayConfig) per the shared cross-agent contract for this feature.
+func TestConfig_IsPreviewEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	tests := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{name: "nil receiver fails closed (false) — no config to consult", cfg: nil, want: false},
+		{name: "non-nil config, field unset, defaults to true", cfg: &Config{}, want: true},
+		{name: "explicit true", cfg: &Config{Gateway: GatewayConfig{PreviewEnabled: &trueVal}}, want: true},
+		{name: "explicit false", cfg: &Config{Gateway: GatewayConfig{PreviewEnabled: &falseVal}}, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.cfg.IsPreviewEnabled()
+			if got != tc.want {
+				t.Errorf("IsPreviewEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestConfig_IsPreviewEnabled_NilPointerExplicit is a standalone, unmistakably
+// explicit regression pin for TDA-1: a literal `var nilCfg *Config` (as
+// opposed to a table-driven `cfg: nil` field, which some readers might assume
+// gets boxed into a non-nil zero value) must resolve IsPreviewEnabled() to
+// false. Calling a method on a nil pointer receiver is valid Go as long as
+// the method doesn't dereference before its own nil check, which is exactly
+// what IsPreviewEnabled's `if c == nil` guard exists to allow.
+func TestConfig_IsPreviewEnabled_NilPointerExplicit(t *testing.T) {
+	var nilCfg *Config
+	if got := nilCfg.IsPreviewEnabled(); got != false {
+		t.Errorf("nilCfg.IsPreviewEnabled() = %v, want false (fail-closed on nil receiver)", got)
+	}
+
+	// Differentiation: a real, non-nil *Config{} with the field unset must
+	// resolve to the OPPOSITE value (true) — proving the nil-receiver check
+	// and the field-level ResolveBool default are two genuinely different
+	// code paths, not one masking the other.
+	if got := (&Config{}).IsPreviewEnabled(); got != true {
+		t.Errorf("(&Config{}).IsPreviewEnabled() = %v, want true (field-level default)", got)
+	}
+}
+
+// writeMinimalLoadableConfig writes a config.json that LoadConfig can load
+// without error (valid version/agents-defaults/gateway block), with
+// gateway.public_url set to publicURL (empty string omits the key entirely,
+// matching an operator who never configured it).
+func writeMinimalLoadableConfig(t *testing.T, publicURL string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	publicURLLine := ""
+	if publicURL != "" {
+		publicURLLine = `,
+			"public_url": "` + publicURL + `"`
+	}
+
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096}
+		},
+		"gateway": {
+			"host": "127.0.0.1",
+			"port": 5000` + publicURLLine + `
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return cfgPath
+}
+
+// TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL covers the W0
+// boot-time auto-detection: LoadConfig fills an unset gateway.public_url
+// from $DEVPOD_PREVIEW_URL so canonicalGatewayOrigin (and therefore
+// serve_web/preview links and the agent's own reachable-URL preamble, W5)
+// resolve to the pod's externally-reachable origin instead of the
+// unreachable http://localhost:5000 default. An operator-set value must
+// never be overridden, and when neither source is present the field must
+// stay empty (existing wildcard-bind/derive-from-host:port behavior is
+// untouched).
+func TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL(t *testing.T) {
+	t.Run("empty public_url + DEVPOD_PREVIEW_URL set resolves to env value", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want auto-detected %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
+
+	t.Run("operator-set public_url wins over DEVPOD_PREVIEW_URL", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		cfgPath := writeMinimalLoadableConfig(t, "https://operator.example.com")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://operator.example.com" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want operator value %q (must never be overridden by env auto-detect)",
+				cfg.Gateway.PublicURL, "https://operator.example.com")
+		}
+	})
+
+	t.Run("both empty stays empty", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want empty (no operator value, no env value)",
+				cfg.Gateway.PublicURL)
+		}
+	})
+
+	// Regression (silent-failure audit): a bare pod's FIRST boot has no
+	// config.json at all, so LoadConfig takes the os.IsNotExist ->
+	// DefaultConfig() early-return path. The auto-detect previously ran only
+	// AFTER that early return, so a fresh pod got public_url="" — defeating the
+	// feature's own primary use case. seedPublicURLFromEnv now runs on every
+	// return path, including this one.
+	t.Run("fresh install (no config.json) still auto-detects — the primary use case", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		missingPath := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+		cfg, err := LoadConfig(missingPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("fresh-install cfg.Gateway.PublicURL = %q, want auto-detected %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
+
+	// A trailing slash would make serve_web emit https://host//preview/... —
+	// seedPublicURLFromEnv trims it.
+	t.Run("trailing slash on DEVPOD_PREVIEW_URL is trimmed", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev/")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want trailing slash trimmed %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
 }

@@ -2,7 +2,7 @@
 // Tests that "/" opens a menu with Commands + Skills sections, section headers,
 // keyboard navigation crossing sections, and filtering.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
@@ -87,6 +87,7 @@ vi.mock('@assistant-ui/react', () => {
       getState: () => ({ text: '' }),
       setText: vi.fn(),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -135,14 +136,24 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockResolvedValue([]),
-  fetchSkills: vi.fn().mockResolvedValue([]),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-  uploadFiles: vi.fn(),
-}))
+// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
+// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
+// doesn't exercise mentions. The workspaces query stays disabled (no
+// activeWorkspaceId set here), so `fetchWorkspaces` is never actually
+// invoked — this just needs to exist so the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    uploadFiles: vi.fn(),
+  }
+})
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
@@ -283,6 +294,70 @@ describe('Partitioned slash menu — filtering', () => {
   })
 })
 
+// Fix 3 (bugfixes3 review): Escape must close an open menu BEFORE it
+// cancels a streaming turn — previously cancel-Escape ran first, so Escape
+// with the menu open mid-stream killed the generation and left the menu
+// open. Captures the real `cancelStream` once so it can be restored after
+// the stub — `useChatStore` is a real (unmocked) singleton store shared
+// across this whole file, and a stray stub would otherwise leak into every
+// test that runs after this one.
+const realCancelStream = useChatStore.getState().cancelStream
+
+describe('Escape precedence — menu-close wins over stream-cancel (Fix 3)', () => {
+  afterEach(() => {
+    act(() => { useChatStore.setState({ cancelStream: realCancelStream }) })
+  })
+
+  it('menu open + streaming: first Escape closes the menu only (no cancel); second Escape cancels', async () => {
+    const cancelStream = vi.fn()
+    act(() => { useChatStore.setState({ isStreaming: true, cancelStream }) })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '/' } }) })
+    // Only available_while_streaming commands render while isStreaming is
+    // true (see useSlashMenu.ts's visibleCommandItems) — "/clear" is not
+    // one of them, "/cancel" is.
+    expect(screen.getByText('/cancel')).toBeInTheDocument()
+
+    // First Escape: menu closes, stream keeps running.
+    act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+    expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
+    expect(cancelStream).not.toHaveBeenCalled()
+
+    // Second Escape: menu is already closed, so this one falls through to
+    // the pre-existing cancel-Escape branch, which calls cancelStream (that
+    // branch is unchanged by Fix 3). That branch's own React synthetic
+    // handler calls preventDefault() before calling cancelIfStreaming(), so
+    // even though it does NOT stopPropagation and the native keydown still
+    // bubbles to `document`, useCancelState's own global Escape listener now
+    // (bugfixes3 deferred item 5 — src/hooks/useCancelState.ts) early-returns
+    // on `e.defaultPrevented` instead of re-dispatching cancelStream a SECOND
+    // time for the same keypress. Pinned to exactly 1 call — restored from
+    // the temporarily relaxed `toHaveBeenCalled()` now that the double-fire
+    // is fixed at the source.
+    act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+    expect(cancelStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('streaming with no menu open: Escape cancels immediately (the new branch does not swallow every Escape)', async () => {
+    const cancelStream = vi.fn()
+    act(() => { useChatStore.setState({ isStreaming: true, cancelStream }) })
+
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+
+    // Nothing typed — shouldShowSlash is false, so the menu-close guard's
+    // condition never matches and Escape falls straight through to cancel.
+    // Pinned to exactly 1 call (bugfixes3 deferred item 5 — see the sibling
+    // test above and useCancelState.ts's global-Escape doc comment for why
+    // this can no longer double-fire).
+    act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+    expect(cancelStream).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('Partitioned slash menu — keyboard navigation across sections', () => {
   it('ArrowDown navigates through commands then skills (globalIndex tracking)', async () => {
     render(<OmnipusComposer />)
@@ -306,6 +381,7 @@ describe('Partitioned slash menu — keyboard navigation across sections', () =>
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)
@@ -328,6 +404,7 @@ describe('Partitioned slash menu — keyboard navigation across sections', () =>
       getState: () => ({ text: '' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })
 
     render(<OmnipusComposer />)

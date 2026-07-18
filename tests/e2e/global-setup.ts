@@ -160,32 +160,57 @@ function validateOrSeedGatewayConfig(): void {
  * Global setup: seed admin + provider via REST and write the auth storage
  * state file directly — no browser-rendered login flow required.
  *
- * Motivation for the API-only approach (vs. the original browser-based login):
+ * Motivation for the API-only approach (vs. a full browser-driven login):
  *
  * The original global-setup navigated a headless Chromium browser to `/`, waited
  * for the React SPA to load its ~5 MB JS bundle, parse it, bootstrap the router,
  * redirect to `/login`, and render the login form — then drove the form inputs.
  * On this server the SPA cold-start takes >5 s in headless mode, which exceeded
  * the 5 s `isVisible({ timeout: 5_000 })` guard in `loginAs()`, causing
- * consistent global-setup failures.
+ * consistent global-setup failures. Driving `POST /api/v1/auth/login` directly
+ * via Playwright's `APIRequestContext` avoids that cold-start cost while still
+ * being a "real" login: it is the exact same `HandleLogin` handler
+ * (`pkg/gateway/rest_auth.go`) the login FORM posts to, so the server mints and
+ * persists the bcrypt `SessionTokenHash` exactly as it would for a UI-driven
+ * login — this is not direct cookie fabrication (spec regression note #7 /
+ * ADR-044 r1 CRIT-002: "direct cookie injection without a seeded hash fails
+ * validation").
  *
- * The replacement strategy:
+ * ADR-044 / US-5 cookie-auth cutover (2026-07-15): the SPA no longer stores or
+ * reads a JS-visible bearer token at all — `src/lib/api.ts` deleted
+ * `getAuthHeaders()` and every request now goes out with `credentials:
+ * 'include'`, authenticated solely by the browser-managed `omnipus-session`
+ * HttpOnly cookie (see `pkg/gateway/middleware/session_cookie.go`). The route
+ * guard (`src/routes/_app.tsx` `beforeLoad`) no longer inspects local/session
+ * storage for a token — it always asks the server via `validateToken()`, which
+ * rides the cookie automatically. That means a Playwright `storageState` that
+ * only carries `localStorage.omnipus_auth_token` (the pre-ADR-044 shape) now
+ * runs every "authenticated" spec LOGGED OUT: the cookie is invisible to JS, so
+ * there is no way to inject it via localStorage — it can only be captured from
+ * a real Set-Cookie response and replayed as an actual `storageState.cookies`
+ * entry.
+ *
+ * The strategy:
  *   1. `onboardViaAPI` — idempotent REST call to seed admin credentials
  *      (200 = fresh onboard, 409 = already complete, both succeed).
- *   2. `POST /api/v1/auth/login` — obtain a valid bearer token.
- *   3. Write a Playwright storageState JSON directly to the auth file with the
- *      token in the `localStorage` of the correct origin.  Playwright reads this
- *      file at test startup and injects the localStorage entries into every test
- *      page before navigation, so the SPA's `beforeLoad()` guard finds the
- *      token without a login redirect.
+ *   2. `POST /api/v1/auth/login` — a real login against `HandleLogin`. The
+ *      response sets BOTH the `omnipus-session` HttpOnly cookie
+ *      (`middleware.WriteSessionCookie`) and the CSRF cookie
+ *      (`middleware.IssueCSRFCookie`). We read both back out of the
+ *      `APIRequestContext`'s cookie jar (which already parsed the Set-Cookie
+ *      headers into the exact `{name,value,domain,path,expires,httpOnly,
+ *      secure,sameSite}` shape Playwright's `storageState.cookies` expects —
+ *      no manual reconstruction needed).
+ *   3. Write a Playwright storageState JSON directly to the auth file with
+ *      those cookies. Playwright injects `storageState.cookies` into every
+ *      test's browser context before the first navigation, so `beforeLoad()`'s
+ *      `validateToken()` call rides an already-valid session cookie with no
+ *      login redirect.
  *
- * TOKEN MIGRATION NOTE: The SPA reads omnipus_auth_token from sessionStorage
- * first, then localStorage (src/routes/_app.tsx:23). Playwright storageState
- * captures localStorage but NOT sessionStorage. Writing the token to localStorage
- * is sufficient — the SPA's `beforeLoad()` will pick it up.
- *
- * The auth store (src/store/auth.ts) replicates the token from localStorage to
- * sessionStorage on mount, so after the first render sessionStorage is also set.
+ * The bearer `token` from the login response is still validated (proof the
+ * login itself succeeded) but is deliberately NOT persisted to localStorage
+ * anymore — the SPA never reads it, and writing it back would resurrect the
+ * exact JS-readable-token surface ADR-044 removed.
  */
 async function globalSetup(): Promise<void> {
   // T0.4: Run preflight checks before any browser/gateway interaction.
@@ -201,14 +226,24 @@ async function globalSetup(): Promise<void> {
   // 200 = fresh onboard, 409 = already complete — both succeed.
   await onboardViaAPI({ baseURL });
 
-  // Step 2: Obtain a valid bearer token + CSRF cookie via REST.
-  // We keep the context alive until we extract cookies so the CSRF cookie set
-  // by the login response can be included in the storageState. Without the
-  // CSRF cookie, SPA tests that call state-changing API endpoints (like
-  // createAgent) fail the client-side cookie-presence gate before fetch fires.
+  // Step 2: Perform a real login via REST and capture the cookies the
+  // gateway issues. We keep the APIRequestContext alive until we extract
+  // cookies — Playwright's APIRequestContext parses every Set-Cookie header
+  // from the response into its own cookie jar (same as a browser would), so
+  // `ctx.storageState()` after the login call already holds both:
+  //   - `omnipus-session` (HttpOnly) — the primary auth credential (US-5 /
+  //     FR-010). Without this, beforeLoad()'s validateToken() 401s and every
+  //     "authenticated" spec gets redirected to /login.
+  //   - `__Host-csrf` (TLS) or `csrf` (plain HTTP) — needed for state-changing
+  //     API calls (createAgent, etc.) to pass the client-side CSRF-cookie-
+  //     presence gate before fetch fires.
   const ctx = await request.newContext({ baseURL });
-  let token: string;
-  let csrfCookieValue: string | null = null;
+  // Element type of ctx.storageState().cookies — Playwright does not export a
+  // standalone `Cookie` type from `@playwright/test`, so it's derived here
+  // rather than hand-declared (which would drift from the real shape).
+  type StorageStateCookie = Awaited<ReturnType<typeof ctx.storageState>>['cookies'][number];
+  let sessionCookie: StorageStateCookie | null = null;
+  let csrfCookie: StorageStateCookie | null = null;
   try {
     const res = await ctx.post('/api/v1/auth/login', {
       data: { username: 'admin', password: 'admin123' },
@@ -217,19 +252,36 @@ async function globalSetup(): Promise<void> {
       const body = await res.text();
       throw new Error(`POST /api/v1/auth/login failed: ${res.status()} — ${body}`);
     }
+    // Validate the response shape (proof the login itself succeeded and
+    // returned the expected LoginResponse contract) — the bearer token
+    // itself is deliberately not persisted anywhere; the SPA never reads one
+    // anymore (ADR-044), so there is nothing to write it into.
     const json = (await res.json()) as { token: string };
     if (!json.token) throw new Error('Login response missing token field');
-    token = json.token;
 
-    // Extract the CSRF cookie from the context's cookie store.
-    // The login endpoint issues either __Host-csrf (TLS) or csrf (HTTP).
-    // We include it in storageState so browser page contexts have it on startup.
+    // Extract the omnipus-session and CSRF cookies from the context's cookie
+    // jar. Both are issued by HandleLogin (pkg/gateway/rest_auth.go):
+    // middleware.WriteSessionCookie + middleware.IssueCSRFCookie. These
+    // objects are already in Playwright's exact storageState.cookies shape
+    // ({name,value,domain,path,expires,httpOnly,secure,sameSite}) — no manual
+    // reconstruction needed, so we use them verbatim.
     const ctxState = await ctx.storageState();
     for (const cookie of ctxState.cookies) {
-      if (cookie.name === '__Host-csrf' || cookie.name === 'csrf') {
-        csrfCookieValue = cookie.value;
-        break;
+      if (cookie.name === 'omnipus-session') {
+        sessionCookie = cookie;
+      } else if (cookie.name === '__Host-csrf' || cookie.name === 'csrf') {
+        csrfCookie = cookie;
       }
+    }
+
+    if (!sessionCookie) {
+      throw new Error(
+        '[E2E global-setup] POST /api/v1/auth/login did not set the ' +
+        '`omnipus-session` cookie. Expected a Set-Cookie header from ' +
+        'middleware.WriteSessionCookie (pkg/gateway/rest_auth.go HandleLogin). ' +
+        'Without this cookie every "authenticated" e2e spec runs logged out ' +
+        '(see ADR-044 / preview-on-main-listener-spec.md S8/S9).',
+      );
     }
   } finally {
     await ctx.dispose();
@@ -237,48 +289,27 @@ async function globalSetup(): Promise<void> {
 
   // Step 3: Write the Playwright storageState file directly.
   // Format: https://playwright.dev/docs/auth#reuse-signed-in-state
-  // The `origins` array contains one entry per origin.  Playwright injects
-  // the `localStorage` items into the browser context for that origin before
-  // each test's page navigation, so the SPA sees the token on first load.
-  //
-  // Cookies are also included so the browser context has the CSRF cookie that
-  // was issued by the login endpoint. Without it, SPA mutations (createAgent,
-  // etc.) fail the client-side CSRF-cookie-presence gate before fetch fires.
+  // `cookies` carries the real omnipus-session + CSRF cookies captured above
+  // so every test's browser context starts already authenticated — the SPA
+  // has no JS-readable token to inject via localStorage anymore (ADR-044).
+  // `omnipus_auth_username` is still written to localStorage: it is NOT an
+  // auth credential, just the display-only "logged in as X" value the auth
+  // store reads directly (src/store/auth.ts) without a round trip.
   const authDir = path.dirname(AUTH_FILE);
   if (!fs.existsSync(authDir)) {
     fs.mkdirSync(authDir, { recursive: true });
   }
 
-  // Build the URL object so we can derive the correct cookie domain/path.
-  const url = new URL(baseURL);
-  const cookieDomain = url.hostname; // e.g. "localhost"
-  const cookieSecure = url.protocol === 'https:';
-
-  // Include both __Host-csrf (TLS) and csrf (HTTP) cookie names so the cookie
-  // is present regardless of which flavor the gateway issued.
-  const csrfCookies = csrfCookieValue
-    ? [
-        {
-          name: cookieSecure ? '__Host-csrf' : 'csrf',
-          value: csrfCookieValue,
-          domain: cookieDomain,
-          path: '/',
-          expires: -1, // session cookie
-          httpOnly: false,
-          secure: cookieSecure,
-          sameSite: 'Strict' as const,
-        },
-      ]
-    : [];
+  const cookies = [sessionCookie, csrfCookie].filter(
+    (c): c is NonNullable<typeof c> => c !== null,
+  );
 
   const storageState = {
-    cookies: csrfCookies,
+    cookies,
     origins: [
       {
         origin: baseURL,
         localStorage: [
-          { name: 'omnipus_auth_token', value: token },
-          { name: 'omnipus_auth_role', value: 'admin' },
           { name: 'omnipus_auth_username', value: 'admin' },
         ],
       },

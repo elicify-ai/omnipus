@@ -397,6 +397,15 @@ For Subagent (External), `timeout_seconds` bounds the Omnipus wait for
 the CLI process.
 
 ### 4.24 `steering_mode` (row 29)
+
+> **2026-07-17 — per-agent `steering_mode` removed entirely (dead config):**
+> create silently dropped it, PUT persisted it to a config location
+> `config.AgentConfig` never loads, and GET always echoed the global default
+> regardless of any per-agent value — the field never actually worked.
+> Steering is now global-only and always-on via `agents.defaults.steering_mode`
+> (`pkg/agent/steering.go` / `pkg/config/config.go`), unaffected by this
+> removal. The description below is historical.
+
 **Main only** — controls how a Main agent handles a new human message
 arriving while a previous turn is still running.
 
@@ -558,6 +567,38 @@ after **500 ms** of input inactivity. Behaviour by response class:
 failure must be visible. But manual-retry-on-error is also a foot-gun
 (it makes the user the retry loop). The pattern above keeps the
 indicator honest while letting the user keep typing.
+
+> **2026-07-17 — Edit slide-over reorg (Wave 5 items 1–4):** §6.2 and
+> §6.4 below (and the tab-count/tab-list BDD scenarios in §9.3 —
+> "Edit slide-over (Main) shows 4 tabs", "Edit slide-over (Subagent
+> External) shows 5 tabs including Runtime", and "Subagent (External)
+> edit shows the Runtime tab and hides Tools / Sandbox / Voice", lines
+> ~934–949 and ~1043–1049) predate a 4-part edit-form reorg and are
+> historical on tab shape/count. What actually ships (verified against
+> `src/components/agents/AgentProfile.tsx` and its Wave 5 tab-structure
+> tests):
+> 1. **Skills is its own tab**, not a section inside Tools — split out so
+>    Tools & Permissions and Skills are each a single clear surface.
+>    Native agents (Main + Subagent) now show `tab-basics` /
+>    `tab-personality` / `tab-tools` / `tab-skills` / `tab-advanced`, in
+>    that order. `Subagent (External)` (subagent_3p) omits BOTH the
+>    Tools tab AND the Skills tab entirely (the external CLI runner
+>    brings its own tools) — its tab set is `tab-basics` /
+>    `tab-personality` / `tab-runtime` / `tab-advanced`, not "Tools tab
+>    with only Skills" as §9.3 previously described.
+> 2. **`fallback_models` moved to Basics**, directly below the Model
+>    section — it no longer lives on the Tools tab.
+> 3. **`shell_policy` (shell deny patterns) moved to Advanced** — it no
+>    longer lives on Basics.
+> 4. **Heartbeat is a conditional tab positioned between Skills and
+>    Advanced** (`tab-heartbeat`), not a section inside Personality —
+>    rendered only when the edit slide-over is opened from a workspace
+>    Team tab and the agent is not a worker (FR-016/US-5, FR-025). Full
+>    tab order with Heartbeat present: Basics, Personality, Tools,
+>    Skills, Heartbeat, Advanced.
+>
+> The mobile accordion (§13) mirrors this same tab set and order
+> 1-for-1 (same conditional gates, same relocations).
 
 ### 6.2 Edit — `Main` (5 tabs: Basics, Personality, Tools, Advanced + Identity strip)
 

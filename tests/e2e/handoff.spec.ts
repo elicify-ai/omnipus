@@ -4,6 +4,7 @@ import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors';
+import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -75,7 +76,7 @@ function getStoredAuthToken(): string | null {
 
 async function getCsrfToken(page: Page): Promise<string | null> {
   const cookies = await page.context().cookies()
-  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf')
+  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
   return csrfCookie?.value ?? null
 }
 
@@ -92,7 +93,7 @@ async function apiHeaders(page: Page): Promise<Record<string, string>> {
 async function createSession(page: Page): Promise<string> {
   const resp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
     headers: await apiHeaders(page),
-    data: { agent_id: 'main', type: 'chat' },
+    data: { agent_id: 'mia', type: 'chat' },
   })
   if (!resp.ok()) {
     const body = await resp.text()
@@ -116,13 +117,32 @@ async function renameSession(page: Page, sessionId: string, title: string): Prom
   }
 }
 
-async function openSession(page: Page, sessionTitle: string): Promise<void> {
-  await page.getByRole('button', { name: 'Open sessions panel' }).click()
-  const sessionBtn = page
-    .getByRole('button', { name: new RegExp(`Open session: ${sessionTitle}`, 'i') })
-    .first()
-  await expect(sessionBtn).toBeVisible({ timeout: 10_000 })
-  await sessionBtn.click()
+/**
+ * Open a seeded session via its deep-link route, `/#/sessions/{id}`.
+ *
+ * Was: click a button named "Open sessions panel", then one named "Open
+ * session: <title>". Neither accessible name exists anywhere in current
+ * `src/` since the session panel was redesigned into the two-mode
+ * SearchModal (`src/components/search/SearchModal.tsx`) — see
+ * tests/e2e/fixtures/session-setup.ts's `openSessionByDeepLink` doc comment
+ * for the full history.
+ *
+ * This test only cares that a seeded multi-agent transcript replays with
+ * correct per-agent labels — not that the panel-open UI affordance itself
+ * works (that's what retention.spec.ts's panel-based interaction now
+ * covers) — so the deep link, which drives the same real WS attach +
+ * replay, is the right seam here.
+ */
+async function openSession(page: Page, sessionId: string): Promise<void> {
+  await page.goto(`/#/sessions/${sessionId}`)
+  // Route-swap guard FIRST (mirrors session-setup.ts's openSessionByDeepLink):
+  // wait until the chat surface is bound to THIS session — a bare composer
+  // wait is satisfied by the previous route's composer during the swap, and
+  // typing at that instant sends on a stale/null session binding.
+  await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
 }
 
 async function waitForReplayDone(page: Page): Promise<void> {
@@ -132,6 +152,15 @@ async function waitForReplayDone(page: Page): Promise<void> {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 test.beforeEach(async ({ page }) => {
+  // Delegation visuals (SubagentBlock cards) are verbose-only in the chat
+  // thread since commit 8e1bf1b9 (shouldRenderSubagentSpan gates on
+  // verboseChatEnabled, default false — src/store/chatPreferences.ts). Test
+  // (b) below asserts the sub-turn MECHANICS (collapsed→expanded, nested
+  // tool-call badges) via [data-testid="subagent-collapsed"] as its
+  // thread-based signal, so this file opts into verbose chat to keep that
+  // signal working — independent of the default (non-verbose) display
+  // policy, which is covered separately by delegation-hidden.spec.ts.
+  await enableVerboseChat(page);
   await page.goto('/');
 });
 
@@ -189,8 +218,8 @@ test(
       },
     ])
 
-    // Navigate to the session via the sessions panel.
-    await openSession(page, sessionTitle)
+    // Navigate to the session via its deep-link route.
+    await openSession(page, sessionId)
     await waitForReplayDone(page)
 
     // Assert: three agent-label elements appear — one per assistant message.

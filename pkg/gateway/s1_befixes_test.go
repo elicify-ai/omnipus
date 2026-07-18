@@ -71,7 +71,7 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "claude-sonnet-4-6",
 				MaxTokens: 4096,
 			},
@@ -159,7 +159,7 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "gpt-4o",
 				MaxTokens: 4096,
 			},
@@ -243,7 +243,7 @@ func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "gemini-flash",
 				MaxTokens: 4096,
 			},
@@ -338,7 +338,7 @@ func TestHandleProviders_CredStoreRef_Resolved_IsConnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "claude-haiku",
 				MaxTokens: 4096,
 			},
@@ -467,15 +467,14 @@ func TestPendingRestart_FreshOnboardingNoBanner(t *testing.T) {
 //
 // Traces to: FR-106, US-3/AC3.
 func TestPendingRestart_GatewayPortStillGated(t *testing.T) {
-	// Pin preview_port explicitly on both sides so it does NOT auto-derive from
-	// the (differing) port — otherwise changing port→8080 would also shift the
-	// derived preview_port (5001→8081) and surface as a second, legitimate diff.
-	// Pinning isolates the assertion to gateway.port.
+	// ADR-044 removed gateway.preview_port entirely (no more auto-derivation
+	// from gateway.port to pin against) — the diff is naturally isolated to
+	// gateway.port on its own now.
 	applied := map[string]any{
-		"gateway": map[string]any{"port": float64(5000), "preview_port": float64(5001)},
+		"gateway": map[string]any{"port": float64(5000)},
 	}
 	persisted := map[string]any{
-		"gateway": map[string]any{"port": float64(8080), "preview_port": float64(5001)}, // port changed
+		"gateway": map[string]any{"port": float64(8080)}, // port changed
 	}
 	api := newPendingRestartAPI(t, applied, persisted)
 

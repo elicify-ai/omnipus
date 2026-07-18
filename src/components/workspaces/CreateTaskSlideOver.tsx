@@ -37,6 +37,7 @@ import {
 } from '@/lib/api'
 import type { Milestone, Task, TaskTrigger, TaskCreateRequest, Todo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
 import {
@@ -134,6 +135,13 @@ export function CreateTaskSlideOver({
     queryFn: fetchAgents,
     staleTime: 60_000,
   })
+
+  // Fix B: the assignee picker is scoped to this workspace's TEAM (core_team ∪
+  // delegation edges), mirroring the backend's validateTaskAgentID gate —
+  // see buildTaskAssigneeItems / useWorkspaceTeamIds for the fallback rules.
+  // F1: `teamError` surfaces a failed team-set fetch as an inline hint next
+  // to the picker (the hook itself logs the failure — see useWorkspaceTeamIds).
+  const { teamIds, isLoading: teamLoading, isError: teamError } = useWorkspaceTeamIds(workspaceId)
 
   // Existing tasks in this workspace — candidate dependencies (depends-on / blocked_by).
   const { data: wsTasks = [] } = useQuery({
@@ -416,14 +424,25 @@ export function CreateTaskSlideOver({
             <SmartSelect
               value={form.agentId}
               onValueChange={(v) => setForm((s) => ({ ...s, agentId: v }))}
-              placeholder="Unassigned"
+              placeholder={teamLoading ? 'Loading team…' : 'Unassigned'}
+              disabled={teamLoading}
               triggerClassName="h-9 text-sm"
               ariaLabel="Agent"
               items={[
                 { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                ...buildTaskAssigneeItems(agents),
+                ...buildTaskAssigneeItems(agents, {
+                  teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
+                }),
               ]}
             />
+            {/* F1: a failed team-set fetch degrades to the unscoped roster —
+                surface that degrade instead of leaving it indistinguishable
+                from a healthy, unrestricted workspace. */}
+            {teamError && (
+              <p className="text-xs text-[var(--color-muted)]">
+                Team list unavailable — showing all agents
+              </p>
+            )}
           </div>
 
           {/* Trigger */}

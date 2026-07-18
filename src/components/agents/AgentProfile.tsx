@@ -21,7 +21,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { SmartSelect } from '@/components/ui/smart-select'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { Switch } from '@/components/ui/switch'
@@ -83,6 +82,30 @@ import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
+
+/**
+ * Echo-race fix, item 3 (belt-and-braces): true when the currently focused
+ * element is a text input/textarea inside THIS profile's own slide-over.
+ * Used only to add a second, independent line of defense around the
+ * hydration effect's primary `isDirtyRef` guard — a hydration must never
+ * clobber text the operator is actively typing into right now, even in a
+ * hypothetical gap where `isDirtyRef` was not (yet) set for the field being
+ * typed into.
+ *
+ * Item 11 (focus-check scoping): scoped via a React ref to THIS instance's
+ * own SheetContent DOM node — passed in by the caller — rather than
+ * `document.querySelector('[data-testid="agent-profile-sheet"]')`, which
+ * would resolve to the FIRST matching element in the whole document
+ * regardless of which AgentProfile instance owns it. The sheet renders
+ * through a Radix portal, but a ref still resolves to the real DOM node
+ * wherever it's portaled to, so scoping this way works cleanly.
+ */
+function isFocusedInAgentProfileForm(sheetEl: HTMLElement | null): boolean {
+  if (typeof document === 'undefined') return false
+  const active = document.activeElement
+  if (!active || (active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA')) return false
+  return !!sheetEl && sheetEl.contains(active)
+}
 
 interface AgentProfileProps {
   /**
@@ -178,6 +201,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
+
+  // Item 11: ref to THIS instance's own SheetContent DOM node, so the
+  // focus-check belt-and-braces guard (`isFocusedInAgentProfileForm`) scopes
+  // to the right sheet instead of a document-wide first-match query.
+  const sheetContentRef = useRef<HTMLDivElement>(null)
 
   // Tracks whether the initial hydration from the server has completed.
   // Guards auto-save from firing with default (empty) state before the first fetch resolves.
@@ -303,7 +331,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // an invalid/empty draft restores the last committed value.
   const [timeoutDraft, setTimeoutDraft] = useState('0')
   const [maxToolIterationsDraft, setMaxToolIterationsDraft] = useState('200')
-  const [steeringMode, setSteeringMode] = useState<'one-at-a-time' | 'queue-and-process'>('one-at-a-time')
   // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
   // Opens an AlertDialog; the confirm mutation invalidates the list and
   // closes the slide-over. Locked agents do not render the trigger.
@@ -349,6 +376,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   useEffect(() => {
     if (!agent) return
+    // Echo-race fix, item 3 (belt-and-braces): never let a hydration reset
+    // text the operator is actively typing into RIGHT NOW while our own
+    // save cycle is what triggered it. Independent of (and checked ahead
+    // of) the isDirtyRef guard immediately below — also covers a save that
+    // is still in flight (`saveStatusRef.current === 'saving'`), where a
+    // field the operator hasn't touched yet could otherwise still be
+    // clobbered mid-keystroke by a same-tick cache patch from a DIFFERENT
+    // field's save. Keep this ahead of, not instead of, the isDirtyRef
+    // check — it deliberately duplicates `isDirtyRef.current` in its own
+    // condition so it stays correct even if the primary guard below is
+    // ever refactored.
+    if (isFocusedInAgentProfileForm(sheetContentRef.current) && (isDirtyRef.current || saveStatusRef.current === 'saving')) return
     // isDirtyRef prevents background refetch from overwriting unsaved user edits.
     // We depend on the stable agentId prop (not agent?.id which can be undefined
     // during loading) so the effect re-runs reliably on agent navigation.
@@ -449,7 +488,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setTimeoutDraft(String(agent.timeout_seconds ?? 0))
     setMaxToolIterations(agent.max_tool_iterations ?? 200)
     setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
-    setSteeringMode((agent.steering_mode ?? 'one-at-a-time') as 'one-at-a-time' | 'queue-and-process')
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
     setExecutor(agent.executor)
@@ -543,10 +581,26 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
       // "no voice configured" rather than persisting a literal "   " that
       // breaks TTS lookup at v0.2.0 release.
+      //
+      // Trim-vs-raw isCurrent gap (item 2, WorkspaceSettingsTab fix):
+      // `voice` (and `provider` above) are trimmed HERE, inside the object
+      // useAutoSave actually watches — in principle the same class of bug
+      // WorkspaceSettingsTab had (isCurrent's deep-equal compares trimmed
+      // values, so a same-tick hydration could clobber raw trailing
+      // whitespace the operator hasn't committed yet). Left as-is rather
+      // than moved to raw-in/trim-in-saveFn: unlike WorkspaceSettingsTab,
+      // this form's hydration effect is ALSO gated by the `updated_at`
+      // monotonic guard (`lastIncorporatedUpdatedAtRef`) — a same-or-stale
+      // refetch echo is rejected regardless of `isDirtyRef`, so the gap is
+      // shielded here. `provider` is additionally never free-typed (it's
+      // set only via ModelSelector's onPairChange), so trailing whitespace
+      // can't occur for it in practice. Aligning to raw-in/trim-in-saveFn
+      // would also require branching the trim by tier inside saveFn (this
+      // form's `data` shape differs for subagent_3p vs. not) for marginal
+      // benefit given the existing shield — not done.
       voice: voice.trim() !== '' ? voice.trim() : undefined,
       timeout_seconds: timeoutPayload,
       max_tool_iterations: maxToolIterations,
-      steering_mode: steeringMode,
       shell_policy: {
         custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
       },
@@ -571,12 +625,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, voice,
-    timeoutPayload, timeoutSeconds, maxToolIterations, steeringMode,
+    timeoutPayload, timeoutSeconds, maxToolIterations,
     shellDenyPatterns,
     agentSkills, executor,
   ])
 
-  const { status: saveStatus, error: saveError, lastSavedAt: saveLastSavedAt } = useAutoSave(
+  const {
+    status: saveStatus,
+    error: saveError,
+    lastSavedAt: saveLastSavedAt,
+    saveNow: saveAgentNow,
+    hasPendingChanges: hasPendingAgentChanges,
+  } = useAutoSave(
     formData,
     async (data) => {
       // Do not save before the server data has been hydrated into state —
@@ -754,32 +814,94 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         }
         throw err
       }
-      isDirtyRef.current = false
+      // Draft-ownership rule: dirty clears via useAutoSave's `onSaved`
+      // callback below (only when the save snapshot still equals the live
+      // draft), NOT unconditionally here — see that callback for why.
       queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
     },
     // Locked agents can still save model and tool changes — do not disable auto-save
     {
+      // Long-form surface (SOUL and other multi-line fields live on this
+      // form) — raised from the 500ms default so a normal typing cadence
+      // doesn't fire a save (and its own invalidateQueries echo) on nearly
+      // every pause. Small-field edits (e.g. the Default toggle) still
+      // reach the server within one debounce cycle. There is no "blur
+      // flush" — the hook has no blur hook at all. The real mechanisms that
+      // can flush a pending edit ahead of the 1500ms debounce are: the
+      // debounce timer itself, the hook's unmount flush, the pagehide/
+      // beforeunload/visibilitychange keepalive beacon (`flushUrl` below),
+      // and — since this sheet does NOT unmount on close (it lives at the
+      // route level; see `handleCloseAgentSheet` below) — the explicit
+      // flush-on-close this component now performs itself.
+      debounceMs: 1500,
+      // Draft-ownership rule — see useAutoSave onSaved docs; clear only
+      // when isCurrent.
+      onSaved: (_saved, isCurrent) => {
+        // Mirror the saveFn's own no-op early-returns above (not hydrated
+        // yet / no agent selected / a 409 conflict refetch still pending):
+        // none of those paths actually persisted anything, so a resolved
+        // (non-throwing) saveFn call in any of those states must not touch
+        // the dirty flag — clearing it here would let an UNRELATED
+        // hydration open back up while local edits are still genuinely
+        // unsaved (most importantly during an active 409 conflict, where
+        // the debounce keeps firing no-op saves until the operator clicks
+        // "Refresh").
+        if (!hasHydrated.current || agentId === null || conflictRef.current) return
+        if (isCurrent) isDirtyRef.current = false
+      },
       // I13: best-effort flush of pending edits on tab close / page hide /
-      // unload. The gateway validates every PUT against the account's
-      // bearer token, so the flush must carry Authorization (sendBeacon
-      // can't, which is why useAutoSave now uses fetch keepalive). The token
-      // is read from the same store the REST client uses (sessionStorage
-      // preferred, localStorage fallback) — kept inline rather than via an
-      // exported accessor because no such accessor exists in src/lib/api.ts
-      // (getAuthHeaders is module-private) and the inline read is the
-      // established pattern (ws.ts, _app.tsx, store/auth.ts).
+      // unload. Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010),
+      // sent automatically by the browser (useAutoSave sets
+      // credentials:'include' + echoes the CSRF cookie on this PUT) —
+      // sendBeacon can't carry either, which is why useAutoSave uses fetch
+      // keepalive instead. No client-side token to pass through anymore.
       flushUrl: agentId !== null ? `/api/v1/agents/${agentId}` : undefined,
-      flushAuthToken:
-        typeof sessionStorage !== 'undefined'
-          ? (sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')) ?? undefined
-          : undefined,
     },
   )
 
+  // Always-fresh mirror of `saveStatus` for effects that must read the
+  // CURRENT save status without depending on it as a re-render trigger —
+  // used by the hydration effect's focused-field belt-and-braces check
+  // below (item 3 of the echo-race fix). Plain per-render assignment (not a
+  // `useEffect`) so it is guaranteed up to date before ANY effect in this
+  // commit runs, regardless of declaration order.
+  const saveStatusRef = useRef(saveStatus)
+  saveStatusRef.current = saveStatus
+
+  // Item 1 (MERGE-BLOCKER — sheet-close data loss): AgentProfile is mounted
+  // at the route level and does NOT unmount when the sheet closes (only
+  // `editAgentId` flips to null) — so useAutoSave's own unmount-flush never
+  // fires here. Without this, a debounce timer armed less than 1500ms
+  // before close fires AFTER close, lands in saveFn's `agentId === null`
+  // early-return, and useAutoSave records that as a SUCCESS (advances
+  // `lastSavedJsonRef`, shows 'Saved') — the edit is silently lost even
+  // though nothing was ever sent to the server.
+  //
+  // Fix: flush explicitly on close, BEFORE the store write that clears
+  // `editAgentId`. Ordering is load-bearing, not cosmetic: `saveNow()` is
+  // fire-and-forget, but calling it synchronously captures the CURRENT
+  // render's `saveFn` closure (via useAutoSave's internal `saveFnRef`,
+  // reassigned every render) and the current `agentId` — both while they
+  // still refer to this agent. If `closeEditAgentSlideOver()` ran FIRST,
+  // the store update would (on the next render) flip `agentId` to null and
+  // the `[agentId]` reset effect would clear `isDirtyRef`/`hasHydrated`
+  // — but that reassignment happens strictly AFTER this synchronous call
+  // returns (React state updates from a store action are not applied
+  // mid-function), so calling `saveNow()` before the store write is safe
+  // either way; doing it in this order is simply the same "flush before
+  // teardown" pattern the hook's own unmount cleanup uses, applied to the
+  // one teardown moment (sheet close) that isn't a real unmount.
+  function handleCloseAgentSheet() {
+    if (hasPendingAgentChanges()) {
+      saveAgentNow()
+    }
+    closeEditAgentSlideOver()
+  }
+
   // W6-B4 / G3 fix: the "Default agent" toggle used to fire its success
   // toast (and invalidate ['agents']) the instant the Switch was flipped —
-  // BEFORE the debounced (500ms) autosave had actually persisted the flag.
+  // BEFORE the debounced autosave had actually persisted the flag.
   // A slow network or a failed save left the toast lying: the operator saw
   // "X is now the default agent" while the server still had the old value.
   // This ref records the pending default-flag change; the effect below only
@@ -943,9 +1065,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     return (
       <ProfileSheet
         isOpen={isOpen}
-        onClose={closeEditAgentSlideOver}
+        onClose={handleCloseAgentSheet}
         title="Edit agent"
         onOpenAutoFocus={handleOpenAutoFocus}
+        contentRef={sheetContentRef}
       >
         <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
           Loading agent...
@@ -971,9 +1094,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     return (
       <ProfileSheet
         isOpen={isOpen}
-        onClose={closeEditAgentSlideOver}
+        onClose={handleCloseAgentSheet}
         title={isNotFound ? 'Agent not found' : "Couldn't load agent"}
         onOpenAutoFocus={handleOpenAutoFocus}
+        contentRef={sheetContentRef}
       >
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
           <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
@@ -984,7 +1108,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 Retry
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={closeEditAgentSlideOver}>
+            <Button variant="outline" size="sm" onClick={handleCloseAgentSheet}>
               Back to Agents
             </Button>
           </div>
@@ -1198,48 +1322,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               emptyCatalogHint="Connect a provider in Settings to pick a model"
             />
             )}
-            {isLocked && (
-              <div className="space-y-1.5">
-                <p className="text-xs text-[var(--color-muted)]">Fallback models</p>
-                <div
-                  data-testid="fallback-summary-locked-basics"
-                  className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-                >
-                  <div className="flex items-center gap-2 text-[var(--color-muted)]">
-                    <Lock size={12} weight="fill" aria-hidden="true" />
-                    <p className="text-[11px]">
-                      Locked: fallback models are inherited from the locked core config.
-                    </p>
-                  </div>
-                  {fallbackModels.length === 0 ? (
-                    <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
-                  ) : (
-                    <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
-                      {fallbackModels.map((entry, idx) => (
-                        <li
-                          key={entry.model}
-                          className="flex items-center gap-2 text-xs font-mono text-[var(--color-secondary)]"
-                        >
-                          <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
-                          <span
-                            data-testid={`fallback-summary-provider-${entry.model}`}
-                            className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold"
-                            style={{
-                              backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
-                              color: 'var(--color-accent)',
-                              border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-                            }}
-                          >
-                            {entry.provider || '—'}
-                          </span>
-                          <span data-testid={`fallback-summary-model-${entry.model}`}>{entry.model}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              </div>
-            )}
             {/* Sampling parameters — collapsed disclosure. Operator decision
                 2026-07-03: editable for locked core agents too (model,
                 sampling, rate limits, and execution knobs ARE mutable on the
@@ -1299,72 +1381,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             )}
           </section>
 
-          {/* Shell deny patterns — a shell-hardening hint, independent of the
-              (removed) per-agent sandbox-profile concept. Editable for ALL
-              agents including locked core agents, and for native Subagents
-              (matrix: O or inherit); hidden ONLY for subagent_3p
-              (external-cli) — the external runner manages its own
-              isolation. */}
-          {!isExternalAgent && (
-            <section className="space-y-3">
-              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => setShellAdvancedOpen((o) => !o)}
-                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                  aria-expanded={shellAdvancedOpen}
-                >
-                  <span className="font-headline font-semibold text-[14px]">Shell deny patterns</span>
-                  {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                </button>
-                {shellAdvancedOpen && (
-                  <div className="px-3 pb-3 border-t border-[var(--color-border)]">
-                    <ShellDenyPatternsEditor
-                      value={shellDenyPatterns}
-                      onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
-                    />
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
-
-    </div>
-  )
-
-  // personality panel
-  const personalityPanel = (
-    <div className="space-y-5">
-
-          <BehaviorFields
-            isWorker={isWorkerAgent}
-            soul={soul}
-            setSoul={(v) => { markDirty(); setSoul(v) }}
-            voice={voice}
-            setVoice={(v) => { markDirty(); setVoice(v) }}
-            renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
-          />
-
-          {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
-              Heartbeat is now configured in the Workspace edit panel, not here. */}
-        
-    </div>
-  )
-
-  // tools panel
-  const toolsPanel = (
-    <div className="space-y-6">
-
-          {/* Fallback models — hidden for subagent_3p (the runner manages
-              its own retries; the field is not settable for this type per
-              the field matrix). */}
+          {/* Fallback models — item 1 reorg: relocated from the Tools tab to
+              sit directly below the Model section on Basics (visually
+              adjacent to the primary model). Hidden for subagent_3p (the
+              runner manages its own retries; the field is not settable for
+              this type per the field matrix). The two locked-only read-only
+              summaries that used to live separately on Basics and Tools are
+              CONSOLIDATED into this single copy — testids keep the
+              `-basics` suffix since this is now the only surface. */}
           {!isExternalAgent && (
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
             <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
             {isLocked ? (
               <div
-                data-testid="fallback-summary-locked-tools"
+                data-testid="fallback-summary-locked-basics"
                 className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
                 <div className="flex items-center gap-2 text-[var(--color-muted)]">
@@ -1376,7 +1407,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {fallbackModels.length === 0 ? (
                   <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
                 ) : (
-                  <ol className="space-y-1" data-testid="fallback-summary-locked-tools-list">
+                  <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
                     {fallbackModels.map((entry, idx) => (
                       <li
                         key={entry.model}
@@ -1457,7 +1488,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         data-testid={`fallback-chip-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
-                        onClick={() => moveFallback(entry.model, -1)}
+                        onClick={() => { markDirty(); moveFallback(entry.model, -1) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowUp size={10} />
@@ -1467,7 +1498,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         data-testid={`fallback-chip-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === fallbackModels.length - 1}
-                        onClick={() => moveFallback(entry.model, 1)}
+                        onClick={() => { markDirty(); moveFallback(entry.model, 1) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowDown size={10} />
@@ -1476,7 +1507,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         type="button"
                         data-testid={`fallback-chip-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
-                        onClick={() => removeFallback(entry.model)}
+                        onClick={() => { markDirty(); removeFallback(entry.model) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <X size={10} />
@@ -1515,6 +1546,33 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </section>
           )}
 
+    </div>
+  )
+
+  // personality panel
+  const personalityPanel = (
+    <div className="space-y-5">
+
+          <BehaviorFields
+            isWorker={isWorkerAgent}
+            soul={soul}
+            setSoul={(v) => { markDirty(); setSoul(v) }}
+            voice={voice}
+            setVoice={(v) => { markDirty(); setVoice(v) }}
+            renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
+          />
+
+          {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
+              Heartbeat is now configured in the Workspace edit panel, not here. */}
+        
+    </div>
+  )
+
+  // tools panel — item 2 reorg: Tools & Permissions ONLY (Skills is now its
+  // own tab; the Fallback models editor moved to Basics — item 1).
+  const toolsPanel = (
+    <div className="space-y-6">
+
           {/* Tools & Permissions — hidden for subagent_3p (the external
               runner has its own tools; per-tool CLI flags govern instead
               per the field matrix). Native workers (and every other kind)
@@ -1542,6 +1600,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               />
             </section>
           )}
+
+    </div>
+  )
+
+  // skills panel — item 2 reorg: split out of the former combined Tools tab
+  // into its own tab. Same gating and content as before, just relocated.
+  const skillsPanel = (
+    <div className="space-y-6">
+
           {/* Skills — Main/core/Subagent (native worker). Per the field
               matrix a native Subagent may optionally be granted skills (or
               inherit); only subagent_3p (external-cli) hides this — an
@@ -1629,7 +1696,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
             </section>
           )}
-        
+
     </div>
   )
 
@@ -1805,7 +1872,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </section>
 
           {/* Execution — ALL agents including locked core agents (operator
-              decision 2026-07-03: timeout/max-tool-iterations/steering are
+              decision 2026-07-03: timeout/max-tool-iterations are
               mutable on the backend for locked agents). Max tool calls
               is further hidden for subagent_3p (see below). */}
           <section className="space-y-3">
@@ -1826,12 +1893,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     value={timeoutDraft}
                     onChange={(e) => {
                       const raw = e.target.value
+                      // Item 5 (draft-field dirty gap): mark dirty on EVERY
+                      // keystroke, not only once the draft commits to a
+                      // valid value. `markDirty()` only gates hydration —
+                      // it triggers no save on its own — so this is safe;
+                      // without it, an external hydration mid-edit (while
+                      // the draft holds an invalid/partial value that
+                      // hasn't committed to `timeoutSeconds` yet) could
+                      // silently reset the field the operator is still
+                      // typing into.
+                      markDirty()
                       setTimeoutDraft(raw)
                       const parsed = Number(raw)
                       // Commit (and autosave) only a real value; in-progress
                       // typing (empty/partial input) never persists.
                       if (raw !== '' && Number.isInteger(parsed) && parsed >= 0) {
-                        markDirty()
                         setTimeoutSeconds(parsed)
                       }
                     }}
@@ -1861,12 +1937,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       value={maxToolIterationsDraft}
                       onChange={(e) => {
                         const raw = e.target.value
+                        // Item 5 (draft-field dirty gap): mark dirty on every
+                        // keystroke — see the turn-timeout input's onChange
+                        // above for why this must not be gated on validity.
+                        markDirty()
                         setMaxToolIterationsDraft(raw)
                         const parsed = Number(raw)
                         // Commit (and autosave) only a real value >= 1; clearing
                         // the field to type never persists a 0 again.
                         if (raw !== '' && Number.isInteger(parsed) && parsed >= 1) {
-                          markDirty()
                           setMaxToolIterations(parsed)
                         }
                       }}
@@ -1875,31 +1954,39 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     />
                   </div>
                 )}
-                {/* Steering mode — Main only. Workers and subagent_3p do
-                    not have a chat surface that consumes concurrent
-                    messages, so steering is a Main concept. */}
-                {!isWorkerAgent && (
-                  <div className="flex items-center gap-3">
-                    <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                      Message handling
-                      <span className="block text-[10px] text-[var(--color-muted)]/70">
-                        How concurrent messages are processed.
-                      </span>
-                    </label>
-                    <SmartSelect
-                      value={steeringMode}
-                      onValueChange={(v) => { markDirty(); setSteeringMode(v as 'one-at-a-time' | 'queue-and-process') }}
-                      triggerClassName="text-xs h-8"
-                      ariaLabel="Message handling"
-                      items={[
-                        { value: 'one-at-a-time', label: 'One at a time' },
-                        { value: 'queue-and-process', label: 'Queue and process' },
-                      ]}
+              </div>
+            </section>
+
+          {/* Shell deny patterns — item 3 reorg: relocated from Basics into
+              Advanced. A shell-hardening hint, independent of the (removed)
+              per-agent sandbox-profile concept. Editable for ALL agents
+              including locked core agents, and for native Subagents
+              (matrix: O or inherit); hidden ONLY for subagent_3p
+              (external-cli) — the external runner manages its own
+              isolation. */}
+          {!isExternalAgent && (
+            <section className="space-y-3">
+              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => setShellAdvancedOpen((o) => !o)}
+                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                  aria-expanded={shellAdvancedOpen}
+                >
+                  <span className="font-headline font-semibold text-[14px]">Shell deny patterns</span>
+                  {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
+                </button>
+                {shellAdvancedOpen && (
+                  <div className="px-3 pb-3 border-t border-[var(--color-border)]">
+                    <ShellDenyPatternsEditor
+                      value={shellDenyPatterns}
+                      onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
                     />
                   </div>
                 )}
               </div>
             </section>
+          )}
 
           {/* Executor summary — all workers (base + external). subagent_3p's
               full editor is in the Runtime tab. Locked core workers are
@@ -2065,12 +2152,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             value={hbIntervalDraft}
             onChange={(e) => {
               const raw = e.target.value
+              // Item 5 (draft-field dirty gap): mark dirty on every
+              // keystroke, not only once a valid value commits — see the
+              // Basics-tab draft inputs for the same fix and rationale.
+              markHbDirty()
               setHbIntervalDraft(raw)
-              // Commit (and mark dirty) only a real, valid value; in-progress
-              // typing (empty, or an intermediate value below the 5-minute
-              // floor on its way to a larger number) never persists.
+              // Commit only a real, valid value; in-progress typing (empty,
+              // or an intermediate value below the 5-minute floor on its way
+              // to a larger number) never persists.
               if (raw !== '' && Number.isInteger(Number(raw)) && Number(raw) >= 5) {
-                markHbDirty()
                 setHbIntervalMinutes(Number(raw))
               }
             }}
@@ -2147,9 +2237,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   return (
     <ProfileSheet
       isOpen={isOpen}
-      onClose={closeEditAgentSlideOver}
+      onClose={handleCloseAgentSheet}
       title={`Edit ${agent.name}`}
       onOpenAutoFocus={handleOpenAutoFocus}
+      contentRef={sheetContentRef}
     >
       {/* Title row locked to 44px chrome; badges/description sit below so the
           open panel aligns with the workspace top bar (flat shell chrome). */}
@@ -2249,10 +2340,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </div>
       )}
             <Tabs defaultValue="basics" className="hidden sm:block w-full">
+        {/* Tab order (item 4 reorg): Basics, Personality, Tools (or Runtime
+            for external), Skills, Heartbeat, Advanced. Heartbeat moves from
+            visually-first to between Skills and Advanced; defaultValue
+            stays 'basics'. */}
         <TabsList className="w-full justify-start overflow-x-auto">
-          {showHeartbeatTab && (
-            <TabsTrigger value="heartbeat" data-testid="tab-heartbeat" className="font-headline">Heartbeat</TabsTrigger>
-          )}
           <TabsTrigger value="basics" data-testid="tab-basics" className="font-headline">Basics</TabsTrigger>
           <TabsTrigger value="personality" data-testid="tab-personality" className="font-headline">Personality</TabsTrigger>
           {!isExternalAgent && (
@@ -2261,15 +2353,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           {isExternalAgent && (
             <TabsTrigger value="runtime" data-testid="tab-runtime" className="font-headline">Runtime</TabsTrigger>
           )}
+          {!isExternalAgent && (
+            <TabsTrigger value="skills" data-testid="tab-skills" className="font-headline">Skills</TabsTrigger>
+          )}
+          {showHeartbeatTab && (
+            <TabsTrigger value="heartbeat" data-testid="tab-heartbeat" className="font-headline">Heartbeat</TabsTrigger>
+          )}
           <TabsTrigger value="advanced" data-testid="tab-advanced" className="font-headline">{advancedTabLabel}</TabsTrigger>
         </TabsList>
 
         {/* ── BASICS TAB ─────────────────────────────────────────────────
             Identity (name/description/default toggle/delegation policy
             summary/avatar color/icon) + Model Configuration (model selector,
-            fallback editor, sampling parameters) + Shell deny patterns
-            (hidden for subagent_3p — the external runner manages its own
-            isolation). The Executor (Spec-4) is a worker-only
+            sampling parameters) + Fallback models (item 1: relocated here,
+            directly below Model). Shell deny patterns moved to Advanced
+            (item 3). The Executor (Spec-4) is a worker-only
             concern — for subagent_3p it is the headline of the Runtime
             tab below; for native workers (no external-cli selected) the
             whole thing is inherited from the caller so it is shown as a
@@ -2280,17 +2378,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             BehaviorFields (SOUL.md / Task prompt + Voice), and the
             Heartbeat sub-block for base agents (workers are
             delegation-only labour agents and never run on a schedule).
-            The Execution params (timeout / max_iter / steering) live in
+            The Execution params (timeout / max_iter) live in
             the Advanced tab per the spec matrix. */}
         <TabsContent value="personality" className="space-y-5">{personalityPanel}</TabsContent>
 
         {/* ── TOOLS TAB (hidden for subagent_3p) ────────────────────────
-            Tool policy editor + Skills picker, live-editable for Main and
-            native Subagents alike. External CLI workers have no Omnipus
-            tool chain (the runner brings its own tools), so every section
-            in this panel is out of scope for them and the whole tab is
-            omitted. The fallback models editor stays here too — FR-007
-            says fallbacks are part of the tool chain. */}
+            Tool policy editor only (item 2: Skills split into its own tab
+            below). External CLI workers have no Omnipus tool chain (the
+            runner brings its own tools), so this panel is out of scope
+            for them and the whole tab is omitted. */}
         {!isExternalAgent && (
           <TabsContent value="tools" className="space-y-6">{toolsPanel}</TabsContent>
         )}
@@ -2306,14 +2402,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <TabsContent value="runtime" className="space-y-5">{runtimePanel}</TabsContent>
         )}
 
-        {/* ── ADVANCED TAB ──────────────────────────────────────────────
-            Rate limits, Execution params (timeout / max_iter / steering —
-            Main only per the spec matrix), Executor summary (workers
-            only; subagent_3p gets the full editor in the Runtime tab),
-            Sessions, Schedules (base-only), Activity. The Executor
-            here is a compact summary for native workers; subagent_3p's
-            editor is in Runtime. */}
-        <TabsContent value="advanced" className="space-y-6">{advancedPanel}</TabsContent>
+        {/* ── SKILLS TAB (hidden for subagent_3p) ──────────────────────────
+            Item 2 reorg: Skills picker, live-editable for Main and native
+            Subagents alike, split out of the former combined Tools tab into
+            its own tab so Tools & Permissions and Skills are each a single
+            clear surface. */}
+        {!isExternalAgent && (
+          <TabsContent value="skills" className="space-y-6">{skillsPanel}</TabsContent>
+        )}
 
         {/* ── HEARTBEAT TAB ─────────────────────────────────────────────
             FR-016 / US-5: conditional tab — only rendered when the agent
@@ -2323,14 +2419,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {showHeartbeatTab && (
           <TabsContent value="heartbeat" className="space-y-5">{heartbeatPanel}</TabsContent>
         )}
+
+        {/* ── ADVANCED TAB ──────────────────────────────────────────────
+            Rate limits, Execution params (timeout / max_iter), Shell deny
+            patterns (item 3: relocated here from Basics), Executor summary
+            (workers only; subagent_3p gets the full editor in the Runtime
+            tab), Activity. The Executor here is a compact summary for
+            native workers; subagent_3p's editor is in Runtime. */}
+        <TabsContent value="advanced" className="space-y-6">{advancedPanel}</TabsContent>
       </Tabs>
       <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
-        {showHeartbeatTab && (
-          <AccordionItem value="heartbeat">
-            <AccordionTrigger data-testid="accordion-heartbeat" className="font-headline">Heartbeat</AccordionTrigger>
-            <AccordionContent>{heartbeatPanel}</AccordionContent>
-          </AccordionItem>
-        )}
         <AccordionItem value="basics">
           <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
           <AccordionContent>{basicsPanel}</AccordionContent>
@@ -2349,6 +2447,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <AccordionItem value="runtime">
           <AccordionTrigger data-testid="accordion-runtime" className="font-headline">Runtime</AccordionTrigger>
           <AccordionContent>{runtimePanel}</AccordionContent>
+        </AccordionItem>
+      )}
+      {!isExternalAgent && (
+        <AccordionItem value="skills">
+          <AccordionTrigger data-testid="accordion-skills" className="font-headline">Skills</AccordionTrigger>
+          <AccordionContent>{skillsPanel}</AccordionContent>
+        </AccordionItem>
+      )}
+      {showHeartbeatTab && (
+        <AccordionItem value="heartbeat">
+          <AccordionTrigger data-testid="accordion-heartbeat" className="font-headline">Heartbeat</AccordionTrigger>
+          <AccordionContent>{heartbeatPanel}</AccordionContent>
         </AccordionItem>
       )}
         <AccordionItem value="advanced">
@@ -2433,6 +2543,10 @@ function ProfileSheet({
    *  can capture the trigger element before Radix shifts focus. Used by
    *  AgentProfile to restore focus to the AgentCard on close. */
   onOpenAutoFocus,
+  /** Item 11: forwarded to SheetContent so the parent can scope its own
+   *  focus-check belt-and-braces guard to THIS instance's DOM node instead
+   *  of a document-wide selector. */
+  contentRef,
   children,
 }: {
   isOpen: boolean
@@ -2446,6 +2560,7 @@ function ProfileSheet({
    */
   title: string
   onOpenAutoFocus?: (event: Event) => void
+  contentRef?: React.Ref<HTMLDivElement>
   children: React.ReactNode
 }) {
   return (
@@ -2455,9 +2570,14 @@ function ProfileSheet({
           i.e. 90vw on mobile, 672 px on desktop). Caps the Edit slide-over at
           ~32rem/90vw instead of 768 px / 47% of a 1440 viewport. */}
       <SheetContent
+        ref={contentRef}
         side="right"
         className="flex flex-col gap-0 p-0"
         onOpenAutoFocus={onOpenAutoFocus}
+        // Kept for tests/tooling that still target it by selector; the
+        // focus-check guard itself now uses `contentRef` (item 11), not
+        // this selector.
+        data-testid="agent-profile-sheet"
       >
         <SheetTitle className="sr-only">{title}</SheetTitle>
         {children}

@@ -12,7 +12,12 @@
  *
  * This test verifies the B1.3e guard in WebServeBlock.tsx: when isWebServeResult()
  * rejects the result and the tool is no longer running, MalformedResultBlock is
- * rendered instead of crashing or silently showing nothing.
+ * rendered instead of crashing or silently showing nothing. This guard fires
+ * BEFORE IframePreview ever mounts, so it is unaffected by ADR-044's
+ * embedded-iframe-to-link-only rewrite — no assertions here changed on that
+ * account. The only update in this file is the `/api/v1/about` mock: the
+ * retired `preview_port`/`preview_listener_enabled` fields are replaced by the
+ * current `preview_enabled` field (AboutResponse contract, ADR-044 US-8).
  *
  * Test drives against the real embedded SPA (Go binary + Playwright).
  */
@@ -20,10 +25,13 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { seedAndOpenSession } from './fixtures/session-setup'
+import { chatInput } from './fixtures/selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const PREVIEW_PORT = parseInt(process.env.OMNIPUS_PREVIEW_PORT || '6061', 10)
-const SYNTHETIC_AGENT_ID = 'main'
+// 'mia' — the seeded default of the 4-base roster. The historical 'main' id
+// no longer resolves to any agent; using it here would attribute these
+// synthetic transcript entries to a non-existent agent.
+const SYNTHETIC_AGENT_ID = 'mia'
 
 // ── T1.19 ─────────────────────────────────────────────────────────────────────
 
@@ -53,8 +61,7 @@ test(
         contentType: 'application/json',
         body: JSON.stringify({
           ...base,
-          preview_listener_enabled: true,
-          preview_port: PREVIEW_PORT,
+          preview_enabled: true,
         }),
       })
     })
@@ -114,8 +121,10 @@ test(
     ).toBeVisible({ timeout: 15_000 })
 
     // (b) Assert: the SPA did not crash or show a blank screen.
-    // The banner must still be visible (not replaced by an error boundary).
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 5_000 })
+    // The session deep-link route renders no role=banner element (see
+    // tool-order.spec.ts's openSessionByDeepLink note), so the composer is
+    // the "app shell alive, no error boundary" signal here.
+    await expect(chatInput(page)).toBeVisible({ timeout: 5_000 })
 
     // No React error boundary message
     await expect(
@@ -172,8 +181,7 @@ test(
         contentType: 'application/json',
         body: JSON.stringify({
           ...base,
-          preview_listener_enabled: true,
-          preview_port: PREVIEW_PORT,
+          preview_enabled: true,
         }),
       })
     })
@@ -217,8 +225,9 @@ test(
       page.locator('text=tool returned a malformed result'),
     ).toBeVisible({ timeout: 15_000 })
 
-    // No crash
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 5_000 })
+    // No crash — composer as the alive-signal (no banner on the session
+    // deep-link route, same note as test 1).
+    await expect(chatInput(page)).toBeVisible({ timeout: 5_000 })
     await expect(
       page.locator('text=Something went wrong').or(page.locator('text=Unexpected error')),
     ).not.toBeVisible()

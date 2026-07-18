@@ -61,7 +61,7 @@ func TestCancel_SubAgentCascade(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "cascade-test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

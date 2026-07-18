@@ -205,7 +205,7 @@ type CancelStageFrame struct {
 	Type      string `json:"type"`
 }
 
-// DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator and renders a distinct delegation-failure block — it does NOT rely on the LLM to narrate the denial. The frame's top-level `error` field carries the same `reason`.
+// DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the calling agent's own narration of the denial, not a dedicated SPA-rendered block. The frame's top-level `error` field carries the same `reason`.
 type DelegationFailure struct {
 	// Fixed discriminator the SPA matches on.
 	Error string `json:"error"`
@@ -291,7 +291,7 @@ type MessageFrame struct {
 	Content string  `json:"content"`
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
 	Media []string `json:"media,omitempty"`
-	// Optional per-message metadata. Phase 1 (FR-010) adds `model_name`: when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes THIS turn to the chosen model. The server falls back to the agent's `model` config when this field is absent.
+	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace setup kickoff for `metadata.workspace_id`.
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	SessionId *string        `json:"session_id,omitempty"`
 	Type      string         `json:"type"`

@@ -3,29 +3,36 @@
  *
  * T1.2: legacy_serve_workspace_replay_renders_in_new_iframe
  *   Seeds a legacy serve_workspace transcript, opens the session, asserts:
- *   - An iframe is mounted (via the unified IframePreview + WebServeBlock path)
- *   - The iframe src contains the /preview/ (rewritten from /serve/) origin-relative path.
- *     The real gateway rewrites legacy /serve/ paths to /preview/ on the preview
- *     listener; here we verify the SPA built the URL from the result.path/url field
- *     which after the web_serve unification carries the /preview/ form.
+ *   - A preview LINK is rendered (via the unified IframePreview + WebServeBlock path)
+ *   - The link's href contains the token from the legacy `/serve/` path.
  *   Note: The legacy serve_workspace result still uses the /serve/ path prefix in the
- *   transcript data, but the SPA wires it through IframePreview and buildIframeURL —
- *   so the test asserts the iframe is rendered at all (not blank/crashed UI), not
- *   the specific path form.
+ *   transcript data; the SPA wires it through IframePreview and resolvePreviewHref —
+ *   so the test asserts the preview link is rendered at all (not blank/crashed UI),
+ *   not the specific path form.
  *
  * T1.3: legacy_run_in_workspace_warmup_replay
  *   Seeds a legacy run_in_workspace transcript (dev-mode, kind inferred from
  *   command + port fields). Asserts:
- *   - A warmup placeholder (or probe iframe or ready state) is rendered — the
+ *   - A warmup placeholder (or timeout error, or ready link) is rendered — the
  *     warmup state machine started.
  *   - No JS crash / blank UI.
  *
- * Both tests drive against the real embedded SPA (Go binary + Playwright).
- * They intercept /api/v1/about to inject a known preview_port so the SPA
- * builds a consistent iframe URL regardless of the gateway's runtime config.
+ * ADR-044 (preview-on-main-listener) update: IframePreview.tsx no longer mounts
+ * an embedded `<iframe>` for this surface (D6) — `/preview/` (and the legacy
+ * `/serve/`/`/dev/` replay prefixes) now share the SPA's own gateway origin,
+ * so previews render as a plain clickable link (`data-testid="preview-link"`
+ * inside `data-testid="preview-link-block"`). Both tests below were rewritten
+ * from asserting an `<iframe>` element to asserting the link element and its
+ * `href`. `/api/v1/about` mocks were updated to the current AboutResponse
+ * contract (`preview_enabled` replaces the retired `preview_port` /
+ * `preview_listener_enabled` fields, ADR-044 US-8) and the mocked result URLs
+ * now point at the SAME origin as `BASE_URL` — there is no separate preview
+ * listener/port to construct a URL against anymore.
  *
- * Note: The preview listener is not required to serve the content; we are
- * testing SPA rendering behavior, not end-to-end preview content delivery.
+ * Both tests drive against the real embedded SPA (Go binary + Playwright).
+ *
+ * Note: the preview handler is not required to actually serve the content; we
+ * are testing SPA rendering behavior, not end-to-end preview content delivery.
  */
 
 import { expect } from '@playwright/test'
@@ -33,45 +40,56 @@ import { test } from './fixtures/console-errors'
 import { seedAndOpenSession } from './fixtures/session-setup'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const PREVIEW_PORT = parseInt(process.env.OMNIPUS_PREVIEW_PORT || '6061', 10)
-const SYNTHETIC_AGENT_ID = 'main'
+// 'mia' — the seeded default of the 4-base roster. The historical 'main' id
+// no longer resolves to any agent; using it here would attribute these
+// synthetic transcript entries to a non-existent agent.
+const SYNTHETIC_AGENT_ID = 'mia'
+
+// ── Shared /api/v1/about mock ─────────────────────────────────────────────────
+
+async function mockAbout(page: import('@playwright/test').Page, extra?: Record<string, unknown>) {
+  await page.route(`${BASE_URL}/api/v1/about`, async (route) => {
+    let base: Record<string, unknown> = {
+      version: 'test',
+      go_version: 'go1.21',
+      os: 'linux',
+      arch: 'amd64',
+      uptime_seconds: 1,
+    }
+    try {
+      const real = await route.fetch()
+      if (real.ok()) base = (await real.json()) as Record<string, unknown>
+    } catch {
+      // Gateway not reachable — stub is sufficient for SPA render path.
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...base,
+        preview_enabled: true,
+        ...extra,
+      }),
+    })
+  })
+}
 
 // ── T1.2: legacy serve_workspace replay ───────────────────────────────────────
 
 test(
-  'legacy_serve_workspace_replay_renders_in_new_iframe',
+  'legacy_serve_workspace_replay_renders_preview_link',
   async ({ page }) => {
-    // Intercept /api/v1/about to inject a known preview_port so buildIframeURL
-    // produces a deterministic src. Without this, the test depends on the running
-    // gateway's preview_listener_enabled state.
-    await page.route(`${BASE_URL}/api/v1/about`, async (route) => {
-      let base: Record<string, unknown> = {
-        version: 'test',
-        go_version: 'go1.21',
-        os: 'linux',
-        arch: 'amd64',
-        uptime_seconds: 1,
-      }
-      try {
-        const real = await route.fetch()
-        if (real.ok()) base = (await real.json()) as Record<string, unknown>
-      } catch {
-        // Gateway not reachable — stub is sufficient for SPA render path.
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          ...base,
-          preview_listener_enabled: true,
-          preview_port: PREVIEW_PORT,
-        }),
-      })
-    })
+    // preview_enabled replaces the retired preview_port/preview_listener_enabled
+    // fields (ADR-044 US-8) — IframePreview no longer derives the preview
+    // origin from /api/v1/about at all (resolvePreviewHref uses the tool
+    // result's own url/path against window.location.origin), so this mock is
+    // belt-and-suspenders schema realism, not load-bearing for the URL itself.
+    await mockAbout(page)
 
     const fakeToken = 'serve-workspace-legacy-token-t12'
     const fakePath = `/serve/${SYNTHETIC_AGENT_ID}/${fakeToken}/`
-    const fakeUrl = `http://localhost:${PREVIEW_PORT}${fakePath}`
+    // ADR-044: same origin as the SPA — no separate preview listener/port.
+    const fakeUrl = `${BASE_URL}${fakePath}`
     const expires = new Date(Date.now() + 3600 * 1000).toISOString()
 
     // Seed a legacy serve_workspace transcript (no `kind` field, no `command`/`port`).
@@ -109,27 +127,34 @@ test(
       },
     ])
 
-    // Assert: the iframe is rendered — the SPA must not crash or render a blank UI.
-    // title="serve_workspace preview" is set by IframePreview.tsx line 850.
+    // Assert: the preview link block is rendered — the SPA must not crash or
+    // render a blank UI. data-testid="preview-link-block" / "preview-link"
+    // are set by IframePreview.tsx's ready-state render (no warmup for
+    // static/serve_workspace mode, so this renders immediately).
+    const previewLink = page.locator('[data-testid="preview-link"]')
     await expect(
-      page.locator('iframe[title="serve_workspace preview"]'),
-      'IframePreview must mount a visible iframe for the legacy serve_workspace transcript',
+      previewLink,
+      'IframePreview must render a preview link for the legacy serve_workspace transcript',
     ).toBeVisible({ timeout: 15_000 })
 
-    // Assert: the iframe src is the expected preview URL (not a blank or error src).
-    const src = await page
-      .locator('iframe[title="serve_workspace preview"]')
-      .first()
-      .getAttribute('src')
-
+    // Assert: the link's href is the expected preview URL (not blank or an error href).
+    const href = await previewLink.getAttribute('href')
     expect(
-      src,
-      `iframe src must be non-null and contain the preview path. Got: ${src}`,
+      href,
+      `preview link href must be non-null and contain the preview token. Got: ${href}`,
     ).not.toBeNull()
     expect(
-      src,
-      `iframe src must contain the expected preview token in the URL path`,
+      href,
+      'preview link href must contain the expected preview token in the URL path',
     ).toContain(fakeToken)
+
+    // Differentiation check: the href must be the SAME origin as the SPA
+    // itself — proving IframePreview builds it from the current page's own
+    // origin (ADR-044), not a hardcoded or stale separate-port value.
+    expect(new URL(href!).origin).toBe(new URL(BASE_URL).origin)
+
+    // ADR-044 D6: no embedded <iframe> anywhere — link-only rendering.
+    await expect(page.locator('iframe')).toHaveCount(0)
 
     // Assert: no malformed-result error block rendered (would appear if isWebServeResult rejected).
     // The MalformedResultBlock renders: "web_serve tool returned a malformed result"
@@ -144,38 +169,12 @@ test(
 test(
   'legacy_run_in_workspace_warmup_replay',
   async ({ page }) => {
-    // Intercept /api/v1/about as above.
-    await page.route(`${BASE_URL}/api/v1/about`, async (route) => {
-      let base: Record<string, unknown> = {
-        version: 'test',
-        go_version: 'go1.21',
-        os: 'linux',
-        arch: 'amd64',
-        uptime_seconds: 1,
-      }
-      try {
-        const real = await route.fetch()
-        if (real.ok()) base = (await real.json()) as Record<string, unknown>
-      } catch {
-        // Stub only.
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          ...base,
-          preview_listener_enabled: true,
-          preview_port: PREVIEW_PORT,
-          // Return a SHORT warmup timeout so the test doesn't wait 60 s for the
-          // warmup to complete (the fake token will never respond successfully).
-          warmup_timeout_seconds: 6,
-        }),
-      })
-    })
+    await mockAbout(page, { warmup_timeout_seconds: 6 })
 
     const devToken = 'run-in-workspace-legacy-token-t13'
     const devPath = `/serve/${SYNTHETIC_AGENT_ID}/${devToken}/`
-    const devUrl = `http://localhost:${PREVIEW_PORT}${devPath}`
+    // ADR-044: same origin as the SPA — no separate preview listener/port.
+    const devUrl = `${BASE_URL}${devPath}`
     const expires = new Date(Date.now() + 3600 * 1000).toISOString()
 
     // Seed a legacy run_in_workspace result — has command + port fields.
@@ -219,26 +218,25 @@ test(
 
     // Assert: the warmup state machine drives the placeholder — either:
     //   (a) "Starting dev server…" placeholder is visible, OR
-    //   (b) Probing phase rendered (probe iframe hidden, placeholder still visible), OR
-    //   (c) Warmup timeout error block (if 3 consecutive probes failed fast-fail).
+    //   (b) Warmup timeout error block (if all probes failed before the test
+    //       assertion runs — a real, unmocked same-origin fetch against
+    //       devUrl will actually 404 quickly since no dev server exists).
     // Any of these is acceptable — the key regression is a blank/crashed UI.
     //
     // We give the component 15 s to render any of these states.
     const hasWarmupPlaceholder = page.locator('text=Starting dev server')
     const hasWarmupError = page.locator('text=Dev server did not respond in time')
-    const hasRetryButton = page.getByRole('button', { name: 'Retry' })
 
-    // At least one of these must appear within the timeout
     await expect(
-      page.locator('text=Starting dev server, text=Dev server did not respond in time').first(),
-    ).toBeVisible({ timeout: 15_000 }).catch(() =>
-      // If neither matched the combined locator, try them individually
-      hasWarmupPlaceholder.or(hasWarmupError).first().waitFor({ state: 'visible', timeout: 15_000 })
-    )
+      hasWarmupPlaceholder.or(hasWarmupError).first(),
+    ).toBeVisible({ timeout: 15_000 })
 
     // Assert: no malformed-result error block
     await expect(
       page.locator('text=tool returned a malformed result'),
     ).not.toBeVisible()
+
+    // ADR-044 D6: no embedded <iframe> anywhere — link-only / warmup-only rendering.
+    await expect(page.locator('iframe')).toHaveCount(0)
   },
 )

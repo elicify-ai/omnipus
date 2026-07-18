@@ -6,11 +6,13 @@ package security_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -353,7 +355,16 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 	})
 
 	t.Run("allows localhost resolution when allowlisted by CIDR", func(t *testing.T) {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		// Dual-stack loopback listener + both-loopback-family allowlist so the
+		// test is robust to how the OS resolver maps "localhost". GitHub Actions
+		// runners resolve localhost to ::1 (IPv6), which an IPv4-only listener
+		// ("127.0.0.1:0") + IPv4-only allowlist ("127.0.0.0/8") spuriously
+		// rejects (the resolved ::1 is neither allowlisted nor reachable on the
+		// v4 listener). The wildcard ":0" listener accepts both 127.0.0.1 and
+		// ::1 connections (Go dual-stack, IPv4-mapped), and both loopback CIDRs
+		// are allowlisted — the security assertion (allowlisted loopback is
+		// permitted) is unchanged, only the address family is made env-agnostic.
+		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 		defer listener.Close()
 
@@ -370,7 +381,7 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 		_, port, err := net.SplitHostPort(listener.Addr().String())
 		require.NoError(t, err)
 
-		checker := security.NewSSRFChecker([]string{"127.0.0.0/8"})
+		checker := security.NewSSRFChecker([]string{"127.0.0.0/8", "::1/128"})
 		dialContext := checker.SafeDialContext(&net.Dialer{Timeout: time.Second})
 		conn, err := dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
 		require.NoError(t, err, "expected localhost DNS resolution to succeed once allowlisted")
@@ -581,4 +592,201 @@ func TestSSRFChecker_CheckRedirect_TooManyRedirectsRejected(t *testing.T) {
 	}
 	require.Error(t, err, "an infinite same-origin redirect loop must eventually be rejected")
 	assert.Contains(t, err.Error(), "too many redirects")
+}
+
+// ---------------------------------------------------------------------------
+// TestBrowserSSRFAllowsGatewayLocalhostOnly — FR-018 / ADR-044 D2 / r4 OBS-003
+// Traces to: docs/internal/specs/preview-on-main-listener-spec.md
+//
+//	US-10 (Agent built-in browser reaches the preview, SSRF scoped, new code)
+//	S21   (Browser SSRF allows the gateway origin only, localhost form)
+//	TDD Plan row 23: TestBrowserSSRFAllowsGatewayLocalhostOnly
+//
+// serve_web emits the literal, pre-resolution form
+// "http://localhost:<gateway.port>/preview/…" when gateway.public_url is
+// unset (D2). The checker is otherwise port-blind (extractHost historically
+// strips the port) and 127.0.0.0/8 is a blanket CIDR block, so without a
+// port-aware exception the built-in browser could never reach its own
+// gateway. AllowGatewayOrigin's exception MUST be scoped to the exact
+// gateway host:port — every other local port, and blanket loopback, must
+// stay blocked (Non-Behaviors: "MUST NOT allowlist 'all localhost'").
+// ---------------------------------------------------------------------------
+func TestBrowserSSRFAllowsGatewayLocalhostOnly(t *testing.T) {
+	const gwPort = 5000
+	const otherPort = 5001
+
+	ctx := context.Background()
+
+	t.Run("literal localhost:<gateway.port> preview URL passes", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://localhost:5000/preview/agent-1/tok3n/")
+		assert.NoError(t, err, "the gateway's own literal localhost:<port> preview URL must pass SSRF")
+	})
+
+	t.Run("resolved-loopback form 127.0.0.1:<gateway.port> passes", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+		assert.NoError(t, err, "the resolved IPv4 loopback form at the gateway port must pass")
+	})
+
+	t.Run("resolved-loopback form [::1]:<gateway.port> passes", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://[::1]:5000/x")
+		assert.NoError(t, err, "the resolved IPv6 loopback form at the gateway port must pass")
+	})
+
+	t.Run("a DIFFERENT local port is still blocked", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, fmt.Sprintf("http://localhost:%d/x", otherPort))
+		require.Error(t, err, "a different local port must remain blocked even with the gateway origin allowed")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("127.0.0.1 on a non-gateway port is still blocked", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, fmt.Sprintf("http://127.0.0.1:%d/x", otherPort))
+		require.Error(t, err, "the resolved-loopback form on a non-gateway port must remain blocked")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run(
+		"no gateway origin configured: localhost at the would-be gateway port is blocked (fail closed)",
+		func(t *testing.T) {
+			checker := security.NewSSRFChecker(nil) // AllowGatewayOrigin never called
+
+			err := checker.CheckURL(ctx, "http://localhost:5000/x")
+			require.Error(t, err, "with no gateway origin configured, localhost must stay blocked by default")
+			assert.Contains(t, err.Error(), "SSRF")
+		},
+	)
+
+	t.Run("public host still passes, independent of the gateway origin exception", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://8.8.8.8/dns")
+		assert.NoError(t, err, "a public IP must still pass — unaffected by the gateway-origin exception")
+	})
+
+	t.Run("private non-gateway IP still blocked", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+
+		err := checker.CheckURL(ctx, "http://10.0.0.5/api")
+		require.Error(t, err, "a private IP unrelated to the gateway origin must remain blocked")
+		assert.Contains(t, err.Error(), "SSRF")
+	})
+
+	t.Run("clearing the gateway origin restores the fail-closed default", func(t *testing.T) {
+		checker := security.NewSSRFChecker(nil)
+		checker.AllowGatewayOrigin("localhost", gwPort)
+		checker.AllowGatewayOrigin("", 0) // explicit clear (empty host)
+
+		err := checker.CheckURL(ctx, "http://localhost:5000/x")
+		require.Error(t, err, "clearing the gateway origin must restore the fail-closed default")
+	})
+
+	t.Run(
+		"non-localhost configured gateway host: exact literal match passes, no loopback expansion",
+		func(t *testing.T) {
+			checker := security.NewSSRFChecker(nil)
+			checker.AllowGatewayOrigin("gateway.internal.example", gwPort)
+
+			err := checker.CheckURL(ctx, "http://gateway.internal.example:5000/x")
+			assert.NoError(t, err, "an exact literal host:port match must pass without needing DNS resolution")
+
+			errLoopback := checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+			require.Error(
+				t,
+				errLoopback,
+				"loopback expansion must NOT apply when the configured gateway host isn't 'localhost'",
+			)
+		},
+	)
+}
+
+// TestCloneWithGatewayOrigin_DoesNotMutateSingleton is the regression for
+// code-review M2: the gateway-origin exception is granted to the agent browser
+// via a CLONE, so it must NOT leak onto the shared singleton that provider
+// base_url / skill-installer URL validation also consult.
+func TestCloneWithGatewayOrigin_DoesNotMutateSingleton(t *testing.T) {
+	ctx := context.Background()
+	const gwPort = 5000
+
+	singleton := security.NewSSRFChecker(nil)
+	clone := singleton.CloneWithGatewayOrigin("localhost", gwPort)
+
+	// The CLONE reaches the gateway's own preview origin (literal + resolved forms).
+	assert.NoError(t, clone.CheckURL(ctx, "http://localhost:5000/preview/a/tok/"),
+		"the clone must allow the gateway's own localhost:<port> preview origin")
+	assert.NoError(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+		"the clone must allow the resolved-loopback gateway origin")
+
+	// The shared singleton is UNCHANGED — still blocks the gateway origin, so
+	// provider/skill URL validation is not silently widened.
+	require.Error(t, singleton.CheckURL(ctx, "http://localhost:5000/preview/a/tok/"),
+		"the shared singleton must NOT be mutated — localhost:<port> stays blocked for provider/skill validation")
+	require.Error(t, singleton.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+		"the shared singleton must still block the resolved-loopback gateway origin")
+
+	// The clone still enforces the shared base block-list — it is not a wide-open
+	// checker, and its exception is scoped to exactly the gateway port.
+	require.Error(t, clone.CheckURL(ctx, "http://169.254.169.254/latest/meta-data/"),
+		"the clone must still block cloud-metadata (shares the base block-list)")
+	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5001/x"),
+		"the clone's exception is scoped to the gateway port only")
+	assert.NoError(t, clone.CheckURL(ctx, "http://8.8.8.8/dns"),
+		"the clone still passes public hosts")
+
+	// Clearing the exception on the clone must not affect any base behavior.
+	clone.AllowGatewayOrigin("", 0)
+	require.Error(t, clone.CheckURL(ctx, "http://127.0.0.1:5000/x"),
+		"after clearing, the clone falls back to the fail-closed default")
+}
+
+// TestAllowGatewayOrigin_ConcurrentWithCheckURL exercises the gwMu RWMutex under
+// concurrent writers (AllowGatewayOrigin) and readers (CheckURL) — meaningful
+// under `go test -race`. Uses only literal-IP URLs so no goroutine touches DNS.
+func TestAllowGatewayOrigin_ConcurrentWithCheckURL(t *testing.T) {
+	ctx := context.Background()
+	checker := security.NewSSRFChecker(nil)
+
+	const workers = 8
+	const iters = 50
+	var wg sync.WaitGroup
+
+	// Writers: toggle the exception on/off for varying ports.
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			for j := 0; j < iters; j++ {
+				checker.AllowGatewayOrigin("localhost", 5000+port)
+				_ = checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+				checker.AllowGatewayOrigin("", 0)
+			}
+		}(i)
+	}
+	// Readers: pure CheckURL against a literal loopback IP (no DNS).
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iters; j++ {
+				_ = checker.CheckURL(ctx, "http://127.0.0.1:5000/x")
+			}
+		}()
+	}
+	wg.Wait()
+	// Reaching here without the race detector firing means the RWMutex is sound.
 }

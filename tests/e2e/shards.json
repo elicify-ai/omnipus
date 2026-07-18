@@ -1,0 +1,93 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the E2E shard plan. Consumed by BOTH .github/workflows/pr.yml (scripts/e2e-shards.sh matrix -> strategy.matrix via fromJSON) and deploy/ci-worker/runci.sh (scripts/e2e-shards.sh list). Every tests/e2e/*.spec.ts MUST be assigned to exactly one shard -- scripts/e2e-shards.sh check enforces this and FAILS CI on drift (an unassigned spec would silently never run; a dead reference would error). key_slot selects the OpenRouter key: a=primary (OPENROUTER_API_KEY / secrets.OPENROUTER_API_KEY_CI, always present), b/c=optional extra keys that fall back to a when unset, so concurrent LLM shards never share one rate-limit window. port is used ONLY by runci.sh (all shards share one worker machine, so they need distinct ports); each GitHub Actions shard runs on its own runner and always uses 6060. solo=true (optional, runci.sh-only, default false) makes runci.sh drain all in-flight shards and run this one ALONE in the foreground -- for timing-sensitive specs (WS-idle, live-vs-replay DOM fidelity, real-recap latency) that flake under any CPU contention on the shared worker; on GitHub Actions each shard already has its own runner so solo is a no-op there. To add a spec: drop it in tests/e2e/ and add its path to exactly one shard here -- nothing else to touch.",
+  "shards": [
+    {
+      "group": "llm-chat",
+      "key_slot": "a",
+      "port": 6060,
+      "specs": [
+        "tests/e2e/chat.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-agents",
+      "key_slot": "b",
+      "port": 6061,
+      "specs": [
+        "tests/e2e/subagent.spec.ts",
+        "tests/e2e/handoff.spec.ts",
+        "tests/e2e/cancel-cross-channel.spec.ts",
+        "tests/e2e/delegation-hidden.spec.ts",
+        "tests/e2e/hot-reload.spec.ts",
+        "tests/e2e/recap-continuity.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-light",
+      "key_slot": "c",
+      "port": 6062,
+      "specs": [
+        "tests/e2e/bug-regression.spec.ts",
+        "tests/e2e/channels-routing.spec.ts",
+        "tests/e2e/media.spec.ts",
+        "tests/e2e/open-in-chat.spec.ts",
+        "tests/e2e/settings.spec.ts",
+        "tests/e2e/memory-remember-recall.spec.ts"
+      ]
+    },
+    {
+      "group": "ui",
+      "key_slot": "c",
+      "port": 6063,
+      "specs": [
+        "tests/e2e/accessibility.spec.ts",
+        "tests/e2e/agents.spec.ts",
+        "tests/e2e/auth.spec.ts",
+        "tests/e2e/burst-resilience.spec.ts",
+        "tests/e2e/contract-counters.spec.ts",
+        "tests/e2e/security-tools.spec.ts",
+        "tests/e2e/sidebar.spec.ts",
+        "tests/e2e/skills.spec.ts",
+        "tests/e2e/ws-reconnect.spec.ts",
+        "tests/e2e/xss.spec.ts",
+        "tests/e2e/calendar.spec.ts",
+        "tests/e2e/create-agent.spec.ts"
+      ]
+    },
+    {
+      "group": "ui-heavy",
+      "key_slot": "c",
+      "port": 6065,
+      "solo": true,
+      "specs": [
+        "tests/e2e/idle-no-reconnect.spec.ts",
+        "tests/e2e/multi-turn-render.spec.ts",
+        "tests/e2e/replay-fidelity.spec.ts",
+        "tests/e2e/retention.spec.ts",
+        "tests/e2e/settings-memory.spec.ts",
+        "tests/e2e/tool-order.spec.ts"
+      ]
+    },
+    {
+      "group": "stubs",
+      "key_slot": "a",
+      "port": 6064,
+      "specs": [
+        "tests/e2e/about.spec.ts",
+        "tests/e2e/api-errors.spec.ts",
+        "tests/e2e/fresh-install.spec.ts",
+        "tests/e2e/iframe-preview-warmup.spec.ts",
+        "tests/e2e/mcp-add.spec.ts",
+        "tests/e2e/profile-fontsize.spec.ts",
+        "tests/e2e/providers.spec.ts",
+        "tests/e2e/settings-gateway.spec.ts",
+        "tests/e2e/version-drift.spec.ts",
+        "tests/e2e/web-serve-canonical.spec.ts",
+        "tests/e2e/web-serve-malformed.spec.ts",
+        "tests/e2e/whatsapp-qr.spec.ts",
+        "tests/e2e/channel-instance-crud.spec.ts",
+        "tests/e2e/channel-routing.spec.ts"
+      ]
+    }
+  ]
+}

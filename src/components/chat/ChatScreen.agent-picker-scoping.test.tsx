@@ -54,17 +54,28 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
 
 // '@assistant-ui/react' is intentionally NOT mocked in this file — see header.
 
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([
-    { id: 'agent-mia', name: 'Mia', color: '#111111', icon: null },
-    { id: 'agent-jim', name: 'Jim', color: '#222222', icon: null },
-  ]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockResolvedValue([]),
-  fetchSkills: vi.fn().mockResolvedValue([]),
-  uploadFiles: vi.fn(),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-}))
+// importOriginal (not a full replacement object): useSlashMenu now calls
+// useChatAgents unconditionally (the "@" mention menu — see
+// src/hooks/useChatAgents.ts), which needs real `fetchWorkspaces`,
+// `workspacesQueryKeys`, and `isWorker` even though this file's assertions
+// don't touch mentions. The workspaces query itself stays disabled (no
+// activeWorkspaceId is ever set here), so `fetchWorkspaces` is never
+// actually invoked — this only needs to exist so the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([
+      { id: 'agent-mia', name: 'Mia', color: '#111111', icon: null },
+      { id: 'agent-jim', name: 'Jim', color: '#222222', icon: null },
+    ]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    uploadFiles: vi.fn(),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+  }
+})
 
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }),

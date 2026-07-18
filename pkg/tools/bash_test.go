@@ -159,12 +159,16 @@ func TestBash_CwdRejectsDeepNestedNetOutside(t *testing.T) {
 // pkg/agent/loop.go:1061/1112). That directory is shared across ALL agents
 // and ALL sessions — not scoped per-agent.
 //
-// Before the fix, resolveCWD called validatePathWithAllowPaths with that real
-// allowlist. validatePathWithAllowPaths checks isAllowedPath() BEFORE the
-// workspace-containment check and BEFORE the cross-agent guard
-// (isCrossAgentPath) ever runs, so cwd=<media temp dir> — an absolute path —
-// was accepted outright, letting any agent `bash` its way into another
-// agent's/session's uploads. Every other cwd test in this file constructs the
+// Before the fix, resolveCWD called validatePathWithAllowPaths (since
+// retired; resolveCWD now calls ResolvePath, which has no allow-patterns
+// parameter of its own — see resolvepath.go's ResolvePathAllowingPatterns
+// doc for why that axis is orthogonal to filesystem_scope) with that real
+// allowlist. validatePathWithAllowPaths checked isAllowedPath() BEFORE the
+// workspace-containment check and BEFORE the cross-agent guard (since
+// retired; superseded by fspolicy.IsCarveOut, anchored on $OMNIPUS_HOME
+// rather than the working directory) ever ran, so cwd=<media temp dir> — an
+// absolute path — was accepted outright, letting any agent `bash` its way
+// into another agent's/session's uploads. Every other cwd test in this file constructs the
 // tool via newBashTool, which never passes allowPaths, so
 // t.allowedPathPatterns is nil there and this class of bug stays hidden. This
 // test constructs the tool WITH a real, non-nil allowedPathPatterns slice
@@ -208,8 +212,10 @@ func TestBash_CwdRejectsAbsolutePathEvenWhenAllowlisted(t *testing.T) {
 	assert.Contains(t, result.ForLLM, "escapes workspace")
 
 	// Defense-in-depth: also confirm the relative-traversal path into the
-	// same shared directory is rejected (validatePathWithAllowPaths must be
-	// called with nil patterns for bash's cwd, not t.allowedPathPatterns).
+	// same shared directory is rejected (resolveCWD's ResolvePath call must
+	// use bash's own dedicated cwd policy, not t.allowedPathPatterns —
+	// ResolvePath has no allow-patterns parameter for bash's cwd to inherit
+	// in the first place).
 	rel, err := filepath.Rel(workspace, mediaDir)
 	require.NoError(t, err)
 	result2 := tool.Execute(bashCtx(t), map[string]any{

@@ -50,7 +50,7 @@ func TestRequestCancel_CallbackFiresWhenFinishRacesRegistration(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "race-test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

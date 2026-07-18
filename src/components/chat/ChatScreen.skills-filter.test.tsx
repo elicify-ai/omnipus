@@ -86,6 +86,7 @@ vi.mock('@assistant-ui/react', () => {
       getState: () => ({ text: '' }),
       setText: vi.fn(),
       addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -97,20 +98,40 @@ vi.mock('@assistant-ui/react', () => {
   }
 })
 
-// 10 skills — used by the "capped at 8" test to actually exercise the slice(0, 8) cap.
-// The other tests use only a prefix of this list; the full list is needed for the cap test.
+// 10 skills, zero-padded numeric suffixes ("Skill 04" not "Skill 4") — used
+// by the "capped at 8" test to actually exercise the slice(0, SECTION_CAP)
+// cap. Deferred item 3 sorts skills alphabetically by name BEFORE the cap
+// (useSlashMenu.ts), so unpadded "Skill 4"/"Skill 10" would sort as
+// "Skill 10" < "Skill 4" (lexicographic, not numeric) — zero-padding keeps
+// this fixture's alphabetical order matching its numeric intent, same as
+// the analogous fixture in useSlashMenu.test.ts's cap describe block.
 const ALL_MOCK_SKILLS = [
   { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
   { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
   { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  { id: 'skill-4',       name: 'Skill 4',        version: '1.0', description: 'Description 4',             verified: true,  status: 'active' },
-  { id: 'skill-5',       name: 'Skill 5',        version: '1.0', description: 'Description 5',             verified: true,  status: 'active' },
-  { id: 'skill-6',       name: 'Skill 6',        version: '1.0', description: 'Description 6',             verified: true,  status: 'active' },
-  { id: 'skill-7',       name: 'Skill 7',        version: '1.0', description: 'Description 7',             verified: true,  status: 'active' },
-  { id: 'skill-8',       name: 'Skill 8',        version: '1.0', description: 'Description 8',             verified: true,  status: 'active' },
-  { id: 'skill-9',       name: 'Skill 9',        version: '1.0', description: 'Description 9',             verified: true,  status: 'active' },
-  { id: 'skill-10',      name: 'Skill 10',       version: '1.0', description: 'Description 10',            verified: true,  status: 'active' },
+  { id: 'skill-04',      name: 'Skill 04',      version: '1.0', description: 'Description 4',             verified: true,  status: 'active' },
+  { id: 'skill-05',      name: 'Skill 05',      version: '1.0', description: 'Description 5',             verified: true,  status: 'active' },
+  { id: 'skill-06',      name: 'Skill 06',      version: '1.0', description: 'Description 6',             verified: true,  status: 'active' },
+  { id: 'skill-07',      name: 'Skill 07',      version: '1.0', description: 'Description 7',             verified: true,  status: 'active' },
+  { id: 'skill-08',      name: 'Skill 08',      version: '1.0', description: 'Description 8',             verified: true,  status: 'active' },
+  { id: 'skill-09',      name: 'Skill 09',      version: '1.0', description: 'Description 9',             verified: true,  status: 'active' },
+  { id: 'skill-10',      name: 'Skill 10',      version: '1.0', description: 'Description 10',            verified: true,  status: 'active' },
 ]
+// Deferred item 3: even zero-padded, "Web Research" sorts LAST alphabetically
+// among ALL_MOCK_SKILLS' 10 names (W > S > D > C) and never survives an
+// 8-item alphabetical cap — that's real, correct, and now-deterministic
+// behavior (see the "capped at 8" test below), not a bug. The three
+// non-cap-related tests that only need a handful of unambiguous, always-
+// visible skills use this smaller fixture instead, so they aren't
+// incidentally coupled to the specific 10-item cap fixture's sort order.
+const SMALL_MOCK_SKILLS = [
+  { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+  { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+  { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+]
+// Mutable per-test override — defaults to the small fixture; the "capped at
+// 8" test below swaps in ALL_MOCK_SKILLS for its own run only.
+let skillsFixture: typeof ALL_MOCK_SKILLS = SMALL_MOCK_SKILLS
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
@@ -129,8 +150,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
         return { data: mockCommands, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') {
-        // Return ALL 10 skills so the "capped at 8" test can actually exercise the cap.
-        return { data: ALL_MOCK_SKILLS, isError: false, refetch: vi.fn() }
+        return { data: skillsFixture, isError: false, refetch: vi.fn() }
       }
       return { data: [], isError: false, refetch: vi.fn() }
     },
@@ -145,14 +165,24 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockResolvedValue([]),
-  fetchSkills: vi.fn().mockResolvedValue([]),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-  uploadFiles: vi.fn(),
-}))
+// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
+// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
+// doesn't exercise mentions. The workspaces query stays disabled (no
+// activeWorkspaceId set here), so `fetchWorkspaces` is never actually
+// invoked — this just needs to exist so the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    uploadFiles: vi.fn(),
+  }
+})
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
@@ -188,6 +218,7 @@ function resetStores() {
       activeAgentType: null,
     })
   })
+  skillsFixture = SMALL_MOCK_SKILLS
 }
 
 beforeEach(resetStores)
@@ -235,27 +266,44 @@ describe('Skills filter mode (D9)', () => {
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
   })
 
-  it('skills are capped at 8 results maximum — 10 skills seeded, only 8 shown', async () => {
-    // The module-level mock now returns ALL_MOCK_SKILLS (10 entries).
-    // This test verifies that the slice(0, 8) cap in visibleSkillMenuItems works.
+  it('skills are capped at 8 results maximum — 10 skills seeded, only 8 shown, alphabetically ordered, with a "+2 more" footer', async () => {
+    // Swap in the 10-entry fixture for this test only (default is the
+    // 3-entry SMALL_MOCK_SKILLS — see the module-level `skillsFixture`
+    // toggle and its doc comment).
+    skillsFixture = ALL_MOCK_SKILLS
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // With 10 skills in the mock, the menu must show at most 8.
-    // Count all buttons in the slash menu that have a skill-like label
-    // (starts with "/" — both commands and skills).
-    const menuButtons = screen
-      .getAllByRole('button')
-      .filter((btn) => {
-        const text = btn.textContent ?? ''
-        // Skill items: /web-research, /code-review, /data-analysis, /skill-4..10
+    // Deferred item 2: rows are `role="option"` now (not the button's
+    // implicit `role="button"`), since they're listbox options — query by
+    // that role rather than "button".
+    const skillOptions = screen
+      .getAllByRole('option')
+      .filter((el) => {
+        const text = el.textContent ?? ''
         return text.match(/^\/(web-research|code-review|data-analysis|skill-\d+)/)
       })
-    // Exactly 8 skill items (cap = 8, mock has 10)
-    expect(menuButtons.length).toBe(8)
+    // Exactly 8 skill items (cap = SECTION_CAP, mock has 10).
+    expect(skillOptions.length).toBe(8)
+    // Deferred item 3: alphabetical by name, zero-padded so numeric order
+    // matches — Code Review, Data Analysis, Skill 04..Skill 09 fill the 8
+    // slots; Skill 10 and Web Research (last alphabetically: "W" > "S") are
+    // the 2 pushed past the cap.
+    // Note: the label and description spans are adjacent with no whitespace
+    // between them in textContent (e.g. "/code-reviewCode Review — ..."), so
+    // match only slug characters, not `\S+` (which would swallow into the
+    // description).
+    expect(skillOptions.map((el) => el.textContent?.match(/^\/([a-z0-9-]+)/)?.[1])).toEqual([
+      'code-review', 'data-analysis', 'skill-04', 'skill-05', 'skill-06', 'skill-07', 'skill-08', 'skill-09',
+    ])
+    expect(screen.queryByText('/skill-10')).not.toBeInTheDocument()
+    expect(screen.queryByText('/web-research')).not.toBeInTheDocument()
+    // Deferred item 3: the "+N more" footer surfaces the overflow instead of
+    // silently hiding it.
+    expect(screen.getByTestId('slash-menu-footer')).toHaveTextContent('+2 more')
   })
 
   it('menu does not show when input does not start with "/"', async () => {

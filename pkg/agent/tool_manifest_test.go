@@ -33,7 +33,7 @@ func newCompressedCfg(t *testing.T) *config.Config {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "mock-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -1775,7 +1775,7 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 				_, registered := agentInst.Tools.Get(name)
 				require.True(t, registered,
 					"REGISTRATION GAP: agent %q — %q must be registered in the test harness. "+
-						"The task store is seeded from cfg.Agents.Defaults.Workspace (t.TempDir()) "+
+						"The task store is seeded from cfg.Agents.Defaults.Home (t.TempDir()) "+
 						"in NewAgentLoop; if this fails, the taskStore or tool registration changed.", tc.agentID, name)
 			}
 

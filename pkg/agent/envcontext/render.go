@@ -82,6 +82,17 @@ func render(p Provider, workspaceOverride string) string {
 	fmt.Fprintf(&sb, "- Sandbox: %s\n", sandboxMode)
 	fmt.Fprintf(&sb, "- Network: %s\n", networkStr)
 
+	// Public URL: only rendered when the provider can derive one (e.g. a
+	// wildcard bind with no gateway.public_url configured yields ""). Told
+	// apart from Workspace/Omnipus-home above because it is the one path
+	// item that's a URL, not a filesystem path — it's where pages the agent
+	// serves (e.g. via serve_web) are reachable from OUTSIDE the sandbox.
+	if publicURL := strings.TrimSpace(p.PublicURL()); publicURL != "" {
+		fmt.Fprintf(&sb,
+			"- Public URL (externally reachable base for pages you serve, e.g. via serve_web): %s\n",
+			publicURL)
+	}
+
 	if len(warnings) > 0 {
 		sb.WriteString("\n### Active warnings\n")
 		for _, w := range warnings {

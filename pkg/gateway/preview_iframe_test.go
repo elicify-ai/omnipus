@@ -10,7 +10,8 @@
 // Coverage targets (SC-006 per spec):
 //   - pkg/gateway/rest_preview.go (HandlePreview — the unified /preview/ route)
 //   - pkg/gateway/rest_workspace.go (CSP / headers)
-//   - pkg/config/config.go (ValidateAndApplyPreviewDefaults)
+//   - pkg/config/config.go (IsPreviewEnabled — ADR-044; ValidateAndApplyPreviewDefaults
+//     and the separate-port preview keys it validated were deleted, no back-compat)
 //
 // Tests NOT here (Track B already covered):
 //   - TestBuildWorkspaceCSP_FrameAncestorsFromMainOrigin
@@ -42,6 +43,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -516,17 +518,17 @@ func TestCanonicalGatewayOrigin_PublicURLOverride(t *testing.T) {
 // HandleAbout — preview fields
 // ---------------------------------------------------------------------------
 
-// TestHandleAbout_PreviewFields verifies FR-009: GET /api/v1/about includes
-// preview_port, preview_listener_enabled, and warmup_timeout_seconds.
-// Traces to: chat-served-iframe-preview-spec.md FR-009
+// TestHandleAbout_PreviewFields verifies FR-015: GET /api/v1/about includes
+// preview_enabled and warmup_timeout_seconds, and no longer includes the
+// retired preview_port/preview_listener_enabled/preview_origin fields.
+// Traces to: preview-on-main-listener-spec.md FR-015 (US-8)
 func TestHandleAbout_PreviewFields(t *testing.T) {
 	api := newPreviewTestAPI(t)
 	// Wire explicit preview config.
 	cfg := api.agentLoop.GetConfig()
 	cfg.Gateway.Port = 5000
-	cfg.Gateway.PreviewPort = 5001
 	trueVal := true
-	cfg.Gateway.PreviewListenerEnabled = &trueVal
+	cfg.Gateway.PreviewEnabled = &trueVal
 	cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds = 60
 
 	w := httptest.NewRecorder()
@@ -537,36 +539,39 @@ func TestHandleAbout_PreviewFields(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
-	// FR-009: three required preview fields.
-	assert.Contains(t, resp, "preview_port",
-		"FR-009: about must include preview_port")
-	assert.Contains(t, resp, "preview_listener_enabled",
-		"FR-009: about must include preview_listener_enabled")
+	// FR-015: preview_enabled replaces the retired preview listener fields.
+	assert.Contains(t, resp, "preview_enabled",
+		"FR-015: about must include preview_enabled")
 	assert.Contains(t, resp, "warmup_timeout_seconds",
-		"FR-009: about must include warmup_timeout_seconds")
+		"FR-015: about must include warmup_timeout_seconds")
+	assert.NotContains(t, resp, "preview_port",
+		"FR-015: preview_port must be removed from AboutResponse")
+	assert.NotContains(t, resp, "preview_listener_enabled",
+		"FR-015: preview_listener_enabled must be removed from AboutResponse")
+	assert.NotContains(t, resp, "preview_origin",
+		"FR-015: preview_origin must be removed from AboutResponse")
 
 	// Values must reflect the config we wired.
 	// JSON numbers decode as float64 in map[string]any.
-	assert.Equal(t, float64(5001), resp["preview_port"],
-		"preview_port must match configured value")
-	assert.Equal(t, true, resp["preview_listener_enabled"],
-		"preview_listener_enabled must reflect config")
+	assert.Equal(t, true, resp["preview_enabled"],
+		"preview_enabled must reflect config")
 	assert.Equal(t, float64(60), resp["warmup_timeout_seconds"],
 		"warmup_timeout_seconds must match configured value")
 }
 
 // TestHandleAbout_PreviewFields_Differentiation verifies that two different
-// preview_port values produce two different about responses — proving it's not
-// hardcoded.
-// Traces to: chat-served-iframe-preview-spec.md FR-009 (differentiation)
+// preview_enabled configs produce two different about responses — proving
+// it's not hardcoded.
+// Traces to: preview-on-main-listener-spec.md FR-015 (US-8, differentiation)
 func TestHandleAbout_PreviewFields_Differentiation(t *testing.T) {
-	ports := []int32{5001, 6001}
+	values := []bool{true, false}
 	bodies := make([]map[string]any, 2)
-	for i, port := range ports {
+	for i, v := range values {
 		api := newPreviewTestAPI(t)
 		cfg := api.agentLoop.GetConfig()
 		cfg.Gateway.Port = 5000
-		cfg.Gateway.PreviewPort = port
+		enabled := v
+		cfg.Gateway.PreviewEnabled = &enabled
 
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/about", nil)
@@ -574,54 +579,68 @@ func TestHandleAbout_PreviewFields_Differentiation(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &bodies[i]))
 	}
-	assert.NotEqual(t, bodies[0]["preview_port"], bodies[1]["preview_port"],
-		"Different preview_port configs must produce different about responses")
+	assert.NotEqual(t, bodies[0]["preview_enabled"], bodies[1]["preview_enabled"],
+		"Different preview_enabled configs must produce different about responses")
+}
+
+// TestHandleAbout_PreviewFields_GeneratedContractType strengthens
+// TestHandleAbout_PreviewFields (pr-test-analyzer finding #24): decoding the
+// response into map[string]any only proves the field NAMES are present — it
+// cannot catch a JSON-type/schema drift (e.g. preview_enabled serialized as a
+// string, or a field silently renamed) because map[string]any accepts any
+// shape. This decodes the SAME /api/v1/about response into the GENERATED
+// gen.AboutResponse struct (Constraint #8 — the one legal cross-boundary type
+// for this response, per contracts/components/schemas/AboutResponse.yaml)
+// and asserts PreviewEnabled round-trips correctly for both the true default
+// and an explicitly-disabled config, proving HandleAbout emits schema-valid
+// JSON for the new field — not just JSON that happens to have the right key
+// when decoded loosely.
+// Traces to: preview-on-main-listener-spec.md FR-015 (US-8); pr-test #24.
+func TestHandleAbout_PreviewFields_GeneratedContractType(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("preview_enabled=%v", enabled), func(t *testing.T) {
+			api := newPreviewTestAPI(t)
+			cfg := api.agentLoop.GetConfig()
+			cfg.Gateway.Port = 5000
+			v := enabled
+			cfg.Gateway.PreviewEnabled = &v
+			cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds = 60
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/about", nil)
+			api.HandleAbout(w, r)
+
+			require.Equal(t, http.StatusOK, w.Code, "/api/v1/about must return 200")
+
+			var resp gen.AboutResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+				"FR-015: /api/v1/about response must decode into the GENERATED gen.AboutResponse "+
+					"contract type without error — a type-mismatched or malformed field would fail "+
+					"here even though a map[string]any decode would silently accept it")
+
+			assert.Equal(t, enabled, resp.PreviewEnabled,
+				"gen.AboutResponse.PreviewEnabled must reflect the configured value")
+			assert.Equal(t, 60, resp.WarmupTimeoutSeconds,
+				"gen.AboutResponse.WarmupTimeoutSeconds must match the configured warmup timeout")
+			assert.NotEmpty(t, resp.Version, "gen.AboutResponse.Version must be populated")
+			assert.NotEmpty(t, resp.GoVersion, "gen.AboutResponse.GoVersion must be populated")
+			assert.NotEmpty(t, resp.Os, "gen.AboutResponse.Os must be populated")
+			assert.NotEmpty(t, resp.Arch, "gen.AboutResponse.Arch must be populated")
+			assert.Positive(t, resp.Pid, "gen.AboutResponse.Pid must be a real positive PID")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
 // PendingRestart — preview fields
 // ---------------------------------------------------------------------------
-
-// TestPendingRestart_PreviewFields verifies that changing preview_port shows
-// up in the pending-restart diff since it is a restart-gated key.
-// Traces to: chat-served-iframe-preview-spec.md FR-027b / MR-02
-func TestPendingRestart_PreviewFields(t *testing.T) {
-	// Applied config at boot had preview_port=5001.
-	applied := map[string]any{
-		"gateway": map[string]any{
-			"port":         float64(5000),
-			"preview_port": float64(5001),
-		},
-	}
-	// Persisted (on-disk) config has preview_port=6001.
-	persisted := map[string]any{
-		"gateway": map[string]any{
-			"port":         float64(5000),
-			"preview_port": float64(6001),
-		},
-	}
-	api := newPendingRestartAPI(t, applied, persisted)
-
-	w := httptest.NewRecorder()
-	r := withAdminCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
-	api.HandlePendingRestart(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	diffs := decodeDiffs(t, w.Body.Bytes())
-
-	var foundPreviewPort bool
-	for _, d := range diffs {
-		if d.Key == "gateway.preview_port" {
-			foundPreviewPort = true
-			assert.Equal(t, float64(6001), d.PersistedValue,
-				"persisted preview_port must be 6001")
-			assert.Equal(t, float64(5001), d.AppliedValue,
-				"applied preview_port must be 5001 (boot value)")
-		}
-	}
-	assert.True(t, foundPreviewPort,
-		"gateway.preview_port must appear in pending-restart diff (restart-gated key)")
-}
+//
+// TestPendingRestart_PreviewFields (the old FR-027b/MR-02 test asserting that
+// changing preview_port surfaces a pending-restart diff) was removed under
+// ADR-044: gateway.preview_port no longer exists, and gateway.preview_enabled
+// (its replacement) is deliberately NOT restart-gated — see
+// TestRestartGatedKeys_KeepsPublicURL_DropsPreview (s1_befixes-adjacent
+// coverage) and rest_pending_restart.go's RestartGatedKeys doc comment.
 
 // ---------------------------------------------------------------------------
 // ProxyDevRequest — strips upstream CSP
