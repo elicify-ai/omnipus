@@ -58,12 +58,19 @@ export interface BrowserWebRTCSessionOptions {
   /** ms to wait after a fallback before the single automatic re-offer.
    * Default 15000. */
   retryDelayMs?: number
+  /** ms to wait for `RTCPeerConnection.iceGatheringState` to reach
+   * 'complete' before giving up and sending the offer with whatever
+   * candidates have gathered so far (non-trickle still works with a partial
+   * candidate set — better than wedging in 'offering' forever on a stuck
+   * gathering). Default 3000. */
+  iceGatheringTimeoutMs?: number
 }
 
 const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
 const DEFAULT_DISCONNECTED_GRACE_MS = 5000
 const DEFAULT_RETRY_DELAY_MS = 15000
+const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 3000
 
 function defaultPcFactory(): RTCPeerConnection {
   return new RTCPeerConnection({ iceServers: [{ urls: DEFAULT_STUN_SERVER }] })
@@ -74,11 +81,19 @@ export class BrowserWebRTCSession {
   private readonly answerTimeoutMs: number
   private readonly disconnectedGraceMs: number
   private readonly retryDelayMs: number
+  private readonly iceGatheringTimeoutMs: number
 
   private pc: RTCPeerConnection | null = null
   private inputChannel: RTCDataChannel | null = null
   private remoteStream: MediaStream | null = null
-  private sendOfferFn: ((sdp: string) => void) | null = null
+  /** An explicit `false` return means the caller's transport failed to
+   * actually send the offer (e.g. a closed WebSocket mid-ICE-gathering) —
+   * see `_beginOffer`, which triggers an immediate 'offer-send-failed'
+   * fallback on `false` rather than waiting out the full answer timeout. A
+   * `void`/`undefined` return (a caller that doesn't report send success) is
+   * treated as "no signal, assume it went out" for backward compatibility —
+   * only a literal `false` is a failure signal. */
+  private sendOfferFn: ((sdp: string) => boolean | void) | null = null
 
   private _state: BrowserWebRTCState = 'idle'
   private stopped = true
@@ -98,6 +113,7 @@ export class BrowserWebRTCSession {
     this.answerTimeoutMs = options.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS
     this.disconnectedGraceMs = options.disconnectedGraceMs ?? DEFAULT_DISCONNECTED_GRACE_MS
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
+    this.iceGatheringTimeoutMs = options.iceGatheringTimeoutMs ?? DEFAULT_ICE_GATHERING_TIMEOUT_MS
   }
 
   get state(): BrowserWebRTCState {
@@ -131,9 +147,27 @@ export class BrowserWebRTCSession {
    * is already up; this keeps that idempotent. Resets the one-shot retry
    * budget — call this again after an intentional `stop()` (a fresh
    * re-attach) to re-arm automatic fallback retry.
+   *
+   * `sendOffer` may optionally return a boolean — an explicit `false` means
+   * the caller's transport failed to actually send the offer (e.g. a closed
+   * WebSocket), which triggers an immediate 'offer-send-failed' fallback
+   * instead of the full answer timeout (see `_beginOffer`). A `void` return
+   * is treated as "assume it sent," so existing callers that don't report
+   * send success are unaffected.
    */
-  start(sendOffer: (sdp: string) => void): void {
+  start(sendOffer: (sdp: string) => boolean | void): void {
     if (this._state === 'offering' || this._state === 'connected') return
+    // Bugfix (HIGH, fix-wave B): a pending automatic-retry timer armed by an
+    // earlier fallback must be cleared here too, not just in stop(). Without
+    // this, the sequence available:false → (retry armed) → available:true →
+    // caller re-invokes start() to reconnect → the STALE retry timer still
+    // fires later and calls _beginOffer on what is now a healthy session,
+    // creating a second RTCPeerConnection alongside the one this start()
+    // just began and leaking the first (its close() is never called).
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
     this.stopped = false
     this.retriedOnce = false
     this.sendOfferFn = sendOffer
@@ -156,12 +190,23 @@ export class BrowserWebRTCSession {
    * when it signals unavailability WHILE a session is actually in flight —
    * deciding whether/when to `start()` on an *available* signal is the
    * caller's job (wave-plan W2-B wiring note), so an available:true frame is
-   * intentionally a no-op here.
+   * intentionally a no-op here UNLESS it also reports `active:false` after
+   * this session had already connected (fix-wave B, MED): the gateway pushes
+   * `available:false` on an ordinary stop, but the relay can also drop out
+   * from under an established connection while the capability itself stays
+   * available (`active` flips false without `available` following it) — the
+   * contract calls that a fallback trigger too, same as any other
+   * mid-session failure.
    */
-  applyState(frame: Pick<BrowserWebRTCStateFrame, 'available' | 'reason'>): void {
-    if (frame.available) return
-    if (this._state === 'offering' || this._state === 'connected') {
-      this._fallback(frame.reason ?? 'unavailable')
+  applyState(frame: Pick<BrowserWebRTCStateFrame, 'available' | 'reason' | 'active'>): void {
+    if (!frame.available) {
+      if (this._state === 'offering' || this._state === 'connected') {
+        this._fallback(frame.reason ?? 'unavailable')
+      }
+      return
+    }
+    if (frame.active === false && this._state === 'connected') {
+      this._fallback(frame.reason ?? 'stream-stopped')
     }
   }
 
@@ -200,6 +245,12 @@ export class BrowserWebRTCSession {
   }
 
   private async _beginOffer(): Promise<void> {
+    // Defensive guard (HIGH, fix-wave B): makes "at most one PC" structural
+    // rather than relying solely on every caller correctly clearing timers
+    // before invoking this. Any leftover `this.pc` here (e.g. from a bug in
+    // a future caller, or a path this fix wave didn't anticipate) is torn
+    // down first so a fresh offer never starts alongside a live one.
+    if (this.pc !== null) this._cleanupPeer()
     this._setState('offering')
     let pc: RTCPeerConnection
     try {
@@ -231,7 +282,18 @@ export class BrowserWebRTCSession {
         this._fallback('no-local-description')
         return
       }
-      this.sendOfferFn?.(sdp)
+      // fix-wave B (MED): an explicit `false` return means the caller's
+      // transport (e.g. a closed WebSocket mid-ICE-gathering) never actually
+      // got the offer out — fall back immediately with a specific reason
+      // rather than silently burning the full answerTimeoutMs waiting for an
+      // answer that was never going to arrive. A `void`/`undefined` return
+      // (existing callers/tests that don't report send success) is NOT
+      // treated as failure — only a literal `false` is.
+      const sendResult = this.sendOfferFn?.(sdp)
+      if (sendResult === false) {
+        this._fallback('offer-send-failed')
+        return
+      }
       this._startAnswerTimeout()
     } catch (err) {
       if (this.pc !== pc) return
@@ -242,8 +304,26 @@ export class BrowserWebRTCSession {
   private _waitForIceGatheringComplete(pc: RTCPeerConnection): Promise<void> {
     if (pc.iceGatheringState === 'complete') return Promise.resolve()
     return new Promise((resolve) => {
+      // fix-wave B (LOW): bound the wait — a gathering process that never
+      // reaches 'complete' (a stuck STUN round trip, a flaky network) used to
+      // wedge this Promise forever, leaving the machine stuck in 'offering'
+      // with no offer ever sent and no fallback ever triggered. Non-trickle
+      // still works fine with whatever candidates gathered in the timeout
+      // window (worst case: fewer candidate types, not zero), so proceeding
+      // with a partial set beats never proceeding at all. The caller
+      // (`_beginOffer`) re-checks `this.pc !== pc` right after this resolves,
+      // so a timeout firing after the session was superseded/stopped is
+      // harmless.
+      const timer = setTimeout(() => {
+        pc.onicegatheringstatechange = null
+        resolve()
+      }, this.iceGatheringTimeoutMs)
       pc.onicegatheringstatechange = () => {
-        if (pc.iceGatheringState === 'complete') resolve()
+        if (pc.iceGatheringState === 'complete') {
+          clearTimeout(timer)
+          pc.onicegatheringstatechange = null
+          resolve()
+        }
       }
     })
   }
