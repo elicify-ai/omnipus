@@ -856,10 +856,26 @@ export function BrowserLiveView({
       // heads-up so the user understands why the picture just changed.
       if (!WEBRTC_CAPABILITY_GATE_REASONS.has(reason)) {
         console.warn('[browser-live] WebRTC fell back to JPEG:', reason)
-        useUiStore.getState().addToast({
-          message: 'Live video degraded to picture mode — audio unavailable.',
-          variant: 'warning',
-        })
+        // fix-wave (MED): an 'answer-timeout' fallback while this machine has
+        // NEVER reached 'connected' in this panel session is very likely the
+        // legitimate cold-start latency (capture start ~20s + bringToFront
+        // ~5s + tracks wait, ~25s+ worst case) racing the machine's own
+        // extended-but-still-finite firstAnswerTimeoutMs, NOT a real
+        // degradation — a toast here is a false alarm that then connects
+        // fine on the machine's own automatic retry. `machine.hasConnectedOnce`
+        // is the lifetime "ever connected" flag (browserWebRTC.ts) —
+        // console.warn still fires unconditionally (so a support engineer
+        // reading the console still sees it), only the user-facing toast is
+        // suppressed. Every OTHER reason, and 'answer-timeout' once the
+        // stream HAD connected before, still toasts — that's a genuine
+        // degradation of a previously-working stream.
+        const coldStartAnswerTimeout = reason === 'answer-timeout' && !machine.hasConnectedOnce
+        if (!coldStartAnswerTimeout) {
+          useUiStore.getState().addToast({
+            message: 'Live video degraded to picture mode — audio unavailable.',
+            variant: 'warning',
+          })
+        }
       }
     })
 

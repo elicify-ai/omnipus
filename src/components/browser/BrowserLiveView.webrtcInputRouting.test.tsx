@@ -27,6 +27,7 @@ const {
   mockMachineApplyState,
   mockMachineStop,
   machineCallbacksRef,
+  machineHasConnectedOnceRef,
 } = vi.hoisted(() => ({
   mockSendInput: vi.fn(() => true),
   mockSendControl: vi.fn(() => true),
@@ -46,6 +47,13 @@ const {
       onFallback: null as ((r: string) => void) | null,
     },
   },
+  // fix-wave (MED): backs the mocked machine's `hasConnectedOnce` getter —
+  // BrowserLiveView.tsx reads this to decide whether an 'answer-timeout'
+  // fallback is a cold-start false positive (never connected, stay quiet)
+  // or a genuine degradation (connected before, warn). Defaults false
+  // (cold start) — individual tests flip it true to exercise the
+  // already-connected path. Reset in beforeEach below.
+  machineHasConnectedOnceRef: { current: false },
 }))
 
 vi.mock('@/lib/browserLiveWs', () => ({
@@ -74,6 +82,9 @@ vi.mock('@/lib/browserWebRTC', () => ({
       applyState: mockMachineApplyState,
       stop: mockMachineStop,
       sendInput: mockMachineSendInput,
+      get hasConnectedOnce() {
+        return machineHasConnectedOnceRef.current
+      },
       onStream: (cb: (s: MediaStream) => void) => {
         machineCallbacksRef.current.onStream = cb
       },
@@ -132,6 +143,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   wsCallbacksRef.current = null
   machineCallbacksRef.current = { onStream: null, onInputChannelOpen: null, onInputChannelClose: null, onFallback: null }
+  machineHasConnectedOnceRef.current = false
   useUiStore.setState({ toasts: [] })
 })
 
@@ -416,7 +428,7 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
 })
 
 describe('BrowserLiveView — surfacing WebRTC fallback reasons (fix-wave B, HIGH)', () => {
-  it.each(['ice-failed', 'answer-timeout', 'ice-disconnected-timeout', 'offer-send-failed', 'stream-stopped', 'error', 'unavailable'])(
+  it.each(['ice-failed', 'ice-disconnected-timeout', 'offer-send-failed', 'stream-stopped', 'error', 'unavailable'])(
     'logs console.warn and shows a transient warning toast for the RUNTIME reason "%s"',
     (reason) => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -434,6 +446,40 @@ describe('BrowserLiveView — surfacing WebRTC fallback reasons (fix-wave B, HIG
       warnSpy.mockRestore()
     },
   )
+
+  // fix-wave (MED, reviewer 4 finding 4): 'answer-timeout' is special-cased —
+  // it splits on whether the machine has EVER connected in this panel
+  // session (machine.hasConnectedOnce, browserWebRTC.ts), unlike every other
+  // runtime reason above which always toasts.
+  it('logs console.warn but SUPPRESSES the toast for "answer-timeout" on a cold start (machine never reached connected) — a false-positive degradation signal, not a real one', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // machineHasConnectedOnceRef defaults to false in beforeEach — a cold start.
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+
+    act(() => machineCallbacksRef.current.onFallback?.('answer-timeout'))
+
+    expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC fell back to JPEG:', 'answer-timeout')
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+    warnSpy.mockRestore()
+  })
+
+  it('logs console.warn AND shows the toast for "answer-timeout" once the machine had already connected once before falling back — a genuine degradation, not a cold start', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    machineHasConnectedOnceRef.current = true
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+
+    act(() => machineCallbacksRef.current.onFallback?.('answer-timeout'))
+
+    expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC fell back to JPEG:', 'answer-timeout')
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toEqual(
+      expect.objectContaining({ variant: 'warning', message: expect.stringContaining('Live video degraded') }),
+    )
+    warnSpy.mockRestore()
+  })
 
   it.each(['disabled', 'not_capable', 'lite_build'])(
     'stays silent — no console.warn, no toast — for the CAPABILITY-GATE reason "%s" (this mode simply is not available; not a degradation)',

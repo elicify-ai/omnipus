@@ -64,6 +64,21 @@ export function BrowserLivePanel() {
     // checked here; a user-gesture open is not popup-blocked in practice,
     // and re-opening the panel is one "Watch live" click if it ever is.)
     closeBrowserPanel()
+    // a11y fix-wave (F1): closeBrowserPanel() unmounts this docked <aside>,
+    // which drops keyboard focus to <body> — stranding keyboard/SR users
+    // with no indication of where focus went. Restore it to the chat
+    // composer, the page's "home position" (see ChatScreen.tsx's own
+    // focus-discipline comment on chatInputRef) — the one landmark
+    // guaranteed to be mounted alongside this panel (BrowserLivePanel is
+    // always docked beside the chat region, per this file's module doc).
+    // A plain DOM query (not a ref/context) is deliberate: this is a single
+    // global instance mounted outside ChatScreen's own component tree, so it
+    // has no direct handle on ChatScreen's internal chatInputRef — querying
+    // by the SAME `data-testid="chat-input"` that ref is threaded to is the
+    // lightest coupling available. Optional chaining makes this a graceful
+    // no-op if the composer isn't mounted (e.g. a future host without a chat
+    // screen), rather than throwing.
+    document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]')?.focus()
   }
 
   return (
