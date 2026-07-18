@@ -207,6 +207,52 @@ func seedTestWorkspaceMembershipForIDs(t *testing.T, ids []string) {
 	}
 }
 
+// seedDistinctTestWorkspacesForIDs makes each id the SOLE member of its OWN
+// dedicated workspace (id "test-harness-solo-<id>"), so every id resolves —
+// via FindForAgentPreferring in resolveTurnWorkDirOrRefuse — to a DISTINCT
+// workspace work/ directory.
+//
+// This is the deliberate counterpart to seedTestWorkspaceMembershipForIDs,
+// which unions every id into ONE shared workspace (hence one shared work/ dir,
+// one shared external_dispatch.go workspaceRunLocks entry). Under ADR-046 P1
+// every dispatch's WorkDir is the acting agent's resolved workspace work/ dir
+// (agent.Home no longer participates), so a concurrency test whose sub-turns
+// must NOT serialize on that per-work-dir lock now expresses "distinct work
+// dirs" as "distinct workspaces" rather than the pre-P1 "distinct agent.Home".
+//
+// Same discipline as seedTestWorkspaceMembershipForIDs: guarded by
+// testHarnessWorkspaceMu, written atomically, and idempotent — an id already a
+// member of SOME workspace is left untouched (never double-seeded into a
+// second workspace, which would create FindForAgent's ambiguous
+// multi-membership case).
+func seedDistinctTestWorkspacesForIDs(t *testing.T, ids []string) {
+	t.Helper()
+	home := omnipusHome()
+
+	testHarnessWorkspaceMu.Lock()
+	defer testHarnessWorkspaceMu.Unlock()
+
+	dir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("seedDistinctTestWorkspacesForIDs: mkdir workspaces: %v", err)
+	}
+	for _, id := range ids {
+		if _, found := workspace.FindForAgent(home, id); found {
+			continue
+		}
+		wsID := "test-harness-solo-" + id
+		rec := testHarnessWorkspaceRecord{ID: wsID, CoreTeam: []string{id}}
+		data, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatalf("seedDistinctTestWorkspacesForIDs: marshal %s: %v", id, err)
+		}
+		path := filepath.Join(dir, wsID+".json")
+		if err := fileutil.WriteFileAtomic(path, data, 0o644); err != nil {
+			t.Fatalf("seedDistinctTestWorkspacesForIDs: write %s: %v", path, err)
+		}
+	}
+}
+
 // testHarnessAgentIDs returns the set of agent IDs mustNewAgentLoop's caller's
 // cfg will register with NewAgentRegistry: DefaultAgentID ("main", always
 // registered as the synthetic default/fallback agent regardless of cfg — see
