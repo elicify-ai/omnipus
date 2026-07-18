@@ -146,9 +146,9 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 			defer recoverPanic("spawn")
 
 			agent := &AgentInstance{
-				ID:        fmt.Sprintf("ext-agent-%d", i),
-				Name:      "External Agent",
-				Workspace: workDirs[i],
+				ID:   fmt.Sprintf("ext-agent-%d", i),
+				Name: "External Agent",
+				Home: workDirs[i],
 				Subagents: &config.SubagentsConfig{
 					Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 				},

@@ -274,9 +274,9 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 	// external_dispatch.go package-level workspaceRunLocks entry for
 	// sharedWorkDir.
 	secondAgent := &AgentInstance{
-		ID:        "ext-agent-lock-2",
-		Name:      "External Agent 2",
-		Workspace: sharedWorkDir,
+		ID:   "ext-agent-lock-2",
+		Name: "External Agent 2",
+		Home: sharedWorkDir,
 		Subagents: &config.SubagentsConfig{
 			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 		},

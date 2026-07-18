@@ -71,6 +71,15 @@ var allowlistedRawFSFilesBrowser = map[string]string{
 		"shutdown) — never a caller-supplied \"path\" tool argument; " +
 		"browser_screenshot (tools.go), the one path-taking tool in this " +
 		"package, already routes through tools.ResolvePath.",
+	"coordinator.go": "the ADR-043 shared-Chrome BrowserCoordinator singleton " +
+		"(not a Tool) — its only raw I/O targets are the operator-configured " +
+		"Chrome profile dir (cfg.ProfileDir, same category as manager.go: " +
+		"MkdirAll on launch, stale-singleton cleanup) and the process-global " +
+		"ownership marker at $OMNIPUS_HOME/browser/shared-chrome.pid " +
+		"(system-computed from homeDir, never a caller-supplied \"path\" " +
+		"argument). ResolvePath resolves a per-turn agent WorkDir; these are " +
+		"process-wide singleton coordination paths with no per-turn " +
+		"confinement decision to enforce.",
 }
 
 // bannedOSFuncs is the FR-034 banned-call list for the "os" package
