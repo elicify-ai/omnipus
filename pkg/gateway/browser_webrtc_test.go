@@ -684,3 +684,153 @@ func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) 
 	_, _, readErr := conn1.ReadMessage()
 	require.Error(t, readErr, "the OLD ingest connection must be closed once a second hello with the same token arrives")
 }
+
+// ── ADR-048 condition-2 fence (re-scoped 2026-07-18) ─────────────────────────
+//
+// UAT root-cause regression tests for "video black when the agent drives":
+// the fence must deny a NEW capture only when another agent's capture
+// session is ACTIVELY VIEWED, must supersede (Stop) a viewerless leftover,
+// and must never consult mere live browser sessions (the old behavior that
+// permanently locked the panel out of video after a second agent's tools
+// opened their own session).
+
+// TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied: another agent's
+// capture session with an attached viewer is a true conflict — the offer is
+// denied with reason "error", and the other session is left untouched.
+func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	}
+	tmpDir := t.TempDir()
+	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Tools.Browser.WebRTCEnabled = true
+		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
+		cfg.Tools.Browser.CaptureSharedContext = true
+	})
+	t.Cleanup(handler.Wait)
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent)
+	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
+	require.True(t, ok)
+
+	// Capability gate must pass so the ladder reaches the fence.
+	installRoot := mgr.InstallRoot()
+	fakeBinDir := filepath.Join(installRoot, "fake-version", "chrome-linux64")
+	require.NoError(t, os.MkdirAll(fakeBinDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBinDir, "chrome"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
+	require.True(t, browser.ClassifyVideoCapability(installRoot).Capable)
+
+	// Another agent's capture session, actively viewed.
+	var calls int32
+	otherCS, err := browser.NewCaptureSessionWithDeps(nil, "other-agent", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+	otherCS.AddViewer("their-viewer")
+	handler.captures.set("other-agent", otherCS)
+	t.Cleanup(otherCS.Stop)
+
+	wc := newTestBrowserWSConn()
+	var state browserConnState
+	frame := generated.BrowserWebRTCOfferFrame{
+		Type:      string(generated.WsFrameTypeBrowserWebrtcOffer),
+		AgentId:   defaultAgent.ID,
+		Sdp:       "v=0\r\n",
+		SessionId: "sess-1",
+	}
+	data, err := json.Marshal(frame)
+	require.NoError(t, err)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+
+	got := decodeWebRTCState(t, drainOneFrame(t, wc))
+	require.False(t, got.Available, "an actively-viewed conflicting capture must deny the offer")
+	require.Equal(t, "error", got.Reason)
+	require.Nil(t, state.webrtc)
+	select {
+	case <-otherCS.Done():
+		t.Fatal("the actively-viewed conflicting capture must NOT be stopped by a denied offer")
+	default:
+	}
+}
+
+// TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded: a viewerless
+// (grace-period) capture session of another agent must be stopped and the
+// ladder must proceed for the requesting agent — the ordinary single-user
+// "panel moved to the other agent" flow that the old live-session fence
+// broke. The ladder then proceeds to a launch failure in this
+// chrome-less harness (same terminal state as
+// TestHandleWebRTCOffer_CapableButLaunchFails); the discriminator between
+// "denied at the fence" and "proceeded past it" is the superseded session's
+// Done() channel.
+func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	}
+	tmpDir := t.TempDir()
+	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Tools.Browser.WebRTCEnabled = true
+		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
+		cfg.Tools.Browser.CaptureSharedContext = true
+	})
+	t.Cleanup(handler.Wait)
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent)
+	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
+	require.True(t, ok)
+
+	installRoot := mgr.InstallRoot()
+	fakeBinDir := filepath.Join(installRoot, "fake-version", "chrome-linux64")
+	require.NoError(t, os.MkdirAll(fakeBinDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBinDir, "chrome"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
+	require.True(t, browser.ClassifyVideoCapability(installRoot).Capable)
+
+	// Another agent's capture session with NO viewers (grace-period leftover).
+	var calls int32
+	otherCS, err := browser.NewCaptureSessionWithDeps(nil, "other-agent", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+	handler.captures.set("other-agent", otherCS)
+	t.Cleanup(otherCS.Stop)
+
+	wc := newTestBrowserWSConn()
+	var state browserConnState
+	frame := generated.BrowserWebRTCOfferFrame{
+		Type:      string(generated.WsFrameTypeBrowserWebrtcOffer),
+		AgentId:   defaultAgent.ID,
+		Sdp:       "v=0\r\n",
+		SessionId: "sess-1",
+	}
+	data, err := json.Marshal(frame)
+	require.NoError(t, err)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+
+	select {
+	case <-otherCS.Done():
+		// superseded — the fence stopped the viewerless leftover and moved on.
+	default:
+		t.Fatal("a viewerless conflicting capture must be superseded (stopped), not left to deny the offer")
+	}
+	got := decodeWebRTCState(t, drainOneFrame(t, wc))
+	require.False(t, got.Available, "this chrome-less harness must then fail at launch (the fence itself passed)")
+	require.Equal(t, "error", got.Reason)
+}
+
+// TestCaptureRegistry_OtherSessions pins the fence's enumeration helper:
+// only OTHER agents' sessions are returned.
+func TestCaptureRegistry_OtherSessions(t *testing.T) {
+	reg := newCaptureRegistry()
+	var calls int32
+	csA, err := browser.NewCaptureSessionWithDeps(nil, "agent-a", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+	csB, err := browser.NewCaptureSessionWithDeps(nil, "agent-b", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+	reg.set("agent-a", csA)
+	reg.set("agent-b", csB)
+
+	others := reg.otherSessions("agent-a")
+	require.Len(t, others, 1)
+	require.Contains(t, others, "agent-b")
+	require.Empty(t, reg.otherSessions("zzz-nonexistent")["agent-c"])
+	require.Len(t, reg.otherSessions("zzz-nonexistent"), 2)
+}
