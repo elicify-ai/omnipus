@@ -234,62 +234,16 @@ func TestCoordinator_Shutdown_IsSoleKill(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ADR-048 fix-wave: LiveSessionAgents (condition-2 multi-agent capture
-// fence) and captureSharedContextResolved/SetCaptureSharedContext
-// (condition-1 config knob). Fast, no-Chrome unit coverage — the coordinator
-// and manager fields these tests read are populated by direct literal
-// construction (same package), never by a real Register()/Chrome launch.
+// ADR-048 fix-wave: captureSharedContextResolved/SetCaptureSharedContext
+// (condition-1 config knob) helper-contract coverage. Fast, no-Chrome unit
+// coverage — the coordinator fields these tests read/write are exercised via
+// direct method calls (same package), never a real Register()/Chrome launch.
+// (The condition-2 multi-agent capture fence itself no longer reads a
+// coordinator-level signal here — BrowserCoordinator.LiveSessionAgents was
+// removed as dead code once browser_webrtc.go's fence moved to the
+// per-session captureRegistry/ViewerCount()-based check; see ADR-048's
+// "actively-viewed-only deny + supersede" re-scoping.)
 // ---------------------------------------------------------------------------
-
-// TestBrowserCoordinator_LiveSessionAgents_OnlyCountsAgentsWithOpenTabs
-// proves the ADR-048 condition-2 fence's "cheapest honest signal": an agent
-// registered on the coordinator but with ZERO open tabs (never actually
-// browsed anything yet) must NOT count as having a "live browser session" —
-// only OpenTabCount()>0 agents do.
-func TestBrowserCoordinator_LiveSessionAgents_OnlyCountsAgentsWithOpenTabs(t *testing.T) {
-	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
-
-	mgrWithTab := &BrowserManager{
-		sessions: map[string]*sessionEntry{
-			DefaultSessionID: {tabs: []*tabEntry{{}}},
-		},
-	}
-	mgrNoTabs := &BrowserManager{sessions: map[string]*sessionEntry{}}
-	mgrNilEntry := (*BrowserManager)(nil)
-
-	coord.mu.Lock()
-	coord.managers["agent-with-tab"] = mgrWithTab
-	coord.managers["agent-no-tabs"] = mgrNoTabs
-	coord.managers["agent-nil-mgr"] = mgrNilEntry
-	coord.mu.Unlock()
-
-	got := coord.LiveSessionAgents()
-	if len(got) != 1 || got[0] != "agent-with-tab" {
-		t.Fatalf("LiveSessionAgents() = %v, want exactly [\"agent-with-tab\"]", got)
-	}
-}
-
-// TestBrowserCoordinator_LiveSessionAgents_EmptyWhenNoneLive covers the
-// zero/one-agent cases the fence must NOT trip on: no agents at all, and
-// exactly one agent with a live session (single-agent is always allowed —
-// v1's fence is specifically "more than one").
-func TestBrowserCoordinator_LiveSessionAgents_EmptyWhenNoneLive(t *testing.T) {
-	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
-	if got := coord.LiveSessionAgents(); len(got) != 0 {
-		t.Fatalf("LiveSessionAgents() on an empty coordinator = %v, want empty", got)
-	}
-
-	coord.mu.Lock()
-	coord.managers["solo-agent"] = &BrowserManager{
-		sessions: map[string]*sessionEntry{DefaultSessionID: {tabs: []*tabEntry{{}}}},
-	}
-	coord.mu.Unlock()
-
-	got := coord.LiveSessionAgents()
-	if len(got) != 1 || got[0] != "solo-agent" {
-		t.Fatalf("LiveSessionAgents() with one live agent = %v, want exactly [\"solo-agent\"]", got)
-	}
-}
 
 // TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride proves
 // ADR-048 condition 1's promotion from OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT

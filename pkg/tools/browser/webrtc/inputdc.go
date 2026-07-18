@@ -125,6 +125,17 @@ func (s *Session) runInputQueue(viewerID string, queue chan []byte) {
 // channel as a TEXT frame. Returns an error if the viewer is unknown or its
 // data channel has not opened yet (the channel opens asynchronously shortly
 // after HandleViewerOffer returns the answer).
+//
+// Fix-wave comment note: this method currently has NO production caller —
+// the gateway (pkg/gateway/browser_webrtc.go) chose the main
+// /api/v1/browser/ws connection, not this data channel, as the path for
+// surfacing input-dispatch acks/errors back to a viewer (see
+// surfaceWebRTCInputError), so replies never round-trip over the same
+// channel input arrived on. Kept as part of this type's public contract
+// (exercised directly by this package's own Go<->Go tests) since the
+// data-channel round trip it implements is still real and may gain a
+// production caller later; it is not dead code to be deleted, just currently
+// unused outside tests.
 func (s *Session) SendToViewer(viewerID string, msg []byte) error {
 	s.viewersMu.Lock()
 	vc, exists := s.viewers[viewerID]

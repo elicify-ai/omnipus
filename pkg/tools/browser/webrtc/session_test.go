@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1078,4 +1079,114 @@ func TestSessionInputDataChannelPreservesOrderUnderSlowSink(t *testing.T) {
 			t.Fatalf("sink received out-of-order sequence at index %d: got seq=%d, want seq=%d (full sequence: %v)", i, s, i, seen)
 		}
 	}
+}
+
+// TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsAndClosesPC
+// is the fix-wave CRIT regression guard (two independent reviewers, conf
+// 85-90): before this fix, viewer.go's OnConnectionStateChange handler
+// routed Closed/Failed/Disconnected straight to removeViewer, which only
+// ever deleted the map entry -- the server-side PeerConnection itself, its
+// two drainViewerRTCP goroutines, its runInputQueue goroutine (inputdc.go),
+// and its UDP sockets were never closed, leaking on every viewer that simply
+// vanished (tab closed, network dropped) without a clean CloseViewer /
+// browser_detach round trip.
+//
+// This test never calls sess.CloseViewer -- it closes ONLY the CLIENT-side
+// PeerConnection, exactly as a crashed/killed browser tab would, and proves
+// the SERVER independently notices (via its own ICE/peer-connection-state
+// machine, not any explicit signaling) and cleans up: Stats().Viewers drops
+// to 0, SendToViewer starts failing, and -- the actual leak proof -- the
+// process's live goroutine count returns to its pre-viewer baseline
+// (drainViewerRTCP x2 + runInputQueue x1 must all have actually exited, not
+// just had their registry entry disappear).
+//
+// Timing: Pion's ICE agent defaults to a 5s disconnected-detection window
+// (pion/ice's defaultDisconnectedTimeout) before the PeerConnectionState
+// callback even fires Disconnected; this package's own disconnectGracePeriod
+// (viewer.go, 10s) then runs from there. disconnectDetectWait gives that
+// combined ~15s a generous margin without shrinking either production
+// timeout (an unexported test seam would only be reachable from THIS
+// package's own in-package tests, not this external Go<->Go one).
+func TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsAndClosesPC(t *testing.T) {
+	var (
+		receivedMu sync.Mutex
+		received   int
+	)
+	sink := func(string, []byte) {
+		receivedMu.Lock()
+		received++
+		receivedMu.Unlock()
+	}
+
+	sess := relay.NewSession(relay.Config{}, sink, safeLogf(t))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	enc := newFakeEncoder(t, true)
+	enc.startPumping(t)
+	offerE, err := sess.HandleIngestOffer(nonTrickleOffer(t, enc.pc))
+	if err != nil {
+		t.Fatalf("HandleIngestOffer: %v", err)
+	}
+	setAnswer(t, enc.pc, offerE)
+
+	// Baseline BEFORE the viewer connection exists -- what the goroutine
+	// count is expected to return to once the server has fully cleaned up.
+	baseline := runtime.NumGoroutine()
+
+	const viewerID = "viewer-client-vanishes"
+	viewer := newFakeViewer(t, true)
+
+	answerV, err := sess.HandleViewerOffer(viewerID, nonTrickleOffer(t, viewer.pc))
+	if err != nil {
+		t.Fatalf("HandleViewerOffer: %v", err)
+	}
+	setAnswer(t, viewer.pc, answerV)
+
+	waitCond(t, testWait, "viewer to receive video RTP", func() bool { return viewer.videoPkts.Load() > 5 })
+	select {
+	case <-viewer.dcOpen:
+	case <-time.After(testWait):
+		t.Fatal("input data channel did not open")
+	}
+	// Prove the input queue worker is actually alive before the connection
+	// dies, so its later exit (asserted via the goroutine-count check below)
+	// is a real transition, not a vacuous no-op.
+	if sendErr := viewer.inputDC.SendText(`{"type":"noop"}`); sendErr != nil {
+		t.Fatalf("viewer input DC SendText: %v", sendErr)
+	}
+	waitCond(t, testWait, "InputSink to receive the pre-disconnect probe message", func() bool {
+		receivedMu.Lock()
+		defer receivedMu.Unlock()
+		return received == 1
+	})
+	if got := sess.Stats().Viewers; got != 1 {
+		t.Fatalf("Stats().Viewers before disconnect = %d, want 1", got)
+	}
+
+	// The client vanishes WITHOUT calling sess.CloseViewer -- exactly what a
+	// crashed tab or dropped network looks like from the server's
+	// perspective. The server must notice entirely on its own.
+	if closeErr := viewer.pc.Close(); closeErr != nil {
+		t.Fatalf("viewer.pc.Close(): %v", closeErr)
+	}
+
+	const disconnectDetectWait = 45 * time.Second
+	waitCond(t, disconnectDetectWait, "server to evict the viewer after the client vanished without signaling", func() bool {
+		return sess.Stats().Viewers == 0
+	})
+
+	if sendErr := sess.SendToViewer(viewerID, []byte("x")); sendErr == nil {
+		t.Error("SendToViewer after the client-initiated disconnect: want error, got nil (registry entry should be gone)")
+	}
+
+	// The leak proof: every goroutine this viewer's server-side PC owned
+	// (two drainViewerRTCP readers, one runInputQueue worker) must have
+	// actually exited -- not just the map entry vanished -- which only
+	// happens if the server's PeerConnection was really Close()d, not merely
+	// forgotten about. A small tolerance absorbs unrelated goroutine churn
+	// elsewhere in the test binary.
+	const goroutineTolerance = 3
+	waitCond(t, disconnectDetectWait, "server goroutine count to return to its pre-viewer baseline (no leaked PC/RTCP/input-queue goroutines)", func() bool {
+		return runtime.NumGoroutine() <= baseline+goroutineTolerance
+	})
 }

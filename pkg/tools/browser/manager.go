@@ -2020,6 +2020,28 @@ func (m *BrowserManager) Preprovision(ctx context.Context) (string, error) {
 // Chrome. Either way the bookkeeping (sessions, started, allocCancel) is
 // reset cleanly and idempotently.
 func (m *BrowserManager) Shutdown() {
+	// Fix-wave CRIT (reviewer 1, conf 88): stop this manager's WebRTC
+	// CaptureSession, if any, BEFORE the connection/session teardown below.
+	// Without this, a live capturing session was orphaned by Shutdown — its
+	// encoder tab lives in the shared-Chrome coordinator's own root context
+	// (capture_session.go's defaultEncoderStarter), not any of the sessions
+	// torn down here, so it survives; its ping beacon keeps the encoder-
+	// liveness watchdog happy; and the registry entry it still occupies
+	// (BrowserManager.capture) is never cleared, making it unstoppable once
+	// this manager itself is gone (e.g. hot-reload via pkg/agent/loop.go's
+	// registerSharedTools, which calls Shutdown on the OLD manager while a
+	// NEW one takes over — the orphaned session's own token still resolves
+	// in the gateway's captureRegistry, but nothing ever calls Stop() on it
+	// again). cs.Stop() is idempotent and safe to call even if the manager
+	// never actually started a capture session (CaptureSession() returns nil
+	// then). Deliberately taken via m.CaptureSession() BEFORE m.mu.Lock()
+	// below: cs.Stop() can block for a few seconds (its own best-effort
+	// ingest control-frame write, now bounded by fix 5's write deadline) and
+	// must never hold m.mu — a separate mutex (m.captureMu) — while doing so.
+	if cs := m.CaptureSession(); cs != nil {
+		cs.Stop()
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -2114,6 +2136,16 @@ func (m *BrowserManager) dropConnection() {
 // completes, then returns a fresh connection + a fresh browserCtxID (CRIT-001:
 // fresh empty context — prior cookies/login are lost by definition on crash).
 func (m *BrowserManager) invalidateConnection() {
+	// Fix-wave CRIT: same orphaned-CaptureSession hazard Shutdown() guards
+	// against (see its doc comment above) — invalidateConnection is a
+	// SEPARATE teardown path (coordinator-detected crash recovery) that does
+	// NOT route through Shutdown, so it needs its own identical guard. Taken
+	// before m.mu.Lock() for the same reason: cs.Stop() must never block
+	// while holding m.mu.
+	if cs := m.CaptureSession(); cs != nil {
+		cs.Stop()
+	}
+
 	m.mu.Lock()
 	for id, se := range m.sessions {
 		for _, t := range se.tabs {
