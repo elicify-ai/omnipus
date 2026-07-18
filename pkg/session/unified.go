@@ -910,6 +910,36 @@ func (us *UnifiedStore) UpdateToolCallStatus(
 	status string,
 	durationMS int64,
 ) (found bool, err error) {
+	return us.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, nil)
+}
+
+// UpdateToolCallStatusAndResult is UpdateToolCallStatus's result-bearing
+// sibling (W4): it performs the exact same in-place Status/DurationMS
+// correction, and additionally rewrites the matching ToolCall's Result field
+// when result is non-nil. Passing a nil result leaves the ToolCall's existing
+// Result untouched (UpdateToolCallStatus delegates here with result=nil,
+// preserving its original status-only behavior exactly).
+//
+// This exists for spawnSubTurn's completion path (pkg/agent/subturn.go): the
+// persisted "delegate" tool_call previously never received the sub-turn's own
+// output — UpdateToolCallStatus corrected Status/DurationMS but had no way to
+// carry the result text, so a session reload showed a delegate tool_call with
+// a terminal status but an empty `result`, even though the live WS stream
+// carried the sub-turn's actual text via SubTurnEndPayload. Mirrors
+// recordExternalToolResultUpdateInPlace's (pkg/agent/external_dispatch.go)
+// read-modify-rewrite-one-line approach for the equivalent external-cli tool
+// call case.
+//
+// See UpdateToolCallStatus's doc comment above for the found=false semantics
+// (same race window, same retry-via-updateToolCallStatusWithRetry contract).
+// Returns a non-nil error only on I/O failure.
+func (us *UnifiedStore) UpdateToolCallStatusAndResult(
+	sessionID string,
+	toolCallID ToolCallID,
+	status string,
+	durationMS int64,
+	result map[string]any,
+) (found bool, err error) {
 	if validationErr := validateSessionID(sessionID); validationErr != nil {
 		return false, validationErr
 	}
@@ -990,6 +1020,9 @@ func (us *UnifiedStore) UpdateToolCallStatus(
 		if target.ToolCalls[ti].ID == toolCallID {
 			target.ToolCalls[ti].Status = status
 			target.ToolCalls[ti].DurationMS = durationMS
+			if result != nil {
+				target.ToolCalls[ti].Result = result
+			}
 		}
 	}
 	rewritten, jsonErr := json.Marshal(target)
