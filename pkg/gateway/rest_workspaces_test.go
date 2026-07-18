@@ -23,7 +23,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // contextWithUser returns a new context that carries the given username (as a
@@ -1136,4 +1138,214 @@ func TestHandleWorkspaces_RepositorySchemeValidation_PUT(t *testing.T) {
 	api.HandleWorkspaces(wBad, rBad)
 	assert.Equal(t, http.StatusBadRequest, wBad.Code,
 		"PUT with javascript: URL must return 400; body=%s", wBad.Body.String())
+}
+
+// ---------------------------------------------------------------------------
+// setup_pending / Ava-only new-workspace seeding tests (Unit A).
+// ---------------------------------------------------------------------------
+
+// newTestRestAPIWithAvaRoster builds a restAPI whose config registers the full
+// base install roster (mia/jim/ava/ray/worker), so both newWorkspaceSetupTeam
+// (Ava-only, used by POST-created workspaces) and defaultWorkspaceTeam (full
+// roster, used only by ensureDefaultWorkspace) have real agents to filter
+// against. newTestRestAPIWithHome deliberately registers no agents at all, so
+// it cannot exercise either seed path meaningfully.
+func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			List: []config.AgentConfig{
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
+				{ID: "ava", Name: "Ava", Type: config.AgentTypeCore},
+				{ID: "ray", Name: "Ray", Type: config.AgentTypeCore},
+				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
+			},
+		},
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
+
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir,
+		taskStore:     task.New(filepath.Join(tmpDir, "tasks")),
+		taskLock:      task.TaskFileLock,
+	}
+}
+
+// TestHandleWorkspacePost_NoCoreTeam_SeedsAvaOnly_SetupPending verifies that a
+// POST /api/v1/workspaces with no explicit core_team now seeds ONLY Ava (not
+// the full install roster), sets setup_pending=true, and produces no
+// delegation edges (ava's only coreagent seed edge is ava->worker, and worker
+// is off-team so seedEdgesForTeam drops it — that is intended per Unit A).
+// BDD:
+//
+//	Given a config with the full base roster (mia/jim/ava/ray/worker) registered,
+//	When POST /api/v1/workspaces is called with no core_team field,
+//	Then 201 with core_team=["ava"] and setup_pending=true in the wire response,
+//	And the persisted on-disk file has the same core_team + setup_pending, and
+//	an empty delegation list.
+func TestHandleWorkspacePost_NoCoreTeam_SeedsAvaOnly_SetupPending(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"NewTeamWorkspace"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "POST /workspaces must return 201; body=%s", w.Body.String())
+	var ws gen.Workspace
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
+
+	require.NotNil(t, ws.CoreTeam, "core_team must be present in the wire response")
+	assert.Equal(t, []string{"ava"}, *ws.CoreTeam,
+		"a new user-created workspace with no explicit core_team must seed ONLY Ava")
+	require.NotNil(t, ws.SetupPending, "setup_pending must be present in the wire response")
+	assert.True(t, *ws.SetupPending, "setup_pending must be true for an auto-seeded Ava-only workspace")
+
+	// Persisted file must agree byte-for-byte on both fields, plus empty delegation.
+	stored, err := readWorkspaceFile(api.homePath, ws.Id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ava"}, stored.CoreTeam, "on-disk core_team must match the wire response")
+	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
+	assert.Empty(t, stored.Delegation,
+		"ava's only coreagent seed edge (ava->worker) must be dropped since worker is off-team")
+}
+
+// TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending
+// verifies that an explicit core_team in the POST body is honored (deduped)
+// rather than overridden by the Ava-only seed, and setup_pending stays false.
+// BDD:
+//
+//	Given POST /api/v1/workspaces with an explicit core_team (with a duplicate),
+//	When the request is handled,
+//	Then 201 with core_team deduplicated exactly as given, and setup_pending
+//	absent/false (this is not an auto-seeded workspace).
+func TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"ExplicitTeamWorkspace","core_team":["mia","jim","mia"]}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "POST /workspaces must return 201; body=%s", w.Body.String())
+	var ws gen.Workspace
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
+
+	require.NotNil(t, ws.CoreTeam, "core_team must be present in the wire response")
+	assert.Equal(t, []string{"mia", "jim"}, *ws.CoreTeam,
+		"an explicit core_team must be honored verbatim (deduplicated), not replaced by the Ava-only seed")
+	assert.Nil(t, ws.SetupPending,
+		"setup_pending must be absent/false when the caller supplied an explicit core_team")
+
+	stored, err := readWorkspaceFile(api.homePath, ws.Id)
+	require.NoError(t, err)
+	assert.False(t, stored.SetupPending, "on-disk setup_pending must be false for an explicit-team workspace")
+}
+
+// TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a Unit A
+// regression: the auto-created boot default workspace ("My Workspace",
+// ensureDefaultWorkspace) is UNCHANGED by the Ava-only seed introduced for
+// ordinary POST-created workspaces — it must still seed the full install
+// roster (every base + specialist agent present in config) with its full seed
+// edges, and setup_pending must stay false (this workspace never runs the
+// setup interview).
+// BDD:
+//
+//	Given a config with the full install roster registered,
+//	When ensureDefaultWorkspace creates the default workspace,
+//	Then GET /api/v1/workspaces/{id} returns core_team containing every
+//	registered base/specialist agent, setup_pending absent/false, and the
+//	full seed delegation edge count on disk.
+func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "mia", Type: config.AgentTypeCore},
+				{ID: "jim", Type: config.AgentTypeCore},
+				{ID: "ava", Type: config.AgentTypeCore},
+				{ID: "ray", Type: config.AgentTypeCore},
+				{ID: "worker", Type: config.AgentTypeWorker},
+				{ID: "planner", Type: config.AgentTypeWorker},
+				{ID: "explorer", Type: config.AgentTypeWorker},
+				{ID: "researcher", Type: config.AgentTypeWorker},
+			},
+		},
+	}
+	require.NoError(t, ensureDefaultWorkspace(home, "alice", cfg))
+
+	wss, err := listWorkspaceFiles(home)
+	require.NoError(t, err)
+	require.Len(t, wss, 1)
+	ws := wss[0]
+	assert.True(t, ws.IsDefault)
+	assert.ElementsMatch(t,
+		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher"},
+		ws.CoreTeam, "the boot default workspace must still seed the FULL install roster")
+	assert.Len(t, ws.Delegation, 9, "the boot default workspace must still seed the full edge set")
+	assert.False(t, ws.SetupPending,
+		"the boot default workspace must never be setup_pending — it never runs the setup interview")
+
+	wire := workspaceToWire(ws, 0)
+	assert.Nil(t, wire.SetupPending, "the wire response must not report setup_pending for the default workspace")
+}
+
+// TestHandleWorkspacePut_PreservesSetupPending is the Unit A regression for
+// item 6: a PUT that only renames a setup_pending workspace must not clear
+// (or otherwise touch) the setup_pending flag — it is cleared exclusively by
+// the (future, wave-2) setup-kickoff turn handler, never by an ordinary field
+// update.
+// BDD:
+//
+//	Given a workspace created with setup_pending=true (Ava-only seed),
+//	When PUT /api/v1/workspaces/{id} renames it (no setup_pending field sent),
+//	Then the returned and persisted workspace still has setup_pending=true.
+func TestHandleWorkspacePut_PreservesSetupPending(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"SetupPendingWS"}`))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code)
+	var created gen.Workspace
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
+	require.NotNil(t, created.SetupPending)
+	require.True(t, *created.SetupPending, "precondition: the created workspace must be setup_pending")
+
+	wPut := httptest.NewRecorder()
+	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
+		strings.NewReader(`{"name":"SetupPendingWS-Renamed"}`))
+	rPut.Header.Set("Content-Type", "application/json")
+	rPut.URL.Path = "/api/v1/workspaces/" + created.Id
+	api.HandleWorkspaces(wPut, rPut)
+	require.Equal(t, http.StatusOK, wPut.Code, "PUT rename must return 200; body=%s", wPut.Body.String())
+	var updated gen.Workspace
+	require.NoError(t, json.Unmarshal(wPut.Body.Bytes(), &updated))
+	assert.Equal(t, "SetupPendingWS-Renamed", updated.Name)
+	require.NotNil(t, updated.SetupPending,
+		"setup_pending must still be present in the wire response after an unrelated rename")
+	assert.True(t, *updated.SetupPending,
+		"a name-only PUT must NOT clear setup_pending")
+
+	stored, err := readWorkspaceFile(api.homePath, created.Id)
+	require.NoError(t, err)
+	assert.True(t, stored.SetupPending, "on-disk setup_pending must survive an unrelated PUT")
 }

@@ -7931,6 +7931,9 @@ type Workspace struct {
 	// Repository Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
 	Repository *string `json:"repository,omitempty"`
 
+	// SetupPending True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise.
+	SetupPending *bool `json:"setup_pending,omitempty"`
+
 	// Status Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
 	Status WorkspaceStatus `json:"status"`
 
