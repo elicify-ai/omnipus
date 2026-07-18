@@ -77,13 +77,24 @@ beforeEach(() => {
   act(() => {
     useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     useSessionStore.setState({ activeSessionId: null, activeAgentId: null, activeAgentType: null })
+    // Fix 3: kickoffAttemptStatus is now module-level store state (not a
+    // component-local useRef), so it survives across tests in this file
+    // unless explicitly reset — several tests below reuse the same
+    // workspace id ('ws-1', 'ws-9', ...), and a leftover 'in-flight' entry
+    // from an earlier test's successful fire would otherwise permanently
+    // block every later test for that same id.
+    useChatStore.setState({ pendingKickoff: null, kickoffAttemptStatus: {} })
   })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
   act(() => {
-    useChatStore.setState({ sendWorkspaceSetupKickoff: useChatStore.getInitialState().sendWorkspaceSetupKickoff })
+    useChatStore.setState({
+      sendWorkspaceSetupKickoff: useChatStore.getInitialState().sendWorkspaceSetupKickoff,
+      pendingKickoff: null,
+      kickoffAttemptStatus: {},
+    })
   })
 })
 
@@ -331,5 +342,162 @@ describe('useWorkspaceSetupKickoff — Fix 4: Set-based fired guard (A → B →
     rerender({ ws: wsA })
     rerender({ ws: wsA })
     await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(2) })
+  })
+})
+
+describe('useWorkspaceSetupKickoff — Fix 4: agent targeting fallback', () => {
+  it('prefers "ava" over core_team[0] when both are chat-eligible', async () => {
+    const RAY: Agent = makeAgent({ id: 'ray', name: 'Ray', type: 'core', status: 'active' })
+    vi.mocked(fetchAgents).mockResolvedValue([RAY, AVA])
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const workspace = makeWorkspace({ id: 'ws-pref', setup_pending: true, core_team: ['ray', 'ava'] })
+    const client = makeClient()
+    renderHook(() => useWorkspaceSetupKickoff(workspace), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(1) })
+    expect(kickoffSpy).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'ava' }))
+  })
+
+  it('falls back to the first chat-eligible core_team member when "ava" is not chat-eligible', async () => {
+    const JIM: Agent = makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'active' })
+    vi.mocked(fetchAgents).mockResolvedValue([JIM]) // 'ava' absent entirely — not chat-eligible
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const workspace = makeWorkspace({ id: 'ws-fallback', setup_pending: true, core_team: ['nonexistent-agent', 'jim'] })
+    const client = makeClient()
+    renderHook(() => useWorkspaceSetupKickoff(workspace), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(1) })
+    expect(kickoffSpy).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'jim' }))
+  })
+
+  it('logs (debug) and bails — never silently forever — when no chat-eligible agent exists at all', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([]) // nobody chat-eligible
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    const workspace = makeWorkspace({ id: 'ws-noagent', setup_pending: true, core_team: ['nonexistent'] })
+    const client = makeClient()
+    renderHook(() => useWorkspaceSetupKickoff(workspace), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => { expect(fetchAgents).toHaveBeenCalled() })
+    expect(kickoffSpy).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(debugSpy).toHaveBeenCalledWith(
+        expect.stringContaining('useWorkspaceSetupKickoff'),
+        expect.objectContaining({ workspaceId: 'ws-noagent' }),
+      )
+    })
+  })
+})
+
+describe('useWorkspaceSetupKickoff — Fix 3: honest retry after a synchronous send failure', () => {
+  it('releases the guard on !sent, proven by a second fire once conditions re-trigger the effect', async () => {
+    const kickoffSpy = vi.fn().mockReturnValueOnce(false).mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const workspace = makeWorkspace({ id: 'ws-retry-sent', setup_pending: true, core_team: ['ava'] })
+    const client = makeClient()
+    renderHook(() => useWorkspaceSetupKickoff(workspace), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(1) })
+    // The guard was released (marked 'failed', not left 'in-flight').
+    expect(useChatStore.getState().kickoffAttemptStatus['ws-retry-sent']).toBe('failed')
+
+    // Toggle isConnected off/on — mirrors a real reconnect — to re-trigger
+    // the fire effect. With the guard released, this must fire again.
+    act(() => { useConnectionStore.setState({ isConnected: false }) })
+    act(() => { useConnectionStore.setState({ isConnected: true }) })
+
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(2) })
+  })
+})
+
+describe('useWorkspaceSetupKickoff — Fix 3: honest retry after an async server-side rejection', () => {
+  // These tests simulate the ASYNC failure signal directly via
+  // `resolveKickoffAttempt` (the same store action chat.ts's own
+  // 'error'-frame / disconnect handling calls internally) rather than
+  // driving a real WS round trip — this file deliberately never touches the
+  // real WS/connection plumbing (see the file header comment), and the
+  // signal this hook reacts to is exactly that store transition regardless
+  // of what produced it.
+
+  it('acceptance flow: invalidates on failure, then fires again once the refetched workspace still reports setup_pending:true', async () => {
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const client = makeClient()
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+    const workspace = makeWorkspace({ id: 'ws-retry-async', setup_pending: true, core_team: ['ava'] })
+
+    const { rerender } = renderHook(({ ws }) => useWorkspaceSetupKickoff(ws), {
+      wrapper: makeWrapper(client),
+      initialProps: { ws: workspace },
+    })
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(1) })
+
+    // The kickoff terminally fails server-side, reported asynchronously.
+    act(() => {
+      useChatStore.getState().resolveKickoffAttempt('ws-retry-async', 'failed')
+    })
+
+    // The hook's invalidate-on-failure effect rolls back its own premature
+    // optimistic cache clear by invalidating (not just patching) the
+    // workspace queries — server truth wins.
+    await waitFor(() => {
+      const keys = invalidateSpy.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown }).queryKey))
+      expect(keys).toContain(JSON.stringify(workspacesQueryKeys.list({ status: 'active' })))
+      expect(keys).toContain(JSON.stringify(workspacesQueryKeys.detail('ws-retry-async')))
+    })
+
+    // "User navigates away and back (no reload)" — the refetched workspace
+    // object (a fresh object, same content) confirms setup_pending is STILL
+    // true — a genuine failure, not a duplicate. Re-opening retries.
+    const refetchedWorkspace = makeWorkspace({ id: 'ws-retry-async', setup_pending: true, core_team: ['ava'] })
+    rerender({ ws: refetchedWorkspace })
+
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(2) })
+  })
+
+  it('duplicate case (server truth resolves setup_pending:false) does NOT retry-loop', async () => {
+    const kickoffSpy = vi.fn().mockReturnValue(true)
+    act(() => { useChatStore.setState({ sendWorkspaceSetupKickoff: kickoffSpy }) })
+    connect()
+
+    const client = makeClient()
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+    const workspace = makeWorkspace({ id: 'ws-dup', setup_pending: true, core_team: ['ava'] })
+
+    const { rerender } = renderHook(({ ws }) => useWorkspaceSetupKickoff(ws), {
+      wrapper: makeWrapper(client),
+      initialProps: { ws: workspace },
+    })
+    await waitFor(() => { expect(kickoffSpy).toHaveBeenCalledTimes(1) })
+
+    // Server rejects as a DUPLICATE — an EARLIER attempt already succeeded,
+    // so setup_pending is already correctly false server-side.
+    act(() => {
+      useChatStore.getState().resolveKickoffAttempt('ws-dup', 'failed')
+    })
+    await waitFor(() => { expect(invalidateSpy).toHaveBeenCalled() })
+
+    // The refetch confirms setup_pending is false (the duplicate case) —
+    // the hook's OWN ordinary early-return guard stops any retry, with no
+    // special-casing needed.
+    const refetchedWorkspace = makeWorkspace({ id: 'ws-dup', setup_pending: false, core_team: ['ava'] })
+    rerender({ ws: refetchedWorkspace })
+
+    // Give the effect a chance to run, then assert it did NOT fire again.
+    await waitFor(() => { expect(fetchAgents).toHaveBeenCalled() })
+    expect(kickoffSpy).toHaveBeenCalledTimes(1)
   })
 })
