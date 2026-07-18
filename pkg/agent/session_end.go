@@ -495,7 +495,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	slog.Info("session_end: writing LAST_SESSION.md",
 		"session_id", sessionID,
 		"agent_id", agentInst.ID,
-		"workspace", agentInst.Workspace,
+		"workspace", agentInst.Home,
 	)
 	if err := memory.WriteLastSession(parsed.Recap); err != nil {
 		slog.Warn("session_end: failed to write LAST_SESSION.md",
@@ -601,7 +601,7 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	slog.Info("session_end: fallback: writing LAST_SESSION.md",
 		"session_id", sessionID,
 		"agent_id", agentInst.ID,
-		"workspace", agentInst.Workspace,
+		"workspace", agentInst.Home,
 		"fallback_reason", fallbackReason,
 	)
 	if err := memory.WriteLastSession(recap); err != nil {
@@ -882,7 +882,7 @@ func (al *AgentLoop) agentSessionHasRetro(agentInst *AgentInstance, sessionID st
 		return false
 	}
 	// Spec-5: retros now live in <workspace>/.omnipus/retros/<date>/<sessionID>_retro.md
-	retrosDir := filepath.Join(agentInst.Workspace, ".omnipus", "retros")
+	retrosDir := filepath.Join(agentInst.Home, ".omnipus", "retros")
 	dateDirs, err := os.ReadDir(retrosDir)
 	if err != nil {
 		if !os.IsNotExist(err) {

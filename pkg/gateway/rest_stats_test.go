@@ -107,7 +107,7 @@ func TestHandleTokenStats_MethodNotAllowed(t *testing.T) {
 
 // writeTestSessionMeta writes a meta.json for a session into the shared session store directory
 // (filepath.Dir(homePath)/sessions/{sessionID}/). This matches where NewAgentLoop initializes
-// sharedSessionStore when cfg.Agents.Defaults.Workspace == homePath.
+// sharedSessionStore when cfg.Agents.Defaults.Home == homePath.
 func writeTestSessionMeta(
 	t *testing.T,
 	homePath, sessionID, agentID string,
@@ -115,7 +115,7 @@ func writeTestSessionMeta(
 	updatedAt time.Time,
 ) {
 	t.Helper()
-	// The agent loop sets homePath = filepath.Dir(cfg.WorkspacePath()) = filepath.Dir(homePath).
+	// The agent loop sets homePath = filepath.Dir(cfg.AgentHomeBasePath()) = filepath.Dir(homePath).
 	// sharedSessionStore is at agentLoopHome/sessions/ = filepath.Dir(homePath)/sessions/.
 	agentLoopHome := filepath.Dir(homePath)
 	sessDir := filepath.Join(agentLoopHome, "sessions", sessionID)
@@ -591,7 +591,7 @@ func TestHandleTokenStats_PartialFlag(t *testing.T) {
 		api := newTestRestAPIWithHome(t)
 
 		// Locate the shared sessions directory.
-		// AgentLoop uses homePath = filepath.Dir(cfg.WorkspacePath()) = filepath.Dir(api.homePath).
+		// AgentLoop uses homePath = filepath.Dir(cfg.AgentHomeBasePath()) = filepath.Dir(api.homePath).
 		// sharedSessionStore baseDir = homePath/sessions = filepath.Dir(api.homePath)/sessions.
 		agentLoopHome := filepath.Dir(api.homePath)
 		sessionsDir := filepath.Join(agentLoopHome, "sessions")

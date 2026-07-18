@@ -41,13 +41,13 @@ func newNativeTaskCompletionTestLoop(t *testing.T, provider providers.LLMProvide
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: t.TempDir(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{Home: t.TempDir(), ModelName: "test-model"},
 			List: []config.AgentConfig{
 				{
-					ID:        "native-agent",
-					Name:      "Native Agent",
-					Type:      config.AgentTypeWorker,
-					Workspace: workspace,
+					ID:   "native-agent",
+					Name: "Native Agent",
+					Type: config.AgentTypeWorker,
+					Home: workspace,
 				},
 			},
 		},

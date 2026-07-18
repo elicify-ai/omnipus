@@ -81,7 +81,7 @@ func newCancelTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, string, 
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18800, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: workspaceDir,
+				Home:      workspaceDir,
 				ModelName: "blocking-cancel-provider",
 				MaxTokens: 4096,
 			},

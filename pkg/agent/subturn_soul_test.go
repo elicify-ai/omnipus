@@ -151,18 +151,18 @@ func TestSpawnSubTurn_ExternalCLI_WorkerEmptySoulDeliversTaskOnly(t *testing.T) 
 	// non-native executors). Empty soul — the seed worker is soul-less
 	// today, and that is the new valid state.
 	worker := &AgentInstance{
-		ID:        string(coreagent.IDWorker),
-		Name:      "Worker",
-		Workspace: t.TempDir(),
+		ID:   string(coreagent.IDWorker),
+		Name: "Worker",
+		Home: t.TempDir(),
 		Subagents: &config.SubagentsConfig{
 			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 		},
 	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock", Workspace: worker.Workspace},
+			Defaults: config.AgentDefaults{Provider: "mock", Home: worker.Home},
 			List: []config.AgentConfig{
-				{ID: string(coreagent.IDWorker), Type: config.AgentTypeWorker, Workspace: worker.Workspace},
+				{ID: string(coreagent.IDWorker), Type: config.AgentTypeWorker, Home: worker.Home},
 			},
 		},
 	}
@@ -225,7 +225,7 @@ func TestResolveDelegateSoul_OnDiskSoulMdForCustomAgent(t *testing.T) {
 	}
 	cfg := al.GetConfig()
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "custom-worker", Type: config.AgentTypeWorker, Workspace: tmp, Locked: true},
+		{ID: "custom-worker", Type: config.AgentTypeWorker, Home: tmp, Locked: true},
 	}
 
 	got := resolveDelegateSoul(al, "custom-worker")

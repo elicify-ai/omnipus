@@ -46,7 +46,7 @@ func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks co
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

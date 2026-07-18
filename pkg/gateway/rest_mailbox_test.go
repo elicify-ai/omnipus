@@ -30,9 +30,9 @@ func newMailboxTestAPI(t *testing.T, mailboxes map[string]map[string]config.Mail
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom, Workspace: tmpDir},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom, Home: tmpDir},
 			},
 		},
 		Mailboxes: mailboxes,

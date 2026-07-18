@@ -129,7 +129,7 @@ func TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGraceful
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "orphan-delegate-test-model",
 				MaxTokens: 4096,
 			},

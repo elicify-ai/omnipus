@@ -48,7 +48,7 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				ContextWindow:     cw,
 				MaxTokens:         mt,

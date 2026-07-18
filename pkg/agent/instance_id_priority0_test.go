@@ -54,7 +54,7 @@ func TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},

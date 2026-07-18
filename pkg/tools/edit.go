@@ -13,9 +13,9 @@ import (
 // The old_text must exist exactly in the file.
 type EditFileTool struct {
 	BaseTool
-	rerootable
-	fs        fileSystem
-	workspace string
+	agentHome string
+	restrict  bool
+	patterns  []*regexp.Regexp
 }
 
 // NewEditFileTool creates a new EditFileTool with optional directory restriction.
@@ -25,9 +25,9 @@ func NewEditFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Re
 		patterns = allowPaths[0]
 	}
 	return &EditFileTool{
-		rerootable: rerootable{restrict: restrict, patterns: patterns},
-		fs:         buildFs(workspace, restrict, patterns),
-		workspace:  workspace,
+		agentHome: workspace,
+		restrict:  restrict,
+		patterns:  patterns,
 	}
 }
 
@@ -69,14 +69,15 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
-	effFs := t.effectiveFs(ctx, t.fs)
-	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
+	}
 
 	// Metadata guard: reject edits to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
-	// Skipped only for static tools that have no agent workspace concept.
-	if effWorkspace != "" {
-		if denied := guardMetadataPath(effWorkspace, path, "write"); denied != nil {
+	if policy.WorkDir != "" {
+		if denied := guardMetadataPath(policy.WorkDir, path, "write"); denied != nil {
 			return denied
 		}
 	}
@@ -91,7 +92,13 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("new_text is required")
 	}
 
-	if err := editFile(effFs, path, oldText, newText); err != nil {
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)
+	if err != nil {
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+
+	if err := editFile(handle, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("File edited: %s", path))
@@ -99,9 +106,9 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 type AppendFileTool struct {
 	BaseTool
-	rerootable
-	fs        fileSystem
-	workspace string
+	agentHome string
+	restrict  bool
+	patterns  []*regexp.Regexp
 }
 
 func NewAppendFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *AppendFileTool {
@@ -110,9 +117,9 @@ func NewAppendFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.
 		patterns = allowPaths[0]
 	}
 	return &AppendFileTool{
-		rerootable: rerootable{restrict: restrict, patterns: patterns},
-		fs:         buildFs(workspace, restrict, patterns),
-		workspace:  workspace,
+		agentHome: workspace,
+		restrict:  restrict,
+		patterns:  patterns,
 	}
 }
 
@@ -150,14 +157,15 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("path is required")
 	}
 
-	effFs := t.effectiveFs(ctx, t.fs)
-	effWorkspace := t.effectiveWorkspace(ctx, t.workspace)
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
+	}
 
 	// Metadata guard: reject appends to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
-	// Skipped only for static tools that have no agent workspace concept.
-	if effWorkspace != "" {
-		if denied := guardMetadataPath(effWorkspace, path, "write"); denied != nil {
+	if policy.WorkDir != "" {
+		if denied := guardMetadataPath(policy.WorkDir, path, "write"); denied != nil {
 			return denied
 		}
 	}
@@ -167,16 +175,22 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("content is required")
 	}
 
-	if err := appendFile(effFs, path, content); err != nil {
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)
+	if err != nil {
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+
+	if err := appendFile(handle, content); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("Appended to %s", path))
 }
 
-// editFile reads the file via sysFs, performs the replacement, and writes back.
-// It uses a fileSystem interface, allowing the same logic for both restricted and unrestricted modes.
-func editFile(sysFs fileSystem, path, oldText, newText string) error {
-	content, err := sysFs.ReadFile(path)
+// editFile reads the file via handle, performs the replacement, and writes
+// back through the same handle.
+func editFile(handle *PathHandle, oldText, newText string) error {
+	content, err := handle.ReadFile()
 	if err != nil {
 		return err
 	}
@@ -186,18 +200,19 @@ func editFile(sysFs fileSystem, path, oldText, newText string) error {
 		return err
 	}
 
-	return sysFs.WriteFile(path, newContent)
+	return handle.WriteFile(newContent)
 }
 
-// appendFile reads the existing content (if any) via sysFs, appends new content, and writes back.
-func appendFile(sysFs fileSystem, path, appendContent string) error {
-	content, err := sysFs.ReadFile(path)
+// appendFile reads the existing content (if any) via handle, appends new
+// content, and writes back through the same handle.
+func appendFile(handle *PathHandle, appendContent string) error {
+	content, err := handle.ReadFile()
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 
 	newContent := append(content, []byte(appendContent)...)
-	return sysFs.WriteFile(path, newContent)
+	return handle.WriteFile(newContent)
 }
 
 // replaceEditContent handles the core logic of finding and replacing a single occurrence of oldText.

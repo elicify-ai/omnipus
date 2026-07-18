@@ -1093,6 +1093,20 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 // on every ListSessions call. A session whose meta.json fails to read/parse
 // is logged at Warn and skipped, not treated as fatal.
 //
+// A missing base directory (os.IsNotExist) is a normal empty state — a store
+// that has never persisted a session yet — and is NOT an error: this
+// reconciles nothing and falls through to whatever is already in metaCache
+// (empty, in that case). Any OTHER read failure (e.g. permission denied) is a
+// genuine, caller-visible error: it is both logged at Warn AND returned, so
+// callers that aggregate across multiple stores — e.g.
+// pkg/agent's AgentLoop.ListAllSessions, which surfaces one error per broken
+// store in its partial-errors slice — can actually see and report it, rather
+// than this store silently reporting "0 sessions" indistinguishably from a
+// genuinely empty store. The already-cached metas (if any) are still
+// returned alongside the error — a transient/permission failure to
+// reconcile against disk should not erase sessions this store already knows
+// about from a prior successful call.
+//
 // Reconciliation requires mutating metaCache (via readMetaLocked), which
 // needs the full write lock — an RLock cannot be upgraded to a Lock without
 // risking deadlock, so the whole method runs under us.mu.Lock() rather than
@@ -1103,10 +1117,12 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	us.mu.Lock()
 
+	var listErr error
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Warn("unified_store: list sessions: read base dir", "dir", us.baseDir, "error", err)
+			listErr = fmt.Errorf("unified_store: list sessions: read base dir %q: %w", us.baseDir, err)
 		}
 	} else {
 		for _, entry := range entries {
@@ -1143,7 +1159,7 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	slices.SortFunc(metas, func(a, b *UnifiedMeta) int {
 		return b.UpdatedAt.Compare(a.UpdatedAt)
 	})
-	return metas, nil
+	return metas, listErr
 }
 
 // AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.

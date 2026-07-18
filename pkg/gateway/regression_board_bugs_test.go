@@ -263,7 +263,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 			Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 			Agents: config.AgentsConfig{
 				Defaults: config.AgentDefaults{
-					Workspace: home,
+					Home:      home,
 					ModelName: "test-model",
 					MaxTokens: 4096,
 				},

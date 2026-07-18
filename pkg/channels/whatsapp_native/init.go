@@ -23,7 +23,7 @@ func init() {
 				// workspace/whatsapp/whatsapp/store.db — different from the old
 				// workspace/whatsapp/store.db, but v0.3 is a fresh-build so
 				// no migration is required.
-				storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp", instanceID)
+				storePath = filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", instanceID)
 			}
 			return NewWhatsAppNativeChannel(waCfg, b, storePath)
 		},

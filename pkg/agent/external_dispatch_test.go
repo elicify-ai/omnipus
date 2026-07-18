@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,11 +39,30 @@ func (d *denyApprover) RequestApproval(_ context.Context, req PolicyApprovalReq)
 // is configured for executor=external-cli with the given CLI name and workspace.
 //
 // ADR-032: external-CLI runs execute directly in the agent's own workspace dir
-// (no isolated worktree/tempdir fallback) — an empty workspace is now a hard
-// error at dispatch time (runExternalCLISubTurn refuses to run with nowhere to
-// cwd into). Callers that don't care about a specific path get a real temp dir
-// here so existing "workspace doesn't matter for this test" call sites
-// (workspace="") keep working without every test needing its own t.TempDir().
+// (no isolated worktree/tempdir fallback). Callers that don't care about a
+// specific path get a real temp dir here so existing "workspace doesn't
+// matter for this test" call sites (workspace="") keep working without every
+// test needing its own t.TempDir().
+//
+// ADR-046 P1 (FR-007/008): execution is always workspace-scoped, for EVERY
+// dispatch kind — an agent that is a member of no workspace is now REFUSED
+// (ErrAgentNotWorkspaceMember), not fallen back to agent.Home/workspace as
+// before. This helper auto-seeds ts.agent.ID into the shared test-harness
+// workspace (seedTestWorkspaceMembershipForIDs, test_helpers_test.go) —
+// mirroring mustNewAgentLoop's own ensureTestWorkspaceMembership for native
+// agents — so the many tests in this file that exercise UNRELATED behavior
+// (model auto-set, permission auto-approval, error handling, egress-proxy
+// injection, token-attribution scope, ...) are unaffected by the membership
+// gate; the `workspace` parameter still sets agent.Home, but agent.Home no
+// longer drives WorkDir resolution at all under this gate — WorkDir is
+// always the resolved workspace's work/ directory now (see
+// resolveTurnWorkDirOrRefuse, workspace_reroot.go).
+//
+// A test that specifically wants to exercise the "member of no workspace"
+// refusal path (or a member whose workspace id/work-dir resolution itself
+// fails) must build its own turnState directly instead of using this helper
+// — see TestExternalDispatch_WorkspacelessAgentRefused and
+// TestExternalDispatch_MemberWithUnsafeWorkspaceID_Refused.
 func newExternalTestLoop(t *testing.T, cli, workspace string) (*AgentLoop, *turnState) {
 	t.Helper()
 	if workspace == "" {
@@ -55,13 +75,14 @@ func newExternalTestLoop(t *testing.T, cli, workspace string) (*AgentLoop, *turn
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 	agent := &AgentInstance{
-		ID:        "ext-agent",
-		Name:      "External Agent",
-		Workspace: workspace,
+		ID:   "ext-agent",
+		Name: "External Agent",
+		Home: workspace,
 		Subagents: &config.SubagentsConfig{
 			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: cli},
 		},
 	}
+	seedTestWorkspaceMembershipForIDs(t, []string{agent.ID})
 	ts := &turnState{
 		agent:               agent,
 		agentID:             agent.ID,
@@ -85,17 +106,26 @@ func withFakeDriver(t *testing.T) (*runner.FakeRunner, func()) {
 
 // TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir drives the full external
 // dispatch flow with a fake driver: the driver's output is streamed into the
-// aggregated result, and the CLI runs directly in the agent's own workspace
-// directory (ADR-032 — no isolated worktree/tempdir copy), which is left in
-// place (not torn down) after the run since it is the agent's persistent tree.
+// aggregated result, and the CLI runs directly in the resolved workspace's
+// work/ directory (ADR-032 — no isolated worktree/tempdir copy; ADR-046 P1 —
+// always the workspace's work/ dir, never agent.Home), which is left in place
+// (not torn down) after the run since it is the workspace's persistent tree.
 func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
-	workspace := t.TempDir()
-	al, ts := newExternalTestLoop(t, "claude-code", workspace)
+	al, ts := newExternalTestLoop(t, "claude-code", "")
 	fr, restore := withFakeDriver(t)
 	defer restore()
+
+	// ADR-046 P1: newExternalTestLoop seeds ts.agent into a workspace, so the
+	// run resolves to THAT workspace's work/ dir, independent of agent.Home —
+	// resolve it the same way runExternalCLISubTurn itself does so this
+	// assertion doesn't hardcode the harness's internal seed-workspace id.
+	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	if wsErr != nil {
+		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
+	}
 
 	// Inject the run's events asynchronously, then signal end.
 	go func() {
@@ -122,10 +152,10 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	if opts[0].Input != "do the task" {
 		t.Errorf("driver input = %q, want %q", opts[0].Input, "do the task")
 	}
-	// ADR-032: WorkDir must be EXACTLY the agent's own workspace directory —
-	// not a separate isolated copy.
-	if opts[0].WorkDir != workspace {
-		t.Errorf("driver WorkDir = %q, want the agent's own workspace %q (ADR-032)", opts[0].WorkDir, workspace)
+	// ADR-046 P1: WorkDir must be EXACTLY the resolved workspace's work/
+	// directory — agent.Home is never consulted for this anymore.
+	if opts[0].WorkDir != wantWorkDir {
+		t.Errorf("driver WorkDir = %q, want the workspace's work/ dir %q (ADR-046 P1)", opts[0].WorkDir, wantWorkDir)
 	}
 	if opts[0].TimeoutSeconds != 30 {
 		t.Errorf("driver TimeoutSeconds = %d, want 30", opts[0].TimeoutSeconds)
@@ -134,23 +164,26 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 		t.Errorf("driver MaxTurns = %d, want %d", opts[0].MaxTurns, DefaultExternalMaxTurns)
 	}
 
-	// ADR-032: the workspace dir is the agent's PERSISTENT tree — it must NOT
-	// be torn down after the run (no more worktree-style cleanup).
+	// ADR-032: the workspace dir is a PERSISTENT tree — it must NOT be torn
+	// down after the run (no more worktree-style cleanup).
 	if _, statErr := os.Stat(opts[0].WorkDir); statErr != nil {
 		t.Errorf("workspace dir %q must still exist after the run (no teardown, ADR-032): stat err=%v",
 			opts[0].WorkDir, statErr)
 	}
 }
 
-// TestExternalDispatch_EmptyWorkspace_HardError proves that an external-cli
-// target with an empty Workspace is a hard dispatch-time error: ADR-032
-// removed the isolated-worktree/tempdir fallback, so there is nowhere to cwd
-// into and the run must fail cleanly before any process is spawned — not
-// silently fall back to some other directory. newExternalTestLoop
-// conveniently auto-fills an empty workspace with a real t.TempDir() (most
-// tests don't care about a specific path), so this test builds its own
-// turnState with an explicitly EMPTY workspace to exercise the guard.
-func TestExternalDispatch_EmptyWorkspace_HardError(t *testing.T) {
+// TestExternalDispatch_WorkspacelessAgentRefused (ADR-046 P1, FR-007/008)
+// replaces the old TestExternalDispatch_EmptyWorkspace_HardError and
+// TestExternalDispatch_NotCoreTeamMember_FallsBackToAgentWorkspace: an
+// external-CLI agent that is a member of NO workspace must have its dispatch
+// REFUSED with an error wrapping ErrAgentNotWorkspaceMember — no fallthrough
+// to agent.Home (empty or not), matching the native runTurn path exactly (the
+// asymmetry a 7-reviewer gate flagged as a BLOCK). The external CLI driver
+// must never even be instantiated: this deliberately builds its own
+// turnState directly (NOT via newExternalTestLoop, which auto-seeds
+// membership) so the agent is genuinely unseeded, and asserts the fake
+// driver's Run was never called.
+func TestExternalDispatch_WorkspacelessAgentRefused(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
@@ -161,9 +194,9 @@ func TestExternalDispatch_EmptyWorkspace_HardError(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 	agent := &AgentInstance{
-		ID:        "ext-agent-empty-ws",
-		Name:      "External Agent Empty Workspace",
-		Workspace: "", // explicit empty — the case under test
+		ID:   "ext-agent-no-workspace",
+		Name: "External Agent With No Workspace",
+		Home: t.TempDir(), // a non-empty Home must NOT rescue this dispatch
 		Subagents: &config.SubagentsConfig{
 			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 		},
@@ -171,19 +204,67 @@ func TestExternalDispatch_EmptyWorkspace_HardError(t *testing.T) {
 	ts := &turnState{
 		agent:               agent,
 		agentID:             agent.ID,
-		turnID:              "ext-run-empty-ws",
-		transcriptSessionID: "session_ext_empty_ws_test",
+		turnID:              "ext-run-no-workspace",
+		transcriptSessionID: "session_ext_no_workspace_test",
 	}
+
+	fr, restore := withFakeDriver(t)
+	defer restore()
 
 	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
 	if err == nil {
-		t.Fatal("expected an error for an empty agent workspace, got nil")
+		t.Fatal("expected an error for a workspace-less agent, got nil")
 	}
-	if !strings.Contains(err.Error(), "agent workspace is empty") {
-		t.Errorf("error = %v, want it to contain %q", err, "agent workspace is empty")
+	if !errors.Is(err, ErrAgentNotWorkspaceMember) {
+		t.Errorf("error = %v, want it to wrap ErrAgentNotWorkspaceMember", err)
 	}
 	if res != nil {
-		t.Errorf("expected nil result on empty-workspace failure, got %+v", res)
+		t.Errorf("expected nil result on refusal, got %+v", res)
+	}
+	if opts := fr.RecordedRunOpts(); len(opts) != 0 {
+		t.Errorf("driver Run called %d times, want 0 — the external CLI must never be spawned for a refused dispatch", len(opts))
+	}
+}
+
+// TestExternalDispatch_MemberWithUnsafeWorkspaceID_Refused (ADR-046 P1,
+// FR-007/008) proves the SECOND refusal branch of resolveTurnWorkDirOrRefuse:
+// a MEMBER whose resolved workspace id fails the SafeWorkDir traversal guard
+// must also be refused, not warn-and-fall-through to agent.Home (the HIGH a
+// 7-reviewer gate found in the old runExternalCLISubTurn, which only warned
+// and kept going). A workspace record's own "id" field — not its filename —
+// is what FindForAgent uses, so a record stored at a safe filename can still
+// carry an unsafe id.
+func TestExternalDispatch_MemberWithUnsafeWorkspaceID_Refused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	agentWorkspace := t.TempDir()
+	al, ts := newExternalTestLoop(t, "claude-code", agentWorkspace)
+	// newExternalTestLoop already seeded ts.agent.ID into the shared harness
+	// workspace; overwrite that record's OWN "id" field (not its filename)
+	// with a traversal-unsafe value so FindForAgent resolves an id that fails
+	// safeID/SafeWorkDir.
+	wsDir := filepath.Join(home, "workspaces")
+	wsJSON := `{"id":"../escape","core_team":["` + ts.agent.ID + `"]}`
+	if err := os.WriteFile(filepath.Join(wsDir, testHarnessWorkspaceMembershipID+".json"), []byte(wsJSON), 0o644); err != nil {
+		t.Fatalf("overwrite harness workspace record: %v", err)
+	}
+
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	if err == nil {
+		t.Fatal("expected an error for a member with an unsafe workspace id, got nil")
+	}
+	if errors.Is(err, ErrAgentNotWorkspaceMember) {
+		t.Errorf("error = %v, want a SafeWorkDir/traversal error, not ErrAgentNotWorkspaceMember (the agent IS a member)", err)
+	}
+	if res != nil {
+		t.Errorf("expected nil result on refusal, got %+v", res)
+	}
+	if opts := fr.RecordedRunOpts(); len(opts) != 0 {
+		t.Errorf("driver Run called %d times, want 0 — the external CLI must never be spawned for a refused dispatch", len(opts))
 	}
 }
 
@@ -386,17 +467,29 @@ func TestExternalDispatch_UnknownCLI_FailsCleanly(t *testing.T) {
 }
 
 // TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly proves that when
-// the agent workspace IS a git repo, the external CLI still runs directly IN
-// that repo directory — NOT a separate `git worktree` checkout (ADR-032
-// removed the FR-5.3 worktree-isolation step for external CLIs). The repo
-// directory and its tracked file must remain present and untouched after the
-// run (no teardown of the agent's own workspace).
+// the RESOLVED WORKSPACE work/ directory IS a git repo, the external CLI
+// still runs directly IN that directory — NOT a separate `git worktree`
+// checkout (ADR-032 removed the FR-5.3 worktree-isolation step for external
+// CLIs). The repo directory and its tracked file must remain present and
+// untouched after the run (no teardown).
+//
+// ADR-046 P1: this no longer builds the git repo at agent.Home — WorkDir is
+// always the resolved workspace's work/ dir now, independent of agent.Home —
+// so the repo is initialized IN PLACE at the dir resolveTurnWorkDirOrRefuse
+// itself resolves to (newExternalTestLoop already seeds ts.agent into a
+// workspace), proving the no-worktree-isolation property still holds under
+// workspace-scoped execution.
 func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
-	// Build a tiny git repo to act as the agent workspace.
-	repo := t.TempDir()
+	al, ts := newExternalTestLoop(t, "claude-code", "")
+	repo, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	if wsErr != nil {
+		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
+	}
+
+	// Turn the resolved workspace work/ dir into a tiny git repo.
 	mustGit(t, repo, "init")
 	mustGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init")
 	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x"), 0o600); err != nil {
@@ -405,7 +498,6 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 	mustGit(t, repo, "add", ".")
 	mustGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add f")
 
-	al, ts := newExternalTestLoop(t, "claude-code", repo)
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
@@ -423,15 +515,16 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 		t.Errorf("output = %q, want %q", res.ForLLM, "done")
 	}
 
-	// ADR-032: WorkDir must be the repo dir itself — no separate worktree copy.
+	// ADR-032/ADR-046 P1: WorkDir must be the repo dir itself — no separate
+	// worktree copy.
 	workDir := fr.RecordedRunOpts()[0].WorkDir
 	if workDir != repo {
-		t.Errorf("driver WorkDir = %q, want the agent's own git-repo workspace %q (no worktree copy, ADR-032)",
+		t.Errorf("driver WorkDir = %q, want the resolved workspace's git-repo work/ dir %q (no worktree copy)",
 			workDir, repo)
 	}
 
 	// The repo directory and its tracked file must still be present — the
-	// agent's own workspace is never torn down.
+	// workspace's work/ dir is never torn down.
 	if _, statErr := os.Stat(filepath.Join(repo, "f.txt")); statErr != nil {
 		t.Errorf("tracked file f.txt missing from workspace after run: %v", statErr)
 	}
@@ -450,22 +543,46 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 // per-agent one. When the dispatching agent's ID is a member of a real,
 // on-disk workspace's core_team, RunOptions.WorkDir must be that workspace's
 // work/ directory ($OMNIPUS_HOME/workspaces/<id>/work/) instead of
-// agent.Workspace — deliberately not the workspace's own root directory,
+// agent.Home — deliberately not the workspace's own root directory,
 // which also holds AGENT.md and the shared memory room.
+//
+// This builds its AgentLoop/turnState directly (NOT via newExternalTestLoop,
+// which auto-seeds ts.agent into the SHARED harness workspace) — this test
+// needs precise, single-membership control (an agent seeded into BOTH the
+// harness workspace and this test's own "ws-shared" would hit
+// FindForAgent's documented ambiguous-multi-membership tiebreak and silently
+// resolve the wrong one).
 func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Provider: "mock"},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 	agentWorkspace := t.TempDir()
-	al, ts := newExternalTestLoop(t, "claude-code", agentWorkspace)
-	// newExternalTestLoop hardcodes agent.ID = "ext-agent" — the workspace
-	// record below lists exactly that id in its core_team.
+	agent := &AgentInstance{
+		ID:   "ext-agent-coreteam",
+		Name: "External Agent CoreTeam Member",
+		Home: agentWorkspace,
+		Subagents: &config.SubagentsConfig{
+			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
+		},
+	}
+	ts := &turnState{
+		agent:               agent,
+		agentID:             agent.ID,
+		turnID:              "ext-run-coreteam",
+		transcriptSessionID: "session_ext_coreteam_test",
+	}
 
 	wsDir := filepath.Join(home, "workspaces")
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		t.Fatalf("mkdir workspaces dir: %v", err)
 	}
-	wsJSON := `{"id":"ws-shared","core_team":["ext-agent"]}`
+	wsJSON := `{"id":"ws-shared","core_team":["` + agent.ID + `"]}`
 	if err := os.WriteFile(filepath.Join(wsDir, "ws-shared.json"), []byte(wsJSON), 0o644); err != nil {
 		t.Fatalf("write workspace record: %v", err)
 	}
@@ -512,55 +629,10 @@ func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) 
 	}
 }
 
-// TestExternalDispatch_NotCoreTeamMember_FallsBackToAgentWorkspace confirms the
-// fallback path: when the dispatching agent's ID is NOT a member of any
-// on-disk workspace's core_team, RunOptions.WorkDir remains agent.Workspace —
-// unchanged from the pre-CoreTeam-override behavior that
-// TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir and
-// TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly already pin
-// (those tests run with no workspaces/ directory at all). This test makes the
-// "no membership -> fallback" contract explicit by persisting a real, on-disk
-// workspace whose core_team does NOT list this agent.
-func TestExternalDispatch_NotCoreTeamMember_FallsBackToAgentWorkspace(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv(config.EnvHome, home)
-
-	agentWorkspace := t.TempDir()
-	al, ts := newExternalTestLoop(t, "claude-code", agentWorkspace)
-
-	wsDir := filepath.Join(home, "workspaces")
-	if err := os.MkdirAll(wsDir, 0o755); err != nil {
-		t.Fatalf("mkdir workspaces dir: %v", err)
-	}
-	// A real workspace exists, but its core_team lists a DIFFERENT agent.
-	wsJSON := `{"id":"ws-other","core_team":["someone-else"]}`
-	if err := os.WriteFile(filepath.Join(wsDir, "ws-other.json"), []byte(wsJSON), 0o644); err != nil {
-		t.Fatalf("write workspace record: %v", err)
-	}
-
-	fr, restore := withFakeDriver(t)
-	defer restore()
-
-	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
-		fr.Cancel()
-	}()
-
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
-	if err != nil {
-		t.Fatalf("runExternalCLISubTurn error: %v", err)
-	}
-
-	opts := fr.RecordedRunOpts()
-	if len(opts) != 1 {
-		t.Fatalf("driver Run called %d times, want 1", len(opts))
-	}
-	if opts[0].WorkDir != agentWorkspace {
-		t.Errorf("driver WorkDir = %q, want the agent's own workspace %q (no CoreTeam membership)",
-			opts[0].WorkDir, agentWorkspace)
-	}
-}
+// Note: the old TestExternalDispatch_NotCoreTeamMember_FallsBackToAgentWorkspace
+// pinned a "no membership -> fall back to agent.Home" contract that ADR-046
+// P1 retires entirely — see TestExternalDispatch_WorkspacelessAgentRefused
+// above, which replaces it: a non-member is now REFUSED, full stop.
 
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()

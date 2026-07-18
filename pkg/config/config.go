@@ -758,7 +758,7 @@ type AgentConfig struct {
 	Default     bool              `json:"default,omitempty"`
 	Name        string            `json:"name,omitempty"`
 	Description string            `json:"description,omitempty"`
-	Workspace   string            `json:"workspace,omitempty"`
+	Home        string            `json:"workspace,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
 	// MaxToolIterations caps the LLM/tool rounds PER TURN for this agent
 	// (one chat message, board task, or heartbeat run = one turn; the turn
@@ -1163,7 +1163,7 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
+	Home string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
 	// RestrictToWorkspace and AllowReadOutsideWorkspace are removed from the v1
 	// JSON schema only (FR-001): tags use json:"-" so SaveConfig never
 	// serializes them, and validateRemovedKeys rejects any v1 config JSON that
@@ -2369,7 +2369,7 @@ type ModelConfig struct {
 
 	// Special providers (CLI-based, OAuth, etc.)
 	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
-	Workspace  string `json:"workspace,omitempty"`   // Workspace path for CLI-based providers
+	Home       string `json:"workspace,omitempty"`   // Home path (working directory) for CLI-based providers
 
 	// Optional optimizations
 	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
@@ -3295,8 +3295,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// with an empty home path) and never resolved a relative $OMNIPUS_HOME,
 	// unlike OmnipusHomeDir(). Common case (env unset, real $HOME) is
 	// byte-identical to before.
-	if cfg.Agents.Defaults.Workspace == "" {
-		cfg.Agents.Defaults.Workspace = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
+	if cfg.Agents.Defaults.Home == "" {
+		cfg.Agents.Defaults.Home = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
 	}
 
 	migrateProviderFields(cfg)
@@ -3481,8 +3481,8 @@ func SaveConfig(path string, cfg *Config) error {
 	return nil
 }
 
-func (c *Config) WorkspacePath() string {
-	return expandHome(c.Agents.Defaults.Workspace)
+func (c *Config) AgentHomeBasePath() string {
+	return expandHome(c.Agents.Defaults.Home)
 }
 
 func expandHome(path string) string {

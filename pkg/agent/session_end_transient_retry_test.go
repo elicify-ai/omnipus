@@ -101,8 +101,8 @@ func buildRecapTestLoop(
 	if ag == nil {
 		t.Fatal("NewAgentInstance returned nil")
 	}
-	ag.Workspace = filepath.Join(home, "agents", "retry-test-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("retry-test-agent", "RetryTest")
+	ag.Home = filepath.Join(home, "agents", "retry-test-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("retry-test-agent", "RetryTest")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -129,7 +129,7 @@ func buildRecapTestLoop(
 func pollLastSession(t *testing.T, ag *AgentInstance, wantAbsent bool) []byte {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(lastSessionPath)
 		if err == nil {
@@ -145,7 +145,7 @@ func pollLastSession(t *testing.T, ag *AgentInstance, wantAbsent bool) []byte {
 	if wantAbsent {
 		return nil // file never appeared, which is also a valid outcome for wantAbsent
 	}
-	t.Fatalf("last-session.md not produced within deadline; agent workspace=%s", ag.Workspace)
+	t.Fatalf("last-session.md not produced within deadline; agent workspace=%s", ag.Home)
 	return nil
 }
 

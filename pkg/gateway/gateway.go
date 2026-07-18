@@ -1276,7 +1276,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 		skillsBuiltinDir = filepath.Join(wd, "skills")
 	}
-	skillsWorkspace := cfg.WorkspacePath()
+	skillsWorkspace := cfg.AgentHomeBasePath()
 	skillsGlobalDir := filepath.Join(homePath, "skills")
 
 	// First-boot seed of the embedded default skill set (Spec-6 U3, FR-9.3).
@@ -1779,7 +1779,7 @@ func setupAndStartServices(
 	runningServices.CronService, err = setupCronTool(
 		agentLoop,
 		msgBus,
-		cfg.WorkspacePath(),
+		cfg.AgentHomeBasePath(),
 		cfg,
 		runningServices.notifStore,
 	)
@@ -2182,6 +2182,17 @@ func setupAndStartServices(
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
 
+	// ADR-046 P1 (FR-007/008): execution is workspace-scoped, and the system
+	// deliberately never auto-adds a custom/pre-existing agent to any
+	// workspace team (FR-008 — no silent global-roster membership). That is
+	// correct for a fresh install (ensureDefaultWorkspace seeds the built-in
+	// roster) but means an operator upgrading an install with pre-existing
+	// CUSTOM agents can end up with agents that silently cannot execute at
+	// all until manually added via a workspace's Team tab — previously only
+	// discoverable one per-turn refusal at a time. Surface the full list ONCE
+	// at boot, after workspaces are ensured, so it's visible up front instead.
+	logWorkspacelessAgents(homePath, cfg)
+
 	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
 	// Runs before the HTTP listener accepts connections (StartAll, below), so no
 	// handler can race reconciliation.
@@ -2349,7 +2360,7 @@ func setupAndStartServices(
 	}
 
 	// Write port file so external callers (e.g. eval-runner) can discover the bound port.
-	portFile := filepath.Join(cfg.WorkspacePath(), "gateway.port")
+	portFile := filepath.Join(cfg.AgentHomeBasePath(), "gateway.port")
 	portData := strconv.Itoa(cfg.Gateway.Port)
 	if writeErr := os.WriteFile(portFile, []byte(portData+"\n"), 0o600); writeErr != nil {
 		return nil, fmt.Errorf("write gateway.port: %w", writeErr)
@@ -2375,7 +2386,7 @@ func setupAndStartServices(
 		cfg.Gateway.Port,
 	)
 
-	stateManager := state.NewManager(cfg.WorkspacePath())
+	stateManager := state.NewManager(cfg.AgentHomeBasePath())
 	runningServices.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,
@@ -2557,14 +2568,14 @@ func restartServices(
 	if runningServices.notifStore == nil {
 		// Derive the home dir from the workspace path (workspace == <home>/workspace).
 		runningServices.notifStore = notifications.NewStore(
-			filepath.Join(filepath.Dir(cfg.WorkspacePath()), "notifications"),
+			filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "notifications"),
 		)
 	}
 	var err error
 	runningServices.CronService, err = setupCronTool(
 		al,
 		msgBus,
-		cfg.WorkspacePath(),
+		cfg.AgentHomeBasePath(),
 		cfg,
 		runningServices.notifStore,
 	)
@@ -2589,7 +2600,7 @@ func restartServices(
 	// Restart the task time-trigger scheduler on its dedicated CronService. The
 	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
 	if tStore := agent.GetTaskStore(al); tStore != nil {
-		triggerStorePath := filepath.Join(filepath.Dir(cfg.WorkspacePath()), "tasks_triggers", "jobs.json")
+		triggerStorePath := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "tasks_triggers", "jobs.json")
 		runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
 			triggerStorePath, tStore, agent.GetTaskExecutor(al),
 		)
@@ -2693,7 +2704,7 @@ func restartServices(
 	if oldDS := runningServices.DeviceService; oldDS != nil {
 		oldDS.Stop()
 	}
-	stateManager := state.NewManager(cfg.WorkspacePath())
+	stateManager := state.NewManager(cfg.AgentHomeBasePath())
 	runningServices.DeviceService = devices.NewService(devices.Config{
 		Enabled:    cfg.Devices.Enabled,
 		MonitorUSB: cfg.Devices.MonitorUSB,

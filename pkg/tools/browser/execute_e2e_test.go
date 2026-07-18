@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +101,7 @@ func newPermissiveRegistry(t *testing.T, cfg BrowserConfig) (*tools.ToolRegistry
 	t.Helper()
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, true /* evaluateEnabled */)
+	mgr, err := RegisterTools(registry, cfg, ssrf, true /* evaluateEnabled */, t.TempDir(), true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 	return registry, mgr
@@ -388,7 +390,7 @@ func TestExecute_Evaluate_DisabledGate(t *testing.T) {
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
 	// evaluateEnabled=false: Execute must deny before touching Chrome.
-	_, regErr := RegisterTools(registry, cfg, ssrf, false)
+	_, regErr := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	evalTool := mustGetTool(t, registry, "browser_evaluate")
@@ -420,7 +422,7 @@ func TestExecute_Navigate_SchemeBlocks(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	_, regErr := RegisterTools(registry, cfg, ssrf, false)
+	_, regErr := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	navTool := mustGetTool(t, registry, "browser_navigate")
@@ -481,7 +483,7 @@ func TestExecute_Navigate_PostRedirectSSRF(t *testing.T) {
 	// 127.0.0.1 is allowed so the fixture server itself passes the pre-check.
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, false)
+	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
@@ -600,6 +602,61 @@ func TestExecute_Screenshot_ReturnsDataURL(t *testing.T) {
 		"browser_screenshot must set ArtifactTags with a local file path")
 	assert.True(t, strings.Contains(result.ArtifactTags[0], "[file:"),
 		"ArtifactTags entry must contain '[file:'; got: %v", result.ArtifactTags)
+}
+
+// TestExecute_Screenshot_WritesUnderAgentHome proves the ADR-046 FR-009
+// defect fix: browser_screenshot must save its JPEG under the turn's
+// effective working directory (ResolvePath, rooted at the agentHome passed
+// to RegisterTools) rather than the process-wide os.TempDir() the pre-fix
+// implementation wrote to unconditionally — a location no per-agent/per-turn
+// confinement ever covered.
+func TestExecute_Screenshot_WritesUnderAgentHome(t *testing.T) {
+	skipIfNoBrowser(t)
+
+	srv := executeTestServer(t)
+	cfg := testBrowserCfg(t)
+
+	// A distinct, per-test agentHome (NOT the bare os.TempDir() root) — if the
+	// pre-fix os.WriteFile(filepath.Join(os.TempDir(), filename)) call were
+	// still in place, the saved path would land directly under os.TempDir(),
+	// never under this subdirectory.
+	agentHome := t.TempDir()
+	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
+	registry := tools.NewToolRegistry()
+	mgr, err := RegisterTools(registry, cfg, ssrf, false, agentHome, true)
+	require.NoError(t, err)
+	t.Cleanup(mgr.Shutdown)
+
+	ctx := context.Background()
+	navTool := mustGetTool(t, registry, "browser_navigate")
+	navResult := navTool.Execute(ctx, map[string]any{"url": srv.URL})
+	require.False(t, navResult.IsError, "navigate must succeed for screenshot test")
+
+	screenshotTool := mustGetTool(t, registry, "browser_screenshot")
+	result := screenshotTool.Execute(ctx, map[string]any{})
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "browser_screenshot must succeed; got ForLLM: %s", result.ForLLM)
+
+	require.NotEmpty(t, result.ArtifactTags,
+		"browser_screenshot must set ArtifactTags with a local file path")
+	tag := result.ArtifactTags[0]
+	require.True(t, strings.HasPrefix(tag, "[file:") && strings.HasSuffix(tag, "]"),
+		"ArtifactTags entry must be a [file:...] marker; got: %q", tag)
+	savedPath := strings.TrimSuffix(strings.TrimPrefix(tag, "[file:"), "]")
+
+	// Resolve agentHome's own symlinks (matching ResolvePath's realpath
+	// resolution) before the prefix comparison, so this doesn't spuriously
+	// fail on a platform where t.TempDir() itself is a symlink (e.g. macOS's
+	// /tmp -> /private/tmp).
+	resolvedAgentHome, evalErr := filepath.EvalSymlinks(agentHome)
+	require.NoError(t, evalErr, "resolve agentHome symlinks for comparison")
+
+	assert.True(t, strings.HasPrefix(savedPath, resolvedAgentHome+string(os.PathSeparator)),
+		"browser_screenshot must write under the agent's effective working directory %q; got %q",
+		resolvedAgentHome, savedPath)
+
+	_, statErr := os.Stat(savedPath)
+	assert.NoError(t, statErr, "screenshot file must exist on disk at the resolved path")
 }
 
 // ---------------------------------------------------------------------------
@@ -786,7 +843,7 @@ func TestExecute_MaxTabs_LimitError(t *testing.T) {
 	}
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, false)
+	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 	ctx := context.Background()
@@ -896,7 +953,7 @@ func TestExecute_ParameterValidation(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	_, regErr := RegisterTools(registry, cfg, ssrf, true)
+	_, regErr := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	ctx := context.Background()

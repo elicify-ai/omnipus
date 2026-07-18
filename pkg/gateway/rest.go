@@ -1432,11 +1432,11 @@ func inferProviderName(provider, model string) string {
 // Returns (path, error). Callers must handle the error; a non-nil error means the
 // workspace could not be created and the returned path may be unusable.
 func agentWorkspacePath(cfg interface {
-	WorkspacePath() string
+	AgentHomeBasePath() string
 }, agentID, agentWorkspace, omnipusHome string,
 ) (string, error) {
 	if agentWorkspace != "" {
-		// AgentConfig.Workspace may contain "~"; expand it the same way config does.
+		// AgentConfig.Home may contain "~"; expand it the same way config does.
 		if len(agentWorkspace) > 0 && agentWorkspace[0] == '~' {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -1459,7 +1459,7 @@ func agentWorkspacePath(cfg interface {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				slog.Error("rest: agentWorkspacePath: UserHomeDir failed", "error", err)
-				return cfg.WorkspacePath(), fmt.Errorf("UserHomeDir: %w", err)
+				return cfg.AgentHomeBasePath(), fmt.Errorf("UserHomeDir: %w", err)
 			}
 			base = filepath.Join(home, ".omnipus")
 		}
@@ -1475,7 +1475,7 @@ func agentWorkspacePath(cfg interface {
 		}
 		return cleaned, nil
 	}
-	return cfg.WorkspacePath(), nil
+	return cfg.AgentHomeBasePath(), nil
 }
 
 // readSoulMD returns the contents of SOUL.md for the given workspace.
@@ -1642,7 +1642,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		if ac.Model != nil && ac.Model.Primary != "" {
 			model = ac.Model.Primary
 		}
-		workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Workspace, a.homePath)
+		workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Home, a.homePath)
 		if wsErr != nil {
 			slog.Warn("rest: listAgents: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 		}
@@ -1699,7 +1699,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if ac.Model != nil && ac.Model.Primary != "" {
 				model = ac.Model.Primary
 			}
-			workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Workspace, a.homePath)
+			workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Home, a.homePath)
 			if wsErr != nil {
 				slog.Warn("rest: getAgent: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 			}
@@ -2491,7 +2491,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	var createSoulContent string
 	if soul != "" {
 		createSoulContent = strings.TrimSpace(soul)
-		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Workspace, a.homePath)
+		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Home, a.homePath)
 		if wsErr != nil {
 			slog.Error("rest: agentWorkspacePath for create", "agent_id", ac.ID, "error", wsErr)
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
@@ -3362,7 +3362,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Write SOUL.md, HEARTBEAT.md, and AGENT.md BEFORE triggering reload,
 	// so the new AgentInstance reads the updated files.
 	// Capture agentWorkspace into a local to avoid TOCTOU on cfg.Agents.List (M1).
-	capturedWorkspace := cfg.Agents.List[foundIdx].Workspace
+	capturedWorkspace := cfg.Agents.List[foundIdx].Home
 	workspace, wsErr := agentWorkspacePath(cfg, id, capturedWorkspace, a.homePath)
 	if wsErr != nil {
 		slog.Error("rest: agentWorkspacePath for update", "agent_id", id, "error", wsErr)
@@ -4643,7 +4643,7 @@ func (a *restAPI) HandleUserContext(w http.ResponseWriter, r *http.Request) {
 
 func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	cfg := a.agentLoop.GetConfig()
-	userMDPath := filepath.Join(cfg.WorkspacePath(), "USER.md")
+	userMDPath := filepath.Join(cfg.AgentHomeBasePath(), "USER.md")
 	content := ""
 	if data, err := os.ReadFile(userMDPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -4665,7 +4665,7 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	userMDPath := filepath.Join(cfg.WorkspacePath(), "USER.md")
+	userMDPath := filepath.Join(cfg.AgentHomeBasePath(), "USER.md")
 	if err := fileutil.WriteFileAtomic(userMDPath, []byte(req.Content), 0o600); err != nil {
 		slog.Error("rest: write USER.md", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
@@ -7738,13 +7738,13 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	}
 
 	// Snapshot the WhatsApp store path (if applicable) before the config write.
-	// We derive the default path the same way init.go does: WorkspacePath()/whatsapp/<instanceID>.
+	// We derive the default path the same way init.go does: AgentHomeBasePath()/whatsapp/<instanceID>.
 	// If SessionStorePath is explicitly set, use that; otherwise use the derived default.
 	var stateDir string
 	if chBaseType == "whatsapp" {
 		storePath := inst.SessionStorePath
 		if storePath == "" {
-			storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp", channelID)
+			storePath = filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", channelID)
 		}
 		stateDir = storePath
 	}

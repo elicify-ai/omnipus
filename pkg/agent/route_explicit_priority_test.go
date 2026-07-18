@@ -18,7 +18,7 @@ func TestResolveMessageRoute_ExplicitAgentIDOverridesHandoffOverride(t *testing.
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 
 	msgBus := bus.NewMessageBus()
@@ -28,8 +28,8 @@ func TestResolveMessageRoute_ExplicitAgentIDOverridesHandoffOverride(t *testing.
 	for _, id := range []string{"jim", "ray"} {
 		ag := NewAgentInstance(&config.AgentConfig{ID: id, Name: id},
 			&cfg.Agents.Defaults, cfg, &mockProvider{})
-		ag.Workspace = filepath.Join(home, "agents", id)
-		ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(id, id)
+		ag.Home = filepath.Join(home, "agents", id)
+		ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
 		al.registry.mu.Lock()
 		al.registry.agents[id] = ag
 		al.registry.mu.Unlock()
@@ -74,7 +74,7 @@ func TestResolveMessageRoute_HandoffOverrideStillAppliesWhenNoExplicitAgentID(t 
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 
 	msgBus := bus.NewMessageBus()
@@ -83,8 +83,8 @@ func TestResolveMessageRoute_HandoffOverrideStillAppliesWhenNoExplicitAgentID(t 
 
 	ag := NewAgentInstance(&config.AgentConfig{ID: "ray", Name: "ray"},
 		&cfg.Agents.Defaults, cfg, &mockProvider{})
-	ag.Workspace = filepath.Join(home, "agents", "ray")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("ray", "ray")
+	ag.Home = filepath.Join(home, "agents", "ray")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("ray", "ray")
 	al.registry.mu.Lock()
 	al.registry.agents["ray"] = ag
 	al.registry.mu.Unlock()
@@ -125,7 +125,7 @@ func TestResolveMessageRoute_ChannelHandoffOverride_RoutesByChatScope(t *testing
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 
 	msgBus := bus.NewMessageBus()
@@ -135,8 +135,8 @@ func TestResolveMessageRoute_ChannelHandoffOverride_RoutesByChatScope(t *testing
 	for _, id := range []string{"mia", "ray"} {
 		ag := NewAgentInstance(&config.AgentConfig{ID: id, Name: id},
 			&cfg.Agents.Defaults, cfg, &mockProvider{})
-		ag.Workspace = filepath.Join(home, "agents", id)
-		ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(id, id)
+		ag.Home = filepath.Join(home, "agents", id)
+		ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
 		al.registry.mu.Lock()
 		al.registry.agents[id] = ag
 		al.registry.mu.Unlock()

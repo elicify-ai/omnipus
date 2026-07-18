@@ -578,7 +578,7 @@ func TestDeleteChannelInstance_RemovesStateDir(t *testing.T) {
 	// Seed the channel instance and create the WhatsApp store directory.
 	seedChannelInstance(t, api, "whatsapp.eu")
 	cfg := api.agentLoop.GetConfig()
-	storeDir := filepath.Join(cfg.WorkspacePath(), "whatsapp", "whatsapp.eu")
+	storeDir := filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", "whatsapp.eu")
 	require.NoError(t, os.MkdirAll(storeDir, 0o700))
 	// Write a fake store file to prove the directory existed.
 	fakeStore := filepath.Join(storeDir, "store.db")
