@@ -248,8 +248,16 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
 	require.True(t, ok)
 	// No full-Chrome build installed under mgr.InstallRoot() in this test's
-	// tmp dir — ClassifyVideoCapability must report not_capable.
-	require.False(t, browser.ClassifyVideoCapability(mgr.InstallRoot()).Capable)
+	// tmp dir — CaptureVideoCapability must report not_capable. Asserted via
+	// CaptureVideoCapability (the ADR-048 condition-3-aware gate), NOT the
+	// older, narrower ClassifyVideoCapability: webrtcUnavailableReason (the
+	// function handleWebRTCOffer's gate ladder actually calls, see
+	// browser_webrtc.go) consults mgr.CaptureVideoCapability() specifically
+	// (fix-wave A renamed the manager-facing path from VideoCapability to
+	// CaptureVideoCapability) — asserting the precondition via the OLD
+	// classifier only incidentally agrees here (no chrome installed) rather
+	// than proving the SAME function the production code path consults.
+	require.False(t, mgr.CaptureVideoCapability().Capable)
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState

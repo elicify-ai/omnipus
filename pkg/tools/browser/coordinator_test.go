@@ -275,6 +275,56 @@ func TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride(t *testing
 	}
 }
 
+// TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtxID
+// is QA regression-wave item 3's missing direction: fix-wave A's
+// TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride only
+// covers CaptureSharedContextEnabled()/captureSharedContextResolved() (the
+// config/env resolution logic) — it never calls Register() at all, so
+// NEITHER of Register's two actual behaviors was proven. The flag-OFF
+// direction (per-agent browser context created, distinct browserCtxIDs) is
+// covered by TestCoordinator_TwoAgents_OneChrome_TwoContexts above; this
+// test covers the flag-ON direction: Register must skip the per-agent CDP
+// browser context entirely and hand back the coordinator's shared root
+// context with an EMPTY browserCtxID (ADR-048 condition 1 — the agent's
+// session then bootstraps in the DEFAULT browser context, which
+// chrome.tabCapture can actually reach).
+func TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtxID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs a real Chrome")
+	}
+	cfg, home := newCoordinatorTestConfig(t)
+	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord.SetCaptureSharedContext(true)
+	t.Cleanup(func() { coord.Shutdown() })
+
+	mgr := newTestManager(t, cfg)
+	mgr.AttachSharedChrome(coord, "agent-shared-ctx")
+
+	rootCtx, browserCtxID, err := coord.Register(context.Background(), "agent-shared-ctx", mgr)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if browserCtxID != "" {
+		t.Fatalf("Register in shared-context mode must return an EMPTY browserCtxID (default context), got %q", browserCtxID)
+	}
+
+	realRoot, ok := coord.RootContext()
+	if !ok {
+		t.Fatal("expected a live root context after Register")
+	}
+	brRoot := chromedp.FromContext(realRoot)
+	brReturned := chromedp.FromContext(rootCtx)
+	if brRoot == nil || brReturned == nil || brRoot.Browser == nil || brReturned.Browser == nil {
+		t.Fatal("expected both contexts to resolve to a live *chromedp.Browser")
+	}
+	if brRoot.Browser != brReturned.Browser {
+		t.Fatal("Register's returned rootCtx must resolve to the coordinator's OWN shared Browser (coord.rootCtx), not a per-agent one")
+	}
+	if coord.contextCount() != 0 {
+		t.Fatalf("shared-context mode must NOT create a per-agent browser context; contextCount() = %d, want 0", coord.contextCount())
+	}
+}
+
 // Ownership marker round-trip (M2 primitive): the coordinator can write+read
 // its own marker; a stale/foreign pid is detected as not-alive.
 func TestCoordinator_OwnershipMarker_RoundTrip(t *testing.T) {

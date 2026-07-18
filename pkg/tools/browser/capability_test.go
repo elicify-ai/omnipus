@@ -1,6 +1,8 @@
 package browser
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -186,6 +188,120 @@ func TestCaptureVideoCapability_RequiresExtensionSeeded(t *testing.T) {
 	if got.Reason == "" {
 		t.Fatal("expected a non-empty operator-facing Reason")
 	}
+}
+
+// TestClassifyVideoCapabilityWithExec_Table exercises
+// ClassifyVideoCapabilityWithExec directly (QA regression gap: fix-wave A's
+// capability_test.go rewrite covered ClassifyVideoCapability's install-root
+// table and CaptureVideoCapability's ADR-048 gates, but no test ever called
+// ClassifyVideoCapabilityWithExec itself — the exec_path override branch
+// installer.go/manager.go's VideoCapability() actually delegates to for every
+// real gateway call — leaving it with zero DIRECT unit coverage). Covers: the
+// empty-execPath delegation to ClassifyVideoCapability, a real full-Chrome
+// exec_path on linux (capable), the two documented headless-shell basename
+// spellings (not capable — no tabCapture surface), and the non-linux
+// early-out via the goosForCapability seam (not capable regardless of the
+// exec_path basename). The gateway-level "exec_path set + empty install root
+// still proceeds past the capability gate" ladder assertion is already
+// covered by TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEvent
+// (pkg/gateway/browser_webrtc_fixwave_test.go) — deliberately not duplicated
+// here.
+func TestClassifyVideoCapabilityWithExec_Table(t *testing.T) {
+	if _, err := cftPlatform(); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Fatalf("cftPlatform: %v", err)
+	}
+
+	t.Run("empty execPath delegates to ClassifyVideoCapability", func(t *testing.T) {
+		withCapabilitySeams(t, "linux")
+		root := t.TempDir()
+		seedBuildBinary(t, root, "131.0.6778.108", platform, fullChromeBuild())
+
+		withExec := ClassifyVideoCapabilityWithExec("", root)
+		base := ClassifyVideoCapability(root)
+		if withExec != base {
+			t.Fatalf("ClassifyVideoCapabilityWithExec(\"\", root) = %+v, want it to equal ClassifyVideoCapability(root) = %+v (delegation)", withExec, base)
+		}
+		if !withExec.Capable {
+			t.Fatalf("expected Capable=true with a full-Chrome build seeded, got %+v", withExec)
+		}
+
+		// And the delegation must carry through to the not-capable case too
+		// (empty install root, nothing seeded) — not just the happy path.
+		emptyRoot := t.TempDir()
+		withExecEmpty := ClassifyVideoCapabilityWithExec("", emptyRoot)
+		baseEmpty := ClassifyVideoCapability(emptyRoot)
+		if withExecEmpty != baseEmpty {
+			t.Fatalf("ClassifyVideoCapabilityWithExec(\"\", emptyRoot) = %+v, want it to equal ClassifyVideoCapability(emptyRoot) = %+v", withExecEmpty, baseEmpty)
+		}
+		if withExecEmpty.Capable {
+			t.Fatal("expected not-capable with an empty install root and no exec_path override")
+		}
+	})
+
+	t.Run("linux full-chrome exec_path -> capable", func(t *testing.T) {
+		withCapabilitySeams(t, "linux")
+		execPath := filepath.Join(t.TempDir(), "chrome-linux64", "chrome")
+		if err := os.MkdirAll(filepath.Dir(execPath), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(execPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write fake chrome: %v", err)
+		}
+
+		got := ClassifyVideoCapabilityWithExec(execPath, t.TempDir())
+		if !got.Capable {
+			t.Fatalf("expected Capable=true for a linux exec_path not naming headless-shell, got %+v", got)
+		}
+		if got.Reason != "" {
+			t.Fatalf("Reason must be empty when Capable=true, got %q", got.Reason)
+		}
+	})
+
+	t.Run("chrome-headless-shell basename -> not capable", func(t *testing.T) {
+		withCapabilitySeams(t, "linux")
+		execPath := filepath.Join(t.TempDir(), "chrome-headless-shell-linux64", "chrome-headless-shell")
+
+		got := ClassifyVideoCapabilityWithExec(execPath, t.TempDir())
+		if got.Capable {
+			t.Fatalf("expected not-capable for a chrome-headless-shell exec_path (no tabCapture surface), got %+v", got)
+		}
+		if got.Reason == "" {
+			t.Fatal("expected a non-empty operator-facing Reason (O-3)")
+		}
+	})
+
+	t.Run("chrome_headless_shell underscore variant basename -> not capable", func(t *testing.T) {
+		withCapabilitySeams(t, "linux")
+		execPath := filepath.Join(t.TempDir(), "bin", "chrome_headless_shell")
+
+		got := ClassifyVideoCapabilityWithExec(execPath, t.TempDir())
+		if got.Capable {
+			t.Fatalf("expected not-capable for a chrome_headless_shell (underscore) exec_path, got %+v", got)
+		}
+		if got.Reason == "" {
+			t.Fatal("expected a non-empty operator-facing Reason (O-3)")
+		}
+	})
+
+	t.Run("non-linux via goosForCapability seam -> not capable regardless of exec_path", func(t *testing.T) {
+		for _, goos := range []string{"darwin", "windows", "android"} {
+			t.Run(goos, func(t *testing.T) {
+				withCapabilitySeams(t, goos)
+				execPath := filepath.Join(t.TempDir(), "chrome") // a plausible FULL-chrome basename
+				got := ClassifyVideoCapabilityWithExec(execPath, t.TempDir())
+				if got.Capable {
+					t.Fatalf("expected not-capable on GOOS=%s regardless of exec_path basename, got %+v", goos, got)
+				}
+				if got.Reason == "" {
+					t.Fatal("expected a non-empty operator-facing Reason (O-3)")
+				}
+			})
+		}
+	})
 }
 
 // TestCaptureVideoCapability_RequiresSharedContextEnabled proves the other

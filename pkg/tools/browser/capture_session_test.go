@@ -11,11 +11,13 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
@@ -189,6 +191,138 @@ func TestCaptureSession_StartPropagatesEncoderError(t *testing.T) {
 	started, err = cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
 	if started || err == nil {
 		t.Fatalf("Start on a stopped session = (%v, %v), want (false, non-nil)", started, err)
+	}
+}
+
+// TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError
+// calls the REAL production defaultEncoderStarter (never a fake) — every
+// other Start()/EncoderStarter test in this file substitutes
+// fakeEncoderStarter, so defaultEncoderStarter itself had zero direct unit
+// coverage. Reaches its step-3 gate (capture_session.go: "rootCtx :=
+// coord.rootContext(); if rootCtx == nil { return ... "shared Chrome is not
+// live" }") by constructing a coordinator that is deliberately never
+// launched (rootCtx stays nil by construction — NewBrowserCoordinator never
+// touches it), while making steps 1-2 succeed WITHOUT a real Chrome:
+//   - step 1 (mgr.Session(DefaultSessionID)): a hand-planted sessionEntry
+//     with a live (never-canceled) tab context, mirroring sessionEntry's own
+//     doc comment ("nil only for hand-built sessionEntry literals in tests
+//     that bypass Session()/createFirstTab entirely... every nil-checked at
+//     its two call sites") and live_deadlock_test.go's identical technique —
+//     plus mgr.started=true so ensureStarted() never attempts a real
+//     coordinator.Register() launch.
+//   - step 2 (coord.LoadedExtensionID() != captureext.ExtensionID): the
+//     coordinator's loadedExtensionID is set directly to captureext.ExtensionID
+//     so LoadExtension (which itself needs a live rootCtx) is never called —
+//     calling it here would fail for a DIFFERENT reason and mask the one
+//     this test targets.
+func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *testing.T) {
+	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
+	// Never Register()'d/launched — coord.rootCtx stays nil, which is exactly
+	// the precondition defaultEncoderStarter's step 3 gate checks for.
+
+	fakeCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	mgr := &BrowserManager{
+		cfg:     BrowserConfig{ProfileDir: t.TempDir() + "/profiles/default"},
+		started: true,
+		sessions: map[string]*sessionEntry{
+			DefaultSessionID: {
+				tabs:      []*tabEntry{{ctx: fakeCtx, cancel: cancel}},
+				activeIdx: 0,
+			},
+		},
+	}
+	mgr.AttachSharedChrome(coord, "agent-no-root-ctx")
+
+	coord.mu.Lock()
+	coord.loadedExtensionID = captureext.ExtensionID
+	coord.mu.Unlock()
+
+	_, _, err := defaultEncoderStarter(context.Background(), mgr, "deadbeef", "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
+	if err == nil {
+		t.Fatal("expected an error when the coordinator has no live root context")
+	}
+	if !strings.Contains(err.Error(), "shared Chrome is not live") {
+		t.Fatalf("error = %q, want it to contain %q", err.Error(), "shared Chrome is not live")
+	}
+}
+
+// TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget is the
+// regression guard for the Start()/Stop() race capture_session.go's Start()
+// explicitly handles (the "cs.stopped" branch inside startOnce.Do, comment:
+// "A Stop() (e.g. browser death detected concurrently) raced this Start()
+// and won — tear down what we just built rather than leaving an orphaned
+// encoder target nobody will ever close"). Blocks a fake EncoderStarter
+// mid-flight, calls Stop() while Start() is still inside it (so Stop()'s own
+// tabCancel snapshot is nil — cs.tabCtx/tabCancel are only assigned AFTER
+// startEncoder returns), then releases the block and proves: (a) Start()
+// itself returns a non-nil "stopped while starting" error, (b) the
+// encoder-context cancel func startEncoder returned WAS invoked (no orphaned
+// target/leaked context) even though Stop() never saw it.
+func TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget(t *testing.T) {
+	relay := &fakeRelay{}
+
+	startCalled := make(chan struct{})
+	releaseStart := make(chan struct{})
+	cancelCalled := make(chan struct{})
+	var cancelOnce sync.Once
+
+	starter := EncoderStarter(func(context.Context, *BrowserManager, string, string) (context.Context, context.CancelFunc, error) {
+		close(startCalled)
+		<-releaseStart // block until the test releases it, simulating a slow chromedp.Run
+		tabCtx, cancel := context.WithCancel(context.Background())
+		wrappedCancel := func() {
+			cancelOnce.Do(func() { close(cancelCalled) })
+			cancel()
+		}
+		return tabCtx, wrappedCancel, nil
+	})
+
+	cs := newTestCaptureSession(t, relay, starter)
+
+	startErrCh := make(chan error, 1)
+	go func() {
+		_, err := cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
+		startErrCh <- err
+	}()
+
+	select {
+	case <-startCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startEncoder was never invoked")
+	}
+
+	// Stop() races in and wins while Start() is still blocked inside
+	// startEncoder — cs.tabCtx/tabCancel are still unset at this point, so
+	// Stop()'s own tabCancel snapshot is nil (asserted indirectly: Stop()
+	// completing here without cancelCalled having fired yet is the proof).
+	cs.Stop()
+	select {
+	case <-cancelCalled:
+		t.Fatal("tabCancel fired from Stop() itself before startEncoder even returned — precondition of this test is violated")
+	default:
+	}
+
+	close(releaseStart)
+
+	select {
+	case err := <-startErrCh:
+		if err == nil {
+			t.Fatal("Start() must return an error when Stop() raced it while starting")
+		}
+		if !strings.Contains(err.Error(), "stopped while starting") {
+			t.Fatalf("Start() error = %q, want it to mention %q", err.Error(), "stopped while starting")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() never returned after being unblocked")
+	}
+
+	select {
+	case <-cancelCalled:
+		// Good: the encoder target's own tabCancel was invoked by Start()'s
+		// stopped-while-starting branch — no orphaned encoder target.
+	case <-time.After(2 * time.Second):
+		t.Fatal("tabCancel was never called on the encoder context Start() abandoned — orphaned encoder target")
 	}
 }
 

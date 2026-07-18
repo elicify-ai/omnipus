@@ -485,6 +485,96 @@ func TestSessionGoToGoFullFlow(t *testing.T) {
 	}
 }
 
+// TestSessionViewerLegReplacement_SameViewerID_OldPCClosedNewPCFlows is the
+// QA regression-wave item 8 guard: viewer.go's HandleViewerOffer explicitly
+// documents (and implements) "if viewerID collides with an already-attached
+// viewer (e.g. a reconnect that races the old connection's teardown), the
+// old PeerConnection is closed and replaced" — the SAME pattern already
+// proven for INGEST replacement by TestSessionGoToGoFullFlow, but no test
+// exercised the VIEWER-leg replacement path (a second browser_webrtc_offer
+// for the SAME viewerID — e.g. a viewer's page reconnecting after a network
+// blip) until now. Proves: (a) the OLD viewer PeerConnection transitions to
+// Closed, (b) the NEW viewer PeerConnection keeps receiving RTP after the
+// swap, and (c) sess.Stats().Viewers stays at 1 throughout — never 2, even
+// transiently at the moment of replacement.
+func TestSessionViewerLegReplacement_SameViewerID_OldPCClosedNewPCFlows(t *testing.T) {
+	sess := relay.NewSession(relay.Config{}, nil, safeLogf(t))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	enc := newFakeEncoder(t, true)
+	enc.startPumping(t)
+	offerE, err := sess.HandleIngestOffer(nonTrickleOffer(t, enc.pc))
+	if err != nil {
+		t.Fatalf("HandleIngestOffer: %v", err)
+	}
+	setAnswer(t, enc.pc, offerE)
+
+	const viewerID = "viewer-reconnect"
+
+	// --- first viewer leg ---
+	viewer1 := newFakeViewer(t, true)
+	oldClosed := make(chan struct{})
+	var oldClosedOnce sync.Once
+	viewer1.pc.OnConnectionStateChange(func(st pion.PeerConnectionState) {
+		if st == pion.PeerConnectionStateClosed {
+			oldClosedOnce.Do(func() { close(oldClosed) })
+		}
+	})
+
+	answer1, err := sess.HandleViewerOffer(viewerID, nonTrickleOffer(t, viewer1.pc))
+	if err != nil {
+		t.Fatalf("HandleViewerOffer (first leg): %v", err)
+	}
+	setAnswer(t, viewer1.pc, answer1)
+
+	waitCond(t, testWait, "first leg to receive video RTP", func() bool { return viewer1.videoPkts.Load() > 5 })
+	if got := sess.Stats().Viewers; got != 1 {
+		t.Fatalf("Stats().Viewers after first leg = %d, want 1", got)
+	}
+
+	// --- second viewer leg: SAME viewerID, a brand-new PeerConnection (the
+	// "reconnect that races the old connection's teardown" case). ---
+	viewer2 := newFakeViewer(t, true)
+
+	answer2, err := sess.HandleViewerOffer(viewerID, nonTrickleOffer(t, viewer2.pc))
+	if err != nil {
+		t.Fatalf("HandleViewerOffer (second leg, replacement): %v", err)
+	}
+	setAnswer(t, viewer2.pc, answer2)
+
+	// (a) the OLD PeerConnection must actually be closed by the replacement,
+	// not merely forgotten about (which would leak it).
+	select {
+	case <-oldClosed:
+	case <-time.After(testWait):
+		t.Fatal("old viewer PeerConnection was never closed after being replaced by a same-viewerID reconnect")
+	}
+
+	// (b) the NEW PeerConnection carries packets — the replacement actually
+	// wired up media, not just torn down the old leg.
+	videoBefore := viewer2.videoPkts.Load()
+	waitCond(t, testWait, "new leg to receive video RTP after replacement", func() bool {
+		return viewer2.videoPkts.Load() > videoBefore+5
+	})
+	waitCond(t, testWait, "new leg to receive audio RTP after replacement", func() bool { return viewer2.audioPkts.Load() > 5 })
+
+	// (c) exactly one viewer registered for viewerID throughout — never 2.
+	if got := sess.Stats().Viewers; got != 1 {
+		t.Fatalf("Stats().Viewers after replacement = %d, want 1 (never 2, even transiently)", got)
+	}
+
+	// SendToViewer now reaches the NEW leg (proves the registry entry
+	// actually points at viewer2's PC, not a stale reference to viewer1's).
+	ackPayload := []byte(`{"id":1,"ok":true}`)
+	if sendErr := sess.SendToViewer(viewerID, ackPayload); sendErr != nil {
+		t.Fatalf("SendToViewer after replacement: %v", sendErr)
+	}
+	waitCond(t, testWait, "new leg to receive the ack", func() bool { return viewer2.ackCount() == 1 })
+	if got := viewer1.ackCount(); got != 0 {
+		t.Fatalf("old (replaced) leg received %d acks, want 0 — SendToViewer must target the CURRENT connection", got)
+	}
+}
+
 // TestSessionVideoOnlyTolerated exercises the "one video + one audio track
 // expected but tolerate video-only" requirement: an encoder that never sends
 // audio must still let a viewer attach and receive video.

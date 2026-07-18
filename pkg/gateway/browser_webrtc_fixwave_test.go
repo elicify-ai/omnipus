@@ -370,6 +370,80 @@ func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
 	require.Contains(t, f.Message, "browser input failed")
 }
 
+// TestWebrtcInputSink_ViewerIdentityArbitration_ControllerVsNonController is
+// the QA regression-wave item 7 guard: proves the WS-granted controller ID
+// (LiveViewRegistry.TakeControl — the SAME call browser_ws.go's handleControl
+// makes for a real browser_control{action:"take"} frame) equals the DC
+// sink's viewer ID end to end, through the ACTUAL production
+// handler.webrtcInputSink(mgr), not a re-implementation of its logic.
+//
+// viewerA is granted control; viewerB never is. Both dispatch the identical
+// input kind through the sink. Neither reaches a real CDP call in this test
+// (no Attach() ever ran, so lv.tabCtx stays nil) — but that is exactly what
+// makes the two outcomes cleanly distinguishable: LiveView.dispatchInput
+// checks controller identity BEFORE ever consulting tabCtx (live.go), so
+//   - viewerA (the controller) clears the identity gate and proceeds to the
+//     tabCtx==nil check, which returns a REAL (non-benign) "session is not
+//     attached" error -- itself proof of having passed the identity gate.
+//   - viewerB (never granted control) is rejected AT the identity gate with
+//     a BENIGN "does not hold control" error, which webrtcInputSink
+//     deliberately never surfaces as a status frame (see its doc comment) --
+//     proving viewerB never got anywhere near the tabCtx check viewerA
+//     reached.
+//
+// A hardcoded/no-op identity check would either surface a status frame for
+// BOTH viewers or NEITHER; this test fails under both of those mutations.
+func TestWebrtcInputSink_ViewerIdentityArbitration_ControllerVsNonController(t *testing.T) {
+	browserCfg, err := browser.DefaultConfig()
+	require.NoError(t, err)
+	browserCfg.ProfileDir = t.TempDir()
+	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
+	require.NoError(t, err)
+
+	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewerA"),
+		"TakeControl for the first-ever controller of a session must succeed")
+
+	handler, _ := newBrowserWSTestHandler(t, nil)
+	t.Cleanup(handler.Wait)
+
+	wcA := newTestBrowserWSConn()
+	handler.registerWebRTCViewerConn("viewerA", wcA, "sess-arb")
+	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewerA") })
+
+	wcB := newTestBrowserWSConn()
+	handler.registerWebRTCViewerConn("viewerB", wcB, "sess-arb")
+	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewerB") })
+
+	sink := handler.webrtcInputSink(mgr)
+	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move"}
+	raw, err := json.Marshal(inputFrame)
+	require.NoError(t, err)
+
+	// viewerA: the WS-granted controller.
+	sink("viewerA", raw)
+	frameA := drainOneFrame(t, wcA)
+	var fA struct {
+		Type    string `json:"type"`
+		State   string `json:"state"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(frameA, &fA))
+	require.Equal(t, "browser_status", fA.Type)
+	require.Equal(t, "error", fA.State)
+	require.Contains(t, fA.Message, "session is not attached",
+		"viewerA (the controller) must clear the identity gate and reach the tabCtx check -- a DIFFERENT "+
+			"failure than viewerB's benign identity-gate rejection below")
+
+	// viewerB: never granted control.
+	sink("viewerB", raw)
+	select {
+	case <-wcB.sendCh:
+		t.Fatal("viewerB (not the controller) must be rejected BENIGNLY at the identity gate -- " +
+			"no status frame should ever be surfaced for it")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fix 9: single gate-ladder classifier (webrtcUnavailableReason).
 // ---------------------------------------------------------------------------
