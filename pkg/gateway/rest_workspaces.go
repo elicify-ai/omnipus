@@ -590,7 +590,13 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		// mirror ensureDefaultWorkspace's full-roster seed, which remains
 		// reserved for the auto-created boot default workspace ("My Workspace").
 		ws.CoreTeam = newWorkspaceSetupTeam(cfg)
-		ws.SetupPending = true
+		// Fix 5: only mark setup_pending when the seed actually produced a
+		// non-empty team. newWorkspaceSetupTeam returns nil when Ava is absent
+		// from the live config (e.g. a lite/custom install) — without this
+		// guard, such an install's workspace would be permanently stuck with
+		// setup_pending=true and an empty core_team: nothing (no kickoff-eligible
+		// agent) is ever available to run the interview and clear the flag.
+		ws.SetupPending = len(ws.CoreTeam) > 0
 	}
 	// Seed default delegation edges from each team agent's seeded role (M5),
 	// restricted to edges whose endpoints are both on this workspace's team so a
@@ -734,6 +740,16 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		jsonErr(w, http.StatusBadRequest, `status must be "active" or "archived"`)
 		return
 	}
+
+	// Fix 1: serialize the full load-modify-write cycle against this workspace
+	// ID so a concurrent kickoff consume (pkg/gateway/websocket.go), a racing
+	// delete, or a racing delegation PUT cannot interleave with this update —
+	// e.g. resurrecting a just-cleared setup_pending flag with this request's
+	// stale in-memory copy, or this write clobbering a concurrent rename.
+	// Held for the whole handler (including the heartbeat-session-creation
+	// loop below) via defer: correctness first, this is not a hot path.
+	unlock := workspace.LockID(id)
+	defer unlock()
 
 	ws, ok := a.loadWorkspace(w, id)
 	if !ok {
@@ -1008,6 +1024,16 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
+
+	// Fix 1: serialize this delete's read-check-remove cycle against this
+	// workspace ID's per-ID lock so a racing kickoff consume cannot read the
+	// workspace after this delete has removed it (readWorkspaceFile then fails
+	// and consumeWorkspaceSetupKickoff correctly rejects — Fix 3 — rather than
+	// the two racing without a lock ever resurrecting the file as a ghost),
+	// and so a racing PUT/delegation-PUT cannot write back a stale copy after
+	// this delete removes the file. Held for the whole handler via defer.
+	unlock := workspace.LockID(id)
+	defer unlock()
 
 	// Verify the workspace exists before cascading.
 	ws, ok := a.loadWorkspace(w, id)

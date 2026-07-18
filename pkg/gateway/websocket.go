@@ -27,6 +27,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -1092,14 +1093,30 @@ func wsFrameSchemaName(frameType string) string {
 // (contracts/asyncapi.yaml) — the SPA sends this on a workspace's first open so
 // Ava introduces herself and interviews the user about the workspace's purpose.
 // When true (and workspaceID resolves to a real workspace), the trigger is
-// recorded as a system-role transcript entry rather than a user bubble, the
-// workspace's SetupPending flag is cleared exactly once (idempotency-guarded via
-// workspaceSetupKickoffMu), and the minted session is given the fixed title
-// "Workspace setup" instead of a content-derived one. A duplicate kickoff (the
-// workspace's SetupPending already false) is rejected with an error frame and
-// returns before minting a session or publishing to the bus. An unresolvable
-// workspaceID, or any read/write failure against the workspace file, demotes
-// the frame to a normal message rather than blocking the user's turn.
+// recorded as a NEUTRAL system-role transcript entry ("Workspace setup
+// started.", never the client-supplied instruction text verbatim — see
+// consumeWorkspaceSetupKickoff's caller below) rather than a user bubble, the
+// workspace's SetupPending flag is cleared exactly once under the per-workspace
+// lock (workspace.LockID, idempotency-guarded), and the minted session is given
+// the fixed title "Workspace setup" instead of a content-derived one. The bus
+// publish still carries the FULL client-supplied instruction so Ava's turn is
+// driven correctly — only the persisted/replayed transcript entry is neutral.
+//
+// ANY kickoff-flagged frame that cannot complete the kickoff — an unresolved
+// workspace_id, a duplicate (SetupPending already false), or a consume
+// read/write failure — is REJECTED outright with an error frame: no session is
+// minted, no transcript entry is written, and nothing is published to the bus.
+// This replaces an earlier "demote to a normal message" behavior, which used
+// to persist the synthetic kickoff instruction as a fake user-authored
+// transcript entry and session title. Flag state is left untouched on a
+// read/write failure (so a later workspace open can retry) and cleared only on
+// the success path.
+//
+// If a downstream step fails AFTER a successful consume — minting the new
+// session, looking up an existing session's meta, or publishing to the bus —
+// the consumed SetupPending flag is best-effort RESTORED to true (see
+// restoreWorkspaceSetupPending) so the one-time setup interview is not
+// permanently lost to a transient persistence/bus failure.
 func (h *WSHandler) handleChatMessage(
 	ctx context.Context,
 	chatID string,
@@ -1156,12 +1173,18 @@ func (h *WSHandler) handleChatMessage(
 
 	// A workspace-setup kickoff is only meaningful against a real, resolved
 	// workspace — either the id was absent to begin with, or the M4 check
-	// above just blanked it as unknown. Demote to a normal message rather
-	// than running the kickoff machinery against nothing.
+	// above just blanked it as unknown. Reject outright (Fix 3: was "demote to
+	// a normal message", which used to persist the kickoff instruction as a
+	// fake user-authored transcript entry and session title) — no session is
+	// minted, nothing is published.
 	if setupKickoff && workspaceID == "" {
-		slog.Warn("ws: workspace setup kickoff with no resolved workspace_id — demoting to normal message",
+		slog.Warn("ws: workspace setup kickoff with no resolved workspace_id — rejecting",
 			"chat_id", chatID)
-		setupKickoff = false
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "workspace setup could not be started: unknown workspace",
+		})
+		return
 	}
 
 	// Pick the right store for the operation:
@@ -1205,15 +1228,30 @@ func (h *WSHandler) handleChatMessage(
 		}
 	}
 
+	// Fix 7: a kickoff-flagged frame with no usable session store (a
+	// degenerate configuration, not the normal path) must be REJECTED like
+	// every other kickoff-cannot-complete case (Fix 3) rather than silently
+	// falling through to the no-store tail below, which would publish the
+	// raw kickoff instruction to the bus as an ordinary message.
+	if setupKickoff && store == nil {
+		slog.Warn("ws: workspace setup kickoff rejected — no session store available",
+			"workspace_id", workspaceID, "chat_id", chatID)
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "workspace setup could not be started",
+		})
+		return
+	}
+
 	if store != nil {
 		// Workspace-setup kickoff idempotency guard: clear SetupPending exactly
-		// once. A duplicate kickoff (e.g. a second tab racing the workspace's
-		// first open) is rejected outright — no session minted, nothing
-		// published. A read/write failure against the workspace file demotes
-		// to a normal message rather than blocking the user's turn.
+		// once, under the per-workspace lock (workspace.LockID). ANY outcome
+		// other than a clean consume — duplicate (already ran) or a read/write
+		// failure against the workspace file — is REJECTED outright (Fix 3): no
+		// session minted, no transcript entry written, nothing published.
 		if setupKickoff {
-			demote, duplicate := h.consumeWorkspaceSetupKickoff(workspaceID)
-			if duplicate {
+			switch h.consumeWorkspaceSetupKickoff(workspaceID) {
+			case kickoffDuplicate:
 				sidCopy := sessionID
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 					Type:      string(generated.WsFrameTypeError),
@@ -1221,9 +1259,16 @@ func (h *WSHandler) handleChatMessage(
 					SessionId: &sidCopy,
 				})
 				return
-			}
-			if demote {
-				setupKickoff = false
+			case kickoffFailed:
+				sidCopy := sessionID
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:      string(generated.WsFrameTypeError),
+					Message:   "workspace setup could not be started",
+					SessionId: &sidCopy,
+				})
+				return
+			case kickoffConsumed:
+				// Proceed — SetupPending is now cleared on disk.
 			}
 		}
 		if sessionID == "" {
@@ -1231,6 +1276,12 @@ func (h *WSHandler) handleChatMessage(
 			meta, err := store.NewSession(session.SessionTypeChat, "webchat", targetAgentID)
 			if err != nil {
 				slog.Error("ws: could not create session", "error", err)
+				// Fix 2: a successful kickoff consume just cleared SetupPending —
+				// if minting the session then fails, the one-time interview would
+				// otherwise be silently lost. Best-effort restore.
+				if setupKickoff {
+					h.restoreWorkspaceSetupPending(workspaceID)
+				}
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 					Type:    string(generated.WsFrameTypeError),
 					Message: fmt.Sprintf("could not create session: %v", err),
@@ -1293,6 +1344,12 @@ func (h *WSHandler) handleChatMessage(
 			existingMeta, err := store.GetMeta(sessionID)
 			if err != nil {
 				slog.Warn("ws: session not found", "session_id", sessionID, "error", err)
+				// Fix 2: same compensation as the NewSession failure above — a
+				// successful kickoff consume must not be silently lost to a
+				// downstream failure.
+				if setupKickoff {
+					h.restoreWorkspaceSetupPending(workspaceID)
+				}
 				sidCopy := sessionID
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 					Type:      string(generated.WsFrameTypeError),
@@ -1352,9 +1409,33 @@ func (h *WSHandler) handleChatMessage(
 				// hydration attributes this entry to her on a fresh turn.
 				entry.Type = session.EntryTypeSystem
 				entry.Role = "system"
+				// Fix 4: the PERSISTED/REPLAYED entry carries neutral, fixed
+				// content — never the client-supplied kickoff instruction
+				// verbatim (session replay renders it as a system pill). The
+				// full instruction still drives the turn via msg.Content below,
+				// which is built from `content`, not from this entry.
+				entry.Content = "Workspace setup started."
 			}
 			if err := store.AppendTranscript(sessionID, entry); err != nil {
 				slog.Warn("ws: could not record user message", "session_id", sessionID, "error", err)
+			}
+			// Fix 6: audit the kickoff consume now that the session it drove is
+			// known. Mirrors the workspace.create/workspace.update audit calls in
+			// rest_workspaces.go — best-effort, never blocks the turn.
+			if setupKickoff {
+				if auditor := h.agentLoop.AuditLogger(); auditor != nil {
+					if err := auditor.Log(&audit.Entry{
+						Event:    "workspace.setup_consumed",
+						Decision: audit.DecisionAllow,
+						Details: map[string]any{
+							"workspace_id": workspaceID,
+							"session_id":   sessionID,
+						},
+					}); err != nil {
+						slog.Warn("ws: workspace setup kickoff: audit write failed",
+							"workspace_id", workspaceID, "session_id", sessionID, "error", err)
+					}
+				}
 			}
 		}
 	}
@@ -1450,6 +1531,12 @@ func (h *WSHandler) handleChatMessage(
 	defer cancel()
 	if err := h.msgBus.PublishInbound(pubCtx, msg); err != nil {
 		slog.Warn("ws: failed to publish message", "error", err)
+		// Fix 2: same compensation as the earlier session-mint/lookup failures
+		// — a successful kickoff consume must not be silently lost just
+		// because the bus publish that was supposed to drive Ava's turn failed.
+		if setupKickoff {
+			h.restoreWorkspaceSetupPending(workspaceID)
+		}
 		sidCopy := sessionID
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:      string(generated.WsFrameTypeError),
@@ -1459,49 +1546,92 @@ func (h *WSHandler) handleChatMessage(
 	}
 }
 
-// workspaceSetupKickoffMu serializes the read-check-write of a workspace's
-// SetupPending flag against the workspace-setup kickoff frame, so two racing
-// kickoff frames (e.g. two tabs opening the same brand-new workspace at once)
-// cannot both observe SetupPending=true and both proceed as the "first" run.
-var workspaceSetupKickoffMu sync.Mutex
+// kickoffOutcome is the result of consumeWorkspaceSetupKickoff.
+type kickoffOutcome int
+
+const (
+	// kickoffConsumed means SetupPending was true and has now been cleared and
+	// persisted — the caller should proceed with the kickoff turn.
+	kickoffConsumed kickoffOutcome = iota
+	// kickoffDuplicate means the workspace's SetupPending was already false (a
+	// second kickoff raced or replayed) — the caller must reject the frame
+	// outright (error frame, no session minted, nothing published to the bus).
+	kickoffDuplicate
+	// kickoffFailed means the workspace file could not be read, or the cleared
+	// flag could not be persisted — the caller must reject the frame outright
+	// (Fix 3: this used to "demote" to a normal message instead, silently
+	// persisting the kickoff instruction as a fake user-authored transcript
+	// entry). SetupPending is left untouched on disk in this case, so a later
+	// workspace open can retry the kickoff.
+	kickoffFailed
+)
 
 // consumeWorkspaceSetupKickoff clears workspaceID's SetupPending flag exactly
-// once, under workspaceSetupKickoffMu so concurrent kickoff frames serialize.
-//
-// Returns (demote, duplicate):
-//   - duplicate=true: the workspace's SetupPending was already false (a second
-//     kickoff raced or replayed) — the caller must reject the frame outright
-//     (error frame, no session minted, nothing published to the bus).
-//   - demote=true: the workspace file could not be read or the cleared flag
-//     could not be persisted — the caller must treat this frame as a normal
-//     (non-kickoff) message rather than block the user's turn on a
-//     persistence hiccup.
-//
-// Both false means the flag was successfully cleared and the caller should
-// proceed with the kickoff turn.
-func (h *WSHandler) consumeWorkspaceSetupKickoff(workspaceID string) (demote bool, duplicate bool) {
-	workspaceSetupKickoffMu.Lock()
-	defer workspaceSetupKickoffMu.Unlock()
+// once, under the workspace's own per-ID lock (workspace.LockID) so concurrent
+// kickoff frames (e.g. two tabs opening the same brand-new workspace at once)
+// serialize against each other AND against every other writer of this same
+// workspace file — a REST PUT/DELETE/delegation-PUT racing this consume can no
+// longer resurrect a just-cleared flag with a stale write-back, clobber this
+// write, or (for DELETE) have this consume resurrect a just-deleted file as a
+// ghost: a delete-then-kickoff race always serializes so the kickoff's
+// readWorkspaceFile either sees the workspace fully intact or (post-delete)
+// fails with errWorkspaceNotFound, which this function maps to kickoffFailed
+// — it never recreates the file.
+func (h *WSHandler) consumeWorkspaceSetupKickoff(workspaceID string) kickoffOutcome {
+	unlock := workspace.LockID(workspaceID)
+	defer unlock()
 
 	w, err := readWorkspaceFile(h.home, workspaceID)
 	if err != nil {
-		slog.Warn("ws: workspace setup kickoff: could not read workspace file — demoting to normal message",
+		slog.Warn("ws: workspace setup kickoff: could not read workspace file — rejecting",
 			"workspace_id", workspaceID, "error", err)
-		return true, false
+		return kickoffFailed
 	}
 	if !w.SetupPending {
 		slog.Warn("ws: workspace setup kickoff: setup already ran — rejecting duplicate",
 			"workspace_id", workspaceID)
-		return false, true
+		return kickoffDuplicate
 	}
 	w.SetupPending = false
 	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeWorkspaceFile(h.home, w); err != nil {
-		slog.Warn("ws: workspace setup kickoff: could not persist cleared setup_pending — demoting to normal message",
+		slog.Warn("ws: workspace setup kickoff: could not persist cleared setup_pending — rejecting",
 			"workspace_id", workspaceID, "error", err)
-		return true, false
+		return kickoffFailed
 	}
-	return false, false
+	return kickoffConsumed
+}
+
+// restoreWorkspaceSetupPending re-sets workspaceID's SetupPending flag to true
+// after a successful kickoff consume (consumeWorkspaceSetupKickoff returned
+// kickoffConsumed) was followed by a downstream failure — minting the new
+// session, looking up an existing session's meta, or publishing the turn to
+// the bus — that means the one-time setup interview never actually ran (Fix
+// 2). Acquires the same per-workspace lock as consumeWorkspaceSetupKickoff so
+// the restore itself cannot race a concurrent writer.
+//
+// Best-effort: a read/write failure here is logged and otherwise ignored —
+// the caller has already committed to sending the user an error frame for the
+// original failure, and there is no further fallback. A restore failure
+// leaves SetupPending=false despite no interview having run, which is a
+// degraded but non-corrupting outcome (the operator can still trigger team
+// setup manually via the workspace's Team tab).
+func (h *WSHandler) restoreWorkspaceSetupPending(workspaceID string) {
+	unlock := workspace.LockID(workspaceID)
+	defer unlock()
+
+	w, err := readWorkspaceFile(h.home, workspaceID)
+	if err != nil {
+		slog.Warn("ws: workspace setup kickoff: could not read workspace file to restore setup_pending",
+			"workspace_id", workspaceID, "error", err)
+		return
+	}
+	w.SetupPending = true
+	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := writeWorkspaceFile(h.home, w); err != nil {
+		slog.Warn("ws: workspace setup kickoff: could not restore setup_pending after downstream failure",
+			"workspace_id", workspaceID, "error", err)
+	}
 }
 
 // sendCancelStageFrame marshals a generated.CancelStageFrame and delivers it via wc.sendCh.
