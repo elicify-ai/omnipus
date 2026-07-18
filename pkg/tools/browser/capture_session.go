@@ -2,11 +2,12 @@ package browser
 
 // capture_session.go implements the ADR-047 / wave-plan W2-A per-agent WebRTC
 // capture session: it owns the gateway-owned encoder page's lifecycle (the
-// capture extension's chrome-extension://<id>/encoder.html target, created
-// inside the CAPTURING AGENT'S OWN browser context/window so
-// encoder.js's chrome.tabs.query({lastFocusedWindow:true}) resolves to that
-// agent's own tab — see coordinator.go's LoadExtension doc comment) plus the
-// Pion SFU relay Session that backs it. One CaptureSession exists per agent
+// capture extension's chrome-extension://<id>/encoder.html target, created in
+// the DEFAULT browser context — Chrome refuses extension pages inside
+// CDP-created contexts, see defaultEncoderStarter — resolving the agent's tab
+// via encoder.js's chrome.tabs.query, which sees the agent-context tabs
+// because the extension is loaded enableInIncognito — see coordinator.go's
+// LoadExtension doc comment) plus the Pion SFU relay Session that backs it. One CaptureSession exists per agent
 // (BrowserManager.capture), created lazily on the first WebRTC-capable
 // viewer offer and torn down on last-viewer-detach (after a grace period) or
 // on browser death (live.go's watchForUnexpectedDeath) or manager Shutdown.
@@ -181,16 +182,15 @@ type captureInjectPayload struct {
 }
 
 // defaultEncoderStarter is the production EncoderStarter: it ensures the
-// agent's default browsing session exists (so its browserCtx is available),
+// agent's default browsing session exists (so there is a tab to capture),
 // ensures the capture extension is loaded into the shared Chrome, creates an
-// UNTRACKED sibling CDP target in the SAME browser context/window as the
-// agent's own tabs (via mgr.createTab against the session's browserCtx —
-// deliberately NOT mgr.OpenTab, which would register the target in the
-// agent's visible tab strip/MaxTabs budget; the encoder page is a
-// gateway-internal target the agent/user never see), injects
-// window.__omnipusCapture BEFORE navigating (Page.
-// addScriptToEvaluateOnNewDocument runs before any of the target document's
-// own scripts, per its CDP doc comment), then navigates to
+// UNTRACKED CDP target in the DEFAULT browser context (see the step-3 comment
+// below for why it cannot live in the agent's own CDP context; deliberately
+// NOT via mgr.OpenTab, which would register the target in the agent's
+// visible tab strip/MaxTabs budget — the encoder page is a gateway-internal
+// target the agent/user never see), injects window.__omnipusCapture BEFORE
+// navigating (Page.addScriptToEvaluateOnNewDocument runs before any of the
+// target document's own scripts, per its CDP doc comment), then navigates to
 // chrome-extension://<captureext.ExtensionID>/encoder.html.
 func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL string) (context.Context, context.CancelFunc, error) {
 	if mgr == nil {
@@ -215,18 +215,27 @@ func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, i
 		}
 	}
 
-	// 3. Get the agent's browserCtx as the parent for a new sibling target
-	// (mirrors OpenTab's own "append an additional tab as a child of the
-	// session's own browserCtx" pattern — manager.go's OpenTab doc comment
-	// — but WITHOUT going through OpenTab, since that registers the target
-	// in m.sessions[sessionID].tabs, the agent-visible tab set/MaxTabs
-	// budget this encoder target must stay outside of).
-	browserCtx := mgr.defaultSessionBrowserCtx()
-	if browserCtx == nil {
-		return nil, nil, fmt.Errorf("capture session: agent has no active browsing context to attach the encoder page to")
+	// 3. Create the encoder target in the DEFAULT browser context (a child of
+	// the coordinator's pipe rootCtx), NOT the agent's per-agent context.
+	// W3 e2e finding (verified against real Chrome 150): Chrome refuses to
+	// load chrome-extension:// pages inside CDP-created browser contexts —
+	// the navigation fails with net::ERR_BLOCKED_BY_CLIENT even when the
+	// extension was loaded with enableInIncognito:true. That flag grants the
+	// extension VISIBILITY of (and tabCapture access to) the CDP contexts'
+	// tabs; it does not permit hosting extension pages inside them. So the
+	// encoder page lives in the default context and resolves the agent's tab
+	// via encoder.js's tab-selection query (chrome.tabs.query sees the
+	// agent-context tabs thanks to enableInIncognito). Like the previous
+	// same-context design, the target is deliberately created WITHOUT
+	// mgr.OpenTab so it never appears in the agent's visible tab
+	// strip/MaxTabs budget (and the default context isn't an agent context
+	// anyway).
+	rootCtx := coord.rootContext()
+	if rootCtx == nil {
+		return nil, nil, fmt.Errorf("capture session: shared Chrome is not live (no root context for the encoder page)")
 	}
 
-	tab, err := mgr.createTab(browserCtx, "")
+	tab, err := mgr.createTab(rootCtx, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("capture session: create encoder target: %w", err)
 	}

@@ -391,6 +391,20 @@ func (m *BrowserManager) InstallRoot() string {
 	return InstallRootForProfileDir(m.cfg.ProfileDir)
 }
 
+// VideoCapability classifies this manager's live-view WebRTC video capability
+// (ADR-047), honouring the operator's exec_path override: a full Chrome
+// pinned via tools.browser.exec_path is video-capable even though no managed
+// full-Chrome download exists under the install root (W3 e2e finding — the
+// install-root-only check wrongly classified such hosts not_capable and
+// permanently disabled WebRTC for them). See ClassifyVideoCapabilityWithExec.
+func (m *BrowserManager) VideoCapability() VideoCapability {
+	m.mu.Lock()
+	execPath := m.cfg.ExecPath
+	profileDir := m.cfg.ProfileDir
+	m.mu.Unlock()
+	return ClassifyVideoCapabilityWithExec(execPath, InstallRootForProfileDir(profileDir))
+}
+
 // AgentID returns the agent identifier this manager was attached to via
 // AttachSharedChrome (empty in remote-CDP-override mode or before
 // attachment). WebRTC build (W2-A): the capture session needs it for

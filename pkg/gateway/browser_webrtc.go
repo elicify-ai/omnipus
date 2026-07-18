@@ -140,7 +140,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		return
 	}
 
-	cap := browser.ClassifyVideoCapability(mgr.InstallRoot())
+	cap := mgr.VideoCapability()
 	if !cap.Capable {
 		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "not_capable")
 		return
@@ -203,6 +203,33 @@ func (h *BrowserWSHandler) detachWebRTCViewer(state *browserConnState, viewerID 
 	}
 	cs.Relay().CloseViewer(viewerID)
 	cs.RemoveViewer(viewerID)
+}
+
+// announceWebRTCAvailability sends the initial post-attach
+// browser_webrtc_state frame (ADR-047 D4 / wave-plan W2-B: "sent after attach
+// and again on any availability change"). The SPA's state machine only sends
+// its browser_webrtc_offer after receiving available:true, and
+// handleWebRTCOffer only replies with a state frame — so without this
+// announcement neither side ever moves and the panel silently stays on JPEG
+// forever (W3 e2e finding). This is an announcement, not an authorization:
+// the offer-side gate ladder in handleWebRTCOffer re-validates every gate
+// when the offer actually arrives.
+func (h *BrowserWSHandler) announceWebRTCAvailability(
+	wc *browserWSConn,
+	mgr *browser.BrowserManager,
+	sessID, viewerID string,
+	cfg *config.Config,
+) {
+	switch {
+	case !cfg.Tools.Browser.WebRTCEnabled:
+		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "disabled")
+	case !webrtc.Available:
+		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "lite_build")
+	case !mgr.VideoCapability().Capable:
+		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "not_capable")
+	default:
+		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "")
+	}
 }
 
 // sendWebRTCState builds and sends a browser_webrtc_state frame.

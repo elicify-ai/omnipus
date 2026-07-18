@@ -246,6 +246,33 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 		return nil, "", err
 	}
 
+	// W3 EXPERIMENTAL — OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT=1 (structural
+	// decision pending, do NOT ship enabled by default): skip the per-agent
+	// CDP browser context and let the agent's manager bootstrap its session
+	// in the DEFAULT browser context (empty browserCtxID → the manager's
+	// bootstrapBrowserCtx omits WithExistingBrowserContext, exactly like the
+	// dedicated-Chrome managed mode). WHY: chrome.tabCapture (the ADR-047 D2
+	// capture mechanism) hard-fails with "Invalid tab specified." for ANY tab
+	// living in a CDP-created browser context — those contexts are
+	// independent off-the-record profiles outside the extension's
+	// include_incognito reach, even with Extensions.loadUnpacked's
+	// enableInIncognito granted (verified against real Chrome 150; the
+	// extension can SEE the tabs via chrome.tabs.query but cannot capture
+	// them). This collides with the ADR-043 per-agent-context isolation
+	// model; until that collision gets an ADR-level decision, this flag
+	// trades per-agent cookie/storage isolation for a capturable agent tab.
+	// Costs while enabled: no CRIT-002 context persistence across reload,
+	// and all agents share the default context's cookie partition.
+	if os.Getenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT") == "1" {
+		c.mu.Lock()
+		c.managers[agentID] = mgr
+		rootCtx = c.rootCtx
+		c.mu.Unlock()
+		logger.WarnCF("browser", "coordinator: EXPERIMENTAL default-context capture mode — per-agent browser-context isolation is OFF",
+			map[string]any{"agent_id": agentID})
+		return rootCtx, "", nil
+	}
+
 	// Re-use an existing context for this agent if one already exists (reload
 	// case: Release dropped only the manager ref, the context survived). This
 	// is the CRIT-002 persistence: the SAME browserCtxID is returned across a
@@ -650,6 +677,20 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	c.loadedExtensionID = id
 	c.mu.Unlock()
 	return id, nil
+}
+
+// rootContext returns the shared Chrome's pipe root context (nil when Chrome
+// is not live). W3 e2e: the capture encoder page MUST be created as a child
+// of this context — i.e. in the DEFAULT browser context — because Chrome
+// refuses to load chrome-extension:// pages inside CDP-created browser
+// contexts (net::ERR_BLOCKED_BY_CLIENT) even with Extensions.loadUnpacked's
+// enableInIncognito:true, which only grants the extension VISIBILITY/capture
+// of those contexts' tabs, not page hosting inside them (verified against
+// real Chrome 150 — see capture_session.go's defaultEncoderStarter).
+func (c *BrowserCoordinator) rootContext() context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rootCtx
 }
 
 // LoadedExtensionID returns the id of the last successfully loaded extension

@@ -2,7 +2,9 @@ package browser
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // CapabilityLevel is the exhaustive classification enum for live-view video
@@ -132,6 +134,36 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 	}
 	if findInstalledBuild(installRoot, platform, fullChromeBuild()) == "" {
 		return notCapable("full-Chrome build not installed yet (download pending or unavailable)")
+	}
+	return videoAndAudio()
+}
+
+// ClassifyVideoCapabilityWithExec is ClassifyVideoCapability plus the
+// operator's exec_path override (W3 e2e finding): when execPath is non-empty,
+// the configured binary IS the browser the coordinator launches, so the
+// managed install root's contents are irrelevant to whether capture can work.
+// The operator's binary is trusted the same way exec_resolver's resolve()
+// trusts it (a stat check, no probing) — full video+audio capability is
+// assumed unless the path visibly names a headless-shell build, which lacks
+// the tabCapture/extension surface entirely. Misclassifying a genuinely
+// non-capable custom binary as capable is not fatal to the product: the
+// capture session simply fails to start and the panel stays on the JPEG
+// fallback tier (ADR-047 D3), exactly like any other capture-path failure.
+func ClassifyVideoCapabilityWithExec(execPath, installRoot string) VideoCapability {
+	if execPath == "" {
+		return ClassifyVideoCapability(installRoot)
+	}
+	if goosForCapability != "linux" {
+		return notCapable(fmt.Sprintf(
+			"live-view video requires a linux full-Chrome build; this host is %s",
+			goosForCapability,
+		))
+	}
+	base := filepath.Base(execPath)
+	if strings.Contains(base, "headless-shell") || strings.Contains(base, "headless_shell") {
+		return notCapable(
+			"configured exec_path is a headless-shell build (no tabCapture surface); live-view video requires a full Chrome build",
+		)
 	}
 	return videoAndAudio()
 }
