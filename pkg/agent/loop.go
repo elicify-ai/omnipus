@@ -8144,6 +8144,20 @@ turnLoop:
 					result["text"] = resultText
 				}
 				tcRecord.Result = result
+			} else if r := buildSyncDelegateResult(toolName, contentForLLM, toolResult.IsError, toolResult.Async); r != nil {
+				// W4 (sync path): spawnSubTurn's async result-persistence defer
+				// (subturn.go) no-ops for SYNCHRONOUS delegation — it runs before
+				// this record exists and only retries when cfg.Async — so this
+				// write is the sync delegate tool_call's FINAL persisted state.
+				// Populate Result with the same {"text":…}(+"error") shape the
+				// async defer produces, so a reloaded sync delegation shows what
+				// the delegate produced (matching the live WS stream and the
+				// async path) instead of an empty result. No-op for non-delegate
+				// tools AND for async delegation (buildSyncDelegateResult returns
+				// nil — async is owned by the defer, never persisted here),
+				// preserving prior behavior for every other case. See
+				// delegate_result.go.
+				tcRecord.Result = r
 			}
 			ts.appendToolCallTranscript(tcRecord)
 			messages = append(messages, toolResultMsg)
