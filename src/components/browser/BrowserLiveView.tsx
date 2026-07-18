@@ -227,6 +227,18 @@ function friendlyBrowserStatusMessage(raw: string): string {
   return raw
 }
 
+// fix-wave B (HIGH) — the `BrowserWebRTCSession.onFallback` reason strings
+// that mean "WebRTC was never available here at all" (arrive via
+// `applyState` before any video sink ever mounted) rather than "a live/
+// negotiating session just failed." These are a mode choice, not a
+// degradation, so the fallback wiring below (the WS-lifecycle effect's
+// `machine.onFallback` callback) stays silent for them and only warns/toasts
+// for every other (runtime-failure) reason. Kept as the exact wire-contract
+// `reason` enum values (`BrowserWebRTCStateFrame.reason` minus 'error', which
+// IS surfaced — an explicit gateway-reported error is a runtime failure, not
+// a capability gate).
+const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite_build'])
+
 /**
  * ADR-041 D4 — a tab's display label: prefer `title`, fall back to the
  * hostname parsed from `url`, fall back to "New tab". The wire type carries
@@ -825,10 +837,30 @@ export function BrowserLiveView({
     // sink back to null so the <img> sink takes over on the next render, and
     // clears the DC-open flag so dispatchInput routes back to WS immediately
     // rather than waiting for a stale readyState check to catch up.
-    machine.onFallback(() => {
+    machine.onFallback((reason) => {
       setWebrtcStream(null)
       setWebrtcHasAudio(false)
       inputChannelOpenRef.current = false
+      // fix-wave B (HIGH): the reason used to be discarded entirely — a
+      // silent drop to JPEG with nothing telling the user (or a support
+      // engineer reading the console) WHY. Capability-gate reasons
+      // (disabled/not_capable/lite_build) arrive via `applyState` before any
+      // video ever started — those are simply "this mode isn't available
+      // here," not a failure, so they stay silent (JPEG is just the mode, not
+      // a degradation). Every other reason (ice-failed, answer-timeout,
+      // ice-disconnected-timeout, offer-send-failed, set-remote-description-
+      // failed, stream-stopped, pc-create-failed, offer-setup-failed,
+      // no-local-description, or a gateway 'error'/'unavailable') means a
+      // session that WAS live (or was actively being negotiated) just fell
+      // over — that's worth a console trace plus a transient, non-blocking
+      // heads-up so the user understands why the picture just changed.
+      if (!WEBRTC_CAPABILITY_GATE_REASONS.has(reason)) {
+        console.warn('[browser-live] WebRTC fell back to JPEG:', reason)
+        useUiStore.getState().addToast({
+          message: 'Live video degraded to picture mode — audio unavailable.',
+          variant: 'warning',
+        })
+      }
     })
 
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
@@ -904,9 +936,14 @@ export function BrowserLiveView({
         setWebrtcHasAudio(f.has_audio ?? false)
         machine.applyState(f)
         if (f.available) {
-          machine.start((sdp) => {
-            wsRef.current?.sendWebRTCOffer(sdp)
-          })
+          // fix-wave B (MED): `sendWebRTCOffer` returns false when the socket
+          // was closed mid-ICE-gathering (a genuinely-async gap between when
+          // gathering started and when it completes). Propagating that
+          // boolean lets the machine (`_beginOffer`, browserWebRTC.ts) fall
+          // back immediately with reason 'offer-send-failed' instead of
+          // burning the full 5s answer timeout waiting for an answer that was
+          // never going to arrive because the offer itself never left.
+          machine.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
         }
       },
       onError: (message) => setConnError(message),

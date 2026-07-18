@@ -78,6 +78,21 @@ function getBrowserWsUrl(): string {
   return `${wsBase}/api/v1/browser/ws`
 }
 
+// fix-wave B (LOW) — Constraint #8's "drop + counter + dev-mode toast on
+// failure" was only half-honored here: invalid payloads were dropped, but
+// silently, with no counter and no dev-visible signal. Deliberately
+// lightweight (no toast — "no prod toast" per the fix-wave scope; a toast per
+// dropped screencast/status frame in a lossy dev session would be noise, not
+// signal) — a module-level counter plus a dev-only console.debug is enough to
+// make schema drift grep-able without adding UI chrome to this socket.
+let _zodDropCount = 0
+
+/** Test/debug hook — the running count of frames dropped by a failed
+ * `WsFrameSchema.safeParse` since module load. */
+export function getBrowserFrameDropCount(): number {
+  return _zodDropCount
+}
+
 /** Validates + narrows an incoming payload to the frames this socket cares about. Never throws. */
 export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   let raw: unknown
@@ -92,7 +107,13 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   }
 
   const result = WsFrameSchema.safeParse(raw)
-  if (!result.success) return null
+  if (!result.success) {
+    _zodDropCount++
+    if (import.meta.env.DEV) {
+      console.debug('[browserLiveWs] dropped a frame that failed schema validation', result.error, raw)
+    }
+    return null
+  }
 
   const frame = result.data
   if (

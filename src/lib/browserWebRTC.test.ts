@@ -225,6 +225,82 @@ describe('BrowserWebRTCSession — happy path', () => {
   })
 })
 
+describe('BrowserWebRTCSession — _beginOffer defensive "at most one PC" guard (HIGH, fix-wave B)', () => {
+  it('cleans up any leftover peer connection before creating a fresh one, rather than leaking it', async () => {
+    const pcs = [makeFakePc(), makeFakePc()]
+    let call = 0
+    const pcFactory = () => asRTCPeerConnection(pcs[call++])
+    const machine = new BrowserWebRTCSession({ pcFactory })
+
+    machine.start(vi.fn())
+    await flush()
+    expect(call).toBe(1)
+    expect(pcs[0].close).not.toHaveBeenCalled()
+
+    // No known caller in this codebase can currently reach `_beginOffer`
+    // with `this.pc` already set (every real trigger — start()'s own state
+    // guard, `_fallback`'s `_cleanupPeer` before scheduling a retry — clears
+    // it first). This directly exercises the structural guard itself so the
+    // invariant ("at most one live RTCPeerConnection at a time") is enforced
+    // even against a future caller this fix wave didn't anticipate, per the
+    // reviewer finding ("makes 'at most one PC' structural").
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (machine as any)._beginOffer()
+
+    expect(pcs[0].close).toHaveBeenCalledTimes(1) // leftover pc cleaned up, not leaked
+    expect(call).toBe(2) // a fresh pc was created for the new offer
+  })
+})
+
+describe('BrowserWebRTCSession — start()/retry-timer race (HIGH, fix-wave B)', () => {
+  it('start() clears a pending automatic-retry timer, so a stale retry cannot fire _beginOffer on a healthy reconnected session and create a second RTCPeerConnection', async () => {
+    vi.useFakeTimers()
+    try {
+      const pcs: FakePc[] = []
+      const pcFactory = () => {
+        const pc = makeFakePc()
+        pcs.push(pc)
+        return asRTCPeerConnection(pc)
+      }
+      const onFallback = vi.fn()
+      const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 20, retryDelayMs: 1000 })
+      machine.onFallback(onFallback)
+
+      // First attempt — never answered, falls back on the 20ms answer
+      // timeout, arming a one-shot automatic retry for ~1000ms later.
+      machine.start(vi.fn())
+      await vi.advanceTimersByTimeAsync(0)
+      pcs[0].iceGatheringState = 'complete'
+      pcs[0].onicegatheringstatechange?.()
+      await vi.advanceTimersByTimeAsync(20)
+
+      expect(onFallback).toHaveBeenCalledTimes(1)
+      expect(pcs).toHaveLength(1)
+      expect(pcs[0].close).toHaveBeenCalledTimes(1)
+
+      // Simulate the real sequence from the reviewer finding: well before the
+      // stale retry timer fires, a fresh `available:true` signal arrives and
+      // the caller (BrowserLiveView) reconnects by calling start() again.
+      await vi.advanceTimersByTimeAsync(100)
+      machine.start(vi.fn())
+      expect(pcs).toHaveLength(2) // the healthy reconnect's own pc
+
+      // Advance well past where the ORIGINAL stale retry timer (armed ~1000ms
+      // after the first fallback, i.e. at the ~1000ms mark, and we're only
+      // ~120ms past that fallback so far) would have fired had start() not
+      // cleared it.
+      await vi.advanceTimersByTimeAsync(1000)
+
+      // Bug (pre-fix): the stale timer fired _beginOffer here, creating a
+      // THIRD pc alongside the healthy one from the manual start() above and
+      // leaking pc #2 (its close() never called).
+      expect(pcs).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('BrowserWebRTCSession — input data-channel routing', () => {
   it('sendInput sends the given JSON string over the data channel and returns true when it is open', async () => {
     const pc = makeFakePc()
@@ -489,6 +565,149 @@ describe('BrowserWebRTCSession — applyState', () => {
 
     expect(onFallback).not.toHaveBeenCalled()
     expect(machine.state).toBe('idle')
+  })
+})
+
+describe('BrowserWebRTCSession — applyState honors active:false after connection (MED, fix-wave B)', () => {
+  it('falls back (default reason "stream-stopped") when available:true but active:false arrives after the machine has connected', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToConnected(pc)
+
+    machine.applyState({ available: true, active: false })
+
+    expect(onFallback).toHaveBeenCalledWith('stream-stopped')
+    expect(machine.state).toBe('fallback')
+    expect(pc.close).toHaveBeenCalled()
+  })
+
+  it('prefers the frame\'s own reason over the default when active:false arrives with one', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToConnected(pc)
+
+    machine.applyState({ available: true, active: false, reason: 'error' })
+
+    expect(onFallback).toHaveBeenCalledWith('error')
+  })
+
+  it('is a no-op for active:false while still offering — not yet connected', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc), retryDelayMs: 100_000 })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+
+    machine.applyState({ available: true, active: false })
+
+    expect(onFallback).not.toHaveBeenCalled()
+    expect(machine.state).toBe('offering')
+  })
+
+  it('stays connected for available:true with active:true, or with active omitted entirely', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn())
+    await driveToConnected(pc)
+
+    machine.applyState({ available: true, active: true })
+    machine.applyState({ available: true })
+
+    expect(onFallback).not.toHaveBeenCalled()
+    expect(machine.state).toBe('connected')
+  })
+})
+
+describe('BrowserWebRTCSession — sendOffer failure (MED, fix-wave B)', () => {
+  it('falls back immediately with "offer-send-failed" when sendOffer returns false, without waiting for the answer timeout', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({
+      pcFactory: () => asRTCPeerConnection(pc),
+      // Deliberately huge — if the immediate-fallback path did NOT fire, the
+      // fallback would never fire either, within this test's real-timer
+      // window, so a false pass here can only mean the immediate path works.
+      answerTimeoutMs: 100_000,
+    })
+    machine.onFallback(onFallback)
+    const sendOffer = vi.fn(() => false)
+    machine.start(sendOffer)
+    await driveToOfferSent(pc)
+
+    expect(sendOffer).toHaveBeenCalledWith('fake-offer-sdp')
+    expect(onFallback).toHaveBeenCalledWith('offer-send-failed')
+    expect(machine.state).toBe('fallback')
+    expect(pc.close).toHaveBeenCalled()
+  })
+
+  it('does NOT treat a void/undefined sendOffer return as a failure — only an explicit false, so callers that do not report send success are unaffected', async () => {
+    const pc = makeFakePc()
+    const onFallback = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+    machine.onFallback(onFallback)
+    machine.start(vi.fn()) // vi.fn() returns undefined, not a boolean
+    await driveToOfferSent(pc)
+
+    expect(onFallback).not.toHaveBeenCalled()
+    expect(machine.state).toBe('offering') // still waiting on the answer, not fallen back
+  })
+})
+
+describe('BrowserWebRTCSession — ICE gathering timeout (LOW, fix-wave B)', () => {
+  it('proceeds to send the offer with whatever candidates gathered if iceGatheringState never reaches complete within iceGatheringTimeoutMs', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = makeFakePc()
+      const sendOffer = vi.fn(() => true)
+      const machine = new BrowserWebRTCSession({
+        pcFactory: () => asRTCPeerConnection(pc),
+        iceGatheringTimeoutMs: 50,
+      })
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0) // let createOffer/setLocalDescription settle
+
+      // iceGatheringState is left at its default 'new' — never reaches
+      // 'complete' — so only the timeout can unblock this.
+      expect(sendOffer).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(50)
+
+      expect(sendOffer).toHaveBeenCalledWith('fake-offer-sdp')
+      expect(machine.state).toBe('offering') // now waiting on the answer timeout instead
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still resolves via the real ICE-gathering-complete event (not the timeout) when gathering finishes first', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = makeFakePc()
+      const sendOffer = vi.fn(() => true)
+      const machine = new BrowserWebRTCSession({
+        pcFactory: () => asRTCPeerConnection(pc),
+        iceGatheringTimeoutMs: 3000,
+      })
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0)
+
+      pc.iceGatheringState = 'complete'
+      pc.onicegatheringstatechange?.()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(sendOffer).toHaveBeenCalledWith('fake-offer-sdp')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

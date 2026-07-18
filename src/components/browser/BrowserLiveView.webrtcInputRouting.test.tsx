@@ -334,6 +334,22 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
     expect(mockSendWebRTCOffer).toHaveBeenCalledWith('fake-sdp')
   })
 
+  it('fix-wave B (MED): the sendOffer callback propagates sendWebRTCOffer\'s boolean return — true on success, false on failure — so browserWebRTC.ts can fall back immediately instead of waiting out the answer timeout', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+
+    act(() => {
+      wsCallbacksRef.current?.onWebRTCState?.({ type: 'browser_webrtc_state', available: true, has_audio: true })
+    })
+
+    const sendOfferFn = mockMachineStart.mock.calls[0][0] as (sdp: string) => boolean
+
+    expect(sendOfferFn('sdp-ok')).toBe(true) // mockSendWebRTCOffer defaults to () => true
+
+    mockSendWebRTCOffer.mockReturnValueOnce(false)
+    expect(sendOfferFn('sdp-fails')).toBe(false)
+  })
+
   it('does not call machine.start on browser_webrtc_state{available:false} — applyState alone handles that', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
@@ -396,5 +412,53 @@ describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () =
 
     expect(mockMachineStop).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
+  })
+})
+
+describe('BrowserLiveView — surfacing WebRTC fallback reasons (fix-wave B, HIGH)', () => {
+  it.each(['ice-failed', 'answer-timeout', 'ice-disconnected-timeout', 'offer-send-failed', 'stream-stopped', 'error', 'unavailable'])(
+    'logs console.warn and shows a transient warning toast for the RUNTIME reason "%s"',
+    (reason) => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+      connectAndFrame()
+
+      act(() => machineCallbacksRef.current.onFallback?.(reason))
+
+      expect(warnSpy).toHaveBeenCalledWith('[browser-live] WebRTC fell back to JPEG:', reason)
+      const toasts = useUiStore.getState().toasts
+      expect(toasts).toHaveLength(1)
+      expect(toasts[0]).toEqual(
+        expect.objectContaining({ variant: 'warning', message: expect.stringContaining('Live video degraded') }),
+      )
+      warnSpy.mockRestore()
+    },
+  )
+
+  it.each(['disabled', 'not_capable', 'lite_build'])(
+    'stays silent — no console.warn, no toast — for the CAPABILITY-GATE reason "%s" (this mode simply is not available; not a degradation)',
+    (reason) => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+      connectAndFrame()
+
+      act(() => machineCallbacksRef.current.onFallback?.(reason))
+
+      expect(warnSpy).not.toHaveBeenCalled()
+      expect(useUiStore.getState().toasts).toHaveLength(0)
+      warnSpy.mockRestore()
+    },
+  )
+
+  it('still drops back to the JPEG sink for a capability-gate reason, even though it stays silent', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    act(() => machineCallbacksRef.current.onStream?.(fakeMediaStream()))
+    expect(screen.getByTestId('browser-live-video')).toBeInTheDocument()
+
+    act(() => machineCallbacksRef.current.onFallback?.('lite_build'))
+
+    expect(screen.getByTestId('browser-live-img')).toBeInTheDocument()
+    expect(useUiStore.getState().toasts).toHaveLength(0)
   })
 })

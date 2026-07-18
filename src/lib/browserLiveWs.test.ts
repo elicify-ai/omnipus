@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { BrowserLiveWsConnection, parseBrowserFrame } from './browserLiveWs'
+import { BrowserLiveWsConnection, parseBrowserFrame, getBrowserFrameDropCount } from './browserLiveWs'
 
 // ── Mock WebSocket ─────────────────────────────────────────────────────────────
 
@@ -524,5 +524,45 @@ describe('parseBrowserFrame', () => {
     expect(
       parseBrowserFrame(JSON.stringify({ type: 'browser_webrtc_state', available: true, bogus: 'nope' })),
     ).toBeNull()
+  })
+})
+
+describe('parseBrowserFrame — drop counter (LOW, fix-wave B, Constraint #8)', () => {
+  // The counter is module-level (persists for the life of the module), so
+  // every assertion here checks the DELTA across one `parseBrowserFrame`
+  // call rather than an absolute value — order-independent regardless of
+  // what ran earlier in this file.
+  it('increments on a payload that fails zod schema validation', () => {
+    const before = getBrowserFrameDropCount()
+
+    parseBrowserFrame(JSON.stringify({ type: 'browser_webrtc_state', reason: 'error' /* missing required available */ }))
+
+    expect(getBrowserFrameDropCount()).toBe(before + 1)
+  })
+
+  it('does NOT increment for a non-JSON string — that fails before zod ever runs', () => {
+    const before = getBrowserFrameDropCount()
+
+    parseBrowserFrame('{not json')
+
+    expect(getBrowserFrameDropCount()).toBe(before)
+  })
+
+  it('does NOT increment for a valid, accepted frame', () => {
+    const before = getBrowserFrameDropCount()
+
+    parseBrowserFrame(
+      JSON.stringify({ type: 'browser_screencast', session_id: 's1', seq: 0, data: 'abc', width: 1, height: 1 }),
+    )
+
+    expect(getBrowserFrameDropCount()).toBe(before)
+  })
+
+  it('does NOT increment for a schema-valid but irrelevant (chat-only) frame type — that is an intentional filter, not a validation failure', () => {
+    const before = getBrowserFrameDropCount()
+
+    parseBrowserFrame(JSON.stringify({ type: 'done', session_id: 'sess-1' }))
+
+    expect(getBrowserFrameDropCount()).toBe(before)
   })
 })
