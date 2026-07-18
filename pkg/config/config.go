@@ -758,7 +758,7 @@ type AgentConfig struct {
 	Default     bool              `json:"default,omitempty"`
 	Name        string            `json:"name,omitempty"`
 	Description string            `json:"description,omitempty"`
-	Workspace   string            `json:"workspace,omitempty"`
+	Home        string            `json:"workspace,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
 	// MaxToolIterations caps the LLM/tool rounds PER TURN for this agent
 	// (one chat message, board task, or heartbeat run = one turn; the turn
@@ -1163,7 +1163,7 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
+	Home string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
 	// RestrictToWorkspace and AllowReadOutsideWorkspace are removed from the v1
 	// JSON schema only (FR-001): tags use json:"-" so SaveConfig never
 	// serializes them, and validateRemovedKeys rejects any v1 config JSON that
@@ -2369,7 +2369,7 @@ type ModelConfig struct {
 
 	// Special providers (CLI-based, OAuth, etc.)
 	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
-	Workspace  string `json:"workspace,omitempty"`   // Workspace path for CLI-based providers
+	Home       string `json:"workspace,omitempty"`   // Home path (working directory) for CLI-based providers
 
 	// Optional optimizations
 	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
@@ -3160,6 +3160,39 @@ func LoadConfigWithStoreAndSelfHealHook(
 	return loadConfigInternal(path, store, onSelfHeal)
 }
 
+// seedPublicURLFromEnv fills cfg.Gateway.PublicURL from $DEVPOD_PREVIEW_URL when
+// the operator hasn't set one (via config.json or OMNIPUS_GATEWAY_PUBLIC_URL).
+//
+// Fill-only-when-empty; trailing slash trimmed so `origin + "/preview/…"` can't
+// produce a double slash. In-memory boot seed only (never written back to
+// config.json), preserving ADR-044's boot-frozen public_url contract.
+//
+// Scope (Constraint #1, single-binary core, no vendor lock-in): the GENERIC,
+// platform-agnostic override is OMNIPUS_GATEWAY_PUBLIC_URL
+// (env:"OMNIPUS_GATEWAY_PUBLIC_URL" on PublicURL, resolved by env.Parse) or
+// gateway.public_url in config.json — both always win over this. DEVPOD_PREVIEW_URL
+// is a deliberately narrow devpod-platform CONVENIENCE fallback for zero-config
+// pods; it is read nowhere else and must never become the primary mechanism.
+//
+// MUST be applied on EVERY loadConfigInternal return path — INCLUDING the
+// fresh-install DefaultConfig() paths — because a brand-new pod has no
+// config.json, which is exactly when this needs to fire (otherwise first boot
+// leaves public_url empty and web_serve/preview links fall back to
+// http://localhost:5000, unreachable from outside the pod).
+func seedPublicURLFromEnv(cfg *Config) {
+	if cfg == nil || strings.TrimSpace(cfg.Gateway.PublicURL) != "" {
+		return
+	}
+	previewURL := strings.TrimRight(strings.TrimSpace(os.Getenv("DEVPOD_PREVIEW_URL")), "/")
+	if previewURL == "" {
+		return
+	}
+	cfg.Gateway.PublicURL = previewURL
+	logger.WarnF("gateway.public_url not set; auto-detected from DEVPOD_PREVIEW_URL", map[string]any{
+		"public_url": previewURL,
+	})
+}
+
 func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
 	logger.Debugf("loading config from %s", path)
 
@@ -3167,7 +3200,9 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if err != nil {
 		if os.IsNotExist(err) {
 			logger.WarnF("config file not found, using default config", map[string]any{"path": path})
-			return DefaultConfig(), nil
+			c := DefaultConfig()
+			seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
+			return c, nil
 		}
 		logger.Errorf("failed to read config file: %v", err)
 		return nil, err
@@ -3186,7 +3221,9 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	}
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
-		return DefaultConfig(), nil
+		c := DefaultConfig()
+		seedPublicURLFromEnv(c)
+		return c, nil
 	}
 
 	// Load config based on detected version
@@ -3258,8 +3295,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// with an empty home path) and never resolved a relative $OMNIPUS_HOME,
 	// unlike OmnipusHomeDir(). Common case (env unset, real $HOME) is
 	// byte-identical to before.
-	if cfg.Agents.Defaults.Workspace == "" {
-		cfg.Agents.Defaults.Workspace = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
+	if cfg.Agents.Defaults.Home == "" {
+		cfg.Agents.Defaults.Home = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
 	}
 
 	migrateProviderFields(cfg)
@@ -3307,6 +3344,15 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// race a second account's own in-flight login). Runs on every load,
 	// all config versions.
 	warnAboutExtraUsers(cfg.Gateway.Users)
+
+	// Auto-detect gateway.public_url from $DEVPOD_PREVIEW_URL when unset — see
+	// seedPublicURLFromEnv for the full rationale (Constraint #1 / ADR-044).
+	// Runs here before validateBootConfig so the auto-detected value gets the
+	// same well-formed-URL check as an operator-supplied one. NOTE: the same
+	// call also runs on the two fresh-install DefaultConfig() return paths
+	// above — a bare pod's first boot has no config.json at all, which is
+	// exactly when the devpod fallback needs to fire.
+	seedPublicURLFromEnv(cfg)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).
@@ -3435,8 +3481,8 @@ func SaveConfig(path string, cfg *Config) error {
 	return nil
 }
 
-func (c *Config) WorkspacePath() string {
-	return expandHome(c.Agents.Defaults.Workspace)
+func (c *Config) AgentHomeBasePath() string {
+	return expandHome(c.Agents.Defaults.Home)
 }
 
 func expandHome(path string) string {

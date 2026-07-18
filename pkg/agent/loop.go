@@ -532,6 +532,15 @@ var ErrReloadNotConfigured = errors.New("reload not configured")
 // reload will call ClearReloadPending when it completes, unblocking any poller.
 var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
 
+// ErrAgentNotWorkspaceMember is returned by runTurn when the acting agent is
+// not a member of any workspace's CoreTeam (ADR-046 P1, FR-007/008). Execution
+// is always workspace-scoped: agents are metadata until added to a workspace's
+// team, and a turn for an unassigned agent MUST be refused rather than
+// silently falling through to the agent's own private home directory. This
+// applies uniformly to top-level and delegated (spawnSubTurn) turns alike,
+// since both resolve ts.agent.ID the same way in the re-root block below.
+var ErrAgentNotWorkspaceMember = errors.New("agent is not a member of any workspace; turn refused")
+
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
 // chain from the provider config. It uses the RequestTimeout of the first provider
 // that has a positive RequestTimeout value, falling back to the providers package
@@ -574,7 +583,7 @@ func NewAgentLoop(
 	defaultAgent := registry.GetDefaultAgent()
 	var stateManager *state.Manager
 	if defaultAgent != nil {
-		stateManager = state.NewManager(defaultAgent.Workspace)
+		stateManager = state.NewManager(defaultAgent.Home)
 	}
 
 	eventBus := NewEventBus()
@@ -598,7 +607,7 @@ func NewAgentLoop(
 
 	// Initialize the unified task store at ~/.omnipus/tasks/ (the single store —
 	// the legacy GTD tasks/ and workflow-tasks/ split was removed in Sprint 2).
-	homePath := filepath.Dir(cfg.WorkspacePath())
+	homePath := filepath.Dir(cfg.AgentHomeBasePath())
 	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
@@ -1147,7 +1156,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		}
 
 		restrict := cfg.Agents.Defaults.RestrictToWorkspace
-		execTool, err := tools.NewExecToolWithDeps(agent.Workspace, restrict, cfg, deps, allowReadPaths)
+		execTool, err := tools.NewExecToolWithDeps(agent.Home, restrict, cfg, deps, allowReadPaths)
 		if err != nil {
 			// Fail closed: if security wiring fails, remove the bash tool from the
 			// registry entirely. The agent will lose bash capability but
@@ -1234,7 +1243,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 			// gateway.preview_enabled live — no restart, no re-wiring on hot
 			// reload required for the toggle to take effect.
 			webServeTool := tools.NewWebServeTool(
-				ag.Workspace,
+				ag.Home,
 				ag.ID,
 				al.GetConfig,
 				deps.ServedSubdirs,
@@ -1472,7 +1481,7 @@ func registerSharedTools(
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore).
 		sendFileTool := tools.NewSendFileTool(
-			agent.Workspace,
+			agent.Home,
 			cfg.Agents.Defaults.RestrictToWorkspace,
 			cfg.Agents.Defaults.GetMaxMediaSize(),
 			nil,
@@ -1492,7 +1501,7 @@ func registerSharedTools(
 			// shape carries no workspace field).
 			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
 				Marketplaces: skills.MarketplacesFromConfig(
-					cfg, os.Getenv, nil /* SSRF handled per-registry at the gateway */, agent.Workspace,
+					cfg, os.Getenv, nil /* SSRF handled per-registry at the gateway */, agent.Home,
 				),
 				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
 			})
@@ -1502,7 +1511,13 @@ func registerSharedTools(
 				time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
 			)
 			agent.Tools.Register(tools.NewFindSkillsTool(registryMgr, searchCache))
-			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
+			// ADR-046 FR-009: install_skill targets the fixed, install-wide
+			// GLOBAL skills directory ($OMNIPUS_HOME/skills) — the SAME
+			// directory every agent's own SkillsLoader searches (see
+			// globalSkillsDir's doc comment in context.go) — never
+			// agent.Home, so a skill installed by one agent is discoverable
+			// by every other agent.
+			agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,
@@ -1525,6 +1540,29 @@ func registerSharedTools(
 		{
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
 			delegateTool.SetSpawner(NewSubTurnSpawner(al))
+			// W2: action:"status" live-progress snapshot for a running native
+			// task. sharedStore mirrors the exact store wiring
+			// NewHandoffTool already uses just above (line ~1469) — the same
+			// *session.UnifiedStore delegated children's transcript entries
+			// are actually written to. It is a plain value captured once at
+			// registration time (NOT a live func()), so it does not itself
+			// reflect a later hot reload; SetAgentRegistry below is the one
+			// that gets the live func() treatment, since al.GetRegistry() is
+			// invoked fresh on every call.
+			// Typed-nil guard: al.GetSessionStore() can return a nil
+			// *session.UnifiedStore on a degraded boot (loop.go:609-620). Boxing
+			// a nil concrete pointer into the DelegateSessionStore interface
+			// yields a NON-nil interface, so SetSessionStore's own `== nil`
+			// graceful-degrade guard would never fire and recentActivityLines
+			// would panic on a nil receiver. Only wire the store when non-nil so
+			// a running-native status snapshot degrades to prompt-only instead
+			// of crashing the whole action:"status" call. (The sibling
+			// NewHandoffTool/NewReturnToDefaultTool wiring above shares this
+			// pre-existing latent pattern; tracked separately.)
+			if sharedStore != nil {
+				delegateTool.SetSessionStore(sharedStore)
+			}
+			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
 			currentAgentID := agentID
 			// ADR-037: the legacy DelegationPolicy.To / SubagentsConfig.AllowAgents
 			// allowlist checkers (SetAllowlistChecker / SetDelegateChecker) are
@@ -1580,7 +1618,7 @@ func registerSharedTools(
 			// Resolve the real default workspace (is_default ULID) when a
 			// chat-delegated task has no workspace bound to the turn — never the
 			// literal "default" (which would land it in an invisible workspace).
-			taskCreate.SetHome(filepath.Dir(cfg.WorkspacePath()))
+			taskCreate.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
 			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
 			// backed by config.ResolveDelegationTo) is retired — the field it
 			// read no longer exists. The graph-based deny checker below is the
@@ -1649,7 +1687,7 @@ func registerSharedTools(
 			agent.Tools.Register(taskUpdate)
 
 			setTodos := tools.NewSetTodosTool(al.taskStore)
-			setTodos.SetHome(filepath.Dir(cfg.WorkspacePath()))
+			setTodos.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
 			agent.Tools.Register(setTodos)
 			agent.Tools.Register(tools.NewTaskDeleteTool(al.taskStore))
 			agent.Tools.Register(tools.NewAgentListTool(func() []tools.AgentInfo {
@@ -1772,7 +1810,13 @@ func registerSharedTools(
 				}
 				coordinator := al.browserCoordinator
 				al.mu.Unlock()
-				mgr, regErr := browser.RegisterTools(agent.Tools, browserCfg, browserSSRF, evaluateEnabled)
+				// fs-workspace: browser tools (browser_screenshot) get agent.Home +
+				// RestrictToWorkspace so screenshot paths resolve through the same
+				// workspace root as the other file tools (FR-009).
+				mgr, regErr := browser.RegisterTools(
+					agent.Tools, browserCfg, browserSSRF, evaluateEnabled,
+					agent.Home, cfg.Agents.Defaults.RestrictToWorkspace,
+				)
 				if regErr == nil {
 					mgr.AttachSharedChrome(coordinator, agentID)
 				}
@@ -3865,7 +3909,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	cfg := al.cfg
 	al.mu.RUnlock()
 
-	modelCfg, err := resolvedModelConfig(cfg, model, agent.Workspace)
+	modelCfg, err := resolvedModelConfig(cfg, model, agent.Home)
 	if err != nil {
 		return "", err
 	}
@@ -5259,7 +5303,7 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
 					"agent_id":   explicitID,
 					"session_id": msg.SessionID,
-					"workspace":  agent.Workspace,
+					"workspace":  agent.Home,
 				})
 				sk := agentSessionKey(explicitID, msg)
 				return routing.ResolvedRoute{AgentID: explicitID, SessionKey: sk}, agent, nil
@@ -5891,33 +5935,24 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// pkg/tools/metadata_guard.go's app-level guard only recognizes the
 	// agents/<id>/ layout and does not match workspaces/<id>/AGENT.md, so
 	// nothing else was catching it.)
-	if wsID, found := workspace.FindForAgentPreferring(omnipusHome(), ts.agent.ID, ts.opts.WorkspaceID); found {
-		// Derive the re-root dir from the SAME canonical home ($OMNIPUS_HOME)
-		// the rest of the feature uses — buildWorkspaceInstructionsNote, the
-		// REST handlers, and ResolveDefaultID/FindForAgent — so the agent's
-		// work files, its injected instructions, and the shared memory room
-		// all live under one workspaces/<id>/ tree (work/ as a dedicated
-		// sibling of AGENT.md and .omnipus/, not their container).
-		// SafeWorkDir validates the id against traversal before it becomes a
-		// filesystem root (fail-closed: an unsafe id falls back to the
-		// agent's own directory).
-		wsDir, idErr := workspace.SafeWorkDir(omnipusHome(), wsID)
-		if idErr != nil {
-			logger.WarnCF(
-				"agent",
-				"workspace-rooted filesystem: invalid workspace id; falling back to agent's own directory",
-				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "error": idErr.Error()},
-			)
-		} else if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
-			logger.WarnCF(
-				"agent",
-				"workspace-rooted filesystem: MkdirAll failed; falling back to agent's own directory",
-				map[string]any{"agent_id": ts.agent.ID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
-			)
-		} else {
-			turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
-		}
+	// ADR-046 P1 (FR-007/008): execution is always workspace-scoped. An agent
+	// that is not a member of ANY workspace's CoreTeam cannot execute at all —
+	// no silent fallthrough to its own agent-home directory, no ambiguous
+	// lexicographic guess. This refusal deliberately runs AFTER the
+	// tools.WithWorkspaceID injection above (memory routing, FR-030) so that
+	// separate signal is completely unaffected by this gate either way.
+	//
+	// resolveTurnWorkDirOrRefuse (workspace_reroot.go) is the SHARED gate —
+	// external_dispatch.go's runExternalCLISubTurn calls the exact same
+	// function so the membership refusal cannot diverge between the native
+	// and external-cli dispatch paths again (a prior review found
+	// runExternalCLISubTurn had its own, weaker copy that fell through to the
+	// agent's private home directory instead of refusing).
+	wsDir, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	if wsErr != nil {
+		return turnResult{}, wsErr
 	}
+	turnCtx = tools.WithTurnWorkspaceDir(turnCtx, wsDir)
 
 	// FR-7.5 / NFR-1: install a per-turn citation tracker so recall_memory can
 	// report surfaced memories and the loop can emit op:cited counter events
@@ -7838,6 +7873,12 @@ turnLoop:
 			// spawn can read it as their parentSpawnCallID when they in turn call
 			// SpawnSubTurn (FR-H-003).
 			execCtx := withSpawnToolCallID(turnCtx, tc.ID)
+			// Also expose it via the pkg/tools-level accessor (W2): DelegateTool
+			// cannot see the agent-package-private spawnToolCallIDKey above, so
+			// it reads its OWN call ID this way at task-creation time to record
+			// the correlation anchor a spawned child sub-turn's transcript
+			// entries will carry back as ParentSpawnCallID.
+			execCtx = tools.WithToolCallID(execCtx, tc.ID)
 			toolResult := ts.agent.Tools.ExecuteWithContext(
 				execCtx,
 				toolName,
@@ -8103,6 +8144,20 @@ turnLoop:
 					result["text"] = resultText
 				}
 				tcRecord.Result = result
+			} else if r := buildSyncDelegateResult(toolName, contentForLLM, toolResult.IsError, toolResult.Async); r != nil {
+				// W4 (sync path): spawnSubTurn's async result-persistence defer
+				// (subturn.go) no-ops for SYNCHRONOUS delegation — it runs before
+				// this record exists and only retries when cfg.Async — so this
+				// write is the sync delegate tool_call's FINAL persisted state.
+				// Populate Result with the same {"text":…}(+"error") shape the
+				// async defer produces, so a reloaded sync delegation shows what
+				// the delegate produced (matching the live WS stream and the
+				// async path) instead of an empty result. No-op for non-delegate
+				// tools AND for async delegation (buildSyncDelegateResult returns
+				// nil — async is owned by the defer, never persisted here),
+				// preserving prior behavior for every other case. See
+				// delegate_result.go.
+				tcRecord.Result = r
 			}
 			ts.appendToolCallTranscript(tcRecord)
 			messages = append(messages, toolResultMsg)
@@ -9018,7 +9073,7 @@ func (al *AgentLoop) handleModelSwitch(
 		// resolve error at WARN with the requested model + agent id gives
 		// operators a breadcrumb to spot the typo at the switch site rather
 		// than several stack frames later.
-		if _, resolveErr := ResolveModelCfg(cfg, newModel, agent.Workspace); resolveErr != nil {
+		if _, resolveErr := ResolveModelCfg(cfg, newModel, agent.Home); resolveErr != nil {
 			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; falling back to agent defaults",
 				map[string]any{
 					"requested_model": newModel,

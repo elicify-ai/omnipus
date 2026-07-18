@@ -28,7 +28,7 @@ func testCfg(agents []config.AgentConfig) *config.Config {
 	return &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         "/tmp/omnipus-test-registry",
+				Home:              "/tmp/omnipus-test-registry",
 				ModelName:         "gpt-4",
 				MaxTokens:         8192,
 				MaxToolIterations: 10,
@@ -86,6 +86,47 @@ func TestNewAgentRegistry_ExplicitAgents(t *testing.T) {
 	support, ok := registry.GetAgent("support")
 	if !ok || support == nil {
 		t.Fatal("expected to find 'support' agent")
+	}
+}
+
+// TestAgentRegistry_IsExternalCLI is the regression proof for W2's
+// native-vs-3p classification (DelegateTaskState.Is3P): AgentRegistry.
+// IsExternalCLI must resolve true ONLY for an agent whose own
+// Subagents.Executor config resolves to runner.DispatchKindExternalCLI —
+// the exact same resolution pkg/agent/subturn.go's spawnSubTurn performs via
+// executorConfigOf/runner.ResolveDispatch — and false for every other case
+// (native agent, unset executor, unknown agent, empty agentID).
+func TestAgentRegistry_IsExternalCLI(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{
+		{ID: "native-worker", Name: "Native Worker"},
+		{
+			ID:   "external-worker",
+			Name: "External Worker",
+			Subagents: &config.SubagentsConfig{
+				Executor: &config.ExecutorConfig{
+					Kind:    config.ExecutorKindExternalCLI,
+					CLI:     "codex",
+					CLIPath: "/usr/bin/codex",
+				},
+			},
+		},
+	})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	if registry.IsExternalCLI("native-worker") {
+		t.Error("a native agent (no executor override) must resolve IsExternalCLI=false")
+	}
+	if !registry.IsExternalCLI("external-worker") {
+		t.Error("an agent with Executor.Kind=external-cli must resolve IsExternalCLI=true")
+	}
+	if registry.IsExternalCLI("does-not-exist") {
+		t.Error("an unknown agent ID must resolve IsExternalCLI=false, not panic or default true")
+	}
+	if registry.IsExternalCLI("") {
+		t.Error("an empty agent ID must resolve IsExternalCLI=false — this is IsExternalCLI's own " +
+			"documented limitation, NOT a real dispatch guarantee: self-delegation (TargetAgentID==\"\") " +
+			"actually dispatches with the PARENT's own executor in spawnSubTurn, so a self-delegating " +
+			"external-CLI parent is misclassified native here (see IsExternalCLI's doc comment)")
 	}
 }
 

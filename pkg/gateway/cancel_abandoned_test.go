@@ -132,7 +132,7 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18803, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: workspaceDir,
+				Home:      workspaceDir,
 				ModelName: "stubborn-provider",
 				MaxTokens: 4096,
 			},

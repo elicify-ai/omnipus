@@ -108,13 +108,13 @@ func TestDefaultConfig_WorkspaceAgreesWithOmnipusHomeDir_RelativeOverride(t *tes
 	want := filepath.Join(wantHome, pkg.WorkspaceName)
 
 	cfg := DefaultConfig()
-	if !filepath.IsAbs(cfg.Agents.Defaults.Workspace) {
-		t.Fatalf("DefaultConfig().Agents.Defaults.Workspace = %q, want an absolute path", cfg.Agents.Defaults.Workspace)
+	if !filepath.IsAbs(cfg.Agents.Defaults.Home) {
+		t.Fatalf("DefaultConfig().Agents.Defaults.Home = %q, want an absolute path", cfg.Agents.Defaults.Home)
 	}
-	if cfg.Agents.Defaults.Workspace != want {
+	if cfg.Agents.Defaults.Home != want {
 		t.Errorf(
-			"DefaultConfig().Agents.Defaults.Workspace = %q, want %q (OmnipusHomeDir()+workspace)",
-			cfg.Agents.Defaults.Workspace,
+			"DefaultConfig().Agents.Defaults.Home = %q, want %q (OmnipusHomeDir()+workspace)",
+			cfg.Agents.Defaults.Home,
 			want,
 		)
 	}
@@ -142,13 +142,13 @@ func TestLoadConfig_WorkspaceDefaultAgreesWithOmnipusHomeDir_RelativeOverride(t 
 	wantHome := OmnipusHomeDir()
 	want := filepath.Join(wantHome, pkg.WorkspaceName)
 
-	if !filepath.IsAbs(cfg.Agents.Defaults.Workspace) {
-		t.Fatalf("cfg.Agents.Defaults.Workspace = %q, want an absolute path", cfg.Agents.Defaults.Workspace)
+	if !filepath.IsAbs(cfg.Agents.Defaults.Home) {
+		t.Fatalf("cfg.Agents.Defaults.Home = %q, want an absolute path", cfg.Agents.Defaults.Home)
 	}
-	if cfg.Agents.Defaults.Workspace != want {
+	if cfg.Agents.Defaults.Home != want {
 		t.Errorf(
-			"cfg.Agents.Defaults.Workspace = %q, want %q (OmnipusHomeDir()+workspace)",
-			cfg.Agents.Defaults.Workspace,
+			"cfg.Agents.Defaults.Home = %q, want %q (OmnipusHomeDir()+workspace)",
+			cfg.Agents.Defaults.Home,
 			want,
 		)
 	}
@@ -166,22 +166,22 @@ func TestDefaultConfigAndLoadConfig_AgreeOnSecureTempFallback_WhenHomeDirFails(t
 
 	// DefaultConfig() call site.
 	cfg := DefaultConfig()
-	defaultsWorkspace := cfg.Agents.Defaults.Workspace
+	defaultsWorkspace := cfg.Agents.Defaults.Home
 	if !filepath.IsAbs(defaultsWorkspace) {
 		t.Fatalf(
-			"DefaultConfig().Agents.Defaults.Workspace = %q, want an absolute path even when $HOME is unset",
+			"DefaultConfig().Agents.Defaults.Home = %q, want an absolute path even when $HOME is unset",
 			defaultsWorkspace,
 		)
 	}
 	if !strings.Contains(defaultsWorkspace, "omnipus-") {
 		t.Errorf(
-			"DefaultConfig().Agents.Defaults.Workspace = %q, want it under a secure omnipus- temp dir fallback",
+			"DefaultConfig().Agents.Defaults.Home = %q, want it under a secure omnipus- temp dir fallback",
 			defaultsWorkspace,
 		)
 	}
 	if filepath.Base(defaultsWorkspace) != pkg.WorkspaceName {
 		t.Errorf(
-			"DefaultConfig().Agents.Defaults.Workspace = %q, want basename %q",
+			"DefaultConfig().Agents.Defaults.Home = %q, want basename %q",
 			defaultsWorkspace,
 			pkg.WorkspaceName,
 		)
@@ -197,21 +197,21 @@ func TestDefaultConfigAndLoadConfig_AgreeOnSecureTempFallback_WhenHomeDirFails(t
 	if err != nil {
 		t.Fatalf("LoadConfig() error: %v", err)
 	}
-	loadedWorkspace := loaded.Agents.Defaults.Workspace
+	loadedWorkspace := loaded.Agents.Defaults.Home
 	if !filepath.IsAbs(loadedWorkspace) {
 		t.Fatalf(
-			"cfg.Agents.Defaults.Workspace = %q, want an absolute path even when $HOME is unset (previously fell back to a bare relative %q)",
+			"cfg.Agents.Defaults.Home = %q, want an absolute path even when $HOME is unset (previously fell back to a bare relative %q)",
 			loadedWorkspace,
 			pkg.WorkspaceName,
 		)
 	}
 	if !strings.Contains(loadedWorkspace, "omnipus-") {
 		t.Errorf(
-			"cfg.Agents.Defaults.Workspace = %q, want it under a secure omnipus- temp dir fallback",
+			"cfg.Agents.Defaults.Home = %q, want it under a secure omnipus- temp dir fallback",
 			loadedWorkspace,
 		)
 	}
 	if filepath.Base(loadedWorkspace) != pkg.WorkspaceName {
-		t.Errorf("cfg.Agents.Defaults.Workspace = %q, want basename %q", loadedWorkspace, pkg.WorkspaceName)
+		t.Errorf("cfg.Agents.Defaults.Home = %q, want basename %q", loadedWorkspace, pkg.WorkspaceName)
 	}
 }

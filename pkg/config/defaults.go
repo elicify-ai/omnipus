@@ -28,7 +28,7 @@ func DefaultConfig() *Config {
 		Version: CurrentVersion,
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:                 workspacePath,
+				Home:                      workspacePath,
 				RestrictToWorkspace:       true,
 				Provider:                  "",
 				MaxTokens:                 32768,

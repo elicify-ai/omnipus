@@ -187,7 +187,7 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "content-routed-orphan-mock",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -336,7 +336,7 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "content-routed-orphan-mock",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

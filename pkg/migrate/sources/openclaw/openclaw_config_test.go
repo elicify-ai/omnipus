@@ -654,8 +654,8 @@ func TestToStandardConfig(t *testing.T) {
 	if stdCfg.Agents.Defaults.ModelName != "claude-sonnet-4-20250514" {
 		t.Errorf("expected model name 'claude-sonnet-4-20250514', got '%s'", stdCfg.Agents.Defaults.ModelName)
 	}
-	if stdCfg.Agents.Defaults.Workspace != "~/.omnipus/workspace" {
-		t.Errorf("expected workspace '~/.omnipus/workspace', got '%s'", stdCfg.Agents.Defaults.Workspace)
+	if stdCfg.Agents.Defaults.Home != "~/.omnipus/workspace" {
+		t.Errorf("expected workspace '~/.omnipus/workspace', got '%s'", stdCfg.Agents.Defaults.Home)
 	}
 
 	if len(stdCfg.Agents.List) != 1 {

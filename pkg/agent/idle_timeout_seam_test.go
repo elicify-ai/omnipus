@@ -57,8 +57,8 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 	if ag == nil {
 		t.Fatal("NewAgentInstance returned nil")
 	}
-	ag.Workspace = filepath.Join(home, "agents", agentID)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(agentID, "Idle")
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, "Idle")
 	al.registry.mu.Lock()
 	al.registry.agents[agentID] = ag
 	al.registry.mu.Unlock()
@@ -96,7 +96,7 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 
 	// Wait for the recap goroutine to produce LAST_SESSION.md (up to 5 s;
 	// mirrors the polling pattern in session_end_behavioral_test.go).
-	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
@@ -115,7 +115,7 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 	}
 
 	// A retro file must also exist with trigger=idle.
-	retrosDir := filepath.Join(ag.Workspace, ".omnipus", "retros")
+	retrosDir := filepath.Join(ag.Home, ".omnipus", "retros")
 	var foundRetro bool
 	var retroBytes []byte
 	retroDeadline := time.Now().Add(5 * time.Second)
@@ -181,8 +181,8 @@ func TestIdleTimeout_FireSeam_Idempotent(t *testing.T) {
 	const agentID = "idem-agent"
 	agentCfg := &config.AgentConfig{ID: agentID, Name: "Idem"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, script)
-	ag.Workspace = filepath.Join(home, "agents", agentID)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(agentID, "Idem")
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, "Idem")
 	al.registry.mu.Lock()
 	al.registry.agents[agentID] = ag
 	al.registry.mu.Unlock()

@@ -55,7 +55,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage, PositionedToolCall } from '@/store/chat'
+import type { ChatMessage, PositionedToolCall, SubagentSpan } from '@/store/chat'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -448,6 +448,31 @@ function wouldToolCallBeVisible(
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
 
+/**
+ * Resolves a subagent span's delegate kind for SubagentBlock's W3 "no live
+ * progress" notice — '3p' only for a resolved external-CLI (subagent_3p)
+ * delegate, undefined otherwise (unresolvable agentId included — an unknown
+ * agent must not be guessed as either kind).
+ *
+ * Unlike useRunningActivity.ts's resolveSpanAgentId, this does NOT apply that
+ * hook's originating-delegate-call fallback — and doesn't need to.
+ * resolveSpanAgentId exists to fix which agent's AVATAR/NAME displays, where
+ * getting the exact agent wrong is visibly wrong; resolveSpanAgentType only
+ * needs the delegate's KIND (native vs subagent_3p), which it derives by
+ * resolving `span.agentId` against the agents list. Per ADR-032, agent
+ * identity flows from the resolved target for BOTH dispatch kinds —
+ * `spawnSubTurn` (pkg/agent/subturn.go) sets `agent.ID = execSource.ID`
+ * unconditionally, native or external-CLI, with no per-dispatch-kind
+ * exception — so `span.agentId` reliably carries the resolved delegate id
+ * here regardless of which kind it turns out to be.
+ */
+function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'native' | undefined {
+  if (!span.agentId) return undefined
+  const agent = agents.find((a) => a.id === span.agentId)
+  if (!agent) return undefined
+  return agent.type === 'subagent_3p' ? '3p' : 'native'
+}
+
 // Renders subagent spans attached to the current message (FR-H-008).
 // useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
 export function SubagentSpansRenderer() {
@@ -460,13 +485,17 @@ export function SubagentSpansRenderer() {
   // call inside a component, not getState()) so this stays reactive to the
   // preference toggling live.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // W3: reused ['agents'] query (prefetched by AppShell, staleTime 30s
+  // elsewhere) — resolves each span's agentId to native/3p so a running
+  // external-CLI delegate's card can show the "no live progress" notice.
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const storeMsg = messages.find((m) => m.id === message.id)
   const spans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
   if (spans.length === 0) return null
   return (
     <>
       {spans.map((span) => (
-        <SubagentBlock key={span.spanId} span={span} />
+        <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
       ))}
     </>
   )
@@ -934,9 +963,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             )
           })}
 
-          {/* Subagent spans — pre-filtered via visibleSpans above (Fix 2). */}
+          {/* Subagent spans — pre-filtered via visibleSpans above (Fix 2).
+              W3: agentType resolved from the `agents` list already fetched
+              above (for the avatar) — see resolveSpanAgentType's doc comment. */}
           {visibleSpans.map((span) => (
-            <SubagentBlock key={span.spanId} span={span} />
+            <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
           ))}
         </div>
 

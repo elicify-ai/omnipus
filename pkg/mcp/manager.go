@@ -327,7 +327,7 @@ func NewManager() *Manager {
 
 // LoadFromConfig loads MCP servers from configuration
 func (m *Manager) LoadFromConfig(ctx context.Context, cfg *config.Config) error {
-	return m.LoadFromMCPConfig(ctx, cfg.Tools.MCP, cfg.WorkspacePath())
+	return m.LoadFromMCPConfig(ctx, cfg.Tools.MCP, cfg.AgentHomeBasePath())
 }
 
 // LoadFromMCPConfig loads MCP servers from MCP configuration and workspace path.

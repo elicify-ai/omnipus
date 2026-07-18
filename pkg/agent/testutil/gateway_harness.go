@@ -641,7 +641,7 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: homeDir,
+				Home:      homeDir,
 				ModelName: "openrouter-glm",
 				MaxTokens: 4096,
 			},

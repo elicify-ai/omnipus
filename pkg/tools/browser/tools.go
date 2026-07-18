@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -402,6 +400,17 @@ type ScreenshotTool struct {
 	tools.BaseTool
 
 	mgr *BrowserManager
+	// agentHome is the agent's fixed home directory (ADR-046's
+	// fspolicy.EffectiveFSPolicy agentHome argument). When the turn carries a
+	// TurnWorkspaceDir (the agent is a member of that turn's Workspace),
+	// EffectiveFSPolicy prefers that re-rooted directory instead — so a
+	// screenshot taken during a Workspace turn lands in that turn's work/
+	// dir, not the agent's own home.
+	agentHome string
+	// restrict maps to fspolicy.FSScopeConfined (true) / FSScopeUnrestricted
+	// (false), mirroring every other path-taking tool's restrictToWorkspace
+	// setting.
+	restrict bool
 }
 
 func (t *ScreenshotTool) Name() string                 { return "browser_screenshot" }
@@ -469,11 +478,32 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: %s", err))
 	}
 
-	tmpDir := os.TempDir()
+	// Route the screenshot write through ResolvePath (ADR-046 mandatory
+	// chokepoint, FR-003/FR-009/FR-034) instead of os.TempDir(), so it lands
+	// in the turn's effective working directory (the per-turn Workspace
+	// re-root when present, else the agent's own home's work/ dir) rather
+	// than a process-wide shared temp directory no per-agent/per-turn
+	// confinement ever covered.
 	filename := fmt.Sprintf("omnipus-screenshot-%d.jpg", time.Now().UnixMilli())
-	path := filepath.Join(tmpDir, filename)
-	if err := os.WriteFile(path, buf, 0o600); err != nil {
+	policy, err := tools.ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve filesystem policy: %s", err))
+	}
+	handle, err := tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)
+	if err != nil {
+		return tools.PermissionDeniedResult("browser_screenshot", err, err.Error())
+	}
+	defer handle.Close()
+	if err := handle.WriteFile(buf); err != nil {
 		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to save: %s", err))
+	}
+	// RealPath is the ONE documented exception to "never hand back a bare
+	// string" (PathHandle.RealPath's doc comment) — used here solely because
+	// ArtifactTags' [file:...] marker is an OS-boundary reference consumed
+	// later by send_file/the media pipeline, not a PathHandle-based read.
+	path, err := handle.RealPath()
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve saved path: %s", err))
 	}
 
 	// FullScreenshot with quality>0 produces JPEG. Return as data URL so

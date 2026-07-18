@@ -46,7 +46,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // executorConfigOf returns the sub-agent executor config for an AgentInstance, or
@@ -154,72 +153,48 @@ func runExternalCLISubTurn(
 		runID = fmt.Sprintf("ext-%d", time.Now().UnixNano())
 	}
 
-	// 1. Resolve the run's working directory: the DELEGATE'S OWN workspace
-	//    directory (ADR-032, 2026-07). External-CLI runs now execute directly
-	//    in the agent's workspace — NOT an isolated git-worktree/temp-dir copy
-	//    — so the CLI can see (and write to) the files the delegating
-	//    conversation actually cares about. This intentionally relaxes the
-	//    original Spec-4 FR-5.3 worktree-isolation boundary for external CLIs
-	//    specifically; see
-	//    docs/internal/architecture/ADR-032-external-agent-workspace-execution.md.
-	//    The external CLI's OWN sandbox (Codex = Landlock/seccomp; Claude
-	//    Code = its permission model; opencode = its own tool gating) remains
-	//    the enforced security boundary — Omnipus adds no new confiner either
-	//    way, isolated or not. No teardown is needed: this is the agent's
-	//    persistent workspace, not a scratch directory.
+	// 1. Resolve the run's working directory: the workspace's dedicated
+	//    project-work subdirectory (workspaces/<id>/work/), via the SAME
+	//    shared gate the native path uses (pkg/agent/loop.go's runTurn calls
+	//    the identical resolveTurnWorkDirOrRefuse, workspace_reroot.go).
 	//
-	//    OVERRIDE (Workspace-team execution): when this agent is a member of a
-	//    Workspace's CoreTeam, it runs in that Workspace's dedicated project-work
-	//    subdirectory (workspaces/<id>/work/, workspace.SafeWorkDir) instead —
-	//    every agent belonging to a Workspace's team, native or external-cli,
-	//    must actually work in the team's shared directory, not its private
-	//    per-agent one (no exceptions by kind). This is deliberately NOT
-	//    workspaces/<id>/ itself: that directory also holds AGENT.md (Project
-	//    Instructions) and the shared memory room (.omnipus/), and a generic
-	//    write_file/edit_file confined there could reach either. The work/
-	//    subdirectory keeps them structurally unreachable — os.Root-confined
-	//    tools cannot open a path outside their root, not merely guarded
-	//    against. workspace.FindForAgentPreferring keys PRIMARILY off agent
-	//    IDENTITY (CoreTeam membership), which is a different, independent
-	//    signal from the channel-bound turn workspace_id that
-	//    tools.WithWorkspaceID routes memory to — see pkg/agent/loop.go's
-	//    runTurn for the mirrored resolution and the divergence discussion.
-	//    An agent not on any workspace's CoreTeam (or an id that fails the
-	//    traversal guard) is NOT an error: it falls back to the agent's own
-	//    workspace directory exactly as before this override existed.
-	//    FindForAgentPreferring additionally breaks a multi-membership tie in
-	//    favor of childTS.opts.WorkspaceID (the current turn's own
-	//    channel-bound workspace) when the agent is actually a member of that
-	//    specific workspace — in practice this is almost always empty here,
-	//    since subagent_3p is delegation-only and spawnSubTurn never threads
-	//    a workspace_id into a child's processOptions, so this falls straight
-	//    through to FindForAgent's existing behavior; kept for symmetry with
-	//    the native path (pkg/agent/loop.go's runTurn) and in case that
-	//    assumption changes.
-	workDir := strings.TrimSpace(agent.Workspace)
-	if wsID, found := workspace.FindForAgentPreferring(omnipusHome(), agent.ID, childTS.opts.WorkspaceID); found {
-		if wsDir, wsErr := workspace.SafeWorkDir(omnipusHome(), wsID); wsErr != nil {
-			slog.Warn(
-				"external-cli dispatch: workspace-team dir resolution failed; falling back to agent's own workspace",
-				"agent_id", agent.ID, "workspace_id", wsID, "error", wsErr)
-		} else {
-			slog.Info(
-				"external-cli dispatch: agent is a workspace CoreTeam member; running in the workspace's project-work directory instead of its own",
-				"agent_id",
-				agent.ID,
-				"workspace_id",
-				wsID,
-				"work_dir",
-				wsDir,
-			)
-			workDir = strings.TrimSpace(wsDir)
-		}
-	}
-	if workDir == "" {
-		return nil, fmt.Errorf("external-cli dispatch: agent workspace is empty — cannot run %s", cli)
-	}
-	if mkErr := os.MkdirAll(workDir, 0o755); mkErr != nil {
-		return nil, fmt.Errorf("external-cli dispatch: ensuring workspace dir %q: %w", workDir, mkErr)
+	//    ADR-046 P1 (FR-007/008): execution is always workspace-scoped, for
+	//    EVERY dispatch kind, no exceptions — an agent that is not a member of
+	//    ANY workspace's CoreTeam cannot execute at all. This is deliberately
+	//    NOT an "OVERRIDE" of some other default: unlike the pre-ADR-046
+	//    behavior (ADR-032's "run directly in the agent's own workspace
+	//    directory"), there is no fallback to agent.Home left at all — a
+	//    non-member external-CLI dispatch is refused exactly like a
+	//    non-member native turn, via the same ErrAgentNotWorkspaceMember. A
+	//    prior version of this function fell through to agent.Home on
+	//    !found, and warn-and-fell-through to agent.Home when a MEMBER's
+	//    SafeWorkDir errored — both were the asymmetry a 7-reviewer gate
+	//    flagged as a BLOCK/HIGH (native runTurn already hard-refused both
+	//    cases). Neither fallback exists anymore.
+	//
+	//    workspace.FindForAgentPreferring (inside resolveTurnWorkDirOrRefuse)
+	//    keys PRIMARILY off agent IDENTITY (CoreTeam membership), which is a
+	//    different, independent signal from the channel-bound turn
+	//    workspace_id that tools.WithWorkspaceID routes memory to — see
+	//    pkg/agent/loop.go's runTurn for the mirrored resolution and the
+	//    divergence discussion (FR-030: memory routing is untouched by this
+	//    gate). It additionally breaks a multi-membership tie in favor of
+	//    childTS.opts.WorkspaceID (the current turn's own channel-bound
+	//    workspace) when the agent is actually a member of that specific
+	//    workspace — in practice this is almost always empty here, since
+	//    subagent_3p is delegation-only and spawnSubTurn never threads a
+	//    workspace_id into a child's processOptions, so this falls straight
+	//    through to FindForAgentPreferring's identity-only resolution; kept
+	//    for symmetry with the native path and in case that assumption
+	//    changes.
+	//
+	//    The dedicated work/ subdirectory (not workspaces/<id>/ itself) keeps
+	//    AGENT.md (Project Instructions) and the shared memory room (.omnipus/)
+	//    structurally unreachable — os.Root-confined tools cannot open a path
+	//    outside their root, not merely guarded against.
+	workDir, wsErr := resolveTurnWorkDirOrRefuse(agent.ID, childTS.opts.WorkspaceID)
+	if wsErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", wsErr)
 	}
 
 	// FIX 1 (cancel propagation, BLOCK finding on the 7-reviewer gate): create

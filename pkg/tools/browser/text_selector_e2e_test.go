@@ -414,7 +414,7 @@ func TestTextSel_ParameterValidation_BothEmpty_ErrorsLikeBefore(t *testing.T) {
 	require.NoError(t, err)
 	registry := tools.NewToolRegistry()
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
-	_, regErr := RegisterTools(registry, cfg, ssrf, true)
+	_, regErr := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, regErr)
 
 	ctx := context.Background()

@@ -16,6 +16,19 @@
 // (exposing the span's id/status), not `() => null` — this file's whole
 // point is asserting whether SubagentSpansRenderer chooses to mount a
 // SubagentBlock at all for a given span.
+//
+// W3 agentType-wiring coverage (test-analyzer MED-HIGH, delegation-visibility
+// review): the stub below also forwards `agentType` as a `data-agent-type`
+// attribute so the "SubagentSpansRenderer — W3 resolveSpanAgentType wiring"
+// describe block can assert the LIVE render path actually COMPUTES and
+// PASSES `agentType='3p'`/`'native'` through resolveSpanAgentType against a
+// real (mocked-response) agents list containing a genuine `subagent_3p`
+// agent — not just that SOME value reaches the stub. SubagentBlock's own
+// rendering of the "no live progress" notice for a given agentType is
+// already covered leaf-level by SubagentBlock.test.tsx's "3p (external-CLI)
+// running notice" describe block; the historical/virtualized render path
+// gets the complementary end-to-end check (real, unmocked SubagentBlock) in
+// ChatScreen.subagent-spans-historical-agenttype-wiring.test.tsx.
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
@@ -49,6 +62,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn().mockResolvedValue([
       { id: 'agent-1', name: 'Mia', color: '#123456', icon: null },
       { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#4488ff', icon: 'compass' },
+      // W3 agentType wiring: a REAL subagent_3p agent so resolveSpanAgentType
+      // (ChatScreen.tsx) has something genuine to resolve '3p' against —
+      // the pre-existing agents above are both native, so without this the
+      // live-path wiring for the '3p' branch was never actually exercised.
+      { id: 'codex-1', name: 'Codex Runner', type: 'subagent_3p', locked: false, status: 'active', color: '#ff8800', icon: 'terminal-window' },
     ]),
     fetchSessionMessages: vi.fn().mockResolvedValue([]),
     fetchCommands: vi.fn().mockResolvedValue([]),
@@ -78,13 +96,17 @@ vi.mock('./markdown-text', () => ({
 
 // Detectable stub (unlike the historical-path sibling's own tests) — exposes
 // the span's id/status so this file can assert PRESENCE/ABSENCE of the card
-// without depending on SubagentBlock's own internal markup.
+// without depending on SubagentBlock's own internal markup. Also forwards
+// the `agentType` prop as `data-agent-type` (W3 wiring coverage, see file
+// header) so tests can assert on the value resolveSpanAgentType actually
+// computed and passed through, without needing to un-stub SubagentBlock.
 vi.mock('./SubagentBlock', () => ({
-  SubagentBlock: ({ span }: { span: SubagentSpan }) =>
+  SubagentBlock: ({ span, agentType }: { span: SubagentSpan; agentType?: '3p' | 'native' }) =>
     React.createElement('div', {
       'data-testid': 'subagent-block-stub',
       'data-span-id': span.spanId,
       'data-status': span.status,
+      'data-agent-type': agentType ?? '',
     }),
 }))
 
@@ -228,5 +250,58 @@ describe('SubagentSpansRenderer — item 8c: live verbose toggle within a single
       useChatPreferencesStore.setState({ verboseChatEnabled: false })
     })
     expect(screen.queryByTestId('subagent-block-stub')).not.toBeInTheDocument()
+  })
+})
+
+// ── W3: resolveSpanAgentType wiring (test-analyzer MED-HIGH finding) ────────
+//
+// SubagentBlock.test.tsx thoroughly covers what SubagentBlock DOES with a
+// given `agentType` prop (shows/hides the "no live progress" notice). What
+// was never covered is whether ChatScreen's LIVE render path
+// (SubagentSpansRenderer, ~L495) actually COMPUTES a correct value via
+// resolveSpanAgentType and PASSES it through — using a real agents list
+// (via the mocked `fetchAgents` above, which now includes a genuine
+// `type: 'subagent_3p'` agent) rather than an empty/native-only list. These
+// tests assert on `data-agent-type`, the value the SubagentBlock stub
+// actually received, closing that gap without re-deriving SubagentBlock's
+// own internal notice-rendering logic (kept in one place, SubagentBlock.
+// test.tsx). Verbose chat must be enabled for the span to render at all
+// (Fix 2 gating, exercised above) — that's incidental to these assertions,
+// not the point being tested here.
+describe('SubagentSpansRenderer — W3 resolveSpanAgentType wiring (test-analyzer MED-HIGH)', () => {
+  it('computes and passes agentType="3p" for a running span whose agentId resolves to a real subagent_3p agent', async () => {
+    seedStreamingAssistantWithSpan(runningSpan({ agentId: 'codex-1' }))
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+
+    await act(async () => {
+      render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+    })
+
+    const stub = screen.getByTestId('subagent-block-stub')
+    expect(stub).toHaveAttribute('data-agent-type', '3p')
+  })
+
+  it('computes and passes agentType="native" (never "3p") for a running span whose agentId resolves to a native agent', async () => {
+    seedStreamingAssistantWithSpan(runningSpan({ agentId: 'ray' }))
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+
+    await act(async () => {
+      render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+    })
+
+    const stub = screen.getByTestId('subagent-block-stub')
+    expect(stub).toHaveAttribute('data-agent-type', 'native')
   })
 })

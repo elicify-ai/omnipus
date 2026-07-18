@@ -34,7 +34,7 @@ import (
 //
 // Returns an error when no match is found; on error the returned
 // *config.ModelConfig is nil. On success the returned config is a CLONE —
-// callers may mutate it (e.g. setting Workspace) without affecting the
+// callers may mutate it (e.g. setting Home) without affecting the
 // provider entry in cfg.
 func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
 	if cfg == nil {
@@ -108,7 +108,7 @@ func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.M
 	return nil, fmt.Errorf("model %q not found in model_list or providers", raw)
 }
 
-// cloneWithWorkspace returns a pointer to a fresh copy of src with Workspace
+// cloneWithWorkspace returns a pointer to a fresh copy of src with Home
 // filled in when src left it empty. The dereference-and-take-address pattern
 // (vs. a deep copy) is intentional: ModelConfig holds scalar fields and
 // pointers; the inner pointer targets (e.g. Subagents) are deliberately shared
@@ -119,8 +119,8 @@ func cloneWithWorkspace(src *config.ModelConfig, workspace string) *config.Model
 		return nil
 	}
 	clone := *src
-	if clone.Workspace == "" {
-		clone.Workspace = workspace
+	if clone.Home == "" {
+		clone.Home = workspace
 	}
 	return &clone
 }

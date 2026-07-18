@@ -19,7 +19,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test content"), 0o644)
 
-	tool := NewReadFileTool("", false, MaxReadFileSize)
+	tool := NewReadFileTool(tmpDir, false, MaxReadFileSize)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": testFile,
@@ -46,7 +46,7 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 
 // TestFilesystemTool_ReadFile_NotFound verifies error handling for missing file
 func TestFilesystemTool_ReadFile_NotFound(t *testing.T) {
-	tool := NewReadFileTool("", false, MaxReadFileSize)
+	tool := NewReadFileTool(t.TempDir(), false, MaxReadFileSize)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/nonexistent_file_12345.txt",
@@ -89,7 +89,7 @@ func TestFilesystemTool_WriteFile_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "newfile.txt")
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path":    testFile,
@@ -128,7 +128,7 @@ func TestFilesystemTool_WriteFile_CreateDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "subdir", "newfile.txt")
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path":    testFile,
@@ -170,7 +170,7 @@ func TestFilesystemTool_WriteFile_MissingPath(t *testing.T) {
 
 // TestFilesystemTool_WriteFile_MissingContent verifies error handling for missing content
 func TestFilesystemTool_WriteFile_MissingContent(t *testing.T) {
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(t.TempDir(), false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/tmp/test.txt",
@@ -197,7 +197,7 @@ func TestFilesystemTool_WriteFile_OverwriteDefaultBlocked(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "existing.txt")
 	os.WriteFile(testFile, []byte("original"), 0o644)
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":    testFile,
 		"content": "new content",
@@ -220,7 +220,7 @@ func TestFilesystemTool_WriteFile_OverwriteExplicitAllowed(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "existing.txt")
 	os.WriteFile(testFile, []byte("original"), 0o644)
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":      testFile,
 		"content":   "replaced",
@@ -240,7 +240,7 @@ func TestFilesystemTool_WriteFile_NewFileNoOverwriteFlag(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "newfile.txt")
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":    testFile,
 		"content": "brand new",
@@ -260,7 +260,7 @@ func TestFilesystemTool_WriteFile_OverwriteFalseExplicitBlocked(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "existing.txt")
 	os.WriteFile(testFile, []byte("original"), 0o644)
 
-	tool := NewWriteFileTool("", false)
+	tool := NewWriteFileTool(tmpDir, false)
 	result := tool.Execute(context.Background(), map[string]any{
 		"path":      testFile,
 		"content":   "new content",
@@ -312,7 +312,7 @@ func TestFilesystemTool_ListDir_Success(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("content"), 0o644)
 	os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755)
 
-	tool := NewListDirTool("", false)
+	tool := NewListDirTool(tmpDir, false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": tmpDir,
@@ -336,7 +336,7 @@ func TestFilesystemTool_ListDir_Success(t *testing.T) {
 
 // TestFilesystemTool_ListDir_NotFound verifies error handling for non-existent directory
 func TestFilesystemTool_ListDir_NotFound(t *testing.T) {
-	tool := NewListDirTool("", false)
+	tool := NewListDirTool(t.TempDir(), false)
 	ctx := context.Background()
 	args := map[string]any{
 		"path": "/nonexistent_directory_12345",
@@ -357,7 +357,7 @@ func TestFilesystemTool_ListDir_NotFound(t *testing.T) {
 
 // TestFilesystemTool_ListDir_DefaultPath verifies default to current directory
 func TestFilesystemTool_ListDir_DefaultPath(t *testing.T) {
-	tool := NewListDirTool("", false)
+	tool := NewListDirTool(t.TempDir(), false)
 	ctx := context.Background()
 	args := map[string]any{}
 
@@ -404,6 +404,22 @@ func TestFilesystemTool_ReadFile_RejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestFilesystemTool_EmptyWorkspace_AccessDenied is the ADR-046 adaptation of
+// the pre-existing "empty workspace fails closed" regression guard. Under
+// the OLD architecture, workspace=="" was a distinguished misconfiguration
+// state (getSafeRelPath/validatePathWithAllowPaths special-cased it with the
+// literal "workspace is not defined" error). Under the ADR-046 P1 review's
+// BLOCK #1 fix, agentHome=="" (with no per-turn TurnWorkspaceDir either) is
+// likewise a distinguished misconfiguration: fspolicy.EffectiveFSPolicy now
+// refuses to produce a policy at all, rather than the earlier, briefly-true
+// intermediate behavior of falling back to the process's own cwd. The
+// SECURITY PROPERTY this test guards (an agent tool constructed with no home
+// can never reach an arbitrary absolute path, or ANY path at all) still
+// holds — arguably more strongly, since there is no longer even a
+// process-cwd fallback to reason about — it is now enforced by
+// ResolveTurnFSPolicy's policy-resolution failure, surfaced as a plain
+// ErrorResult (not the structured permission_denied shape, since the denial
+// happens before ResolvePath — and its typed sentinels — are ever reached).
 func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 	tool := NewReadFileTool("", true, MaxReadFileSize) // restrict=true but workspace=""
 
@@ -416,11 +432,14 @@ func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 		"path": secretFile,
 	})
 
-	// We EXPECT IsError=true (access blocked due to empty workspace)
+	// We EXPECT IsError=true (access blocked: no working directory at all
+	// means no policy can be resolved, so no read is ever attempted).
 	assert.True(t, result.IsError, "Security Regression: Empty workspace allowed access! content: %s", result.ForLLM)
 
-	// Verify it failed for the right reason
-	assert.Contains(t, result.ForLLM, "workspace is not defined", "Expected 'workspace is not defined' error")
+	// Verify it failed for the right reason: fspolicy's fail-closed
+	// empty-working-directory guard (BLOCK #1), not some unrelated error.
+	assert.Contains(t, result.ForLLM, "failed to resolve filesystem policy")
+	assert.Contains(t, result.ForLLM, "no working directory")
 }
 
 // TestRootMkdirAll verifies that root.MkdirAll (used by atomicWriteFileInRoot) handles all cases:
@@ -478,7 +497,9 @@ func TestFilesystemTool_WriteFile_Restricted_CreateDir(t *testing.T) {
 	assert.Equal(t, content, string(data))
 }
 
-// TestHostRW_Read_PermissionDenied verifies that hostRW.Read surfaces access denied errors.
+// TestHostRW_Read_PermissionDenied verifies that the host-mode PathHandle
+// (fspolicy.FSScopeUnrestricted — ResolvePath's root==nil branch, ported
+// from the pre-ADR-046 hostFs) surfaces access denied errors.
 func TestHostRW_Read_PermissionDenied(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		// chmod 0o000 is advisory-only on Windows; injection doesn't fire.
@@ -488,46 +509,65 @@ func TestHostRW_Read_PermissionDenied(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("skipping permission test: running as root")
 	}
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	protected := filepath.Join(tmpDir, "protected.txt")
 	err := os.WriteFile(protected, []byte("secret"), 0o000)
 	assert.NoError(t, err)
 	defer os.Chmod(protected, 0o644) // ensure cleanup
 
-	_, err = (&hostFs{}).ReadFile(protected)
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "read_file", "", FSOpRead, protected)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	_, err = handle.ReadFile()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
 
-// TestHostRW_Read_Directory verifies that hostRW.Read returns an error when given a directory path.
+// TestHostRW_Read_Directory verifies that the host-mode PathHandle returns
+// an error when given a directory path.
 func TestHostRW_Read_Directory(t *testing.T) {
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 
-	_, err := (&hostFs{}).ReadFile(tmpDir)
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "read_file", "", FSOpRead, tmpDir)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	_, err = handle.ReadFile()
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
-// TestRootRW_Read_Directory verifies that rootRW.Read returns an error when given a directory.
+// TestRootRW_Read_Directory verifies that the confined (os.Root-backed)
+// PathHandle returns an error when given a directory.
 func TestRootRW_Read_Directory(t *testing.T) {
 	workspace := t.TempDir()
-	root, err := os.OpenRoot(workspace)
-	assert.NoError(t, err)
-	defer root.Close()
 
 	// Create a subdirectory
-	err = root.Mkdir("subdir", 0o755)
+	err := os.Mkdir(filepath.Join(workspace, "subdir"), 0o755)
 	assert.NoError(t, err)
 
-	_, err = (&sandboxFs{workspace: workspace}).ReadFile("subdir")
+	handle, err := ResolvePath(context.Background(), confinedPolicy(t, workspace), "read_file", "", FSOpRead, "subdir")
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	_, err = handle.ReadFile()
 	assert.Error(t, err, "expected error when reading a directory as a file")
 }
 
-// TestHostRW_Write_ParentDirMissing verifies that hostRW.Write creates parent dirs automatically.
+// TestHostRW_Write_ParentDirMissing verifies that the host-mode PathHandle
+// creates parent dirs automatically.
 func TestHostRW_Write_ParentDirMissing(t *testing.T) {
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "a", "b", "c", "file.txt")
 
-	err := (&hostFs{}).WriteFile(target, []byte("hello"))
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "write_file", "", FSOpWrite, target)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile([]byte("hello"))
 	assert.NoError(t, err)
 
 	data, err := os.ReadFile(target)
@@ -535,13 +575,18 @@ func TestHostRW_Write_ParentDirMissing(t *testing.T) {
 	assert.Equal(t, "hello", string(data))
 }
 
-// TestRootRW_Write_ParentDirMissing verifies that rootRW.Write creates
-// nested parent directories automatically within the sandbox.
+// TestRootRW_Write_ParentDirMissing verifies that the confined
+// (os.Root-backed) PathHandle creates nested parent directories
+// automatically within the sandbox.
 func TestRootRW_Write_ParentDirMissing(t *testing.T) {
 	workspace := t.TempDir()
 
 	relPath := "x/y/z/file.txt"
-	err := (&sandboxFs{workspace: workspace}).WriteFile(relPath, []byte("nested"))
+	handle, err := ResolvePath(context.Background(), confinedPolicy(t, workspace), "write_file", "", FSOpWrite, relPath)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile([]byte("nested"))
 	assert.NoError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(workspace, relPath))
@@ -549,13 +594,18 @@ func TestRootRW_Write_ParentDirMissing(t *testing.T) {
 	assert.Equal(t, "nested", string(data))
 }
 
-// TestHostRW_Write verifies the hostRW.Write helper function
+// TestHostRW_Write verifies the host-mode PathHandle.WriteFile helper.
 func TestHostRW_Write(t *testing.T) {
+	workDir := t.TempDir()
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "atomic_test.txt")
 	testData := []byte("atomic test content")
 
-	err := (&hostFs{}).WriteFile(testFile, testData)
+	handle, err := ResolvePath(context.Background(), unrestrictedPolicy(t, workDir), "write_file", "", FSOpWrite, testFile)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile(testData)
 	assert.NoError(t, err)
 
 	content, err := os.ReadFile(testFile)
@@ -564,7 +614,7 @@ func TestHostRW_Write(t *testing.T) {
 
 	// Verify it overwrites correctly
 	newData := []byte("new atomic content")
-	err = (&hostFs{}).WriteFile(testFile, newData)
+	err = handle.WriteFile(newData)
 	assert.NoError(t, err)
 
 	content, err = os.ReadFile(testFile)
@@ -572,15 +622,19 @@ func TestHostRW_Write(t *testing.T) {
 	assert.Equal(t, newData, content)
 }
 
-// TestRootRW_Write verifies the rootRW.Write helper function
+// TestRootRW_Write verifies the confined (os.Root-backed)
+// PathHandle.WriteFile helper.
 func TestRootRW_Write(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	relPath := "atomic_root_test.txt"
 	testData := []byte("atomic root test content")
 
-	erw := &sandboxFs{workspace: tmpDir}
-	err := erw.WriteFile(relPath, testData)
+	handle, err := ResolvePath(context.Background(), confinedPolicy(t, tmpDir), "write_file", "", FSOpWrite, relPath)
+	assert.NoError(t, err)
+	defer handle.Close()
+
+	err = handle.WriteFile(testData)
 	assert.NoError(t, err)
 
 	root, err := os.OpenRoot(tmpDir)
@@ -597,7 +651,7 @@ func TestRootRW_Write(t *testing.T) {
 
 	// Verify it overwrites correctly
 	newData := []byte("new root atomic content")
-	err = erw.WriteFile(relPath, newData)
+	err = handle.WriteFile(newData)
 	assert.NoError(t, err)
 
 	f2, err := root.Open(relPath)

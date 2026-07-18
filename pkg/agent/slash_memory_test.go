@@ -118,7 +118,7 @@ func TestApplyMemoryCommandPrompt_Precedence(t *testing.T) {
 	defer cleanup()
 
 	// Install a skill whose slug collides with a memory command name.
-	writeSkillFile(t, cfg.Agents.Defaults.Workspace, "remember")
+	writeSkillFile(t, cfg.Agents.Defaults.Home, "remember")
 
 	agent := al.GetRegistry().GetDefaultAgent()
 	if agent == nil {

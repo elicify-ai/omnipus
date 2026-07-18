@@ -77,7 +77,7 @@ func TestAgentLoopClose_TearsDownMemoryScorchGoroutines(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspace,
+				Home:              workspace,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -153,7 +153,7 @@ func TestAgentLoopClose_BoundedWhenRecapDrainWedged(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspace,
+				Home:              workspace,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

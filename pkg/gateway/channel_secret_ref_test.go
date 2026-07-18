@@ -29,7 +29,7 @@ func newLockedStoreChannelAPI(t *testing.T, configJSON string) *restAPI {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
@@ -48,7 +48,7 @@ func newChannelTestAPI(t *testing.T, configJSON string) *restAPI {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})

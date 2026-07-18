@@ -72,23 +72,23 @@ func newTestRestAPIWithNativeAndExternalCLIAgent(t *testing.T) *restAPI {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        nativeTestAgentID,
-					Name:      "Native Assignee",
-					Default:   true,
-					Type:      config.AgentTypeCustom,
-					Workspace: nativeWorkspace,
+					ID:      nativeTestAgentID,
+					Name:    "Native Assignee",
+					Default: true,
+					Type:    config.AgentTypeCustom,
+					Home:    nativeWorkspace,
 				},
 				{
-					ID:        extCLITestAgentID,
-					Name:      "External CLI Assignee",
-					Type:      config.AgentTypeWorker,
-					Workspace: extCLIWorkspace,
+					ID:   extCLITestAgentID,
+					Name: "External CLI Assignee",
+					Type: config.AgentTypeWorker,
+					Home: extCLIWorkspace,
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},

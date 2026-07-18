@@ -908,7 +908,7 @@ func (c *OpenClawConfig) convertAgents(warnings *[]string) []AgentConfig {
 func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 	cfg := config.DefaultConfig()
 
-	cfg.Agents.Defaults.Workspace = c.Agents.Defaults.Workspace
+	cfg.Agents.Defaults.Home = c.Agents.Defaults.Workspace
 	cfg.Agents.Defaults.Provider = c.Agents.Defaults.Provider
 	cfg.Agents.Defaults.ModelName = c.Agents.Defaults.ModelName
 	cfg.Agents.Defaults.ModelFallbacks = c.Agents.Defaults.ModelFallbacks
@@ -932,11 +932,11 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 	cfg.Agents.List = make([]config.AgentConfig, len(c.Agents.List))
 	for i, a := range c.Agents.List {
 		cfg.Agents.List[i] = config.AgentConfig{
-			ID:        a.ID,
-			Default:   a.Default,
-			Name:      a.Name,
-			Workspace: a.Workspace,
-			Skills:    a.Skills,
+			ID:      a.ID,
+			Default: a.Default,
+			Name:    a.Name,
+			Home:    a.Workspace,
+			Skills:  a.Skills,
 		}
 		if a.Model != nil {
 			cfg.Agents.List[i].Model = &config.AgentModelConfig{

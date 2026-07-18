@@ -220,7 +220,7 @@ func TestBrowserToolRegistration_WithScope(t *testing.T) {
 	require.NoError(t, err)
 	ssrf := security.NewSSRFChecker(nil)
 	// evaluateEnabled=true: include browser_evaluate in the expected tool set.
-	_, err = RegisterTools(registry, cfg, ssrf, true)
+	_, err = RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, err)
 
 	expectedTools := []string{
@@ -248,7 +248,7 @@ func TestBrowserToolsAlwaysRegisterRegardlessOfLegacyFlag(t *testing.T) {
 	// RegisterTools succeeds; the browser manager is created but Chromium is
 	// not launched until the first tool is invoked (lazy start).
 	// evaluateEnabled=true: explicitly opt in to browser_evaluate registration.
-	mgr, err := RegisterTools(registry, cfg, ssrf, true)
+	mgr, err := RegisterTools(registry, cfg, ssrf, true, t.TempDir(), true)
 	require.NoError(t, err)
 	require.NotNil(t, mgr)
 
@@ -284,7 +284,7 @@ func TestSSRFBlocksPrivateNavigation(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	// evaluateEnabled=false: this test only uses browser_navigate, so no need
 	// to register browser_evaluate.
-	mgr, err := RegisterTools(registry, cfg, ssrf, false)
+	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err)
 	defer mgr.Shutdown()
 

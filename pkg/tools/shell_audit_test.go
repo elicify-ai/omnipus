@@ -8,6 +8,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,6 +138,54 @@ func TestReadFileTool_AuditReason_SymlinkEscape(t *testing.T) {
 	reason := classifyPathDenialReason(symlinkErr, 0)
 	assert.Equal(t, ReasonSymlinkEscape, reason,
 		"symlink error: reason must be symlink_escape")
+}
+
+// ---------------------------------------------------------------------------
+// TestClassifyPathDenialReason_TypedSentinels — HIGH #5 (ADR-046 P1 review).
+// classifyPathDenialReason's primary classification path (path_audit.go) is
+// now an errors.Is type switch over ResolvePath's typed sentinels
+// (ErrCarveOut/ErrPathInvalid/ErrOutsideScope), checked BEFORE the legacy
+// string-sniffing fallback the three tests above cover. This pins each
+// sentinel branch individually, plus a %w-wrapped case to confirm the
+// classification survives wrapping (errors.Is, not a direct ==).
+// ---------------------------------------------------------------------------
+
+func TestClassifyPathDenialReason_TypedSentinels(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"ErrCarveOut classifies as carve_out", ErrCarveOut, ReasonCarveOut},
+		{"ErrPathInvalid classifies as path_invalid", ErrPathInvalid, ReasonPathInvalid},
+		{"ErrOutsideScope classifies as outside_workspace", ErrOutsideScope, ReasonOutsideWorkspace},
+		{
+			"wrapped ErrCarveOut still classifies via errors.Is",
+			fmt.Errorf("%w: agents/other/SOUL.md", ErrCarveOut),
+			ReasonCarveOut,
+		},
+		{
+			"wrapped ErrPathInvalid still classifies via errors.Is",
+			fmt.Errorf("%w: embedded NUL byte", ErrPathInvalid),
+			ReasonPathInvalid,
+		},
+		{
+			"wrapped ErrOutsideScope still classifies via errors.Is",
+			fmt.Errorf("%w: escapes the working directory", ErrOutsideScope),
+			ReasonOutsideWorkspace,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// allowPathsLen=0 throughout: it only discriminates the LEGACY
+			// string-sniffing fallback (outside_workspace vs
+			// not_in_allow_list), which the typed-sentinel branch above
+			// short-circuits before ever consulting it.
+			got := classifyPathDenialReason(tc.err, 0)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 // errorFromString converts a string into an error for testing.
