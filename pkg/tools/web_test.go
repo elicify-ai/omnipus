@@ -1005,7 +1005,12 @@ func TestWebFetchDialContext_BlocksPrivateDNSResolutionWithoutWhitelist(t *testi
 }
 
 func TestWebFetchDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Dual-stack loopback listener (":0", not "127.0.0.1:0") so the test is
+	// robust to "localhost" resolving to ::1 (IPv6) on GitHub Actions runners as
+	// well as 127.0.0.1 elsewhere; the allowlist below covers both loopback
+	// families. See TestSSRFChecker_SafeDialContext_RealDNSResolution for the
+	// same rationale.
+	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatalf("failed to listen on loopback: %v", err)
 	}
@@ -1026,7 +1031,7 @@ func TestWebFetchDialContext_AllowsWhitelistedPrivateDNSResolution(t *testing.T)
 		t.Fatalf("failed to split listener address: %v", err)
 	}
 
-	ssrf := security.NewSSRFChecker([]string{"127.0.0.0/8"})
+	ssrf := security.NewSSRFChecker([]string{"127.0.0.0/8", "::1/128"})
 	dialContext := webFetchDialContext(&net.Dialer{Timeout: time.Second}, ssrf)
 	conn, err := dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
 	if err != nil {

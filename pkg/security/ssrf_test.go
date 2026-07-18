@@ -355,7 +355,16 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 	})
 
 	t.Run("allows localhost resolution when allowlisted by CIDR", func(t *testing.T) {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		// Dual-stack loopback listener + both-loopback-family allowlist so the
+		// test is robust to how the OS resolver maps "localhost". GitHub Actions
+		// runners resolve localhost to ::1 (IPv6), which an IPv4-only listener
+		// ("127.0.0.1:0") + IPv4-only allowlist ("127.0.0.0/8") spuriously
+		// rejects (the resolved ::1 is neither allowlisted nor reachable on the
+		// v4 listener). The wildcard ":0" listener accepts both 127.0.0.1 and
+		// ::1 connections (Go dual-stack, IPv4-mapped), and both loopback CIDRs
+		// are allowlisted — the security assertion (allowlisted loopback is
+		// permitted) is unchanged, only the address family is made env-agnostic.
+		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 		defer listener.Close()
 
@@ -372,7 +381,7 @@ func TestSSRFChecker_SafeDialContext_RealDNSResolution(t *testing.T) {
 		_, port, err := net.SplitHostPort(listener.Addr().String())
 		require.NoError(t, err)
 
-		checker := security.NewSSRFChecker([]string{"127.0.0.0/8"})
+		checker := security.NewSSRFChecker([]string{"127.0.0.0/8", "::1/128"})
 		dialContext := checker.SafeDialContext(&net.Dialer{Timeout: time.Second})
 		conn, err := dialContext(context.Background(), "tcp", net.JoinHostPort("localhost", port))
 		require.NoError(t, err, "expected localhost DNS resolution to succeed once allowlisted")
