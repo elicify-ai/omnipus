@@ -99,14 +99,19 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 		sessionIDs[i] = fmt.Sprintf("stress-session-%d", i)
 	}
 
-	// Pre-allocate every sub-turn's workspace dir up front, from the main
-	// test goroutine, rather than calling t.TempDir() from inside the spawn
-	// goroutines below — avoids depending on T.TempDir()'s own concurrency
-	// characteristics and gives every sub-turn a DISTINCT workspace path so
-	// none of them serialize on external_dispatch.go's workspaceRunLocks
-	// (keyed by workDir), which would otherwise mask true concurrency.
+	// Give every sub-turn a DISTINCT work/ dir so none of them serialize on
+	// external_dispatch.go's workspaceRunLocks (keyed by workDir), which would
+	// otherwise mask the true concurrency this stress test exists to exercise.
 	//
-	// NOTE (7-reviewer gate, BLOCK finding on FIX 1): this distinct-workDir
+	// ADR-046 P1: a dispatch's WorkDir is the acting agent's RESOLVED workspace
+	// work/ dir, never agent.Home — so "distinct work dirs" is now expressed as
+	// "one dedicated single-member workspace per agent". Seed those workspaces
+	// up front, from the main goroutine, BEFORE any spawn goroutine resolves
+	// its WorkDir (resolveTurnWorkDirOrRefuse would otherwise refuse a
+	// workspaceless agent). agent.Home is still set to a distinct temp dir
+	// below, purely as a realistic non-empty Home; it no longer drives WorkDir.
+	//
+	// NOTE (7-reviewer gate, BLOCK finding on FIX 1): this distinct-workspace
 	// choice is deliberate and remains correct for THIS stress test's own
 	// purpose (proving the setTurnCancel/setProviderCancel-vs-Range race is
 	// race-detector-clean under high concurrency) — it is not a gap left
@@ -118,6 +123,12 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 	// BLOCK finding identified as unprotected before FIX 1's lock-ordering
 	// fix (registering childTS's cancel funcs before acquiring the lock, and
 	// making the lock acquisition itself cancel-aware).
+	agentIDs := make([]string, total)
+	for i := range agentIDs {
+		agentIDs[i] = fmt.Sprintf("ext-agent-%d", i)
+	}
+	seedDistinctTestWorkspacesForIDs(t, agentIDs)
+
 	workDirs := make([]string, total)
 	for i := range workDirs {
 		workDirs[i] = t.TempDir()
@@ -146,7 +157,7 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 			defer recoverPanic("spawn")
 
 			agent := &AgentInstance{
-				ID:   fmt.Sprintf("ext-agent-%d", i),
+				ID:   agentIDs[i],
 				Name: "External Agent",
 				Home: workDirs[i],
 				Subagents: &config.SubagentsConfig{

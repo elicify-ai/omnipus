@@ -267,12 +267,21 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 	firstTS.transcriptSessionID = "session_lock_first"
 	firstTS.turnID = "lock-first-1"
 
-	// A second turnState on an agent with the SAME workspace directory as
-	// firstTS — constructed directly (not via a second newExternalTestLoop
+	// A second turnState whose agent resolves to the SAME workspace work/ dir
+	// as firstTS — constructed directly (not via a second newExternalTestLoop
 	// call, which would spin up an unrelated second *AgentLoop) so both
 	// sub-turns share the same al.activeTurnStates and the same
-	// external_dispatch.go package-level workspaceRunLocks entry for
-	// sharedWorkDir.
+	// external_dispatch.go package-level workspaceRunLocks entry.
+	//
+	// ADR-046 P1: a sub-turn's WorkDir (and thus its workspaceRunLocks key) is
+	// the acting agent's RESOLVED workspace work/ dir, never agent.Home — so
+	// same-lock contention now comes from both agents being CoreTeam members of
+	// the SAME workspace, not from a shared agent.Home. newExternalTestLoop
+	// already seeded firstTS's agent (ext-agent) into the shared test-harness
+	// workspace; the seedTestWorkspaceMembershipForIDs call below unions
+	// ext-agent-lock-2 into that same workspace so both resolve to its one
+	// work/ dir. sharedWorkDir survives only as the agents' (now
+	// lock-irrelevant) Home.
 	secondAgent := &AgentInstance{
 		ID:   "ext-agent-lock-2",
 		Name: "External Agent 2",
@@ -281,6 +290,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 		},
 	}
+	seedTestWorkspaceMembershipForIDs(t, []string{secondAgent.ID})
 	secondTS := &turnState{
 		agent:               secondAgent,
 		agentID:             secondAgent.ID,
