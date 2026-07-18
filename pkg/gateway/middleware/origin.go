@@ -45,10 +45,8 @@
 package middleware
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -61,69 +59,10 @@ import (
 // reference this constant rather than the literal string.
 const DevOriginDeniedEvent = "dev.origin_denied"
 
-// canonicalGatewayOrigin returns the browser-facing origin for the main gateway
-// listener. Used as the authoritative value for CORS Access-Control-Allow-Origin
-// and CSP frame-ancestors directives.
-//
-// Resolution order (FR-022 / MR-03):
-//  1. cfg.Gateway.PublicURL set → return it verbatim. Reverse-proxy case: the
-//     operator tells us the public-facing origin.
-//  2. host is a wildcard bind ("0.0.0.0", "::", "[::]") and PublicURL unset →
-//     return empty string. The CALLER interprets empty as "fall back to
-//     frame-ancestors '*'" and emits a boot WARN per FR-007e.
-//  3. host already looks like a URL (contains "://") → parse and return scheme+host.
-//  4. Otherwise → derive from host:port (http or https heuristic).
-//
-// Returns "" when the config is empty (caller should reject all state-changing
-// requests when the expected origin cannot be derived — fail-closed).
-func canonicalGatewayOrigin(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-
-	// 1. PublicURL override (FR-022).
-	if pu := strings.TrimSpace(cfg.Gateway.PublicURL); pu != "" {
-		return pu
-	}
-
-	host := strings.TrimSpace(cfg.Gateway.Host)
-	if host == "" {
-		return ""
-	}
-
-	// 2. Wildcard-bind hosts: 0.0.0.0, ::, [::] (MR-03 / FR-007e).
-	normHost := strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-	switch normHost {
-	case "0.0.0.0", "::", "::0":
-		return ""
-	}
-
-	// 3. If host already looks like a URL, parse it.
-	if strings.Contains(host, "://") {
-		u, err := url.Parse(host)
-		if err != nil || u.Host == "" {
-			return ""
-		}
-		return fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-	}
-
-	// 4. Bare host — derive scheme from port heuristic.
-	port := cfg.Gateway.Port
-	scheme := "http"
-	if port == 443 {
-		scheme = "https"
-	}
-	if port > 0 && port != 80 && port != 443 {
-		return fmt.Sprintf("%s://%s:%d", scheme, host, port)
-	}
-	return fmt.Sprintf("%s://%s", scheme, host)
-}
-
-// CanonicalGatewayOrigin is the exported form, used by Track B's CSP builder
-// and by gateway.Run for the allowedOrigin computation.
-func CanonicalGatewayOrigin(cfg *config.Config) string {
-	return canonicalGatewayOrigin(cfg)
-}
+// canonicalGatewayOrigin / CanonicalGatewayOrigin live in origin_canonical.go —
+// deliberately WITHOUT this file's `//go:build !cgo` tag so pkg/tools (via
+// web_serve.go) can import CanonicalGatewayOrigin under CGO, i.e. the `go test
+// -race` gate. See that file's header for the full rationale.
 
 // originMatches returns true when the request's Origin header matches the
 // expected gateway origin. Comparison is case-insensitive on the host
