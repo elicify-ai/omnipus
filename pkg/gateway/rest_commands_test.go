@@ -95,7 +95,7 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	wantNames := map[string]bool{
-		"new":  true,
+		"new":    true,
 		"help":   true,
 		"model":  true,
 		"cancel": true,
@@ -240,7 +240,7 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	// Post ADR-026: all web commands are client-delivered (D7/D9 made /agents and
 	// /skills client commands that open the in-header selector / filter the menu).
 	clientCmds := map[string]bool{
-		"new":  true,
+		"new":    true,
 		"help":   true,
 		"model":  true,
 		"cancel": true,
