@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   mapClientToDevice,
+  mapClientToDeviceVideo,
   computeModifiers,
   mapMouseButton,
   isPrintableKey,
@@ -88,6 +89,63 @@ describe('mapClientToDevice', () => {
     const rect = { left: 0, top: 0, width: 1280, height: 720 }
     const result = mapClientToDevice(2000, 2000, rect, 1280, 720, 2.0)
     expect(result).toEqual({ x: 640, y: 360 }) // clamps to 1280/2, 720/2 — not 1280, 720
+  })
+})
+
+describe('mapClientToDeviceVideo (WebRTC build — video-mode sink)', () => {
+  it('maps a 1:1 rect exactly like mapClientToDevice with no page_scale division', () => {
+    const rect = { left: 0, top: 0, width: 1280, height: 720 }
+    expect(mapClientToDeviceVideo(640, 360, rect, 1280, 720)).toEqual({ x: 640, y: 360 })
+  })
+
+  it('scales up when the rendered box is smaller than the video (CSS-shrunk preview)', () => {
+    const rect = { left: 0, top: 0, width: 640, height: 360 }
+    expect(mapClientToDeviceVideo(320, 180, rect, 1280, 720)).toEqual({ x: 640, y: 360 })
+  })
+
+  it('scales down when the rendered box is larger than the video', () => {
+    const rect = { left: 0, top: 0, width: 2560, height: 1440 }
+    expect(mapClientToDeviceVideo(1280, 720, rect, 1280, 720)).toEqual({ x: 640, y: 360 })
+  })
+
+  it('offsets by rect.left/rect.top', () => {
+    const rect = { left: 100, top: 50, width: 1280, height: 720 }
+    expect(mapClientToDeviceVideo(100, 50, rect, 1280, 720)).toEqual({ x: 0, y: 0 })
+  })
+
+  it('clamps negative results to 0', () => {
+    const rect = { left: 100, top: 50, width: 1280, height: 720 }
+    expect(mapClientToDeviceVideo(50, 10, rect, 1280, 720)).toEqual({ x: 0, y: 0 })
+  })
+
+  it('clamps results beyond video dimensions to the video edge (NOT divided by any page_scale, unlike mapClientToDevice with a pageScale arg)', () => {
+    const rect = { left: 0, top: 0, width: 1280, height: 720 }
+    expect(mapClientToDeviceVideo(2000, 2000, rect, 1280, 720)).toEqual({ x: 1280, y: 720 })
+  })
+
+  it('returns null when the container has no measurable size', () => {
+    const rect = { left: 0, top: 0, width: 0, height: 720 }
+    expect(mapClientToDeviceVideo(10, 10, rect, 1280, 720)).toBeNull()
+  })
+
+  it('returns null when the video has no reported dimensions yet (videoWidth/videoHeight 0 before loadedmetadata)', () => {
+    const rect = { left: 0, top: 0, width: 1280, height: 720 }
+    expect(mapClientToDeviceVideo(10, 10, rect, 0, 0)).toBeNull()
+  })
+
+  it('is exactly equivalent to calling mapClientToDevice with pageScale=1 (thin wrapper, no drift possible)', () => {
+    const rect = { left: 12, top: 7, width: 900, height: 500 }
+    const viaVideo = mapClientToDeviceVideo(321, 198, rect, 1920, 1080)
+    const viaGeneral = mapClientToDevice(321, 198, rect, 1920, 1080, 1)
+    expect(viaVideo).toEqual(viaGeneral)
+  })
+
+  it('never divides by a caller-supplied page_scale — video capture has no such factor to correct for', () => {
+    // Even a wildly different rect/video ratio must follow the plain linear
+    // scale formula (scale fixed at 1), matching CDP-dispatch CSS-pixel
+    // space directly at capture resolution (wave-plan item 8).
+    const rect = { left: 0, top: 0, width: 640, height: 360 }
+    expect(mapClientToDeviceVideo(640, 360, rect, 1280, 720)).toEqual({ x: 1280, y: 720 })
   })
 })
 
@@ -329,5 +387,32 @@ describe('scaleCropToImagePixels', () => {
     const scaled = scaleCropToImagePixels(rect, 1920, 1080, 1280, 720)
     expect(scaled.width).toBe(1)
     expect(scaled.height).toBe(1)
+  })
+
+  // WebRTC build (video-mode annotate crop, cropFrameToFile's video branch,
+  // BrowserLiveView.tsx): this same generic scale function is reused —
+  // deliberately not duplicated — to scale a crop rect from the
+  // <video>-element dimensions captured at drag-START time into the
+  // <video>'s CURRENT videoWidth/videoHeight at draw time. Unlike the JPEG
+  // path (where the mismatch is a fixed downscale cap), the video-mode
+  // mismatch this guards is a recapture-driven resolution change (e.g. the
+  // agent's active tab is switched to a differently-sized page) landing
+  // mid-gesture, between when the crop rect was computed and when the
+  // eventual canvas.drawImage(video, …) actually runs.
+  it('scales a video-mode crop rect when the video\'s reported dimensions changed between drag-start and draw (recapture drift)', () => {
+    // Drag was computed against a 1280x720 tab viewport; a recapture (tab
+    // switch) resized the captured video to 1920x1080 before the drag
+    // finished.
+    const rect = { x: 640, y: 360, width: 100, height: 50 }
+    const scaled = scaleCropToImagePixels(rect, 1280, 720, 1920, 1080)
+    expect(scaled.x).toBeCloseTo(960)
+    expect(scaled.y).toBeCloseTo(540)
+    expect(scaled.width).toBeCloseTo(150)
+    expect(scaled.height).toBeCloseTo(75)
+  })
+
+  it('is a no-op for video-mode when videoWidth/videoHeight match the dimensions the crop rect was computed against (the common case — no recapture mid-drag)', () => {
+    const rect = { x: 100, y: 50, width: 40, height: 30 }
+    expect(scaleCropToImagePixels(rect, 1920, 1080, 1920, 1080)).toEqual(rect)
   })
 })
