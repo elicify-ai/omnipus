@@ -1525,6 +1525,14 @@ func registerSharedTools(
 		{
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
 			delegateTool.SetSpawner(NewSubTurnSpawner(al))
+			// W2: action:"status" live-progress snapshot for a running native
+			// task. sharedStore mirrors the exact store/registry wiring
+			// getRegistryReader/NewHandoffTool already use just above — a
+			// live func() so hot reloads are reflected, and the same
+			// *session.UnifiedStore delegated children's transcript entries
+			// are actually written to.
+			delegateTool.SetSessionStore(sharedStore)
+			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
 			currentAgentID := agentID
 			// ADR-037: the legacy DelegationPolicy.To / SubagentsConfig.AllowAgents
 			// allowlist checkers (SetAllowlistChecker / SetDelegateChecker) are
@@ -7838,6 +7846,12 @@ turnLoop:
 			// spawn can read it as their parentSpawnCallID when they in turn call
 			// SpawnSubTurn (FR-H-003).
 			execCtx := withSpawnToolCallID(turnCtx, tc.ID)
+			// Also expose it via the pkg/tools-level accessor (W2): DelegateTool
+			// cannot see the agent-package-private spawnToolCallIDKey above, so
+			// it reads its OWN call ID this way at task-creation time to record
+			// the correlation anchor a spawned child sub-turn's transcript
+			// entries will carry back as ParentSpawnCallID.
+			execCtx = tools.WithToolCallID(execCtx, tc.ID)
 			toolResult := ts.agent.Tools.ExecuteWithContext(
 				execCtx,
 				toolName,

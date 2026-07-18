@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ADR-036 / docs/internal/specs/agent-delegation-spec.md — `delegate` is the
@@ -86,6 +87,68 @@ type DelegateTaskState struct {
 	Status        string // running | completed | failed | canceled
 	Result        string
 	Created       int64
+
+	// SessionID is the transcript session ID a spawned child sub-turn writes
+	// its own intermediate narration and final-turn text into — the SAME
+	// session ID the delegating PARENT turn itself uses (delegated children
+	// share their parent's transcript; see pkg/agent/subturn.go's
+	// TranscriptSessionID: parentTS.transcriptSessionID). Captured at
+	// task-creation time from ToolTranscriptSessionID(ctx) — the identical
+	// value the child will be spawned with. Used by action:"status" (W2) to
+	// read back a running native task's recent activity. Empty when no
+	// transcript session context was available at creation time (e.g. a
+	// direct programmatic Execute call, as in most of this file's tests).
+	SessionID string
+	// SpawnCallID is this delegate tool call's own ID — the value a spawned
+	// child sub-turn's transcript entries carry back as
+	// session.TranscriptEntry.ParentSpawnCallID (see that field's doc
+	// comment and pkg/agent/subturn.go's parentSpawnCallID). Captured at
+	// task-creation time from ToolCallID(ctx). Used to filter SessionID's
+	// transcript down to just this task's own activity.
+	SpawnCallID string
+	// Is3P is true when this task's target agent dispatches via an external
+	// CLI runner (subagent_3p: claude-code/codex/opencode — see
+	// runner.DispatchKindExternalCLI) rather than natively inside the
+	// Omnipus agent loop. Resolved ONCE at task-creation time via
+	// DelegateAgentRegistry.IsExternalCLI, so a registry/config change
+	// mid-flight cannot flip a task's own snapshot eligibility
+	// inconsistently. By design (operator-confirmed scope for W2),
+	// external-CLI dispatch is treated as batch/report-on-completion for
+	// action:"status" purposes even though runExternalCLISubTurn's own
+	// narration DOES land in the same ParentSpawnCallID-tagged transcript
+	// entries a native task's does (see recordExternalToolCall /
+	// pkg/agent/external_dispatch.go's appendIntermediateAssistantTranscript
+	// calls) — a running Is3P task's action:"status" never attempts a live
+	// transcript snapshot regardless, and instead renders a fixed
+	// no-live-progress note.
+	Is3P bool
+}
+
+// DelegateAgentRegistry is a minimal interface for resolving whether a
+// delegation target dispatches natively (inside the Omnipus agent loop) or
+// via an external CLI runner (subagent_3p: claude-code/codex/opencode).
+// DelegateTool consults this at task-creation time (W2) to decide whether a
+// background task is eligible for a live in-flight transcript snapshot
+// under action:"status" — see DelegateTaskState.Is3P's doc comment.
+//
+// Satisfied by *agent.AgentRegistry; defined as an interface here (mirroring
+// AgentRegistryReader in handoff.go) to avoid an import cycle
+// (tools -> agent -> tools).
+type DelegateAgentRegistry interface {
+	// IsExternalCLI reports whether agentID resolves to dispatch kind
+	// "external-cli" (subagent_3p). Returns false (native) for an unknown or
+	// empty agentID.
+	IsExternalCLI(agentID string) bool
+}
+
+// DelegateSessionStore is the subset of *session.UnifiedStore DelegateTool
+// needs to read back a running native task's own transcript entries for
+// action:"status" (W2). Defined as an interface (mirroring
+// HandoffSessionStore in handoff.go) to decouple from the concrete store
+// type.
+type DelegateSessionStore interface {
+	// ReadTranscript returns all transcript entries for the session.
+	ReadTranscript(sessionID string) ([]session.TranscriptEntry, error)
 }
 
 // DelegateTool is the unified delegation tool (FR-D1). Any agent — including
@@ -99,6 +162,21 @@ type DelegateTool struct {
 	defaultModel string
 	maxTokens    int
 	temperature  float64
+
+	// getAgentRegistry, when set, resolves the live agent registry used to
+	// classify a delegation target as native or external-CLI at
+	// task-creation time (W2). Called at task-creation time (not
+	// construction time) so hot reloads are reflected automatically,
+	// mirroring NewHandoffTool's getRegistry closure pattern. A nil/unset
+	// resolver leaves every task's Is3P at its zero value (false — treated
+	// as native), matching the pre-W2 behavior for anyone who doesn't wire
+	// it (e.g. this file's existing unit tests).
+	getAgentRegistry func() DelegateAgentRegistry
+	// sessionStore, when set, is read from by action:"status" (W2) to build
+	// a running native task's recent-activity snapshot. A nil/unset store
+	// degrades gracefully — status falls back to the prompt-only summary it
+	// already returned before this feature.
+	sessionStore DelegateSessionStore
 
 	mu     sync.Mutex
 	tasks  map[string]*DelegateTaskState
@@ -146,6 +224,22 @@ func NewDelegateTool(defaultModel string, maxTokens int, temperature float64) *D
 // SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
 func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
 	t.spawner = spawner
+}
+
+// SetAgentRegistry installs the live agent-registry lookup (W2) DelegateTool
+// uses at task-creation time to classify a delegation target as native or
+// external-CLI (DelegateTaskState.Is3P). getRegistry is called at
+// task-creation time, not construction time, so hot reloads are reflected
+// automatically — see the getAgentRegistry field doc.
+func (t *DelegateTool) SetAgentRegistry(getRegistry func() DelegateAgentRegistry) {
+	t.getAgentRegistry = getRegistry
+}
+
+// SetSessionStore installs the transcript store DelegateTool reads from to
+// build a running native task's recent-activity snapshot under
+// action:"status" (W2). See the sessionStore field doc.
+func (t *DelegateTool) SetSessionStore(store DelegateSessionStore) {
+	t.sessionStore = store
 }
 
 // SetDelegationDenyCheckerBackground installs the full delegation-policy gate
@@ -364,6 +458,22 @@ func (t *DelegateTool) executeAsync(
 
 	channel := ToolChannel(ctx)
 	chatID := ToolChatID(ctx)
+	// W2: capture, at task-creation time, the exact correlation anchors a
+	// spawned child sub-turn's transcript entries will carry back —
+	// SessionID mirrors TranscriptSessionID: parentTS.transcriptSessionID
+	// (pkg/agent/subturn.go), and SpawnCallID mirrors the delegate tool
+	// call's own ID (the value spawnToolCallIDFromContext captures on the
+	// agent-package side to set childTS.parentSpawnCallID). Reading both
+	// from THIS SAME ctx guarantees they match what the child will actually
+	// use, without any agent-package coupling.
+	sessionID := ToolTranscriptSessionID(ctx)
+	spawnCallID := ToolCallID(ctx)
+	is3P := false
+	if agentID != "" && t.getAgentRegistry != nil {
+		if reg := t.getAgentRegistry(); reg != nil {
+			is3P = reg.IsExternalCLI(agentID)
+		}
+	}
 
 	t.mu.Lock()
 	taskID := fmt.Sprintf("delegate-%d", t.nextID)
@@ -377,6 +487,9 @@ func (t *DelegateTool) executeAsync(
 		OriginChatID:  chatID,
 		Status:        "running",
 		Created:       time.Now().UnixMilli(),
+		SessionID:     sessionID,
+		SpawnCallID:   spawnCallID,
+		Is3P:          is3P,
 	}
 	t.mu.Unlock()
 
@@ -599,7 +712,7 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
 		}
 
-		return NewToolResult(delegateFormatTask(&taskCopy))
+		return NewToolResult(delegateFormatTask(&taskCopy, t.delegateStatusExtra(&taskCopy)))
 	}
 
 	origTasks := t.listTaskCopies()
@@ -651,7 +764,7 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 	sb.WriteString("\n")
 
 	for _, task := range taskList {
-		sb.WriteString(delegateFormatTask(task))
+		sb.WriteString(delegateFormatTask(task, t.delegateStatusExtra(task)))
 		sb.WriteString("\n\n")
 	}
 
@@ -683,8 +796,15 @@ func (t *DelegateTool) listTaskCopies() []DelegateTaskState {
 	return copies
 }
 
-// delegateFormatTask renders a single DelegateTaskState as a human-readable block.
-func delegateFormatTask(task *DelegateTaskState) string {
+// delegateFormatTask renders a single DelegateTaskState as a human-readable
+// block. extra, when non-empty, is appended as a trailing "\n"+extra section
+// — used by action:"status" (W2) to attach either a running native task's
+// recent transcript activity or a running external-CLI task's
+// no-live-progress note (see delegateStatusExtra). Pass "" for a task with
+// nothing to add (a non-running task, or a running native task with no
+// activity captured yet) — this keeps the function's output identical to
+// its pre-W2 shape for those cases.
+func delegateFormatTask(task *DelegateTaskState, extra string) string {
 	var sb strings.Builder
 
 	header := fmt.Sprintf("[%s] status=%s", task.ID, task.Status)
@@ -712,6 +832,106 @@ func delegateFormatTask(task *DelegateTaskState) string {
 		}
 		sb.WriteString(fmt.Sprintf("\n  result: %s", result))
 	}
+	if extra != "" {
+		sb.WriteString("\n")
+		sb.WriteString(extra)
+	}
 
 	return sb.String()
+}
+
+// maxStatusActivityLines caps how many of a running native task's most
+// recent transcript entries action:"status" surfaces (W2). Fixed at ~5 per
+// spec — enough to convey what the delegate is currently doing without
+// flooding the calling LLM's context on every poll.
+const maxStatusActivityLines = 5
+
+// maxStatusActivityLineRunes caps each surfaced activity line's length (W2).
+const maxStatusActivityLineRunes = 120
+
+// delegate3PStatusNote is the fixed action:"status" annotation for a running
+// external-CLI (subagent_3p) task — see DelegateTaskState.Is3P's doc comment
+// for why no live snapshot is attempted for these.
+const delegate3PStatusNote = "  note:   external agent — no live progress; results on completion"
+
+// delegateStatusExtra computes the action:"status" trailing annotation for
+// task (W2). Only a "running" task gets anything:
+//   - a native task gets up to maxStatusActivityLines of its own recent
+//     transcript activity (recentActivityLines), or "" if the child sub-turn
+//     hasn't written anything yet;
+//   - an external-CLI (Is3P) task gets the fixed delegate3PStatusNote instead
+//     of any attempted snapshot (batch/report-on-completion by design).
+//
+// Every non-running task (completed/failed/canceled) returns "" — its
+// Result field already carries the final answer, so nothing is added.
+func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
+	if task.Status != "running" {
+		return ""
+	}
+	if task.Is3P {
+		return delegate3PStatusNote
+	}
+	lines := t.recentActivityLines(task.SessionID, task.SpawnCallID, maxStatusActivityLines)
+	if len(lines) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("  recent activity:")
+	for _, line := range lines {
+		sb.WriteString("\n    - ")
+		sb.WriteString(line)
+	}
+	return sb.String()
+}
+
+// recentActivityLines reads back up to max of the most recent transcript
+// entries a running NATIVE delegated sub-turn has written into its shared
+// parent session, filtered to just this task's own activity via
+// session.TranscriptEntry.ParentSpawnCallID == spawnCallID — the delegate
+// tool call's own ID, which subturn.go stamps onto every intermediate/final
+// assistant-text entry the child sub-turn produces (see
+// ParentSpawnCallID's doc comment). This is a pure READ of data the child
+// sub-turn already persists as a side effect of running — no new storage or
+// write path is introduced by W2.
+//
+// Returns nil (never an error) when no session store is wired, sessionID or
+// spawnCallID is empty, the transcript can't be read, or nothing has been
+// written yet — delegateStatusExtra treats all of these as "no snapshot
+// available" and falls back to the prompt-only summary that predates this
+// feature.
+func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, max int) []string {
+	if t.sessionStore == nil || sessionID == "" || spawnCallID == "" {
+		return nil
+	}
+	entries, err := t.sessionStore.ReadTranscript(sessionID)
+	if err != nil {
+		slog.Warn("delegate: status snapshot: failed to read transcript",
+			"session_id", sessionID, "error", err)
+		return nil
+	}
+
+	var lines []string
+	for _, e := range entries {
+		if string(e.ParentSpawnCallID) != spawnCallID {
+			continue
+		}
+		content := strings.TrimSpace(e.Content)
+		if content == "" {
+			continue
+		}
+		runes := []rune(content)
+		if len(runes) > maxStatusActivityLineRunes {
+			content = string(runes[:maxStatusActivityLineRunes]) + "…"
+		}
+		lines = append(lines, content)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	// Entries are in chronological (append) order — keep only the most
+	// recent `max`, preserving chronological order within that window.
+	if len(lines) > max {
+		lines = lines[len(lines)-max:]
+	}
+	return lines
 }
