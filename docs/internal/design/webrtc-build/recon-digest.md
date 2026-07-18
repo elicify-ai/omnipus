@@ -1,5 +1,10 @@
 # WebRTC build — recon digest (2026-07-18, 4-agent recon of feature/browser-video-2 + archive)
 
+**Snapshot of the pre-build tree @ d4b4144a (2026-07-18). Point-in-time facts and line
+numbers are NOT maintained** — several claims (no pion in go.mod, no `<video>` in
+`src/`, port 9223, Q1 pending) are false at HEAD by design; see ADR-047/048 and
+wv1-spike-results for current truth.
+
 Condensed working reference for the ADR amendment + implementation waves. File:line cites
 verified by recon agents on this branch unless marked FETCH_HEAD (= archive
 feature/live-browser-video-streaming @ 2e2701b1, fetched).

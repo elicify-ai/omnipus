@@ -67,14 +67,20 @@ One `RTCPeerConnection` per peer. Per active stream there are **two roles**: a *
 
 Grounds: the three forcing problems (§1) — audio-with-video is native to WebRTC; input contention is killed **by construction** (D4: input on its own data channel, media never touches the CDP command queue — Q4 p95 21 ms vs the 5000 ms regression); TCP head-of-line blocking is replaced by WebRTC congestion control.
 
+**Amended 2026-07-18 (commit 41022b69, fix-wave media governing):** the encoder
+caps video at **2 Mbps default** (override via injected `maxVideoBitrate`),
+`degradationPreference: 'balanced'`, `contentHint: 'motion'` — a pod-CPU UAT
+finding not present in the original spike.
+
 ```
 CONFIDENCE (D1 — WebRTC/Pion transport, SFU relay): High
   Basis   : Full target pipeline proven end-to-end in-pod (Q3 media, Q4 input);
             SFU shared-TrackLocalStaticRTP + PLI-to-ingest pattern worked first try.
   Evidence: Q3 (1172 frames @ 30 fps, packetsLost=0, VP8+Opus, encoder-restart
             recovery); Q4 (p95 21 ms input under stress, media unaffected).
-  Missing : External ICE traversal (OI-1) — bounds benefit reach, not the design
-            (fallback covers it). Single-driver arbitration not exercised (OI-3).
+  Missing : ~~External ICE traversal (OI-1) — bounds benefit reach, not the design
+            (fallback covers it).~~ OI-1 resolved 2026-07-18 — see §5 OI-1
+            resolution. Single-driver arbitration not exercised (OI-3).
   Would improve: OI-1 external run; wiring the controller lock in front of the DC.
 ```
 
@@ -89,6 +95,10 @@ Build-critical mechanics:
 - Extension shipped via `go:embed` + atomic seed to `$OMNIPUS_HOME` following the skills `SeedDefaults` pattern (`pkg/skills/embed.go` `//go:embed all:embedded` + `SeedDefaults:61`, staged-tmpdir + atomic rename, idempotent; `OmnipusHomeDir` `home.go:34`). `[FACT — recon-digest]`
 - **Extension ID pinned via the manifest `key` field** to get a deterministic ID computable ahead of launch, so `--allowlisted-extension-id` can be passed at launch **without a two-phase launch**. The spike used the two-phase "load, learn ID, relaunch with the ID baked in" dance; the manifest-`key` approach is the recon-recommended production refinement (a well-documented Chrome behavior). `[FACT that manifest key → deterministic ID; INFERENCE that it removes the two-phase launch — recon-digest recommendation, not yet spike-proven end-to-end]`
 - The `-32000 "no browser is open"` on `--headless=new` over the pipe means the build MUST use **raw `Target.createBrowserContext` + `createTarget(WithNewWindow(true))`**, not chromedp's `WithNewBrowserContext`. The Chrome-151 hidden-tab screencast bug (a background sibling reports `visibilityState=hidden`) is why each tab needs its **own window** (`WithNewWindow(true)`); whether tabCapture of a background tab is affected the same way is an implementation detail (→ OI-2). `[FACT — context.md §5 learnings]`
+
+  **Amended in part by ADR-048 (2026-07-18):** capture requires the shared DEFAULT
+  browser context; the per-agent-context preservation claim below is withdrawn for
+  WebRTC-captured agents.
 
 ```
 CONFIDENCE (D2 — tabCapture MV3 extension, headless full Chrome): High
@@ -113,7 +123,7 @@ This **reverses ADR-044's A2-only "unavailable state"** and **cancels the M-10 c
 This is the **NFR-2 answer without TURN**: worst case = today's experience, for every install and every viewer. `[FACT — recon-digest "fallback posture = JPEG screencast remains"; context.md]`
 
 - **No TURN in v1.** STUN server is **configurable**; default is a public STUN (`stun.l.google.com:19302` in the spike). Document the egress dependency (the install must reach the STUN server over UDP — unfiltered today, D7) **and** the privacy note that a public default STUN discloses the install's IP to that provider; operators may set their own. `[FACT — Q1; INFERENCE on the privacy note]`
-- The still-pending operator **external traversal test** (OI-1) is recorded as an **ops-guidance / benefit-reach item that cannot change the architecture** — because the fallback exists, its outcome only decides *how many* users get WebRTC vs JPEG, not whether the feature ships or regresses anything.
+- ~~The still-pending operator **external traversal test** (OI-1)~~ **(resolved 2026-07-18 — see §5 OI-1 resolution)** is recorded as an **ops-guidance / benefit-reach item that cannot change the architecture** — because the fallback exists, its outcome only decides *how many* users get WebRTC vs JPEG, not whether the feature ships or regresses anything.
 
 ```
 CONFIDENCE (D3 — JPEG fallback retained, no TURN in v1): High
@@ -128,7 +138,7 @@ CONFIDENCE (D3 — JPEG fallback retained, no TURN in v1): High
 
 ### D4 — Signaling and input: contract-first over the existing `/api/v1/browser/ws`
 
-Signaling rides the existing authenticated WS endpoint (`/api/v1/browser/ws`, `gateway.go:2091`) with its existing first-frame bearer auth (`browser_ws.go:283`), origin check (`wsCheckOrigin:189`), and inbound schema validation (`:450-466`). **Non-trickle** offer/answer (spike-proven copy-pasteable SDP; simpler than trickle at the cost of waiting for ICE-gathering-complete before the offer/answer is emitted). New contract-first frames (Constraint #8; each a **per-frame `const`-discriminated schema file with `additionalProperties:false`**, never a `oneOf` union over external file refs — the **ADR-034 trap avoided**):
+Signaling rides the existing authenticated WS endpoint (`/api/v1/browser/ws`, `gateway.go:2091`) with its existing first-frame bearer auth (`browser_ws.go:283`), origin check (`wsCheckOrigin:189`), and inbound schema validation (`:450-466`). **Non-trickle** offer/answer (spike-proven copy-pasteable SDP; simpler than trickle at the cost of ~~waiting for ICE-gathering-complete before the offer/answer is emitted~~ — **amended 2026-07-18:** ICE-gathering-complete is not awaited unbounded; the as-built waits are **bounded on all three legs** — SPA 3s, gateway 10s, encoder 10s offer-answer timeout — still non-trickle, single-shot). New contract-first frames (Constraint #8; each a **per-frame `const`-discriminated schema file with `additionalProperties:false`**, never a `oneOf` union over external file refs — the **ADR-034 trap avoided**):
 
 | Frame | Direction | Payload |
 |---|---|---|
@@ -268,7 +278,7 @@ CONFIDENCE (D8 — SDP codec negotiation dissolves the WebCodecs probe): High (m
 
 ## 8. Open Items (not blockers)
 
-- **OI-1 — External UDP traversal (operator test pending).** Whether inbound UDP hole-punch to the pod's srflx mapping succeeds from a real external network is unproven (Fly forwards only TCP:8080). **Cannot change the architecture** — fallback (D3) means failure = today's JPEG experience — but it **determines the reach of the WebRTC benefit**: if external UDP is chronically blocked and no TURN ships, external users effectively get JPEG while LAN/good-NAT users get WebRTC. Escalation if chronic: embedded pure-Go TURN, or ICE-TCP over a reachable forwarded port (deferred, decide post-measurement). Ops-guidance, not a gate.
+- **OI-1 — External UDP traversal.** ~~(operator test pending)~~ **Resolved 2026-07-18 — see §5 OI-1 resolution.** ~~Whether inbound UDP hole-punch to the pod's srflx mapping succeeds from a real external network is unproven~~ (Fly forwards only TCP:8080) — **operator UAT confirmed the WebRTC PeerConnection established externally without TURN.** **Cannot change the architecture** — fallback (D3) means failure = today's JPEG experience — but it **determined the reach of the WebRTC benefit**: TURN-free traversal is confirmed for this deployment class; the JPEG fallback remains the safety net for networks where it does not. Escalation path if a future network shows chronic failure: embedded pure-Go TURN, or ICE-TCP over a reachable forwarded port (deferred, no longer gated on this item). Ops-guidance, not a gate.
 - **OI-2 — Capture-follow-active-tab on tab switch.** The spike proved a stream **survives navigation** of the captured tab (Q2 T4), but **tab-switch re-capture** (re-`getMediaStreamId` for a new target tab ID) is unproven, and the Chrome-151 hidden-tab-needs-own-window learning may bear on capturing a backgrounded agent tab. Implementation detail with spike evidence on one side only.
 - **OI-3 — Multi-agent concurrency / single-driver arbitration.** v1 scope: one shared Chrome, per-agent managers, capture the **attached agent's active tab**, **one active stream per agent**. The product's existing single-driver controller lock is NOT exercised by the throwaway spike (all viewers funnelled to one shared CDP session); D4 requires wiring it in front of the data-channel input path — architecturally sound, integration-unproven.
 
@@ -282,11 +292,11 @@ CONFIDENCE (D8 — SDP codec negotiation dissolves the WebCodecs probe): High (m
 
 ## 10. Confidence Assessment
 
-Direction (WebRTC/Pion over WebCodecs-A2): **High** — the full target pipeline (capture→Pion SFU→viewer, media + input + audio) was proven end-to-end in-pod (Q2/Q3/Q4), the decisive requirement (FR-A1) eliminates A2, and the fallback (D3) neutralizes B's only ADR-044 losing criterion (NFR-2). Capture mechanism: **High** (measured). Codec/iPad: **High mechanism / Medium device-UAT**. The single genuinely open empirical question — external UDP traversal (OI-1) — cannot flip the architecture, only the reach of its benefit, precisely because the JPEG fallback is retained.
+Direction (WebRTC/Pion over WebCodecs-A2): **High** — the full target pipeline (capture→Pion SFU→viewer, media + input + audio) was proven end-to-end in-pod (Q2/Q3/Q4), the decisive requirement (FR-A1) eliminates A2, and the fallback (D3) neutralizes B's only ADR-044 losing criterion (NFR-2). Capture mechanism: **High** (measured). Codec/iPad: **High mechanism / Medium device-UAT**. ~~The single genuinely open empirical question — external UDP traversal (OI-1)~~ **(OI-1 resolved 2026-07-18 — see §5 OI-1 resolution; external UDP traversal confirmed via operator UAT)** — cannot flip the architecture, only the reach of its benefit, precisely because the JPEG fallback is retained.
 
 ## 11. Validation / Next Steps
 
-1. **Operator external traversal run (OI-1):** open the preview `/view`, DEFAULT mode, drive the tab; a connected `srflx/udp` selected pair proves TURN-free traversal with real media + input. Read-out per `wv1-spike-results.md` Q1.
+1. ~~**Operator external traversal run (OI-1):** open the preview `/view`, DEFAULT mode, drive the tab; a connected `srflx/udp` selected pair proves TURN-free traversal with real media + input. Read-out per `wv1-spike-results.md` Q1.~~ **Done — resolved 2026-07-18, see §5 OI-1 resolution** (operator UAT confirmed TURN-free external traversal via the Fly-proxied preview).
 2. **`/plan-spec`** this ADR — capture extension + `go:embed` seed, Pion SFU relay (lite-gated), cdppipe port + coordinator rework, installer/`ClassifyVideoCapability` reword, contract-first `browser_webrtc_*` frames, SPA WebRTC render + input DC + JPEG-fallback switch, with FR-A1/FR-A2/NFR-A3 + the degradation ladder as acceptance anchors.
 3. **`/grill-spec`** the resulting spec (must PASS), then **`/taskify`**, then implement under the wave pattern + 7-reviewer gate + UAT (operator conventions).
 4. **Supply-chain review** of the Pion module set before merge; capture CI smoke test; browsing-equivalence regression gating the cdppipe/coordinator swap.
@@ -296,3 +306,7 @@ Direction (WebRTC/Pion over WebCodecs-A2): **High** — the full target pipeline
 - **Superseded by this ADR:** ADR-044 §6.0–§6.4 (WebCodecs-over-WS "A2" transport; CDP `Page.startScreencast` as the capture mechanism; the encoder-page-fed topology; the A2-only "unavailable state" degradation; the M-10 removal of `browser_screencast`, now **cancelled**).
 - **Still valid (decision history + inherited):** ADR-044's rejection of Options C/D (§5); the full-Chrome installer rationale and dual-download (§6.5 + 2026-07-17 amendment); the CDP-over-pipe motivation and the coordinator/9223 rework (§6.0.3); the single-shared-Chrome topology (ADR-043); the STRIDE trust framing (§6.6). ADR-044's **Option B is the decision promoted here**.
 - **Prior ADRs untouched:** ADR-038/040/041 interaction model, ADR-043 per-agent Chrome contexts — all preserved (input/attach/annotate/multi-viewer unchanged, D4).
+
+**Amended in part by ADR-048 (2026-07-18):** capture requires the shared DEFAULT
+browser context; the per-agent-context preservation claim above is withdrawn for
+WebRTC-captured agents.
