@@ -122,6 +122,30 @@ export function reattachActiveSession(
   if (!activeSessionId) {
     return false;
   }
+  // Fix 2 (kickoff pending-session hardening): '__pending' is the LOCAL
+  // sentinel for an outstanding sendWorkspaceSetupKickoff / sendMessage
+  // no-session turn — never a real, attachable session id. Sending
+  // `attach_session {session_id: '__pending'}` would be a protocol
+  // violation the gateway would reject, and resetChatBucketForReplay
+  // ('__pending') would wipe the bucket for a replay that can never arrive.
+  // A reconnect mid-kickoff means the connection that would have carried
+  // the kickoff's own ack is gone — there is no ack coming on this new one.
+  // Tear the pending state down directly instead of attaching:
+  // `abandonPendingKickoff` clears `pendingKickoff`, drops the orphaned
+  // '__pending' bucket, and marks the workspace's `kickoffAttemptStatus`
+  // 'failed' (Fix 3, idempotent if clearStreamingState's own disconnect-time
+  // call already ran this); resetting `activeSessionId` back to null here
+  // (Fix 1 deliberately does NOT do this on disconnect — see
+  // clearStreamingState's own comment) returns the composer to a fresh,
+  // unstuck state. Whether the kickoff needs to retry is decided by server
+  // truth: useWorkspaceSetupKickoff's invalidate-on-failure effect re-fires
+  // once the workspaces query refetches and still reports
+  // `setup_pending: true` — nothing here forces that refetch itself.
+  if (activeSessionId === "__pending") {
+    useChatStore.getState().abandonPendingKickoff();
+    useSessionStore.getState().setActiveSession(null);
+    return false;
+  }
   // Re-seed the header/composer agent from the authoritative last-active agent
   // BEFORE replay starts. After a handover (e.g. Mia → Jim) a full reload must
   // keep the header on Jim (active_agent_id), not revert to the creating agent.
@@ -170,8 +194,6 @@ function WsLifecycle() {
       onConnected: async () => {
         setConnected(true);
         setConnectionError(null);
-        // Drain any messages that were buffered while the connection was down.
-        useChatStore.getState().drainOutboundQueue();
         // Re-bind any in-flight session to the freshly-opened WS so the
         // gateway's per-connection sessionID is restored. Without this, a
         // browser-suspended WS that auto-reconnects on focus would cause the
@@ -179,7 +201,27 @@ function WsLifecycle() {
         // transcript context. The reattach logic (seed agent, success/failure
         // bucket handling) lives in reattachActiveSession so it can be unit
         // tested directly.
+        //
+        // Fix 2 (kickoff pending-session hardening): reattach BEFORE
+        // draining the outbound queue. `reattachActiveSession` settles
+        // `activeSessionId` first — either sends `attach_session` for a real
+        // session, or (the '__pending' guard added for Fix 2) tears down a
+        // dead kickoff's placeholder and resets `activeSessionId` back to
+        // null. Draining first used to risk a race: `outboundQueue` can hold
+        // a message that collided with a kickoff's `pendingKickoff` slot
+        // (Fix 1's collision guard in sendMessage) while `activeSessionId`
+        // is still the SAME dead '__pending' sentinel from BEFORE the
+        // disconnect — sending that queued message via sendMessage's own
+        // '__pending'-collapse guard would mint a BRAND NEW '__pending'
+        // bucket for it, and a reattach call running AFTER that send would
+        // then see activeSessionId === '__pending' and — unable to tell
+        // that fresh turn apart from the dead kickoff's — tear down the
+        // message that had JUST been sent. Running reattach first
+        // eliminates the ambiguity: by the time any queued message drains,
+        // `activeSessionId` is already resolved to null or a real session id.
         reattachActiveSession(conn, setConnectionError);
+        // Drain any messages that were buffered while the connection was down.
+        useChatStore.getState().drainOutboundQueue();
       },
       onDisconnected: () => {
         setConnected(false);
