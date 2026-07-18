@@ -200,6 +200,11 @@ func (r *AgentRegistry) IsExternalCLI(agentID string) bool {
 	}
 	kind, err := runner.ResolveDispatch(executorConfigOf(agent))
 	if err != nil {
+		// Don't swallow silently: a resolution error (e.g. reserved remote-a2a
+		// or an unknown kind) is classified native here, but log it so the
+		// classifier leaves a diagnostic trail rather than a silent catch.
+		logger.WarnF("registry: could not resolve dispatch kind for IsExternalCLI, defaulting to native",
+			map[string]any{"agent_id": agentID, "error": err.Error()})
 		return false
 	}
 	return kind == runner.DispatchKindExternalCLI

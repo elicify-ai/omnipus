@@ -1534,7 +1534,19 @@ func registerSharedTools(
 			// reflect a later hot reload; SetAgentRegistry below is the one
 			// that gets the live func() treatment, since al.GetRegistry() is
 			// invoked fresh on every call.
-			delegateTool.SetSessionStore(sharedStore)
+			// Typed-nil guard: al.GetSessionStore() can return a nil
+			// *session.UnifiedStore on a degraded boot (loop.go:609-620). Boxing
+			// a nil concrete pointer into the DelegateSessionStore interface
+			// yields a NON-nil interface, so SetSessionStore's own `== nil`
+			// graceful-degrade guard would never fire and recentActivityLines
+			// would panic on a nil receiver. Only wire the store when non-nil so
+			// a running-native status snapshot degrades to prompt-only instead
+			// of crashing the whole action:"status" call. (The sibling
+			// NewHandoffTool/NewReturnToDefaultTool wiring above shares this
+			// pre-existing latent pattern; tracked separately.)
+			if sharedStore != nil {
+				delegateTool.SetSessionStore(sharedStore)
+			}
 			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
 			currentAgentID := agentID
 			// ADR-037: the legacy DelegationPolicy.To / SubagentsConfig.AllowAgents
