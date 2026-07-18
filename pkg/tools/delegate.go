@@ -899,7 +899,7 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 // written yet — delegateStatusExtra treats all of these as "no snapshot
 // available" and falls back to the prompt-only summary that predates this
 // feature.
-func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, max int) []string {
+func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLines int) []string {
 	if t.sessionStore == nil || sessionID == "" || spawnCallID == "" {
 		return nil
 	}
@@ -912,7 +912,7 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, max in
 
 	var lines []string
 	for _, e := range entries {
-		if string(e.ParentSpawnCallID) != spawnCallID {
+		if e.ParentSpawnCallID != spawnCallID {
 			continue
 		}
 		content := strings.TrimSpace(e.Content)
@@ -929,9 +929,9 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, max in
 		return nil
 	}
 	// Entries are in chronological (append) order — keep only the most
-	// recent `max`, preserving chronological order within that window.
-	if len(lines) > max {
-		lines = lines[len(lines)-max:]
+	// recent `maxLines`, preserving chronological order within that window.
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
 	}
 	return lines
 }

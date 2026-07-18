@@ -123,7 +123,10 @@ func TestAgentRegistry_IsExternalCLI(t *testing.T) {
 		t.Error("an unknown agent ID must resolve IsExternalCLI=false, not panic or default true")
 	}
 	if registry.IsExternalCLI("") {
-		t.Error("an empty agent ID must resolve IsExternalCLI=false (self-delegation is always native)")
+		t.Error("an empty agent ID must resolve IsExternalCLI=false — this is IsExternalCLI's own " +
+			"documented limitation, NOT a real dispatch guarantee: self-delegation (TargetAgentID==\"\") " +
+			"actually dispatches with the PARENT's own executor in spawnSubTurn, so a self-delegating " +
+			"external-CLI parent is misclassified native here (see IsExternalCLI's doc comment)")
 	}
 }
 
