@@ -57,7 +57,7 @@ func TestCancel_SessionIsolation(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "isolation-test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -171,7 +171,7 @@ func TestCancel_SessionIsolation_TranscriptWrittenOnlyForA(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "isolation-transcript-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

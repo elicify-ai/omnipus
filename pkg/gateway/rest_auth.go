@@ -180,8 +180,14 @@ var (
 	validateLimiter = newAPIRateLimiter(30, 1*time.Minute)
 	// /api/v1/onboarding/complete — 3 requests/minute per IP (highly sensitive).
 	onboardingCompleteLimiter = newAPIRateLimiter(3, 1*time.Minute)
-	// /api/v1/config — 30 requests/minute per IP.
-	configLimiter = newAPIRateLimiter(30, 1*time.Minute)
+	// /api/v1/config and /api/v1/workspaces* (incl. read GETs: list, single,
+	// milestones, delegation) — 240 requests/minute per IP. Raised from 30: the
+	// SPA fires a burst of workspace reads on every navigation (list + milestones
+	// + delegation + tasks), and 30/min throttled legitimate rapid workspace
+	// switching — surfacing as transient "Failed to load workspace" (429) in the
+	// e2e calendar suite and for heavy real users. Mutations stay rate-limited;
+	// this only widens the per-IP read budget.
+	configLimiter = newAPIRateLimiter(240, 1*time.Minute)
 	// /api/v1/auth/reauth — 10 requests/minute per IP. A password re-verification
 	// (sensitive), but a legitimate user may mistype a few times; tighter than
 	// login, not punitive (Spec-6 FR-12.2).
@@ -339,6 +345,21 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				handler(w, r)
 				return
 			}
+		}
+		// Cookie fallback (ADR-044, FR-009): the SPA no longer sends a bearer
+		// token — it authenticates via the omnipus-session HttpOnly cookie. Resolve
+		// it here (the same lookup checkBearerAuth/authenticateWS/browser_ws use) so
+		// optional-auth routes that DO require a user post-onboarding — e.g.
+		// PUT /providers/{id}, POST /providers/{id}/test and /refresh-models, whose
+		// handlers 401 when UserContextKey is nil — see the logged-in identity
+		// instead of falling through to anonymous. Like a non-matching bearer above,
+		// a cookie-parse error or no match is NOT a hard 401 here: it falls through
+		// to anonymous pass-through, keeping this the *optional*-auth path.
+		if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
+			ctx := context.WithValue(r.Context(), UserContextKey{}, user)
+			a.setCORSHeaders(w, r)
+			handler(w, r.WithContext(ctx))
+			return
 		}
 		// No auth or invalid token in dev mode — pass through unauthenticated.
 		a.setCORSHeaders(w, r)
@@ -533,6 +554,22 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	// browser-side cookies (a harmless no-op for a non-browser CLI caller)
 	// and report success like any other logout.
 	if viaCLI, _ := r.Context().Value(CLITokenContextKey{}).(bool); viaCLI {
+		middleware.ClearSessionCookie(w, r)
+		middleware.ClearCSRFCookie(w, r)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// dev_mode_bypass synthetic identity: like the CLI caller above, the
+	// "_dev_bypass" user (checkBearerAuth's bypass short-circuit, auth.go) has no
+	// Gateway.Users row, so the username lookup below would fail with "user not
+	// found" (500) and skip clearing the browser cookies entirely. Expiring the
+	// browser-side cookies is the only meaningful logout action for a synthetic
+	// identity, so do that and report success — matching the CLI-token path.
+	// Only reachable when gateway.dev_mode_bypass=true (never in production,
+	// where bypass is off and the request authenticates as a real cookie/bearer
+	// user with a genuine Gateway.Users row to revoke).
+	if user.Username == devBypassUser.Username {
 		middleware.ClearSessionCookie(w, r)
 		middleware.ClearCSRFCookie(w, r)
 		w.WriteHeader(http.StatusNoContent)

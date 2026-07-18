@@ -1,18 +1,10 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  Globe,
-  ArrowsClockwise,
-  CheckCircle,
-  XCircle,
-  CaretDown,
-  CaretUp,
-  Camera,
-  Broadcast,
-} from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Camera, Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 interface BrowserNavigateArgs {
   url?: string
@@ -53,16 +45,22 @@ function parseResult(result: unknown): BrowserResult {
   return {}
 }
 
+// Flat text-line redesign (ticket "Tool components in chat", P2): the
+// hardcoded Globe identity icon is dropped — it was purely decorative next
+// to the fixed "browser.navigate" label, which already says what this row
+// is. Status now lives only in the leading dot/spinner.
 export function BrowserNavigateBlock({
   args,
   result,
   isRunning,
   isError,
+  isCancelled,
 }: {
   args: BrowserNavigateArgs
   result: unknown
   isRunning: boolean
   isError?: boolean
+  isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -72,6 +70,18 @@ export function BrowserNavigateBlock({
   const screenshotData = parsed.screenshot
   const pageTitle = parsed.title
   const hasDetail = !isRunning && hasResult
+
+  // Always resolves to a real config — a terminal state (running finished,
+  // no error/cancellation) with no result is still a real outcome (e.g. a
+  // navigate call that legitimately returned nothing) and must still show a
+  // status dot + label, not a silently blank indicator.
+  const statusConfig: ToolBadgeStatusConfig = isRunning
+    ? getToolBadgeStatusConfig('running', { size: 12 })
+    : isCancelled
+    ? getToolBadgeStatusConfig('cancelled', { size: 12, cancelledVariant: 'muted' })
+    : isError
+    ? getToolBadgeStatusConfig('error', { size: 12 })
+    : getToolBadgeStatusConfig('success', { size: 12 })
 
   // ADR-038: "Watch live" opens the app-root BrowserLivePanel overlay onto the
   // browser session driving this tool call. Imperative store reads (not hooks)
@@ -88,39 +98,27 @@ export function BrowserNavigateBlock({
   }
 
   return (
-    <div
-      className={cn(
-        'mt-2 rounded-md border overflow-hidden text-xs',
-        isError && !isRunning
-          ? 'border-[var(--color-error)]/30'
-          : 'border-[var(--color-border)]'
-      )}
-    >
+    // Flat text-line design (ticket "Tool components in chat", P2): no
+    // border, no surface fill, no rounded frame, no overflow-hidden — the
+    // row is transparent on the thread.
+    <div className="mt-2 text-xs font-mono">
       {/* Header — a row of composed controls (mirrors BrowserToolBlock in
           BrowserTool.tsx): the expand/collapse toggle is its own button so
           "Watch live" can be a separate, independently clickable sibling
           rather than nested inside it. */}
-      <div className="flex w-full items-center gap-1 bg-[var(--color-surface-1)] transition-colors">
+      <div className="flex w-full items-center gap-2">
         <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
-            'flex flex-1 min-w-0 items-center gap-2 px-3 py-2 text-left',
-            hasDetail && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
+            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             !hasDetail && 'cursor-default'
           )}
-          aria-expanded={expanded}
+          aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}
         >
-          <Globe
-            size={13}
-            weight="duotone"
-            className={cn(
-              isRunning ? 'text-[var(--color-accent)]' :
-              isError ? 'text-[var(--color-error)]' :
-              'text-[var(--color-secondary)]'
-            )}
-          />
+          {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">browser.navigate</span>
           <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
             {displayUrl(url)}
@@ -130,6 +128,10 @@ export function BrowserNavigateBlock({
               {pageTitle}
             </span>
           )}
+          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+            {statusConfig.label}
+          </span>
+          {screenshotData && <Camera size={11} className="text-[var(--color-muted)] shrink-0" />}
         </button>
 
         {/* "Watch live" is shown on every navigate row, running or completed —
@@ -140,52 +142,40 @@ export function BrowserNavigateBlock({
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-colors"
+          className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
         >
           <Broadcast size={13} />
           <span>Watch live</span>
         </button>
 
-        <span className="flex items-center gap-1 shrink-0 pr-3 py-2">
-          {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-          ) : isError ? (
-            <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
-          ) : hasResult ? (
-            <>
-              <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-              {screenshotData && <Camera size={11} className="text-[var(--color-muted)]" />}
-            </>
-          ) : null}
-          {hasDetail && (
-            <span className="ml-1 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
-            </span>
-          )}
-        </span>
+        {hasDetail && (
+          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
+            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
+          </span>
+        )}
       </div>
 
-      {/* Detail panel */}
+      {/* Detail panel — indented left-accent block instead of the old
+          bordered/backgrounded panel; each section keeps its own spacing
+          via space-y-2 rather than individual borders/fills. */}
       {expanded && hasDetail && (
-        <div className="border-t border-[var(--color-border)]">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
           {/* Full URL breadcrumb */}
-          <div className="px-2 py-0.5 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
+          <div>
             <span className="text-[10px] text-[var(--color-muted)] font-mono break-all">{url}</span>
           </div>
 
           {/* Screenshot indicator (image itself renders in the assistant reply bubble via the media frame). */}
           {screenshotData && (
-            <div className="px-3 py-2 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
-              <div className="flex items-center gap-1.5">
-                <Camera size={11} className="text-[var(--color-muted)]" />
-                <span className="text-[10px] text-[var(--color-muted)]">Screenshot captured</span>
-              </div>
+            <div className="flex items-center gap-1.5">
+              <Camera size={11} className="text-[var(--color-muted)]" />
+              <span className="text-[10px] text-[var(--color-muted)]">Screenshot captured</span>
             </div>
           )}
 
           {/* Page content preview */}
           {parsed.content && (
-            <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto bg-[var(--color-surface-1)]">
+            <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {parsed.content.slice(0, 2000)}
               {parsed.content.length > 2000 && (
                 <span className="text-[var(--color-muted)] italic">
@@ -197,7 +187,7 @@ export function BrowserNavigateBlock({
 
           {/* Error */}
           {parsed.error && (
-            <div className="px-3 py-2 text-[var(--color-error)] text-[10px]">{parsed.error}</div>
+            <div className="text-[var(--color-error)] text-[10px]">{parsed.error}</div>
           )}
         </div>
       )}
@@ -213,6 +203,7 @@ export const BrowserNavigateUI = makeAssistantToolUI<BrowserNavigateArgs, unknow
       result={result}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })
@@ -226,6 +217,7 @@ export const BrowserNavigateUnderscoreUI = makeAssistantToolUI<BrowserNavigateAr
       result={result}
       isRunning={status.type === 'running'}
       isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })

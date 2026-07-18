@@ -98,7 +98,7 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "blocking-stream-model",
 				MaxTokens: 4096,
 			},

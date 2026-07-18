@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { isApiError } from '@/lib/api'
+import { isApiError, getCsrfCookie, CSRF_HEADER_NAME } from '@/lib/api'
 import { isReAuthCancelled } from '@/components/settings/useReAuthGate'
+
+// Draft-ownership rule (canon): a dirty field is never hydrated from the
+// server; a caller's dirty flag clears ONLY when the save snapshot still
+// equals the live draft. See `UseAutoSaveOptions.onSaved`'s doc comment
+// below for the full rule and the callback contract that enforces it — every
+// consumer's own onSaved comment should point back here rather than
+// re-narrating it.
 
 export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
-interface UseAutoSaveOptions {
+interface UseAutoSaveOptions<T> {
   /** Debounce delay in ms. Default: 500 */
   debounceMs?: number
   /** If true, auto-save is disabled (e.g., for locked agents) */
@@ -13,22 +20,17 @@ interface UseAutoSaveOptions {
    * Optional endpoint to receive a best-effort flush of the pending data
    * when the page is hidden or unloaded. Uses `fetch(..., { keepalive: true })`
    * (preferred over `navigator.sendBeacon` because keepalive fetch can carry
-   * an `Authorization` header, which sendBeacon cannot). If not provided, no
-   * flush is attempted.
+   * the CSRF double-submit header the PUT requires, which sendBeacon cannot
+   * set). Auth itself rides the `omnipus-session` HttpOnly cookie via
+   * `credentials: 'include'` — there is no bearer token to attach. If not
+   * provided, no flush is attempted.
    */
   flushUrl?: string
   /**
-   * Optional bearer token sent as `Authorization: Bearer <token>` on the
-   * keepalive flush request. Required when the flush endpoint requires auth
-   * (the Omnipus gateway validates every state-changing call against the
-   * account's bearer token); without it the flush will 401 and silently drop.
-   */
-  flushAuthToken?: string
-  /**
    * Optional component-supplied override for the page-hide/unload flush.
    * When provided, `flushBeacon` calls THIS instead of the built-in
-   * single-URL `fetch(flushUrl, { keepalive: true, ... })`. `flushUrl` /
-   * `flushAuthToken` are ignored when this is supplied.
+   * single-URL `fetch(flushUrl, { keepalive: true, ... })`. `flushUrl` is
+   * ignored when this is supplied.
    *
    * Needed when a component's `saveFn` writes to more than one endpoint in a
    * load-bearing order (e.g. WorkspaceTeamTab's core_team-before-edges
@@ -44,6 +46,35 @@ interface UseAutoSaveOptions {
    * `hasPendingChanges()` is true).
    */
   beaconFlush?: () => void
+  /**
+   * Called once per successful save, after this hook's own bookkeeping
+   * (`lastSavedJsonRef`, `status`, `lastSavedAt`) has already been updated.
+   * `saved` is the exact payload that was just persisted (the `data` this
+   * save actually sent, not necessarily today's live `data`); `isCurrent`
+   * is true only when the live `data` — read now, AFTER the save's network
+   * round-trip completed, not when it started — is still deep-equal to
+   * `saved`.
+   *
+   * DRAFT-OWNERSHIP RULE this callback exists to let callers enforce: a
+   * dirty field is never hydrated from the server, and dirty clears ONLY
+   * when the save snapshot equals the live draft. A caller that hand-rolls
+   * an `isDirtyRef` (cleared elsewhere to unblock a hydration-guarded
+   * effect) must clear it here — `if (isCurrent) isDirtyRef.current =
+   * false` — and NOT unconditionally on every successful save. If the
+   * operator edited `data` again while this save's request was still in
+   * flight, `isCurrent` is false: the dirty flag must stay armed, because
+   * this hook's own serialization (FIX 3 below) has already queued a
+   * re-run that will persist the newer draft the moment this save's
+   * `finally` releases the guard. Clearing dirty unconditionally is exactly
+   * the bug this callback exists to prevent — it lets a same-tick (or
+   * refetch-driven) hydration effect revert keystrokes the operator typed
+   * during the round-trip.
+   *
+   * Not called on a failed save, and not called when the save was a no-op
+   * because the user cancelled a re-auth gate (see FIX 1 below) — there is
+   * nothing "saved" to report in either case.
+   */
+  onSaved?: (saved: T, isCurrent: boolean) => void
 }
 
 interface UseAutoSaveResult {
@@ -53,6 +84,17 @@ interface UseAutoSaveResult {
   lastSavedAt: Date | undefined
   /** Call this to trigger an immediate save (no debounce) */
   saveNow: () => void
+  /**
+   * True when the live `data` has not yet been durably persisted (deep
+   * JSON-compared against the last successfully-saved snapshot). Exposed so
+   * a caller can flush deliberately at a moment the hook itself has no
+   * hook into — e.g. a sheet/modal `onClose` that does NOT unmount the
+   * component (so the hook's own unmount-flush never fires): check this,
+   * and if true call `saveNow()` BEFORE tearing down whatever state the
+   * save's closure depends on (see AgentProfile's sheet-close handler for
+   * the canonical example and the ordering hazard it documents).
+   */
+  hasPendingChanges: () => boolean
 }
 
 /**
@@ -68,9 +110,12 @@ interface UseAutoSaveResult {
 export function useAutoSave<T>(
   data: T,
   saveFn: (data: T) => Promise<unknown>,
-  options?: UseAutoSaveOptions,
+  options?: UseAutoSaveOptions<T>,
 ): UseAutoSaveResult {
-  const { debounceMs = 500, disabled = false, flushUrl, flushAuthToken, beaconFlush } = options ?? {}
+  // Merge note (hotfix/v0.1.1): flushAuthToken was retired hook-wide — the
+  // keepalive flush now carries the CSRF double-submit header instead of a
+  // bearer token. onSaved is this lineage's draft-ownership callback.
+  const { debounceMs = 500, disabled = false, flushUrl, beaconFlush, onSaved } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
   const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
@@ -117,6 +162,11 @@ export function useAutoSave<T>(
   const saveFnRef = useRef(saveFn)
   saveFnRef.current = saveFn
   latestDataRef.current = data
+  // Always-fresh ref for the optional `onSaved` callback — same pattern as
+  // `saveFnRef` above, so a caller's inline arrow function doesn't need to
+  // be a stable identity across renders.
+  const onSavedRef = useRef(onSaved)
+  onSavedRef.current = onSaved
 
   const hasPendingChanges = useCallback(() => {
     return JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current
@@ -138,14 +188,23 @@ export function useAutoSave<T>(
     setError(undefined)
     // Snapshot what we're about to persist so success marks exactly that JSON
     // saved (data may change again while the request is in flight).
-    const inFlightJson = JSON.stringify(latestDataRef.current)
+    const inFlightData = latestDataRef.current
+    const inFlightJson = JSON.stringify(inFlightData)
+    // Hook polish (7-reviewer-gate finding): tracks whether THIS save's own
+    // `saveFnRef` call actually succeeded, so the `onSaved` callback below —
+    // now invoked OUTSIDE this try/catch — knows whether it's allowed to
+    // fire without re-deriving that from `status` (which a concurrent
+    // queued re-run could have already moved past 'saved' by the time we
+    // get there).
+    let savedSuccessfully = false
     try {
-      await saveFnRef.current(latestDataRef.current)
+      await saveFnRef.current(inFlightData)
       // Only NOW is the data durable — advance the saved marker so
       // hasPendingChanges() flips false for this exact payload.
       lastSavedJsonRef.current = inFlightJson
       setStatus('saved')
       setLastSavedAt(new Date())
+      savedSuccessfully = true
       // Fade back to idle after 2s. Cancel any previous fade timer first to
       // avoid leaking setTimeouts when saves happen in quick succession.
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
@@ -176,6 +235,31 @@ export function useAutoSave<T>(
         if (JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current) {
           void doSave()
         }
+      }
+    }
+    // Hook polish (7-reviewer-gate finding): `onSaved` is invoked OUTSIDE
+    // the try/catch above, in its own try/catch that only logs. A THROWING
+    // caller callback must never flip a save that already genuinely
+    // succeeded (the PUT landed, `lastSavedJsonRef` already advanced) into
+    // 'error' status — that would be a lie to the user (the AutoSaveIndicator
+    // would show a failure for a save that, in fact, persisted). `return`
+    // inside the `catch` block above (the re-auth-cancel path) still skips
+    // this entirely, since code after a try/catch/finally is unreachable
+    // once a `return` inside try/catch has fired; the plain error path falls
+    // through here with `savedSuccessfully` still false, so onSaved is
+    // correctly skipped for both failure modes.
+    if (savedSuccessfully) {
+      try {
+        // Draft-ownership rule (see `onSaved`'s doc comment above): report
+        // whether the LIVE draft — read now, after the round-trip — is
+        // still the exact payload we just persisted. Comparing
+        // `latestDataRef.current` (not `inFlightData`) here is the whole
+        // point: if the operator typed more while this save was in flight,
+        // they differ and `isCurrent` is false, so a caller-owned dirty
+        // flag must stay armed.
+        onSavedRef.current?.(inFlightData, JSON.stringify(latestDataRef.current) === inFlightJson)
+      } catch (err) {
+        console.error('useAutoSave: onSaved callback threw', err)
       }
     }
   }, [disabled])
@@ -226,12 +310,12 @@ export function useAutoSave<T>(
 
   // Best-effort flush of pending changes when the page is hidden or unloaded.
   // Uses `fetch(..., { keepalive: true })` rather than `navigator.sendBeacon`
-  // because keepalive fetch can carry an `Authorization: Bearer` header —
-  // the Omnipus gateway validates every state-changing call against the
-  // account's bearer token, and sendBeacon cannot set request headers, so a
-  // sendBeacon flush would 401 and silently drop the pending edit. This
-  // prevents silently losing edits on tab close, browser reload, or
-  // background throttling.
+  // because keepalive fetch can carry the CSRF double-submit header the PUT
+  // requires — sendBeacon cannot set request headers, so a sendBeacon flush
+  // would fail CSRF validation and silently drop the pending edit. Auth
+  // itself is the `omnipus-session` HttpOnly cookie, sent automatically via
+  // `credentials: 'include'`. This prevents silently losing edits on tab
+  // close, browser reload, or background throttling.
   //
   // When `beaconFlush` is supplied it takes over entirely (see the option's
   // doc comment) — the built-in single-URL fetch below is the default path
@@ -286,18 +370,23 @@ export function useAutoSave<T>(
     }
     const payload = JSON.stringify(latestDataRef.current)
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (flushAuthToken) headers['Authorization'] = `Bearer ${flushAuthToken}`
+    // PUT is state-changing — auth is the omnipus-session cookie (US-5 /
+    // FR-010), which requires the CSRF double-submit header alongside it.
+    // Read fresh (never cache — see getCsrfCookie's own doc comment).
+    const csrf = getCsrfCookie()
+    if (csrf) headers[CSRF_HEADER_NAME] = csrf
     try {
       void fetch(flushUrl!, {
         method: 'PUT',
         keepalive: true,
+        credentials: 'include',
         headers,
         body: payload,
       })
     } catch {
       // Best-effort — browser may block outbound requests during unload.
     }
-  }, [flushUrl, flushAuthToken, hasPendingChanges, beaconFlush])
+  }, [flushUrl, hasPendingChanges, beaconFlush])
 
   useEffect(() => {
     if ((!flushUrl && !beaconFlush) || disabled) return
@@ -317,7 +406,7 @@ export function useAutoSave<T>(
       window.removeEventListener('beforeunload', onBeforeUnload)
       window.removeEventListener('pagehide', onPageHide)
     }
-  }, [flushUrl, flushAuthToken, disabled, flushBeacon, beaconFlush])
+  }, [flushUrl, disabled, flushBeacon, beaconFlush])
 
   // Cleanup on unmount: cancel timers and flush any pending save so changes
   // made just before navigation/unmount are not silently dropped.
@@ -370,5 +459,5 @@ export function useAutoSave<T>(
     }
   }, [hasPendingChanges, doSave])
 
-  return { status, error, lastSavedAt, saveNow: doSave }
+  return { status, error, lastSavedAt, saveNow: doSave, hasPendingChanges }
 }

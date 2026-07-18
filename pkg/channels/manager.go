@@ -110,20 +110,16 @@ func (e *ChannelInitError) Error() string {
 func (e *ChannelInitError) Unwrap() error { return e.Err }
 
 type Manager struct {
-	channels     map[string]Channel
-	workers      map[string]*channelWorker
-	bus          *bus.MessageBus
-	config       *config.Config
-	secrets      credentials.SecretBundle // resolved plaintext secrets; never written to env
-	mediaStore   media.MediaStore
-	dispatchTask *asyncTask
-	dispatchCtx  context.Context // stored so RegisterChannel can spin up workers after Start
-	mux          *dynamicServeMux
-	httpServer   *http.Server
-	// previewMux and previewServer serve only /serve/ and /dev/ routes on the
-	// preview listener (FR-001, FR-005). Nil when preview is disabled.
-	previewMux        *dynamicServeMux
-	previewServer     *http.Server
+	channels          map[string]Channel
+	workers           map[string]*channelWorker
+	bus               *bus.MessageBus
+	config            *config.Config
+	secrets           credentials.SecretBundle // resolved plaintext secrets; never written to env
+	mediaStore        media.MediaStore
+	dispatchTask      *asyncTask
+	dispatchCtx       context.Context // stored so RegisterChannel can spin up workers after Start
+	mux               *dynamicServeMux
+	httpServer        *http.Server
 	mu                sync.RWMutex
 	placeholders      sync.Map           // "channel:chatID" → placeholderEntry
 	typingStops       sync.Map           // "channel:chatID" → typingEntry
@@ -758,36 +754,6 @@ func (m *Manager) SetupHTTPServer(addr string, healthServer *health.Server) {
 	}
 }
 
-// SetupPreviewServer creates a dedicated HTTP server for the preview listener.
-// It owns a separate mux that registers only /serve/ and /dev/ routes — all
-// other paths return 404. Must be called after SetupHTTPServer and before
-// StartAll. Call RegisterPreviewHandler to add route handlers to this mux.
-//
-// This mirrors SetupHTTPServer but intentionally does NOT register health
-// endpoints (the preview listener is not a health-check surface).
-func (m *Manager) SetupPreviewServer(addr string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.previewMux = newDynamicServeMux()
-	m.previewServer = &http.Server{
-		Addr:         addr,
-		Handler:      m.previewMux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
-}
-
-// RegisterPreviewHandler registers an HTTP handler at the given path pattern
-// on the preview mux. Must be called after SetupPreviewServer.
-// Only /serve/ and /dev/ prefixes should be registered here (FR-005).
-func (m *Manager) RegisterPreviewHandler(pattern string, handler http.Handler) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.previewMux != nil {
-		m.previewMux.Handle(pattern, handler)
-	}
-}
-
 // WrapHTTPHandler wraps the HTTP server's root handler with the given middleware.
 // Must be called after SetupHTTPServer and before StartAll. This allows callers
 // to inject cross-cutting concerns (e.g., config snapshot middleware) without
@@ -797,21 +763,6 @@ func (m *Manager) WrapHTTPHandler(middleware func(http.Handler) http.Handler) er
 		return fmt.Errorf("WrapHTTPHandler: httpServer not initialized")
 	}
 	m.httpServer.Handler = middleware(m.httpServer.Handler)
-	return nil
-}
-
-// WrapPreviewHandler wraps the preview server's root handler with the given
-// middleware. Must be called after SetupPreviewServer and before StartAll.
-// Mirrors WrapHTTPHandler for the preview listener so callers can inject
-// the same cross-cutting middleware (e.g. configSnapshotMiddleware) on both
-// servers. Without this, handlers on the preview mux that call
-// configFromContext(r.Context()) would receive nil and fall back to a torn
-// live read of the config pointer during hot-reload (F-13).
-func (m *Manager) WrapPreviewHandler(middleware func(http.Handler) http.Handler) error {
-	if m.previewServer == nil || m.previewServer.Handler == nil {
-		return fmt.Errorf("WrapPreviewHandler: previewServer not initialized")
-	}
-	m.previewServer.Handler = middleware(m.previewServer.Handler)
 	return nil
 }
 
@@ -962,24 +913,6 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		}()
 	}
 
-	// Start the preview listener if configured (FR-001, FR-020).
-	if m.previewServer != nil {
-		go func() {
-			logger.InfoCF("channels", "Preview HTTP server listening", map[string]any{
-				"addr": m.previewServer.Addr,
-			})
-			if err := m.previewServer.ListenAndServe(); err != nil &&
-				!errors.Is(err, http.ErrServerClosed) &&
-				!errors.Is(err, net.ErrClosed) {
-				// Log at Error and return — do NOT call os.Exit here.
-				// Same rationale as the shared HTTP server goroutine above.
-				logger.ErrorCF("channels", "Preview HTTP server error — server stopped unexpectedly", map[string]any{
-					"error": err.Error(),
-				})
-			}
-		}()
-	}
-
 	logger.InfoC("channels", "All channels started")
 
 	// C1 fix: invoke RegisterCommands on every started channel that implements
@@ -1039,18 +972,6 @@ func (m *Manager) StopAll(ctx context.Context) error {
 			})
 		}
 		m.httpServer = nil
-	}
-
-	// Shutdown preview listener (FR-001).
-	if m.previewServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		if err := m.previewServer.Shutdown(shutdownCtx); err != nil {
-			logger.ErrorCF("channels", "Preview HTTP server shutdown error", map[string]any{
-				"error": err.Error(),
-			})
-		}
-		m.previewServer = nil
 	}
 
 	// Cancel dispatcher

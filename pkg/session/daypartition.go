@@ -223,6 +223,31 @@ type TranscriptEntry struct {
 	ParentSpawnCallID string `json:"parent_spawn_call_id,omitempty"`
 }
 
+// IsDelegateChildEntry reports whether this entry was produced by a CHILD
+// delegation sub-turn rather than a genuine top-level turn in the session's
+// own thread — i.e. ParentSpawnCallID is non-empty. See ParentSpawnCallID's
+// doc comment above for the full root-cause writeup.
+//
+// This is the single shared predicate BOTH the live-reconnect replay path
+// (pkg/gateway/replay.go) and the REST cold-load read paths
+// (pkg/gateway/rest.go's getSession/getSessionMessages) must use to decide
+// whether to withhold an entry from the caller, so the two paths cannot
+// silently drift out of sync again (they did once: replay.go filtered these
+// entries while the REST cold-load path did not, so a fresh page load/reopen
+// dumped raw delegate narration — including "[external-cli permission]"
+// lines — into the main chat that a live reconnect never showed).
+//
+// This filtering is deliberately SERVER-SIDE, at both call sites above,
+// applied BEFORE any wire frame is built — never as a client-side/SPA
+// visibility filter. A delegate's raw internal narration (including tool-
+// permission detail) must never cross the wire in the first place; a
+// client-side filter would still leak that content to anyone inspecting
+// network traffic or a stored payload. Do not move or duplicate this check
+// into frontend code.
+func (e TranscriptEntry) IsDelegateChildEntry() bool {
+	return e.ParentSpawnCallID != ""
+}
+
 // Attachment represents a file attached to a message.
 type Attachment struct {
 	Type     string `json:"type"`

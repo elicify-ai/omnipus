@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,12 +60,37 @@ var privateIPv6Ranges = []string{
 // that NewSSRFChecker reads from allowInternal, and correctly stay empty on
 // a zero value since there is no config to read.
 type SSRFChecker struct {
-	initOnce   sync.Once
+	initOnce sync.Once
+
+	// ipv4Nets, ipv6Nets, allowList, allowCIDRs (TDA-2): READ-ONLY after
+	// NewSSRFChecker (or ensureInit, for a zero-value checker) populates
+	// them. Do NOT add a mutator (e.g. an "AddAllowEntry"/"AppendCIDR"
+	// method) that appends or replaces these in place. CloneWithGatewayOrigin
+	// aliases these slices/map BY REFERENCE across every clone it produces
+	// AND the process-wide shared singleton (the one provider base_url and
+	// skill-installer URL validation also consult) — they are never deep-
+	// copied. An in-place mutation on any one checker would silently widen
+	// (or narrow) the SSRF allow-list for every other checker sharing these
+	// fields, including checkers the mutator's author never intended to
+	// touch. If a genuinely new allow-list needs to be built, construct a
+	// fresh SSRFChecker via NewSSRFChecker instead of mutating an existing
+	// one's fields.
 	ipv4Nets   []*net.IPNet
 	ipv6Nets   []*net.IPNet
 	allowList  map[string]bool // Allowlisted exact IPs and hostnames
 	allowCIDRs []*net.IPNet    // Allowlisted CIDR ranges
 	resolver   Resolver        // DNS resolver (injectable for testing)
+
+	// gwMu guards gatewayHost/gatewayPort — the FR-018 / ADR-044 D2 gateway-
+	// origin exception (see AllowGatewayOrigin). Zero value (gatewayHost=="")
+	// means no exception is configured, which is fail-closed: isAllowedGatewayOrigin
+	// always returns false and CheckURL falls through to the normal, fully
+	// restrictive SSRF path. A separate mutex (rather than reusing initOnce)
+	// because this is mutable operator/wiring state that may be set once at
+	// boot and read on every navigation, not a one-time lazy default.
+	gwMu        sync.RWMutex
+	gatewayHost string // lower-cased; "" = no gateway origin configured
+	gatewayPort int    // 0 = no gateway origin configured
 }
 
 // ensureInit lazily populates the built-in CIDR block-lists and default DNS
@@ -184,6 +210,123 @@ func NewSSRFChecker(allowInternal []string) *SSRFChecker {
 // SetResolver overrides the DNS resolver (for testing).
 func (sc *SSRFChecker) SetResolver(r Resolver) {
 	sc.resolver = r
+}
+
+// AllowGatewayOrigin scopes a single, exact gateway host:port pair as an SSRF
+// exception (FR-018, ADR-044 D2). It exists so the agent's built-in browser
+// can reach the gateway's OWN preview URL (`http://localhost:<port>/preview/…`,
+// the literal form `serve_web` emits when `gateway.public_url` is unset)
+// without opening blanket loopback access to arbitrary local ports — the
+// naive "allow localhost" the ADR explicitly rejects.
+//
+// host is matched case-insensitively; whitespace is trimmed. Passing an
+// empty host or a non-positive/out-of-range port clears any previously
+// configured exception, restoring the fail-closed default (no gateway
+// origin allowed). There is only ever one gateway origin configured at a
+// time — this is not a general-purpose allowlist mechanism, and calling it
+// again replaces the prior value rather than adding to a set.
+//
+// See CheckURL / isAllowedGatewayOrigin for exactly what this permits: an
+// exact host:port match, evaluated before any other SSRF check (including
+// the 127.0.0.0/8 CIDR block). When host is "localhost" (the expected
+// caller usage per D2 — the wiring lives in pkg/agent/loop.go), the
+// resolved-loopback literal forms "127.0.0.1" and "::1" are ALSO accepted
+// for the same port, matching r4 OBS-003's requirement to cover both the
+// pre-resolution token and the resolved forms. A different configured host
+// gets literal host:port matching only — no loopback expansion.
+//
+// Thread-safe (guarded by an internal RWMutex); intended to be called once
+// at boot before the checker starts serving concurrent CheckURL calls, but
+// safe to call at any time.
+func (sc *SSRFChecker) AllowGatewayOrigin(host string, port int) {
+	sc.gwMu.Lock()
+	defer sc.gwMu.Unlock()
+
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" || port <= 0 || port > 65535 {
+		// Invalid/cleared configuration — restore the fail-closed default
+		// rather than storing a partial or nonsensical exception.
+		sc.gatewayHost = ""
+		sc.gatewayPort = 0
+		return
+	}
+	sc.gatewayHost = host
+	sc.gatewayPort = port
+}
+
+// CloneWithGatewayOrigin returns an INDEPENDENT SSRFChecker that shares this
+// checker's immutable (post-construction) block-lists, allowlist, and resolver
+// but carries its OWN gateway-origin exception. Setting or clearing the clone's
+// exception never affects the receiver.
+//
+// Use this to grant a single tool (e.g. an agent's built-in browser) reach to
+// the gateway's own origin via AllowGatewayOrigin WITHOUT widening the shared
+// singleton that provider base_url and skill-installer URL validation also
+// consult (ADR-044 D2). Calling AllowGatewayOrigin directly on the shared
+// singleton would silently allow http://localhost:<gateway.port> on those
+// unrelated CheckURL paths too — the "blanket loopback" the ADR rejected.
+//
+// The shared fields are read-only after NewSSRFChecker populates them, so
+// aliasing them by reference across the receiver and the clone is safe for
+// concurrent reads. The clone gets fresh sync primitives (its own initOnce and
+// gwMu); ensureInit on the clone is a no-op because the aliased block-lists are
+// already populated.
+func (sc *SSRFChecker) CloneWithGatewayOrigin(host string, port int) *SSRFChecker {
+	sc.ensureInit() // populate the shared block-lists/resolver before aliasing them
+	clone := &SSRFChecker{
+		ipv4Nets:   sc.ipv4Nets,
+		ipv6Nets:   sc.ipv6Nets,
+		allowList:  sc.allowList,
+		allowCIDRs: sc.allowCIDRs,
+		resolver:   sc.resolver,
+	}
+	clone.AllowGatewayOrigin(host, port)
+	return clone
+}
+
+// isAllowedGatewayOrigin reports whether rawURL's literal (pre-resolution)
+// host:port exactly matches the gateway origin configured via
+// AllowGatewayOrigin. Fails closed: if no gateway origin has been
+// configured, or rawURL carries no explicit port, or the port doesn't
+// match, this always returns false and CheckURL falls through to the full
+// SSRF path.
+//
+// The match is on host:port only, NOT scheme: both http:// and https:// to the
+// configured gateway host:port are accepted. This is intentional and harmless —
+// a scheme mismatch against a plain-HTTP loopback gateway simply fails at the
+// transport layer, and the exception exists only so the agent can reach its own
+// gateway's preview origin, which is a single host:port regardless of scheme.
+func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
+	sc.gwMu.RLock()
+	gwHost, gwPort := sc.gatewayHost, sc.gatewayPort
+	sc.gwMu.RUnlock()
+
+	if gwHost == "" || gwPort <= 0 {
+		return false // no exception configured — fail closed
+	}
+
+	host, portStr, ok := extractHostPort(rawURL)
+	if !ok {
+		return false // no explicit port in the URL — never a gateway-origin match
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port != gwPort {
+		return false
+	}
+
+	host = strings.ToLower(host)
+	if host == gwHost {
+		return true
+	}
+	// Accept the resolved-loopback literal forms as equivalent to a
+	// configured "localhost" gateway host (r4 OBS-003) — but ONLY when the
+	// configured host is itself "localhost". This does not generalize to an
+	// arbitrary configured host, so it can never be used to smuggle in a
+	// blanket loopback allowance for a non-localhost gateway origin.
+	if gwHost == "localhost" && (host == "127.0.0.1" || host == "::1") {
+		return true
+	}
+	return false
 }
 
 // CheckIP verifies that an IP address is not in a private/reserved range.
@@ -309,6 +452,16 @@ func (sc *SSRFChecker) CheckHost(ctx context.Context, host string) ([]net.IPAddr
 // CheckURL validates a URL string against SSRF rules.
 // Extracts the host, resolves it, and checks all resolved IPs.
 func (sc *SSRFChecker) CheckURL(ctx context.Context, rawURL string) error {
+	// FR-018 / ADR-044 D2: the gateway-origin exception is evaluated FIRST —
+	// before host extraction and before the 127.0.0.0/8 CIDR block below —
+	// so the built-in browser can reach the gateway's own preview URL. This
+	// is a new, narrowly-scoped exact host:port match (see
+	// isAllowedGatewayOrigin); every other loopback port, and every other
+	// host, still runs the full SSRF path below.
+	if sc.isAllowedGatewayOrigin(rawURL) {
+		return nil
+	}
+
 	host := extractHost(rawURL)
 	if host == "" {
 		return fmt.Errorf("SSRF: cannot extract host from URL %q", rawURL)
@@ -320,8 +473,41 @@ func (sc *SSRFChecker) CheckURL(ctx context.Context, rawURL string) error {
 
 // extractHost extracts the hostname (without port) from a URL.
 func extractHost(rawURL string) string {
-	// Remove scheme
+	host, _, _ := stripURLToAuthority(rawURL)
+	return host
+}
+
+// extractHostPort extracts the literal host AND port from a URL's authority
+// section, without any DNS resolution. Unlike extractHost (which discards
+// the port), this preserves it — used exclusively by the gateway-origin
+// exception (isAllowedGatewayOrigin), which must match on the literal,
+// pre-resolution host:port token exactly as serve_web emits it (e.g.
+// "localhost:5000"), before any resolution or CIDR check runs.
+//
+// ok is false when the URL has no explicit port (e.g. a bare
+// "https://example.com" defaulting to 443) — the gateway-origin exception
+// never matches a portless URL, since serve_web always emits an explicit
+// port and a portless host can never be the literal token it produces.
+func extractHostPort(rawURL string) (host, port string, ok bool) {
+	_, authority, hadPort := stripURLToAuthority(rawURL)
+	if !hadPort {
+		return "", "", false
+	}
+	h, p, err := net.SplitHostPort(authority)
+	if err != nil {
+		return "", "", false
+	}
+	return h, p, true
+}
+
+// stripURLToAuthority strips scheme, path, and userinfo from rawURL, leaving
+// just the host[:port] authority component. Returns the host-only form
+// (port stripped, matching extractHost's historical behavior), the raw
+// authority string (host[:port] as written, for extractHostPort), and
+// whether an explicit port was present.
+func stripURLToAuthority(rawURL string) (hostOnly, authority string, hadPort bool) {
 	url := rawURL
+	// Remove scheme
 	if idx := strings.Index(url, "://"); idx != -1 {
 		url = url[idx+3:]
 	}
@@ -333,12 +519,13 @@ func extractHost(rawURL string) string {
 	if idx := strings.LastIndex(url, "@"); idx != -1 {
 		url = url[idx+1:]
 	}
+	authority = url
 	// Remove port
 	host, _, err := net.SplitHostPort(url)
 	if err != nil {
-		return url
+		return url, authority, false
 	}
-	return host
+	return host, authority, true
 }
 
 // SafeTransport returns an http.Transport that enforces SSRF rules on all connections.

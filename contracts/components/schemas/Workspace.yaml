@@ -70,6 +70,15 @@ properties:
       True only for the auto-created default workspace. The default workspace cannot
       be deleted and always appears first in the sidebar.
     example: false
+  setup_pending:
+    type: boolean
+    readOnly: true
+    description: >
+      True while this workspace's initial team-setup interview has not yet run.
+      Set server-side at creation when the default (Ava-only) roster was
+      auto-seeded; cleared server-side when the setup kickoff turn is accepted.
+      Absent/false otherwise. Server-set; ignored on input (readOnly).
+    example: false
   created_at:
     type: string
     format: date-time

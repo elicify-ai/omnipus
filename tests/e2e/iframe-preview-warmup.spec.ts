@@ -2,18 +2,33 @@
  * iframe-preview-warmup.spec.ts — T1.6
  *
  * T1.6: warmup_default_60s_when_about_returns_60
- *   Don't pass warmupTimeoutSeconds to IframePreview; mount in dev mode.
- *   /api/v1/about returns warmup_timeout_seconds=60.
- *   The component computes maxProbes = Math.floor(60 / 2) = 30.
- *   Using Playwright's fake clock, advance time by 62 s (enough to exhaust
- *   all 30 probes at 2 s intervals). After advancing, assert the warmup
- *   timeout error block appears ("Dev server did not respond in time").
+ *   Seed a legacy `run_in_workspace` (dev-mode) transcript so IframePreview
+ *   starts its warmup state machine. Fake the clock, make every probe fail
+ *   (503), advance past the full warmup window, and assert the timeout error
+ *   block appears ("Dev server did not respond in time").
  *
- * This test drives against the real embedded SPA. The clock is frozen so
- * the warmup exhausts in < 1 real second instead of 60 real seconds.
+ * ADR-044 (preview-on-main-listener) update: IframePreview.tsx no longer
+ * mounts a hidden probe `<iframe>` to detect dev-server readiness — `/preview/`
+ * (and legacy `/serve/`) now share the SPA's own gateway origin, so the warmup
+ * poll is a plain same-origin `fetch(url, { method: 'HEAD' })` on an interval
+ * (no CORS opt-in needed from the dev server, an improvement over the old
+ * two-port model). This test is rewritten to fake that HEAD probe via
+ * `page.route()` on the SAME origin the page itself is served from, instead
+ * of a separate `PREVIEW_PORT` origin.
+ *
+ * Also updated: `warmup_timeout_seconds` is no longer read from `/api/v1/about`
+ * by any consumer — `WebServeBlock` (src/components/chat/tools/WebServeUI.tsx)
+ * never passes a `warmupTimeoutSeconds` prop to `IframePreview`, so the
+ * component always falls back to its own hardcoded default (60 s →
+ * `maxProbes = Math.floor(60 / 2) = 30`). Mocking `warmup_timeout_seconds` in
+ * the about response therefore has no effect on the component under test; the
+ * mock is kept only for a schema-realistic response (other parts of the SPA
+ * still fetch `/api/v1/about`), with the retired `preview_port` /
+ * `preview_listener_enabled` fields replaced by the current `preview_enabled`
+ * field (AboutResponse contract, ADR-044 US-8).
  *
  * Regression class: the maxProbes calculation (Math.floor(effectiveTimeout / 2))
- * must derive from the gateway-supplied warmup_timeout_seconds, not be hardcoded.
+ * must derive from IframePreview's own default when no override is supplied.
  */
 
 import { expect } from '@playwright/test'
@@ -21,20 +36,26 @@ import { test } from './fixtures/console-errors'
 import { seedAndOpenSession } from './fixtures/session-setup'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const PREVIEW_PORT = parseInt(process.env.OMNIPUS_PREVIEW_PORT || '6061', 10)
-const SYNTHETIC_AGENT_ID = 'main'
+// 'mia' — the seeded default of the 4-base roster. The historical 'main' id
+// no longer resolves to any agent; using it here would attribute these
+// synthetic transcript entries to a non-existent agent.
+const SYNTHETIC_AGENT_ID = 'mia'
 
 test(
   'warmup_default_60s_when_about_returns_60',
   async ({ page }) => {
     const devToken = 'warmup-timeout-60s-token-t16'
     const devPath = `/serve/${SYNTHETIC_AGENT_ID}/${devToken}/`
-    const devUrl = `http://localhost:${PREVIEW_PORT}${devPath}`
+    // ADR-044: /preview/ (and legacy /serve/) share the SPA's own origin —
+    // no separate preview listener/port exists anymore. The mocked result
+    // URL reflects that: same origin as BASE_URL, not a second port.
+    const devUrl = `${BASE_URL}${devPath}`
     const expires = new Date(Date.now() + 3600 * 1000).toISOString()
 
-    // Intercept /api/v1/about to return warmup_timeout_seconds=60.
-    // This is the default from config and should be the value IframePreview
-    // uses for maxProbes = Math.floor(60 / 2) = 30.
+    // Intercept /api/v1/about for a schema-realistic response. preview_enabled
+    // replaces the retired preview_port/preview_listener_enabled fields
+    // (ADR-044 US-8). warmup_timeout_seconds is kept for shape realism only —
+    // see the file header note; it is not actually read by IframePreview.
     await page.route(`${BASE_URL}/api/v1/about`, async (route) => {
       let base: Record<string, unknown> = {
         version: 'test',
@@ -54,16 +75,18 @@ test(
         contentType: 'application/json',
         body: JSON.stringify({
           ...base,
-          preview_listener_enabled: true,
-          preview_port: PREVIEW_PORT,
+          preview_enabled: true,
           warmup_timeout_seconds: 60,
         }),
       })
     })
 
-    // Intercept all requests to the fake preview URL to return 503
-    // (simulates no dev server running — all probes fail).
-    await page.route(`http://localhost:${PREVIEW_PORT}/**`, (route) => {
+    // Intercept the same-origin preview URL to return 503 (simulates no dev
+    // server running — every HEAD probe fails). Scoped to the exact preview
+    // path only — BASE_URL is the same origin the page itself is served from,
+    // so a broader pattern would also intercept the SPA's own asset/API
+    // requests.
+    await page.route(devUrl, (route) => {
       void route.fulfill({ status: 503, body: 'no server' })
     })
 
@@ -117,30 +140,33 @@ test(
     // Each probe fires every 2 s; 30 probes * 2 s = 60 s total. We advance by 62 s
     // to ensure the last interval tick fires and transitions to 'error'.
     //
-    // page.clock.tick() advances the mocked clock, triggering all pending setInterval
-    // callbacks synchronously. This is what makes the 60-probe cycle complete in
-    // < 1 real second in the test.
-    await page.clock.fastForward(62_000)
+    // page.clock.runFor() advances the mocked clock tick-by-tick, firing EVERY
+    // due setInterval callback in order (like real elapsed time, just fast) — this
+    // is what makes the 30-probe cycle complete in < 1 real second in the test.
+    // fastForward() is NOT equivalent here: per Playwright's Clock semantics it
+    // jumps the clock forward and fires at most the single most-recent due callback
+    // for a recurring timer (it's built for "skip past N calls you don't care about",
+    // not "run through all of them") — so probeCountRef would only ever reach 1,
+    // never maxProbes (30), and the component would never transition to 'error'.
+    await page.clock.runFor(62_000)
 
     // Step 3: After time has passed, the warmup should have timed out.
     // IframePreview.tsx: when probeCountRef.current >= maxProbes (30), stopPolling()
-    // is called and setWarmupPhase('error') fires.
+    // is called and setWarmupPhase('error') fires, rendering ErrorBlock's message.
     await expect(
       page.locator('text=Dev server did not respond in time'),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Step 4: The Retry warmup button must be visible. There is also a generic
-    // "Retry" icon button in the iframe chrome — disambiguate explicitly.
+    // Step 4: The Retry button must be visible (ErrorBlock's onRetry handler,
+    // IframePreview.tsx — accessible name is "Retry warmup" via aria-label,
+    // even though the visible label is just "Retry").
     await expect(
       page.getByRole('button', { name: 'Retry warmup' }),
     ).toBeVisible({ timeout: 5_000 })
 
-    // Step 5: Verify the probe count is consistent with maxProbes=30.
-    // We inspect the DOM to check that the probe iframe (used during warmup) is no
-    // longer present — it is removed when the phase transitions to 'error'.
-    // (The probe iframe has aria-hidden="true" and title="probe".)
-    await expect(
-      page.locator('iframe[title="probe"]'),
-    ).not.toBeVisible()
+    // Step 5: ADR-044 — IframePreview never mounts an <iframe> at all anymore
+    // (link-only rendering, D6). Assert there is none anywhere on the page,
+    // not just that a since-retired "probe" iframe is gone.
+    await expect(page.locator('iframe')).toHaveCount(0)
   },
 )

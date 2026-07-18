@@ -1187,6 +1187,115 @@ describe('ChatStore_GroupsFramesBySpan', () => {
     expect(spans[0].steps).toHaveLength(1)
     expect(spans[1].steps).toHaveLength(2)
   })
+
+  // Bug fix regression (root-caused at chat.ts's tool_call_result span-merge
+  // sites): the result-step object used to hardcode `params: {}`, and
+  // `{ ...existingStep.tool, ...step }` let that empty object clobber the
+  // REAL params recorded at tool_call_start — so a step's params silently
+  // reverted to {} the moment its result arrived. Downstream, ToolCallBadge's
+  // shouldRenderToolCall(tool, params, ...) misclassified e.g. a
+  // `bash {action:'poll'}` step as visible (params={} doesn't match the
+  // poll/read hide rule), leaking noisy background infra into
+  // SubagentBlock/ActivityPanel. Pins that the step's params survive the
+  // result merge unchanged.
+  it('a span step keeps its tool_call_start params after tool_call_result arrives (params must not be clobbered)', () => {
+    seedAssistant()
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span_params',
+        parent_call_id: 'c_params',
+        task_label: 'poll a background session',
+        session_id: TEST_SESSION_ID,
+      })
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 't_params',
+        tool: 'bash',
+        params: { action: 'poll' },
+        parent_call_id: 'c_params',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    let msgs = useChatStore.getState().messages
+    let span = msgs[msgs.length - 1].spans?.[0]
+    const stepBefore = span?.steps[0]
+    expect(stepBefore?.kind === 'tool' ? stepBefore.tool.params : undefined).toEqual({ action: 'poll' })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 't_params',
+        tool: 'bash',
+        result: 'still running',
+        status: 'success',
+        duration_ms: 50,
+        parent_call_id: 'c_params',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    msgs = useChatStore.getState().messages
+    span = msgs[msgs.length - 1].spans?.[0]
+    const stepAfter = span?.steps[0]
+    // The bug: this used to become {} after the result merge.
+    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.params : undefined).toEqual({ action: 'poll' })
+    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.status : undefined).toBe('success')
+    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.result : undefined).toBe('still running')
+  })
+
+  // (item 8d, 2026-07-16 fix wave): a `tool_call_result` can arrive for a
+  // call_id this span's index has NO existing step for — a genuine race
+  // where the result beat its own `tool_call_start` (as opposed to
+  // ChatStore_OrphanFrame_FallsBackFlat below, which covers the SPAN itself
+  // never having started at all). The span IS already open here
+  // (subagent_start already ran), so this hits the "no existingIdx" push
+  // branch (chat.ts ~2802-2807) rather than the orphan-buffer path. Pins:
+  // no crash, and the pushed step defaults to params:{} (there is no
+  // start-time params to inherit).
+  it('a tool_call_result with no prior tool_call_start, on an already-open span, pushes a step with params:{} and does not crash', () => {
+    seedAssistant()
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span_orphan_step',
+        parent_call_id: 'c_orphan_step',
+        task_label: 'race condition repro',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+
+    expect(() => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result',
+          call_id: 't_orphan_step',
+          tool: 'fs.list',
+          result: '["a.txt"]',
+          status: 'success',
+          duration_ms: 12,
+          parent_call_id: 'c_orphan_step',
+          session_id: TEST_SESSION_ID,
+        })
+      })
+    }).not.toThrow()
+
+    const msgs = useChatStore.getState().messages
+    const span = msgs[msgs.length - 1].spans?.[0]
+    expect(span?.steps).toHaveLength(1)
+    const step = span?.steps[0]
+    expect(step?.kind).toBe('tool')
+    if (step?.kind === 'tool') {
+      expect(step.tool.call_id).toBe('t_orphan_step')
+      expect(step.tool.tool).toBe('fs.list')
+      expect(step.tool.params).toEqual({})
+      expect(step.tool.status).toBe('success')
+      expect(step.tool.result).toBe('["a.txt"]')
+    }
+  })
 })
 
 // TDD row 12: ChatStore_OrphanFrame_FallsBackFlat

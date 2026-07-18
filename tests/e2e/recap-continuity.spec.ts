@@ -225,13 +225,21 @@ async function sendSessionCloseFrame(page: Page, sessionId: string): Promise<boo
  * Poll until <OMNIPUS_HOME>/agents/<agentId>/.omnipus/last-session.md exists
  * and contains `needle`.  Returns the file contents on success; throws on timeout.
  *
- * Budget is generous (60 s) because recap involves an async LLM call.
+ * Budget is 120 s. runRecap self-bounds at a 60 s overallBudget
+ * (pkg/agent/session_end.go:252) before it deterministically writes a
+ * heuristic, content-free fallback summary (session_end.go:515
+ * writeHeuristicFallbackRetroWithCount) — so SOME file is guaranteed to exist
+ * by ~60 s, but a real, slow-but-successful LLM call can legitimately take
+ * close to that full 60 s under load. A poll budget equal to (or only
+ * slightly above) 60 s races the pipeline's own contract with zero margin
+ * even on the successful path. 120 s gives a full 60 s of margin past the
+ * pipeline's hard cap.
  */
 async function pollLastSession(
   page: Page,
   agentId: string,
   needle: string,
-  budgetMs = 60_000,
+  budgetMs = 120_000,
 ): Promise<string> {
   const lastSessionPath = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus', 'last-session.md')
   const deadline = Date.now() + budgetMs
@@ -247,23 +255,55 @@ async function pollLastSession(
     await page.waitForTimeout(2_000)
   }
 
-  // Timeout — surface a clear diagnostic.
+  // Timeout — surface an HONEST diagnostic that distinguishes the distinct
+  // failure modes rather than lumping them into one generic message.
   if (!fs.existsSync(lastSessionPath)) {
     throw new Error(
       `recap-continuity: last-session.md NOT FOUND after ${budgetMs / 1000}s.\n` +
         `Expected path: ${lastSessionPath}\n` +
-        `This means CloseSession → runRecap → WriteLastSession did NOT run.\n` +
+        `This means CloseSession → runRecap → WriteLastSession did NOT run at all ` +
+        `— not even the fallback path fired, which would be surprising since the ` +
+        `fallback is unconditional once the 60s overallBudget elapses.\n` +
         `Check: (a) auto_recap_enabled=true was applied before the turn, ` +
-        `(b) session_close_ack was received, (c) recap LLM call did not error out.`,
+        `(b) session_close_ack was received, (c) the gateway process is up.`,
+    )
+  }
+
+  // File exists but never gained the nonce within budget. Distinguish the
+  // pipeline's own fallback path (pkg/agent/session_end.go:515
+  // writeHeuristicFallbackRetroWithCount) from a genuine recap-quality bug.
+  // The fallback template is fixed and recognisable by its "Fallback reason:"
+  // marker; it carries only turn/tool-call counts and NEVER conversation
+  // content, so it structurally cannot contain the nonce — that is expected,
+  // not a bug in the fallback itself, but it IS a product gap worth flagging
+  // (all session content is lost when the LLM path degrades to fallback).
+  const isFallback = lastContents.includes('Fallback reason:')
+  if (isFallback) {
+    throw new Error(
+      `recap-continuity: last-session.md EXISTS but is the CONTENT-FREE FALLBACK ` +
+        `template, not a real recap, after ${budgetMs / 1000}s.\n` +
+        `Path: ${lastSessionPath}\n` +
+        `Contents: ${lastContents.trim()}\n` +
+        `This means the recap pipeline's LLM call did not complete within its own ` +
+        `60s overallBudget (pkg/agent/session_end.go:252) and degraded to the ` +
+        `heuristic fallback (session_end.go:515), which structurally carries no ` +
+        `conversation content and can therefore never contain the nonce ` +
+        `"${needle}". This is EITHER real-LLM slowness/unavailability under load ` +
+        `(re-run to confirm) OR evidence of a product gap: the fallback recap ` +
+        `loses all session content on timeout, so a slow LLM silently degrades ` +
+        `the "remembers last session" feature to nothing.`,
     )
   }
 
   throw new Error(
-    `recap-continuity: last-session.md EXISTS but does not contain nonce "${needle}".\n` +
+    `recap-continuity: last-session.md EXISTS but does not contain nonce "${needle}", ` +
+      `and it is NOT the heuristic fallback template (no "Fallback reason:" marker) ` +
+      `— this is a real recap that ran to completion.\n` +
       `Path: ${lastSessionPath}\n` +
       `File size: ${fs.statSync(lastSessionPath).size} bytes.\n` +
       `Contents (first 500 chars): ${lastContents.slice(0, 500)}\n` +
-      `This means the recap ran but omitted the distinctive fact from the summary.`,
+      `This means the recap LLM call completed but omitted the distinctive fact ` +
+      `from the summary — a genuine recap-quality bug, not a timing issue.`,
   )
 }
 
@@ -355,10 +395,42 @@ test.afterAll(async ({ browser }) => {
 test(
   'recap_continuity: distinctive fact persists across sessions via last-session.md injection',
   async ({ page }) => {
-    // Generous timeout: two LLM round-trips + async recap + disk poll.
-    // Turn 1 (fact statement): ~90s.  Recap LLM call: ~60s.  Turn 2 (recall): ~90s.
-    // Total budget: 300s + margin = 360s.
-    test.setTimeout(360_000)
+    // Budget (WORST-CASE ceiling, not a "typical" duration — recomputed the same
+    // way chat.spec.ts (b) was fixed: the outer test.setTimeout is a hard
+    // governor, so it must sum every step's own worst-case timeout, INCLUDING
+    // both waitForTurnFullyDone legs. The previous comment below omitted them
+    // entirely and modeled the whole run as two flat ~90s LLM round-trips —
+    // that was the bug.
+    //
+    // Step-by-step worst-case:
+    //   Navigation + fact input (fill/press) ........................... ~20s
+    //   Turn 1 toHaveCount(1) ceiling ..................................... 90s
+    //   Turn 1 waitForTurnFullyDone: gapMs(8s) + follow-up-call
+    //     ceiling(180s, ~L109-117 above) — this turn's prompt ("Remember
+    //     for later: the launch codename is ...") is very likely to trigger
+    //     the memory-tool follow-up call, so this leg is a realistic risk,
+    //     not a theoretical worst case ................................... 188s
+    //   session_close_ack poll (sendSessionCloseFrame, ~L212) .............. 10s
+    //   pollLastSession (raised 60s -> 120s, see the helper's own doc
+    //     comment above, ~L228) ............................................ 120s
+    //   New-session setup (createSession + goto + input visibility +
+    //     toHaveCount(0) + settle wait) .................................. ~27s
+    //   Turn 2 toHaveCount(1) ceiling ..................................... 90s
+    //   Turn 2 waitForTurnFullyDone: gapMs(8s) + follow-up-call
+    //     ceiling(180s) ...................................................... 188s
+    //
+    // Worst-case total: 20 + 90 + 188 + 10 + 120 + 27 + 90 + 188 = 733s.
+    //
+    // The PREVIOUS budget ("300s + margin = 360s") undercounted this the same
+    // way chat.spec.ts's old budget did: it treated each LLM round-trip as a
+    // flat ~90s and never accounted for either waitForTurnFullyDone call's
+    // documented up-to-188s worst case, nor the raised 120s pollLastSession
+    // budget.
+    //
+    // New budget: 733s worst-case ceiling + ~167s margin (~23%) for CI
+    // scheduling/runner jitter beyond each step's own declared timeout = 900s
+    // (15 min), a round number with real headroom over the computed ceiling.
+    test.setTimeout(900_000)
 
     // BDD:
     //   Given auto_recap_enabled is true (set in beforeAll)
@@ -443,8 +515,11 @@ test(
     // ── Step 4: Poll last-session.md for the nonce ────────────────────────────
 
     // Recap is async: CloseSession spawns a goroutine → LLM call → WriteLastSession.
-    // We poll up to 60 s.  If pollLastSession throws, the test fails with a specific
-    // diagnostic — never silently passes.
+    // We poll up to 120 s — comfortably past the pipeline's own 60 s overallBudget
+    // (pkg/agent/session_end.go:252) so a real, slow-but-successful recap has time
+    // to land. If pollLastSession throws, the test fails with a specific diagnostic
+    // (including whether the pipeline degraded to its content-free fallback
+    // template) — never silently passes.
     const lastSessionContents = await pollLastSession(page, agentId, NONCE)
 
     // Extra content assertion: the file should be non-trivial (not just the nonce).

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,6 +75,31 @@ type UnifiedMeta struct {
 	Type UnifiedSessionType `json:"type"`
 }
 
+// Clone returns a deep, independent copy of m. Nil-safe (returns nil for a
+// nil receiver). This is the sole mechanism by which UnifiedStore.metaCache
+// entries are handed to or accepted from callers: scalar fields copy by
+// value via the struct assignment, but slice/map fields alias their backing
+// array/storage unless cloned explicitly, so every reference field on
+// UnifiedMeta/SessionMeta/SessionStats is deep-copied here.
+//
+// This is load-bearing, not polish: NewChannelSession mutates
+// meta.PeerID/meta.Title on the pointer returned by NewSession without
+// holding us.mu (see its doc comment). If the cache aliased that pointer,
+// a concurrent ListSessions/GetMeta clone-read racing that mutation would be
+// a real -race failure. Cloning on every cache insert and cache read keeps
+// the cache and every caller's copy fully independent in both directions.
+func (m *UnifiedMeta) Clone() *UnifiedMeta {
+	if m == nil {
+		return nil
+	}
+	c := *m
+	c.Partitions = slices.Clone(m.Partitions)
+	c.AgentIDs = slices.Clone(m.AgentIDs)
+	c.CompactionSummaries = maps.Clone(m.CompactionSummaries)
+	c.Stats.ByModel = maps.Clone(m.Stats.ByModel)
+	return &c
+}
+
 // ErrAlreadyActive is returned by SwitchAgent when the session's ActiveAgentID
 // already matches the requested newAgentID. Callers should treat this as success
 // (idempotent operation).
@@ -85,10 +111,48 @@ var ErrAlreadyActive = errors.New("agent already active on this session")
 // It implements SessionStore so the agent loop works unchanged, and adds
 // UI-oriented methods (NewSession, AppendTranscript, ReadTranscript, etc.).
 type UnifiedStore struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	baseDir  string // {workspace}/sessions/
 	homePath string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
 	backend  *memory.JSONLStore
+
+	// metaCache holds one independent clone per session, keyed by session ID.
+	// It is the primary data source for ListSessions/GetOrCreateScheduledSession's
+	// existence check and GetMeta's fast path — avoiding the O(N) os.ReadDir +
+	// per-session os.ReadFile+json.Unmarshal that ListSessions previously did
+	// under the single store-wide lock on every call. Populated via four
+	// paths: once at construction (loadMetaCacheLocked); on every successful
+	// mutation via writeMetaLocked (every mutation path funnels through it);
+	// via readMetaLocked self-healing the cache on a cache-miss disk read
+	// (SetMeta, SwitchAgent, AppendTranscript, GetOrCreateScheduledSession, and
+	// GetMeta's cache-miss path all reach the cache this way); and via
+	// ListSessions' own reconciliation pass, which uses a directory-NAMES-only
+	// os.ReadDir to find sessions written directly to disk out-of-band
+	// (bypassing this store) and self-heals them into the cache the same way
+	// readMetaLocked does — without any per-file disk read for entries already
+	// cached. Explicit eviction on DeleteSession, ClearAll, and
+	// RetentionSweep's empty-dir removal.
+	metaCache map[string]*UnifiedMeta
+
+	// cacheLoadFailures counts sessions whose meta.json failed to read/parse
+	// at construction time (loadMetaCacheLocked), even after one retry
+	// (MB-2). Such a session is excluded from metaCache — and therefore from
+	// ListSessions — for this UnifiedStore's entire process lifetime; a
+	// transient blip that would have cleared up moments later does NOT
+	// self-correct without a restart. This counter makes that accepted
+	// limitation assertable/observable instead of a silent gap. See
+	// CacheLoadFailureCount.
+	cacheLoadFailures int
+}
+
+// CacheLoadFailureCount returns the number of sessions that failed to load
+// into metaCache at construction time (after one retry) — see
+// loadMetaCacheLocked's doc comment for the accepted limitation this
+// signals. Safe to call concurrently with any other UnifiedStore method.
+func (us *UnifiedStore) CacheLoadFailureCount() int {
+	us.mu.RLock()
+	defer us.mu.RUnlock()
+	return us.cacheLoadFailures
 }
 
 // BaseDir returns the root directory of this store.
@@ -105,6 +169,15 @@ func (us *UnifiedStore) BaseDir() string {
 // to ClearAll's one call site — not a general refactor of the package's other
 // os.RemoveAll/os.ReadDir calls.
 var removeAllFn = os.RemoveAll
+
+// writeFileAtomicFn is a package-level test seam for writeMetaLocked's disk
+// write step. It defaults to fileutil.WriteFileAtomic; tests override it to
+// force a deterministic write failure (the MB-1 cache/disk-divergence
+// regression guard) without depending on OS permission enforcement — same
+// rationale as removeAllFn above (root bypasses chmod-based failure
+// injection via CAP_DAC_OVERRIDE in CI). Scoped narrowly to writeMetaLocked's
+// one call site.
+var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // validateSessionID rejects IDs that could escape the base directory.
 func validateSessionID(id string) error {
@@ -150,13 +223,69 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 	}
 
 	us := &UnifiedStore{
-		baseDir:  baseDir,
-		homePath: homePath,
-		backend:  store,
+		baseDir:   baseDir,
+		homePath:  homePath,
+		backend:   store,
+		metaCache: make(map[string]*UnifiedMeta),
 	}
 
 	us.migrateLegacy()
+	us.loadMetaCacheLocked()
 	return us, nil
+}
+
+// loadMetaCacheLocked scans baseDir once and populates metaCache with every
+// session's metadata. Called from the constructor, after migrateLegacy, so
+// this moves the O(N) directory scan + per-session disk read from every
+// future ListSessions call to a single one-time cost at store construction.
+//
+// Despite the "Locked" naming convention shared with readMetaLocked/
+// writeMetaLocked, no lock is held or required here: us has not yet escaped
+// the constructor, so no other goroutine can reach it concurrently.
+//
+// A session whose meta.json fails to read/parse is retried ONCE (MB-2) —
+// this alone absorbs a transient boot-time blip, e.g. a concurrent writer
+// mid-rename — before being treated as genuinely unreadable. If it still
+// fails after the retry, this is logged at Error, not Warn: unlike the
+// pre-cache behavior, where ListSessions re-scanned disk on every call so a
+// transient failure would self-correct on the very next call, a session
+// excluded here is excluded from ListSessions for this UnifiedStore's ENTIRE
+// PROCESS LIFETIME — only a restart re-runs this scan and gives it another
+// chance. That permanent-until-restart exclusion is also counted in
+// cacheLoadFailures (see CacheLoadFailureCount) so it is assertable/
+// observable rather than a silent gap. This is an accepted, minimal
+// mitigation, not a full fix — a periodic reconciler that keeps retrying in
+// the background would close the gap completely but is out of scope for
+// this fix round; store construction (and therefore gateway boot) is still
+// never aborted over one bad session directory.
+func (us *UnifiedStore) loadMetaCacheLocked() {
+	entries, err := os.ReadDir(us.baseDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("unified_store: load meta cache: read base dir", "dir", us.baseDir, "error", err)
+		}
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == ".context" {
+			continue
+		}
+		sessionDir := filepath.Join(us.baseDir, entry.Name())
+		meta, err := readUnifiedMeta(sessionDir)
+		if err != nil {
+			// One retry: absorbs a transient boot-time blip before we give up.
+			meta, err = readUnifiedMeta(sessionDir)
+		}
+		if err != nil {
+			us.cacheLoadFailures++
+			slog.Error(
+				"unified_store: load meta cache: session unreadable after retry — excluded until restart",
+				"dir", entry.Name(), "error", err,
+			)
+			continue
+		}
+		us.metaCache[entry.Name()] = meta
+	}
 }
 
 // uploadsRoot returns the root directory for upload files associated with
@@ -366,7 +495,13 @@ func (us *UnifiedStore) GetOrCreateScheduledSession(id, ownerAgentID string) (*U
 	defer us.mu.Unlock()
 
 	if meta, err := us.readMetaLocked(id); err == nil {
-		return meta, nil
+		// Cache-first existence check. readMetaLocked already returns an
+		// independent clone (both cache-hit and cache-miss paths — see its
+		// doc comment), so this second Clone() call is redundant but
+		// harmless; kept as a defensive belt-and-braces guarantee that a
+		// future readMetaLocked change can never leak a live cache pointer to
+		// this external-facing existence check.
+		return meta.Clone(), nil
 	}
 	return us.createSessionLocked(id, SessionTypeScheduled, "scheduled", ownerAgentID)
 }
@@ -376,9 +511,27 @@ func (us *UnifiedStore) GetMeta(sessionID string) (*UnifiedMeta, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return nil, err
 	}
+
+	// Fast path: RLock-only cache hit, cloned before returning so the caller
+	// never receives a pointer aliasing the cache's live entry.
+	us.mu.RLock()
+	if meta, ok := us.metaCache[sessionID]; ok {
+		clone := meta.Clone()
+		us.mu.RUnlock()
+		return clone, nil
+	}
+	us.mu.RUnlock()
+
+	// Cache miss: upgrade to the full write lock and self-heal from disk
+	// (readMetaLocked populates the cache on a successful read). Preserves
+	// the existing not-found error contract.
 	us.mu.Lock()
 	defer us.mu.Unlock()
-	return us.readMetaLocked(sessionID)
+	meta, err := us.readMetaLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return meta.Clone(), nil
 }
 
 // SetMeta applies a partial update to a session's meta.json.
@@ -446,23 +599,73 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 	return us.writeMetaLocked(sessionID, meta)
 }
 
-// readMetaLocked reads meta.json for sessionID without acquiring the mutex.
-// Caller must hold us.mu.
+// readMetaLocked returns an INDEPENDENT CLONE of sessionID's metadata,
+// never the live cache entry pointer, on both the cache-hit and cache-miss
+// paths. Caller must hold us.mu (the full write lock — see below).
+//
+// MB-1 fix (cache/disk divergence on write failure): an earlier version of
+// this method returned the LIVE cache entry pointer on a hit, reasoning that
+// every read-modify-write caller (SetMeta, SwitchAgent, AppendTranscript,
+// GetOrCreateScheduledSession, GetMeta's cache-miss path) holds us.mu.Lock()
+// — the full exclusive lock — across its entire mutate-then-write, so no
+// RLock holder could observe the entry mid-mutation. That reasoning covered
+// the SUCCESS path but not FAILURE: those callers mutate the returned value
+// in place and then call writeMetaLocked; if the disk write failed,
+// writeMetaLocked returned early WITHOUT re-storing a clone — but the
+// in-place mutation had already corrupted the shared cached object, so
+// GetMeta/ListSessions would go on reporting the unpersisted, attempted
+// value while meta.json on disk still held the old one. Cloning on every
+// read (not just every write) closes this: every RMW caller now mutates its
+// own private clone, so a failed writeMetaLocked leaves the cache entry
+// completely untouched — it still reflects whatever was last durably
+// persisted (the prior cache value on a hit, or the freshly disk-read value
+// on a miss).
+//
+// Callers that hand this value to code outside us.mu (GetMeta's cache-miss
+// path, GetOrCreateScheduledSession) may return it directly — it is already
+// an independent clone — though both currently call .Clone() on it again
+// before returning; that second clone is redundant but harmless (kept as
+// defensive belt-and-braces so a future readMetaLocked change can never leak
+// a live cache pointer to those external-facing call sites).
+//
+// On a cache miss, reads meta.json from disk, populates the cache with the
+// freshly-unmarshaled (necessarily unaliased) object, and returns a clone of
+// it.
 func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
-	return readUnifiedMeta(filepath.Join(us.baseDir, sessionID))
+	if meta, ok := us.metaCache[sessionID]; ok {
+		return meta.Clone(), nil
+	}
+	meta, err := readUnifiedMeta(filepath.Join(us.baseDir, sessionID))
+	if err != nil {
+		return nil, err
+	}
+	us.metaCache[sessionID] = meta
+	return meta.Clone(), nil
 }
 
 // writeMetaLocked atomically writes meta.json for sessionID, acquiring an OS
-// flock for cross-process defense-in-depth. Caller must hold us.mu.
+// flock for cross-process defense-in-depth, then refreshes metaCache with an
+// independent clone of the just-written value. Caller must hold us.mu.
+//
+// This is the single invalidation/update point for every mutation path:
+// createSessionLocked, SetMeta, SwitchAgent, AppendTranscript, and
+// NewChannelSession's direct post-create call all funnel through here, so
+// the cache can never observe a mutation that didn't also land on disk.
+// (writeUnifiedMetaDirect, used only by migrateLegacy before the cache
+// exists, does not need this hook.)
 func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) error {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("unified_store: marshal meta: %w", err)
 	}
 	metaPath := filepath.Join(us.baseDir, sessionID, "meta.json")
-	return fileutil.WithFlock(metaPath, func() error {
-		return fileutil.WriteFileAtomic(metaPath, data, 0o600)
-	})
+	if err := fileutil.WithFlock(metaPath, func() error {
+		return writeFileAtomicFn(metaPath, data, 0o600)
+	}); err != nil {
+		return err
+	}
+	us.metaCache[sessionID] = meta.Clone()
+	return nil
 }
 
 // AppendTranscript appends an entry to {session-id}/transcript.jsonl.
@@ -707,6 +910,36 @@ func (us *UnifiedStore) UpdateToolCallStatus(
 	status string,
 	durationMS int64,
 ) (found bool, err error) {
+	return us.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, nil)
+}
+
+// UpdateToolCallStatusAndResult is UpdateToolCallStatus's result-bearing
+// sibling (W4): it performs the exact same in-place Status/DurationMS
+// correction, and additionally rewrites the matching ToolCall's Result field
+// when result is non-nil. Passing a nil result leaves the ToolCall's existing
+// Result untouched (UpdateToolCallStatus delegates here with result=nil,
+// preserving its original status-only behavior exactly).
+//
+// This exists for spawnSubTurn's completion path (pkg/agent/subturn.go): the
+// persisted "delegate" tool_call previously never received the sub-turn's own
+// output — UpdateToolCallStatus corrected Status/DurationMS but had no way to
+// carry the result text, so a session reload showed a delegate tool_call with
+// a terminal status but an empty `result`, even though the live WS stream
+// carried the sub-turn's actual text via SubTurnEndPayload. Mirrors
+// recordExternalToolResultUpdateInPlace's (pkg/agent/external_dispatch.go)
+// read-modify-rewrite-one-line approach for the equivalent external-cli tool
+// call case.
+//
+// See UpdateToolCallStatus's doc comment above for the found=false semantics
+// (same race window, same retry-via-updateToolCallStatusWithRetry contract).
+// Returns a non-nil error only on I/O failure.
+func (us *UnifiedStore) UpdateToolCallStatusAndResult(
+	sessionID string,
+	toolCallID ToolCallID,
+	status string,
+	durationMS int64,
+	result map[string]any,
+) (found bool, err error) {
 	if validationErr := validateSessionID(sessionID); validationErr != nil {
 		return false, validationErr
 	}
@@ -787,6 +1020,9 @@ func (us *UnifiedStore) UpdateToolCallStatus(
 		if target.ToolCalls[ti].ID == toolCallID {
 			target.ToolCalls[ti].Status = status
 			target.ToolCalls[ti].DurationMS = durationMS
+			if result != nil {
+				target.ToolCalls[ti].Result = result
+			}
 		}
 	}
 	rewritten, jsonErr := json.Marshal(target)
@@ -845,35 +1081,85 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 }
 
 // ListSessions returns all session metas, sorted by UpdatedAt descending.
+//
+// Primarily served from metaCache — avoiding the old per-call O(N)
+// os.ReadDir + per-session os.ReadFile+json.Unmarshal scan — but first
+// reconciles the cache against disk with a directory-NAMES-only os.ReadDir
+// (one syscall, no per-file reads for entries already cached). Any directory
+// not yet in metaCache — e.g. a session written directly to disk out-of-band,
+// bypassing this store entirely — is lazily loaded via readMetaLocked (the
+// same self-heal path GetMeta/SetMeta/etc. use on a cache miss), which also
+// populates the cache so the disk read is paid at most once per session, not
+// on every ListSessions call. A session whose meta.json fails to read/parse
+// is logged at Warn and skipped, not treated as fatal.
+//
+// A missing base directory (os.IsNotExist) is a normal empty state — a store
+// that has never persisted a session yet — and is NOT an error: this
+// reconciles nothing and falls through to whatever is already in metaCache
+// (empty, in that case). Any OTHER read failure (e.g. permission denied) is a
+// genuine, caller-visible error: it is both logged at Warn AND returned, so
+// callers that aggregate across multiple stores — e.g.
+// pkg/agent's AgentLoop.ListAllSessions, which surfaces one error per broken
+// store in its partial-errors slice — can actually see and report it, rather
+// than this store silently reporting "0 sessions" indistinguishably from a
+// genuinely empty store. The already-cached metas (if any) are still
+// returned alongside the error — a transient/permission failure to
+// reconcile against disk should not erase sessions this store already knows
+// about from a prior successful call.
+//
+// Reconciliation requires mutating metaCache (via readMetaLocked), which
+// needs the full write lock — an RLock cannot be upgraded to a Lock without
+// risking deadlock, so the whole method runs under us.mu.Lock() rather than
+// the previous RLock. This serializes ListSessions with writers for the
+// duration of the call, but ListSessions is not on a hot path, and the
+// steady-state (no out-of-band directories) cost is unchanged: one
+// os.ReadDir plus map lookups, still zero per-session disk reads.
 func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	us.mu.Lock()
-	defer us.mu.Unlock()
 
+	var listErr error
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+		if !os.IsNotExist(err) {
+			slog.Warn("unified_store: list sessions: read base dir", "dir", us.baseDir, "error", err)
+			listErr = fmt.Errorf("unified_store: list sessions: read base dir %q: %w", us.baseDir, err)
 		}
-		return nil, fmt.Errorf("unified_store: list sessions: %w", err)
+	} else {
+		for _, entry := range entries {
+			if !entry.IsDir() || entry.Name() == ".context" {
+				continue
+			}
+			name := entry.Name()
+			if err := validateSessionID(name); err != nil {
+				continue
+			}
+			if _, cached := us.metaCache[name]; cached {
+				// Already cached — no per-file disk read needed.
+				continue
+			}
+			// Unknown on-disk directory: lazily load via the standard
+			// self-heal path, which also populates metaCache as a side
+			// effect (see readMetaLocked's cache-miss branch).
+			if _, readErr := us.readMetaLocked(name); readErr != nil {
+				slog.Warn(
+					"unified_store: list sessions: skipping unreadable out-of-band session dir",
+					"dir", name, "error", readErr,
+				)
+				continue
+			}
+		}
 	}
 
-	var metas []*UnifiedMeta
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == ".context" {
-			continue
-		}
-		meta, err := readUnifiedMeta(filepath.Join(us.baseDir, entry.Name()))
-		if err != nil {
-			slog.Warn("unified_store: skipping unreadable session", "dir", entry.Name(), "error", err)
-			continue
-		}
-		metas = append(metas, meta)
+	metas := make([]*UnifiedMeta, 0, len(us.metaCache))
+	for _, meta := range us.metaCache {
+		metas = append(metas, meta.Clone())
 	}
+	us.mu.Unlock()
 
 	slices.SortFunc(metas, func(a, b *UnifiedMeta) int {
 		return b.UpdatedAt.Compare(a.UpdatedAt)
 	})
-	return metas, nil
+	return metas, listErr
 }
 
 // AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.
@@ -995,6 +1281,7 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("unified_store: delete session %q: %w", sessionID, err)
 	}
+	delete(us.metaCache, sessionID)
 	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
 	os.Remove(contextFile) // best-effort, ignore error if file does not exist
 
@@ -1042,6 +1329,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 			errs = append(errs, fmt.Errorf("unified_store: clear all: remove session dir %q: %w", entry.Name(), err))
 			continue
 		}
+		delete(us.metaCache, entry.Name())
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
 		os.Remove(contextFile) // best-effort, ignore error if file does not exist
 		// Cascade-delete uploads for this session.
@@ -1052,6 +1340,22 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		}
 		removed++
 	}
+
+	// Evict any remaining cache entry whose on-disk directory is already gone.
+	// The per-dir loop above only deletes cache entries for directories THIS
+	// call physically removed; when several stores share one baseDir (e.g.
+	// multiple agents configured with the same workspace), whichever store's
+	// ClearAll runs first removes the shared directories, and the others then
+	// find nothing to remove and never evict their now-stale cache entries —
+	// leaving ListSessions to resurrect sessions that are gone from disk.
+	// Entries whose directory survived (a failed removal above) are kept, since
+	// those sessions genuinely still exist.
+	for id := range us.metaCache {
+		if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); errors.Is(statErr, os.ErrNotExist) {
+			delete(us.metaCache, id)
+		}
+	}
+
 	return removed, errors.Join(errs...)
 }
 

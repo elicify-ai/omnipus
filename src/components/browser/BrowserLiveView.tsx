@@ -51,7 +51,7 @@ import {
   WarningCircle,
   X,
 } from '@phosphor-icons/react'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
@@ -1876,7 +1876,7 @@ export function BrowserLiveView({
             {resolvedAgent?.icon ? (
               <IconRenderer icon={resolvedAgent.icon} size={9} />
             ) : resolvedAgent && resolvedAgent.name ? (
-              resolvedAgent.name.charAt(0).toUpperCase()
+              initialOf(resolvedAgent.name)
             ) : (
               <Robot size={9} />
             )}

@@ -3,23 +3,7 @@ package tools
 import (
 	"fmt"
 	"math"
-	"regexp"
 )
-
-// ValidateWorkspacePath is the exported wrapper around validatePathWithAllowPaths.
-// It resolves rawPath against workspace, optionally restricting to the workspace
-// tree (restrict=true), with an optional compiled allow-list (allowPaths). Returns
-// the resolved absolute path on success.
-//
-// Called by web_serve.Execute (static mode), which must stay within its own
-// package and cannot reach the unexported validatePathWithAllowPaths directly
-// from other packages — but since both live in package tools, this wrapper
-// just delegates.
-//
-// Pass nil for allowPaths to use workspace-only restriction.
-func ValidateWorkspacePath(rawPath, workspace string, restrict bool, allowPaths []*regexp.Regexp) (string, error) {
-	return validatePathWithAllowPaths(rawPath, workspace, restrict, allowPaths)
-}
 
 // validateToolArgs validates args against a JSON Schema-like map.
 // schema is expected to have optional keys: "properties", "required", "additionalProperties".

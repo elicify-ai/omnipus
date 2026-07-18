@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, newChatButton } from './fixtures/selectors';
+import { chatInput, agentPicker, assistantMessages, startNewChat, tokenCounter } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -49,8 +49,13 @@ test(
 
     await expect(assistantMessages(page)).toHaveCount(msgsBefore + 1, { timeout: 60_000 });
 
-    const sessionBar = page.locator('header');
-    await expect(sessionBar).toContainText(/\d+/, { timeout: 10_000 });
+    // Token/cost UI moved out of the header banner into the composer's
+    // context row (src/components/chat/composer/TokenCounter.tsx) — see
+    // ChatControls.tsx's doc comment. The header banner is now solely the
+    // workspace top-bar (hamburger + tab strip + "Open browser").
+    const tokens = tokenCounter(page);
+    await expect(tokens).toBeVisible({ timeout: 10_000 });
+    await expect(tokens).toContainText(/\d+/, { timeout: 10_000 });
 
     await expectA11yClean(page);
   },
@@ -59,19 +64,50 @@ test(
 test(
   '(b) multi-turn retention: turn 3 references content from turn 1',
   async ({ page }) => {
-    // Budget: newchat(5) + agentswitch(15) + turn1(300) + gap(10) + turn2(300) + gap(10)
-    //         + turn3(300) = 940s. 1200s gives a 260s margin for LLM variance.
-    test.setTimeout(1_200_000);
+    // Budget (WORST-CASE ceiling, not a "typical" duration — test.setTimeout is a
+    // hard governor: if it's smaller than the sum of every step's own declared
+    // timeout, the outer timeout kills the test mid-flight before an inner
+    // assertion ever gets to legitimately time out or succeed, which is exactly
+    // what produced a 21.8-min real hang under the old budget below).
+    //
+    // Fixed overhead (sum of each step's own timeout, chatInput/newChat/picker
+    // visibility + count=0 + contains-Jim checks):
+    //   15_000 + 10_000 + 10_000 + 15_000 + 5_000 = 55s
+    //
+    // Per turn (×3 — fill/press/toHaveCount/waitForTurnFullyDone):
+    //   toHaveCount ceiling ................................ 300s
+    //   waitForTurnFullyDone ceiling: this helper (defined above, ~L24-34) first
+    //   waits up to `gapMs` (8s, the value passed at every call site below) for
+    //   the stop button to reappear, and if it does, waits up to a FURTHER 180s
+    //   for it to vanish again (a legitimate tool-call follow-up LLM turn) ... 8 + 180 = 188s
+    //   => per-turn ceiling: 300 + 188 = 488s
+    // 3 turns: 3 * 488 = 1464s
+    //
+    // Worst-case total: 55 + 1464 = 1519s (~25.3 min).
+    //
+    // The PREVIOUS budget ("940s expected + 260s margin" -> 1200s) undercounted
+    // this badly in two ways: (1) it modeled each waitForTurnFullyDone call as a
+    // flat "gap(10)" 10s placeholder instead of the helper's own documented
+    // up-to-188s worst case, and (2) it only budgeted 2 gaps, omitting the THIRD
+    // waitForTurnFullyDone call entirely (the third call, immediately before
+    // the `serialMsgs` assertion). Three turns each legitimately hitting the 188s
+    // follow-up-call ceiling alone sums to 564s — already more than double the
+    // old 260s margin, before even counting the toHaveCount ceilings.
+    //
+    // New budget: 1519s worst-case ceiling + ~281s margin (~19%) for CI
+    // scheduling/runner jitter beyond each step's own declared timeout = 1800s
+    // (30 min), a round number with real headroom over the computed ceiling.
+    test.setTimeout(1_800_000);
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
     // Start a fresh session to avoid stale messages from prior tests.
     // After goto('/') the app may restore the last active session with messages.
-    // Clicking New Chat resets to an empty thread so assistantMessages count starts at 0.
-    const newChat = newChatButton(page);
-    await expect(newChat).toBeVisible({ timeout: 10_000 });
-    await newChat.click();
+    // The header "New Chat" button was removed from the redesign (see
+    // startNewChat's doc comment) — "/new" + Enter resets to an empty
+    // thread so assistantMessages count starts at 0.
+    await startNewChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     // Switch to Jim: Mia has "no long enumerations" guardrails and may handoff to
@@ -166,9 +202,9 @@ test(
 
     const urlBefore = page.url();
 
-    const newChat = newChatButton(page);
-    await expect(newChat).toBeVisible({ timeout: 10_000 });
-    await newChat.click();
+    // Header "New Chat" button was removed (see startNewChat's doc comment
+    // in fixtures/selectors.ts) — "/new" + Enter is the replacement.
+    await startNewChat(page);
 
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 

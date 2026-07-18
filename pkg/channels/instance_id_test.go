@@ -21,7 +21,7 @@ import (
 
 // minimalCfg returns a *config.Config with the given channel map pre-populated.
 // It does NOT set WorkspacePath so tests that need a real path must set
-// cfg.Agents.Defaults.Workspace themselves.
+// cfg.Agents.Defaults.Home themselves.
 func minimalCfg(channels map[string]config.ChannelInstanceConfig) *config.Config {
 	return &config.Config{Channels: channels}
 }
@@ -272,14 +272,14 @@ func TestWhatsApp_PerInstanceStorePath(t *testing.T) {
 	workspaceRoot := t.TempDir()
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = workspaceRoot
+	cfg.Agents.Defaults.Home = workspaceRoot
 
 	euStorePath := filepath.Join(workspaceRoot, "whatsapp", "whatsapp.eu")
 	usStorePath := filepath.Join(workspaceRoot, "whatsapp", "whatsapp.us")
 
 	// Simulate what the factory closure computes for each instance.
 	computeStorePath := func(instanceID string) string {
-		return filepath.Join(cfg.WorkspacePath(), "whatsapp", instanceID)
+		return filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", instanceID)
 	}
 
 	pathEU := computeStorePath("whatsapp.eu")

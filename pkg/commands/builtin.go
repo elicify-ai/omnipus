@@ -5,8 +5,14 @@ package commands
 // Definitions are stateless — runtime dependencies are provided
 // via the Runtime parameter passed to handlers at execution time.
 //
-// Canonical (visible) commands (10): clear, help, model, cancel,
-// agents, tasks, skills, channels, status, config.
+// Canonical (visible) commands (13): clear, help, model, cancel,
+// agents, tasks, skills, channels, status, config, remember, recall,
+// retrospective.
+//
+// The three memory commands (remember, recall, retrospective) are
+// agent-delivery and Handler-less by design (see pkg/commands/cmd_memory.go):
+// the agent loop rewrites the turn into a steering prompt so the model itself
+// invokes the underlying memory tools, rather than a Handler replying inline.
 //
 // Deprecated/hidden commands (kept for one-release back-compat): start, show,
 // list, switch, check. These execute when invoked but are excluded from /help,
@@ -27,6 +33,9 @@ func BuiltinDefinitions() []Definition {
 		channelsCommand(),
 		statusCommand(),
 		configCommand(),
+		rememberCommand(),
+		recallCommand(),
+		retrospectiveCommand(),
 
 		// Deprecated commands — hidden but still execute (one-release back-compat).
 		startCommand(),

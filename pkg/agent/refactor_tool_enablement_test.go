@@ -30,7 +30,7 @@ import (
 // agent loop silently skipped registration.
 func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Home = t.TempDir()
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})

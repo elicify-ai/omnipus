@@ -93,7 +93,7 @@ func TestDriftDrop_EmitsAuditEntry_WithRequiredFields(t *testing.T) {
 	defer auditLogger.Close()
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
@@ -198,7 +198,7 @@ func TestDriftDrop_ExactlyOneEntryPerMessage(t *testing.T) {
 	defer auditLogger.Close()
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},

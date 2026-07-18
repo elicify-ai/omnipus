@@ -23,6 +23,7 @@
 //     symbol appeared in any _test.go file in this package.
 //
 // Traces to: pkg/agent/loop.go:7355-7434 (abortTurn + its doc comment).
+
 package agent
 
 import (
@@ -185,7 +186,7 @@ func TestRunTurn_SyntheticDenyFloor_AbortsWithSurfacedError(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

@@ -4,8 +4,8 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package middleware — canonical-origin computation and Origin enforcement
-// middleware for the Omnipus gateway.
+// Package middleware — canonical-origin computation and an Origin-check
+// CSRF helper for the Omnipus gateway.
 //
 // canonicalGatewayOrigin (and its exported alias CanonicalGatewayOrigin)
 // derives the browser-facing origin for the main listener from the current
@@ -15,22 +15,38 @@
 // cfg.Gateway.PublicURL, then host:port heuristic, then empty-string fallback
 // for wildcard binds (see FR-022 / MR-03 / FR-007e).
 //
-// RequireMatchingOriginOnStateChanging is a general-purpose CSRF fence for the
-// SPA's own /api/v1/* routes. It is NOT applied to the /dev/<agent>/<token>/
-// reverse-proxy path: per FR-023a, /dev/ uses path-token-only authentication,
-// and any form POST originating from inside the iframe carries the iframe's
-// preview origin — which by design differs from the SPA's main origin. Applying
-// the Origin check to /dev/ would block legitimate iframe POSTs with 403. The
-// dev-iframe is protected against foreign embeds by the CSP frame-ancestors
-// directive instead (Threat Model T-04).
+// RequireMatchingOriginOnStateChanging is a general-purpose Origin-check CSRF
+// helper. It is NOT currently wired into the live gateway handler chain:
+// gateway.go's setupServices wraps the main mux with only
+// configSnapshotMiddleware and middleware.CSRFMiddleware (the double-submit
+// cookie check) — this function is not one of those wraps. The live
+// cross-origin defense for /api/v1/*'s state-changing routes today is that
+// wired CSRFMiddleware, not this helper. RequireMatchingOriginOnStateChanging
+// is kept as a tested, ready-to-use reference/building-block (see
+// origin_test.go) in case a future change wants an additional Origin-based
+// fence, but it cannot be wired in as-is: it 403s any state-changing request
+// whose Origin header is missing (originMatches("", expected) is always
+// false), which would reject every CLI/curl/webhook client (none send an
+// Origin header) and any same-origin browser POST from a user agent that
+// omits Origin. Wiring it would first require adding a bearer-authenticated /
+// no-Origin exemption alongside the /preview/ exemption below.
+//
+// The one exemption this helper DOES implement: it never applies to the
+// /preview/<agent>/<token>/ reverse-proxy path (ADR-044 / FR-012 / FR-023a):
+// /preview/ uses path-token-only authentication, and a state-changing request
+// originating from inside a previewed app (or a form POST proxied through it)
+// carries no Origin header the SPA's main origin would recognize — by
+// design, since the previewed app is not the SPA. Applying the Origin check
+// to /preview/ would block legitimate previewed-app POSTs with 403.
+// /preview/ is protected against foreign embeds by the CSP frame-ancestors
+// directive instead (Threat Model T-04), and FR-013 additionally strips the
+// operator's cookies before the request is proxied to the dev server.
 
 package middleware
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -43,69 +59,10 @@ import (
 // reference this constant rather than the literal string.
 const DevOriginDeniedEvent = "dev.origin_denied"
 
-// canonicalGatewayOrigin returns the browser-facing origin for the main gateway
-// listener. Used as the authoritative value for CORS Access-Control-Allow-Origin
-// and CSP frame-ancestors directives.
-//
-// Resolution order (FR-022 / MR-03):
-//  1. cfg.Gateway.PublicURL set → return it verbatim. Reverse-proxy case: the
-//     operator tells us the public-facing origin.
-//  2. host is a wildcard bind ("0.0.0.0", "::", "[::]") and PublicURL unset →
-//     return empty string. The CALLER interprets empty as "fall back to
-//     frame-ancestors '*'" and emits a boot WARN per FR-007e.
-//  3. host already looks like a URL (contains "://") → parse and return scheme+host.
-//  4. Otherwise → derive from host:port (http or https heuristic).
-//
-// Returns "" when the config is empty (caller should reject all state-changing
-// requests when the expected origin cannot be derived — fail-closed).
-func canonicalGatewayOrigin(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-
-	// 1. PublicURL override (FR-022).
-	if pu := strings.TrimSpace(cfg.Gateway.PublicURL); pu != "" {
-		return pu
-	}
-
-	host := strings.TrimSpace(cfg.Gateway.Host)
-	if host == "" {
-		return ""
-	}
-
-	// 2. Wildcard-bind hosts: 0.0.0.0, ::, [::] (MR-03 / FR-007e).
-	normHost := strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-	switch normHost {
-	case "0.0.0.0", "::", "::0":
-		return ""
-	}
-
-	// 3. If host already looks like a URL, parse it.
-	if strings.Contains(host, "://") {
-		u, err := url.Parse(host)
-		if err != nil || u.Host == "" {
-			return ""
-		}
-		return fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-	}
-
-	// 4. Bare host — derive scheme from port heuristic.
-	port := cfg.Gateway.Port
-	scheme := "http"
-	if port == 443 {
-		scheme = "https"
-	}
-	if port > 0 && port != 80 && port != 443 {
-		return fmt.Sprintf("%s://%s:%d", scheme, host, port)
-	}
-	return fmt.Sprintf("%s://%s", scheme, host)
-}
-
-// CanonicalGatewayOrigin is the exported form, used by Track B's CSP builder
-// and by gateway.Run for the allowedOrigin computation.
-func CanonicalGatewayOrigin(cfg *config.Config) string {
-	return canonicalGatewayOrigin(cfg)
-}
+// canonicalGatewayOrigin / CanonicalGatewayOrigin live in origin_canonical.go —
+// deliberately WITHOUT this file's `//go:build !cgo` tag so pkg/tools (via
+// web_serve.go) can import CanonicalGatewayOrigin under CGO, i.e. the `go test
+// -race` gate. See that file's header for the full rationale.
 
 // originMatches returns true when the request's Origin header matches the
 // expected gateway origin. Comparison is case-insensitive on the host
@@ -117,6 +74,21 @@ func originMatches(requestOrigin, expectedOrigin string) bool {
 	return strings.EqualFold(strings.TrimRight(requestOrigin, "/"),
 		strings.TrimRight(expectedOrigin, "/"))
 }
+
+// PreviewPathPrefix is the reverse-proxied dev-preview surface
+// (rest_preview.go HandlePreview) and the single source of truth for that path
+// prefix across the security boundary: csrf.go's defaultExemptPrefixes and this
+// file's Origin-check exemption both reference it, so the CSRF-exempt and
+// Origin-exempt prefixes can never drift apart. The gateway package
+// (rest.go registration, rest_preview.go path-strip) references it as
+// middleware.PreviewPathPrefix for the same reason.
+//
+// Preview URLs are tokenized (/preview/<agent>/<token>/…) so an exact-path
+// exemption can never match, and the path token IS the credential — a
+// previewed app must be able to submit state-changing requests through the
+// proxy without carrying an Origin header the SPA's main origin recognizes
+// (ADR-044 / FR-012).
+const PreviewPathPrefix = "/preview/"
 
 // isStateChangingMethod returns true for HTTP methods that modify state
 // (POST, PUT, PATCH, DELETE). GET, HEAD, OPTIONS are safe by RFC 7231
@@ -133,6 +105,16 @@ func isStateChangingMethod(method string) bool {
 // RequireMatchingOriginOnStateChanging returns a middleware that rejects
 // state-changing requests (POST/PUT/PATCH/DELETE) whose Origin header is
 // missing or does not match the canonicalised cfg.Gateway.Host.
+//
+// NOT CURRENTLY WIRED: this middleware is not installed anywhere in the live
+// gateway.go handler chain (see the package doc above). It is kept as a
+// tested, ready-reference building block, not as an active protection layer
+// — do not assume requests are passing through this check. The live
+// cross-origin defense on /api/v1/*'s state-changing routes today is
+// middleware.CSRFMiddleware's double-submit cookie check. Wiring this helper
+// as-is would 403 every Origin-less request (all CLI/curl/webhook clients,
+// plus any browser that omits Origin on a same-origin POST) — it would need
+// a bearer-authenticated / no-Origin exemption added first.
 //
 // GET (and HEAD, OPTIONS) requests bypass the check entirely.
 //
@@ -153,6 +135,12 @@ func RequireMatchingOriginOnStateChanging(
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// /preview/ is prefix-exempt for ALL methods (FR-012) — see
+			// PreviewPathPrefix's doc comment.
+			if strings.HasPrefix(r.URL.Path, PreviewPathPrefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			// GET (and other safe methods) bypass the check.
 			if !isStateChangingMethod(r.Method) {
 				next.ServeHTTP(w, r)

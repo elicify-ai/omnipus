@@ -112,8 +112,22 @@ vi.mock('@/components/chat/ChatControls', () => ({
   ChatControls: () => <div data-testid="chat-controls-mock">ChatControls</div>,
 }))
 
+// Workspace-setup kickoff — mocked to a no-op. This suite covers
+// the container's OWN layout/session-lifecycle concerns, not the kickoff
+// mechanics (those have dedicated coverage in
+// src/hooks/useWorkspaceSetupKickoff.test.ts and
+// src/store/chat.workspace-setup-kickoff.test.ts). Mocking it here (rather
+// than letting the real hook import '@/store/chat') avoids dragging chat.ts's
+// module-load-time registerChatSetReplaying/registerChatResetForReplay/
+// registerSyncChatForeground calls into this file's already-partial
+// '@/store/session' mock above, which doesn't export those.
+vi.mock('@/hooks/useWorkspaceSetupKickoff', () => ({
+  useWorkspaceSetupKickoff: vi.fn(),
+}))
+
 // ── Component under test ───────────────────────────────────────────────────────
 import { WorkspaceTabContainer } from './WorkspaceTabContainer'
+import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -258,5 +272,48 @@ describe('WorkspaceTabContainer — session lifecycle (Bug 1 regression)', () =>
 
     // Still only once
     expect(mockEnterWorkspaceChat).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('WorkspaceTabContainer — useWorkspaceSetupKickoff wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPathname = '/workspaces/ws-1/chat'
+    mockWorkspaceId = 'ws-1'
+    mockWorkspaceName = 'My Workspace'
+  })
+
+  it('calls useWorkspaceSetupKickoff with the RESOLVED workspace object once the workspace query has data', async () => {
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    // The container must hand the hook the actual resolved Workspace object
+    // (not the bare workspaceId string, and not undefined) once the
+    // workspaces query has data matching the route param — the hook's own
+    // guards (setup_pending, status, core_team) all read fields off this
+    // object.
+    expect(useWorkspaceSetupKickoff).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ws-1', name: 'My Workspace' }),
+    )
+  })
+
+  it('re-calls useWorkspaceSetupKickoff with the newly-resolved workspace when the workspace id changes', async () => {
+    const { rerender } = render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    await act(async () => { /* flush effects */ })
+
+    expect(useWorkspaceSetupKickoff).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'ws-1' }),
+    )
+
+    mockWorkspaceId = 'ws-2'
+    mockWorkspaceName = 'Second Workspace'
+    await act(async () => {
+      rerender(<WorkspaceTabContainer workspaceId="ws-2" />)
+    })
+
+    expect(useWorkspaceSetupKickoff).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'ws-2', name: 'Second Workspace' }),
+    )
   })
 })

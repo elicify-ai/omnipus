@@ -17,6 +17,7 @@ import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, newChatButton, selectAgent } from './fixtures/selectors';
+import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -65,6 +66,16 @@ async function startFreshChat(page: import('@playwright/test').Page): Promise<vo
 }
 
 test.beforeEach(async ({ page }) => {
+  // Delegation visuals (SubagentBlock cards) are verbose-only in the chat
+  // thread since commit 8e1bf1b9 (shouldRenderSubagentSpan gates on
+  // verboseChatEnabled, default false — src/store/chatPreferences.ts). This
+  // whole file asserts the sub-turn MECHANICS (spawn, grandchild refusal,
+  // sibling independence, live step counter, a11y) via
+  // [data-testid="subagent-collapsed"] as its thread-based signal, so it
+  // opts into verbose chat here to keep that signal working — independent
+  // of the default (non-verbose) display policy, which is covered
+  // separately by delegation-hidden.spec.ts.
+  await enableVerboseChat(page);
   await page.goto('/');
 });
 

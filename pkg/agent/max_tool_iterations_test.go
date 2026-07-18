@@ -18,7 +18,7 @@ func TestNewAgentInstance_MaxToolIterationsResolution(t *testing.T) {
 	mk := func(perAgent, def int) *AgentInstance {
 		t.Helper()
 		cfg := config.DefaultConfig()
-		cfg.Agents.Defaults.Workspace = filepath.Join(home, "ws")
+		cfg.Agents.Defaults.Home = filepath.Join(home, "ws")
 		cfg.Agents.Defaults.MaxToolIterations = def
 		agentCfg := &config.AgentConfig{ID: "iter-test", Name: "IterTest", MaxToolIterations: perAgent}
 		ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})

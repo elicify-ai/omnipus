@@ -124,9 +124,23 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		if hasTranscript {
 			continue
 		}
+		// Removing sessDir also removes its meta.json — with metaCache in
+		// play, an unguarded os.RemoveAll here would leave a stale cache
+		// entry pointing at a directory that no longer exists on disk
+		// (a phantom session that ListSessions/GetMeta would keep serving
+		// forever). Guard the decision + cache eviction with us.mu so the
+		// removal and the cache update are atomic with respect to every
+		// other UnifiedStore method. The first pass above (aged .jsonl file
+		// removal) never touches meta.json, so it stays unlocked as before.
 		sessID := filepath.Base(sessDir)
-		if rmErr := os.RemoveAll(sessDir); rmErr != nil {
-			slog.Warn("session: retention_sweep: dir remove failed", "dir", sessDir, "error", rmErr)
+		us.mu.Lock()
+		dirRmErr := os.RemoveAll(sessDir)
+		if dirRmErr == nil {
+			delete(us.metaCache, sessID)
+		}
+		us.mu.Unlock()
+		if dirRmErr != nil {
+			slog.Warn("session: retention_sweep: dir remove failed", "dir", sessDir, "error", dirRmErr)
 		}
 		// Cascade-delete uploads for this session so disk space is reclaimed.
 		uploadsDir := filepath.Join(uploadsRoot, sessID)

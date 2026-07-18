@@ -1,10 +1,20 @@
 /**
  * preview-url.ts — Pure URL-rewrite and path-validation utilities for the
- * iframe preview feature (FR-010, FR-010a, FR-010b, FR-016, FR-017,
- * FR-017a, FR-017b).
+ * chat preview-link feature (FR-010b, FR-016, FR-017 — preview-on-main-listener
+ * spec, ADR-044).
  *
- * All three functions are pure (no DOM access, no side effects, no React)
- * so they can be exercised in plain Node.js / Vitest without a browser.
+ * ADR-044 note: `/preview/` is now served on the SAME origin as the SPA (no
+ * separate preview listener/port/origin — see docs/internal/architecture/
+ * ADR-044-preview-on-main-listener.md and
+ * docs/internal/specs/preview-on-main-listener-spec.md, FR-005/FR-015/FR-016).
+ * `serve_web` already returns an absolute URL on that canonical origin, so
+ * this module no longer resolves an operator-configured preview origin/port
+ * — it only validates and (for old transcripts) normalises legacy bind-all
+ * hosts to the current page's own origin.
+ *
+ * All functions are pure (no DOM access beyond the values callers pass in,
+ * no side effects, no React) so they can be exercised in plain Node.js /
+ * Vitest without a browser.
  */
 
 /**
@@ -30,9 +40,12 @@ export function hasPreviewShape(v: unknown): v is { path: string; url: string } 
 }
 
 /**
- * Legacy bind-all hosts that the gateway may place in tool-result URLs.
- * These are never browser-reachable as-is, so we rewrite them to the
- * actual hostname the user is accessing the SPA from.
+ * Legacy bind-all hosts that an OLD tool result (recorded before ADR-044, or
+ * before the prior two-port fix) may still contain. These are never
+ * browser-reachable as-is, so we rewrite them to the current page's own
+ * hostname/port. New `serve_web` results never contain these — the backend
+ * always emits the canonical gateway origin (FR-005) — this exists purely
+ * for historical transcript replay.
  *
  * Ambiguity note — WHATWG URL normalisation:
  *   • `http://0:5000/…`    → parsed hostname is `"0.0.0.0"` (normalised).
@@ -82,7 +95,7 @@ const PREVIEW_PATH_REGEX = /^\/(?:preview|serve|dev)\/[A-Za-z0-9_\-]+\/[A-Za-z0-
 
 /**
  * Returns `true` when `path` is a safe, well-formed preview path that the
- * SPA may use as an iframe `src` suffix.
+ * SPA may use to build a preview href.
  *
  * @example
  * validatePreviewPath('/preview/agent-1/abc123/')     // true  (canonical)
@@ -100,7 +113,8 @@ export function validatePreviewPath(path: string): boolean {
 }
 
 /**
- * Rewrites `href` when its host is a legacy bind-all address (FR-016/017).
+ * Rewrites `href` when its host is a legacy bind-all address (historical
+ * transcript replay only — see LEGACY_HOSTS above).
  *
  * Rules applied in order:
  *  1. Relative paths (`/…`) and scheme-relative URLs (`//…`) are returned
@@ -112,14 +126,15 @@ export function validatePreviewPath(path: string): boolean {
  *  4. If the parsed `hostname` is NOT in `LEGACY_HOSTS`, return unchanged.
  *  5. Rewrite the host to `hostname` (the caller's `window.location.hostname`).
  *  6. If the path starts with `/preview/` (canonical), `/serve/`, or `/dev/`
- *     (both legacy back-compat paths), also swap the port to `previewPort`.
+ *     (both legacy back-compat paths), also swap the port to `port` (the
+ *     caller's own origin port — preview now shares that origin, ADR-044).
  *     Otherwise preserve the original port.
  *
- * @param href - The raw href string from the markdown link.
+ * @param href - The raw href string from the markdown link or tool result.
  * @param hostname - The host the user is accessing the SPA from
  *   (`window.location.hostname`). May be a bare IP, a domain, or `localhost`.
- * @param previewPort - The preview listener port advertised by
- *   `GET /api/v1/about` as `preview_port`.
+ * @param port - The current page's own port (`window.location.port`,
+ *   defaulted per scheme) — preview and the SPA share this origin post-ADR-044.
  * @returns The rewritten URL string, or `href` unchanged when no rewrite applies.
  *
  * @example
@@ -202,7 +217,7 @@ export function validatePreviewPath(path: string): boolean {
  * rewriteLegacyURL('not-a-url', '1.2.3.4', 5001)
  * // => 'not-a-url'
  */
-export function rewriteLegacyURL(href: string, hostname: string, previewPort: number): string {
+export function rewriteLegacyURL(href: string, hostname: string, port: number): string {
   // Rule 1: relative paths and scheme-relative URLs pass through unchanged.
   // Check BEFORE parsing so the WHATWG URL constructor cannot attach a
   // placeholder and produce a false positive.
@@ -235,14 +250,15 @@ export function rewriteLegacyURL(href: string, hostname: string, previewPort: nu
   // We set `hostname` (not `host`) so we can control the port separately.
   parsed.hostname = hostname
 
-  // Rule 6: if the path is a preview/serve/dev path, swap to the preview port;
-  // otherwise preserve the port already in the URL.
+  // Rule 6: if the path is a preview/serve/dev path, swap to the caller's own
+  // port (preview now shares the SPA's origin, ADR-044); otherwise preserve
+  // the port already in the URL.
   if (
     parsed.pathname.startsWith('/preview/') ||
     parsed.pathname.startsWith('/serve/') ||
     parsed.pathname.startsWith('/dev/')
   ) {
-    parsed.port = String(previewPort)
+    parsed.port = String(port)
   }
   // (If not a preview/serve/dev path, parsed.port was already preserved by the
   // assignment to `parsed.hostname` above, which does not affect the port.)
@@ -255,196 +271,118 @@ export function rewriteLegacyURL(href: string, hostname: string, previewPort: nu
 }
 
 /**
- * Resolve the effective preview hostname + port the SPA should use when
- * rewriting legacy `0.0.0.0` / `::` URLs in markdown.
+ * Historically resolved an operator-configured preview host/port override
+ * advertised on `/api/v1/about` (before ADR-044) so markdown links pointing
+ * at a legacy bind-all host could be rewritten to a reachable address on the
+ * (then-separate) preview listener.
  *
- * Priority:
- *   1. `aboutInfo.preview_origin` — operator-configured override (a full URL).
- *      We extract hostname + port from it. If the hostname in preview_origin
- *      is itself a legacy bind-all (operator misconfigured), fall back to the
- *      caller's `windowHostname` so the result is still reachable.
- *   2. `aboutInfo.preview_port` — the gateway's preview listener port,
- *      combined with `windowHostname`.
- *   3. nothing — return null; caller should leave the URL unchanged.
+ * ADR-044 retires that separate preview listener/port/origin entirely —
+ * `/preview/` now always shares the SPA's own origin. There is no override
+ * left to resolve, so this always returns `null` (= "no rewrite needed";
+ * hrefs render exactly as the backend returned them). The function is kept
+ * (rather than deleted), with its original two-argument shape, purely so
+ * existing callers (`markdown-text.tsx`, `historical-markdown.tsx` via
+ * `markdown-shared.tsx`'s `createLinkRenderer`) do not need to change.
  */
 export function resolveEffectivePreview(
-  aboutInfo: { preview_origin?: string; preview_port?: number } | null | undefined,
-  windowHostname: string,
+  _aboutInfo: unknown,
+  _windowHostname: string,
 ): { hostname: string; port: number } | null {
-  if (aboutInfo?.preview_origin) {
-    try {
-      const u = new URL(aboutInfo.preview_origin)
-      const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80)
-      if (port > 0) {
-        const host = LEGACY_HOSTS.has(u.hostname) ? windowHostname : u.hostname
-        return { hostname: host, port }
-      }
-    } catch {
-      // Malformed preview_origin → fall through to preview_port.
-    }
-  }
-  if (aboutInfo?.preview_port && aboutInfo.preview_port > 0) {
-    return { hostname: windowHostname, port: aboutInfo.preview_port }
-  }
   return null
 }
 
 /**
- * Arguments for `buildIframeURL`.
- */
-export interface BuildIframeURLArgs { // not-wire-format: arguments bag for the buildIframeURL helper function; never serialised over any HTTP/WS boundary
-  /**
-   * The relative path from the tool result, e.g.
-   * `"/preview/<agent>/<token>/"` (canonical) or the legacy
-   * `"/serve/<agent>/<token>/"` / `"/dev/<agent>/<token>/"` for transcript
-   * replay.
-   */
-  path: string
-  /**
-   * When the operator has set `gateway.preview_origin`, this is that value
-   * fully-qualified, e.g. `"https://preview.acme.com"`. When absent or empty,
-   * the URL is constructed from `protocol`, `hostname`, and `previewPort`.
-   */
-  previewOrigin?: string
-  /** The preview listener port from `/api/v1/about`. */
-  previewPort: number
-  /** `window.location.hostname` — the host the user is accessing the SPA from. */
-  hostname: string
-  /** `window.location.protocol` — e.g. `"http:"` or `"https:"`. */
-  protocol: string
-}
-
-/**
- * Constructs the iframe `src` URL for a `web_serve` tool result (or the
- * legacy `serve_workspace` / `run_in_workspace` tool results kept for
- * transcript replay).
+ * Resolves the href to render for a `web_serve` tool result (dev or static
+ * mode), or the legacy `serve_workspace` / `run_in_workspace` shapes kept
+ * for transcript replay.
  *
- * Returns either `{ url: string }` on success or one of three typed errors:
- *   - `{ error: 'invalid-path' }` — `path` failed `validatePreviewPath`.
- *     Indicates a malformed or corrupt tool result.
- *   - `{ error: 'scheme-mismatch' }` — `previewOrigin` is HTTPS but the
- *     SPA was loaded over HTTP (or vice-versa). Mixed-content iframes would
- *     be blocked by the browser; this fails fast with a clear error
- *     (FR-010a, US-5 AS-3).
- *   - `{ error: 'misconfigured-origin' }` — `previewOrigin` is set but
- *     unparseable as a URL. Indicates an operator deployment problem, not a
- *     corrupt tool result.
+ * Since ADR-044, `serve_web` already returns an absolute URL on the
+ * canonical gateway origin (FR-005) — the SAME origin the SPA itself is
+ * served from. This function no longer builds a URL from an
+ * operator-configured preview origin/port; it:
+ *   1. Prefers the result's own `url` when it is a validatable absolute
+ *      http(s) URL or a validatable relative path, normalising any legacy
+ *      bind-all host via `rewriteLegacyURL` (old-transcript replay safety).
+ *   2. Falls back to building an absolute URL from the relative `path`
+ *      field against `origin` (the SPA's own `window.location.origin`).
+ *   3. Returns `{ error: 'invalid-path' }` when neither field yields a
+ *      validatable preview path — the caller falls back to rendering the
+ *      raw `url` (if any) via a scheme-checked link-only fallback.
  *
- * Per FR-010, FR-010a, FR-010b.
+ * Per FR-016 / FR-017.
  *
  * @example
- * // Happy path — no previewOrigin, HTTP SPA (canonical /preview/ path)
- * buildIframeURL({
+ * // Happy path — absolute url on the canonical origin
+ * resolvePreviewHref({
+ *   url: 'https://pod.example.com/preview/agent-1/abc123/',
+ *   origin: 'https://pod.example.com',
+ *   hostname: 'pod.example.com',
+ *   port: 443,
+ * })
+ * // => { href: 'https://pod.example.com/preview/agent-1/abc123/' }
+ *
+ * @example
+ * // Relative path only (no absolute url) — built from the SPA's own origin
+ * resolvePreviewHref({
  *   path: '/preview/agent-1/abc123/',
- *   previewPort: 5001,
+ *   origin: 'http://localhost:5000',
+ *   hostname: 'localhost',
+ *   port: 5000,
+ * })
+ * // => { href: 'http://localhost:5000/preview/agent-1/abc123/' }
+ *
+ * @example
+ * // Legacy bind-all host in an old transcript's url — normalised
+ * resolvePreviewHref({
+ *   url: 'http://0.0.0.0:5000/preview/agent-1/abc123/',
+ *   origin: 'http://146.190.89.151:5000',
  *   hostname: '146.190.89.151',
- *   protocol: 'http:',
+ *   port: 5000,
  * })
- * // => { url: 'http://146.190.89.151:5001/preview/agent-1/abc123/' }
+ * // => { href: 'http://146.190.89.151:5000/preview/agent-1/abc123/' }
  *
  * @example
- * // Happy path — previewOrigin set (canonical /preview/ path)
- * buildIframeURL({
- *   path: '/preview/agent-1/abc123/',
- *   previewOrigin: 'https://preview.acme.com',
- *   previewPort: 5001,
- *   hostname: 'omnipus.acme.com',
- *   protocol: 'https:',
- * })
- * // => { url: 'https://preview.acme.com/preview/agent-1/abc123/' }
- *
- * @example
- * // Legacy back-compat: /serve/ path still accepted for transcript replay
- * buildIframeURL({
- *   path: '/serve/agent-1/abc123/',
- *   previewPort: 5001,
- *   hostname: '146.190.89.151',
- *   protocol: 'http:',
- * })
- * // => { url: 'http://146.190.89.151:5001/serve/agent-1/abc123/' }
- *
- * @example
- * // Invalid path
- * buildIframeURL({
+ * // Invalid path in both fields
+ * resolvePreviewHref({
  *   path: 'javascript:alert(1)',
- *   previewPort: 5001,
- *   hostname: '1.2.3.4',
- *   protocol: 'http:',
- * })
- * // => { error: 'invalid-path' }
- *
- * @example
- * // Scheme mismatch — HTTP SPA + HTTPS preview origin
- * buildIframeURL({
- *   path: '/preview/agent-1/abc123/',
- *   previewOrigin: 'https://preview.example.com',
- *   previewPort: 443,
- *   hostname: 'main.example.com',
- *   protocol: 'http:',
- * })
- * // => { error: 'scheme-mismatch' }
- *
- * @example
- * // Invalid path — path traversal attempt
- * buildIframeURL({
- *   path: '/preview/../../etc/passwd',
- *   previewPort: 5001,
- *   hostname: '1.2.3.4',
- *   protocol: 'http:',
- * })
- * // => { error: 'invalid-path' }
- *
- * @example
- * // Invalid path — empty string
- * buildIframeURL({
- *   path: '',
- *   previewPort: 5001,
- *   hostname: '1.2.3.4',
- *   protocol: 'http:',
- * })
- * // => { error: 'invalid-path' }
- *
- * @example
- * // Invalid path — API path
- * buildIframeURL({
- *   path: '/api/v1/agents',
- *   previewPort: 5001,
- *   hostname: '1.2.3.4',
- *   protocol: 'http:',
+ *   origin: 'http://localhost:5000',
+ *   hostname: 'localhost',
+ *   port: 5000,
  * })
  * // => { error: 'invalid-path' }
  */
-export function buildIframeURL(args: BuildIframeURLArgs): { url: string } | { error: 'invalid-path' | 'scheme-mismatch' | 'misconfigured-origin' } {
-  const { path, previewOrigin, previewPort, hostname, protocol } = args
+export function resolvePreviewHref(args: {
+  path?: string
+  url?: string
+  origin: string
+  hostname: string
+  port: number
+}): { href: string } | { error: 'invalid-path' } {
+  const { path, url, origin, hostname, port } = args
 
-  // Step 1: validate path via the shared regex (FR-010b).
-  if (!validatePreviewPath(path)) {
-    return { error: 'invalid-path' }
+  if (url && url.length > 0) {
+    if (url.startsWith('/')) {
+      if (validatePreviewPath(url)) {
+        return { href: rewriteLegacyURL(`${origin}${url}`, hostname, port) }
+      }
+    } else {
+      try {
+        const parsed = new URL(url)
+        if (
+          (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+          validatePreviewPath(parsed.pathname)
+        ) {
+          return { href: rewriteLegacyURL(url, hostname, port) }
+        }
+      } catch {
+        // Not an absolute URL — fall through to the relative `path` field.
+      }
+    }
   }
 
-  // Step 2: if previewOrigin is provided and non-empty, use it.
-  if (previewOrigin && previewOrigin.length > 0) {
-    // Parse the preview origin to extract its scheme for the mismatch check.
-    let originParsed: URL
-    try {
-      originParsed = new URL(previewOrigin)
-    } catch {
-      // Unparseable preview origin — this is an operator deployment problem
-      // (misconfigured gateway.preview_origin), not a corrupt tool result.
-      return { error: 'misconfigured-origin' }
-    }
-
-    // Scheme mismatch check (FR-010a): reject HTTP + HTTPS combos.
-    if (originParsed.protocol !== protocol) {
-      return { error: 'scheme-mismatch' }
-    }
-
-    // Strip trailing slash from origin, prepend path.
-    const base = previewOrigin.replace(/\/$/, '')
-    return { url: base + path }
+  if (path && validatePreviewPath(path)) {
+    return { href: rewriteLegacyURL(`${origin}${path}`, hostname, port) }
   }
 
-  // Step 3: no previewOrigin — construct from current window coordinates.
-  const url = `${protocol}//${hostname}:${previewPort}${path}`
-  return { url }
+  return { error: 'invalid-path' }
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"mime"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,7 +18,11 @@ import (
 // to the user on the current chat channel via the MediaStore pipeline.
 type SendFileTool struct {
 	BaseTool
-	workspace   string
+	// agentHome is the agent's fixed home directory (the pre-ADR-046-rename
+	// "workspace" constructor parameter) — fspolicy.EffectiveFSPolicy's
+	// agentHome argument. When the turn carries a TurnWorkspaceDir,
+	// EffectiveFSPolicy prefers that re-rooted directory instead.
+	agentHome   string
 	restrict    bool
 	maxFileSize int
 	mediaStore  media.MediaStore
@@ -30,7 +33,7 @@ type SendFileTool struct {
 }
 
 func NewSendFileTool(
-	workspace string,
+	agentHome string,
 	restrict bool,
 	maxFileSize int,
 	store media.MediaStore,
@@ -44,7 +47,7 @@ func NewSendFileTool(
 		patterns = allowPaths[0]
 	}
 	return &SendFileTool{
-		workspace:   workspace,
+		agentHome:   agentHome,
 		restrict:    restrict,
 		maxFileSize: maxFileSize,
 		mediaStore:  store,
@@ -108,12 +111,20 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("media store not configured")
 	}
 
-	resolved, err := validatePathWithAllowPaths(path, t.workspace, t.restrict, t.allowPaths)
+	// Resolve the single, authoritative filesystem policy for this turn
+	// (FR-036), mirroring the generic file tools (ReadFileTool et al.).
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid path: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}
 
-	info, err := os.Stat(resolved)
+	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.allowPaths)
+	if err != nil {
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+
+	info, err := handle.Stat()
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("file not found: %v", err))
 	}
@@ -125,6 +136,15 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			"file too large: %d bytes (max %d bytes)",
 			info.Size(), t.maxFileSize,
 		))
+	}
+
+	// RealPath is the ONE documented exception to "never hand back a bare
+	// string" (PathHandle.RealPath's doc comment) — used here solely because
+	// media.MediaStore.Store/RefByPath are OS-boundary call sites with no
+	// PathHandle parameter of their own, exactly like exec.Cmd.Dir.
+	resolved, err := handle.RealPath()
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve file path: %v", err))
 	}
 
 	filename, _ := args["filename"].(string)

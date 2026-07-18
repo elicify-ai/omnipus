@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { ArrowsClockwise, LockKey } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
@@ -84,19 +84,49 @@ export function ProfileSection() {
     queryFn: fetchUserContext,
   })
 
+  // Draft-ownership rule (see useAutoSave's `onSaved` doc comment): a dirty
+  // field is never overwritten by server data. Set on every onChange below;
+  // cleared only when `onSaved` confirms the save snapshot still equals the
+  // live draft. The hydration effect skips entirely while dirty.
+  const contextDirtyRef = useRef(false)
+  const markContextDirty = () => { contextDirtyRef.current = true }
+
   useEffect(() => {
+    if (contextDirtyRef.current) return
     if (userContextData) {
       setUserContent(userContextData.content)
     }
   }, [userContextData])
 
+  // Item 4 (pagehide flush): the tracked `data` must match the wire body
+  // exactly (`{content: string}`, per `updateUserContext`) so the hook's
+  // built-in single-`flushUrl` keepalive fetch — which just
+  // `JSON.stringify`s whatever `data` is — sends the right shape. A bare
+  // string would keepalive-PUT a JSON string literal, not an object.
+  const contextFormData = useMemo(() => ({ content: userContent }), [userContent])
+
   const { status: contextSaveStatus, error: contextSaveError } = useAutoSave(
-    userContent,
-    async (content) => {
-      await updateUserContext(content)
+    contextFormData,
+    async (data) => {
+      await updateUserContext(data.content)
       queryClient.invalidateQueries({ queryKey: ['user-context'] })
     },
-    { disabled: userContextError },
+    {
+      disabled: userContextError,
+      // Long-form surface — raised from the 500ms default so a normal
+      // typing cadence doesn't fire a save (and its own invalidate/refetch
+      // echo) on nearly every pause.
+      debounceMs: 1500,
+      onSaved: (_saved, isCurrent) => {
+        // Draft-ownership rule — see useAutoSave onSaved docs; clear only
+        // when isCurrent.
+        if (isCurrent) contextDirtyRef.current = false
+      },
+      // Item 4: best-effort flush on tab close / page hide / backgrounding.
+      // The hook's keepalive fetch carries the CSRF double-submit header
+      // (hotfix/v0.1.1 retired the flushAuthToken bearer mechanism).
+      flushUrl: '/api/v1/user-context',
+    },
   )
 
   const { mutate: submitPasswordChange, isPending: isChangingPassword } = useMutation({
@@ -350,7 +380,7 @@ export function ProfileSection() {
               aria-labelledby="workspace-context-heading"
               aria-describedby="workspace-context-desc"
               value={userContent}
-              onChange={(e) => setUserContent(e.target.value)}
+              onChange={(e) => { markContextDirty(); setUserContent(e.target.value) }}
               placeholder={"# About Me\n\nDescribe your role, expertise, and preferences..."}
               rows={8}
               className="text-xs font-mono resize-none"

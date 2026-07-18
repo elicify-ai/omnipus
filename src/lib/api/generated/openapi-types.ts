@@ -374,7 +374,7 @@ export interface paths {
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
          */
         put: operations["updateAgent"];
         post?: never;
@@ -565,7 +565,7 @@ export interface paths {
         };
         /**
          * Gateway metadata
-         * @description Returns version, runtime, uptime, PID, and preview listener fields. Used by the SPA to construct iframe preview URLs (FR-009).
+         * @description Returns version, runtime, uptime, PID, and the live preview_enabled flag. The SPA uses preview_enabled to decide whether to surface preview links, which resolve against the main gateway origin at /preview/ (no separate preview listener/port/origin exists — ADR-044).
          */
         get: operations["getAbout"];
         put?: never;
@@ -1289,7 +1289,7 @@ export interface paths {
         };
         /**
          * Serve agent-generated preview content (token-auth)
-         * @description Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the separate preview listener (default port gateway.port + 1). Unknown or expired tokens return 404. Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection.
+         * @description Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the MAIN gateway listener at the /preview/ path prefix (ADR-044) — there is no separate preview listener/port/origin. Gated by the live gateway.preview_enabled flag: when disabled the endpoint returns 404 with no restart required. Unknown or expired tokens return 404. All HTTP methods are proxied (previewed apps may POST). Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection; the proxy strips inbound Cookie/Authorization and neutralizes reserved Set-Cookie so a previewed app cannot read or plant the gateway session/CSRF cookies.
          */
         get: operations["getPreview"];
         put?: never;
@@ -3015,12 +3015,6 @@ export interface components {
              * @example 50
              */
             max_tool_iterations: number;
-            /**
-             * @description Tool execution steering strategy. "one-at-a-time" = approve each tool call individually. Workers always use "one-at-a-time" (server-set).
-             * @example one-at-a-time
-             * @enum {string}
-             */
-            steering_mode: "one-at-a-time" | "queue-and-process";
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
@@ -3228,7 +3222,7 @@ export interface components {
         AgentCreateRequest: components["schemas"]["AgentCreateRequestMain"] | components["schemas"]["AgentCreateRequestSubagent"] | components["schemas"]["AgentCreateRequestSubagent3p"];
         /**
          * AgentCreateRequestMain
-         * @description Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice and steering_mode are Main-only; executor is absent (Main never has one).
+         * @description Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
          */
         AgentCreateRequestMain: {
             /**
@@ -3351,16 +3345,10 @@ export interface components {
              * @example 50
              */
             max_tool_iterations?: number;
-            /**
-             * @description Tool execution steering strategy. Main only; the server forces "one-at-a-time" for workers.
-             * @example one-at-a-time
-             * @enum {string}
-             */
-            steering_mode?: "one-at-a-time" | "queue-and-process";
         };
         /**
          * AgentCreateRequestSubagent
-         * @description Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no steering_mode (workers are forced one-at-a-time server-side), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
+         * @description Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
          */
         AgentCreateRequestSubagent: {
             /**
@@ -3481,7 +3469,7 @@ export interface components {
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, steering_mode, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
          */
         AgentCreateRequestSubagent3p: {
             /**
@@ -3556,7 +3544,7 @@ export interface components {
              */
             timeout_seconds?: number;
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, max_tool_iterations, and steering_mode may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
+        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
         AgentUpdateRequest: {
             /**
              * Format: date-time
@@ -3604,12 +3592,6 @@ export interface components {
              * @example 100
              */
             max_tool_iterations?: number;
-            /**
-             * @description New steering mode. Allowed on all agents (Main only — server forces "one-at-a-time" for workers).
-             * @example one-at-a-time
-             * @enum {string}
-             */
-            steering_mode?: "one-at-a-time" | "queue-and-process";
             /**
              * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
              * @example false
@@ -4620,20 +4602,10 @@ export interface components {
              */
             pid: number;
             /**
-             * @description Port the preview listener is bound on (FR-009). Default is gateway.port + 1.
-             * @example 5001
-             */
-            preview_port: number;
-            /**
-             * @description Whether the iframe preview listener is currently bound and serving requests. Absent on old gateway versions (treat as true when absent).
+             * @description Whether the preview feature (gateway.preview_enabled) is currently enabled. When true, `/preview/` is served on the main gateway listener (no separate preview listener/port/origin exists).
              * @example true
              */
-            preview_listener_enabled: boolean;
-            /**
-             * @description Fully-qualified HTTPS origin operators set via gateway.preview_origin (e.g. "https://preview.acme.com"). Absent when not configured; the SPA constructs the origin from preview_port in that case.
-             * @example https://preview.acme.com
-             */
-            preview_origin?: string;
+            preview_enabled: boolean;
             /**
              * @description Dev-server warmup timeout from config.
              * @example 30
@@ -7365,6 +7337,11 @@ export interface components {
              * @example false
              */
             is_default?: boolean;
+            /**
+             * @description True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
+             * @example false
+             */
+            readonly setup_pending?: boolean;
             /**
              * Format: date-time
              * @description RFC3339 UTC creation timestamp

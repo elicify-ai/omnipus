@@ -9,10 +9,11 @@
 // direct task assignment:
 //   - createSessionHTTP rejects a worker agent_id (RESIDUAL PATH 5)
 //   - POST/PATCH /api/v1/tasks: agent_id must be a member of the task's
-//     workspace TEAM (core_team ∪ delegation-edge endpoints) — worker or not.
-//     A subagent_3p (external-CLI) worker is rejected unconditionally (task
-//     execution for it is not yet wired). (RESIDUAL PATH 7 - Sprint 2; P1
-//     Agent System fix - workers were previously banned outright)
+//     workspace TEAM (core_team ∪ delegation-edge endpoints) — worker or not,
+//     subagent_3p included (ADR-042 wired external-CLI task execution through
+//     TaskExecutor, retiring the old unconditional 3p rejection). (RESIDUAL
+//     PATH 7 - Sprint 2; P1 Agent System fix - workers were previously banned
+//     outright)
 //   - firstChatTargetAgentID skips a worker (RESIDUAL PATH 6)
 //   - delegation-created worker task still succeeds (control: Jim→worker works)
 //
@@ -23,9 +24,12 @@
 //
 // P1 fix (Agent System): validateTaskAgentID used to reject EVERY worker
 // outright (reg.IsWorker(agentID) => 400), regardless of workspace. That is
-// replaced by a workspace-team-membership check (worker or not), plus an
-// unconditional rejection specifically for subagent_3p (external-CLI) workers
-// — see rest_tasks.go's validateTaskAgentID docstring for the full rationale.
+// replaced by a workspace-team-membership check (worker or not). ADR-042 then
+// retired the interim unconditional subagent_3p rejection — external-CLI task
+// execution is wired through TaskExecutor, so team membership is the ONLY
+// gate for every agent type. See rest_tasks.go's validateTaskAgentID
+// docstring and pkg/gateway/rest_tasks_external_cli_assignment_test.go for
+// the full 3p accept/reject matrix.
 // TestTaskPost_WorkerAssignment / TestTaskPatch_WorkerAssignment below cover
 // the new behavior; the differentiation subtests prove the guard is keyed on
 // team membership, not agent type.
@@ -53,9 +57,11 @@ import (
 )
 
 // newWorkerTestRestAPI builds a restAPI whose config holds a base default agent
-// ("mia"), a native worker ("hans"), a non-worker agent not in any workspace's
-// default team ("otto"), and a subagent_3p (external-CLI) worker ("gustav").
-// All four are registered in the loop's registry.
+// ("mia"), a core Ava agent ("ava" — the sole agent a fresh POST-created
+// workspace's implicit core_team now seeds by default), a native
+// worker ("hans"), a non-worker agent not in any workspace's default team
+// ("otto"), and a subagent_3p (external-CLI) worker ("gustav"). All five are
+// registered in the loop's registry.
 func newWorkerTestRestAPI(t *testing.T) (*restAPI, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -65,13 +71,14 @@ func newWorkerTestRestAPI(t *testing.T) (*restAPI, string) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
 				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "ava", Name: "Ava", Type: config.AgentTypeCore},
 				{ID: "hans", Name: "Hans", Type: config.AgentTypeWorker},
 				{ID: "otto", Name: "Otto", Type: config.AgentTypeCustom},
 				{
@@ -173,7 +180,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 
 	t.Run("worker NOT on workspace team is rejected", func(t *testing.T) {
 		api, _ := newWorkerTestRestAPI(t)
-		wsID := ensureTestWorkspace(t, api) // default team = ["mia"] only; "hans" absent
+		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only; "hans" absent
 
 		body := fmt.Sprintf(
 			`{"title":"WorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
@@ -193,7 +200,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 
 	t.Run("non-worker NOT on workspace team is also rejected (symmetry)", func(t *testing.T) {
 		api, _ := newWorkerTestRestAPI(t)
-		wsID := ensureTestWorkspace(t, api) // default team = ["mia"] only; "otto" (non-worker) absent
+		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only; "otto" (non-worker) absent
 
 		body := fmt.Sprintf(
 			`{"title":"NonWorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"otto"}`,
@@ -210,12 +217,14 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 				"no longer keyed on worker-vs-main type, only on team membership; body=%s", w.Body.String())
 	})
 
-	t.Run("subagent_3p (external-CLI) worker is rejected regardless of team membership", func(t *testing.T) {
+	t.Run("subagent_3p (external-CLI) worker on the team is accepted (ADR-042)", func(t *testing.T) {
 		api, _ := newWorkerTestRestAPI(t)
 		wsID := ensureTestWorkspace(t, api)
-		// Put gustav ON the team so this subtest proves the subagent_3p rejection
-		// is unconditional — if it were actually a team-membership failure this
-		// subtest would be indistinguishable from the plain off-team-worker case.
+		// Put gustav ON the team: since ADR-042 wired external-CLI task
+		// execution through TaskExecutor, team membership is the only gate —
+		// the old unconditional subagent_3p rejection is retired. The off-team
+		// reject + full accept matrix lives in
+		// rest_tasks_external_cli_assignment_test.go.
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia", "gustav"})
 
 		body := fmt.Sprintf(
@@ -228,27 +237,30 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		r.URL.Path = "/api/v1/tasks"
 		api.HandleTasks(w, r)
 
-		require.Equal(t, http.StatusBadRequest, w.Code,
-			"a subagent_3p (external-CLI) worker must be rejected even when it IS a workspace team member — "+
-				"task execution for external-CLI workers is not wired through TaskExecutor today; body=%s",
+		require.Equal(t, http.StatusCreated, w.Code,
+			"a subagent_3p (external-CLI) worker that IS a workspace team member must be accepted — "+
+				"ADR-042 wired external-CLI task execution; body=%s",
 			w.Body.String())
-		bodyLower := strings.ToLower(w.Body.String())
-		assert.Contains(t, bodyLower, "subagent_3p",
-			"the 400 body must name subagent_3p/external-CLI so this is distinguishable from a plain "+
-				"team-membership rejection")
-		assert.NotContains(t, bodyLower, "not a member",
-			"the subagent_3p rejection must use its own message, not the team-membership message")
+		var created gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+		require.NotNil(t, created.AgentId)
+		assert.Equal(t, "gustav", *created.AgentId,
+			"the accepted task must persist the subagent_3p assignee")
 	})
 
 	t.Run("differentiation: base agent in default team is accepted (control)", func(t *testing.T) {
-		// Control proving the guard is real (not hardcoded): "mia" is one of
-		// defaultWorkspaceTeam's base-roster candidates, so a freshly created
-		// workspace (no explicit core_team) already has her on-team by default.
+		// Control proving the guard is real (not hardcoded): "ava" is the ONLY
+		// agent newWorkspaceSetupTeam seeds by default, so a freshly
+		// created workspace (no explicit core_team) already has her on-team.
+		// (This control previously used "mia" via defaultWorkspaceTeam's
+		// full base roster; that seed now applies only to the auto-created
+		// boot default workspace, ensureDefaultWorkspace — not to ordinary
+		// POST-created workspaces like this one.)
 		api, _ := newWorkerTestRestAPI(t)
 		wsID := ensureTestWorkspace(t, api)
 
 		body := fmt.Sprintf(
-			`{"title":"BaseAgentDefaultTeamTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"mia"}`,
+			`{"title":"BaseAgentDefaultTeamTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"ava"}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -258,8 +270,8 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		api.HandleTasks(w, r)
 
 		require.Equal(t, http.StatusCreated, w.Code,
-			"mia is in defaultWorkspaceTeam's base roster, so a fresh workspace accepts her without an "+
-				"explicit core_team; body=%s", w.Body.String())
+			"ava is newWorkspaceSetupTeam's sole default seed member, so a fresh workspace accepts her "+
+				"without an explicit core_team; body=%s", w.Body.String())
 	})
 }
 
@@ -303,7 +315,7 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 		assert.Nil(t, got.AgentId, "task must not have an agent_id after a rejected PATCH")
 	})
 
-	t.Run("PATCH rejects subagent_3p even when on team", func(t *testing.T) {
+	t.Run("PATCH accepts subagent_3p on the team (ADR-042)", func(t *testing.T) {
 		api, _ := newWorkerTestRestAPI(t)
 		wsID := ensureTestWorkspace(t, api)
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia", "gustav"})
@@ -311,10 +323,12 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 		created := createTaskViaAPI(t, api, "PatchSubagent3p", wsID)
 
 		w := patchTask(t, api, created.Id, `{"agent_id":"gustav"}`)
-		require.Equal(t, http.StatusBadRequest, w.Code,
-			"PATCH assigning a subagent_3p worker must be rejected; body=%s", w.Body.String())
-		assert.Contains(t, strings.ToLower(w.Body.String()), "subagent_3p",
-			"the 400 body must name subagent_3p/external-CLI")
+		require.Equal(t, http.StatusOK, w.Code,
+			"PATCH assigning an on-team subagent_3p worker must succeed (ADR-042); body=%s", w.Body.String())
+		var updated gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+		require.NotNil(t, updated.AgentId)
+		assert.Equal(t, "gustav", *updated.AgentId)
 	})
 }
 
@@ -338,8 +352,7 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 func TestTaskPost_AgentOnDifferentWorkspaceTeam_Rejected(t *testing.T) {
 	api, _ := newWorkerTestRestAPI(t)
 
-	// wsA keeps the default roster (mia/jim/ava/ray/planner/explorer/researcher
-	// intersected with what's actually configured) — "hans" is not in it.
+	// wsA keeps the default (Ava-only) seed roster — "hans" is not in it.
 	wsA := ensureTestWorkspace(t, api)
 	wsB := createWorkspaceViaAPI(t, api, "TeamWorkspaceB_"+t.Name(), "")
 	setWorkspaceCoreTeam(t, api, wsB, []string{"mia", "hans"})
@@ -485,6 +498,7 @@ func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
 		nil,             // mediaRefs
 		"",              // modelName (no per-turn override)
 		"",              // workspaceID (no active workspace)
+		false,           // setupKickoff
 		wc,
 	)
 

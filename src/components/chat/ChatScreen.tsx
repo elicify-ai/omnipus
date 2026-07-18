@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -55,17 +55,20 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage } from '@/store/chat'
+import type { ChatMessage, PositionedToolCall, SubagentSpan } from '@/store/chat'
+import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderSubagentSpan, shouldRenderToolCall } from '@/lib/toolVisibility'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
-import { useSlashMenu } from '@/hooks/useSlashMenu'
+import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
 
@@ -380,18 +383,119 @@ function InlineMedia() {
   )
 }
 
+/**
+ * Returns true when the result is the structured delegation-denied sentinel
+ * (mirrors GenericToolCall.tsx's/ToolCallBadge.tsx's detector of the same
+ * name — duplicated locally rather than imported, same as ToolCallBadge.tsx
+ * already does for isMarshalErrorResult below, so ChatScreen.tsx's import of
+ * GenericToolCall.tsx stays limited to the component itself; many sibling
+ * ChatScreen.*.test.tsx files fully replace that module with a bare-bones
+ * `{ GenericToolCall: ... }` stub via vi.mock, and importing anything else
+ * from it here would silently break every one of those mocks).
+ */
+function isDelegationFailureResult(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['error'] === 'delegation_denied'
+  )
+}
+
+/** Returns true when the result is the marshal-error sentinel from replay.go. Mirrors GenericToolCall.tsx's/ToolCallBadge.tsx's detector of the same name — see isDelegationFailureResult's comment for why this is a local duplicate, not an import. */
+function isMarshalErrorSentinel(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
+  )
+}
+
+/**
+ * Mirrors the per-tool-call visibility gate GenericToolCall/BashOutput/
+ * ToolCallBadge each apply at render time (Fix 3, 2026-07-16). Used ONLY to
+ * decide whether a message has any VISIBLE content, so the ghost-bubble
+ * empty-placeholder / bare-Copy-bar logic below doesn't unmask a bubble
+ * whose only content is a hidden delegation or background-bash dispatch
+ * (the D-fix UAT defect resurfacing once the thread started hiding
+ * delegation/background-bash by default — toolVisibility.ts). Reuses the
+ * same sentinel-detection semantics and the shouldRenderToolCall classifier
+ * those components call directly — not re-derived logic, just a local copy
+ * of the two small detector predicates (see their own comments for why).
+ *
+ * `errorFlag` is the outcome signal each call site already carries under a
+ * different name (a baked ToolCall's `.error` string, or a live/streaming
+ * ToolCallMessagePart's `.isError` boolean) — see the two call sites below.
+ * This is a close approximation, not a byte-for-byte replay of every
+ * renderer's exact gate: e.g. BashOutputBlock's own live `isError` source is
+ * AssistantUI's per-part MessagePartStatus, which isn't available at the
+ * message.content-array level this runs at — the live ToolCallMessagePart's
+ * own `isError` field is the closest available proxy. Every tool this
+ * project's registered live tool UIs render OTHER than through
+ * GenericToolCall (Fallback)/BashOutputUI never self-hides regardless of
+ * tool name (only load_tool/delegate/bash are ever hidden — see
+ * shouldRenderToolCall's switch), so calling shouldRenderToolCall uniformly
+ * for every tool name here is accurate for those surfaces too, without
+ * needing to special-case them.
+ */
+function wouldToolCallBeVisible(
+  tool: string,
+  params: Record<string, unknown> | undefined,
+  result: unknown,
+  errorFlag: boolean,
+  verboseChatEnabled: boolean,
+): boolean {
+  const isError = errorFlag || isDelegationFailureResult(result) || isMarshalErrorSentinel(result)
+  return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
+}
+
+/**
+ * Resolves a subagent span's delegate kind for SubagentBlock's W3 "no live
+ * progress" notice — '3p' only for a resolved external-CLI (subagent_3p)
+ * delegate, undefined otherwise (unresolvable agentId included — an unknown
+ * agent must not be guessed as either kind).
+ *
+ * Unlike useRunningActivity.ts's resolveSpanAgentId, this does NOT apply that
+ * hook's originating-delegate-call fallback — and doesn't need to.
+ * resolveSpanAgentId exists to fix which agent's AVATAR/NAME displays, where
+ * getting the exact agent wrong is visibly wrong; resolveSpanAgentType only
+ * needs the delegate's KIND (native vs subagent_3p), which it derives by
+ * resolving `span.agentId` against the agents list. Per ADR-032, agent
+ * identity flows from the resolved target for BOTH dispatch kinds —
+ * `spawnSubTurn` (pkg/agent/subturn.go) sets `agent.ID = execSource.ID`
+ * unconditionally, native or external-CLI, with no per-dispatch-kind
+ * exception — so `span.agentId` reliably carries the resolved delegate id
+ * here regardless of which kind it turns out to be.
+ */
+function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'native' | undefined {
+  if (!span.agentId) return undefined
+  const agent = agents.find((a) => a.id === span.agentId)
+  if (!agent) return undefined
+  return agent.type === 'subagent_3p' ? '3p' : 'native'
+}
+
 // Renders subagent spans attached to the current message (FR-H-008).
 // useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
-function SubagentSpansRenderer() {
+export function SubagentSpansRenderer() {
   const message = useMessage()
   const messages = useChatStore((s) => s.messages)
+  // Fix 2 (user-approved 2026-07-16): delegation cards are hidden from the
+  // thread by default — verbose chat is the only way to bring them back
+  // here (shouldRenderSubagentSpan, src/lib/toolVisibility.ts). Selector
+  // pattern mirrors ToolCallBadge.tsx's use of the same store (a plain hook
+  // call inside a component, not getState()) so this stays reactive to the
+  // preference toggling live.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // W3: reused ['agents'] query (prefetched by AppShell, staleTime 30s
+  // elsewhere) — resolves each span's agentId to native/3p so a running
+  // external-CLI delegate's card can show the "no live progress" notice.
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const storeMsg = messages.find((m) => m.id === message.id)
-  const spans = storeMsg?.spans ?? []
+  const spans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
   if (spans.length === 0) return null
   return (
     <>
       {spans.map((span) => (
-        <SubagentBlock key={span.spanId} span={span} />
+        <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
       ))}
     </>
   )
@@ -623,12 +727,43 @@ function StaticCopyButton({ text }: { text: string }) {
   )
 }
 
-/** Standalone assistant message row for the virtualizer (historical / completed messages). */
-function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
+/**
+ * Standalone assistant message row for the virtualizer (historical / completed messages).
+ *
+ * Perf (gate 5 MEDIUM): wrapped in React.memo. Prop-identity correctness —
+ * `message` is a safe memo key: the chat store (src/store/chat.ts) keeps
+ * every message in an Immer-backed `messagesById` map, and every mutation
+ * path goes through `produce()` (or an equivalent single-key replace inside
+ * `withBucket`/`applyMessageArray`). Immer's structural sharing means a
+ * `produce()` call that touches ONE message only allocates a new object
+ * identity for THAT message (and the containing `messagesById`/array
+ * wrappers) — every sibling message keeps its exact prior object reference.
+ * `getMessages()`/`bucketToForeground()` (chat.ts) rebuild the top-level
+ * `messages` ARRAY on every store update (so the array itself always has a
+ * new identity), but each ELEMENT of that array is the same reference as
+ * before unless that specific message was baked/edited. Since this
+ * component is invoked per-row with its own `message` element (never the
+ * whole array), React.memo's default shallow prop comparison — Object.is on
+ * `message` and `liteMode` — correctly skips re-rendering any row whose
+ * underlying message object is referentially unchanged, even though the
+ * parent's `messages` array (and therefore the JSX call each render) is
+ * rebuilt every time. This is exactly the "replaces message objects by
+ * reference on bake" contract the memo key relies on — verified against
+ * chat.ts's `produce`/`withBucket`/`applyMessageArray`/`getMessages`, not
+ * assumed.
+ */
+const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const toolCalls = useChatStore((s) => s.toolCalls)
+  // Fix 2 (user-approved 2026-07-16): same thread-gating rule as the live
+  // path's SubagentSpansRenderer, applied here for the historical/virtualized
+  // render tree. This component is React.memo'd, so the selector MUST be
+  // called unconditionally at the top with every other hook (Rules of
+  // Hooks) — reading getState() instead would silently freeze this row's
+  // gating at whatever the preference was on its last actual re-render.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
@@ -640,7 +775,30 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
 
   // Build tool-call parts from the message's stored tool_calls list.
   // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
-  const storeToolCallIds = (message.tool_calls ?? []).map((tc) => tc.id)
+  const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
+
+  // Perf (gate 5 MEDIUM): memoized on the message's OWN content/tool_calls
+  // fields (not the derived `positionedToolCalls`, which gets a brand-new
+  // `[]` identity every render whenever message.tool_calls is undefined —
+  // keying on that would defeat the memo, recomputing every render exactly
+  // like before). splitMessageParts does real work (a sort + a content
+  // slice per positioned call) that was previously re-run inline in JSX on
+  // every render of this row, including renders triggered by state this
+  // row doesn't even display (e.g. liteMode toggling on OTHER rows, before
+  // the React.memo above cut most of those). This memo is still valuable
+  // even with the row memoized: message.content mutates in place many
+  // times per second while a turn is streaming (each `token` frame), so
+  // this row itself legitimately re-renders often — the memo just stops
+  // re-running the split when a re-render was triggered by something OTHER
+  // than a content/tool_calls change (e.g. liteMode).
+  const messageParts = useMemo(
+    () => splitMessageParts(message.content ?? '', positionedToolCalls),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the
+    // message's raw fields (stable references unless the message actually
+    // changed), not the freshly-allocated `positionedToolCalls` derived
+    // above — see comment.
+    [message.content, message.tool_calls],
+  )
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -649,11 +807,26 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
   // component. Without this guard, a message with isStreaming:true and empty
   // content would show the same "avatar + Copy, nothing to copy" broken bubble
   // as the live path (see AssistantMessage's showEmptyPlaceholder).
+  //
+  // Fix 3 (2026-07-16): emptiness is judged on VISIBLE content only — a
+  // message whose only content is a hidden delegation/background-bash
+  // dispatch (default thread policy, toolVisibility.ts) must not render an
+  // empty bubble with a bare Copy action bar (the D-fix UAT defect
+  // resurfacing once the thread started hiding those by default).
+  // visibleToolCalls/visibleSpans are also what's actually rendered below —
+  // hoisted here so both the emptiness check and the render loop share one
+  // computation instead of drifting into two different notions of "visible".
   const hasContent = !!message.content?.trim().length
-  const hasToolCalls = storeToolCallIds.length > 0
+  const visibleToolCalls = positionedToolCalls.filter((tc) =>
+    wouldToolCallBeVisible(tc.tool, tc.params, tc.result, !!tc.error, verboseChatEnabled),
+  )
+  const hasVisibleToolCalls = visibleToolCalls.length > 0
   const hasMedia = mediaItems.length > 0
-  const hasSpans = (message.spans ?? []).length > 0
-  const showEmptyPlaceholder = !!message.isStreaming && !hasContent && !hasToolCalls && !hasMedia && !hasSpans
+  // Fix 2 (user-approved 2026-07-16): the actual render list, filtered
+  // through the thread gate (shouldRenderSubagentSpan).
+  const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
+  const showEmptyPlaceholder =
+    !!message.isStreaming && !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
 
   return (
     <div
@@ -712,18 +885,40 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
             </div>
           )}
 
-          {/* Text content — use react-markdown for static historical messages.
-              The live streaming message uses the full AssistantUI MarkdownText
-              (with Shiki highlighting, Mermaid, etc.) via ThreadPrimitive.Messages. */}
-          {message.content && <HistoricalMessageMarkdown content={message.content} />}
+          {/* Text + tool calls, INTERLEAVED via splitMessageParts (bug fix):
+              this used to render `message.content` as one whole
+              HistoricalMessageMarkdown block, then map ALL of
+              storeToolCallIds after it — so a finished/replayed message
+              always showed "all text, then all tool calls", collapsing
+              whatever interleaved order the assistant actually streamed in.
+              splitMessageParts (src/lib/messageParts.ts) uses each baked
+              call's `textOffset` (stamped by the store — see
+              PositionedToolCall in src/store/chat.ts) to rebuild that order:
+              text slices and tool calls now alternate in the same sequence
+              they happened live. Calls with no offset (legacy bakes /
+              reconnect edge — offset genuinely unknown) fall back to the
+              old "after all text" placement, exactly as before.
 
-          {/* Tool calls — rendered from stored tool_calls list */}
-          {storeToolCallIds.map((callId) => {
-            const tc = toolCalls[callId] ?? (message.tool_calls ?? []).find((t) => t.id === callId)
-            if (!tc) return null
+              Each text slice renders as its OWN HistoricalMessageMarkdown
+              block rather than one block for the whole message — markdown
+              is parsed per-slice, so a slice boundary that falls mid-
+              paragraph (because a tool call started there) breaks that
+              paragraph across two blocks. This is not a regression: a slice
+              boundary only ever falls where a tool call started, and the
+              LIVE renderer (omnipus-runtime.ts's pushHistoryParts /
+              buildContentParts) already treats that exact point as a
+              text-segment boundary — so the finished view now matches what
+              was on screen while it was still streaming, instead of
+              (incorrectly) rendering the paragraph as one unbroken block. */}
+          {messageParts.map((part, idx) => {
+            if (part.type === 'text') {
+              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
+            }
+            const callId = part.call.id
+            const tc = toolCalls[callId] ?? part.call
             // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
             // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
-            // here too, so replayed sessions render the iframe (or the malformed
+            // here too, so replayed sessions render the preview link (or the malformed
             // result block) instead of a collapsed generic badge.
             if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
               return (
@@ -768,9 +963,11 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
             )
           })}
 
-          {/* Subagent spans */}
-          {(message.spans ?? []).map((span) => (
-            <SubagentBlock key={span.spanId} span={span} />
+          {/* Subagent spans — pre-filtered via visibleSpans above (Fix 2).
+              W3: agentType resolved from the `agents` list already fetched
+              above (for the avatar) — see resolveSpanAgentType's doc comment. */}
+          {visibleSpans.map((span) => (
+            <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
           ))}
         </div>
 
@@ -795,7 +992,7 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
       </div>
     </div>
   )
-}
+})
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
 function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
@@ -1021,6 +1218,9 @@ function AssistantMessage() {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const message = useMessage()
   const messages = useChatStore((s) => s.messages)
+  // Fix 3 (2026-07-16): needed to judge tool-call/span emptiness on VISIBLE
+  // content only — see the showEmptyPlaceholder computation below.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   // Prefer the per-message agentId (set during transcript replay) over the
   // session-level activeAgentId. This makes multi-agent transcripts show the
@@ -1046,10 +1246,27 @@ function AssistantMessage() {
   const hasVisibleText = message.content?.some(
     (part) => part.type === 'text' && part.text.trim().length > 0,
   )
-  const hasToolCall = message.content?.some((part) => part.type === 'tool-call')
+  // Fix 3 (2026-07-16): VISIBLE tool calls only — mirrors the historical
+  // path's wouldToolCallBeVisible check (same function, same rationale: a
+  // hidden delegation/background-bash dispatch must not count as "content"
+  // for the ghost-bubble guard below). part.isError is the closest
+  // available proxy for this surface's outcome signal — see
+  // wouldToolCallBeVisible's own doc comment for why.
+  const hasVisibleToolCall = message.content?.some(
+    (part) =>
+      part.type === 'tool-call' &&
+      wouldToolCallBeVisible(
+        part.toolName,
+        part.args as Record<string, unknown> | undefined,
+        part.result,
+        !!part.isError,
+        verboseChatEnabled,
+      ),
+  )
   const hasMedia = !!storeMsg?.media?.length
-  const hasSpans = !!storeMsg?.spans?.length
-  const showEmptyPlaceholder = isRunning && !hasVisibleText && !hasToolCall && !hasMedia && !hasSpans
+  const visibleSpans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
+  const showEmptyPlaceholder =
+    isRunning && !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
 
   return (
     <MessagePrimitive.Root
@@ -1220,12 +1437,25 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   // Attach affordance gate — shared by the AddAttachment button AND the
   // drag-drop handlers/overlay below (same read-only conditions: agent
-  // removed, streaming, replaying, gateway unreachable, or gave up on
-  // reconnect). A single source of truth keeps the two from drifting: without
-  // this, a drag-drop in a read-only (agentRemoved / gave_up) session could
-  // attach a chip that can never be sent, even though the attach button
-  // itself was correctly disabled.
-  const attachDisabled = !isConnected || isStreaming || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
+  // removed, replaying, gateway unreachable, or gave up on reconnect). A
+  // single source of truth keeps the two from drifting: without this, a
+  // drag-drop in a read-only (agentRemoved / gave_up) session could attach a
+  // chip that can never be sent, even though the attach button itself was
+  // correctly disabled.
+  //
+  // Deliberately does NOT include isStreaming (bugfixes3 follow-up): pasted
+  // images already ride a mid-stream steer correctly end-to-end (paste ->
+  // useFileUpload's commitFiles -> composerRuntime.addAttachment ->
+  // BaseComposerRuntimeCore.send() -> onNew -> store sendMessage's steer
+  // branch, which threads opts.mediaRefs into the WS `media` field
+  // unconditionally on isStreaming — see src/store/chat.ts's `if
+  // (isStreaming)` steer branch). The AddAttachment button and drag-drop
+  // funnel into that exact same commitFiles -> addAttachment call (see
+  // useFileUpload.ts) — there is no separate mid-stream attachment code
+  // path to diverge from paste, so gating the button/drag-drop on
+  // isStreaming was just an inconsistent affordance (paste allowed it, the
+  // button forbade the identical action) rather than a real safety gate.
+  const attachDisabled = !isConnected || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
 
   // The 3 previously-tangled composer concerns (slash/skill palette, file
   // upload incl. harmful-file confirm, stop/cancel state machine) each own
@@ -1271,10 +1501,225 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     cancelIfStreaming: cancelState.cancelIfStreaming,
   })
 
-  // Top-level keydown orchestration — precedence matches the original
-  // composer exactly: cancel-Escape first (US-1.4/FR-23), then
-  // Enter-blocked-while-streaming, then slash-menu navigation.
+  // Fix E (bugfixes3 sign-off): `shouldShowSlash` alone is not "the menu
+  // has content to render" — the LOW S8 commandsError carve-out
+  // (useSlashMenu.ts) deliberately keeps it true even when `slashItems` is
+  // empty, so the container below could mount with NEITHER a real item NOR
+  // the error row inside it (e.g. "/skills" + commandsError + zero skills:
+  // the error row hides itself via `!isSkillsFilter` failing, and there are
+  // no skill items either) — an empty bordered box with nothing in it.
+  // Gate on whatever will actually render: at least one item, OR the exact
+  // condition the error row's own JSX uses below (kept identical on
+  // purpose so the two can't drift apart).
+  const hasMenuContent =
+    slashMenu.slashItems.length > 0 ||
+    (slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode)
+
+  // Deferred item 2: single source of truth for "the menu is actually
+  // mounted right now" — reused by the render gate below, the combobox
+  // `aria-expanded`/`aria-controls`/`aria-activedescendant` on the textarea,
+  // and the scroll-into-view effect just below. Previously this exact
+  // three-way `&&` was duplicated inline at the JSX render site; centralizing
+  // it means the ARIA attributes literally cannot drift out of sync with
+  // what's actually rendered.
+  const menuIsRendered = slashMenu.shouldShowSlash && slashMenu.slashOpen && hasMenuContent
+
+  // ARIA clamp (gates 2+4): `slashMenu.slashHighlight` can point at an index
+  // that no longer exists in `slashItems` for exactly one render — the
+  // highlight is reset to 0 by a useEffect INSIDE useSlashMenu.ts (keyed on
+  // the joined item keys), which necessarily runs AFTER the render where the
+  // list already narrowed (e.g. a keystroke shrinks slashItems from 5 rows
+  // to 2 while slashHighlight was still 3 from the previous, longer list).
+  // Between that render and the effect's correction, an UNCLAMPED
+  // `aria-activedescendant`/`aria-selected`/`data-highlighted` would
+  // reference a row that doesn't exist in the DOM this render — invisible to
+  // sighted users (no row LOOKS highlighted either, since the loop below
+  // never finds `globalIndex === 3` in a 2-item list) but a broken/absent
+  // announcement for screen-reader users, who rely on activedescendant
+  // pointing at a real, currently-rendered option. Clamping at render time
+  // (rather than waiting for the effect) means these ARIA attributes are
+  // always consistent with what's actually in the DOM THIS render,
+  // regardless of when the highlight-reset effect catches up. `undefined`
+  // when there are zero items — there is no valid index to clamp to.
+  const clampedSlashHighlight =
+    slashMenu.slashItems.length > 0
+      ? Math.min(slashMenu.slashHighlight, slashMenu.slashItems.length - 1)
+      : undefined
+
+  // Cap-footer copy (gate 2 LOW) + SR gap (gate 4 MODERATE): single source of
+  // truth for the currently-active capped section's overflow state, shared
+  // by the VISIBLE "+N more" footer row below AND its sr-only announcement
+  // mirror (menuFooterAnnouncement) — computed once so the two can never say
+  // different things. Only one capped section can be showing a footer at a
+  // time: "/" mode caps skills (commands has no cap), "@" mode caps agents,
+  // and the two triggers are mutually exclusive by construction (see
+  // useSlashMenu.ts's file header), so `isMentionMode` alone picks the right
+  // count.
+  const activeSectionHiddenCount = slashMenu.isMentionMode ? slashMenu.agentsHiddenCount : slashMenu.skillsHiddenCount
+  // Cap-footer copy (gate 2 LOW): in the "/skills" special-filter state (D9
+  // — exact input "/skills" shows every skill, capped, ignoring "skills"
+  // itself as a filter string), "keep typing to narrow" is impossible advice
+  // — ANY further keystroke changes inputValue away from the exact
+  // "/skills" string, which ENDS this special view rather than narrowing it
+  // (the next filter is evaluated as a normal skill-name prefix/substring
+  // match against the new text, not a continuation of "showing everything").
+  // Switch to a purely informational count in that state instead of a CTA
+  // that can't do what it claims.
+  const footerCopy =
+    activeSectionHiddenCount > 0
+      ? slashMenu.isSkillsFilter
+        ? `Showing ${SECTION_CAP} of ${SECTION_CAP + activeSectionHiddenCount} skills`
+        : `+${activeSectionHiddenCount} more — keep typing to narrow`
+      : null
+  // SR gap (gate 4 MODERATE): sr-only mirror of the same cap state, worded
+  // for a listener with no visual context of the row list above it. Reuses
+  // the exact same activeSectionHiddenCount/isSkillsFilter inputs as
+  // `footerCopy` so the two can never drift on the underlying numbers, even
+  // though the wording is deliberately more explicit for a non-visual
+  // medium.
+  const menuFooterAnnouncement =
+    activeSectionHiddenCount > 0
+      ? slashMenu.isSkillsFilter
+        ? `${SECTION_CAP} of ${SECTION_CAP + activeSectionHiddenCount} skills shown`
+        : `${SECTION_CAP} options shown, ${activeSectionHiddenCount} more — keep typing`
+      : null
+
+  // Deferred item 2: replaces the old inline ref-callback scroll hack (which
+  // called `el.scrollIntoView()` from INSIDE a per-row `ref` callback on
+  // every render where that row happened to be the highlighted one — a side
+  // effect smuggled into a ref callback, re-running on every re-render of
+  // the menu, not just on highlight changes). A `useEffect` keyed on the
+  // highlight index (and whether the menu is even mounted) runs exactly
+  // once per actual highlight change; the row's `id` (composer-option-N,
+  // assigned in the render loop below) makes the lookup a plain
+  // `getElementById` — no ref plumbing needed since ids are already unique
+  // within this single-instance composer (verified: OmnipusComposer has
+  // exactly one call site, ChatScreen.tsx's own render below).
+  //
+  // Scroll effect (gate 2 LOW): also keyed on the item-SET (joined item
+  // keys), not just the numeric highlight index. Without this, a keystroke
+  // that changes WHICH items are at each index (e.g. a filter narrowing from
+  // one set of skills to a different set, where the highlighted numeric
+  // index happens to stay the same) never re-ran this effect — the row now
+  // highlighted at that index could be freshly scrolled off-screen with
+  // nothing to bring it back into view, since neither `menuIsRendered` nor
+  // `slashHighlight` (the number) changed.
+  const menuItemKeysForScroll = slashMenu.slashItems.map((i) => i.key).join(',')
+  useEffect(() => {
+    if (!menuIsRendered) return
+    const highlighted = document.getElementById(`composer-option-${slashMenu.slashHighlight}`)
+    highlighted?.scrollIntoView({ block: 'nearest' })
+  }, [menuIsRendered, slashMenu.slashHighlight, menuItemKeysForScroll])
+
+  // Top-level keydown orchestration.
+  //
+  // Fix 3 (precedence): menu-close now wins over stream-cancel. Previously
+  // cancel-Escape (below) ran BEFORE slashMenu.handleKeyDown, so pressing
+  // Escape with the "/" or "@" menu open mid-stream killed the generation
+  // AND left the menu open — the menu was unreachable-by-Escape the entire
+  // time a turn was streaming. When the menu is showing, Escape now closes
+  // ONLY the menu; a second Escape (menu now closed) falls through to the
+  // cancel branch exactly as before. Applies identically to "/" and "@"
+  // mode — `shouldShowSlash` already covers both.
+  //
+  // Correctness of the stopPropagation guard: useCancelState also owns a
+  // document-level Escape listener (`document.addEventListener('keydown',
+  // ...)`, no `capture: true` — see useCancelState's global-escape effect,
+  // src/hooks/useCancelState.ts) so a turn can be
+  // cancelled even when the input isn't focused. That listener is
+  // BUBBLE-phase on `document`. This app mounts via `createRoot(#root)`
+  // (src/main.tsx), and React 17+ (including the React 19 used here)
+  // delegates synthetic events at the ROOT CONTAINER (`#root`), not at
+  // `document` — `document` is a plain DOM ANCESTOR of that container, not
+  // where React's own listener lives. When a synthetic handler calls
+  // `e.stopPropagation()`, React synchronously calls the underlying native
+  // event's `stopPropagation()` too, which happens while the native event is
+  // still bubbling — at the `#root` container, on its way up to `document`.
+  // That halts the native bubble right there, so useCancelState's
+  // document-level listener never sees the keydown at all. No extra
+  // isMenuOpen plumbing into useCancelState is needed; `e.stopPropagation()`
+  // here is sufficient and provably correct for this app's actual mount
+  // topology (verified against src/main.tsx and useCancelState.ts, not
+  // assumed).
+  // Mid-turn steering send (bugfixes3 — enable mid-turn queued sends in the
+  // composer): the actual send/append mechanism used by BOTH (1) Enter
+  // pressed mid-stream, below, and (2) the mid-stream Send button rendered
+  // next to Stop, further down. Verified (not assumed — read against the
+  // installed @assistant-ui/react@0.14.14 / @assistant-ui/core@0.2.10
+  // sources under node_modules) that AssistantUI's OWN submission paths are
+  // both unusable mid-stream for this app's runtime:
+  //   - ComposerPrimitive.Input's internal Enter handling
+  //     (node_modules/@assistant-ui/react/dist/primitives/composer/
+  //     ComposerInput.js, handleKeyPress) hard-blocks submission whenever
+  //     `thread.isRunning && !thread.capabilities.queue`.
+  //   - ComposerPrimitive.Root's internal onSubmit (ComposerRoot.js) sends
+  //     via `useComposerSend()` (@assistant-ui/core's React hook), which
+  //     computes `disabled = !composer.canSend || (thread.isRunning &&
+  //     !thread.capabilities.queue)` — so the callback is `null` while
+  //     running and `handleSubmit`'s `if (!send) return` silently no-ops.
+  //     `form.requestSubmit()` therefore does nothing mid-stream.
+  // Our runtime is built via `useExternalStoreRuntime` (an ExternalStoreAdapter
+  // — see src/lib/omnipus-runtime.ts). `ExternalStoreThreadRuntimeCore`
+  // (node_modules/@assistant-ui/core/dist/runtimes/external-store/
+  // external-store-thread-runtime-core.js) hardcodes `queue: false` into
+  // `capabilities` unconditionally on every adapter update — there is no
+  // ExternalStoreAdapter option that flips it (`unstable_capabilities` only
+  // covers `copy`), so `thread.capabilities.queue` can never be true here.
+  //
+  // The fix bypasses that UI-only isRunning gate by calling the composer
+  // RUNTIME's own `.send()` instance method directly (`composerRuntime` from
+  // `useComposerRuntime()` above — a `ComposerRuntimeImpl`), NOT the
+  // `useComposerSend()` hook `ComposerPrimitive.Send`/`.Root` use internally.
+  // `ComposerRuntimeImpl.send()` (node_modules/@assistant-ui/core/dist/
+  // runtime/api/composer-runtime.js) forwards straight to
+  // `BaseComposerRuntimeCore.send()` (.../runtime/base/
+  // base-composer-runtime-core.js), which is gated ONLY by `canSend`
+  // (`!isEmpty && !isSendDisabled`) — there is no `isRunning` check anywhere
+  // in that call path, and `ExternalStoreThreadRuntimeCore.append()` →
+  // `adapter.onNew()` (src/lib/omnipus-runtime.ts's `onNew`, which forwards
+  // straight to `useChatStore.getState().sendMessage()`) has none either.
+  // This is therefore a genuine, intentional use of a real public API, not a
+  // workaround around business logic: the `isRunning` gate exists only to
+  // disable the PRESENTATIONAL button/keyboard-submit for runtimes that
+  // don't support mid-run sends — ours explicitly does (the gateway queues
+  // and injects mid-turn messages server-side), so this drives the send
+  // explicitly instead of going through the gated presentational path.
+  function submitMidStreamMessage() {
+    // Mirrors ComposerPrimitive.Root's onSubmit below: a typed client
+    // command (e.g. "/cancel") still intercepts locally instead of steering
+    // into the running turn as chat text.
+    if (slashMenu.interceptClientCommand()) return
+    // BaseComposerRuntimeCore.send() no-ops on its own `canSend` check
+    // (empty composer / isSendDisabled, which trims) — no separate emptiness
+    // guard is needed before calling it, matching the native Enter/click-Send
+    // behavior when idle. But that means a whitespace-only composer makes
+    // `.send()` below a no-op too, leaving the composer's actual text
+    // untouched — so the mirror-clear must be gated the same way: read
+    // whether there's real (non-whitespace) text BEFORE sending, and only
+    // clear the slash-menu mirror when there was something to actually send.
+    // Unconditionally clearing it here would desync the mirror from the
+    // real, unchanged composer text (still whitespace) — hasComposerText
+    // (which reads the mirror) would wrongly flip false, hiding the
+    // mid-stream Send button/hint even though the composer visually still
+    // holds that whitespace.
+    const hadSendableText = slashMenu.inputValue.trim().length > 0
+    composerRuntime.send()
+    if (hadSendableText) {
+      // Fix-4 mirror resync — see the identical call + comment in onSubmit
+      // below; the runtime clears its own text on a successful send without
+      // firing the textarea's onChange.
+      slashMenu.onInputChange('')
+    }
+  }
+
   function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape' && slashMenu.slashOpen && slashMenu.shouldShowSlash) {
+      slashMenu.handleKeyDown(e) // closes the menu (its own Escape branch)
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
     // US-1.4 / FR-23: Escape cancels a turn.
     // Only morph the button to "Stopping..." if the turn is actively streaming
     // (same logic as the /cancel command and the stop button click). Pressing
@@ -1288,14 +1733,49 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       return
     }
 
-    // Block Enter submission while streaming — slash menu Enter still works below.
-    if (e.key === 'Enter' && isStreaming && !slashMenu.slashOpen) {
+    // Mid-turn steering send: Enter pressed WHILE a turn is streaming no
+    // longer swallows the keystroke — it sends, and the gateway steers the
+    // message into the RUNNING turn (see submitMidStreamMessage's doc
+    // comment above for the full, verified mechanism). Still deferred to
+    // the slash/mention menu below when it's actually VISIBLE (menu-open
+    // Enter selects the highlighted row, not "send") — `slashOpen` alone is
+    // not enough (Fix F, bugfixes3 sign-off): it can be true while the menu
+    // renders nothing at all (e.g. "/zzz"/"@zzz" typed — no match,
+    // `shouldShowSlash` false), so this checks `shouldShowSlash` too. Also
+    // deferred on Shift+Enter — that is universally "insert a newline" in
+    // this composer (mirrors useSlashMenu.ts's own Fix 8 for the in-menu
+    // case), including mid-stream: falls through to the textarea's native
+    // handling below via `slashMenu.handleKeyDown(e)` (a no-op when the menu
+    // isn't open) and, past that, the internal ComposerPrimitive.Input
+    // handling, which inserts the newline.
+    //
+    // Explicit `inputEnabled` check (defense-in-depth): the textarea's own
+    // native `disabled` attribute (set from `!inputEnabled`, see the
+    // ComposerPrimitive.Input below) already stops a real browser from ever
+    // dispatching a keydown into a read-only composer, but that native
+    // attribute is the ONLY thing currently gating this branch against
+    // replay / agentRemoved / gave_up-reconnect — none of which clear
+    // `isStreaming`. Guarding here too means this branch stays correct even
+    // if the textarea is ever rendered without `disabled` wired up (e.g. a
+    // future refactor, or a test that dispatches the event directly against
+    // the element), instead of relying solely on the DOM to enforce it.
+    if (e.key === 'Enter' && isStreaming && inputEnabled && !e.shiftKey && !(slashMenu.slashOpen && slashMenu.shouldShowSlash)) {
       e.preventDefault()
+      submitMidStreamMessage()
       return
     }
 
     slashMenu.handleKeyDown(e)
   }
+
+  // Mid-turn Send affordance gate: the plain Send button rendered next to
+  // Stop while streaming (below), and the "Sends into the running response"
+  // hint line, both only show once there's actually something to steer.
+  // Reuses the slash-menu's own live text mirror (`inputValue`, kept in sync
+  // via the textarea's onChange) rather than a fresh subscription — trimmed
+  // to match `canSend`'s own emptiness semantics (whitespace-only text is
+  // not sendable).
+  const hasComposerText = slashMenu.inputValue.trim().length > 0
 
   return (
     // @container on the composer root: TokenCounter's `@2xl:flex` gate in the
@@ -1308,6 +1788,46 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
       onDrop={attachDisabled ? undefined : fileUpload.onDrop}
     >
+      {/* a11y HIGH: "@" mention-selection announcement. Selecting an agent
+          via "@" silently empties the composer and silently changes where
+          the next message routes — zero non-visual feedback for a
+          screen-reader user. Mirrors the sr-only aria-live pattern in
+          ChatScreen (see the message-list's own `aria-live="polite"`
+          region near the top of the ChatScreen component) so a mention
+          selection reads the same way a new assistant response does.
+          Content-change-triggers-announcement: re-selecting the SAME agent
+          leaves the text unchanged, so it does not re-announce (see
+          useSlashMenu.ts's mentionAnnouncement doc comment) — acceptable,
+          nothing actually changed. */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="agent-mention-announcement">
+        {slashMenu.mentionAnnouncement && <span>Now chatting with {slashMenu.mentionAnnouncement}</span>}
+      </div>
+
+      {/* SR gap (gate 4 MODERATE): the "Commands unavailable" error row
+          inside the listbox below is deliberately `role="presentation"` —
+          excluded from the listbox's accessible option children (see that
+          row's own comment) — which means it is entirely silent to screen
+          readers: a sighted user sees the italic error text, but nothing is
+          ever announced. Mirror it (and the cap-footer's overflow state —
+          see `menuFooterAnnouncement` above) into a dedicated sr-only
+          `role="status"` region OUTSIDE the listbox, reusing the same
+          sr-only live-region pattern as the "@" mention announcement just
+          above, so both states reach assistive tech without changing a
+          single visible pixel of the rows themselves. Unconditionally
+          mounted (content conditionally populated) — a live region must
+          already exist in the DOM before its content changes for most
+          screen readers to reliably announce the change; a freshly-mounted
+          region with content already inside it is not guaranteed to fire.
+          `role="status"` carries an implicit `aria-live="polite"` +
+          `aria-atomic="true"`, matching the pattern above explicitly for
+          clarity. */}
+      <div role="status" aria-atomic="true" className="sr-only" data-testid="slash-menu-status">
+        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
+          <span>Commands unavailable</span>
+        )}
+        {menuIsRendered && menuFooterAnnouncement && <span>{menuFooterAnnouncement}</span>}
+      </div>
+
       {fileUpload.isDragging && !attachDisabled && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--color-primary)]/80 border-2 border-dashed border-[var(--color-accent)] rounded-lg">
           <p className="text-[var(--color-accent)] font-medium">Drop files here</p>
@@ -1393,14 +1913,41 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Slash command + skills partitioned dropdown (FR-005).
+      {/* Slash command + skills + "@" agent-mention partitioned dropdown
+          (FR-005). One container/list renders three different sections
+          depending on the trigger: "/" opens Commands+Skills, "@" opens
+          Agents (see useSlashMenu.ts's isMentionMode) — the two triggers
+          are mutually exclusive by construction, so `slashItems` is always
+          either [commands, skills] or [agents], never a mix (J.4
+          correction, bugfixes3 sign-off — this comment previously only
+          mentioned the "/" side).
           F6: unified slashItems.map() — emits a section header on each section
           transition, making the `section` field load-bearing and removing the
           duplicate render blocks + the off-by-one `globalIndex` variable.
-          FR-014/R3: skill items show their argument_hint as muted help text. */}
-      {slashMenu.shouldShowSlash && slashMenu.slashOpen && (
+          FR-014/R3: skill items show their argument_hint as muted help text.
+          Fix E / deferred item 2: gated on `menuIsRendered` (declared above,
+          alongside `slashMenu`), which folds in `hasMenuContent` —
+          `shouldShowSlash` alone can be true with nothing to actually
+          render; see that constant's own comment.
+
+          Deferred item 2 (W3C APG combobox pattern): this container is the
+          combobox's `listbox` — `role="listbox"`, a stable `id` the
+          textarea's `aria-controls` points to, and an `aria-label` since the
+          listbox has no visible heading of its own (its rows have section
+          headers, but the LISTBOX itself doesn't). Rows below are
+          `role="option"` with `tabIndex={-1}` (NOT 0 — see the row's own
+          comment) and `aria-selected`; the textarea (ChatScreen.tsx's
+          ComposerPrimitive.Input, below) carries
+          `aria-activedescendant={composer-option-${slashHighlight}}` so
+          screen readers announce the highlighted row without moving DOM
+          focus off the input, per APG's combobox-with-listbox-popup
+          pattern. */}
+      {menuIsRendered && (
         <div
           data-testid="slash-menu"
+          id="composer-slash-menu"
+          role="listbox"
+          aria-label="Commands, skills and agents"
           // max-h + scroll: the menu opens UPWARD from the composer, so a tall
           // list (many commands + skills) pushed its top rows above the
           // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
@@ -1411,10 +1958,23 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               palette. Hidden during the "/skills" filter (D9 already hides
               the whole Commands section there, so an error row would be a
               non-sequitur). Muted styling matches SearchModal's own
-              query-error row (src/components/search/SearchModal.tsx). */}
-          {slashMenu.commandsError && !slashMenu.isSkillsFilter && (
+              query-error row (src/components/search/SearchModal.tsx).
+              Fix 1: also hidden in "@" mention mode — a commands-fetch
+              error has nothing to do with the agent-mention menu, and this
+              render gate must match useSlashMenu's own shouldShowSlash
+              fallback (useSlashMenu.ts), which already excludes
+              isMentionMode from the "keep the menu open on error" carve-out.
+              Without this clause the row leaked into the "@" menu whenever
+              the commands query happened to be erroring, even though the
+              "@" menu has nothing to do with commands.
+              Deferred item 2: `role="presentation"` — this row is
+              informational text, not a selectable listbox option; without
+              this it would silently pollute the `listbox`'s accessible
+              children with a non-option row. */}
+          {slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
             <div
               data-testid="slash-commands-error"
+              role="presentation"
               className="px-3 py-2 text-xs text-[var(--color-error)] italic"
             >
               Commands unavailable
@@ -1423,30 +1983,64 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           {slashMenu.slashItems.map((item, globalIndex) => {
             const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
             const isFirstInSection = item.section !== prevSection
+            const nextSection = globalIndex < slashMenu.slashItems.length - 1 ? slashMenu.slashItems[globalIndex + 1].section : null
+            const isLastInSection = item.section !== nextSection
+            // Deferred item 3: the section's overflow count, rendered as a
+            // muted footer row right after that section's last visible row.
+            // Only skills/agents are capped (commands has no cap — see
+            // useSlashMenu.ts) — 0 for commands, so the footer simply never
+            // renders there.
+            const sectionHiddenCount =
+              item.section === 'skills' ? slashMenu.skillsHiddenCount :
+              item.section === 'agents' ? slashMenu.agentsHiddenCount : 0
             return (
               <React.Fragment key={item.key}>
                 {isFirstInSection && (
-                  <div className={cn(
-                    'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
-                    globalIndex === 0
-                      ? 'border-b border-[var(--color-border)]'
-                      : 'border-t border-[var(--color-border)]',
-                  )}>
-                    {item.section === 'commands' ? 'Commands' : 'Skills'}
+                  <div
+                    role="presentation"
+                    className={cn(
+                      'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
+                      globalIndex === 0
+                        ? 'border-b border-[var(--color-border)]'
+                        : 'border-t border-[var(--color-border)]',
+                    )}>
+                    {item.section === 'commands' ? 'Commands' : item.section === 'skills' ? 'Skills' : 'Agents'}
                   </div>
                 )}
-                <button tabIndex={0}
+                <button
                   type="button"
-                  ref={(el) => {
-                    // Keep the keyboard-highlighted row visible inside the
-                    // scroll-capped menu as ArrowUp/Down move the highlight.
-                    if (el && globalIndex === slashMenu.slashHighlight) {
-                      el.scrollIntoView({ block: 'nearest' })
-                    }
-                  }}
+                  id={`composer-option-${globalIndex}`}
+                  role="option"
+                  aria-selected={globalIndex === clampedSlashHighlight}
+                  // Deferred item 2 (APG combobox pattern, amends the eb4de2a2
+                  // blanket tabIndex=0 stamp for THIS widget specifically):
+                  // options inside a combobox's listbox popup are NOT
+                  // separately tabbable — focus stays on the textarea the
+                  // whole time the menu is open (that's the entire point of
+                  // aria-activedescendant), and ArrowUp/ArrowDown move the
+                  // active-descendant highlight without ever moving real DOM
+                  // focus. tabIndex=0 here was actively harmful: Tab-focusing
+                  // a row started the textarea's 150ms blur-close timer
+                  // (onInputBlur, useSlashMenu.ts), which unmounted the menu
+                  // out from under the just-focused row and dropped focus to
+                  // `body` — a keyboard dead end. Selection still works via
+                  // onMouseDown (mouse) and Enter (keyboard, through the
+                  // textarea's own onKeyDown → slashMenu.handleKeyDown) —
+                  // neither depends on this button ever receiving focus.
+                  tabIndex={-1}
+                  // "@" mention menu rows only — mirrors the slash-command/skill
+                  // rows' shared markup exactly, so this testid is additive
+                  // rather than a fork of the row.
+                  data-testid={item.section === 'agents' ? 'agent-mention-item' : undefined}
+                  // Fix 11: semantic highlight marker — lets a test assert the
+                  // highlighted row without depending on the visual class
+                  // string below (which stays purely presentational; `undefined`
+                  // when not highlighted, so the attribute doesn't render at all
+                  // rather than serializing as `data-highlighted="false"`).
+                  data-highlighted={globalIndex === clampedSlashHighlight || undefined}
                   className={cn(
                     'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
-                    globalIndex === slashMenu.slashHighlight
+                    globalIndex === clampedSlashHighlight
                       ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
                       : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
                   )}
@@ -1459,6 +2053,29 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   }}
                   onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
                 >
+                  {/* Agent rows only — same avatar-dot markup as AgentPicker's
+                      DropdownMenuItem rows (composer/AgentPicker.tsx) so the
+                      mention menu and the picker dropdown read as the same
+                      "agent row" everywhere in the composer.
+                      Fix 9: aria-hidden — the initial/icon is decorative; the
+                      row BUTTON's accessible name should come from the label/
+                      description text, not this dot's text content. Initial is
+                      derived from `item.agentName` (astral-safe via
+                      `initialOf`), not `label.charAt(1)` — the old approach
+                      assumed `label` was always "@" + exactly one BMP
+                      character, which breaks for a name whose first character
+                      is outside the BMP (e.g. an emoji). */}
+                  {item.section === 'agents' && (
+                    <div
+                      aria-hidden="true"
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                      style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
+                    >
+                      {item.agentIcon
+                        ? <IconRenderer icon={item.agentIcon} size={11} />
+                        : initialOf(item.agentName ?? '')}
+                    </div>
+                  )}
                   {/* Fixed-width label column so descriptions align across rows
                       (a two-column table, not per-row flow). 9.5rem fits the
                       longest current label; truncate guards outliers. */}
@@ -1470,7 +2087,40 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                       {item.argumentHint}
                     </span>
                   )}
+                  {/* Mirrors AgentPicker's "active" marker (composer/AgentPicker.tsx) */}
+                  {item.section === 'agents' && item.isActiveAgent && (
+                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
+                  )}
                 </button>
+                {/* Deferred item 3: "+N more" footer — rendered right after
+                    the LAST visible row of a capped section that still has
+                    overflow. Deliberately `role="presentation"` and OUTSIDE
+                    `slashMenu.slashItems` entirely (not just visually
+                    de-emphasized) — it is not part of `globalIndex`'s
+                    sequence, so it can never receive an
+                    `id="composer-option-N"`, can never be `aria-selected`,
+                    and ArrowUp/ArrowDown (which cycle modulo
+                    `slashItems.length`) can never land the highlight on it. */}
+                {isLastInSection && sectionHiddenCount > 0 && (
+                  <div
+                    data-testid="slash-menu-footer"
+                    role="presentation"
+                    className="px-3 py-1.5 text-[10px] text-[var(--color-muted)] italic"
+                  >
+                    {/* Cap-footer copy fix (gate 2 LOW): `footerCopy` (declared
+                        above, alongside `menuIsRendered`) already accounts for
+                        the "/skills" special-filter state, where "keep typing
+                        to narrow" is impossible advice — see its own comment.
+                        `sectionHiddenCount > 0` here is guaranteed to equal the
+                        `activeSectionHiddenCount` `footerCopy` was computed
+                        from (only one capped section can be rendering a footer
+                        at a time — "/" caps skills, "@" caps agents, and the
+                        two triggers are mutually exclusive), so reusing the
+                        single shared value here (rather than re-deriving the
+                        copy per-row) is exactly correct, not a coincidence. */}
+                    {footerCopy}
+                  </div>
+                )}
               </React.Fragment>
             )
           })}
@@ -1519,18 +2169,42 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         <ComposerPrimitive.Root
           className="flex items-end gap-2 p-2"
           onSubmit={(e) => {
-            // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
-            if (isStreaming) {
-              e.preventDefault()
-              return
-            }
+            // Mid-turn steering: this native form-submit path is NEVER
+            // actually reached while streaming (verified — see
+            // submitMidStreamMessage's doc comment above): Enter mid-stream
+            // is fully handled by handleKeyDown's own branch (which calls
+            // e.preventDefault(), so ComposerPrimitive.Input's internal
+            // handleKeyPress — the only thing that would call
+            // form.requestSubmit() — never runs), and the mid-stream Send
+            // button below is `type="button"`, so a click never fires this
+            // form's submit event either. The isStreaming preventDefault
+            // that used to sit here was therefore removed for coherence, not
+            // because it was blocking a live path — leaving it in place
+            // would misleadingly suggest Enter/Send still route through here
+            // while a turn is running.
             // Send-path interception: if the typed text is exactly a client-delivery
             // slash command (e.g. "/new", "/help", "/model", "/cancel"), handle it
             // locally and prevent it from reaching the backend. This converges the
             // typed+Enter path with the palette selection path.
             if (slashMenu.interceptClientCommand()) {
               e.preventDefault()
+              return
             }
+            // Fix 4: resync the text mirror after a real send. assistant-ui's
+            // composerRuntime clears its own text on a successful submit
+            // WITHOUT firing the textarea's onChange (no synthetic change
+            // event is dispatched for the runtime-driven clear), so
+            // `slashMenu.inputValue` — which only updates via onInputChange —
+            // kept the just-sent text (e.g. "@mia hello everyone") even
+            // though the visible textarea was now empty. A subsequent
+            // ArrowDown in the (visually empty) textarea then read the STALE
+            // "@..." mirror, reopened the full agent-mention menu, and Enter
+            // silently switched the active agent with no text on screen to
+            // explain why. Only reached here when the send actually
+            // proceeded (neither the isStreaming guard nor
+            // interceptClientCommand() intercepted it above), so this can't
+            // clear the mirror out from under a blocked/intercepted send.
+            slashMenu.onInputChange('')
           }}
         >
           {/* Attach — leading the input, ChatGPT/Claude-style. Plus (add
@@ -1565,7 +2239,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               // (cursor-not-allowed/opacity) on isStreaming via the className
               // below, not the disabled attribute.
               disabled={!inputEnabled}
-              aria-disabled={!inputEnabled || isStreaming || undefined}
+              // aria-disabled (gate 4 LOW): deliberately does NOT include
+              // isStreaming. `disabled` (native, above) is likewise gated on
+              // `!inputEnabled` alone — the textarea genuinely accepts
+              // keystrokes mid-stream by design (FR-3a: the slash menu must
+              // stay reachable while a turn is streaming). Including
+              // isStreaming here previously told assistive tech the input
+              // was disabled mid-turn even though it demonstrably was not —
+              // a screen-reader user would be misinformed that they could
+              // not type, when they could. Submission-blocking during a
+              // stream is conveyed by the Stop button replacing Send (see
+              // the ternary below), not by marking the TEXT INPUT disabled.
+              aria-disabled={!inputEnabled || undefined}
               rows={1}
               cancelOnEscape={false}
               className={cn(
@@ -1581,6 +2266,33 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
               )}
               aria-label="Message input"
+              // Deferred item 2 (W3C APG combobox pattern — combobox with
+              // listbox popup). Verified against node_modules/@assistant-ui/
+              // react/dist/primitives/composer/ComposerInput.js: the real
+              // ComposerPrimitive.Input destructures a fixed, small prop list
+              // (autoFocus/asChild/render/disabled/onChange/onKeyDown/onPaste/
+              // onSelect/submitOnEnter/submitMode/cancelOnEscape/unstable_*/
+              // addAttachmentOnPaste) and spreads everything ELSE — including
+              // `role` and any `aria-*` prop — via `...rest` straight onto the
+              // underlying `TextareaAutosize` element (only overridden if this
+              // app used `Unstable_TriggerPopoverRoot`, which it doesn't — that
+              // context is optional and unset here). So `role="combobox"` and
+              // the aria-* props below reach the real DOM node unmodified; no
+              // fallback is needed.
+              role="combobox"
+              aria-expanded={menuIsRendered}
+              aria-controls={menuIsRendered ? 'composer-slash-menu' : undefined}
+              // Undefined (not rendered) when the menu is closed OR has zero
+              // navigable items (the LOW S8 commandsError carve-out can leave
+              // shouldShowSlash true with slashItems empty — see
+              // useSlashMenu.ts's Fix D) — there is no real option for the id
+              // to point at in either case.
+              aria-activedescendant={
+                menuIsRendered && clampedSlashHighlight !== undefined
+                  ? `composer-option-${clampedSlashHighlight}`
+                  : undefined
+              }
+              aria-autocomplete="list"
               onChange={(e) => {
                 const val = (e.target as HTMLTextAreaElement).value
                 slashMenu.onInputChange(val)
@@ -1622,49 +2334,120 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // slot mid-stream (see the composer tab-ring map in
             // ChatControls.tsx) — it must keep Send's slot, not default to 0,
             // or the ring silently drops a stop the whole time a turn is
-            // streaming.
-            <button tabIndex={6}
-              type="button"
-              data-testid="stop-btn"
-              onClick={() => {
-                // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
-                // so the UI updates within the same React render tick, before the
-                // cancel network round-trip starts (no perceived latency). It does
-                // NOT guard on isStreaming — see useCancelState's doc comment for
-                // why guarding here would silently no-op on the render/click race.
-                cancelState.cancelUnconditional()
-              }}
-              className={cn(
-                // h-9 + mb-0.5: same footprint as the send button it replaces
-                // mid-stream (keeps the row from jumping on morph).
-                'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
-                cancelState.stopLabel === 'stopping'
-                  ? 'px-3 h-9 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                  : 'w-9 h-9',
-                isStreaming
-                  ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                  : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
+            // streaming. Mid-turn steering (below): the plain Send button
+            // that now sits next to Stop shares this same slot 6 (both are
+            // "the send/stop action cluster") — cancel must stay reachable
+            // in exactly one keystroke even when steering is also available,
+            // so Stop keeps its own dedicated element rather than being
+            // folded into a menu/toggle.
+            <>
+              <button tabIndex={6}
+                type="button"
+                data-testid="stop-btn"
+                onClick={() => {
+                  // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
+                  // so the UI updates within the same React render tick, before the
+                  // cancel network round-trip starts (no perceived latency). It does
+                  // NOT guard on isStreaming — see useCancelState's doc comment for
+                  // why guarding here would silently no-op on the render/click race.
+                  cancelState.cancelUnconditional()
+                }}
+                className={cn(
+                  // h-9 + mb-0.5: same footprint as the send button it replaces
+                  // mid-stream (keeps the row from jumping on morph).
+                  'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
+                  cancelState.stopLabel === 'stopping'
+                    ? 'px-3 h-9 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                    : 'w-9 h-9',
+                  isStreaming
+                    ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
+                )}
+                aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
+                title="Stop (Escape)"
+              >
+                <Stop size={15} weight="fill" />
+                {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
+              </button>
+              {/* Mid-turn steering Send — a PLAIN button, deliberately not
+                  ComposerPrimitive.Send: verified (see submitMidStreamMessage's
+                  doc comment above) that the primitive's own useComposerSend()
+                  hook hard-disables it whenever thread.isRunning &&
+                  !thread.capabilities.queue, and our ExternalStoreAdapter
+                  runtime always reports capabilities.queue === false — so the
+                  primitive would render permanently disabled here no matter
+                  what `disabled` prop it's given. `type="button"` (not
+                  "submit"): a click must NOT fire ComposerPrimitive.Root's
+                  form submit event — submitMidStreamMessage() drives the send
+                  directly. Only rendered once there's text to steer — an
+                  empty composer has nothing to send, and Stop alone already
+                  covers "I have nothing more to add, stop the response." */}
+              {hasComposerText && (
+                <button tabIndex={6}
+                  type="button"
+                  data-testid="chat-send-mid-stream"
+                  disabled={!inputEnabled}
+                  onClick={submitMidStreamMessage}
+                  className={cn(
+                    'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
+                    inputEnabled
+                      ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)]'
+                      : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
+                  )}
+                  aria-label="Send into the running response"
+                  title="Send into the running response"
+                  aria-describedby="mid-stream-send-hint"
+                >
+                  <PaperPlaneRight size={15} weight="bold" />
+                </button>
               )}
-              aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
-              title="Stop (Escape)"
-            >
-              <Stop size={15} weight="fill" />
-              {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
-            </button>
+            </>
           ) : (
             // FR-I-014: also disabled during replay so user cannot send out-of-order.
             // Fix 3: when reconnecting (fast or slow), allow send — messages go to
             // the outbound queue and drain automatically on reconnect.
             //
-            // Native ComposerPrimitive.Send: calls composer.send() → onNew, which
-            // now carries text AND attachments. Send and Enter both go through
-            // composer.send(), so they are identical. Send auto-disables when the
+            // Native ComposerPrimitive.Send (bugfixes3 sign-off — J correction;
+            // FIXED bugfixes3 deferred item 1, below): verified against
+            // node_modules/@assistant-ui/react/dist/utils/createActionButton.js +
+            // primitives/composer/ComposerSend.js — the Send button is built via
+            // createActionButton, which renders a plain `type="button"` whose
+            // onClick is `composeEventHandlers(primitiveProps.onClick, callback)`
+            // (from `@radix-ui/primitive`, checkForDefaultPrevented=true by
+            // default — verified in node_modules/@radix-ui/primitive/dist/
+            // index.js): OUR `onClick` prop below runs FIRST; `callback` (which
+            // invokes `composer.send()` DIRECTLY, NOT `form.requestSubmit()`) only
+            // runs afterward if our handler did NOT call `e.preventDefault()`. A
+            // mouse click on Send therefore never fires this ComposerPrimitive.
+            // Root's onSubmit above — Send and Enter do NOT share a code path —
+            // so the interception below intentionally duplicates (not reuses)
+            // onSubmit's `interceptClientCommand()` check for this button's own
+            // click path, converging typed-"/new"-then-click-Send with
+            // typed-"/new"-then-Enter.
+            //
+            // No isStreaming guard here (unlike onSubmit's own preventDefault
+            // check): this button is swapped for the Stop button above whenever
+            // `isStreaming || cancelState.stopLabel === 'stopping'` is true, so
+            // ComposerPrimitive.Send is never even mounted while a turn is
+            // streaming — verified against the ternary a few lines up — there is
+            // no click path to guard against.
+            //
+            // The Fix-4 text-mirror resync (onSubmit, above) is NOT duplicated
+            // here either: it is unconditionally handled by useSlashMenu.ts's Fix
+            // A, which subscribes directly to composerRuntime so `inputValue`
+            // stays correct after ANY out-of-band clear — click-Send included,
+            // not just the keyboard path. Send still auto-disables when the
             // composer is empty (no text and no attachments) via the runtime's
-            // canSend, so no manual empty-check is needed here.
+            // canSend, so no manual empty-check is needed here either.
             <ComposerPrimitive.Send
               disabled={!inputEnabled || isReplaying}
               data-testid="chat-send"
               tabIndex={6}
+              onClick={(e) => {
+                if (slashMenu.interceptClientCommand()) {
+                  e.preventDefault()
+                }
+              }}
               className={cn(
                 'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying
@@ -1686,6 +2469,31 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             </ComposerPrimitive.Send>
           )}
         </ComposerPrimitive.Root>
+
+        {/* Mid-turn steering affordance: the empty-composer case already says
+            "Waiting for response..." via the placeholder (composerPlaceholder,
+            above) — but a NATIVE placeholder only shows on an empty input, so
+            once the user has actually typed something mid-stream it goes
+            invisible right when the affordance matters most. This small,
+            muted line (tokens only, no emoji) fills that gap: it appears
+            only once there's live text to steer with, right where the Send
+            button next to Stop just appeared. Microcopy unified with that
+            button's own title/aria-label (one phrase, three surfaces); `id`
+            is targeted by the button's `aria-describedby` above so a
+            screen-reader user gets the same explanation the sighted hint
+            line provides. Safe to reference unconditionally from the button
+            (no dangling id): the button only renders when hasComposerText is
+            also true (its own parent condition additionally requires
+            isStreaming), which is exactly this line's render condition too. */}
+        {isStreaming && hasComposerText && (
+          <div
+            id="mid-stream-send-hint"
+            data-testid="mid-stream-send-hint"
+            className="px-3 pb-1.5 -mt-1 text-[10px] text-[var(--color-muted)]"
+          >
+            Send into the running response
+          </div>
+        )}
 
         {/* Pending attachments — native AssistantUI composer attachments. Shows a
             chip for each attached file (via the attach (+) button, drag-drop, or
@@ -1866,7 +2674,21 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const liteMode = useConnectionStore((s) => s.liteMode)
 
   return (
-    <div className="flex flex-col absolute inset-0 overflow-hidden">
+    // data-active-session-id: deterministic DOM signal of WHICH session this
+    // chat surface is currently bound to. Only empty on a cold load with no
+    // session yet attached — during a route swap away from a previously
+    // attached session it still holds the PREVIOUS session's id (stale)
+    // until the new one lands, and it can transiently read '__pending' (the
+    // optimistic-send sentinel, store/chat.ts) too. E2E deep-link
+    // navigation needs it: a bare "composer is visible/enabled" wait is
+    // satisfied by the PREVIOUS route's composer during the route swap, so
+    // a test can type into the old surface and the message rides the stale
+    // session binding — see openSessionByDeepLink in
+    // tests/e2e/fixtures/session-setup.ts.
+    <div
+      className="flex flex-col absolute inset-0 overflow-hidden"
+      data-active-session-id={activeSessionId ?? ''}
+    >
       {/* Agent-removed banner — shown when the session's agent has been deleted (#103) */}
       {agentRemoved && (
         <div

@@ -23,18 +23,20 @@ export const Route = createFileRoute('/_app')({
       throw redirect({ to: '/onboarding' })
     }
 
-    // Onboarding is complete — require login token
-    const token = sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')
-    if (!token) {
-      throw redirect({ to: '/login' })
-    }
-    // Validate the token (cached + transient-tolerant — see authValidation.ts).
-    // Only a CONFIRMED 401 evicts the session; a network/5xx hiccup keeps it.
+    // Onboarding is complete — require an authenticated session. Auth is the
+    // omnipus-session HttpOnly cookie (US-5 / FR-010): the SPA has no
+    // JS-visible signal of whether one exists, so it always asks the server
+    // rather than pre-checking local storage (there is nothing to check —
+    // the cookie is invisible to JS). validateToken() rides the cookie
+    // automatically (credentials:'include' in src/lib/api.ts); a fresh
+    // install or expired/missing session comes back 401.
+    //
+    // checkTokenValidity is cached + transient-tolerant (see
+    // authValidation.ts) — only a CONFIRMED 401 evicts the session; a
+    // network/5xx hiccup keeps it.
     const verdict = await checkTokenValidity(validateToken)
     if (verdict === 'unauthorized') {
-      sessionStorage.removeItem('omnipus_auth_token')
-      localStorage.removeItem('omnipus_auth_token')
-      console.warn('[auth] Token validation failed (401) — redirecting to login')
+      console.warn('[auth] Session validation failed (401) — redirecting to login')
       throw redirect({ to: '/login' })
     }
     // 'ok' or 'transient' → proceed into the app.

@@ -2,47 +2,28 @@
 //
 // Per spec §5.3-§5.5: tools_cfg (per-tool allow/ask/deny editor — default
 // deny; HIDDEN for subagent_3p per matrix row 14), skills[] (checkbox list
-// of installed skills — shown for all three types), fallback_models[]
-// (chip + per-entry provider picker, max 2 — HIDDEN for subagent_3p per
-// matrix row 16).
+// of installed skills — shown for all three types). fallback_models[]
+// moved to Step1Identity.tsx (item 6 reorg — adjacent to the model field);
+// see that file for the FallbackEditor implementation.
 //
-// The ToolPolicyEditor + SkillPicker + FallbackEditor patterns are lifted
-// from `AgentProfile.tsx` (the slide-over profile editor) so the create
-// wizard and edit flow cannot drift on the wire shape.
+// The ToolPolicyEditor + SkillPicker patterns are lifted from
+// `AgentProfile.tsx` (the slide-over profile editor) so the create wizard
+// and edit flow cannot drift on the wire shape.
 //
 // W4 + W5 testids emitted per the plan's UI table:
 //   wizard-tools-cfg (Main/Subagent only — HIDDEN for External per BDD),
-//   wizard-skills,
-//   wizard-add-fallback.
+//   wizard-skills.
 
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import type {
-  FallbackModel,
-  RegistryTool,
-} from '@/lib/api'
-import { useModelToProvider } from '@/lib/agents/modelToProvider'
+import type { RegistryTool } from '@/lib/api'
 import { resolveToolsCfg } from '@/lib/toolPolicyPresets'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { InheritToggle } from './InheritToggle'
-import type { Provider } from '@/lib/api/generated/openapi-types'
-import { X } from '@phosphor-icons/react'
 import type { StepProps } from './types'
-
-const MAX_FALLBACKS = 2
 
 export function Step3Tools({
   payload,
   setField,
   initialType,
-  connectedProviders = [],
   registryTools = [],
   skills = [],
   globalPolicies,
@@ -160,136 +141,7 @@ export function Step3Tools({
         )}
       </div>
       )}
-
-      {!isExternal && (
-        <FallbackEditor
-          payload={payload}
-          setField={setField}
-          providers={connectedProviders as Provider[]}
-        />
-      )}
     </>
-  )
-}
-
-// ── Fallback editor ──────────────────────────────────────────────────────────
-
-interface FallbackEditorProps {
-  payload: StepProps['payload']
-  setField: StepProps['setField']
-  providers: Provider[]
-}
-
-function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
-  const fallbacks = payload.fallback_models ?? []
-  const { lookup: modelToProvider } = useModelToProvider(providers)
-  const providerNameById = new Map(providers.map((p) => [p.id, p.name ?? p.id ?? 'Unknown']))
-
-  function setFallbacks(next: FallbackModel[]) {
-    setField('fallback_models', next.length > 0 ? next : undefined)
-  }
-
-  function addFallback() {
-    if (fallbacks.length >= MAX_FALLBACKS) return
-    setFallbacks([
-      ...fallbacks,
-      { model: '', provider: modelToProvider('') },
-    ])
-  }
-
-  function updateFallback(idx: number, patch: Partial<FallbackModel>) {
-    setFallbacks(
-      fallbacks.map((f, i) => (i === idx ? { ...f, ...patch } : f)),
-    )
-  }
-
-  function removeFallback(idx: number) {
-    setFallbacks(fallbacks.filter((_, i) => i !== idx))
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <label className="text-sm font-medium">Fallback models (max {MAX_FALLBACKS})</label>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={addFallback}
-          disabled={fallbacks.length >= MAX_FALLBACKS}
-          title={
-            fallbacks.length >= MAX_FALLBACKS
-              ? `Maximum ${MAX_FALLBACKS} fallback models`
-              : undefined
-          }
-          data-testid="wizard-add-fallback"
-          className="h-7 text-xs"
-        >
-          + Add fallback
-        </Button>
-      </div>
-      <p className="text-xs text-[var(--color-muted)]">
-        Each fallback is a {`{model, provider}`} pair. Server rejects more
-        than {MAX_FALLBACKS} with 400.
-      </p>
-      {fallbacks.length === 0 && (
-        <p className="text-xs text-[var(--color-muted)]">No fallbacks configured.</p>
-      )}
-      <div className="space-y-1.5">
-        {fallbacks.map((entry, idx) => (
-          <div
-            key={idx}
-            className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5"
-            data-testid={`wizard-fallback-${idx}`}
-          >
-            <Input
-              value={entry.model}
-              onChange={(e) => {
-                const model = e.target.value
-                updateFallback(idx, {
-                  model,
-                  // Auto-fill the provider from the slug → provider map
-                  // so the user does not have to retype it. Operator can
-                  // override via the explicit picker below.
-                  provider: modelToProvider(model) || entry.provider,
-                })
-              }}
-              placeholder="model slug"
-              className="font-mono text-xs h-7 flex-1"
-              data-testid={`wizard-fallback-model-${idx}`}
-            />
-            <Select
-              value={entry.provider || '__auto__'}
-              onValueChange={(v) => updateFallback(idx, { provider: v === '__auto__' ? '' : v })}
-            >
-              <SelectTrigger
-                className="h-7 px-2 text-xs"
-                data-testid={`wizard-fallback-provider-${idx}`}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__auto__">auto</SelectItem>
-                {providers.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {providerNameById.get(p.id) ?? p.id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <button tabIndex={0}
-              type="button"
-              onClick={() => removeFallback(idx)}
-              className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-              aria-label={`Remove fallback ${idx + 1}`}
-              data-testid={`wizard-fallback-remove-${idx}`}
-            >
-              <X size={12} />
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
   )
 }
 

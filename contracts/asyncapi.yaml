@@ -40,14 +40,6 @@ servers:
       are governed by gateway.port in config.json (default 6060). For TLS
       deployments behind a reverse proxy, this becomes wss:// at the public
       hostname.
-  gateway-preview:
-    host: localhost:6061
-    pathname: /ws
-    protocol: ws
-    description: >
-      Preview-port WebSocket endpoint (gateway.preview_port, default 6061).
-      Serves the iframe-preview channel. The same frame protocol applies.
-      Only active when gateway.preview_listener_enabled is true (default).
 
 defaultContentType: application/json
 
@@ -1225,11 +1217,15 @@ components:
           # the SPA mid-rollout.
           additionalProperties: true
           description: >
-            Optional per-message metadata. Phase 1 (FR-010) adds `model_name`:
-            when the user picks a model in the chat composer, the picker
-            value is sent as `metadata.model_name` so the server routes
-            THIS turn to the chosen model. The server falls back to the
-            agent's `model` config when this field is absent.
+            Optional per-message metadata. Typed keys today: `model_name`
+            (Phase 1, FR-010) — when the user picks a model in the chat
+            composer, the picker value is sent as `metadata.model_name` so
+            the server routes this turn to the chosen model, falling back to
+            the agent's `model` config when absent; `workspace_id` — the
+            active workspace this chat belongs to; and
+            `workspace_setup_kickoff` (boolean) — a one-time marker that this
+            message is the workspace setup kickoff for
+            `metadata.workspace_id`.
           properties:
             model_name:
               type: string
@@ -1240,6 +1236,32 @@ components:
                 falls back to agent config otherwise. Empty string is
                 treated as absent.
               example: "z-ai/glm-5-turbo"
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+              description: >
+                Active workspace this chat belongs to (M4 workspace→turn binding).
+                When the user sends a message from a workspace chat, the SPA sets
+                this so the server tags the session with the workspace and any task
+                the agent creates during the turn (task_create / delegation) lands on
+                THIS workspace's board instead of the agent's default workspace.
+                Stamped onto the session meta on first use; absent for the global
+                (non-workspace) chat, where created tasks fall back to the default
+                workspace.
+              example: "01JXDEFAULT000000000000001"
+            workspace_setup_kickoff:
+              type: boolean
+              description: >
+                One-time marker that this message is the workspace-setup kickoff
+                turn for `metadata.workspace_id`. When true, the server treats the
+                frame as the one-time workspace-setup kickoff — the frame's
+                `content` is ignored and replaced by a server-composed
+                instruction; a system-role entry is recorded; the workspace's
+                `setup_pending` flag is cleared exactly once (idempotency-guarded);
+                duplicate and malformed kickoffs are rejected with an error frame.
+                Absent/false for ordinary messages.
+              example: true
 
     CancelFrame:
       title: CancelFrame
@@ -1553,9 +1575,12 @@ components:
         tool_call_result frame (status="error") when a delegation tool
         (spawn / subagent / task_create) is denied by the delegation policy
         (trust set / mode / depth). The SPA matches on the fixed
-        error="delegation_denied" discriminator and renders a distinct
-        delegation-failure block — it does NOT rely on the LLM to narrate the
-        denial. The frame's top-level `error` field carries the same `reason`.
+        error="delegation_denied" discriminator, but (policy 2026-07-16) only
+        renders a distinct delegation-failure block in verbose chat or an
+        ActivityPanel step context — the default thread presentation is the
+        calling agent's own narration of the denial, not a dedicated
+        SPA-rendered block. The frame's top-level `error` field carries the
+        same `reason`.
       type: object
       required:
         - error

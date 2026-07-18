@@ -8,9 +8,14 @@
  * old transcripts replay correctly; all new sessions use WebServeUI directly.
  *
  * Spec: FR-008 / FR-008a / FR-010 / FR-011 / FR-012 / FR-013 / FR-014 / FR-015 / FR-019.
+ * Also: docs/internal/specs/preview-on-main-listener-spec.md FR-016/FR-017 (US-9) —
+ * `/preview/` now shares the SPA's own gateway listener (ADR-044), so BOTH
+ * modes render as a clickable link via IframePreview — never an embedded
+ * same-origin iframe.
  *
- * kind="static": Globe icon + path label, iframe mounts immediately (no warmup).
- * kind="dev":    Terminal icon + command + port label, warmup state machine.
+ * kind="static": Globe icon + path label, preview link renders immediately (no warmup).
+ * kind="dev":    Terminal icon + command + port label, warmup state machine, then
+ *                a preview link (same-origin HEAD-poll warmup, no iframe).
  *                Default grace period is 60 s (tools.run_in_workspace
  *                .warmup_timeout_seconds in config.json). The config key retains
  *                the pre-unification name for back-compat with deployed configs.
@@ -23,12 +28,11 @@
  */
 
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { Globe, Terminal, CheckCircle, ArrowsClockwise, XCircle } from '@phosphor-icons/react'
+import { Globe, Terminal } from '@phosphor-icons/react'
 import { type ServeWorkspaceResult as ServeWorkspaceIframeResult, type RunInWorkspaceResult as RunInWorkspaceIframeResult } from '@/lib/api'
 import { hasPreviewShape } from '@/lib/preview-url'
 import { IframePreview } from '../IframePreview'
 import { PreviewToolHeader } from './PreviewToolHeader'
-import { cn } from '@/lib/utils'
 
 // ── Result types ──────────────────────────────────────────────────────────────
 
@@ -42,7 +46,15 @@ import { cn } from '@/lib/utils'
 export interface WebServeResult {
   /** Discriminator for the two modes. */
   kind?: 'static' | 'dev'
-  /** Relative preview path, e.g. "/preview/<agent>/<token>/". */
+  /**
+   * The preview URL. Since ADR-044 (preview-on-main-listener), the backend
+   * builds this from the canonical gateway origin — e.g.
+   * "https://pod.example.com/preview/<agent>/<token>/" or
+   * "http://localhost:<gateway.port>/preview/<agent>/<token>/" — the SAME
+   * origin the SPA itself is served from. Legacy/replay transcripts may
+   * still carry a relative path here (e.g. "/preview/<agent>/<token>/");
+   * IframePreview's URL resolution (resolvePreviewHref) handles both shapes.
+   */
   url: string
   /** ISO-8601 token expiry timestamp. */
   expires_at: string
@@ -102,7 +114,12 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
     rawJson = String(raw)
   }
   return (
-    <div data-testid="webserve-malformed-block" className="mt-2 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 px-3 py-2 text-xs space-y-1.5">
+    // Flat text-line design (ticket "Tool components in chat", P2): the old
+    // rounded/bordered/backgrounded error card is a border-l-2 left accent
+    // instead — matches GenericToolCall.tsx's marshal-error/delegation-denied
+    // banners. This is the only frame WebServeUI itself owns; PreviewToolHeader
+    // (used above by WebServeBlock) was restyled separately (commit 48325168).
+    <div data-testid="webserve-malformed-block" className="mt-2 border-l-2 border-[var(--color-error)]/40 pl-2.5 py-1 text-xs space-y-1.5">
       <p className="text-[var(--color-error)]">
         web_serve tool returned a malformed result — cannot render preview.
       </p>
@@ -110,7 +127,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
         <summary tabIndex={0} className="cursor-pointer text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors">
           Show raw result
         </summary>
-        <pre className="mt-1.5 p-2 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-mono text-[10px] overflow-auto max-h-40 whitespace-pre-wrap break-all">
+        <pre className="mt-1.5 text-[var(--color-muted)] font-mono text-[10px] overflow-auto max-h-40 whitespace-pre-wrap break-all">
           {rawJson}
         </pre>
       </details>
@@ -149,14 +166,6 @@ export function WebServeBlock({
   const isDevMode = effectiveKind === 'dev' ||
     (effectiveKind === null && (typeof args.command === 'string' || typeof args.port === 'number'))
 
-  const statusIcon = isRunning ? (
-    <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-  ) : typedResult ? (
-    <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-  ) : (
-    <XCircle size={12} weight="fill" className="text-[var(--color-error)]" />
-  )
-
   const portChip =
     isDevMode && port !== undefined ? (
       <span className="text-[var(--color-muted)] font-mono">:{port}</span>
@@ -194,35 +203,25 @@ export function WebServeBlock({
     <div className="mt-2 text-xs">
       <PreviewToolHeader
         data-testid="webserve-tool-header"
+        // Mode icon (Terminal/Globe) is a fixed, muted glyph — it identifies
+        // WHICH kind of preview this is (dev server vs static), never the
+        // call's status. Status lives only in PreviewToolHeader's own
+        // leading dot/spinner; tinting this icon by isRunning/typedResult
+        // (the old behavior) duplicated that signal and, in static mode,
+        // rendered a SECOND running spinner alongside the header's own.
         icon={
           isDevMode ? (
-            <Terminal
-              size={13}
-              className={cn(
-                isRunning
-                  ? 'text-[var(--color-accent)] animate-pulse'
-                  : typedResult
-                  ? 'text-[var(--color-success)]'
-                  : 'text-[var(--color-error)]',
-              )}
-            />
+            <Terminal size={13} className="text-[var(--color-muted)]" />
           ) : (
-            <Globe
-              size={13}
-              weight="duotone"
-              className={cn(
-                isRunning
-                  ? 'text-[var(--color-accent)]'
-                  : typedResult
-                  ? 'text-[var(--color-success)]'
-                  : 'text-[var(--color-error)]',
-              )}
-            />
+            <Globe size={13} weight="duotone" className="text-[var(--color-muted)]" />
           )
         }
         toolName={toolName}
         label={isDevMode ? (command || undefined) : (pathLabel || undefined)}
-        trailing={isDevMode ? portChip : statusIcon}
+        // Static mode has no trailing chip — the header's own leading dot
+        // already carries status (see comment above); a second trailing
+        // status icon here was a duplicate/triplicate status render.
+        trailing={isDevMode ? portChip : undefined}
         isRunning={isRunning}
         hasResult={typedResult !== null}
       />

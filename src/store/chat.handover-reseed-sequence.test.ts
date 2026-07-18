@@ -7,8 +7,15 @@
 //
 // This locks the end-to-end store outcome of the cold-load attach sequence:
 //
-//   1. route loader      → setActiveSession(sid, active_agent_id ?? agent_id)
-//                           i.e. seeds Jim from the detail (active_agent_id='jim')
+//   1. component attach effect (sessions.$sessionId.tsx) → attachToSession /
+//                           setActiveSession(sid, active_agent_id ?? agent_id)
+//                           i.e. seeds Jim from the detail (active_agent_id='jim').
+//                           NOTE: this used to be attributed to the route
+//                           loader, but the loader must never write to the
+//                           session store — see sessions.$sessionId.tsx for
+//                           why (deep-link WS-replay regression). The
+//                           component's attach effect is the sole attacher;
+//                           the seeded value is unchanged.
 //   2. WS replay frames   → the gateway replays the transcript; for the handoff
 //                           system entry replay.go emits an `agent_switched`
 //                           (wire `ln`) frame carrying the TARGET agent (Jim),
@@ -46,8 +53,9 @@ describe('chat store — cold-load attach sequence keeps header on last-active a
 
   it('given detail agent_id=mia + active_agent_id=jim, ends on jim after the cold-load attach sequence', () => {
     act(() => {
-      // Step 1 — route loader / WsLifecycle reseed: seed from the LAST-ACTIVE
-      // agent. The loader computes `active_agent_id ?? agent_id`, i.e. 'jim'.
+      // Step 1 — component attach effect / WsLifecycle reseed: seed from the
+      // LAST-ACTIVE agent. `headerAgentId` resolves to
+      // `active_agent_id ?? agent_id`, i.e. 'jim'.
       useSessionStore.getState().setActiveSession(SID, 'jim', null)
     })
     expect(useSessionStore.getState().activeAgentId).toBe('jim')

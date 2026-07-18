@@ -51,16 +51,26 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
 
 // '@assistant-ui/react' is intentionally NOT mocked in this file — see header.
 
-vi.mock('@/lib/api', () => ({
-  fetchAgents: vi.fn().mockResolvedValue([
-    { id: 'agent-1', name: 'Mia', color: '#123456', icon: null },
-  ]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockResolvedValue([]),
-  fetchSkills: vi.fn().mockResolvedValue([]),
-  uploadFiles: vi.fn(),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-}))
+// importOriginal: useSlashMenu now calls useChatAgents unconditionally (the
+// "@" mention menu — src/hooks/useChatAgents.ts), which needs real
+// `fetchWorkspaces`/`workspacesQueryKeys`/`isWorker` even though this file
+// doesn't exercise mentions. The workspaces query stays disabled (no
+// activeWorkspaceId set here), so `fetchWorkspaces` is never actually
+// invoked — this just needs to exist so the module loads.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([
+      { id: 'agent-1', name: 'Mia', color: '#123456', icon: null },
+    ]),
+    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    uploadFiles: vi.fn(),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+  }
+})
 
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }),
@@ -158,6 +168,117 @@ function seedStreamingAssistant(assistantContent: string): void {
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
   useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
 }
+
+/**
+ * Seeds a user message followed by a streaming assistant placeholder whose
+ * ONLY content is a live (in-progress or just-finished) `delegate` tool
+ * call — Fix 3 (2026-07-16): a `delegate` 'run' dispatch is hidden from the
+ * thread by default (toolVisibility.ts), so this exercises the exact
+ * "hidden delegation is the message's only content" ghost-bubble scenario
+ * on the LIVE AssistantMessage() render path (item 8b/8c coverage —
+ * SubagentSpansRenderer's sibling gate for tool-call parts, previously
+ * untested since every OTHER ChatScreen suite mocks ThreadPrimitive.Messages
+ * to null; this file is the one exception, see its header).
+ */
+function seedStreamingAssistantWithHiddenToolCall(toolCallStatus: 'running' | 'success'): void {
+  const userMsg: ChatMessage = {
+    id: 'msg_user',
+    role: 'user',
+    content: 'hi',
+    timestamp: new Date().toISOString(),
+    status: 'done',
+  }
+  const streamingMsg: ChatMessage = {
+    id: 'msg_assistant',
+    role: 'assistant',
+    content: '',
+    timestamp: new Date().toISOString(),
+    status: 'streaming',
+    isStreaming: true,
+  }
+  const allMessages = [userMsg, streamingMsg]
+  const bucket = makeBucketMessages(allMessages)
+  useChatStore.setState((s) => ({
+    ...s,
+    sessionsById: {
+      [SID]: {
+        ...((s.sessionsById ?? {})[SID] ?? {}),
+        ...bucket,
+        isStreaming: true,
+        isReplaying: false,
+        replayCompletedForSession: SID,
+        toolCalls: {
+          tc_hidden_delegate: {
+            id: 'tc_hidden_delegate',
+            call_id: 'tc_hidden_delegate',
+            tool: 'delegate',
+            params: { action: 'run', async: true, target_agent_id: 'ray', task: 'do X' },
+            status: toolCallStatus,
+            ...(toolCallStatus === 'success' ? { result: { ok: true } } : {}),
+          },
+        },
+        toolCallOrder: ['tc_hidden_delegate'],
+        textAtToolCallStart: {},
+        sessionTokens: 0,
+        sessionCost: 0,
+        rateLimitEvent: null,
+        lastUserMessageAt: null,
+        cancelStage: null,
+        lastReceivedEventTime: null,
+        spanByParentCallId: {},
+        trimmedCount: 0,
+      },
+    },
+    messages: allMessages,
+    isStreaming: true,
+    isReplaying: false,
+    replayCompletedForSession: SID,
+  }))
+  useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+  useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
+}
+
+describe('Fix 3 (2026-07-16): ghost bubble when the only live content is a hidden delegation', () => {
+  it('a STILL-RUNNING hidden delegate call shows the thinking placeholder, not a bare Copy bubble', async () => {
+    seedStreamingAssistantWithHiddenToolCall('running')
+
+    await act(async () => {
+      render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+    })
+
+    const bubble = screen.getByTestId('assistant-message')
+    expect(within(bubble).queryByLabelText('Copy message')).toBeNull()
+    expect(
+      within(bubble).getByText(
+        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('a FINISHED (success) hidden delegate call, with nothing else in the message yet, still shows the thinking placeholder', async () => {
+    seedStreamingAssistantWithHiddenToolCall('success')
+
+    await act(async () => {
+      render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+    })
+
+    const bubble = screen.getByTestId('assistant-message')
+    expect(within(bubble).queryByLabelText('Copy message')).toBeNull()
+    expect(
+      within(bubble).getByText(
+        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+      ),
+    ).toBeInTheDocument()
+  })
+})
 
 describe('D: empty streaming assistant bubble (live AssistantMessage render)', () => {
   it('renders the thinking indicator, not an empty Copy-only bubble, while content is empty', async () => {

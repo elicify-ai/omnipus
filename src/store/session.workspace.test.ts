@@ -110,6 +110,84 @@ describe('sessionByWorkspace — written by startNewSession', () => {
   })
 })
 
+describe('setActiveSession — never records the "__pending" sentinel', () => {
+  beforeEach(resetAll)
+
+  it('does NOT write a sessionByWorkspace descriptor when sessionId is "__pending"', () => {
+    // BDD: Given a workspace-setup kickoff (or any no-session sendMessage)
+    //   activates the local '__pending' placeholder session,
+    //   When setActiveSession('__pending', ...) runs,
+    //   Then sessionByWorkspace must NOT record it — recording it would make
+    //   the next enterWorkspaceChat for this workspace call
+    //   attachToSession('__pending'), which the server rejects as an
+    //   invalid session_id after the local bucket has already been wiped.
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+
+    useSessionStore.getState().setActiveSession('__pending', 'agent-1', 'core')
+
+    expect(useSessionStore.getState().activeSessionId).toBe('__pending')
+    expect('ws-1' in useSessionStore.getState().sessionByWorkspace).toBe(false)
+  })
+
+  it('still records a real descriptor for a subsequent real session id after a "__pending" call', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+
+    useSessionStore.getState().setActiveSession('__pending', 'agent-1', 'core')
+    useSessionStore.getState().setActiveSession('sess-real', 'agent-1', 'core')
+
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toEqual({
+      id: 'sess-real',
+      type: 'chat',
+      title: null,
+      agentId: 'agent-1',
+    })
+  })
+
+  it('does not write a descriptor for sessionId=null either (pre-existing behavior, unaffected)', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+
+    useSessionStore.getState().setActiveSession(null, 'agent-1', 'core')
+
+    expect('ws-1' in useSessionStore.getState().sessionByWorkspace).toBe(false)
+  })
+})
+
+describe('enterWorkspaceChat — legacy "__pending" descriptor (defense-in-depth)', () => {
+  beforeEach(resetAll)
+
+  it('starts fresh instead of attaching when the stored descriptor id is "__pending"', () => {
+    // Simulates a descriptor written by some other/legacy path before this
+    // fix — enterWorkspaceChat must never call attachToSession('__pending').
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({
+      activeSessionId: 'some-other-session',
+      sessionByWorkspace: {
+        'ws-1': { id: '__pending', type: 'chat', title: null, agentId: 'agent-1' },
+      },
+    })
+
+    useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    // startNewSession, not attachToSession — activeSessionId resets to null,
+    // never becomes '__pending'.
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+  })
+
+  it('is a no-op (activeSessionId stays null) when already null and the stored descriptor is "__pending"', () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    useSessionStore.setState({
+      activeSessionId: null,
+      sessionByWorkspace: {
+        'ws-1': { id: '__pending', type: 'chat', title: null, agentId: 'agent-1' },
+      },
+    })
+
+    useSessionStore.getState().enterWorkspaceChat('ws-1')
+
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+  })
+})
+
 describe('enterWorkspaceChat — first visit (no descriptor)', () => {
   beforeEach(resetAll)
 

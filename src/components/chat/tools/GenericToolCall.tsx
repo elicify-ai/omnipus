@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import {
-  Wrench,
   ArrowsClockwise,
   XCircle,
   Prohibit,
@@ -23,7 +22,12 @@ import { fetchToolResult } from '@/lib/api'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
-import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import {
+  getToolBadgeStatusConfig,
+  statusDot,
+  isCancelledStatus,
+  type ToolBadgeStatusConfig,
+} from '@/lib/toolStatusConfig'
 
 interface GenericToolCallProps {
   toolName: string
@@ -74,7 +78,12 @@ function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
  * sentinel-type detector pattern above; matched against the generated
  * DelegationFailure contract (error: "delegation_denied").
  */
-function isDelegationFailure(value: unknown): value is DelegationFailure {
+// Exported so ToolCallBadge.tsx (the historical-list / SubagentBlock-step
+// renderer for the same delegation-denied outcome) can reuse the exact same
+// detection + label logic instead of re-deriving it — both callers must
+// render pixel-identical "Delegation denied · <axis>" chips for the same
+// sentinel shape.
+export function isDelegationFailure(value: unknown): value is DelegationFailure {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -83,7 +92,7 @@ function isDelegationFailure(value: unknown): value is DelegationFailure {
 }
 
 /** Human label for the policy axis that blocked the delegation. */
-function policyAxisLabel(policy: DelegationFailure['policy']): string {
+export function policyAxisLabel(policy: DelegationFailure['policy']): string {
   switch (policy) {
     case 'trust_set':
       return 'Trust set'
@@ -125,8 +134,9 @@ function ToolResultRefDisplay({
 
   return (
     <div data-testid="result-tool-ref">
-      {/* Banner */}
-      <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 mb-1 font-sans text-[10px] text-amber-400">
+      {/* Banner — flat: a warning-tinted left accent stands in for the old
+          amber box (ticket "Tool components in chat"); text stays amber. */}
+      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400">
         <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
         <span>
           Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
@@ -182,7 +192,8 @@ function ToolResultRefDisplay({
 function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult }) {
   return (
     <div data-testid="result-client-truncated">
-      <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 mb-1 font-sans text-[10px] text-amber-400">
+      {/* Flat: warning-tinted left accent instead of the old amber box; text stays amber. */}
+      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400">
         <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
         <span>
           Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
@@ -205,12 +216,13 @@ function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult 
  */
 function DelegationFailureDisplay({ failure }: { failure: DelegationFailure }) {
   return (
+    // Flat: a warning-tinted left accent replaces the old bordered/tinted
+    // box (ticket "Tool components in chat") — icon/label text stay warning-colored.
     <div
       data-testid="result-delegation-denied"
-      className="rounded border px-2.5 py-2 mb-1 font-sans text-[10px]"
+      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px]"
       style={{
-        borderColor: 'color-mix(in srgb, var(--color-warning) 40%, transparent)',
-        backgroundColor: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+        borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
       }}
     >
       <div className="flex items-center gap-2 mb-1.5">
@@ -261,36 +273,42 @@ export function GenericToolCall({
 
   const isRunning = status.type === 'running'
   const isError = status.type === 'incomplete' || !!error
-  // AssistantUI's MessagePartStatus does not expose `reason` on the `incomplete` variant in its
-  // public types, so we narrow with `'reason' in status` before casting to access it safely.
-  const isCancelled = status.type === 'incomplete' && 'reason' in status && (status as { reason?: string }).reason === 'cancelled'
+  const isCancelled = isCancelledStatus(status)
 
   // G17: a delegation denial is an error-status result; surface it in the
   // COLLAPSED header ("Delegation denied · <axis>") instead of a generic
   // "Failed" so the user sees the policy block without expanding. The full
   // reason stays in the expanded DelegationFailureDisplay. Computed here
-  // (rather than after the gate below) because the gate needs it too — a
-  // delegation denial is an error outcome even when `status` alone doesn't
-  // say so.
+  // (rather than after the gate below) because the gate below also consults
+  // it — though (revised 2026-07-16) it is only actually HONORED there for
+  // load_tool; see the gate comment below and toolVisibility.ts's doc
+  // comment for the per-tool-class rule.
   const delegationFailure = isDelegationFailure(result) ? result : null
 
   // Marshal-error sentinel: the backend emits `{_marshal_error: "..."}` when
   // JSON-marshaling a tool result fails during replay-frame construction —
   // this can happen even when the tool call itself succeeded, so neither
   // `status` nor `error` reflects it. Computed here (before the gate below,
-  // alongside delegationFailure) because the gate needs it too: a
-  // load_tool/background bash/delegate call whose args match the "hide by
-  // default" shape must still surface if its result silently failed to
-  // marshal, exactly like a policy-denied delegation must.
+  // alongside delegationFailure) because the gate needs it too — but only
+  // for load_tool: shouldRenderToolCall's outcome override is per-tool-class
+  // (see that function's doc comment, toolVisibility.ts), so a load_tool
+  // call whose args match the "hide by default" shape still surfaces on a
+  // marshal failure, while a delegate/background-bash call does NOT get
+  // that exception (the failure is left to the calling agent's own response
+  // text; the raw result stays inspectable in the ActivityPanel).
   const marshalErr = isMarshalErrorResult(result) ? result : null
 
   // Client-side render gate (verbose-chat off by default): hides noisy
   // background infra calls (load_tool, background delegate/bash dispatch,
-  // status polls) unless the user has opted into verbose chat. An
-  // error/denial/marshal-failure outcome always overrides the hide decision —
-  // a policy-denied delegation or a marshal-error result must never disappear
-  // just because its default args look like ordinary background dispatch.
-  // Must sit after every hook above and before the JSX return (Rules of Hooks).
+  // status polls) unless the user has opted into verbose chat. The
+  // isError/delegationFailure/marshalErr outcome signal passed below is only
+  // honored by shouldRenderToolCall's load_tool case (toolVisibility.ts doc
+  // comment) — a load_tool call still forces visible on error/denial/
+  // marshal-failure, but delegate and background-bash do NOT get that
+  // exception: that failure is left to the calling agent's own response
+  // text, with the raw result staying inspectable in the ActivityPanel
+  // slide-out. Must sit after every hook above and before the JSX return
+  // (Rules of Hooks).
   if (
     !shouldRenderToolCall(
       toolName,
@@ -324,10 +342,13 @@ export function GenericToolCall({
   } else if (isCancelled) {
     statusConfig = getToolBadgeStatusConfig('cancelled', { size: 12, cancelledVariant: 'muted' })
   } else if (delegationFailure) {
+    // No equivalent status in getToolBadgeStatusConfig's 4-value domain (see
+    // src/lib/toolStatusConfig.tsx's file header), so this stays a local
+    // literal — but reuses the shared `statusDot` helper so its dot matches
+    // the other four statuses exactly.
     statusConfig = {
-      icon: <Prohibit size={12} weight="fill" className="text-[var(--color-warning)]" />,
+      indicator: statusDot('bg-[var(--color-warning)]'),
       label: `Delegation denied · ${policyAxisLabel(delegationFailure.policy)}`,
-      border: 'border-[var(--color-warning)]/20',
     }
   } else if (isError) {
     statusConfig = getToolBadgeStatusConfig('error', { size: 12 })
@@ -348,35 +369,47 @@ export function GenericToolCall({
       : undefined
 
   return (
-    <div
-      data-testid="tool-call-badge"
-      data-tool={toolName}
-      className={cn('mt-2 rounded-md border bg-[var(--color-surface-1)] text-xs font-mono overflow-hidden', statusConfig.border)}
-    >
-      {/* Header row — a composed row so browser tools can carry a separate,
-          independently clickable "Watch live" launcher next to the toggle. */}
-      <div className="flex w-full items-center">
+    // Flat text-line design (ticket "Tool components in chat", P2): no
+    // border, no surface fill, no rounded frame, no overflow-hidden — the
+    // row is transparent on the thread. Separation comes from `mt-2`
+    // spacing and the status dot, not a card frame.
+    <div data-testid="tool-call-badge" data-tool={toolName} className="mt-2 text-xs font-mono">
+      {/* Header row — the toggle button spans the row (flex-1) and owns the
+          caret as its last child (ml-auto pushes it to the toggle's own
+          right edge), so the caret is inside the clickable toggle and
+          actually expands on click — mirrors ToolCallBadge.tsx. "Watch
+          live" stays an independent sibling *after* the toggle: a button
+          can't nest inside another button, so it can't live inside the
+          toggle too. For non-browser rows the toggle fills the whole row
+          and the caret still lands at the row's far right, unchanged. For
+          browser rows the toggle only fills the space left of "Watch
+          live", so the caret now sits immediately before that launcher
+          instead of after it — an acceptable, intentional shift. */}
+      <div className="flex w-full items-center gap-2">
         <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
-            'flex flex-1 min-w-0 items-center gap-2 px-3 py-2 text-left transition-colors',
-            hasDetail && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
+            // flex-1: the toggle spans the whole row (minus the Watch-live
+            // launcher, which stays an independent target) — matching
+            // ToolCallBadge's full-row click target. Without it the toggle
+            // shrinks to its text and the row's middle is dead space.
+            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
             !hasDetail && 'cursor-default'
           )}
-          aria-expanded={expanded}
+          aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}
         >
-          <Wrench size={13} className="text-[var(--color-muted)] shrink-0" />
+          {statusConfig.indicator}
           <span className="text-[var(--color-secondary)] font-medium">
             {humanizeToolName(toolName)}
           </span>
-          <span className="flex items-center gap-1 ml-1">
-            {statusConfig.icon}
-            <span className="text-[var(--color-muted)]">{statusConfig.label}</span>
+          <span className={cn('text-[var(--color-muted)]', statusConfig.textClass)}>
+            {statusConfig.label}
           </span>
           {hasDetail && (
-            <span className="ml-auto text-[var(--color-muted)]">
+            <span className="ml-auto shrink-0 text-[var(--color-muted)]">
               {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
             </span>
           )}
@@ -387,7 +420,7 @@ export function GenericToolCall({
             onClick={handleWatchLive}
             aria-label="Watch live"
             title="Watch this agent's browser live"
-            className="shrink-0 flex items-center gap-1 px-2 py-2 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-colors"
+            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
           >
             <Broadcast size={13} />
             <span>Watch live</span>
@@ -395,9 +428,11 @@ export function GenericToolCall({
         )}
       </div>
 
-      {/* Expanded detail */}
+      {/* Expanded detail — indented quote-block: a thin left accent line
+          stands in for the old bordered panel, aligned under the
+          status-dot column instead of boxing the whole row. */}
       {expanded && hasDetail && (
-        <div className="border-t border-[var(--color-border)] px-3 py-2 space-y-2">
+        <div className="ml-[3px] space-y-2 border-l-2 border-[var(--color-border)] py-1 pl-3">
           <div>
             <div className="text-[var(--color-muted)] mb-1 font-sans">Tool</div>
             <code className="text-[10px] text-[var(--color-secondary)] break-all">{toolName}</code>
@@ -425,23 +460,25 @@ export function GenericToolCall({
             <div>
               <div className="text-[var(--color-muted)] mb-1 font-sans">Result</div>
 
-              {/* Marshal-error sentinel: result could not be serialized */}
+              {/* Marshal-error sentinel: result could not be serialized. Flat:
+                  error-tinted left accent instead of the old bordered box. */}
               {marshalErr && (
                 <div
                   data-testid="result-marshal-error"
-                  className="flex items-start gap-2 rounded border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-2 py-1.5 mb-1 font-sans text-[10px] text-[var(--color-error)]"
+                  className="flex items-start gap-2 border-l-2 border-[var(--color-error)]/40 pl-2 py-1 mb-1 font-sans text-[10px] text-[var(--color-error)]"
                 >
                   <XCircle size={12} weight="fill" className="shrink-0 mt-0.5" />
                   <span>Result serialization failed: {marshalErr._marshal_error}</span>
                 </div>
               )}
 
-              {/* Server-truncated sentinel: result exceeded 10 KiB server-side */}
+              {/* Server-truncated sentinel: result exceeded 10 KiB server-side.
+                  Flat: warning-tinted left accent instead of the old amber box. */}
               {truncated && (
                 <>
                   <div
                     data-testid="result-truncated-banner"
-                    className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 mb-1 font-sans text-[10px] text-amber-400"
+                    className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400"
                   >
                     <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
                     <span>

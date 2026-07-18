@@ -1,4 +1,9 @@
-// Client-side render filter for tool-call chips in the chat transcript.
+// Client-side render filter, governing TWO chat surfaces via THREE exported
+// policies:
+//   - The chat THREAD (transcript) — shouldRenderToolCall (tool-call chips)
+//     and shouldRenderSubagentSpan (SubagentBlock delegation cards).
+//   - The ActivityPanel slide-out — shouldRenderToolCallInPanel (expanded
+//     native-agent step rows), whose default INVERTS the thread's.
 //
 // This is a PURE UI decision — it never touches the persisted session
 // transcript (JSONL on disk keeps every tool call untouched). It only
@@ -23,6 +28,8 @@
 //     getBoolArg(), whose zero value (missing/non-bool) is `false` — i.e.
 //     bash is foreground-by-default.
 
+import type { SpanLikeStatus } from './toolStatusConfig'
+
 /** Narrow an unknown params bag to a string field, honoring only real strings. */
 function paramString(params: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = params?.[key]
@@ -38,20 +45,44 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
 /**
  * Decide whether a tool call should render inline in the chat transcript.
  *
- * This classifier looks ONLY at the tool's name and its call-time arguments —
- * it has no idea whether the call ultimately succeeded, failed, or was
- * denied. That is deliberate: outcome is a completely orthogonal axis, and
- * callers that know the outcome pass it via `isError` rather than this
- * function trying to infer it from params. An error/denial/failure must
- * always be visible, no matter how noisy the tool+params combination would
- * otherwise be classified — a policy-denied delegation or a failed
- * background command is never "just infra".
+ * This classifier looks at the tool's name, its call-time arguments, and
+ * (for SOME tools only) its outcome. Outcome is NOT a blanket override
+ * anymore (revised 2026-07-16, user-approved): whether an error/denial
+ * forces visibility is now a per-tool-class decision, not a single
+ * short-circuit above the switch —
+ *   - `load_tool`: an error still forces visibility. It has no calling
+ *     agent's own turn to explain the failure in, and the panel hides
+ *     load_tool by default too (shouldRenderToolCallInPanel below) — so
+ *     without this exception the failure would be invisible everywhere
+ *     except verbose chat.
+ *   - `delegate` and the background-dispatch/poll/read sub-cases of `bash`:
+ *     NO error exception. A failed/denied delegation or background shell
+ *     command is returned to the CALLING agent's own turn as the tool
+ *     result — that agent decides how (and whether) to explain the failure
+ *     in its own response text. The ActivityPanel slide-out is the durable
+ *     fallback for THIS case, but its coverage is narrower than "fully
+ *     transparent": it only ever shows subagent SPANS (running, plus a
+ *     recently-finished list capped at 8 — RECENTLY_FINISHED_CAP in
+ *     useRunningActivity.ts) and background bash SESSIONS, and (Fix 1,
+ *     2026-07-16) stays reachable at idle only while a failure is still
+ *     retained in that capped list (ActivityBar.tsx). A delegation DENIED
+ *     outright at dispatch time never opens a span, so it never reaches the
+ *     panel either — verbose chat (which reveals this row directly,
+ *     DelegationFailureDisplay included) is the only render surface for
+ *     that specific case; absent verbose chat, the calling agent's own
+ *     narration is the only place the denial surfaces. A delegation that
+ *     DOES dispatch (a span opens) has its own nested step-level failures
+ *     shown in the panel via shouldRenderToolCallInPanel below (shows
+ *     everything except load_tool). Only verbose chat brings any of these
+ *     rows back into the thread itself.
+ *   - Every other case ignores `isError` entirely (they're either always
+ *     visible or, for `bash`'s foreground/`kill` cases, don't depend on it).
  *
  * @param tool The tool name as it appears on the wire (e.g. "bash", "delegate", "mcp_github_create_issue").
  * @param params The tool call's arguments, if any.
  * @param verboseChatEnabled When true, every tool call renders — this function short-circuits to `true`.
- * @param isError When true, the call's outcome was an error/denial/failure — this function
- *   short-circuits to `true` regardless of what the tool+params classification below would say.
+ * @param isError When true, the call's outcome was an error/denial/failure. Only honored by the
+ *   `load_tool` case (see above) — every other case decides visibility from tool+params alone.
  *   Defaults to `false` so existing call sites that haven't been updated with an outcome signal
  *   keep their current (name/params-only) behavior unchanged.
  */
@@ -67,21 +98,17 @@ export function shouldRenderToolCall(
     return true
   }
 
-  // An error/denial/failure outcome always renders, regardless of what the
-  // tool+params classification below would otherwise decide. This must run
-  // BEFORE the switch — the switch only knows how to reason about the
-  // "normal" background-infra case, not about outcomes.
-  if (isError) {
-    return true
-  }
-
   switch (tool) {
     // --- Hidden by default: noisy infra with no standalone chat meaning ---
 
     case 'load_tool':
       // Every call is infrastructure (loading a tool's full definition into
       // context) — never a meaningful standalone action to a chat reader.
-      return false
+      // Exception: an error/failure outcome still forces visibility (see
+      // this function's doc comment) — unlike delegate/background-bash
+      // below, there is no calling-agent turn that narrates a load_tool
+      // failure on its behalf.
+      return isError
 
     case 'delegate': {
       // action defaults to "run" (pkg/tools/delegate.go execute()).
@@ -91,11 +118,19 @@ export function shouldRenderToolCall(
         // over async since delegate.go dispatches on action first.
         return false
       }
-      // async defaults to true — background delegation (executeRun()).
-      const async = paramBool(params, 'async') ?? true
-      // Hidden only for the default background run (action=run, async=true).
-      // An explicit async=false (await/blocking) is a deliberate, visible action.
-      return !(action === 'run' && async)
+      if (action === 'run') {
+        // Fix 2 (user-approved, revised 2026-07-16): a 'run' delegation is
+        // hidden from the thread by default for BOTH sync and async, AND
+        // regardless of outcome (`isError` is deliberately not consulted
+        // here — see this function's doc comment for the LLM-mediated
+        // rationale). The thread's delegation surface is now the span card
+        // alone (gated separately by shouldRenderSubagentSpan, below), and
+        // that card carries the same no-error-exception, verbose-only rule.
+        return false
+      }
+      // Any other action (e.g. 'kill') is unchanged — a deliberate,
+      // standalone-meaningful action, always visible.
+      return true
     }
 
     case 'bash': {
@@ -103,7 +138,8 @@ export function shouldRenderToolCall(
       const action = paramString(params, 'action') ?? 'run'
       if (action === 'poll' || action === 'read') {
         // Checking on / reading from an already-running background session
-        // — noisy polling, not a new action.
+        // — noisy polling, not a new action. No error exception (same
+        // LLM-mediated rationale as delegate above) — verbose only.
         return false
       }
       if (action === 'kill') {
@@ -113,10 +149,10 @@ export function shouldRenderToolCall(
         return true
       }
       // run_in_background defaults to false (getBoolArg() zero value) —
-      // bash is foreground-by-default.
+      // bash is foreground-by-default. The background-dispatch branch below
+      // has no error exception either, for the same reason as poll/read; a
+      // foreground run doesn't need one since it's already always visible.
       const runInBackground = paramBool(params, 'run_in_background') ?? false
-      // Hidden only for the default foreground-vs-background split when
-      // kicking off a background run; a foreground run is always visible.
       return !(action === 'run' && runInBackground)
     }
 
@@ -147,4 +183,61 @@ export function shouldRenderToolCall(
       // an unknown tool is always shown rather than silently swallowed.
       return true
   }
+}
+
+/**
+ * Decide whether a delegation card (SubagentBlock) renders inline in the
+ * chat THREAD (Fix 2, user-approved 2026-07-16; revised same day). Delegation
+ * is hidden from the thread by default, UNCONDITIONALLY — including a failed/
+ * errored/timed-out/interrupted span. There is deliberately no failed-state
+ * exception here (an earlier revision of this policy had one — removed):
+ * a subagent's error is returned to the DELEGATING agent's own turn as the
+ * tool result, and that agent decides how to present or react to it in its
+ * own response text, so the thread doesn't need its own separate failure
+ * card for the same information. The raw span (including its failure) stays
+ * fully transparent in the ActivityPanel slide-out — see
+ * shouldRenderToolCallInPanel below, whose own rendering is NOT gated by
+ * this function at all. The thread card reappears only via verbose chat.
+ *
+ * Kept as its own named policy function (rather than inlined at each call
+ * site as a bare `verboseChatEnabled` check) so this rationale — and the
+ * span-status domain it deliberately does NOT branch on — stays discoverable
+ * in one place for the next person who wonders "why is a failed delegation
+ * invisible in the thread?".
+ *
+ * @param span Any object carrying the span's status — deliberately typed
+ *   structurally (not as the full `SubagentSpan` union from `@/store/chat`)
+ *   so this lib module never has to import the store. Unused now that the
+ *   failed-state exception is gone, but kept in the signature so call sites
+ *   read naturally ("should this span render") and so a future revision of
+ *   this policy (e.g. reinstating a narrower exception) doesn't need to
+ *   touch every call site's argument list.
+ * @param verboseChatEnabled When true, every span renders. This is now the
+ *   ONLY condition under which a span renders in the thread.
+ */
+export function shouldRenderSubagentSpan(
+  _span: { status: SpanLikeStatus },
+  verboseChatEnabled: boolean,
+): boolean {
+  return verboseChatEnabled
+}
+
+/**
+ * Panel-only visibility policy for ToolCallBadge rows expanded inside the
+ * ActivityPanel slide-out (Fix 2, user-approved 2026-07-16 — inverted from
+ * the thread's policy). The panel is the designated home for exactly the
+ * background/noisy detail the thread (shouldRenderToolCall) hides — a user
+ * who opened the panel already asked to see what's happening, so default
+ * to showing everything EXCEPT `load_tool` (pure internal
+ * tool-definition-loading infra — "Find & load tools" humanized — with no
+ * standalone meaning even in a detail view). Verbose chat reveals
+ * `load_tool` there too. Deliberately name-based only, no params: unlike
+ * shouldRenderToolCall this isn't classifying dispatch shape/outcome, only
+ * excluding one always-noisy tool name.
+ */
+export function shouldRenderToolCallInPanel(
+  tool: string,
+  verboseChatEnabled: boolean,
+): boolean {
+  return verboseChatEnabled || tool !== 'load_tool'
 }

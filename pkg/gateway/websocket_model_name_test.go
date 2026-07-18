@@ -34,7 +34,7 @@ func newTestWSHandlerForModelName(t *testing.T, msgBus *bus.MessageBus) (*WSHand
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-default-model",
 				MaxTokens: 4096,
 			},
@@ -68,6 +68,7 @@ func TestHandleChatMessage_ForwardsModelNameToBus(t *testing.T) {
 		nil,                // mediaRefs
 		"z-ai/glm-5-turbo", // modelName
 		"",                 // workspaceID (no active workspace)
+		false,              // setupKickoff
 		wc,
 	)
 
@@ -98,8 +99,9 @@ func TestHandleChatMessage_EmptyModelName_DoesNotSetKey(t *testing.T) {
 		"hello",
 		"",
 		nil,
-		"", // empty modelName
-		"", // workspaceID (no active workspace)
+		"",    // empty modelName
+		"",    // workspaceID (no active workspace)
+		false, // setupKickoff
 		wc,
 	)
 
@@ -133,6 +135,7 @@ func TestHandleChatMessage_WhitespaceModelName_DoesNotSetKey(t *testing.T) {
 		nil,
 		"   \t\n", // whitespace only
 		"",        // workspaceID (no active workspace)
+		false,     // setupKickoff
 		wc,
 	)
 
@@ -165,6 +168,7 @@ func TestHandleChatMessage_TrimsModelName(t *testing.T) {
 		nil,
 		"  z-ai/glm-5-turbo  ", // surrounding whitespace
 		"",                     // workspaceID (no active workspace)
+		false,                  // setupKickoff
 		wc,
 	)
 
@@ -195,6 +199,7 @@ func TestHandleChatMessage_ModelNameWithAgentID_BothKeysSet(t *testing.T) {
 		nil,
 		"z-ai/glm-5-turbo", // per-turn model
 		"",                 // workspaceID (no active workspace)
+		false,              // setupKickoff
 		wc,
 	)
 

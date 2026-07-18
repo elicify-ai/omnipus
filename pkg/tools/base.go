@@ -116,6 +116,7 @@ var (
 	ctxKeyTurnWorkspaceDir    = &toolCtxKey{"turnWorkspaceDir"}
 	ctxKeyCitationTracker     = &toolCtxKey{"citationTracker"}
 	ctxKeyDelegationDepth     = &toolCtxKey{"delegationDepth"}
+	ctxKeyToolCallID          = &toolCtxKey{"toolCallID"}
 )
 
 // ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
@@ -268,6 +269,25 @@ func WithDelegationDepth(ctx context.Context, depth int) context.Context {
 // unset (a root chat/agent turn, or any non-task invocation).
 func ToolDelegationDepth(ctx context.Context) int {
 	v, _ := ctx.Value(ctxKeyDelegationDepth).(int)
+	return v
+}
+
+// WithToolCallID returns a child context carrying the ID of the tool call
+// currently being dispatched. The agent loop injects this immediately before
+// every tool execution (mirroring the channel/chatID/agentID injections
+// above), so a tool can learn its OWN call ID. DelegateTool uses it (W2:
+// delegate action:"status" live-progress snapshot) to record, at
+// task-creation time, the exact ID a spawned child sub-turn's transcript
+// entries will carry back as ParentSpawnCallID — see
+// session.TranscriptEntry.ParentSpawnCallID's doc comment and
+// pkg/agent/subturn.go's parentSpawnCallID.
+func WithToolCallID(ctx context.Context, toolCallID string) context.Context {
+	return context.WithValue(ctx, ctxKeyToolCallID, toolCallID)
+}
+
+// ToolCallID extracts the current tool call's own ID from ctx, or "" if unset.
+func ToolCallID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyToolCallID).(string)
 	return v
 }
 

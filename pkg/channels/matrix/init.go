@@ -27,7 +27,7 @@ func init() {
 				// Matrix instances (e.g. "matrix.eu" and "matrix.us") must never
 				// share one Olm/Megolm store, or their E2E crypto state collides —
 				// each instance would overwrite the other's device/session keys.
-				channelDir := filepath.Join(cfg.WorkspacePath(), "matrix")
+				channelDir := filepath.Join(cfg.AgentHomeBasePath(), "matrix")
 				cryptoDatabasePath = filepath.Join(channelDir, instanceID)
 				migrateLegacyMatrixCryptoStore(cfg, channelDir, instanceID, cryptoDatabasePath)
 			}

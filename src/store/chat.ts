@@ -5,7 +5,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import type { Message, ToolCall } from '@/lib/api'
+import type { Message, ToolCall, AgentKind } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
@@ -19,6 +19,17 @@ import { logDiagnostic } from '@/lib/telemetry'
 // Maximum messages kept in the visible ring buffer per session.
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
 export const MAX_MESSAGES_PER_SESSION = 500
+
+// Kickoff content template for sendWorkspaceSetupKickoff — sent as
+// the (synthetic, never user-visible) first turn of a freshly-created
+// workspace. The backend records the message this content rides on as a
+// SYSTEM-role transcript entry (centered pill on replay), not a user
+// message, so this text is never shown verbatim in the UI — it only
+// instructs Ava what to do; her own reply is what the user actually reads.
+// Exported (module-level constant fn) so tests can assert on the exact
+// content without duplicating the template.
+export const buildWorkspaceSetupKickoffContent = (workspaceName: string): string =>
+  `The workspace "${workspaceName}" was just created. Introduce yourself and interview the user about this workspace's purpose so you can determine which agents and skills its team needs, then set up the team.`
 
 // Maximum byte size of a tool result stored in client state; oversized results become a sentinel.
 const MAX_TOOL_RESULT_BYTES = 50_000
@@ -325,6 +336,79 @@ function emptySessionState(): SessionChatState {
 }
 
 /**
+ * Client-only extension of {@link ToolCall} carrying its interleaving
+ * position within the owning message. `textOffset` is the character offset
+ * into the owning message's FINAL `content` string where this call started
+ * — SPA-internal (camelCase deliberately, NEVER crosses the wire;
+ * ChatMessage/store shapes are not-wire-format), used by renderers to
+ * interleave text segments and tool calls after finalize/replay.
+ *
+ * Undefined when no position could be determined (e.g. a reconnect edge
+ * where the tool_call_start snapshot was never recorded — see
+ * `stampToolCallOffset`). Renderers must fall back to the legacy
+ * bottom-grouped rendering for those calls only; an absent offset must
+ * never be defaulted to 0, which would misrepresent "position unknown" as
+ * "started at the very beginning of the message".
+ */
+export type PositionedToolCall = ToolCall & { textOffset?: number }
+
+/**
+ * Stamp a single baked tool-call entry with its `textOffset`, and return the
+ * new (never mutated in place) entry.
+ *
+ * Semantics: `textAtToolCallStart[id]` holds the owning message's `content`
+ * AT THE MOMENT this call started (see the `tool_call_start` handler, which
+ * writes it once per call id and never overwrites it thereafter). Message
+ * content is append-only from that point on — every later token/replay-merge
+ * write only ever concatenates onto the end, never rewrites an earlier
+ * range — so the snapshot's `.length` is already the correct split offset
+ * into whatever the content eventually finalizes to, no matter how much
+ * more text or how many more calls land after this one started.
+ *
+ * INVARIANT — once stamped, an offset is correct forever: `prevOffset` —
+ * the offset the call was already stamped with on a PRIOR bake, if any —
+ * is checked FIRST, ahead of a fresh `textAtToolCallStart` snapshot. A call
+ * can be baked more than once over its lifetime (the abandoned-bubble
+ * copy-bake in the 'token' handler followed by the turn-end bake at `done`;
+ * a WS-replay same-turn merge baking a call that was already copy-baked
+ * onto an earlier segment; a reconnect replaying a `tool_call_start` for a
+ * call that is already baked into a historical message; etc). In every
+ * LEGITIMATE re-bake, `prevOffset === snapshot.length` anyway (content is
+ * append-only, so the two agree whenever both are available) — so
+ * preferring `prevOffset` changes nothing for those cases. What it fixes is
+ * the ILLEGITIMATE case: a WS reconnect replays the transcript into a
+ * bucket that already baked-and-wiped this call's snapshot, so the
+ * `tool_call_start` reconnect guard (see its own comment) has to record a
+ * FRESH snapshot — one that reflects however much text has accumulated by
+ * reconnect time, not the original call-start position. Preferring
+ * `snapshot` there would silently overwrite a correct, already-stamped
+ * offset with a bogus end-of-text one on the very next bake. Falling back
+ * to `snapshot?.length` only when there is no `prevOffset` at all (first
+ * bake ever) is still required: silently computing `(undefined ?? '').length`
+ * would default to 0 and misrepresent "snapshot no longer available" as
+ * "started at position 0".
+ */
+function stampToolCallOffset(
+  id: string,
+  tc: ToolCall & { call_id: string },
+  textAtToolCallStart: Record<string, string>,
+  prevOffset: number | undefined,
+): PositionedToolCall {
+  const snapshot = textAtToolCallStart[id]
+  const textOffset = prevOffset ?? snapshot?.length
+  return {
+    id,
+    tool: tc.tool,
+    params: tc.params ?? {},
+    result: tc.result,
+    status: tc.status,
+    duration_ms: tc.duration_ms,
+    error: tc.error,
+    ...(textOffset !== undefined ? { textOffset } : {}),
+  }
+}
+
+/**
  * Bake pending tool calls onto their OWNING message (per ownerByCallId,
  * falling back to fallbackMsgId when a call has no recorded owner — legacy
  * calls started before this tracking existed, or whose owner message was
@@ -334,6 +418,12 @@ function emptySessionState(): SessionChatState {
  * the last message" would silently move a tool call onto a DIFFERENT
  * producer's bubble whenever that producer's segment happens to be the one
  * still open when the bake fires.
+ *
+ * Each baked entry is stamped with `textOffset` via `stampToolCallOffset`
+ * (see its doc comment for the exact offset semantics and the
+ * re-bake-preservation rule) using `textAtToolCallStart` for the snapshot
+ * lookup and any already-baked entry on the target message for the
+ * preservation fallback.
  *
  * Replaces each touched entry in `messagesById` with a NEW object (never
  * mutates an existing message object in place) — safe both as an Immer
@@ -354,6 +444,7 @@ function bakeToolCallsByOwner(
   toolCalls: Record<string, ToolCall & { call_id: string }>,
   ownerByCallId: Record<string, string>,
   fallbackMsgId: string | null,
+  textAtToolCallStart: Record<string, string>,
 ): void {
   const idsByOwner = new Map<string, string[]>()
   for (const id of toolCallOrder) {
@@ -376,15 +467,58 @@ function bakeToolCallsByOwner(
   for (const [ownerMsgId, ids] of idsByOwner) {
     const msg = messagesById[ownerMsgId]
     if (!msg || msg.role !== 'assistant') continue
-    const baked = ids.map((id) => {
-      const tc = toolCalls[id]
-      return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-    })
-    const existing = msg.tool_calls ?? []
-    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+    const existing = (msg.tool_calls ?? []) as PositionedToolCall[]
+    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
+    const baked = ids.map((id) => stampToolCallOffset(id, toolCalls[id], textAtToolCallStart, existingById.get(id)?.textOffset))
+    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
     for (const tc of baked) mergedById.set(tc.id, tc)
     messagesById[ownerMsgId] = { ...msg, tool_calls: Array.from(mergedById.values()) }
   }
+}
+
+/**
+ * Scan every assistant message in a bucket for an already-baked tool call
+ * with the given id — used by the `tool_call_start` reconnect guard
+ * (defense-in-depth alongside `stampToolCallOffset`'s prevOffset-first
+ * invariant) to detect a WS reattach replaying `tool_call_start` for a call
+ * that has ALREADY been baked into `message.tool_calls` (by a prior `done`
+ * or WS-replay-merge bake, which wipes toolCalls/toolCallOrder/
+ * textAtToolCallStart/toolCallOwnerMessageId — see those bake sites). When
+ * true, the caller must treat the frame as a no-op start: it must NOT
+ * re-record a snapshot (the bucket's current content no longer reflects
+ * where this call originally started — that position is only preserved in
+ * the already-baked entry's `textOffset`) and must NOT re-add the id to
+ * `toolCallOrder` (doing so would queue the call for ANOTHER bake, risking
+ * it landing on the wrong owner message if the tail message has changed
+ * since the original bake — `stampToolCallOffset`'s prevOffset preference
+ * only recovers the correct offset when the re-bake lands back on the SAME
+ * owner message that already holds it).
+ *
+ * Must NOT trigger for a still-streaming turn's calls reattaching mid-turn
+ * (the legitimate reconnect case the guard's surrounding comment describes)
+ * — those calls are not yet baked into any message, so this scan correctly
+ * returns false for them and the existing snapshot/order guards run
+ * unchanged.
+ *
+ * O(messages) — deliberately not indexed. Only a `tool_call_start` frame
+ * calls this, and only the reconnect/replay path ever revisits a call id
+ * that could possibly already be baked (a live turn's own calls are never
+ * baked until `done`/a replay merge, so a live call is never found here —
+ * see the call site). Bucket message counts are capped by
+ * MAX_MESSAGES_PER_SESSION, and there is no cheaper existing index:
+ * toolCallOwnerMessageId is wiped by the very same bake that populates
+ * message.tool_calls, so it cannot answer "is this id baked" for the one
+ * case this function exists to catch.
+ */
+function isToolCallBakedInBucket(messagesById: Record<string, ChatMessage>, callId: string): boolean {
+  for (const id in messagesById) {
+    const msg = messagesById[id]
+    if (msg.role !== 'assistant' || !msg.tool_calls) continue
+    for (const tc of msg.tool_calls) {
+      if (tc.id === callId) return true
+    }
+  }
+  return false
 }
 
 /** Return the ordered message array for a bucket. O(N) — call once per reducer, not per frame. */
@@ -685,6 +819,130 @@ interface ChatStore {
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
   /**
+   * Auto-triggers Ava's (or whichever agent leads the workspace's
+   * core_team) workspace-setup interview the first time a freshly-created
+   * workspace (server-seeded `setup_pending: true`) is opened with no
+   * conversation yet. Reuses `sendMessage`'s no-active-session ("new turn")
+   * wire mechanics — pending `'__pending'` placeholder bucket,
+   * `_validateOutboundFrame`, `isStreaming`, rollback-on-send-failure — MINUS
+   * any user-visible bubble: the backend records this turn's kickoff frame
+   * as a SYSTEM-role transcript entry (centered pill on replay), not a user
+   * message, so rendering an optimistic user bubble here would show text the
+   * user never typed. No `session_id` is sent — the server mints one and
+   * acks with `session_started`, same as any other first message.
+   *
+   * Sets the active agent (mirrors `AgentPicker`'s auto-select:
+   * `setActiveSession` with the resolved agent's id+type) so the
+   * composer/thread header show the agent immediately, without depending on
+   * `AgentPicker`'s own effect having already run.
+   *
+   * Bails silently (returns `false`, no toast) when offline, mid-stream, or
+   * a conversation already exists (`activeSessionId !== null`) — this must
+   * never fire over an existing chat. Returns `true` once the frame is
+   * handed to `connection.send` successfully. The caller (
+   * `useWorkspaceSetupKickoff`) uses the return value to decide whether to
+   * optimistically clear `setup_pending` in the workspaces query cache.
+   */
+  sendWorkspaceSetupKickoff: (opts: {
+    workspaceId: string
+    workspaceName: string
+    agentId: string
+    agentType: AgentKind | null
+  }) => boolean
+  /**
+   * Kickoff pending-session hardening: the workspace id of the
+   * ONE in-flight `sendWorkspaceSetupKickoff` call, or `null` when no
+   * kickoff is outstanding. Set the moment a kickoff frame is handed to
+   * `connection.send` successfully; cleared on whichever terminal outcome
+   * resolves it first:
+   *   - `session_started` — the kickoff succeeded (see that frame handler,
+   *     which also uses the recorded workspaceId to decide whether the ack
+   *     is still for the workspace the user is currently on, AND whether
+   *     the '__pending' placeholder is still the local foreground turn at
+   *     all — the plausibility gate).
+   *   - a rejecting, UNTAGGED `error` frame (a kickoff turn never
+   *     gets a real session_id, so any tagged error can never be a kickoff
+   *     reject) — regardless of whether `activeSessionId` is still
+   *     `'__pending'` at the time (the reject-after-navigation
+   *     fall-through covers the case where the user already moved on
+   *     locally).
+   *   - a hard WS disconnect — `clearStreamingState` tears this down
+   *     via `abandonPendingKickoff` the instant the connection drops, since
+   *     no ack can ever arrive on a dead connection.
+   *   - a failed `connection.send()` inside `sendWorkspaceSetupKickoff`
+   *     itself (the full-rollback branch).
+   *
+   * Also doubles as a single-slot in-flight guard: `sendWorkspaceSetupKickoff`
+   * bails while this is non-null, since a second kickoff would collide with
+   * the first on the shared `'__pending'` bucket key before either resolves.
+   * `sendMessage`'s own no-active-session branch respects the same guard
+   * — it enqueues instead of building a second
+   * `'__pending'` bucket while this is non-null.
+   */
+  pendingKickoff: { workspaceId: string } | null
+  /**
+   * Honest retry: per-workspace kickoff-attempt guard, keyed by
+   * workspace id. This is `useWorkspaceSetupKickoff`'s OWN send-time "have I
+   * already fired for this workspace" bookkeeping — moved out of a
+   * component-local `useRef` (which, once a kickoff terminally failed, had
+   * NO path back to "retry": failure just left the ref permanently claimed)
+   * and into the store so it can also be corrected by chat.ts's own async
+   * WS-frame handlers (`session_started` / `error` / a hard disconnect),
+   * which are the only code that ever learns of an ASYNC kickoff outcome —
+   * the hook itself only ever observes the synchronous accept/reject of the
+   * initial `connection.send()` call.
+   *   'in-flight' — a kickoff was sent for this workspace and hasn't
+   *                 resolved yet; blocks a second concurrent fire for the
+   *                 SAME workspace id.
+   *   'failed'    — the kickoff terminally failed (server reject, a hard
+   *                 disconnect, or a synchronous send failure). Does NOT
+   *                 block a future fire — the hook's own effect reacts to
+   *                 this transition by invalidating the workspaces query so
+   *                 server truth (which restores `setup_pending:true` on a
+   *                 genuine failure, per the kickoff contract — a DUPLICATE
+   *                 rejection is the exception: the flag is already
+   *                 correctly `false` from the earlier, actually-successful
+   *                 attempt) replaces the hook's own premature optimistic
+   *                 `false` write. The next natural re-render (once the
+   *                 invalidated query refetches a fresh `Workspace` object)
+   *                 decides honestly whether to retry via the ordinary
+   *                 `setup_pending` check — the DUPLICATE case naturally
+   *                 stops there since the refetch reports `false`.
+   * No entry means "never attempted, or already resolved 'done'" — free to
+   * fire.
+   */
+  kickoffAttemptStatus: Record<string, 'in-flight' | 'failed'>
+  /**
+   * Claim the per-workspace kickoff-attempt slot. Called by
+   * `useWorkspaceSetupKickoff` immediately BEFORE invoking
+   * `sendWorkspaceSetupKickoff`, mirroring the old ref's "claim before send"
+   * ordering — a synchronous re-render triggered by the send itself must
+   * not re-enter the hook's effect body and fire a second frame.
+   */
+  markKickoffInFlight: (workspaceId: string) => void
+  /**
+   * Resolve a workspace's kickoff-attempt slot. `'done'` deletes the
+   * entry (success, or any other case that no longer needs tracking);
+   * `'failed'` marks it so `useWorkspaceSetupKickoff`'s invalidate-on-failure
+   * effect fires.
+   */
+  resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
+  /**
+   * Kickoff pending-session hardening: full, quiet teardown of an
+   * outstanding workspace-setup kickoff — clears `pendingKickoff`, drops the
+   * orphaned `'__pending'` bucket (if present), and marks the workspace's
+   * `kickoffAttemptStatus` as `'failed'`. No-op when no kickoff is
+   * outstanding. Used by `clearStreamingState` (a hard disconnect means no
+   * ack for any in-flight kickoff can ever arrive on the dead connection)
+   * and by `OmnipusRuntimeProvider.reattachActiveSession` (a reconnect
+   * mid-kickoff must not send a protocol-violating `attach_session
+   * {session_id: '__pending'}`). Deliberately does NOT touch
+   * `activeSessionId` or show a toast — those are the caller's own,
+   * context-specific responsibility (a disconnect vs. a reconnect want
+   * different visible behavior).
+   */
+  abandonPendingKickoff: () => void
+  /**
    * Cancels the target session's in-flight turn (sends the `cancel` WS frame
    * and marks its last assistant message interrupted). `sessionId` optionally
    * scopes this to a specific session — e.g. the browser panel's "Take over"
@@ -830,6 +1088,61 @@ export const useChatStore = create<ChatStore>((set, get) => {
     })
   }
 
+  /**
+   * Remove a bucket entirely (unlike `withBucket`, which can only
+   * patch/create). Used for FULL teardown of the `'__pending'` bucket —
+   * kickoff rollback, kickoff rejection cleanup, and the
+   * "kickoff acked while the user navigated to a different workspace"
+   * branch — none of which want a lingering empty/errored bucket
+   * left under the shared `'__pending'` key. No-op if the bucket doesn't
+   * exist. Resyncs foreground fields the same way `withBucket` does, so a
+   * delete of the CURRENTLY-foreground bucket correctly collapses to
+   * `EMPTY_BUCKET` rather than leaving stale foreground fields behind.
+   */
+  function deleteBucket(sid: string): void {
+    set((state) => {
+      if (!(sid in state.sessionsById)) return {}
+      const sessionsById = { ...state.sessionsById }
+      delete sessionsById[sid]
+      const activeSid = getActiveSid()
+      const activeBucket = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
+      return { sessionsById, ...bucketToForeground(activeBucket) }
+    })
+  }
+
+  /**
+   * Resolve a workspace's `kickoffAttemptStatus` slot. `'done'`
+   * deletes the entry entirely (success needs no further tracking — the
+   * server's own `setup_pending:false` already blocks a refire via the
+   * hook's ordinary guard); `'failed'` marks it so the hook's
+   * invalidate-on-failure effect can react.
+   */
+  function resolveKickoffAttempt(workspaceId: string, outcome: 'done' | 'failed'): void {
+    set((state) => {
+      const kickoffAttemptStatus = { ...state.kickoffAttemptStatus }
+      if (outcome === 'done') {
+        delete kickoffAttemptStatus[workspaceId]
+      } else {
+        kickoffAttemptStatus[workspaceId] = 'failed'
+      }
+      return { kickoffAttemptStatus }
+    })
+  }
+
+  /**
+   * Full, quiet teardown of an outstanding workspace-setup
+   * kickoff — see the public `abandonPendingKickoff` action's doc comment
+   * on the ChatStore interface for the exact contract. No-op when
+   * `pendingKickoff` is already null.
+   */
+  function abandonPendingKickoffInternal(): void {
+    const kickoff = get().pendingKickoff
+    if (kickoff === null) return
+    deleteBucket('__pending')
+    set({ pendingKickoff: null })
+    resolveKickoffAttempt(kickoff.workspaceId, 'failed')
+  }
+
   /** Re-sync foreground fields from sessionsById after an external session switch. */
   function syncForeground(): void {
     set((state) => {
@@ -899,6 +1212,22 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // ── Outbound queue initial state ─────────────────────────────────────────
     outboundQueue: [],
     pendingDrainQueue: [],
+
+    // No kickoff outstanding at store init.
+    pendingKickoff: null,
+    // No per-workspace kickoff attempts tracked at store init.
+    kickoffAttemptStatus: {},
+    markKickoffInFlight: (workspaceId) => {
+      set((state) => ({
+        kickoffAttemptStatus: { ...state.kickoffAttemptStatus, [workspaceId]: 'in-flight' },
+      }))
+    },
+    resolveKickoffAttempt: (workspaceId, outcome) => {
+      resolveKickoffAttempt(workspaceId, outcome)
+    },
+    abandonPendingKickoff: () => {
+      abandonPendingKickoffInternal()
+    },
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults projected through bucketToForeground.
@@ -1456,7 +1785,22 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     drainOutboundQueue: () => {
       const queue = get().outboundQueue
-      if (queue.length === 0) return
+      // Kickoff hardening: the early-return used to skip straight
+      // past `maybeDrainNext()` whenever `outboundQueue` was empty — but
+      // several kickoff-terminal cleanup paths (a rejecting error frame, a
+      // synchronous send failure, the "wrong workspace" migration) call
+      // THIS function specifically (not `maybeDrainNext()` directly) to
+      // release whatever is waiting, and what's waiting may already sit in
+      // `pendingDrainQueue` (moved there by an EARLIER drain cycle that got
+      // stuck behind the kickoff's own `isStreaming` window) rather than in
+      // `outboundQueue`. Always falling through to `maybeDrainNext()` below
+      // makes this function a safe, strict superset of it — correct to call
+      // at every "an attempt just ended, try to free the next thing"
+      // site, regardless of which queue actually holds the waiting item.
+      if (queue.length === 0) {
+        maybeDrainNext()
+        return
+      }
       // BUG FIX (2026-07): used to `for`-loop `sendMessage` over the whole
       // queue synchronously — see the `maybeDrainNext` doc comment above for
       // why that silently dropped every message after the first. Instead,
@@ -1554,13 +1898,42 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (workspaceId.length > 0) metadata.workspace_id = workspaceId
       const metadataFrame = Object.keys(metadata).length > 0 ? { metadata } : {}
       const { connection, isConnected } = useConnectionStore.getState()
-      const { activeSessionId, activeAgentId } = useSessionStore.getState()
+      const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
+      // Composer guard: a '__pending' sentinel with no in-flight
+      // stream is a STUCK state, not a real session — it means a workspace-
+      // setup kickoff started a turn under '__pending' and that turn ended
+      // (rejected, rolled back, or otherwise never got its session_started
+      // ack) without activeSessionId ever being reset back to null. Sending
+      // `session_id: '__pending'` on the wire is a protocol violation the
+      // gateway answers with a terminal "session not found" error. Treat it
+      // exactly like "no active session yet" instead — an ordinary fresh
+      // turn, no session_id on the wire — rather than propagating the
+      // sentinel. A '__pending' session that IS still streaming (the kickoff
+      // or a first message is actively in flight) is untouched here; that
+      // case is handled by the existing mid-turn-steering '__pending' branch
+      // below.
+      const activeSessionId = (rawActiveSessionId === '__pending' && !isStreaming) ? null : rawActiveSessionId
 
-      if (isStreaming) {
-        useConnectionStore.getState().setConnectionError('Please wait — a response is still generating.')
-        return
-      }
+      // Mid-turn steering (bugfixes3 gate 4): sendMessage USED to hard-return
+      // here with a 'Please wait — a response is still generating.' toast
+      // whenever isStreaming was true — the SPA composer was the only surface
+      // in the app that couldn't send mid-turn; channels already deliver
+      // mid-turn messages today, and the gateway queues them per-scope,
+      // injecting each one into the turn that's already RUNNING (between
+      // tool calls — any still-in-flight tool calls for that turn are
+      // skipped server-side with "Skipped due to queued user message"). See
+      // the `if (isStreaming)` branch inside the `activeSessionId !== null`
+      // block below for how a mid-turn send differs from a new-turn send (no
+      // second assistant placeholder is minted; `isStreaming` is left alone).
+      //
+      // The offline check immediately below intentionally still runs FIRST,
+      // unconditional on isStreaming: mid-turn steering must NOT bypass
+      // offline buffering — if the socket is down, a message typed mid-turn
+      // queues into outboundQueue exactly like an idle-state message and
+      // drains once drainOutboundQueue() reconnects (maybeDrainNext still
+      // waits for !isStreaming before popping that queue — untouched,
+      // separate mechanism from this steering path).
       if (!connection || !isConnected) {
         // WS is disconnected — buffer the message for when the connection
         // recovers rather than losing it silently or showing a hard error.
@@ -1587,6 +1960,90 @@ export const useChatStore = create<ChatStore>((set, get) => {
           status: 'done',
           ...(attachments.length > 0 ? { media: attachments } : {}),
         }
+
+        // Mid-turn steering send: a turn is already streaming, so this
+        // message does NOT start a new turn — the gateway injects it into
+        // the turn that's already running (between tool calls). The existing
+        // streaming assistant bubble (the last message in the thread) stays
+        // live and keeps receiving content for THAT SAME turn. This path
+        // therefore:
+        //   - appends ONLY the user bubble (no second assistant placeholder —
+        //     minting one here would render a second, permanently-empty
+        //     "streaming" bubble that never receives tokens, since the
+        //     backend keeps streaming into the FIRST one, not this one);
+        //   - leaves `isStreaming` untouched (already true; resetting it here
+        //     would race the in-flight turn's own done/error frame);
+        //   - skips the prevAssistantIdx tool_calls-baking logic below — that
+        //     logic finalizes tool_calls onto a turn that has ALREADY ENDED
+        //     (it bakes the live toolCalls state onto the previous assistant
+        //     message right as a NEW turn begins); this turn hasn't ended,
+        //     so there is nothing to finalize yet.
+        // The appended user message lands AFTER the still-streaming assistant
+        // message in message order, which is the correct chronology for a
+        // steering message — it was sent while that assistant turn was still
+        // producing output.
+        if (isStreaming) {
+          // Mid-turn steering during the '__pending' session window: the
+          // FIRST message of a brand new chat streams under the optimistic
+          // placeholder sid '__pending' (see the no-active-session branch
+          // below) until the server's session_started frame supplies the
+          // real session_id. A steer sent in that window would send
+          // session_id:'__pending' on the wire — a protocol violation the
+          // gateway answers with a terminal "session not found" error frame,
+          // which the SPA's error handler then (incorrectly) attributes to
+          // the legitimate first turn, erroring it out and losing the steer
+          // text. There is no real session to steer INTO yet, so degrade to
+          // the existing offline-style buffering instead: enqueue the steer
+          // text and let it go out as an ordinary FOLLOW-UP message once
+          // session_started resolves the real session_id (which now also
+          // calls drainOutboundQueue() — see that handler) and the first
+          // turn's own done/error frame calls maybeDrainNext(). That drain
+          // already gates on `!isStreaming` (see maybeDrainNext's doc
+          // comment), so this cannot race the in-flight first turn — it
+          // simply becomes the next queued message once turn 1 completes.
+          if (activeSessionId === '__pending') {
+            const enqueued = get().enqueueOutboundMessage(content)
+            if (!enqueued) {
+              useConnectionStore.getState().setConnectionError(
+                'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
+              )
+            }
+            return
+          }
+
+          withBucket(activeSessionId, (b) => {
+            const allMsgs = [...getMessages(b), userMsg]
+            return { ...applyMessageArray(allMsgs, b), lastUserMessageAt: Date.now() }
+          })
+
+          const steerPayload = {
+            type: 'message' as const,
+            content,
+            session_id: activeSessionId,
+            agent_id: activeAgentId ?? undefined,
+            ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+            ...metadataFrame,
+          }
+          get()._validateOutboundFrame(steerPayload, activeSessionId)
+          const steerSent = connection.send(steerPayload)
+
+          if (!steerSent) {
+            // The in-flight turn is unaffected by a steering-send failure —
+            // only THIS message failed to reach the gateway. Mark just the
+            // user bubble as 'error' (Retry affordance) and leave
+            // `isStreaming` alone; there is no assistant placeholder to roll
+            // back because a mid-turn steering send never creates one.
+            withBucket(activeSessionId, (b) => produce(b, (draft) => {
+              const um = draft.messagesById[userMsg.id]
+              if (um) { um.status = 'error' }
+            }) as Partial<SessionChatState>)
+            useConnectionStore.getState().setConnectionError(
+              'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
+            )
+          }
+          return
+        }
+
         const assistantMsg: ChatMessage = {
           id: generateId(),
           session_id: activeSessionId,
@@ -1617,23 +2074,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
               (id) => !alreadySeen.has(id) && b.toolCalls[id],
             )
             if (liveIds.length > 0) {
-              const baked = liveIds.map((id) => {
-                const tc = b.toolCalls[id]
-                return {
-                  id,
-                  tool: tc.tool,
-                  params: tc.params,
-                  result: tc.result,
-                  status: tc.status,
-                  duration_ms: tc.duration_ms,
-                  error: tc.error,
-                }
-              })
+              const existingCalls = (prev.tool_calls ?? []) as PositionedToolCall[]
+              const existingById = new Map(existingCalls.map((tc) => [tc.id, tc]))
+              const baked = liveIds.map((id) =>
+                stampToolCallOffset(id, b.toolCalls[id], b.textAtToolCallStart, existingById.get(id)?.textOffset),
+              )
               // Dedupe the merged tool_calls list by id so a re-bake (after
               // an attach + replay, or any other path that revisits live
               // ids) cannot leave duplicate ids on the message.
-              const mergedById = new Map<string, NonNullable<typeof prev.tool_calls>[number]>()
-              for (const tc of (prev.tool_calls ?? [])) mergedById.set(tc.id, tc)
+              const mergedById = new Map<string, PositionedToolCall>(existingCalls.map((tc) => [tc.id, tc]))
               for (const tc of baked) mergedById.set(tc.id, tc)
               finalMsgs = [...msgs]
               // #3: prev is guaranteed assistant (prevAssistantIdx only set for
@@ -1712,6 +2161,28 @@ export const useChatStore = create<ChatStore>((set, get) => {
           maybeDrainNext()
         }
       } else {
+        // Kickoff hardening: a workspace-setup kickoff already owns
+        // the shared '__pending' bucket key (see `pendingKickoff`'s doc
+        // comment). Building a SECOND '__pending' bucket here would collide
+        // with — and, since `withBucket` appends rather than replaces,
+        // silently co-mingle content with — the kickoff's own placeholder,
+        // and this send's eventual `session_started` ack would then be
+        // ambiguous with the kickoff's own ack. Degrade to the same
+        // offline-style buffering `sendMessage` already uses for a
+        // disconnected WS / mid-turn '__pending' steering: enqueue and let
+        // it go out as an ordinary follow-up once the kickoff resolves
+        // (every kickoff-terminal cleanup path calls `drainOutboundQueue()`
+        // to release it).
+        if (get().pendingKickoff !== null) {
+          const enqueued = get().enqueueOutboundMessage(content)
+          if (!enqueued) {
+            useConnectionStore.getState().setConnectionError(
+              'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
+            )
+          }
+          return
+        }
+
         // No active session — send without session_id; server will mint one
         // and ack with session_started.
         //
@@ -1779,6 +2250,114 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
       }
   },
+
+    sendWorkspaceSetupKickoff: (opts) => {
+      const { workspaceId, workspaceName, agentId, agentType } = opts
+      const { connection, isConnected } = useConnectionStore.getState()
+      const { activeSessionId } = useSessionStore.getState()
+      const { isStreaming, pendingKickoff } = get()
+
+      // Never kick off over an offline connection, a mid-turn stream, or an
+      // existing conversation — mirrors sendMessage's own guards, but as an
+      // outright bail (no queueing, no toast): a missed kickoff simply
+      // leaves `setup_pending` true, so the calling hook can retry on the
+      // next render once the blocking condition clears.
+      if (!connection || !isConnected) return false
+      if (isStreaming) return false
+      if (activeSessionId !== null) return false
+      // A DIFFERENT kickoff is already outstanding (its ack hasn't
+      // landed yet — see `pendingKickoff`'s doc comment). This can happen
+      // even with `activeSessionId === null` above: the user can navigate
+      // away from the workspace that triggered the first kickoff (which
+      // resets `activeSessionId` back to null via `enterWorkspaceChat`)
+      // before that kickoff's `session_started`/`error` ack arrives. Firing
+      // a second kickoff here would collide with the first on the shared
+      // `'__pending'` bucket key. Bail exactly like the other guards; the
+      // hook releases its own guard on `false` and retries later.
+      if (pendingKickoff !== null) return false
+
+      const content = buildWorkspaceSetupKickoffContent(workspaceName)
+      const pendingSid = '__pending'
+      const assistantMsg: ChatMessage = {
+        id: generateId(),
+        session_id: pendingSid,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        status: 'streaming',
+        isStreaming: true,
+        // Stamp the target agent's identity on the placeholder
+        // immediately (mirrors the reconnect/reattach placeholders — see
+        // `resolveLastActiveAgentId` in OmnipusRuntimeProvider.tsx) so the
+        // thread shows the resolved agent right away instead of waiting for
+        // a later frame that also happens to carry `agent_id`.
+        agentId,
+      }
+
+      // Render ONLY the optimistic streaming assistant placeholder — no user
+      // bubble. This turn's "user" content is a synthetic instruction the
+      // backend records as a SYSTEM-role transcript entry (a centered pill
+      // on replay), not something the user typed, so echoing it as a user
+      // bubble here would show text the user never wrote.
+      withBucket(pendingSid, (b) => {
+        const allMsgs = [...getMessages(b), assistantMsg]
+        return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
+      })
+      // Activate the pending bucket AND select the agent in one write —
+      // mirrors AgentPicker's auto-select (setActiveSession with the
+      // resolved agent's id+type) so the composer/thread header show the
+      // agent immediately, same as sendMessage's own no-session branch
+      // activates '__pending' as foreground.
+      useSessionStore.getState().setActiveSession(pendingSid, agentId, agentType)
+      // Claim the single in-flight-kickoff slot BEFORE sending, so
+      // a synchronous re-render triggered by the writes above cannot race a
+      // second kickoff attempt in behind this one, and so the
+      // `session_started`/`error` handlers can find it as soon as either
+      // frame arrives.
+      set({ pendingKickoff: { workspaceId } })
+
+      const payload = {
+        type: 'message' as const,
+        content,
+        agent_id: agentId,
+        metadata: {
+          workspace_id: workspaceId,
+          workspace_setup_kickoff: true,
+        },
+      }
+      get()._validateOutboundFrame(payload, pendingSid)
+      const sent = connection.send(payload)
+
+      if (!sent) {
+        // FULL rollback — unlike sendMessage's failure rollback
+        // (which keeps a user's typed bubble as a retriable 'error'), a
+        // kickoff has no user-typed content to preserve, so tear the whole
+        // '__pending' bucket down rather than leaving an empty husk behind.
+        // Also reset session activation back to "no session" (retaining the
+        // agent selection just made above) — without this, `activeSessionId`
+        // would stay stuck at '__pending' forever and the hook's own guard
+        // (`activeSessionId === null`) would block every future retry,
+        // including the one it's about to attempt now that this call is
+        // returning `false`. `abandonPendingKickoffInternal` handles the
+        // `pendingKickoff` clear + bucket teardown + `kickoffAttemptStatus`
+        // 'failed' marking in one place, shared with the disconnect
+        // and reject-frame cleanup paths below.
+        abandonPendingKickoffInternal()
+        useSessionStore.getState().setActiveSession(null)
+        useConnectionStore.getState().setConnectionError(
+          'Could not start the workspace setup interview — connection dropped. Please try again.'
+        )
+        // Only `drainOutboundQueue()` (not `maybeDrainNext()`) moves
+        // items actually sitting in `outboundQueue` — e.g. a message that
+        // collided with THIS kickoff's `pendingKickoff` slot via the
+        // collision guard in `sendMessage` — into `pendingDrainQueue` and
+        // sends the head.
+        get().drainOutboundQueue()
+        return false
+      }
+
+      return true
+    },
 
     cancelStream: (sessionId) => {
       const { connection } = useConnectionStore.getState()
@@ -1861,6 +2440,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     clearStreamingState: () => {
+      // Kickoff hardening: a hard disconnect means no ack
+      // (session_started or error) can ever arrive on THIS connection for an
+      // outstanding workspace-setup kickoff — its '__pending' placeholder
+      // turn is dead. Clear the slot and drop the orphaned bucket now
+      // (quietly — no toast, no `activeSessionId` change: `activeSessionId`
+      // staying at '__pending' until reconnect is handled by
+      // `OmnipusRuntimeProvider.reattachActiveSession`) rather than
+      // leaving `pendingKickoff` wedged non-null forever, which would
+      // otherwise permanently block every future kickoff attempt via
+      // `sendWorkspaceSetupKickoff`'s own `pendingKickoff` guard.
+      abandonPendingKickoffInternal()
       // F-S3: a socket drop means no more terminal frames are coming for any
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
@@ -1939,7 +2529,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // `next` may still share by reference with `bucket` (when the
             // needsMsgFix branch above didn't already copy it).
             next.messagesById = { ...next.messagesById }
-            bakeToolCallsByOwner(next.messagesById, bucket.toolCallOrder, toolCalls, bucket.toolCallOwnerMessageId ?? {}, lastAssistantId)
+            bakeToolCallsByOwner(next.messagesById, bucket.toolCallOrder, toolCalls, bucket.toolCallOwnerMessageId ?? {}, lastAssistantId, bucket.textAtToolCallStart)
             next.toolCalls = {}
             next.toolCallOrder = []
             next.textAtToolCallStart = {}
@@ -2048,6 +2638,75 @@ export const useChatStore = create<ChatStore>((set, get) => {
         case 'session_started': {
           // Server minted a new session_id in response to a message sent without one.
           const newSid = frame.session_id
+
+          // This ack may be resolving a pending workspace-setup
+          // kickoff rather than an ordinary sendMessage no-session turn.
+          // Capture + clear `pendingKickoff` up front — this frame always
+          // resolves whichever kickoff was outstanding, regardless of which
+          // branch below runs. Resolve the per-workspace attempt tracker
+          // ('done') too — this ack is always a SUCCESS for the kickoff
+          // (a failure arrives as an 'error' frame instead, never as
+          // session_started), regardless of which branch below handles it.
+          const resolvedKickoff = get().pendingKickoff
+          if (resolvedKickoff) {
+            set({ pendingKickoff: null })
+            resolveKickoffAttempt(resolvedKickoff.workspaceId, 'done')
+          }
+          const stillOnOriginatingWorkspace =
+            resolvedKickoff === null ||
+            useWorkspacesStore.getState().activeWorkspaceId === resolvedKickoff.workspaceId
+          // Plausibility gate: even when still on the originating
+          // workspace, only treat this ack as safe to FOREGROUND when the
+          // '__pending' placeholder is STILL the local foreground turn
+          // (activeSessionId === '__pending'). If the user has since
+          // attached to a different, real session WITHOUT leaving the
+          // workspace — e.g. picked an existing conversation from the
+          // sidebar/search while the kickoff was still resolving —
+          // `activeSessionId` is that real session's id, not '__pending';
+          // forefronting the kickoff's session here would silently evict
+          // the session the user actually selected (and, with `sendMessage`'s
+          // no-longer-possible collision — the collision guard prevents
+          // a stray plain message from ever sharing the '__pending' bucket
+          // with the kickoff — this is the one remaining way a late kickoff
+          // ack could still misattribute). Treat it exactly like "wrong
+          // workspace": migrate silently, do not disturb whatever is
+          // actually foreground.
+          const kickoffStillForeground =
+            resolvedKickoff === null || useSessionStore.getState().activeSessionId === '__pending'
+
+          if (resolvedKickoff && (!stillOnOriginatingWorkspace || !kickoffStillForeground)) {
+            // Late ack, wrong workspace, or superseded foreground:
+            // do NOT foreground it — leave whatever the user is currently
+            // looking at completely alone. Record the real session id under
+            // the ORIGINATING workspace's descriptor instead, so a later
+            // enterWorkspaceChat for that workspace attaches to (and
+            // replays) this session normally.
+            useSessionStore.getState().setWorkspaceSessionDescriptor(resolvedKickoff.workspaceId, {
+              id: newSid,
+              type: 'chat',
+              title: null,
+              agentId: frame.agent_id ?? null,
+            })
+            // Free the '__pending' bucket key. Its content so far (Ava's
+            // greeting, still streaming) isn't needed locally — re-entering
+            // the originating workspace triggers a fresh server replay via
+            // attachToSession regardless, and leaving it here would risk
+            // colliding with the next unrelated no-session turn that reuses
+            // the same '__pending' key.
+            deleteBucket('__pending')
+            queryClient.invalidateQueries({ queryKey: ['sessions'] })
+            // A message that collided with this kickoff's slot (via
+            // the `sendMessage` collision guard) sits in `outboundQueue` —
+            // nothing else will release it now that this kickoff has
+            // resolved via this (non-foregrounding) branch.
+            get().drainOutboundQueue()
+            break
+          }
+
+          // Plain sendMessage ack, OR a kickoff ack while the user is still
+          // on the workspace that triggered it — foreground exactly as
+          // before (byte-for-byte unchanged from the pre-fix logic).
+          //
           // Register in session store and create the bucket.
           useSessionStore.getState().setActiveSession(newSid, frame.agent_id ?? useSessionStore.getState().activeAgentId)
           // Bucket is lazily created by first withBucket call; ensure it exists now
@@ -2085,6 +2744,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // Invalidate sessions list so the session lists (SearchModal, sidebar
           // accordion) re-fetch and show the new session.
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
+          // A steer sent while this turn was still under the '__pending'
+          // placeholder sid (see sendMessage's isStreaming branch) was
+          // buffered into outboundQueue instead of sent — drainOutboundQueue
+          // was previously only invoked on WS reconnect (OmnipusRuntimeProvider),
+          // so without this call that buffered steer would sit inert until
+          // the NEXT disconnect/reconnect cycle, which may never happen in a
+          // healthy session. Draining here moves it into pendingDrainQueue;
+          // maybeDrainNext() (called inside drainOutboundQueue) reads
+          // isStreaming fresh via get() — which bucketToForeground above just
+          // set to true for this brand-new turn — so it correctly no-ops now
+          // and the buffered message goes out automatically as an ordinary
+          // next-turn message once THIS turn's own done/error frame calls
+          // maybeDrainNext() again. A no-op (queue empty) the vast majority
+          // of the time, so unconditional here is cheap and safe.
+          get().drainOutboundQueue()
           break
         }
 
@@ -2181,7 +2855,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     (id) => draft.toolCalls[id] && draft.toolCallOwnerMessageId?.[id] === abandonedMsgId,
                   )
                   if (ownedIds.length > 0) {
-                    bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, abandonedMsgId)
+                    bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, abandonedMsgId, draft.textAtToolCallStart)
                   }
                 }
                 if (!lastMsgId) {
@@ -2323,17 +2997,37 @@ export const useChatStore = create<ChatStore>((set, get) => {
             withBucket(sid, (b) => {
               return produce(b, (draft) => {
                 const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
-                if (lastMsgId) {
+                // Sweep the UNION of {the last assistant message} (unchanged
+                // — always normalized exactly as before, even when it isn't
+                // flagged "streaming" at all, e.g. a replay-reconstructed
+                // bubble whose `isStreaming` is `undefined` rather than
+                // `true`/`false` — see the 'replay_message' case's own doc
+                // comment on why replay bubbles are finalized the instant
+                // they're created) ∪ {every OTHER still-streaming assistant
+                // message in the bucket} (defense-in-depth addition —
+                // mirrors clearStreamingState's own sweep, used on a hard
+                // WS-drop, see the identical backward-scan loop there). A
+                // mid-turn steer (sendMessage's `isStreaming` branch) appends
+                // the steering text as a new USER message AFTER the
+                // still-open assistant bubble, so that bubble is no longer
+                // "the last message" by the time `done` arrives — finalizing
+                // only the last assistant message would leave the ORIGINAL
+                // bubble permanently stuck at isStreaming:true (permanent
+                // shimmer, Copy bar suppressed) even though the turn is over.
+                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                  const id = draft.messageOrder[i]
+                  const m = draft.messagesById[id]
+                  if (m?.role !== 'assistant') continue
+                  if (id !== lastMsgId && !m.isStreaming && m.status !== 'streaming') continue
                   // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
-                  const msg = draft.messagesById[lastMsgId]
-                  msg.isStreaming = false
-                  msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
+                  m.isStreaming = false
+                  m.status = m.status === 'interrupted' ? 'interrupted' : 'done'
                   // Clear the tool-call text-boundary marker on finalize. If the
                   // turn's last event was a tool call with no trailing narration
                   // token before `done`, pendingTextBoundary would otherwise be
                   // left `true` on a message with no next token coming — a
                   // representable-but-meaningless state for a finalized bubble.
-                  msg.pendingTextBoundary = false
+                  m.pendingTextBoundary = false
                 }
                 // Bake any pending tool calls into the last assistant message so
                 // VirtualAssistantMessageRow can render them from message.tool_calls.
@@ -2356,7 +3050,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // land on the bubble that actually issued it, not whichever
                 // bubble happens to be last when the turn ends.
                 if (draft.toolCallOrder.length > 0) {
-                  bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, lastMsgId)
+                  bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, lastMsgId, draft.textAtToolCallStart)
                   draft.toolCalls = {}
                   draft.toolCallOrder = []
                   draft.textAtToolCallStart = {}
@@ -2390,6 +3084,84 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'error':
           {
+            // A kickoff rejection (duplicate kickoff, unknown
+            // workspace, or a server-side kickoff error) is a hard REJECT of
+            // a turn that never really started — there is no real session
+            // behind it, only the local '__pending' sentinel. A kickoff
+            // rejection therefore NEVER carries a session_id on the wire
+            // (there is no real session to tag it with) — a
+            // session-TAGGED error frame is by definition never a kickoff
+            // reject, so `!frameSessionId` gates the ENTIRE kickoff-error
+            // branch (both sub-cases below), never just the still-foreground
+            // one. A genuinely tagged error always falls through unchanged
+            // to the generic routing further down.
+            const rejectedKickoff = get().pendingKickoff
+            if (rejectedKickoff && !frameSessionId) {
+              const sessionStillPending = useSessionStore.getState().activeSessionId === '__pending'
+              // "already ran" style messages are a benign DUPLICATE — an
+              // EARLIER attempt already succeeded server-side (setup_pending
+              // is already correctly false), not a real failure. Everything
+              // else is a genuine failure, worded differently so the user
+              // knows re-opening the workspace will retry it.
+              const isDuplicate = /already/i.test(frame.message ?? '')
+              // `abandonPendingKickoffInternal` handles the shared cleanup
+              // trio for BOTH sub-cases below: clear `pendingKickoff`, drop
+              // the orphaned '__pending' bucket, and mark this workspace's
+              // `kickoffAttemptStatus` 'failed' so
+              // useWorkspaceSetupKickoff's invalidate-on-failure effect can
+              // react and roll back its own premature optimistic
+              // setup_pending:false cache write.
+              abandonPendingKickoffInternal()
+              console.warn('chat.workspace_setup_kickoff_rejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
+              logDiagnostic('chatWorkspaceSetupKickoffRejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
+              if (sessionStillPending) {
+                // The kickoff's placeholder is still what the user is
+                // looking at — reset the composer back to a normal, empty
+                // state (not to be left as a stuck 'error'-status bubble
+                // under '__pending', which would otherwise poison every
+                // subsequent sendMessage call with a protocol-violating
+                // session_id:'__pending' frame — see sendMessage's composer
+                // guard) and surface a toast.
+                useSessionStore.getState().setActiveSession(null)
+                useUiStore.getState().addToast(
+                  isDuplicate
+                    ? {
+                        message: 'Workspace setup already ran — find the interview in your sessions list.',
+                        variant: 'default',
+                      }
+                    : {
+                        message: frame.message
+                          ? `Could not start the workspace setup interview: ${frame.message}`
+                          : 'Could not start the workspace setup interview — reopen the workspace to retry.',
+                        variant: 'warning',
+                      },
+                )
+              }
+              // Reject-after-navigation fall-through: when the
+              // kickoff's placeholder is NO LONGER the local foreground
+              // (the user already navigated away, or attached to a
+              // different real session — either resets `activeSessionId`
+              // away from '__pending'), this untagged reject belongs to a
+              // turn nothing is currently showing. No toast — there is
+              // nothing on screen to retry FROM; the workspace-open hook is
+              // what will retry, once it re-checks server truth on the next
+              // open. Swallow quietly and do NOT let this frame fall through
+              // to the generic routing below — it would otherwise
+              // misattribute to whatever IS foreground (erroring an
+              // unrelated conversation's last bubble, or — if nothing is
+              // foreground — raising a bogus global connection-error banner
+              // via the `!targetSid` branch just below).
+              //
+              // Only `drainOutboundQueue()` (not `maybeDrainNext()`,
+              // which the ORIGINAL version of this branch used — a bug: it
+              // only ever moves `pendingDrainQueue`, never `outboundQueue`,
+              // so it never actually freed a message buffered by the
+              // collision guard or mid-turn '__pending' steering) releases
+              // whatever is actually queued.
+              get().drainOutboundQueue()
+              break
+            }
+
             // C8: a terminal error frame must always resolve the in-flight turn.
             // When the frame can't be routed to a bucket (no active session /
             // missing session_id in production), fall back to a global sweep so
@@ -2428,31 +3200,58 @@ export const useChatStore = create<ChatStore>((set, get) => {
               }
             }
             withBucket(targetSid, (b) => {
+              const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
               const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-              if (lastMsgId) {
-                const prevMsg = b.messagesById[lastMsgId]
-                const prevStatus = prevMsg.status
-                // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
-                const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
-                const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
-                  ? 'interrupted'
-                  : 'error'
+              // C8 defense-in-depth: close the UNION of {the last assistant
+              // message} (unchanged — always closed exactly as before, even
+              // when it isn't flagged "streaming" at all, e.g. a
+              // replay-reconstructed bubble whose `isStreaming` is
+              // `undefined` — mirrors the matching `done`-handler fix above)
+              // ∪ {every OTHER still-streaming assistant message in the
+              // bucket} — mirrors clearStreamingState's own sweep (used on a
+              // hard WS-drop). A mid-turn steer (sendMessage's `isStreaming`
+              // branch) appends the steering text as a new USER message
+              // AFTER the still-open assistant bubble, so that bubble is no
+              // longer "the last message" by the time `error` arrives —
+              // closing only the last assistant message here would leave the
+              // ORIGINAL bubble permanently stuck at isStreaming:true even
+              // though the turn just errored out.
+              const streamingIds: string[] = []
+              for (let i = b.messageOrder.length - 1; i >= 0; i--) {
+                const id = b.messageOrder[i]
+                const m = b.messagesById[id]
+                if (m?.role !== 'assistant') continue
+                if (id === lastMsgId || m.isStreaming || m.status === 'streaming') {
+                  streamingIds.push(id)
+                }
+              }
+              if (streamingIds.length > 0) {
                 return produce(b, (draft) => {
-                  const msg = draft.messagesById[lastMsgId!]
-                  msg.content = (resolvedStatus === 'interrupted')
-                    ? msg.content
-                    : (msg.content || frame.message)
-                  msg.isStreaming = false
-                  msg.status = resolvedStatus
-                  msg.pendingTextBoundary = false
+                  for (const id of streamingIds) {
+                    const msg = draft.messagesById[id]
+                    const prevStatus = msg.status
+                    // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
+                    const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
+                      ? 'interrupted'
+                      : 'error'
+                    msg.content = (resolvedStatus === 'interrupted')
+                      ? msg.content
+                      : (msg.content || frame.message)
+                    msg.isStreaming = false
+                    msg.status = resolvedStatus
+                    msg.pendingTextBoundary = false
+                  }
                   draft.isStreaming = false
                   if (clearReplayingNow) {
                     draft.isReplaying = false
                   }
                 }) as Partial<SessionChatState>
               }
-              // No assistant message — push one. Only show an error toast for non-cancel errors.
-              const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
+              // streamingIds is empty here only when there is NO assistant
+              // message in the bucket at all (lastMsgId, unconditionally
+              // included above whenever it exists, would otherwise have made
+              // it non-empty) — push one below so the error isn't silently
+              // dropped. Only show an error toast for non-cancel errors.
               if (!isCancelAck) {
                 useConnectionStore.getState().setConnectionError(frame.message)
               }
@@ -2546,8 +3345,51 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
           } else {
             withBucket(targetSid, (b) => {
-              const lastMsgId = b.messageOrder[b.messageOrder.length - 1]
-              const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
+              // Anchor resolution. Default: the raw message-order tail, same
+              // as before — this is REPLAY-SAFE and must stay unconditional
+              // on role alone (NOT isStreaming): replay-reconstructed
+              // assistant bubbles (see the 'replay_message' case) are
+              // finalized (isStreaming:false) the INSTANT they're created —
+              // that's by design, not a live "closed segment" — and
+              // tool_call_start frames replayed right after them must still
+              // reuse that same bubble (mirrors the 'replay_message' case's
+              // own doc comment on why isStreaming can't serve as the
+              // open/closed signal during replay).
+              //
+              // Fallback ONLY when the raw tail is NOT an assistant message:
+              // this is the mid-turn-steer case (sendMessage's `isStreaming`
+              // branch appends the steer text as a new USER message AFTER
+              // the still-open assistant bubble, so the raw tail is no
+              // longer assistant by the time this frame arrives) — anchor
+              // instead on the last assistant message further back, but
+              // ONLY if it is still genuinely STREAMING (never a
+              // replay-finalized or turn-closed one — reusing a closed
+              // bubble here would be the "text-then-image-at-bottom"
+              // reconnect-bug class of mistake the 'token' handler's own
+              // still-streaming check already guards against). Without this
+              // fallback, tool_call_start would wrongly mint a brand-new
+              // assistant placeholder while the ORIGINAL bubble is left
+              // behind still marked isStreaming:true — nothing else ever
+              // finalizes an abandoned bubble like that (the done/error
+              // handlers below now sweep every still-streaming assistant
+              // message, but only once a terminal frame actually arrives),
+              // so it would render a permanent shimmer/spinner (Copy bar
+              // suppressed) until a manual reload replayed history.
+              const rawTailId = b.messageOrder[b.messageOrder.length - 1]
+              const rawTail = rawTailId ? b.messagesById[rawTailId] : undefined
+              let lastMsgId: string | undefined
+              let lastMsg: ChatMessage | undefined
+              if (rawTail?.role === 'assistant') {
+                lastMsgId = rawTailId
+                lastMsg = rawTail
+              } else {
+                const lastAssistantId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
+                const lastAssistantMsg = lastAssistantId ? b.messagesById[lastAssistantId] : undefined
+                if (lastAssistantMsg?.isStreaming) {
+                  lastMsgId = lastAssistantId ?? undefined
+                  lastMsg = lastAssistantMsg
+                }
+              }
               const textSnapshot = (lastMsg?.role === 'assistant' ? lastMsg.content : '') ?? ''
               // Reconnect/replay safety: if this call_id is already recorded
               // (we have a textAtToolCallStart snapshot for it), keep the
@@ -2563,6 +3405,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const existingSnapshot = b.textAtToolCallStart[frame.call_id]
               const existingOwner = b.toolCallOwnerMessageId?.[frame.call_id]
               const existingTC = b.toolCalls[frame.call_id]
+              // Defense-in-depth alongside stampToolCallOffset's prevOffset-
+              // first invariant (see that function's doc comment): a
+              // reconnect can replay `tool_call_start` for a call that has
+              // ALREADY been baked into a historical message's tool_calls
+              // (the done-bake / replay-merge bakes wipe toolCallOrder/
+              // textAtToolCallStart, so orderHasCall/existingSnapshot alone
+              // can't detect this). When that's the case, the frame must be
+              // treated as a no-op start — see isToolCallBakedInBucket's doc
+              // comment for why re-recording a snapshot or re-queuing the id
+              // into toolCallOrder here would risk corrupting the already-
+              // correct stamped offset. A still-streaming turn's calls
+              // reattaching mid-turn are NOT yet baked into any message, so
+              // this is false for them and they take the unchanged path below.
+              const alreadyBaked = isToolCallBakedInBucket(b.messagesById, frame.call_id)
               // FR-21 / T21–T25: a tool_call_start for a top-level (non-subagent)
               // tool means the agent is actively working — set isStreaming:true so
               // the Stop button appears even when the LLM emits a tool call without
@@ -2623,8 +3479,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 if (!existingTC || existingTC.status === 'running') {
                   draft.toolCalls[frame.call_id] = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' }
                 }
-                if (!orderHasCall) draft.toolCallOrder.push(frame.call_id)
-                if (existingSnapshot === undefined) {
+                if (!orderHasCall && !alreadyBaked) draft.toolCallOrder.push(frame.call_id)
+                if (existingSnapshot === undefined && !alreadyBaked) {
                   draft.textAtToolCallStart[frame.call_id] = textSnapshot
                 }
                 if (existingOwner === undefined && ownerMsgId) {
@@ -2652,15 +3508,30 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     if (!msg?.spans) return
                     const span = msg.spans[entry.spanIdx]
                     if (!span) return
-                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: {}, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
+                    // No `params` key here (bug fix — was `params: {}`, which
+                    // clobbered the real start-time params via the spread
+                    // below and made e.g. a hidden `bash {action:'poll'}`
+                    // step misclassify as visible to ToolCallBadge's
+                    // shouldRenderToolCall, since it saw params={} instead of
+                    // the real args). Mirrors the buffered merge paths above
+                    // (startSpan / subagent_start), which never carried this
+                    // bug because they never included a params key at all.
+                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
                     const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
                     if (existingIdx !== -1) {
                       const existingStep = span.steps[existingIdx]
                       if (existingStep.kind === 'tool') {
+                        // Spread order matters: existingStep.tool's params
+                        // (recorded at tool_call_start) survive because
+                        // `step` no longer carries a params key to overwrite it.
                         span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
                       }
                     } else {
-                      span.steps.push({ kind: 'tool' as const, tool: step })
+                      // Genuine race — no tool_call_start was ever recorded
+                      // for this call_id on this span (result arrived first).
+                      // There is no start-time params to inherit here, so
+                      // (only in this orphan-step branch) default to {}.
+                      span.steps.push({ kind: 'tool' as const, tool: { ...step, params: {} } })
                     }
                   }) as Partial<SessionChatState>
                 }
@@ -2676,7 +3547,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   return produce(bucket, (draft) => {
                     const draftMsg = draft.messagesById[msgId]
                     const span = draftMsg.spans![spanIdx]
-                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: {}, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
+                    // See the primary (index-hit) branch above for why
+                    // `params` is intentionally absent from this object.
+                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
                     const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
                     if (existingIdx !== -1) {
                       const existingStep = span.steps[existingIdx]
@@ -2684,7 +3557,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                         span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
                       }
                     } else {
-                      span.steps.push({ kind: 'tool' as const, tool: step })
+                      span.steps.push({ kind: 'tool' as const, tool: { ...step, params: {} } })
                     }
                   }) as Partial<SessionChatState>
                 }
@@ -2912,7 +3785,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
             })
             break
           }
-          const role = (replayFrame.role || 'assistant') as 'user' | 'assistant'
+          // Widened from 'user' | 'assistant' — the 'turn_canceled'
+          // branch above always `break`s, so by this point
+          // `replayFrame.role` can only be 'user' | 'assistant' | 'system'
+          // | undefined (the wire type's fourth member is excluded by
+          // control flow). The old, narrower cast silently dropped 'system'
+          // even though `Message`/`ChatMessage` (and every downstream
+          // consumer keyed off `role`) fully supports it — this is exactly
+          // the shape the kickoff's own SYSTEM-role transcript entry
+          // replays as.
+          const role = (replayFrame.role || 'assistant') as 'user' | 'assistant' | 'system'
           const text = replayFrame.content ?? ''
           const messageId = replayFrame.id
           const messageTimestamp = replayFrame.timestamp
@@ -2988,14 +3870,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // return. Without this, toolCallOrder accumulates across turns and ends
                   // up baked onto the wrong (later) assistant message.
                   if (draft.toolCallOrder.length > 0) {
+                    const existing = (draft.messagesById[lastMsgId].tool_calls ?? []) as PositionedToolCall[]
+                    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
                     const baked = draft.toolCallOrder
                       .filter((id) => draft.toolCalls[id])
-                      .map((id) => {
-                        const tc = draft.toolCalls[id]
-                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                      })
-                    const existing = draft.messagesById[lastMsgId].tool_calls ?? []
-                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                      .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
                     for (const tc of baked) mergedById.set(tc.id, tc)
                     draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
                     draft.toolCalls = {}
@@ -3023,14 +3903,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // all calls get attributed to the LAST assistant at `done`.
                   // Mirrors the non-coalesce bake path immediately below.
                   if (draft.toolCallOrder.length > 0) {
+                    const existing = (m.tool_calls ?? []) as PositionedToolCall[]
+                    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
                     const baked = draft.toolCallOrder
                       .filter((id) => draft.toolCalls[id])
-                      .map((id) => {
-                        const tc = draft.toolCalls[id]
-                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                      })
-                    const existing = m.tool_calls ?? []
-                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                      .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
                     for (const tc of baked) mergedById.set(tc.id, tc)
                     m.tool_calls = Array.from(mergedById.values())
                     draft.toolCalls = {}
@@ -3088,14 +3966,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     // split this content into separate bubbles in the first
                     // place.
                     if (draft.toolCallOrder.length > 0) {
+                      // Offsets are computed from `textAtToolCallStart` BEFORE
+                      // `candidate.content += '\n\n' + text` below appends the
+                      // next segment — each call's snapshot was captured back
+                      // when it started (mid-way through the content
+                      // accumulated so far), and since content only ever
+                      // grows at the end, that snapshot's `.length` is
+                      // already the correct split offset into whatever the
+                      // FINAL merged content becomes, including segments
+                      // appended after this bake (see stampToolCallOffset's
+                      // doc comment; pinned by the "WS-replay same-turn
+                      // merge" describe block's exact-offset assertion in
+                      // chat.tool-call-offset.test.ts).
+                      const existingCalls = (candidate.tool_calls ?? []) as PositionedToolCall[]
+                      const existingById = new Map(existingCalls.map((tc) => [tc.id, tc]))
                       const baked = draft.toolCallOrder
                         .filter((id) => draft.toolCalls[id])
-                        .map((id) => {
-                          const tc = draft.toolCalls[id]
-                          return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                        })
-                      const existingCalls = candidate.tool_calls ?? []
-                      const mergedById = new Map(existingCalls.map((tc) => [tc.id, tc]))
+                        .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                      const mergedById = new Map<string, PositionedToolCall>(existingCalls.map((tc) => [tc.id, tc]))
                       for (const tc of baked) mergedById.set(tc.id, tc)
                       candidate.tool_calls = Array.from(mergedById.values())
                       draft.toolCalls = {}
@@ -3134,15 +4022,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
                 // T1.10: Bake any live tool calls from the previous turn.
                 if (lastMsgId && draft.toolCallOrder.length > 0) {
+                  const lastMsg = draft.messagesById[lastMsgId]
+                  const existing = (lastMsg.tool_calls ?? []) as PositionedToolCall[]
+                  const existingById = new Map(existing.map((tc) => [tc.id, tc]))
                   const baked = draft.toolCallOrder
                     .filter((id) => draft.toolCalls[id])
-                    .map((id) => {
-                      const tc = draft.toolCalls[id]
-                      return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
-                    })
-                  const lastMsg = draft.messagesById[lastMsgId]
-                  const existing = lastMsg.tool_calls ?? []
-                  const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                    .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+                  const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
                   for (const tc of baked) mergedById.set(tc.id, tc)
                   lastMsg.tool_calls = Array.from(mergedById.values())
                   draft.toolCalls = {}

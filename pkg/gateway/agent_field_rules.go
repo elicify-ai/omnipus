@@ -74,12 +74,6 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 	// unconditional "a worker cannot have a per-agent voice" guard in
 	// updateAgent, so it never needed a place in subagent3pForbiddenUpdateFields.
 	"voice": "rejected for every worker (not subagent_3p-specific) by updateAgent's unconditional worker-voice guard",
-	// steering_mode is Main-only in intent (the server forces
-	// "one-at-a-time" for every worker). On PUT it is silently overridden,
-	// not 400-rejected, by updateAgent — so it is neither a PUT-forbidden
-	// field nor structurally worker-exclusive; it just never appears on the
-	// 3p create variant.
-	"steering_mode": "silently forced to one-at-a-time for every worker by updateAgent, never a PUT-forbidden field",
 	// executor is 3p-REQUIRED (present on AgentCreateRequestSubagent3p, not
 	// Main) — it does not actually appear in the Main-but-not-3p diff this
 	// test walks, but is documented here defensively: its per-field
@@ -92,7 +86,7 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 // firstForbiddenSubagent3pField returns the first forbidden field supplied on
 // an AgentUpdateRequest PUT to a subagent_3p (External CLI) agent, or ("",
 // false) when none are set. Fields NOT in this list — model, provider,
-// timeout_seconds, color, icon, description, name, voice(*), steering_mode(*),
+// timeout_seconds, color, icon, description, name, voice(*),
 // rate_limits, executor (cli_path/env_overrides/cli_args only — cli is
 // immutable after create, enforced separately), default, updated_at — are
 // valid on a subagent_3p PUT.
@@ -105,11 +99,10 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 // subagent3pCreateOnlyExemptFields, scoped to "retired wire field" rather
 // than "CLI-owned, worker-specific field."
 //
-// (*) voice and steering_mode are ALSO rejected for any worker (Subagent or
-// subagent_3p) by dedicated checks elsewhere in updateAgent — not because
-// they are CLI-owned, but because workers are not chat personas. They are
-// intentionally absent from this list to keep it scoped to "fields the
-// external runner owns".
+// (*) voice is ALSO rejected for any worker (Subagent or subagent_3p) by a
+// dedicated check elsewhere in updateAgent — not because it is CLI-owned,
+// but because workers are not chat personas. It is intentionally absent
+// from this list to keep it scoped to "fields the external runner owns".
 func firstForbiddenSubagent3pField(req *gen.AgentUpdateRequest) (string, bool) {
 	if req == nil {
 		return "", false

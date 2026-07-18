@@ -24,7 +24,7 @@ vi.mock('remark-math', () => ({ default: () => {} }))
 vi.mock('rehype-katex', () => ({ default: () => {} }))
 vi.mock('katex/dist/katex.min.css', () => ({}))
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({ data: { preview_port: 5001 } }),
+  useQuery: () => ({ data: null }),
 }))
 vi.mock('@/lib/api', () => ({ fetchAboutInfo: vi.fn().mockResolvedValue({}) }))
 vi.mock('@/lib/rehype-phosphor-emoji', () => ({ rehypePhosphorEmoji: () => {} }))

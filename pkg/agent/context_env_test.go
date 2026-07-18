@@ -24,6 +24,7 @@ type mockEnvProvider struct {
 	workspacePath  string
 	omnipusHome    string
 	activeWarnings []string
+	publicURL      string
 }
 
 func (m *mockEnvProvider) Platform() (envcontext.Platform, error) {
@@ -36,6 +37,7 @@ func (m *mockEnvProvider) NetworkPolicy() envcontext.NetworkPolicy {
 func (m *mockEnvProvider) WorkspacePath() string    { return m.workspacePath }
 func (m *mockEnvProvider) OmnipusHome() string      { return m.omnipusHome }
 func (m *mockEnvProvider) ActiveWarnings() []string { return m.activeWarnings }
+func (m *mockEnvProvider) PublicURL() string        { return m.publicURL }
 
 // ---------------------------------------------------------------------------
 // #58 — TestContextBuilder_GetEnvironmentContext_TopOfPrompt

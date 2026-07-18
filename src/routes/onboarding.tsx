@@ -531,9 +531,11 @@ function OnboardingWizard() {
   }
 
   // Step 3 → completion: fire the atomic onboarding transaction. On success,
-  // store the auth token and reveal the "Meet your Assistant" screen. On
-  // failure, surface the error inline on step 3 so the user can retry without
-  // losing their place.
+  // the gateway has already issued the omnipus-session HttpOnly cookie
+  // (US-5 / FR-011) — the SPA only needs to remember the display-only
+  // username, then reveal the "Meet your Assistant" screen. On failure,
+  // surface the error inline on step 3 so the user can retry without losing
+  // their place.
   const handleComplete = async () => {
     setIsSaving(true)
     setFinishError('')
@@ -552,7 +554,7 @@ function OnboardingWizard() {
           password: adminPassword,
         },
       })
-      useAuthStore.getState().setToken(resp.token, resp.username)
+      useAuthStore.getState().setUsername(resp.username)
       setCompleted(true)
     } catch (err) {
       // Surface the failure both inline (so the user stays on step 3 and can
@@ -571,13 +573,13 @@ function OnboardingWizard() {
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden"
-      style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)' }}
+      className="h-screen flex flex-col items-center p-6 relative overflow-y-auto overflow-x-hidden overscroll-y-contain"
+      style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)', justifyContent: 'safe center' }}
     >
       {/* Atmospheric depth — subtle Forge Gold radial glow */}
       <div
         aria-hidden
-        className="absolute inset-0 pointer-events-none"
+        className="fixed inset-0 pointer-events-none"
         style={{
           background:
             'radial-gradient(ellipse 65% 55% at 50% 50%, rgba(212,175,55,0.055) 0%, transparent 68%)',
@@ -586,7 +588,7 @@ function OnboardingWizard() {
       {/* Top edge accent line */}
       <div
         aria-hidden
-        className="absolute top-0 left-0 right-0 h-px pointer-events-none"
+        className="fixed top-0 left-0 right-0 h-px pointer-events-none"
         style={{
           background:
             'linear-gradient(90deg, transparent 0%, rgba(212,175,55,0.35) 50%, transparent 100%)',
@@ -597,12 +599,19 @@ function OnboardingWizard() {
       {appStateBannerMessage && (
         <div
           role="alert"
-          className="absolute top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-400"
+          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-400"
         >
           {appStateBannerMessage}
         </div>
       )}
 
+      {/* Safe-centering wrapper: my-auto centers the step block vertically when
+          it fits the viewport, but collapses to 0 and lets the page scroll when
+          content overflows (e.g. Step 3 with a multi-variant provider like ZAI
+          expands the plan/region panel + API-key field and would otherwise push
+          the Back / Complete Setup buttons below the fold with no way to scroll
+          — overflow-hidden + justify-center clipped both ends). */}
+      <div className="w-full flex flex-col items-center">
       {/* Step indicator — labeled for assistive tech so screen readers announce
           progress. The dots themselves are decorative (aria-hidden); the
           progressbar role + valuenow/min/max + aria-label carry the semantics,
@@ -744,6 +753,7 @@ function OnboardingWizard() {
             </motion.div>
           )}
         </AnimatePresence>
+      </div>
       </div>
     </div>
   )
@@ -1096,6 +1106,12 @@ function ModelKeyStep({
   probeValidation?: ProviderValidation
 }) {
   const [searchQuery, setSearchQuery] = useState('')
+  // Provider-picker accordion: once a company is selected the tall search+grid
+  // collapses into a one-line summary (the grid is the single tallest element on
+  // this step), keeping the form short enough to fit the viewport without
+  // scrolling — critical on touch/iPad, where a scrollable form can rubber-band
+  // the submit button back below the fold. "Change" re-expands the grid.
+  const [pickerOpen, setPickerOpen] = useState(() => !selectedCompany)
 
   // Derive filtered company list (search + stable priority order for the grid).
   // filterCompanies already returns companies with priority companies first.
@@ -1151,7 +1167,48 @@ function ModelKeyStep({
         </p>
       </div>
 
+      {/* Selected-provider summary — collapses the search + company grid below
+          it once a company is picked, so this step stays short. */}
+      {selectedCompany && !pickerOpen && (
+        <div
+          className="rounded-lg border p-3 flex items-center justify-between gap-2"
+          style={{ borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <BrandIcon
+              slug={logoSlugForCompany(providers, selectedCompany)}
+              size={18}
+              decorative
+              className="shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate" style={{ color: 'var(--color-secondary)' }}>
+                {selectedCompany}
+              </p>
+              <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                {[
+                  PLAN_LABELS[selectedPlan],
+                  hasRegionForPlan && selectedRegion ? REGION_LABELS[selectedRegion] : null,
+                  resolvedEntry?.endpointHint,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            </div>
+          </div>
+          <button tabIndex={0}
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="shrink-0 text-xs font-medium px-2.5 py-1.5 rounded transition-colors"
+            style={{ color: 'var(--color-accent)' }}
+          >
+            Change
+          </button>
+        </div>
+      )}
+
       {/* ── L1: Search + company grid ───────────────────────────────────── */}
+      {(pickerOpen || !selectedCompany) && (
       <div className="space-y-2">
         {/* Search box — spec: >25 items → searchable (NN/g) */}
         <div className="relative">
@@ -1180,7 +1237,10 @@ function ModelKeyStep({
               <button tabIndex={0}
                 key={company}
                 type="button"
-                onClick={() => onSelectCompany(company)}
+                onClick={() => {
+                  onSelectCompany(company)
+                  setPickerOpen(false)
+                }}
                 className="px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 text-left flex items-center justify-between gap-1"
                 aria-pressed={isSelected}
                 style={
@@ -1222,6 +1282,7 @@ function ModelKeyStep({
           )}
         </div>
       </div>
+      )}
 
       {/* ── L2: Plan + Region (inline, only for multi-variant companies) ── */}
       <AnimatePresence>

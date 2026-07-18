@@ -1,15 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import {
-  Folder,
-  FolderOpen,
-  File,
-  ArrowsClockwise,
-  CheckCircle,
-  CaretDown,
-  CaretUp,
-} from '@phosphor-icons/react'
+import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 
 interface ListDirArgs {
   path?: string
@@ -50,10 +43,14 @@ function FileTreeBlock({
   args,
   result,
   isRunning,
+  isError,
+  isCancelled,
 }: {
   args: ListDirArgs
   result: unknown
   isRunning: boolean
+  isError?: boolean
+  isCancelled?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -61,42 +58,55 @@ function FileTreeBlock({
   const content = result != null ? String(result) : ''
   const entries = content ? parseTree(content) : []
 
+  // Always resolves to a real config — a completed listing with zero entries
+  // (no error, no cancellation) is still a real "0 entries" success, not a
+  // silently blank indicator (the old `content ? successDot : null` dropped
+  // the indicator entirely for that case).
+  const statusConfig = getToolBadgeStatusConfig(
+    isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
+    { size: 12, cancelledVariant: 'muted' }
+  )
+  // On a real success, always show the entry count — including "0 entries"
+  // for an empty directory (previously silent: no text shown at all when
+  // content was falsy). Running/error/cancelled show the shared status label
+  // instead, matching BashOutput/WebFetchPreview.
+  const countOrStatusLabel =
+    isRunning || isError || isCancelled ? statusConfig.label : `${entries.length} entries`
+
   return (
-    <div className="mt-2 rounded-md border border-[var(--color-border)] overflow-hidden text-xs">
+    // Flat text-line design (ticket "Tool components in chat", P2): no card
+    // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
+    // language. The header's Folder/FolderOpen toggle icon is gone (leading
+    // slot is the status dot/spinner only, like the other rows); each tree
+    // entry below keeps its own Folder/File icon and indentation — that's
+    // the file tree's identity, preserved per the flat-redesign spec.
+    <div className="mt-2 text-xs font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
-          'flex w-full items-center gap-2 px-3 py-2 bg-[var(--color-surface-1)] transition-colors text-left',
-          !isRunning && 'hover:bg-[var(--color-surface-3)] cursor-pointer',
+          'flex w-full items-center gap-2 py-1 transition-colors text-left',
+          !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
           isRunning && 'cursor-default'
         )}
-        aria-expanded={expanded}
+        aria-expanded={!isRunning ? expanded : undefined}
+        disabled={isRunning}
       >
-        {expanded
-          ? <FolderOpen size={13} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
-          : <Folder size={13} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
-        }
+        {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{path}</span>
         <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
-          {isRunning ? (
-            <ArrowsClockwise size={12} className="animate-spin text-[var(--color-accent)]" />
-          ) : content ? (
-            <>
-              <CheckCircle size={12} weight="fill" className="text-[var(--color-success)]" />
-              <span>{entries.length} entries</span>
-            </>
-          ) : null}
+          <span className={cn(statusConfig.textClass)}>{countOrStatusLabel}</span>
           {!isRunning && (
-            <span className="ml-1">{expanded ? <CaretUp size={10} /> : <CaretDown size={10} />}</span>
+            <span className="ml-1">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}
         </span>
       </button>
 
-      {/* Tree panel */}
+      {/* Tree panel — left-accent block, no bordered card. Entries keep their
+          Folder/File icons and paddingLeft-based indentation unchanged. */}
       {expanded && !isRunning && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-1)] max-h-64 overflow-auto px-3 py-2 space-y-0.5">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-1 pl-3 space-y-0.5">
           {entries.length > 0 ? (
             entries.map((entry, i) => (
               <div
@@ -129,6 +139,8 @@ export const FileTreeViewUI = makeAssistantToolUI<ListDirArgs, unknown>({
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })
@@ -141,6 +153,8 @@ export const FileListAliasDotUI = makeAssistantToolUI<ListDirArgs, unknown>({
       args={args ?? {}}
       result={result}
       isRunning={status.type === 'running'}
+      isError={status.type === 'incomplete'}
+      isCancelled={isCancelledStatus(status)}
     />
   ),
 })

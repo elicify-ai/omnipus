@@ -247,6 +247,10 @@ func workspaceToWire(w storedWorkspace, taskCount int) gen.Workspace {
 		t := true
 		wire.IsDefault = &t
 	}
+	if w.SetupPending {
+		sp := true
+		wire.SetupPending = &sp
+	}
 	if w.Description != "" {
 		wire.Description = &w.Description
 	}
@@ -328,8 +332,9 @@ func (a *restAPI) loadWorkspace(w http.ResponseWriter, id string) (storedWorkspa
 
 // ensureDefaultWorkspace checks if the default workspace exists; if not, creates it.
 // Seeds one workspace named "My Workspace" (FR-1.6, US-6) pre-populated with the
-// default team (4 base agents + Planner/Explorer/Researcher specialists) and the
-// default delegation edges derived from the seeded per-agent trust graph (M5/M6).
+// full install roster (every agent coreagent delivers — 4 base + Worker +
+// Planner/Explorer/Researcher) and the default delegation edges derived from
+// the seeded per-agent trust graph (M5/M6), including Jim/Mia/Ava/Ray→Worker.
 // Idempotent: if a workspace with is_default=true already exists, this is a no-op.
 // Thread-safe: serialized by defaultWorkspaceSeedMu to prevent TOCTOU double-seed
 // when two gateway boots race (e.g. rapid restart or dual-process test).
@@ -344,6 +349,16 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	}
 	for _, w := range workspaces {
 		if w.IsDefault {
+			// FR-008/US-3 AS-4: an upgraded install whose default workspace
+			// already exists still needs the built-in roster back-filled
+			// (e.g. a coreagent added after the operator's install) — but
+			// must NEVER retroactively auto-add a custom/user-created agent.
+			// Best-effort: a back-fill failure is logged, not fatal — the
+			// gateway continues booting on the pre-existing default workspace.
+			if berr := ensureBuiltinRosterPresent(home, w, cfg); berr != nil {
+				slog.Warn("rest: ensureDefaultWorkspace: failed to back-fill built-in roster",
+					"workspace_id", w.ID, "error", berr)
+			}
 			return nil // already exists
 		}
 	}
@@ -363,9 +378,10 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 		UpdatedAt: now,
 	}
 	// Seed delegation edges restricted to the default team so the graph's nodes
-	// and edges stay consistent (no edge to an off-team agent like the generic
-	// worker). The Planner→Explorer/Researcher specialist edges survive because
-	// all three are on the default team.
+	// and edges stay consistent (no edge to an agent not on the team). With the
+	// full install roster (including Worker) this keeps Jim→Worker and the other
+	// coreagent seed edges; seedEdgesForTeam still drops edges if a lite install
+	// omitted an endpoint agent from config.
 	seedEdges := seedEdgesForTeam(defaultWorkspaceDelegationEdges(cfg), ws.CoreTeam)
 	// Defense-in-depth: validate each seeded edge so no unvalidated edge is ever
 	// persisted. The source is the trusted compiled-in roster so failures are
@@ -390,6 +406,89 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 		"id", ws.ID, "owner", ownerUsername,
 		"team_size", len(ws.CoreTeam), "edge_count", len(ws.Delegation))
 	return nil
+}
+
+// ensureBuiltinRosterPresent unions any built-in-roster member
+// (defaultWorkspaceTeam(cfg) — coreagent.All() ∩ configured agents) missing
+// from the existing default workspace w's CoreTeam, and persists the change
+// ONLY if the set actually grew (ADR-046 P1, FR-008 / US-3 AS-4). This keeps
+// an upgraded install's pre-existing default workspace current with the
+// installed built-in roster (e.g. a coreagent added post-upgrade) every
+// boot, idempotently and safely:
+//   - NEVER removes an existing member (including a custom agent an operator
+//     added to the team by hand).
+//   - NEVER adds a non-built-in ID — only defaultWorkspaceTeam(cfg)'s own
+//     coreagent.All() ∩ configured-agents set is eligible.
+//   - Does NOT touch w.Delegation. Expanding or seeding a workspace team must
+//     never create or imply a Delegation[] trust edge (FR-038) — trust stays
+//     workspace-scoped and explicit (ADR-037).
+func ensureBuiltinRosterPresent(home string, w storedWorkspace, cfg *config.Config) error {
+	builtin := defaultWorkspaceTeam(cfg)
+	if len(builtin) == 0 {
+		return nil
+	}
+	existing := make(map[string]bool, len(w.CoreTeam))
+	for _, id := range w.CoreTeam {
+		existing[id] = true
+	}
+	grew := false
+	for _, id := range builtin {
+		if !existing[id] {
+			w.CoreTeam = append(w.CoreTeam, id)
+			existing[id] = true
+			grew = true
+		}
+	}
+	if !grew {
+		return nil
+	}
+	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := writeWorkspaceFile(home, w); err != nil {
+		return fmt.Errorf("ensureBuiltinRosterPresent: write: %w", err)
+	}
+	slog.Info("rest: ensureDefaultWorkspace: back-filled built-in roster into existing default workspace",
+		"workspace_id", w.ID, "team_size", len(w.CoreTeam))
+	return nil
+}
+
+// logWorkspacelessAgents is a boot-time diagnostic (ADR-046 P1, FR-007/008):
+// it enumerates every configured agent (cfg.Agents.List) that is a member of
+// NO workspace's CoreTeam and emits ONE WARN naming all of them, if any
+// exist. Called once at boot, after ensureDefaultWorkspace has run, so an
+// operator upgrading an install with pre-existing custom agents sees the
+// full list up front — rather than discovering it only as per-turn
+// ErrAgentNotWorkspaceMember refusals, one agent at a time, as those agents
+// happen to be invoked.
+//
+// This is diagnostic ONLY: it never mutates any workspace or agent — FR-008
+// forbids auto-adding a pre-existing/custom agent to any team, and that rule
+// applies here too. The operator remedy is manual: add the agent to a
+// workspace's Team tab.
+func logWorkspacelessAgents(home string, cfg *config.Config) {
+	if cfg == nil || len(cfg.Agents.List) == 0 {
+		return
+	}
+	var workspaceless []string
+	for i := range cfg.Agents.List {
+		id := cfg.Agents.List[i].ID
+		if id == "" {
+			continue
+		}
+		if _, found := workspace.FindForAgent(home, id); !found {
+			workspaceless = append(workspaceless, id)
+		}
+	}
+	if len(workspaceless) == 0 {
+		return
+	}
+	sort.Strings(workspaceless)
+	slog.Warn(
+		"gateway: configured agents are members of no workspace — they cannot execute a turn until added to a workspace's Team tab (ADR-046 P1, FR-007/008)",
+		"agent_ids",
+		strings.Join(workspaceless, ","),
+		"count",
+		len(workspaceless),
+	)
 }
 
 // HandleWorkspaces dispatches all /api/v1/workspaces* requests.
@@ -575,12 +674,27 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		ws.Repository = *req.Repository
 	}
 	cfg := a.agentLoop.GetConfig()
-	if req.CoreTeam != nil {
+	if req.CoreTeam != nil && len(*req.CoreTeam) > 0 {
 		ws.CoreTeam = deduplicateStrings(*req.CoreTeam)
 	} else {
-		// No explicit team: seed the default roster (4 base + specialists) so a
-		// fresh workspace works out of the box (M6), mirroring My Workspace.
-		ws.CoreTeam = defaultWorkspaceTeam(cfg)
+		// No explicit team (nil, OR an explicit empty array — an empty array
+		// means "unspecified", not "deliberately no team"; otherwise a caller
+		// sending "core_team": [] would get a permanently teamless workspace
+		// with setup_pending left false and no agent ever available to run the
+		// interview and add members): new user-created workspaces start with
+		// only Ava on the team — she interviews the user and builds out the
+		// rest of the team herself (the setup_pending flow). This deliberately
+		// does NOT mirror ensureDefaultWorkspace's full-roster seed, which
+		// remains reserved for the auto-created boot default workspace
+		// ("My Workspace").
+		ws.CoreTeam = newWorkspaceSetupTeam(cfg)
+		// Only mark setup_pending when the seed actually produced a
+		// non-empty team. newWorkspaceSetupTeam returns nil when Ava is absent
+		// from the live config (e.g. a lite/custom install) — without this
+		// guard, such an install's workspace would be permanently stuck with
+		// setup_pending=true and an empty core_team: nothing (no kickoff-eligible
+		// agent) is ever available to run the interview and clear the flag.
+		ws.SetupPending = len(ws.CoreTeam) > 0
 	}
 	// Seed default delegation edges from each team agent's seeded role (M5),
 	// restricted to edges whose endpoints are both on this workspace's team so a
@@ -724,6 +838,16 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		jsonErr(w, http.StatusBadRequest, `status must be "active" or "archived"`)
 		return
 	}
+
+	// Serialize the full load-modify-write cycle against this workspace
+	// ID so a concurrent kickoff consume (pkg/gateway/websocket.go), a racing
+	// delete, or a racing delegation PUT cannot interleave with this update —
+	// e.g. resurrecting a just-cleared setup_pending flag with this request's
+	// stale in-memory copy, or this write clobbering a concurrent rename.
+	// Held for the whole handler (including the heartbeat-session-creation
+	// loop below) via defer: correctness first, this is not a hot path.
+	unlock := workspace.LockID(id)
+	defer unlock()
 
 	ws, ok := a.loadWorkspace(w, id)
 	if !ok {
@@ -999,9 +1123,28 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// The per-ID lock guards ONLY the
+	// authoritative delete — load/validate, the two HARD cascade steps that
+	// must complete (or abort the whole delete) before the workspace file is
+	// removed, and the file removal itself — so a racing kickoff consume
+	// cannot read the workspace after this delete has removed it
+	// (readWorkspaceFile then fails and consumeWorkspaceSetupKickoff correctly
+	// rejects it), and so a racing PUT/delegation-PUT cannot write back a
+	// stale copy after this delete removes the file. It is released
+	// IMMEDIATELY after the workspace file is gone via explicit unlock() calls
+	// at every exit from this section (no defer) — the remaining BEST-EFFORT
+	// cascade (cron jobs, heartbeat sessions, milestones, mailboxes, the
+	// workspace directory RemoveAll) never touches workspaces/{id}.json, so it
+	// does not need to serialize against it; running it after unlock avoids
+	// holding the lock across a potentially multi-second directory RemoveAll
+	// plus config/credential rewrites, which could otherwise block a
+	// shard-colliding kickoff's WS readLoop for no correctness benefit.
+	unlock := workspace.LockID(id)
+
 	// Verify the workspace exists before cascading.
 	ws, ok := a.loadWorkspace(w, id)
 	if !ok {
+		unlock()
 		return
 	}
 
@@ -1009,15 +1152,53 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 
 	// Default workspace cannot be deleted (FR-1.6 delete-protection retained).
 	if ws.IsDefault {
+		unlock()
 		jsonErr(w, http.StatusConflict, "cannot delete the default workspace")
 		return
 	}
 
-	// Cascade: (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
-	// (4) tasks → (5) mailboxes → (6) channel instances → (7) workspace file →
-	// (8) workspace directory.
-	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace before
-	// removing the workspace file. Best-effort (logged on failure).
+	// HARD cascade step (gates the delete — must stay under the lock, before
+	// the workspace file is removed): a task-scan failure aborts the whole
+	// delete with 500.
+	if err := deleteTasksForWorkspace(a.homePath, id); err != nil {
+		unlock()
+		slog.Error("rest: delete workspace: cascade tasks", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
+		return
+	}
+
+	// HARD cascade step (gates the delete — must stay under the lock, before
+	// the workspace file is removed): ADR-029 FR-025/MAJ-005 — disable and
+	// unbind all channel instances bound to this workspace BEFORE removing the
+	// workspace file. If this config write fails the delete aborts with 500,
+	// leaving the workspace + bindings fully consistent (no orphan). Ordering
+	// guarantee: config unbind → workspace file delete.
+	if err := unbindChannelInstancesForWorkspace(a, id); err != nil {
+		unlock()
+		slog.Error("rest: delete workspace: cascade channel unbind", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
+		return
+	}
+
+	// The authoritative delete: remove the workspace JSON file. Still under
+	// the lock — this is the write the lock exists to serialize.
+	path := filepath.Join(a.homePath, "workspaces", id+".json")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		unlock()
+		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	// The workspace file is gone — release the lock now. Everything below is
+	// best-effort cascade cleanup that does not touch workspaces/{id}.json.
+	unlock()
+
+	// Best-effort cascade (order preserved from before this restructure):
+	// (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
+	// (4) mailboxes → (5) workspace directory.
+	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace.
+	// Best-effort (logged on failure).
 	if cs := a.cronService.Load(); cs != nil {
 		releaseHeartbeatJobsForWorkspace(cs, id)
 	}
@@ -1025,39 +1206,17 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// HIGH-1 (FR-023): release standing heartbeat sessions for each member that
 	// had a heartbeat enabled. The sessions live in per-agent session stores (NOT
 	// under the workspace directory), so RemoveAll of the workspace dir does not
-	// remove them. This must run before the workspace file is deleted (we need
-	// member_configs to find which sessions to release). Best-effort per-session.
+	// remove them. ws (loaded above, before unlock) still carries the
+	// member_configs needed to find which sessions to release. Best-effort
+	// per-session.
 	releaseHeartbeatSessionsForWorkspace(a.agentLoop, ws)
 
 	deleteMilestonesForWorkspace(a.homePath, id)
-
-	if err := deleteTasksForWorkspace(a.homePath, id); err != nil {
-		slog.Error("rest: delete workspace: cascade tasks", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
-		return
-	}
 
 	// M11: remove every mailbox (config.mailboxes entry + stored credential)
 	// bound to this workspace. Best-effort (logged on failure, never aborts
 	// the delete) — see removeMailboxesForWorkspace's doc comment.
 	removeMailboxesForWorkspace(a, id)
-
-	// ADR-029 FR-025/MAJ-005: disable and unbind all channel instances bound to
-	// this workspace BEFORE removing the workspace file. If this config write fails
-	// the delete aborts with 500, leaving the workspace + bindings fully consistent
-	// (no orphan). Ordering guarantee: config unbind → workspace file delete.
-	if err := unbindChannelInstancesForWorkspace(a, id); err != nil {
-		slog.Error("rest: delete workspace: cascade channel unbind", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
-		return
-	}
-
-	path := filepath.Join(a.homePath, "workspaces", id+".json")
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
 
 	// Best-effort: remove the per-workspace directory. This now holds more than
 	// AGENT.md and the shared memory room: its work/ subdirectory is also the
@@ -1069,7 +1228,8 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// deleted workspace deletes its own shared working tree) — this comment
 	// update only makes the blast radius explicit; the JSON removal above
 	// remains the authoritative delete, and a stale directory left behind on
-	// a RemoveAll failure is not fatal.
+	// a RemoveAll failure is not fatal. Runs unlocked (see restructure note
+	// above) — it is best-effort and never touches workspaces/{id}.json.
 	wsDir := workspace.WorkspaceDir(a.homePath, id)
 	if err := os.RemoveAll(wsDir); err != nil {
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)

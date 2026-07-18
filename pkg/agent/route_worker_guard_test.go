@@ -14,8 +14,8 @@ func registerInstance(t *testing.T, al *AgentLoop, cfg *config.Config, home, id 
 	t.Helper()
 	ag := NewAgentInstance(&config.AgentConfig{ID: id, Name: id, Type: typ},
 		&cfg.Agents.Defaults, cfg, &mockProvider{})
-	ag.Workspace = filepath.Join(home, "agents", id)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(id, id)
+	ag.Home = filepath.Join(home, "agents", id)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
 	al.registry.mu.Lock()
 	al.registry.agents[id] = ag
 	al.registry.mu.Unlock()
@@ -31,7 +31,7 @@ func TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault(t *testing.T
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	// The route cascade reads cfg.Agents.List to resolve the default — give it a
 	// chat-target default and a worker.
@@ -77,7 +77,7 @@ func TestResolveMessageRoute_WorkerHandoffPinClearedAndFallsBack(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
@@ -124,7 +124,7 @@ func TestResolveMessageRoute_ExplicitBaseAgentIDStillResolves(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},

@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
@@ -276,7 +277,7 @@ func (h *BrowserWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	})
 
-	userID, ok := h.authenticate(conn)
+	userID, ok := h.authenticate(conn, r)
 	if !ok {
 		return
 	}
@@ -311,9 +312,14 @@ func (h *BrowserWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.readLoop(conn, wc, viewerID, userID, cfg)
 }
 
-// authenticate reads the first frame and validates the token. Mirrors
-// WSHandler.authenticateWS's (websocket.go) identity resolution exactly —
-// every account in Gateway.Users first (via the shared resolveBearerIdentity
+// authenticate authenticates the WS handshake via EITHER the omnipus-session
+// cookie (checked first, synchronously, against the upgrade request r) OR the
+// legacy first-message {"type":"auth","token":...} frame (FR-009), mirroring
+// WSHandler.authenticateWS (websocket.go) exactly — see that function's doc
+// for the full rationale (cookie checked before the blocking frame read so a
+// cookie-only client, which sends no frame at all post-Wave-1, isn't stuck
+// waiting on one). The frame path's identity resolution is unchanged: every
+// account in Gateway.Users first (via the shared resolveBearerIdentity
 // helper), then Gateway.CLIToken, then the legacy OMNIPUS_BEARER_TOKEN env
 // var, then dev_mode_bypass — so browser-live can never authenticate a
 // caller chat would have rejected, or vice versa. On failure this has
@@ -323,8 +329,21 @@ func (h *BrowserWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Returns the resolved userID. Per the documented Entry.User contract
 // (pkg/audit/audit.go), the env-token and dev-bypass paths deliberately
 // return "" (not a synthesized identity) — same as chat's wc.userID, which
-// only resolveBearerIdentity's match branch ever sets.
-func (h *BrowserWSHandler) authenticate(conn *websocket.Conn) (string, bool) {
+// only resolveBearerIdentity's match branch (and now the cookie branch) ever
+// sets.
+func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (string, bool) {
+	cfg := h.agentLoop.GetConfig()
+
+	if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return user.Username, true
+	}
+	// SFH-1: surface "cookie present but invalid" (replay/probe/stale
+	// cookie) as a log line — silent for the routine "no cookie at all"
+	// case (see LogInvalidSessionCookiePresent's doc). Log-only: falling
+	// through to the frame-based auth path below is unchanged either way.
+	middleware.LogInvalidSessionCookiePresent(r, cfg)
+
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
@@ -345,7 +364,6 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn) (string, bool) {
 		return "", false
 	}
 
-	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
 	if user, _, matched := resolveBearerIdentity(cfg, rawToken); matched {

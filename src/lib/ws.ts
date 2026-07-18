@@ -314,7 +314,7 @@ function _parseServerFrame(data: unknown): ServerFrame | null {
     if (import.meta.env.DEV) {
       const meta = (raw as { metadata?: unknown }).metadata
       if (meta && typeof meta === 'object') {
-        const known = new Set(['model_name'])
+        const known = new Set(['model_name', 'workspace_id', 'workspace_setup_kickoff'])
         const extras = Object.keys(meta as Record<string, unknown>).filter((k) => !known.has(k))
         if (extras.length > 0) {
           // eslint-disable-next-line no-console
@@ -717,15 +717,12 @@ export class WsConnection {
       this._receivedSinceLastPing = false
       // Notify UI that we are now connected (phase=null, attempt=0).
       this.callbacks.onReconnectStateChange?.(null, 0)
-      // Auth token is re-read on every (re-)connect so changes after
-      // initial load take effect without a page refresh.
-      // Check sessionStorage first (XSS protection), fall back to localStorage.
-      const token = sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')
-      if (token) {
-        this.send({ type: 'auth', token })
-      } else {
-        console.warn('[ws] No auth token found — connecting unauthenticated')
-      }
+      // Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010/FR-009):
+      // the browser attaches it automatically to the WS handshake request
+      // (same-origin), so no client-sent {type:'auth', token} frame is
+      // needed or possible — the SPA never holds a JS-visible token. The
+      // gateway's authenticateWS resolves identity from that cookie on the
+      // handshake; a missing/invalid cookie closes with 1008 (handled below).
       this._startHeartbeat()
       this.callbacks.onConnected()
     }

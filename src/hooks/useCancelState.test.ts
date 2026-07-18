@@ -153,4 +153,45 @@ describe('useCancelState — T23 global Escape handler', () => {
 
     expect(cancelStream).not.toHaveBeenCalled()
   })
+
+  // bugfixes3 deferred item 5: a focused-textarea Escape mid-stream used to
+  // double-dispatch cancelStream — once via ChatScreen.handleKeyDown's own
+  // cancel-Escape branch (React synthetic onKeyDown, which preventDefaults
+  // then calls cancelIfStreaming() directly), and a SECOND time via this
+  // hook's own document-level bubble listener, which didn't check
+  // defaultPrevented and re-ran its own shouldCancel logic against the same
+  // native keydown as it continued bubbling to `document`. The fix: this
+  // listener now early-returns when the event's default was already
+  // prevented upstream — pressEscape() below constructs the event with
+  // `cancelable: true` and calls `preventDefault()` on it BEFORE dispatch,
+  // simulating exactly what the React synthetic handler already did to the
+  // native event by the time it reaches this document-level listener.
+  it('does not call cancelStream when the Escape event was already defaultPrevented upstream (kills the double dispatch)', () => {
+    const cancelStream = vi.fn()
+    renderHook(() => useCancelState(true, cancelStream))
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+
+    act(() => {
+      const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+      event.preventDefault()
+      document.dispatchEvent(event)
+    })
+
+    expect(cancelStream).not.toHaveBeenCalled()
+  })
+
+  // Companion case: an Escape that reaches this listener WITHOUT any upstream
+  // preventDefault (e.g. focus is nowhere near the composer — the FR-23/T23
+  // "cancel even when unfocused" scenario) must still cancel normally. Proves
+  // the defaultPrevented check only suppresses the double-fire case, not
+  // legitimate global-Escape cancellation.
+  it('still calls cancelStream for a plain (non-defaultPrevented) global Escape', () => {
+    const cancelStream = vi.fn()
+    renderHook(() => useCancelState(true, cancelStream))
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+
+    act(() => pressEscape())
+
+    expect(cancelStream).toHaveBeenCalledTimes(1)
+  })
 })

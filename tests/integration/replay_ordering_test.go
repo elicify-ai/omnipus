@@ -461,14 +461,26 @@ func TestReplay_AssistantTextSurvivesDisconnect(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	_ = conn.Close()
 
-	// Wait for the server to finish the turn and write the transcript.
-	// 200 ms LLM delay + generous 1 s for processing.
-	time.Sleep(llmDelay + 1*time.Second)
-
-	// Extract the session ID from the WS connect to reattach. We don't have
-	// a stored session ID from the initial WS connect (it was ephemeral). Use
-	// the REST API to list sessions and pick the most recently created one.
-	sessionID := getMostRecentSessionID(t, gw)
+	// The server finishes the turn asynchronously after the client disconnects,
+	// then appends the assistant reply to the transcript. Poll for the session to
+	// appear AND that transcript write to land, rather than guessing with a fixed
+	// sleep: under the ci go-test -p4 cross-package CPU contention the async turn
+	// routinely needs longer than a fixed ~1.2s, which dropped the write past the
+	// wait window and lost the assistant text (the flake seen 2026-07-17). Waiting
+	// on the actual condition is contention-robust; the package -timeout is the
+	// real hang backstop.
+	const expectedText = "assistant text that must survive disconnect"
+	var sessionID string
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if sessionID == "" {
+			sessionID = getMostRecentSessionID(t, gw)
+		}
+		if sessionID != "" && sessionTranscriptContains(gw, sessionID, expectedText) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if sessionID == "" {
 		t.Fatal("BUG-3: could not find a session to reattach — server may not have created one")
 	}
@@ -483,8 +495,8 @@ func TestReplay_AssistantTextSurvivesDisconnect(t *testing.T) {
 	frames := collectFramesUntilDone(t, conn2, 10*time.Second)
 	logFrameTypes(t, frames)
 
-	// Invariant: at least one replay_message frame must carry the assistant text.
-	const expectedText = "assistant text that must survive disconnect"
+	// Invariant: at least one replay_message frame must carry the assistant text
+	// (expectedText declared above, where the transcript write is awaited).
 	found := false
 	for _, f := range frames {
 		if tp, _ := f["type"].(string); tp == "replay_message" {
@@ -541,6 +553,23 @@ func getMostRecentSessionID(t *testing.T, gw *testutil.TestGateway) string {
 	return body.Sessions[0].ID
 }
 
+// sessionTranscriptContains reports whether ANY transcript JSONL file in the
+// session's directory contains want. The real turn-completion path writes a
+// day-partitioned file (sessions/<id>/<YYYY-MM-DD>.jsonl), while the seeding
+// helpers write transcript.jsonl — globbing *.jsonl matches either without the
+// caller needing to know which. Path mirrors writeTranscriptEntries /
+// loop.go:340 (sessions live one level above gw.HomeDir()).
+func sessionTranscriptContains(gw *testutil.TestGateway, sessionID, want string) bool {
+	sessionDir := filepath.Join(filepath.Dir(gw.HomeDir()), "sessions", sessionID)
+	matches, _ := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
+	for _, p := range matches {
+		if b, err := os.ReadFile(p); err == nil && strings.Contains(string(b), want) {
+			return true
+		}
+	}
+	return false
+}
+
 // ─── Transcript seeding helpers ───────────────────────────────────────────────
 
 // seedToolCallTranscript writes a one-turn transcript with a tool_call entry
@@ -592,9 +621,9 @@ func seedTwoTurnTranscript(t *testing.T, gw *testutil.TestGateway, sessionID str
 // Path: <SessionsBaseDir>/sessions/<sessionID>/transcript.jsonl
 //
 // The agent loop derives its session store root from
-// filepath.Dir(cfg.WorkspacePath()), NOT from cfg.WorkspacePath() itself.
-// In the test harness, cfg.Agents.Defaults.Workspace = gw.HomeDir(), so:
-//   - cfg.WorkspacePath() = gw.HomeDir()
+// filepath.Dir(cfg.AgentHomeBasePath()), NOT from cfg.AgentHomeBasePath() itself.
+// In the test harness, cfg.Agents.Defaults.Home = gw.HomeDir(), so:
+//   - cfg.AgentHomeBasePath() = gw.HomeDir()
 //   - sharedSessionDir   = filepath.Dir(gw.HomeDir()) + "/sessions"
 //
 // This means sessions live one level ABOVE gw.HomeDir(), in the parent of
@@ -604,7 +633,7 @@ func writeTranscriptEntries(t *testing.T, gw *testutil.TestGateway, sessionID st
 	t.Helper()
 
 	// Sessions are stored at parent(workspace)/sessions/, matching loop.go:340:
-	//   homePath := filepath.Dir(cfg.WorkspacePath())
+	//   homePath := filepath.Dir(cfg.AgentHomeBasePath())
 	//   sharedDir := filepath.Join(homePath, "sessions")
 	sessionsBase := filepath.Join(filepath.Dir(gw.HomeDir()), "sessions")
 	sessionDir := filepath.Join(sessionsBase, sessionID)

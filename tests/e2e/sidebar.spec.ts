@@ -7,12 +7,21 @@ import { expectA11yClean } from './fixtures/a11y';
 // HashRouter: TanStack Router generates href="/#/<path>" links (not href="/<path>").
 // Workspace-as-project IA: the top-level Chat (/#/) and Monitor (/#/monitor)
 // nav items were removed and Connectors replaced the old Channels item. The
-// main navigation now exposes Agents · Connectors · Skills & Tools · Settings.
-const NAV_ITEMS = [
+// main navigation's fixed-bottom "Library" group (Sidebar.tsx LIBRARY_ITEMS)
+// now exposes only Agents · Skills & Tools · Connectors as direct links.
+//
+// Settings is NOT one of them: it moved into the "Open user menu" profile
+// dropdown at the very bottom of the sidebar (Sidebar.tsx: DropdownMenuItem
+// asChild > Link to="/settings"). That dropdown's content is rendered via a
+// Radix Portal (dropdown-menu.tsx's DropdownMenuContent wraps
+// DropdownMenuPrimitive.Portal), so it is NOT a DOM descendant of
+// `nav[aria-label="Main navigation"]` even though it is opened from a button
+// inside that nav — a `nav ... a[href="/#/settings"]` selector can never
+// match it. It has to be reached by opening the profile menu instead.
+const LIBRARY_NAV_ITEMS = [
   { href: '/#/agents', urlPattern: /agents/ },
   { href: '/#/connectors', urlPattern: /connectors/ },
   { href: '/#/skills', urlPattern: /skills/ },
-  { href: '/#/settings', urlPattern: /settings/ },
 ] as const;
 
 test.beforeEach(async ({ page }) => {
@@ -22,7 +31,7 @@ test.beforeEach(async ({ page }) => {
 test('(a) every nav item routes correctly', async ({ page }) => {
   const hamburger = page.locator('#sidebar-hamburger');
 
-  for (const item of NAV_ITEMS) {
+  for (const item of LIBRARY_NAV_ITEMS) {
     // Open (or re-open) sidebar before each nav click — overlay closes on navigation
     await expect(hamburger).toBeVisible({ timeout: 10_000 });
     await hamburger.click();
@@ -37,6 +46,23 @@ test('(a) every nav item routes correctly', async ({ page }) => {
     await link.click();
     await expect(page).toHaveURL(item.urlPattern, { timeout: 10_000 });
   }
+
+  // Settings: open the sidebar, open the profile dropdown
+  // (data-testid="sidebar-profile-trigger"), then click its portaled
+  // "Settings" menu item.
+  await expect(hamburger).toBeVisible({ timeout: 10_000 });
+  await hamburger.click();
+  const nav = page.locator('nav[aria-label="Main navigation"]');
+  await expect(nav).toBeVisible({ timeout: 5_000 });
+
+  const profileTrigger = page.locator('[data-testid="sidebar-profile-trigger"]');
+  await expect(profileTrigger).toBeVisible({ timeout: 5_000 });
+  await profileTrigger.click();
+
+  const settingsItem = page.getByRole('menuitem', { name: 'Settings' });
+  await expect(settingsItem).toBeVisible({ timeout: 5_000 });
+  await settingsItem.click();
+  await expect(page).toHaveURL(/settings/, { timeout: 10_000 });
 
   await expectA11yClean(page);
 });

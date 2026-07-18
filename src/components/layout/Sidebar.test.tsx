@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
-import { fetchWorkspaces, fetchSessions } from '@/lib/api'
+import { fetchWorkspaces, fetchSessions, logout } from '@/lib/api'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
 // Return matches: true so canPin=true and the pin toggle button renders in tests.
@@ -38,10 +38,13 @@ async function openUserMenu() {
   })
 }
 
-// Mock TanStack Router — Sidebar uses useLocation and useNavigate
+// Mock TanStack Router — Sidebar uses useLocation and useNavigate.
+// mockNavigate is a stable module-level spy (not a fresh vi.fn() per call)
+// so tests (e.g. the FR-020 sign-out test below) can assert on it.
+const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: '/' }),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
   Link: ({ children, to, onClick, className }: {
     children: React.ReactNode
     to: string
@@ -61,6 +64,7 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.
 // Using vi.fn() so individual tests can override the resolved value with mockResolvedValueOnce.
 vi.mock('@/lib/api', () => ({
   fetchWorkspaces: vi.fn().mockResolvedValue([]),
+  logout: vi.fn().mockResolvedValue(undefined),
   fetchSessions: vi.fn().mockResolvedValue([]),
   fetchAgents: vi.fn().mockResolvedValue([]),
   workspacesQueryKeys: {
@@ -180,6 +184,9 @@ beforeEach(() => {
   })
   // Reset fetchWorkspaces to the default empty-list response before each test.
   vi.mocked(fetchWorkspaces).mockResolvedValue([])
+  mockNavigate.mockClear()
+  vi.mocked(logout).mockClear()
+  vi.mocked(logout).mockResolvedValue(undefined)
   vi.mocked(fetchSessions).mockResolvedValue([])
   mockSetActiveWorkspaceId.mockReset()
   mockStartNewSession.mockReset()
@@ -642,5 +649,56 @@ describe('Sidebar — username popup: User + Sign out', () => {
     render(<Sidebar />, { wrapper: makeWrapper() })
     await openUserMenu()
     expect(screen.getByText('Sign out')).toBeTruthy()
+  })
+})
+
+// ── FR-020 (grafted from hotfix/v0.1.1): sign-out revokes the server session
+// before clearing local state ──────────────────────────────────────────────
+describe('Sidebar — FR-020 sign-out calls server logout before local teardown', () => {
+  it('calls logout(), then clearAuth(), then navigates to /login, in that order', async () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const { useAuthStore } = await import('@/store/auth')
+    const clearAuthMock = useAuthStore.getState().clearAuth as ReturnType<typeof vi.fn>
+    clearAuthMock.mockClear()
+
+    const signOutBtn = screen.getByRole('button', { name: 'Sign out' })
+    await act(async () => {
+      fireEvent.click(signOutBtn)
+      // Flush the logout().catch().finally() microtask chain.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(logout).toHaveBeenCalledOnce()
+    expect(clearAuthMock).toHaveBeenCalledOnce()
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login' })
+
+    // Order matters: a client-side-only teardown would leave the
+    // omnipus-session cookie valid and replayable (spec S14).
+    const logoutOrder = vi.mocked(logout).mock.invocationCallOrder[0]
+    const clearAuthOrder = clearAuthMock.mock.invocationCallOrder[0]
+    const navigateOrder = mockNavigate.mock.invocationCallOrder[0]
+    expect(logoutOrder).toBeLessThan(clearAuthOrder)
+    expect(clearAuthOrder).toBeLessThan(navigateOrder)
+  })
+
+  it('still clears local state and navigates when the server logout call fails (best-effort, never stuck)', async () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const { useAuthStore } = await import('@/store/auth')
+    const clearAuthMock = useAuthStore.getState().clearAuth as ReturnType<typeof vi.fn>
+    clearAuthMock.mockClear()
+    vi.mocked(logout).mockRejectedValueOnce(new Error('network unavailable'))
+
+    const signOutBtn = screen.getByRole('button', { name: 'Sign out' })
+    await act(async () => {
+      fireEvent.click(signOutBtn)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(clearAuthMock).toHaveBeenCalledOnce()
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login' })
   })
 })

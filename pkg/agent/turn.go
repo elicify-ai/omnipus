@@ -114,8 +114,22 @@ type turnState struct {
 	gracefulInterruptHint string
 	gracefulTerminalUsed  bool
 	hardAbort             bool
-	providerCancel        context.CancelFunc
-	turnCancel            context.CancelFunc
+	// providerCancel is fired by the graceful cascade (InterruptSession) to
+	// abort the in-flight LLM/provider call immediately; turnCancel is fired
+	// by the hard-abort cascade (InterruptSessionHard/requestHardAbort) to
+	// tear down the whole turn. For a NATIVE turn these are two genuinely
+	// distinct cancel funcs (turnCtx's cancel is a superset of the
+	// provider-call's own). For an EXTERNAL-CLI sub-turn
+	// (pkg/agent/external_dispatch.go's runExternalCLISubTurn) both slots are
+	// set to the exact SAME cancel func — the runner exposes no distinct
+	// graceful-stop primitive, so canceling either slot cancels the one
+	// runCtx the external CLI's OS child is bound to
+	// (exec.CommandContext(runCtx, ...)), killing the process outright either
+	// way. That makes firing providerCancel alone already terminal for an
+	// external-CLI turn — there is no softer "graceful" stage for this kind
+	// of turn to fall back through.
+	providerCancel context.CancelFunc
+	turnCancel     context.CancelFunc
 
 	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
@@ -446,6 +460,39 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 		return anyMatch
 	}
 	return nil
+}
+
+// getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
+// parentTurnID=="") matching sessionID's transcriptSessionID, or nil when no
+// root turn is currently active for the session — INCLUDING when the only
+// resolvable match is a non-root descendant. Unlike
+// GetActiveTurnHookForSession (which falls back to ANY match, root-preferring
+// but not root-EXCLUSIVE, as a defensive last resort for other callers), this
+// NEVER returns a delegate sub-turn.
+//
+// Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
+// pkg/agent/orphan_watch.go) to answer "is there still a genuine foreground
+// turn to reap" without ever mistaking a surviving Critical/background
+// delegate — whose parent root has already finished and been cleared from
+// activeTurnStates via clearActiveTurn (loop.go) — for one. Reusing
+// GetActiveTurnHookForSession's anyMatch fallback for that decision was the
+// root cause of MA-1: it would resolve the delegate as "the turn to reap",
+// and handing that to RequestCancel would trigger RequestCancel's
+// session-wide escalation against the exact turn ADR-045 exists to protect.
+func (al *AgentLoop) getActiveRootTurnStateForSession(sessionID string) *turnState {
+	var root *turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID != sessionID {
+			return true
+		}
+		if ts.depth == 0 || ts.parentTurnID == "" {
+			root = ts
+			return false
+		}
+		return true
+	})
+	return root
 }
 
 func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {

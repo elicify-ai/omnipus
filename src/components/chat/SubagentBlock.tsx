@@ -1,19 +1,27 @@
 // SubagentBlock — FR-H-008
-// Renders one subagent span as a collapsible block.
-// Collapsed header: icon + task label + step count + status pill + duration + caret.
-// Expanded body: nested ToolCallBadges + optional final result section.
-// Visual grammar matches ToolCallBadge (same border/surface palette).
+// Renders one subagent span as a collapsible flat text-line row (ticket "Tool
+// components in chat", P2 — delegate-card restyle). Matches ToolCallBadge's/
+// GenericToolCall's flat grammar: no bordered/filled card, no status pill —
+// an 8px status dot (or the spinning icon while running) + a "Delegate → "
+// label + muted status/duration text + a muted caret. Expanded body swaps
+// the old bordered panel for an indented border-l-2 accent line, same as the
+// two tool-call components; the final-result section drops its bordered box
+// in favor of a plain text block with a small success dot + muted label.
+//
+// Status dot comes from getSpanStatusDot (src/lib/toolStatusConfig.tsx),
+// added in db5714b6 for this migration. ActivityPanel.tsx uses the same
+// helper. The pill-shaped predecessor (getSpanStatusConfig) had no
+// remaining consumers once both callers migrated, so it was deleted rather
+// than kept as dead code.
 
-import { CaretDown, CaretUp, UserCircle } from '@phosphor-icons/react'
+import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import { ToolCallBadge } from './ToolCallBadge'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
-import type { WsSubagentEndFrame } from '@/lib/ws'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
-import { getSpanStatusConfig } from '@/lib/toolStatusConfig'
-
-type SubagentEndReason = WsSubagentEndFrame['reason']
+import { getSpanStatusDot, statusDot } from '@/lib/toolStatusConfig'
+import { formatInterruptReason } from '@/lib/subagentStatus'
 
 // ── Label truncation — grapheme-safe (FR-H-009, Scenario 14) ─────────────────
 
@@ -21,11 +29,11 @@ type SubagentEndReason = WsSubagentEndFrame['reason']
 function truncateLabel(raw: string): string {
   const clusters = Array.from(raw)
   if (clusters.length <= 60) return raw
-  return clusters.slice(0, 60).join('') + '\u2026'
+  return clusters.slice(0, 60).join('') + '…'
 }
 
 // ── Duration formatting + status config ──────────────────────────────────────
-// Shared with ActivityPanel.tsx (pill family) — see src/lib/toolStatusConfig.tsx.
+// Shared with ActivityPanel.tsx (span family) — see src/lib/toolStatusConfig.tsx.
 // SubagentBlock uses the defaults: icon size 13, 'running' label "working".
 
 // ── Step count text ───────────────────────────────────────────────────────────
@@ -36,32 +44,40 @@ function stepCountText(count: number): string {
 }
 
 // ── SubagentBlock ─────────────────────────────────────────────────────────────
-
-/** Human-readable label for the interrupted reason field (W1-9). */
-function formatInterruptReason(reason: SubagentEndReason): string {
-  switch (reason) {
-    case 'parent_timeout': return 'parent timed out'
-    case 'parent_cancelled': return 'parent cancelled'
-    case 'parent_done_early': return 'parent completed early'
-    case 'unknown': return 'unknown reason'
-    default: return reason ?? ''
-  }
-}
+// formatInterruptReason (W1-9) now lives in @/lib/subagentStatus — shared
+// with ActivityPanel/useRunningActivity.ts (Fix 2, 2026-07-16).
 
 export interface SubagentBlockProps {
   span: SubagentSpan
+  /**
+   * The delegate's kind, when the caller has resolved it (span.agentId
+   * looked up against the agents list — see ChatScreen.tsx's two render
+   * sites, SubagentSpansRenderer and VirtualAssistantMessageRow). Only
+   * '3p' changes rendering: external-CLI (subagent_3p) delegates are
+   * structurally batch — they emit no intermediate output while running
+   * and only report once finished (W3, delegation-visibility) — so a
+   * RUNNING '3p' span shows an inline notice explaining the silence.
+   * Omitted (or 'native') preserves prior behavior exactly; an
+   * unresolvable agentId is passed through as omitted by the caller
+   * rather than a false '3p'/'native' guess.
+   */
+  agentType?: '3p' | 'native'
 }
 
-export function SubagentBlock({ span }: SubagentBlockProps) {
+export function SubagentBlock({ span, agentType }: SubagentBlockProps) {
   // Expansion state lives in the UI store so live-render → historical-virtualized-render
   // swap (when streaming ends) preserves user-chosen expanded/collapsed state.
   const expanded = useUiStore((s) => Boolean(s.expandedSpans[span.spanId]))
   const toggleSpanExpansion = useUiStore((s) => s.toggleSpanExpansion)
   const isTerminal = span.status !== 'running'
+  // W3: only while a 3p (external-CLI) delegate is still running — it emits
+  // no intermediate output, so without this the row looks silent/stuck. A
+  // completed 3p span (isTerminal) shows its result normally, same as native.
+  const show3pRunningNotice = agentType === '3p' && !isTerminal
 
   // W4-4: narrow to terminal type before accessing durationMs/finalResult.
   const terminal = isTerminal ? (span as SubagentSpanTerminal) : null
-  const config = getSpanStatusConfig(span.status)
+  const config = getSpanStatusDot(span.status)
   const label = truncateLabel(span.taskLabel ?? '')
   const stepCount = span.steps.length
   const hasFinalResult = Boolean(terminal?.finalResult)
@@ -71,12 +87,9 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
   }
 
   return (
-    <div
-      className={cn(
-        'mt-2 rounded-md border bg-[var(--color-surface-1)] text-xs font-mono overflow-hidden',
-        config.border,
-      )}
-    >
+    // Flat text-line design: no border, no surface fill, no rounded frame —
+    // the row is transparent on the thread, matching ToolCallBadge/GenericToolCall.
+    <div className="mt-2 text-xs font-mono">
       {/* Collapsed header — FR-H-008 */}
       <button tabIndex={0}
         type="button"
@@ -84,14 +97,16 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
         onClick={toggle}
         aria-expanded={expanded}
         aria-label={`Subagent: ${label}, ${stepCountText(stepCount)}, status ${span.status}`}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-3)] cursor-pointer"
+        className="flex w-full items-center gap-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
       >
-        {/* Subagent icon */}
-        <UserCircle size={13} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
+        {/* Status indicator — dot for terminal states, spinner while running */}
+        {config.indicator}
 
-        {/* Task label */}
+        {/* Delegate label — the exact same truncated task label as before,
+            prefixed to read as a delegation row now that the dedicated
+            subagent icon + bordered card are gone. */}
         <span className="text-[var(--color-secondary)] font-medium truncate flex-1 min-w-0">
-          {label}
+          Delegate → {label}
         </span>
 
         {/* Step count */}
@@ -99,17 +114,16 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
           {stepCountText(stepCount)}
         </span>
 
-        {/* Status indicator */}
-        <span className={cn('flex items-center gap-1 shrink-0 rounded px-1.5 py-0.5', config.pill)}>
-          {config.icon}
-          <span>{config.label}</span>
+        {/* Status text — muted, per the flat text-line spec */}
+        <span className={cn('text-[var(--color-muted)] shrink-0', config.textClass)}>
+          {config.label}
           {/* W1-9: show interrupt reason as a muted inline label when available */}
           {span.status === 'interrupted' && terminal?.reason && (
             <span
-              className="text-[var(--color-muted)] font-sans"
+              className="font-sans"
               title={`Interrupted: ${formatInterruptReason(terminal.reason)}`}
             >
-              ({formatInterruptReason(terminal.reason)})
+              {' '}({formatInterruptReason(terminal.reason)})
             </span>
           )}
         </span>
@@ -127,11 +141,27 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
         </span>
       </button>
 
-      {/* Expanded body — FR-H-008 */}
+      {/* W3: 3p (external-CLI) delegates are batch — no intermediate output
+          while running, only a report on completion. Shown only while
+          running (never once terminal) so it never contradicts a rendered
+          result. Always visible without expanding — a collapsed running 3p
+          row is exactly the case that reads as silent/stuck otherwise. */}
+      {show3pRunningNotice && (
+        <p
+          data-testid="subagent-3p-running-notice"
+          className="pl-[18px] pb-1 -mt-0.5 text-[10px] text-[var(--color-muted)] font-sans italic"
+        >
+          External agent — no live progress; results appear when it finishes.
+        </p>
+      )}
+
+      {/* Expanded body — FR-H-008. Indented quote-block: a thin left accent
+          line stands in for the old bordered panel, matching ToolCallBadge's/
+          GenericToolCall's expanded-detail treatment. */}
       {expanded && (
         <div
           data-testid="subagent-expanded"
-          className="border-t border-[var(--color-border)] px-3 py-2 space-y-1"
+          className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3 space-y-1"
           style={{ maxHeight: '400px', overflowY: 'auto' }}
         >
           {span.steps.length === 0 && !hasFinalResult && (
@@ -155,10 +185,13 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
             )
           })}
 
-          {/* Final result section — visually distinguishable from tool calls */}
+          {/* Final result section — plain text block, no box/fill: a small
+              success dot + muted "Final result" label, matching the flat
+              text-line design used everywhere else. */}
           {hasFinalResult && (
-            <div className="mt-2 rounded border border-[var(--color-success)]/30 bg-[var(--color-surface-2)] px-3 py-2">
-              <div className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide font-sans">
+            <div className="mt-2">
+              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide font-sans">
+                {statusDot('bg-[var(--color-success)]')}
                 Final result
               </div>
               <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">

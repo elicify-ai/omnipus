@@ -694,7 +694,6 @@ func FixtureAgent_Populated() Agent {
 		Soul:              "You are Jim, a helpful assistant.",
 		TimeoutSeconds:    300,
 		MaxToolIterations: 50,
-		SteeringMode:      "one-at-a-time",
 		Color:             &color,
 		Icon:              &icon,
 		Model:             &model,
@@ -716,7 +715,6 @@ func FixtureAgent_Edge() Agent {
 		Soul:              "",
 		TimeoutSeconds:    0,
 		MaxToolIterations: 0,
-		SteeringMode:      "one-at-a-time",
 	}
 }
 
@@ -2114,14 +2112,13 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 // W1 turned the single flat AgentCreateRequest into a discriminated union —
 // one named Go type per agent type, each with additionalProperties: false.
 // Field allocation per docs/internal/architecture/agent-types-field-matrix.md:
-//   - Main: full field set (voice, steering_mode included), no executor.
-//   - Subagent: like Main minus voice/steering_mode, no executor (server
-//     derives native).
+//   - Main: full field set (voice included), no executor.
+//   - Subagent: like Main minus voice, no executor (server derives native).
 //   - Subagent3p: ONLY type/name/description/model/provider/color/icon/
 //     rate_limits/soul/executor/timeout_seconds — executor
 //     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
 //     fallback_models, model_params, shell_policy, voice,
-//     steering_mode, max_tool_iterations) do not exist as properties on this
+//     max_tool_iterations) do not exist as properties on this
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
@@ -2130,7 +2127,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	model := "claude-sonnet-4-6"
 	enabled := true
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
-	steering := AgentCreateRequestMainSteeringModeOneAtATime
 	description := "Focused research assistant"
 	temperature := 0.7
 	maxTokens := 4096
@@ -2212,7 +2208,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 				}{{Id: "my-mcp"}},
 			},
 		},
-		SteeringMode: &steering,
 	}
 }
 
@@ -2382,7 +2377,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	maxTokens := 2048
 	topP := 0.9
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
-	steering := QueueAndProcess
 	heartbeat := "Check queue every hour."
 	soul := "You are a helpful assistant."
 	voice := "alloy"
@@ -2390,16 +2384,15 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 
 	vDefault := true
 	return AgentUpdateRequest{
-		Name:         &name,
-		Description:  &description,
-		Model:        &model,
-		Color:        &color,
-		Icon:         &icon,
-		Default:      &vDefault,
-		Soul:         &soul,
-		Heartbeat:    &heartbeat,
-		Voice:        &voice,
-		SteeringMode: &steering,
+		Name:        &name,
+		Description: &description,
+		Model:       &model,
+		Color:       &color,
+		Icon:        &icon,
+		Default:     &vDefault,
+		Soul:        &soul,
+		Heartbeat:   &heartbeat,
+		Voice:       &voice,
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
 			Temperature *float64 `json:"temperature,omitempty"`

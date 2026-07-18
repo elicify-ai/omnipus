@@ -1,10 +1,10 @@
 // Package tools — path-guard audit emission helpers ( / ).
 //
 // This file owns the audit-logging side-effect that every file/exec tool's
-// Execute path emits when validatePathWithAllowPaths (or the equivalent
-// shell.go cwd / guard-command path check) rejects a request. The shape of
-// each entry follows — fields go into Entry.Details (no top-level
-// schema change to pkg/audit.Entry).
+// Execute path emits when ResolvePath (or the equivalent shell.go cwd /
+// guard-command path check) rejects a request. The shape of each entry
+// follows — fields go into Entry.Details (no top-level schema change to
+// pkg/audit.Entry).
 //
 // Reason heuristic ( — caller side, not validator side):
 //
@@ -22,6 +22,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -41,15 +42,31 @@ const (
 	ReasonOutsideWorkspace = "outside_workspace"
 	ReasonNotInAllowList   = "not_in_allow_list"
 	ReasonSymlinkEscape    = "symlink_escape"
+	// ReasonCarveOut and ReasonPathInvalid are ADR-046 additions: FR-035
+	// explicitly calls out "carve-out hit" as a distinct filesystem-scope
+	// refusal category from a plain outside-work denial, and ResolvePath's
+	// ErrPathInvalid (embedded NUL / unresolvable path) is a third, distinct
+	// failure shape neither prior constant described.
+	ReasonCarveOut    = "carve_out"
+	ReasonPathInvalid = "path_invalid"
 )
 
 // classifyPathDenialReason picks the audit reason for a path-guard error.
 //
-// `validatorErr` is the error returned by validatePathWithAllowPaths or by
-// the shell guardCommand path checker. `allowPathsLen` is the number of
+// ADR-046: ResolvePath (resolvepath.go) returns typed sentinel errors
+// (ErrCarveOut/ErrOutsideScope/ErrPathInvalid), so the primary
+// classification is now an errors.Is type switch rather than string
+// sniffing. The legacy string-sniffing fallback below is kept for
+// `validatorErr` values that are NOT one of those sentinels — the shape the
+// shell guardCommand path checker still produces (bash's in-command
+// absolute-path scan, a defense-in-depth layer distinct from ResolvePath's
+// own cwd resolution) — so its denials keep classifying correctly too. Every
+// path-taking tool's own path argument (send_file.go/web_serve.go included,
+// as of the ADR-046 defects wave) now resolves through ResolvePath and hits
+// the typed-sentinel branch above instead. `allowPathsLen` is the number of
 // configured AllowReadPaths/AllowWritePaths entries — it discriminates
 // "outside workspace, no allow-list configured" from "outside workspace,
-// allow-list configured but no entry matched".
+// allow-list configured but no entry matched" for that legacy path only.
 //
 // Pure function — no side effects, safe to call without locks.
 func classifyPathDenialReason(validatorErr error, allowPathsLen int) string {
@@ -58,6 +75,18 @@ func classifyPathDenialReason(validatorErr error, allowPathsLen int) string {
 		// Fall back to the most common reason rather than panicking.
 		return ReasonOutsideWorkspace
 	}
+
+	switch {
+	case errors.Is(validatorErr, ErrCarveOut):
+		return ReasonCarveOut
+	case errors.Is(validatorErr, ErrPathInvalid):
+		return ReasonPathInvalid
+	case errors.Is(validatorErr, ErrOutsideScope):
+		return ReasonOutsideWorkspace
+	}
+
+	// Legacy fallback: validatorErr is not one of the typed ResolvePath
+	// sentinels above — classify it the pre-ADR-046 way.
 	msg := strings.ToLower(validatorErr.Error())
 	if strings.Contains(msg, "symlink") {
 		return ReasonSymlinkEscape
@@ -104,8 +133,8 @@ func canonicalDeniedPath(path string) string {
 // `auditLog` is the *audit.Logger handed to the tool via SetAuditLogger;
 // pass nil to skip emission silently.
 //
-// `validatorErr` is the original error from validatePathWithAllowPaths
-// (or shell guardCommand). Must be non-nil — callers gate on this.
+// `validatorErr` is the original error from ResolvePath (or shell
+// guardCommand). Must be non-nil — callers gate on this.
 //
 // `allowPathsLen` is len(allowPaths) at the call site and is used for the
 // reason heuristic

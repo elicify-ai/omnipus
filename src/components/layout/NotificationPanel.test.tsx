@@ -83,13 +83,13 @@ describe('NotificationPanel (#264)', () => {
     })
   })
 
-  it('clicking a schedule notification navigates to command-center', () => {
+  it('clicking a schedule notification navigates to the Board tab', () => {
     useNotificationsStore.getState().apply(frame({ id: 's', title: 'Sched', schedule_id: 'sched-1' }))
 
     render(<NotificationPanel />)
     fireEvent.click(screen.getByText('Sched'))
 
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/command-center' })
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/tasks' })
   })
 
   it('does not render the mark-all-read action when nothing is unread', () => {

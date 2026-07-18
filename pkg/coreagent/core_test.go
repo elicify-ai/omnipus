@@ -201,6 +201,56 @@ func TestCoreAgentPromptsDifferentiation(t *testing.T) {
 		"Mia and Ray must have different compiled prompts")
 }
 
+// TestAvaPromptContainsWorkspaceSetupInterview verifies Ava's compiled prompt
+// carries the workspace-setup kickoff interview instructions: the
+// plain (user-role) message announcing a new workspace's team needs setting
+// up must produce a first-person greeting from Ava, followed by a short
+// interview and the update_workspace/create_agent team-assembly steps. The
+// kickoff reaches Ava as an ordinary user-role chat message (pkg/gateway's
+// handleChatMessage publishes it with Role: "user" — only the PERSISTED/
+// REPLAYED transcript entry is recorded as a neutral system-role event), so
+// the prompt must not claim it arrives "as a system message".
+//
+// Traces to: contracts/asyncapi.yaml metadata.workspace_setup_kickoff,
+// pkg/workspace/workspace.go Workspace.SetupPending.
+func TestAvaPromptContainsWorkspaceSetupInterview(t *testing.T) {
+	avaPrompt := coreagent.GetPrompt("ava")
+	require.NotEmpty(t, avaPrompt)
+
+	assert.Contains(t, avaPrompt, "## Workspace setup interview",
+		"Ava's prompt must have a dedicated section for the workspace-setup kickoff")
+	assert.Contains(t, avaPrompt, "workspace-setup kickoff",
+		"the section must name the kickoff trigger so Ava recognizes the message")
+	assert.Contains(t, avaPrompt, "When a message announces that a workspace was just created",
+		"the trigger phrasing must describe the kickoff as a plain message, not a system message")
+	assert.NotContains(t, avaPrompt, "a system message announces",
+		"the prompt must not claim the kickoff arrives as a system message — it is a plain user-role message")
+	assert.Contains(t, avaPrompt, "Hi, I'm Ava",
+		"Ava's first reply on kickoff must greet in first person")
+	assert.Contains(t, avaPrompt, "update_workspace",
+		"the interview must end in setting the workspace's core_team via update_workspace")
+	assert.Contains(t, avaPrompt, "create_agent",
+		"the interview must cover creating specialists that don't already exist")
+	assert.Contains(
+		t,
+		avaPrompt,
+		"default delegation trust edges are seeded automatically",
+		"Ava's prompt must tell her that adding built-in roster members via update_workspace auto-seeds delegation edges",
+	)
+	assert.Contains(t, avaPrompt, "Team tab",
+		"Ava's prompt must point the user to the Team tab to review/adjust the auto-seeded edges")
+	assert.Contains(t, avaPrompt, "does NOT extend to custom specialists you create yourself with create_agent",
+		"the prompt must be honest that custom agents get zero auto-seeded delegation edges")
+	assert.Contains(t, avaPrompt, "delegation_seeded",
+		"the prompt must tell Ava to check the update_workspace result's delegation_seeded note and relay it")
+	assert.NotContains(
+		t,
+		avaPrompt,
+		"so the team can delegate to each other out of the box",
+		"the prompt must not overclaim that ALL team members (including custom specialists) can delegate out of the box",
+	)
+}
+
 // TestGetPromptUnknownID verifies GetPrompt returns empty string for unknown IDs.
 // Callers fall back to SOUL.md on disk when the empty string is returned.
 //

@@ -81,8 +81,8 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 	if ag == nil {
 		t.Fatal("recapIT: NewAgentInstance returned nil")
 	}
-	ag.Workspace = filepath.Join(home, "agents", agentID)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(agentID, "RecapIT")
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, "RecapIT")
 	al.registry.mu.Lock()
 	al.registry.agents[agentID] = ag
 	al.registry.mu.Unlock()
@@ -105,7 +105,7 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 	al.CloseSession(sessionID, "explicit")
 
 	// Wait for LAST_SESSION.md to appear (recap goroutine writes it).
-	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
@@ -224,8 +224,8 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 	if ag == nil {
 		t.Fatal("idleIT: NewAgentInstance returned nil")
 	}
-	ag.Workspace = filepath.Join(home, "agents", agentID)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(agentID, "IdleIT")
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, "IdleIT")
 	al.registry.mu.Lock()
 	al.registry.agents[agentID] = ag
 	al.registry.mu.Unlock()
@@ -287,7 +287,7 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 	}
 
 	// Step 5: Wait for LAST_SESSION.md to appear (proves runRecap completed).
-	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
@@ -309,7 +309,7 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 	}
 
 	// Step 6: Verify a retro with trigger=idle was written.
-	retrosDir := filepath.Join(ag.Workspace, ".omnipus", "retros")
+	retrosDir := filepath.Join(ag.Home, ".omnipus", "retros")
 	var foundRetro bool
 	var retroBytes []byte
 	retroDeadline := time.Now().Add(5 * time.Second)
