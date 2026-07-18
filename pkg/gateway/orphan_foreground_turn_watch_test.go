@@ -84,7 +84,7 @@ func newOrphanForegroundTurnTestWSHandler(
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "blocking-cancel-provider",
 				MaxTokens: 4096,
 			},

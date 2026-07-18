@@ -22,7 +22,7 @@ func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
@@ -54,7 +54,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenZero(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
@@ -83,7 +83,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
@@ -113,7 +113,7 @@ func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "gpt-5",
 				Provider:  "openrouter",
 			},
@@ -226,7 +226,7 @@ func TestNewAgentInstance_FallbackModelsPrefersExplicitOverLegacy(t *testing.T) 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "gpt-5",
 				Provider:  "openrouter",
 			},
@@ -380,7 +380,7 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 			cfg := &config.Config{
 				Agents: config.AgentsConfig{
 					Defaults: config.AgentDefaults{
-						Workspace: tmpDir,
+						Home:      tmpDir,
 						ModelName: tt.aliasName,
 					},
 				},
@@ -433,7 +433,7 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadAndList_RejectsForBash(t *tes
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:           workspace,
+				Home:                workspace,
 				ModelName:           "test-model",
 				RestrictToWorkspace: true,
 			},
@@ -506,7 +506,7 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: workspace,
+				Home:      workspace,
 				ModelName: "test-model",
 			},
 		},
@@ -532,12 +532,12 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 	}
 }
 
-// TestResolveAgentWorkspace_OMNIPUSHome verifies that resolveAgentWorkspace
+// TestResolveAgentHome_OMNIPUSHome verifies that resolveAgentHome
 // places per-agent workspaces under $OMNIPUS_HOME/agents/ when OMNIPUS_HOME
 // is set, and falls back to ~/.omnipus/agents/ when it is not.
-func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
+func TestResolveAgentHome_OMNIPUSHome(t *testing.T) {
 	defaults := &config.AgentDefaults{
-		Workspace: filepath.Join(t.TempDir(), ".omnipus", "workspace"),
+		Home: filepath.Join(t.TempDir(), ".omnipus", "workspace"),
 	}
 
 	t.Run("OMNIPUS_HOME_set", func(t *testing.T) {
@@ -545,11 +545,11 @@ func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
 		t.Setenv("OMNIPUS_HOME", tmpHome)
 
 		agentCfg := &config.AgentConfig{ID: "jim"}
-		got := resolveAgentWorkspace(agentCfg, defaults)
+		got := resolveAgentHome(agentCfg, defaults)
 
 		want := filepath.Join(tmpHome, "agents", "jim")
 		if got != want {
-			t.Errorf("resolveAgentWorkspace with OMNIPUS_HOME=%q: got %q, want %q", tmpHome, got, want)
+			t.Errorf("resolveAgentHome with OMNIPUS_HOME=%q: got %q, want %q", tmpHome, got, want)
 		}
 	})
 
@@ -559,11 +559,11 @@ func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
 		t.Setenv("HOME", fakeHome)
 
 		agentCfg := &config.AgentConfig{ID: "ava"}
-		got := resolveAgentWorkspace(agentCfg, defaults)
+		got := resolveAgentHome(agentCfg, defaults)
 
 		want := filepath.Join(fakeHome, ".omnipus", "agents", "ava")
 		if got != want {
-			t.Errorf("resolveAgentWorkspace without OMNIPUS_HOME: got %q, want %q", got, want)
+			t.Errorf("resolveAgentHome without OMNIPUS_HOME: got %q, want %q", got, want)
 		}
 	})
 
@@ -572,7 +572,7 @@ func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
 		t.Setenv("OMNIPUS_HOME", tmpHome)
 
 		agentCfg := &config.AgentConfig{ID: "../../etc/passwd"}
-		got := resolveAgentWorkspace(agentCfg, defaults)
+		got := resolveAgentHome(agentCfg, defaults)
 
 		safeBase := filepath.Join(tmpHome, "agents")
 		if !strings.HasPrefix(filepath.Clean(got), safeBase) {
@@ -588,7 +588,7 @@ func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
 
 		// Default=true means "routing default" — it must NOT redirect to shared workspace.
 		agentCfg := &config.AgentConfig{ID: "mia", Default: true}
-		got := resolveAgentWorkspace(agentCfg, defaults)
+		got := resolveAgentHome(agentCfg, defaults)
 
 		want := filepath.Join(tmpHome, "agents", "mia")
 		if got != want {
@@ -596,34 +596,34 @@ func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
 		}
 
 		// The shared workspace must NOT be returned.
-		if got == defaults.Workspace {
-			t.Errorf("Default=true agent must not receive the shared default workspace %q", defaults.Workspace)
+		if got == defaults.Home {
+			t.Errorf("Default=true agent must not receive the shared default workspace %q", defaults.Home)
 		}
 	})
 }
 
-// TestResolveAgentWorkspace_ExportedWrapper proves ResolveAgentWorkspace (the
+// TestResolveAgentHome_ExportedWrapper proves ResolveAgentHome (the
 // exported wrapper added for pkg/gateway's executor-smoke-test agent_id
-// feature — see its doc) delegates to the exact same resolveAgentWorkspace
-// this file already covers above, for both the explicit-Workspace and the
+// feature — see its doc) delegates to the exact same resolveAgentHome
+// this file already covers above, for both the explicit-Home and the
 // per-agent-derived-path cases, so a future edit to one cannot silently
 // diverge from the other.
-func TestResolveAgentWorkspace_ExportedWrapper(t *testing.T) {
+func TestResolveAgentHome_ExportedWrapper(t *testing.T) {
 	defaults := &config.AgentDefaults{
-		Workspace: filepath.Join(t.TempDir(), ".omnipus", "workspace"),
+		Home: filepath.Join(t.TempDir(), ".omnipus", "workspace"),
 	}
 
 	t.Run("explicit_workspace_passthrough", func(t *testing.T) {
 		explicit := filepath.Join(t.TempDir(), "agents", "custom-explicit")
-		agentCfg := &config.AgentConfig{ID: "custom-explicit", Workspace: explicit}
+		agentCfg := &config.AgentConfig{ID: "custom-explicit", Home: explicit}
 
-		got := ResolveAgentWorkspace(agentCfg, defaults)
-		want := resolveAgentWorkspace(agentCfg, defaults)
+		got := ResolveAgentHome(agentCfg, defaults)
+		want := resolveAgentHome(agentCfg, defaults)
 		if got != want {
-			t.Errorf("ResolveAgentWorkspace diverged from resolveAgentWorkspace: got %q, want %q", got, want)
+			t.Errorf("ResolveAgentHome diverged from resolveAgentHome: got %q, want %q", got, want)
 		}
 		if got != explicit {
-			t.Errorf("ResolveAgentWorkspace with explicit Workspace: got %q, want %q", got, explicit)
+			t.Errorf("ResolveAgentHome with explicit Home: got %q, want %q", got, explicit)
 		}
 	})
 
@@ -632,14 +632,14 @@ func TestResolveAgentWorkspace_ExportedWrapper(t *testing.T) {
 		t.Setenv("OMNIPUS_HOME", tmpHome)
 
 		agentCfg := &config.AgentConfig{ID: "ray"}
-		got := ResolveAgentWorkspace(agentCfg, defaults)
-		want := resolveAgentWorkspace(agentCfg, defaults)
+		got := ResolveAgentHome(agentCfg, defaults)
+		want := resolveAgentHome(agentCfg, defaults)
 		if got != want {
-			t.Errorf("ResolveAgentWorkspace diverged from resolveAgentWorkspace: got %q, want %q", got, want)
+			t.Errorf("ResolveAgentHome diverged from resolveAgentHome: got %q, want %q", got, want)
 		}
 		wantPath := filepath.Join(tmpHome, "agents", "ray")
 		if got != wantPath {
-			t.Errorf("ResolveAgentWorkspace derived path: got %q, want %q", got, wantPath)
+			t.Errorf("ResolveAgentHome derived path: got %q, want %q", got, wantPath)
 		}
 	})
 }

@@ -68,7 +68,7 @@ func TestUpdateToolCallStatusWithRetry_AsyncWaitsForDelayedPlaceholder(t *testin
 
 	// The CHILD's cleanup defer calls this immediately — racing ahead of the
 	// writer goroutine above, exactly as a fast-failing dispatch would.
-	found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "error", 42, true)
+	found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "error", 42, true, nil)
 	require.NoError(t, updateErr)
 	assert.True(t, found,
 		"async retry must wait out the race and find the placeholder once the parent's "+
@@ -102,7 +102,7 @@ func TestUpdateToolCallStatusWithRetry_SyncDoesNotWaitForDelayedRecord(t *testin
 	const callID = session.ToolCallID("c-sync")
 
 	start := time.Now()
-	found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "error", 42, false)
+	found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "error", 42, false, nil)
 	elapsed := time.Since(start)
 
 	require.NoError(t, updateErr)
@@ -134,7 +134,7 @@ func TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry(t *testing.
 		}))
 
 		start := time.Now()
-		found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "success", 100, async)
+		found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "success", 100, async, nil)
 		elapsed := time.Since(start)
 
 		require.NoError(t, updateErr)

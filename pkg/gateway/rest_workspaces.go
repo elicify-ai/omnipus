@@ -349,6 +349,16 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	}
 	for _, w := range workspaces {
 		if w.IsDefault {
+			// FR-008/US-3 AS-4: an upgraded install whose default workspace
+			// already exists still needs the built-in roster back-filled
+			// (e.g. a coreagent added after the operator's install) — but
+			// must NEVER retroactively auto-add a custom/user-created agent.
+			// Best-effort: a back-fill failure is logged, not fatal — the
+			// gateway continues booting on the pre-existing default workspace.
+			if berr := ensureBuiltinRosterPresent(home, w, cfg); berr != nil {
+				slog.Warn("rest: ensureDefaultWorkspace: failed to back-fill built-in roster",
+					"workspace_id", w.ID, "error", berr)
+			}
 			return nil // already exists
 		}
 	}
@@ -396,6 +406,87 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 		"id", ws.ID, "owner", ownerUsername,
 		"team_size", len(ws.CoreTeam), "edge_count", len(ws.Delegation))
 	return nil
+}
+
+// ensureBuiltinRosterPresent unions any built-in-roster member
+// (defaultWorkspaceTeam(cfg) — coreagent.All() ∩ configured agents) missing
+// from the existing default workspace w's CoreTeam, and persists the change
+// ONLY if the set actually grew (ADR-046 P1, FR-008 / US-3 AS-4). This keeps
+// an upgraded install's pre-existing default workspace current with the
+// installed built-in roster (e.g. a coreagent added post-upgrade) every
+// boot, idempotently and safely:
+//   - NEVER removes an existing member (including a custom agent an operator
+//     added to the team by hand).
+//   - NEVER adds a non-built-in ID — only defaultWorkspaceTeam(cfg)'s own
+//     coreagent.All() ∩ configured-agents set is eligible.
+//   - Does NOT touch w.Delegation. Expanding or seeding a workspace team must
+//     never create or imply a Delegation[] trust edge (FR-038) — trust stays
+//     workspace-scoped and explicit (ADR-037).
+func ensureBuiltinRosterPresent(home string, w storedWorkspace, cfg *config.Config) error {
+	builtin := defaultWorkspaceTeam(cfg)
+	if len(builtin) == 0 {
+		return nil
+	}
+	existing := make(map[string]bool, len(w.CoreTeam))
+	for _, id := range w.CoreTeam {
+		existing[id] = true
+	}
+	grew := false
+	for _, id := range builtin {
+		if !existing[id] {
+			w.CoreTeam = append(w.CoreTeam, id)
+			existing[id] = true
+			grew = true
+		}
+	}
+	if !grew {
+		return nil
+	}
+	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := writeWorkspaceFile(home, w); err != nil {
+		return fmt.Errorf("ensureBuiltinRosterPresent: write: %w", err)
+	}
+	slog.Info("rest: ensureDefaultWorkspace: back-filled built-in roster into existing default workspace",
+		"workspace_id", w.ID, "team_size", len(w.CoreTeam))
+	return nil
+}
+
+// logWorkspacelessAgents is a boot-time diagnostic (ADR-046 P1, FR-007/008):
+// it enumerates every configured agent (cfg.Agents.List) that is a member of
+// NO workspace's CoreTeam and emits ONE WARN naming all of them, if any
+// exist. Called once at boot, after ensureDefaultWorkspace has run, so an
+// operator upgrading an install with pre-existing custom agents sees the
+// full list up front — rather than discovering it only as per-turn
+// ErrAgentNotWorkspaceMember refusals, one agent at a time, as those agents
+// happen to be invoked.
+//
+// This is diagnostic ONLY: it never mutates any workspace or agent — FR-008
+// forbids auto-adding a pre-existing/custom agent to any team, and that rule
+// applies here too. The operator remedy is manual: add the agent to a
+// workspace's Team tab.
+func logWorkspacelessAgents(home string, cfg *config.Config) {
+	if cfg == nil || len(cfg.Agents.List) == 0 {
+		return
+	}
+	var workspaceless []string
+	for i := range cfg.Agents.List {
+		id := cfg.Agents.List[i].ID
+		if id == "" {
+			continue
+		}
+		if _, found := workspace.FindForAgent(home, id); !found {
+			workspaceless = append(workspaceless, id)
+		}
+	}
+	if len(workspaceless) == 0 {
+		return
+	}
+	sort.Strings(workspaceless)
+	slog.Warn(
+		"gateway: configured agents are members of no workspace — they cannot execute a turn until added to a workspace's Team tab (ADR-046 P1, FR-007/008)",
+		"agent_ids", strings.Join(workspaceless, ","),
+		"count", len(workspaceless),
+	)
 }
 
 // HandleWorkspaces dispatches all /api/v1/workspaces* requests.

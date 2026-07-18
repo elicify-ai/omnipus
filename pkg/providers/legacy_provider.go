@@ -30,8 +30,8 @@ func CreateProvider(cfg *config.Config) (LLMProvider, string, error) {
 	}
 
 	// Inject global workspace if not set in model config
-	if modelCfg.Workspace == "" {
-		modelCfg.Workspace = cfg.WorkspacePath()
+	if modelCfg.Home == "" {
+		modelCfg.Home = cfg.AgentHomeBasePath()
 	}
 
 	// Use factory to create provider

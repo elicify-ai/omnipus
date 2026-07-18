@@ -12,7 +12,7 @@
 // Auth: RequireSessionCookieOrBearer (authentication only — ownership-based
 // authorization was removed with the single-user model; see issue #470).
 //
-// Path guard: validatePathWithAllowPaths via tools.ValidateWorkspacePath.
+// Path guard: tools.ResolvePath (ADR-046 mandatory chokepoint, FR-003/FR-034).
 // Out-of-workspace → 403. Not-found → 404. Method other than GET → 405.
 //
 // Content-Type is derived from the file extension via an allow-list (FR-020a).
@@ -30,15 +30,17 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -236,7 +238,7 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 	// its authorization needs to be reconsidered from scratch at that time.
 
 	// Resolve workspace path for this agent.
-	agentWorkspace, err := agentWorkspacePath(cfg, agentCfg.ID, agentCfg.Workspace, a.homePath)
+	agentWorkspace, err := agentWorkspacePath(cfg, agentCfg.ID, agentCfg.Home, a.homePath)
 	if err != nil {
 		slog.Error("rest: HandleWorkspace: agentWorkspacePath failed",
 			"agent_id", agentID, "error", err)
@@ -249,26 +251,53 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Canonicalise and guard the requested path against the agent's workspace.
-	// restrict=true, no allow-list patterns (workspace only).
-	absPath, err := tools.ValidateWorkspacePath(filePath, agentWorkspace, true, nil)
+	// Canonicalise and guard the requested path against the agent's workspace
+	// via ResolvePath (ADR-046 mandatory chokepoint, FR-003/FR-034) — the
+	// SAME resolver every path-taking tool routes through, replacing the
+	// retired tools.ValidateWorkspacePath/validatePathWithAllowPaths.
+	// restrict=true, no allow-list patterns (workspace only); this handler
+	// has no per-turn Workspace re-root, so turnWorkDir is always "".
+	policy, err := fspolicy.EffectiveFSPolicy(
+		r.Context(), agentWorkspace, "", true, config.OmnipusHomeDir(), agentID, "",
+	)
+	if err != nil {
+		slog.Error("rest: HandleWorkspace: failed to resolve filesystem policy",
+			"agent_id", agentID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not resolve filesystem policy")
+		return
+	}
+	handle, err := tools.ResolvePath(r.Context(), policy, "workspace_read", "", tools.FSOpRead, filePath)
 	if err != nil {
 		slog.Info("rest: HandleWorkspace: path rejected",
 			"agent_id", agentID, "path", filePath, "error", err)
-		if strings.Contains(err.Error(), "outside the workspace") ||
-			strings.Contains(err.Error(), "symlink resolves outside") ||
-			strings.Contains(err.Error(), "another agent's workspace") {
+		// ErrOutsideScope covers both "outside workspace" and "symlink escapes
+		// workspace"; ErrCarveOut covers FR-017's carve-outs (including
+		// another agent's home directory — the case the retired
+		// isCrossAgentPath used to check) — both were 403s under the legacy
+		// validator and stay 403s here.
+		if errors.Is(err, tools.ErrOutsideScope) || errors.Is(err, tools.ErrCarveOut) {
 			jsonErr(w, http.StatusForbidden, fmt.Sprintf("access denied: %v", err))
 		} else {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid path: %v", err))
 		}
 		return
 	}
+	defer handle.Close()
+
+	// absPath is used ONLY for Content-Type detection and log lines below —
+	// PathHandle.RealPath's documented ONE exception to "never hand back a
+	// bare string" (advisory only; all actual I/O below goes through handle).
+	absPath, err := handle.RealPath()
+	if err != nil {
+		slog.Error("rest: HandleWorkspace: failed to resolve real path", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not resolve file path")
+		return
+	}
 
 	// Stat the file to determine streaming strategy.
-	info, err := os.Stat(absPath)
+	info, err := handle.Stat()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			jsonErr(w, http.StatusNotFound, "file not found")
 			return
 		}
@@ -284,7 +313,7 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 	if info.Size() <= workspaceStreamingThreshold {
 		// Buffered path: read into memory before setting any headers so that
 		// read errors can still return a proper HTTP error status.
-		data, readErr := os.ReadFile(absPath)
+		data, readErr := handle.ReadFile()
 		if readErr != nil {
 			slog.Error("rest: HandleWorkspace: ReadFile failed", "path", absPath, "error", readErr)
 			jsonErr(w, http.StatusInternalServerError, "could not read file")
@@ -303,7 +332,7 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 	// Streaming path: open file BEFORE setting any response headers so that an
 	// open failure can still return a proper HTTP error status (not a silent 200
 	// with an empty body). Once WriteHeader is called the status code is frozen.
-	f, openErr := os.Open(absPath)
+	f, openErr := handle.Open()
 	if openErr != nil {
 		slog.Error("rest: HandleWorkspace: Open failed", "path", absPath, "error", openErr)
 		jsonErr(w, http.StatusInternalServerError, "could not open file")

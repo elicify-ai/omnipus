@@ -131,8 +131,8 @@ func TestRunRecap_AllCandidatesFail_CarriesRecentContextForward(t *testing.T) {
 
 	agentCfg := &config.AgentConfig{ID: "cf-agent", Name: "CarryFwd"}
 	ag := NewAgentInstance(agentCfg, &cfg.Agents.Defaults, cfg, prov)
-	ag.Workspace = filepath.Join(home, "agents", "cf-agent")
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo("cf-agent", "CarryFwd")
+	ag.Home = filepath.Join(home, "agents", "cf-agent")
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("cf-agent", "CarryFwd")
 	al.registry.mu.Lock()
 	al.registry.agents[agentCfg.ID] = ag
 	al.registry.mu.Unlock()
@@ -153,7 +153,7 @@ func TestRunRecap_AllCandidatesFail_CarriesRecentContextForward(t *testing.T) {
 
 	al.CloseSession(meta.ID, "explicit")
 
-	lastSessionPath := filepath.Join(ag.Workspace, ".omnipus", "last-session.md")
+	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	deadline := time.Now().Add(5 * time.Second)
 	var content []byte
 	for time.Now().Before(deadline) {

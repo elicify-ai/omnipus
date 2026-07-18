@@ -50,15 +50,15 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "ext-worker",
-					Type:      config.AgentTypeWorker,
-					Workspace: workerWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
+					ID:    "ext-worker",
+					Type:  config.AgentTypeWorker,
+					Home:  workerWorkspace,
+					Model: &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},
@@ -66,6 +66,26 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 			},
 		},
 	}
+	// ADR-046 P1 (FR-007/008): dispatch is always workspace-scoped, so
+	// "ext-worker" needs CoreTeam membership to execute at all. Persist a
+	// DEDICATED workspace listing ONLY "ext-worker" — deliberately NOT the
+	// shared test-harness workspace mustNewAgentLoop would otherwise seed it
+	// into (testHarnessAgentIDs' doc comment) — so this stays a genuine
+	// identity-source regression check: if dispatch ever mistakenly resolved
+	// the PARENT's identity instead of the TARGET's, the parent (a member of
+	// the shared harness workspace only) would NOT be a member of this
+	// workspace and the run would be refused rather than silently
+	// succeeding in the wrong place.
+	workerWsDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(workerWsDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspaces dir: %v", err)
+	}
+	wsJSON := `{"id":"ext-worker-ws","core_team":["ext-worker"]}`
+	if err := os.WriteFile(filepath.Join(workerWsDir, "ext-worker-ws.json"), []byte(wsJSON), 0o644); err != nil {
+		t.Fatalf("write dedicated workspace record: %v", err)
+	}
+	wantWorkDir := filepath.Join(workerWsDir, "ext-worker-ws", "work")
+
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
 
 	// The delegating PARENT is the registry's default "main" agent: it has NO
@@ -120,9 +140,12 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 	if len(opts) != 1 {
 		t.Fatalf("driver Run called %d times, want 1 (dispatch must have gone external-cli)", len(opts))
 	}
-	if opts[0].WorkDir != workerWorkspace {
-		t.Errorf("WorkDir = %q, want the TARGET worker's own workspace %q (not the parent's %q)",
-			opts[0].WorkDir, workerWorkspace, parentWorkspace)
+	// ADR-046 P1: WorkDir is always the resolved workspace's work/ dir,
+	// keyed off the TARGET's identity — never the parent's workspace, and
+	// never the target's raw agent.Home (workerWorkspace) either.
+	if opts[0].WorkDir != wantWorkDir {
+		t.Errorf("WorkDir = %q, want the TARGET worker's own workspace's work/ dir %q (not the parent's %q, not the target's raw Home %q)",
+			opts[0].WorkDir, wantWorkDir, parentWorkspace, workerWorkspace)
 	}
 	if opts[0].Model != "claude-sonnet-4.6" {
 		t.Errorf("Model = %q, want the TARGET worker's own configured model %q",
@@ -150,16 +173,16 @@ func TestSpawnSubTurn_TargetIdentity_PropagatesFullTargetConfig(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "ext-worker-full",
-					Name:      "Worker Full Identity",
-					Type:      config.AgentTypeWorker,
-					Workspace: workerWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
+					ID:    "ext-worker-full",
+					Name:  "Worker Full Identity",
+					Type:  config.AgentTypeWorker,
+					Home:  workerWorkspace,
+					Model: &config.AgentModelConfig{Primary: "claude-sonnet-4.6"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{
 							Kind:         config.ExecutorKindExternalCLI,
@@ -273,7 +296,7 @@ func TestSpawnSubTurn_TargetIdentity_PropagatesFullTargetConfig(t *testing.T) {
 }
 
 // identityCapturingProvider is a minimal providers.LLMProvider stub that
-// records the model string and the calling turn's agent.Workspace/agent.ID
+// records the model string and the calling turn's agent.Home/agent.ID
 // observed at Chat() call time — pulled from ctx via turnStateFromContext,
 // the same way runTurn's own providerCtx carries the turn state (loop.go:
 // providerCtx := context.WithCancel(turnCtx), and turnCtx already has ts
@@ -300,7 +323,7 @@ func (p *identityCapturingProvider) Chat(
 	defer p.mu.Unlock()
 	p.sawModel = model
 	if ts := turnStateFromContext(ctx); ts != nil && ts.agent != nil {
-		p.sawWorkspace = ts.agent.Workspace
+		p.sawWorkspace = ts.agent.Home
 		p.sawAgentID = ts.agent.ID
 	}
 	p.calls++
@@ -341,15 +364,15 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-native-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "native-target",
-					Type:      config.AgentTypeWorker,
-					Workspace: targetWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "target-model-must-not-leak"},
+					ID:    "native-target",
+					Type:  config.AgentTypeWorker,
+					Home:  targetWorkspace,
+					Model: &config.AgentModelConfig{Primary: "target-model-must-not-leak"},
 					// No Subagents.Executor at all — resolves native (the
 					// zero value of ExecutorConfig.Kind).
 				},
@@ -367,7 +390,7 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 	if !ok {
 		t.Fatal("test setup: target agent not registered")
 	}
-	if target.Workspace == parent.Workspace || target.Model == parent.Model {
+	if target.Home == parent.Home || target.Model == parent.Model {
 		t.Fatalf(
 			"test setup invariant broken: target and parent must have distinct Workspace/Model, got target=%+v parent=%+v",
 			target,
@@ -417,11 +440,11 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 	// Workspace comes from the TARGET too — the identity fix's whole point is
 	// that the sub-turn's file/bash cwd and ContextBuilder-resolved context
 	// (SOUL.md, memory, skills) are the delegate's own, not the parent's.
-	if sawWorkspace != target.Workspace {
+	if sawWorkspace != target.Home {
 		t.Errorf(
-			"childTS.agent.Workspace = %q, want the TARGET's workspace %q (native dispatch must adopt the target's full identity)",
+			"childTS.agent.Home = %q, want the TARGET's workspace %q (native dispatch must adopt the target's full identity)",
 			sawWorkspace,
-			target.Workspace,
+			target.Home,
 		)
 	}
 	// ID DOES come from the TARGET too — this is what tools.WithAgentID
@@ -513,15 +536,15 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "parent-allow-policy",
-					Type:      config.AgentTypeCore,
-					Default:   true,
-					Workspace: parentWorkspace,
+					ID:      "parent-allow-policy",
+					Type:    config.AgentTypeCore,
+					Default: true,
+					Home:    parentWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{probeTool: config.ToolPolicyAllow},
@@ -529,9 +552,9 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 					},
 				},
 				{
-					ID:        "native-target-policy",
-					Type:      config.AgentTypeWorker,
-					Workspace: targetWorkspace,
+					ID:   "native-target-policy",
+					Type: config.AgentTypeWorker,
+					Home: targetWorkspace,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{probeTool: config.ToolPolicyDeny},
@@ -618,7 +641,7 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 // call 1 emits a read_file tool call, call 2 returns a plain-text answer. It
 // captures the "tool" role message injected before call 2 — the ACTUAL result
 // the read_file tool produced — so the test can assert on real file content,
-// not just an AgentInstance.Workspace string field.
+// not just an AgentInstance.Home string field.
 type filesystemScopedToolProvider struct {
 	mu             sync.Mutex
 	calls          int
@@ -662,7 +685,7 @@ func (p *filesystemScopedToolProvider) snapshot() (toolContent string, calls int
 
 // TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools proves the
 // fix's file/bash confinement claim actually holds, not just the
-// AgentInstance.Workspace STRING field: workspace-scoped tools
+// AgentInstance.Home STRING field: workspace-scoped tools
 // (read_file/write_file/edit_file/bash/...) bind their root directory ONCE,
 // at NewAgentInstance construction time (tools.NewReadFileTool(workspace,
 // ...)) — CloneExcept is a shallow filter that copies the SAME underlying
@@ -673,7 +696,7 @@ func (p *filesystemScopedToolProvider) snapshot() (toolContent string, calls int
 // swapped. Both the parent's and target's workspace contain a file with the
 // SAME NAME but DIFFERENT CONTENT — the sub-turn's own read_file call must
 // return the TARGET's content, proving the underlying tool object (not just
-// the AgentInstance.Workspace string) is the target's own.
+// the AgentInstance.Home string) is the target's own.
 func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testing.T) {
 	const relPath = "identity.txt"
 	const parentContent = "I am the PARENT's file"
@@ -682,12 +705,38 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
-	parentWorkspace := t.TempDir()
-	targetWorkspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(parentWorkspace, relPath), []byte(parentContent), 0o600); err != nil {
+	// ADR-046 P1 (FR-007/008): execution is always workspace-scoped now — a
+	// native agent's file tools resolve to ITS OWN workspace's work/ dir
+	// (loop.go's runTurn re-root, keyed on agent identity), not a raw
+	// AgentConfig.Home path directly. To keep proving the ADR-032
+	// distinctness property this test exists for (native dispatch must use
+	// the TARGET's own tool objects, never the PARENT's), give the parent and
+	// the target their OWN DEDICATED workspaces — never the same one — and
+	// write each one's file into ITS OWN workspace's work/ dir. Pre-creating
+	// these before mustNewAgentLoop also means the test harness's own
+	// membership seeding (test_helpers_test.go) sees both IDs already
+	// covered and leaves them alone (see testHarnessAgentIDs' doc comment).
+	workspacesDir := filepath.Join(home, "workspaces")
+	parentWorkDir := filepath.Join(workspacesDir, "parent-ws", "work")
+	targetWorkDir := filepath.Join(workspacesDir, "target-ws", "work")
+	if err := os.MkdirAll(parentWorkDir, 0o755); err != nil {
+		t.Fatalf("mkdir parent work dir: %v", err)
+	}
+	if err := os.MkdirAll(targetWorkDir, 0o755); err != nil {
+		t.Fatalf("mkdir target work dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacesDir, "parent-ws.json"),
+		[]byte(`{"id":"parent-ws","core_team":["parent-fs-scope"]}`), 0o644); err != nil {
+		t.Fatalf("write parent-ws.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacesDir, "target-ws.json"),
+		[]byte(`{"id":"target-ws","core_team":["native-target-fs-scope"]}`), 0o644); err != nil {
+		t.Fatalf("write target-ws.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parentWorkDir, relPath), []byte(parentContent), 0o600); err != nil {
 		t.Fatalf("write parent file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(targetWorkspace, relPath), []byte(targetContent), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(targetWorkDir, relPath), []byte(targetContent), 0o600); err != nil {
 		t.Fatalf("write target file: %v", err)
 	}
 
@@ -695,16 +744,15 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:            "mock",
-				Workspace:           parentWorkspace,
+				Home:                filepath.Join(home, "agents", "parent-fs-scope"),
 				ModelName:           "parent-model",
-				RestrictToWorkspace: true, // required for read_file to actually root relative paths at Workspace, not the raw host fs (buildFs: !restrict -> hostFs{})
+				RestrictToWorkspace: true, // required for read_file to actually root relative paths at the re-rooted workspace dir, not the raw host fs (buildFs: !restrict -> hostFs{})
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "parent-fs-scope",
-					Type:      config.AgentTypeCore,
-					Default:   true,
-					Workspace: parentWorkspace,
+					ID:      "parent-fs-scope",
+					Type:    config.AgentTypeCore,
+					Default: true,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{"read_file": config.ToolPolicyAllow},
@@ -712,9 +760,8 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 					},
 				},
 				{
-					ID:        "native-target-fs-scope",
-					Type:      config.AgentTypeWorker,
-					Workspace: targetWorkspace,
+					ID:   "native-target-fs-scope",
+					Type: config.AgentTypeWorker,
 					Tools: &config.AgentToolsCfg{
 						Builtin: config.AgentBuiltinToolsCfg{
 							Policies: map[string]config.ToolPolicy{"read_file": config.ToolPolicyAllow},
@@ -853,7 +900,7 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         parentWorkspace,
+				Home:              parentWorkspace,
 				Provider:          "openrouter",
 				ModelName:         "openrouter-default",
 				MaxTokens:         4096,
@@ -961,15 +1008,15 @@ func TestSpawnSubTurn_TargetIdentity_ConcurrentModelSwitchRace(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Provider:  "mock",
-				Workspace: parentWorkspace,
+				Home:      parentWorkspace,
 				ModelName: "parent-default-model",
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "ext-worker-race",
-					Type:      config.AgentTypeWorker,
-					Workspace: workerWorkspace,
-					Model:     &config.AgentModelConfig{Primary: "model-a"},
+					ID:    "ext-worker-race",
+					Type:  config.AgentTypeWorker,
+					Home:  workerWorkspace,
+					Model: &config.AgentModelConfig{Primary: "model-a"},
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},

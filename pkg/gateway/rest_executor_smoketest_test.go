@@ -887,23 +887,26 @@ func newTestRestAPIWithWorkspaceAgent(t *testing.T) (api *restAPI, agentID, work
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        agentID,
-					Name:      "Smoke Test Agent",
-					Type:      config.AgentTypeCustom,
-					Workspace: workspace,
+					ID:   agentID,
+					Name: "Smoke Test Agent",
+					Type: config.AgentTypeCustom,
+					Home: workspace,
 				},
 			},
 		},
 	}
 
 	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	// No workspace-membership auto-seed: these executor smoke tests set up their
+	// OWN membership (none, or a specific workspace) and assert on the resolved
+	// work dir; the shared harness default would pollute that resolution.
+	al := mustAgentLoopNoWorkspaceSeed(t, cfg, msgBus, &restMockProvider{})
 	api = &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
@@ -914,7 +917,7 @@ func newTestRestAPIWithWorkspaceAgent(t *testing.T) (api *restAPI, agentID, work
 // TestPostAgentsExecutorSmokeTest_AgentIDResolvesToRealWorkspace is the
 // primary regression test for the architectural fix: a smoke-test request
 // naming a real, saved agent_id must run in THAT agent's own persistent
-// workspace directory — the exact path agent.ResolveAgentWorkspace (and a
+// workspace directory — the exact path agent.ResolveAgentHome (and a
 // real subagent_3p delegation via external_dispatch.go) would use — not the
 // disposable ephemeral scratch directory, and that directory must survive
 // the request (never removed), regardless of success/failure.

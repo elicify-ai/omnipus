@@ -126,7 +126,7 @@ func newTestWSHandlerForKickoffAudit(t *testing.T, msgBus *bus.MessageBus) (*WSH
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: workspaceDir,
+				Home:      workspaceDir,
 				ModelName: "test-default-model",
 				MaxTokens: 4096,
 			},
@@ -494,7 +494,7 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_NoStore_Rejects(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: workspaceDir,
+				Home:      workspaceDir,
 				ModelName: "test-default-model",
 				MaxTokens: 4096,
 			},

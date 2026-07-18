@@ -95,7 +95,7 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -291,7 +291,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         modelName,
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -573,7 +573,7 @@ func TestRunAgentLoop_ErrorEntry_HasStatusErrorField(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -666,21 +666,21 @@ func TestResolveModelCfg_CloneMutationIndependence(t *testing.T) {
 	// Capture the resolved values, then mutate the returned config and the
 	// resolved clone — assert the original cfg.Providers[0] is unchanged.
 	originalModel := cfg.Providers[0].Model
-	originalWorkspace := cfg.Providers[0].Workspace
+	originalWorkspace := cfg.Providers[0].Home
 
 	// Mutate the resolved clone's fields.
 	mc.Model = "mutated/model"
-	mc.Workspace = "mutated-workspace"
+	mc.Home = "mutated-workspace"
 
 	// Original must not have changed.
 	require.Equal(t, originalModel, cfg.Providers[0].Model,
 		"ResolveModelCfg must return a CLONE — mutating the returned ModelConfig must "+
 			"not mutate the underlying cfg.Providers[i]. Model: pre=%q post=%q",
 		originalModel, cfg.Providers[0].Model)
-	require.Equal(t, originalWorkspace, cfg.Providers[0].Workspace,
+	require.Equal(t, originalWorkspace, cfg.Providers[0].Home,
 		"Workspace on the resolved clone must not leak back into cfg.Providers[i] when "+
 			"the caller mutates it; pre=%q post=%q",
-		originalWorkspace, cfg.Providers[0].Workspace)
+		originalWorkspace, cfg.Providers[0].Home)
 }
 
 // =============================================================================
@@ -702,7 +702,7 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				Provider:          "openai",
 				ModelName:         "local",
 				MaxTokens:         4096,
@@ -768,7 +768,7 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "scripted-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

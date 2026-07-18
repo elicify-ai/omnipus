@@ -520,8 +520,8 @@ func TestRealGW_CliTokenAuditedAsUser(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify the audit file is created (sandbox.audit_log=true reached the agent loop).
-	// Agent loop path: homePath = filepath.Dir(cfg.WorkspacePath())
-	// cfg.Agents.Defaults.Workspace = homeDir, so WorkspacePath() = homeDir
+	// Agent loop path: homePath = filepath.Dir(cfg.AgentHomeBasePath())
+	// cfg.Agents.Defaults.Home = homeDir, so AgentHomeBasePath() = homeDir
 	// Therefore: homePath = filepath.Dir(homeDir) = parent of homeDir
 	// Audit dir: homePath/system/ = parent(homeDir)/system/
 	auditDir := filepath.Join(filepath.Dir(gw.HomeDir()), "system")

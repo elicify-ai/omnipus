@@ -103,7 +103,7 @@ func startPerfGateway(tb testing.TB, _ *testutil.ScenarioProvider) *perfGateway 
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: homeDir,
+				Home:      homeDir,
 				ModelName: "openrouter-glm",
 				MaxTokens: 4096,
 			},

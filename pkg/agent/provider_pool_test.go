@@ -26,7 +26,7 @@ func newPoolTestConfig(t *testing.T) *config.Config {
 	return &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         t.TempDir(),
+				Home:              t.TempDir(),
 				Provider:          "openrouter",
 				ModelName:         "openrouter-default",
 				MaxTokens:         4096,

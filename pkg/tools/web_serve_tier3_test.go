@@ -88,7 +88,7 @@ func TestTier3CommandAllowList_DenyEmitsAuditEntry(t *testing.T) {
 
 	workspace := t.TempDir()
 	tool := &WebServeTool{
-		workspace:   workspace,
+		agentHome:   workspace,
 		agentID:     "audit-deny-test-agent",
 		auditLogger: logger,
 		devCfg: WebServeDevConfig{

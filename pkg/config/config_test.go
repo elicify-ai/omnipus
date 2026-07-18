@@ -231,7 +231,7 @@ func TestConfig_BackwardCompat_NoAgentsList(t *testing.T) {
 func TestDefaultConfig_WorkspacePath(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Agents.Defaults.Workspace == "" {
+	if cfg.Agents.Defaults.Home == "" {
 		t.Error("Workspace should not be empty")
 	}
 }
@@ -474,7 +474,7 @@ func TestSaveConfig_FiltersVirtualModels(t *testing.T) {
 func TestConfig_Complete(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Agents.Defaults.Workspace == "" {
+	if cfg.Agents.Defaults.Home == "" {
 		t.Error("Workspace should not be empty")
 	}
 	if cfg.Agents.Defaults.Temperature != nil {
@@ -832,8 +832,8 @@ func TestDefaultConfig_WorkspacePath_Default(t *testing.T) {
 	cfg := DefaultConfig()
 	want := filepath.Join(fakeHome, ".omnipus", "workspace")
 
-	if cfg.Agents.Defaults.Workspace != want {
-		t.Errorf("Default workspace path = %q, want %q", cfg.Agents.Defaults.Workspace, want)
+	if cfg.Agents.Defaults.Home != want {
+		t.Errorf("Default workspace path = %q, want %q", cfg.Agents.Defaults.Home, want)
 	}
 }
 
@@ -843,8 +843,8 @@ func TestDefaultConfig_WorkspacePath_WithOmnipusHome(t *testing.T) {
 	cfg := DefaultConfig()
 	want := filepath.Join("/custom/omnipus/home", "workspace")
 
-	if cfg.Agents.Defaults.Workspace != want {
-		t.Errorf("Workspace path with OMNIPUS_HOME = %q, want %q", cfg.Agents.Defaults.Workspace, want)
+	if cfg.Agents.Defaults.Home != want {
+		t.Errorf("Workspace path with OMNIPUS_HOME = %q, want %q", cfg.Agents.Defaults.Home, want)
 	}
 }
 
@@ -1737,4 +1737,124 @@ func TestConfig_IsPreviewEnabled_NilPointerExplicit(t *testing.T) {
 	if got := (&Config{}).IsPreviewEnabled(); got != true {
 		t.Errorf("(&Config{}).IsPreviewEnabled() = %v, want true (field-level default)", got)
 	}
+}
+
+// writeMinimalLoadableConfig writes a config.json that LoadConfig can load
+// without error (valid version/agents-defaults/gateway block), with
+// gateway.public_url set to publicURL (empty string omits the key entirely,
+// matching an operator who never configured it).
+func writeMinimalLoadableConfig(t *testing.T, publicURL string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	publicURLLine := ""
+	if publicURL != "" {
+		publicURLLine = `,
+			"public_url": "` + publicURL + `"`
+	}
+
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096}
+		},
+		"gateway": {
+			"host": "127.0.0.1",
+			"port": 5000` + publicURLLine + `
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return cfgPath
+}
+
+// TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL covers the W0
+// boot-time auto-detection: LoadConfig fills an unset gateway.public_url
+// from $DEVPOD_PREVIEW_URL so canonicalGatewayOrigin (and therefore
+// serve_web/preview links and the agent's own reachable-URL preamble, W5)
+// resolve to the pod's externally-reachable origin instead of the
+// unreachable http://localhost:5000 default. An operator-set value must
+// never be overridden, and when neither source is present the field must
+// stay empty (existing wildcard-bind/derive-from-host:port behavior is
+// untouched).
+func TestLoadConfig_PublicURL_AutoDetectFromDevpodPreviewURL(t *testing.T) {
+	t.Run("empty public_url + DEVPOD_PREVIEW_URL set resolves to env value", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want auto-detected %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
+
+	t.Run("operator-set public_url wins over DEVPOD_PREVIEW_URL", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		cfgPath := writeMinimalLoadableConfig(t, "https://operator.example.com")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://operator.example.com" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want operator value %q (must never be overridden by env auto-detect)",
+				cfg.Gateway.PublicURL, "https://operator.example.com")
+		}
+	})
+
+	t.Run("both empty stays empty", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want empty (no operator value, no env value)",
+				cfg.Gateway.PublicURL)
+		}
+	})
+
+	// Regression (silent-failure audit): a bare pod's FIRST boot has no
+	// config.json at all, so LoadConfig takes the os.IsNotExist ->
+	// DefaultConfig() early-return path. The auto-detect previously ran only
+	// AFTER that early return, so a fresh pod got public_url="" — defeating the
+	// feature's own primary use case. seedPublicURLFromEnv now runs on every
+	// return path, including this one.
+	t.Run("fresh install (no config.json) still auto-detects — the primary use case", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev")
+		missingPath := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+		cfg, err := LoadConfig(missingPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("fresh-install cfg.Gateway.PublicURL = %q, want auto-detected %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
+
+	// A trailing slash would make serve_web emit https://host//preview/... —
+	// seedPublicURLFromEnv trims it.
+	t.Run("trailing slash on DEVPOD_PREVIEW_URL is trimmed", func(t *testing.T) {
+		t.Setenv("DEVPOD_PREVIEW_URL", "https://pod-omnipus.fly.dev/")
+		cfgPath := writeMinimalLoadableConfig(t, "")
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.Gateway.PublicURL != "https://pod-omnipus.fly.dev" {
+			t.Errorf("cfg.Gateway.PublicURL = %q, want trailing slash trimmed %q",
+				cfg.Gateway.PublicURL, "https://pod-omnipus.fly.dev")
+		}
+	})
 }

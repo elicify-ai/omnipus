@@ -43,7 +43,7 @@ func TestResolveSlash_Matrix(t *testing.T) {
 
 	// Install skills: web-research, web, summarize.
 	for _, name := range []string{"web-research", "web", "summarize"} {
-		writeSkillFile(t, cfg.Agents.Defaults.Workspace, name)
+		writeSkillFile(t, cfg.Agents.Defaults.Home, name)
 	}
 
 	agent := al.GetRegistry().GetDefaultAgent()
@@ -146,7 +146,7 @@ func TestResolveSlash_SkillCannotShadowBuiltin(t *testing.T) {
 	defer cleanup()
 
 	// Install a skill whose slug is "clear" — same as the /clear built-in.
-	writeSkillFile(t, cfg.Agents.Defaults.Workspace, "clear")
+	writeSkillFile(t, cfg.Agents.Defaults.Home, "clear")
 
 	agent := al.GetRegistry().GetDefaultAgent()
 	if agent == nil {
@@ -175,7 +175,7 @@ func TestResolveSlash_Matrix_A2(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 
-	writeSkillFile(t, cfg.Agents.Defaults.Workspace, "web-research")
+	writeSkillFile(t, cfg.Agents.Defaults.Home, "web-research")
 
 	agent := al.GetRegistry().GetDefaultAgent()
 	if agent == nil {
@@ -224,7 +224,7 @@ func TestResolveSlash_A12_NoSkillsInstalled(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -387,7 +387,7 @@ func TestResolveSlash_HiddenBuiltinWins(t *testing.T) {
 	defer cleanup()
 
 	// Install a skill whose slug is "list" — same as the hidden back-compat built-in.
-	writeSkillFile(t, cfg.Agents.Defaults.Workspace, "list")
+	writeSkillFile(t, cfg.Agents.Defaults.Home, "list")
 
 	agent := al.GetRegistry().GetDefaultAgent()
 	if agent == nil {

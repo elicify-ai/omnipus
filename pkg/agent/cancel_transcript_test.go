@@ -63,7 +63,7 @@ func TestCancel_TranscriptTurnCancelledEntry(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspaceDir,
+				Home:              workspaceDir,
 				ModelName:         "transcript-cancel-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

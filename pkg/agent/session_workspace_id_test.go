@@ -43,7 +43,7 @@ func TestSessionCreation_InheritsWorkspaceID(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", tmpRoot)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.Home = workspace
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
@@ -118,7 +118,7 @@ func TestSessionCreation_UnboundInstance_NoWorkspaceID(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", tmpRoot)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.Home = workspace
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
@@ -167,7 +167,7 @@ func TestSessionCreation_TwoInstancesDifferentWorkspaces(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", tmpRoot)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.Home = workspace
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -59,7 +60,7 @@ func NewAgentRegistry(
 	defaultInstance.SetAgentType("core")
 	registry.agents[DefaultAgentID] = defaultInstance
 	logger.InfoCF("agent", "Registered default agent (main)", map[string]any{
-		"workspace": defaultInstance.Workspace,
+		"workspace": defaultInstance.Home,
 		"model":     defaultInstance.Model,
 	})
 
@@ -89,7 +90,7 @@ func NewAgentRegistry(
 			map[string]any{
 				"agent_id":  id,
 				"name":      ac.Name,
-				"workspace": instance.Workspace,
+				"workspace": instance.Home,
 				"model":     instance.Model,
 			})
 	}
@@ -165,6 +166,48 @@ func (r *AgentRegistry) IsWorker(agentID string) bool {
 		return false
 	}
 	return agent.IsWorker()
+}
+
+// IsExternalCLI reports whether agentID resolves to a subagent_3p (external
+// CLI runner: claude-code/codex/opencode) delegation target — i.e.
+// runner.ResolveDispatch classifies the agent's own Subagents.Executor
+// config as runner.DispatchKindExternalCLI, the same resolution
+// pkg/agent/subturn.go's spawnSubTurn performs before choosing between the
+// native and runExternalCLISubTurn dispatch paths (see executorConfigOf).
+// Returns false for an unknown/empty agentID or a nil executor; a
+// ResolveDispatch error is also reported false.
+//
+// NOTE: this does NOT mirror spawnSubTurn — an unresolved target actually
+// dispatches with the parent's own executor (spawnSubTurn falls back to
+// baseAgent, subturn.go ~L537-565), and a ResolveDispatch error there FAILS
+// the delegation outright (subturn.go ~L1173-1179) rather than defaulting to
+// native. So a parent configured as external-CLI delegating to an
+// unknown/empty target is misclassified native here. Accepted for W2's scope
+// (Is3P only gates whether to attempt a native transcript snapshot; the
+// mislabeled task fails fast and degrades gracefully).
+//
+// Satisfies the tools.DelegateAgentRegistry interface used by DelegateTool
+// (W2: action:"status" live-progress scoping — a running subagent_3p task
+// never gets an in-flight transcript snapshot, since external-CLI dispatch
+// is batch/report-on-completion by design) without an import cycle.
+func (r *AgentRegistry) IsExternalCLI(agentID string) bool {
+	if agentID == "" {
+		return false
+	}
+	agent, ok := r.GetAgent(agentID)
+	if !ok || agent == nil {
+		return false
+	}
+	kind, err := runner.ResolveDispatch(executorConfigOf(agent))
+	if err != nil {
+		// Don't swallow silently: a resolution error (e.g. reserved remote-a2a
+		// or an unknown kind) is classified native here, but log it so the
+		// classifier leaves a diagnostic trail rather than a silent catch.
+		logger.WarnF("registry: could not resolve dispatch kind for IsExternalCLI, defaulting to native",
+			map[string]any{"agent_id": agentID, "error": err.Error()})
+		return false
+	}
+	return kind == runner.DispatchKindExternalCLI
 }
 
 // Close releases resources held by all registered agents and clears the map (M9).

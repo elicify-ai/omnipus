@@ -121,8 +121,14 @@ type WebServeDevConfig struct {
 // agent; both registries are shared process-wide (different lifecycles).
 type WebServeTool struct {
 	BaseTool
-	// workspace is the agent's absolute workspace directory.
-	workspace string
+	// agentHome is the agent's fixed home directory (the pre-ADR-046-rename
+	// "workspace" constructor parameter) — fspolicy.EffectiveFSPolicy's
+	// agentHome argument. When the turn carries a TurnWorkspaceDir (the
+	// agent is a member of that turn's Workspace), EffectiveFSPolicy prefers
+	// that re-rooted directory instead. web_serve was always restrict=true
+	// (confined), so callers always pass fspolicy.FSScopeConfined via the
+	// literal `true` restrict argument below — there is no separate field.
+	agentHome string
 	// agentID is the agent this tool instance belongs to.
 	agentID string
 	// getConfig returns the LIVE *config.Config snapshot at call time
@@ -157,7 +163,7 @@ type WebServeTool struct {
 
 // NewWebServeTool constructs the unified web_serve tool for a given agent.
 //
-//   - workspace: absolute path to the agent's workspace root.
+//   - agentHome: absolute path to the agent's home directory.
 //   - agentID: the agent's ID (embedded in the URL).
 //   - getConfig: live *config.Config accessor. Used to build the
 //     /preview/<agent>/<token>/ URL from the canonical gateway origin and to
@@ -171,7 +177,7 @@ type WebServeTool struct {
 //   - auditLogger: audit logger (may be nil in tests).
 //   - minDurSec / maxDurSec: static registration lifetime bounds (seconds).
 func NewWebServeTool(
-	workspace string,
+	agentHome string,
 	agentID string,
 	getConfig func() *config.Config,
 	served ServedSubdirsRegistry,
@@ -194,7 +200,7 @@ func NewWebServeTool(
 		devCfg.MaxConcurrent = 2
 	}
 	return &WebServeTool{
-		workspace:   workspace,
+		agentHome:   agentHome,
 		agentID:     agentID,
 		getConfig:   getConfig,
 		served:      served,
@@ -332,10 +338,40 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 		return previewOriginUnresolvedResult()
 	}
 
-	// Resolve and validate the path within the workspace.
-	absDir, err := ValidateWorkspacePath(rawPath, t.workspace, true, nil)
+	// Resolve and validate the path within the workspace via ResolvePath
+	// (ADR-046 mandatory chokepoint, FR-003/FR-034). serve_web was always
+	// restrict=true (confined), so the literal `true` below maps to
+	// fspolicy.FSScopeConfined regardless of the agent's own
+	// RestrictToWorkspace setting — matching the pre-migration
+	// ValidateWorkspacePath(rawPath, t.workspace, true, nil) call this
+	// replaces.
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, true)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("path rejected: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
+	}
+	handle, err := ResolvePath(ctx, policy, ToolNameWebServe, "", FSOpServe, rawPath)
+	if err != nil {
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+
+	// RealPath is the ONE documented exception to "never hand back a bare
+	// string" (PathHandle.RealPath's doc comment): ServedSubdirsRegistry.
+	// Register and the static file server it backs are OS-boundary call
+	// sites (http.Dir-style directory registration) with no PathHandle
+	// parameter of their own.
+	//
+	// NOTE (deferred, P2/FR-031): the bytes actually served out of absDir on
+	// every subsequent HTTP GET to /preview/<agent>/<token>/... happen in the
+	// gateway's static file server, which re-opens paths under absDir by
+	// plain os I/O, NOT through this PathHandle. That is a SEPARATE,
+	// pre-existing TOCTOU surface from the one FR-009 closes here (this fix
+	// only confines WHERE the registration itself resolves, i.e. that "."
+	// lands in the turn's work/ dir instead of a stale/wrong root) — closing
+	// the byte-serving path is out of scope for this wave.
+	absDir, err := handle.RealPath()
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve served directory: %v", err))
 	}
 
 	// Parse optional duration; clamp to [min, max].
@@ -527,10 +563,23 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		return ErrorResult(fmt.Sprintf("web_serve: command not permitted: %v", err))
 	}
 
-	// Resolve the workspace subdirectory.
-	absDir, err := ValidateWorkspacePath(rawPath, t.workspace, true, nil)
+	// Resolve the workspace subdirectory via ResolvePath (ADR-046 mandatory
+	// chokepoint, FR-003/FR-034). See executeStatic's identical migration
+	// comment for the restrict=true rationale and the P2/FR-031 deferred
+	// TOCTOU note on the dev-server child's OWN subsequent file access under
+	// absDir (governed by sandbox.Limits.WorkspaceDir, not this handle).
+	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, true)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("path rejected: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
+	}
+	handle, err := ResolvePath(ctx, policy, ToolNameWebServe, "", FSOpServe, rawPath)
+	if err != nil {
+		return PermissionDeniedResult(t.Name(), err, err.Error())
+	}
+	defer handle.Close()
+	absDir, err := handle.RealPath()
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to resolve served directory: %v", err))
 	}
 
 	// Resolve the port: an explicit port (validated against the range) or 0 to
@@ -775,7 +824,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 		Command:  command,
 		Details: map[string]any{
 			"reason":    reason,
-			"workspace": t.workspace,
+			"workspace": t.agentHome,
 		},
 	})
 	if logErr == nil {
@@ -838,7 +887,7 @@ func (t *WebServeTool) auditDevStart(ctx context.Context, agentID, command strin
 		Details: map[string]any{
 			"expose_port":      port,
 			"egress_allowlist": t.devCfg.EgressAllowList,
-			"workspace":        t.workspace,
+			"workspace":        t.agentHome,
 		},
 	})
 	if logErr == nil {

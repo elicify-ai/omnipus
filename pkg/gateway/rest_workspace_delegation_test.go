@@ -54,7 +54,7 @@ func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 			List: []config.AgentConfig{
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
 				{ID: "ava", Name: "Ava", Type: config.AgentTypeCore},
@@ -563,6 +563,40 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 		assert.NotEqual(t, "explorer", e.FromAgent, "explorer must not have a seeded outgoing edge")
 		assert.NotEqual(t, "researcher", e.FromAgent, "researcher must not have a seeded outgoing edge")
 	}
+}
+
+// TestDefaultWorkspaceTeam_ExcludesCustomAgents pins ADR-046 P1 (FR-007/008,
+// US-3 AS-1): defaultWorkspaceTeam must return ONLY built-in-roster IDs
+// (coreagent.All() intersected with configured agents) even when
+// cfg.Agents.List additionally carries custom/user-created agents. This
+// guards against a future edit silently widening the default-team seed to
+// auto-add custom agents — "the default workspace's seeded team MUST be the
+// built-in roster only" (FR-008) must hold regardless of what else is
+// configured.
+func TestDefaultWorkspaceTeam_ExcludesCustomAgents(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "mia", Type: config.AgentTypeCore},
+				{ID: "jim", Type: config.AgentTypeCore},
+				{ID: "ava", Type: config.AgentTypeCore},
+				{ID: "ray", Type: config.AgentTypeCore},
+				{ID: "worker", Type: config.AgentTypeWorker},
+				{ID: "planner", Type: config.AgentTypeWorker},
+				{ID: "explorer", Type: config.AgentTypeWorker},
+				{ID: "researcher", Type: config.AgentTypeWorker},
+				// Custom/user-created agents — must NEVER appear in the default team.
+				{ID: "my-custom-bot", Type: config.AgentTypeCustom},
+				{ID: "another-custom-agent", Type: config.AgentTypeCustom},
+			},
+		},
+	}
+	team := defaultWorkspaceTeam(cfg)
+	assert.ElementsMatch(t,
+		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher"},
+		team, "defaultWorkspaceTeam must return ONLY the built-in roster, never a custom agent")
+	assert.NotContains(t, team, "my-custom-bot")
+	assert.NotContains(t, team, "another-custom-agent")
 }
 
 // TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges (T3,
