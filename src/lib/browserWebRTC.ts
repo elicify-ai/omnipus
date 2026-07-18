@@ -57,8 +57,7 @@ import type { BrowserWebRTCStateFrame } from '@/lib/api/generated/asyncapi-types
  * render WebRTC video and let the JPEG sink carry on. */
 export type BrowserWebRTCState = 'idle' | 'offering' | 'connected' | 'fallback'
 
-// not-wire-format: local constructor options for the client-side PC state machine (timer durations + injected RTCPeerConnection factory for tests); never serialized, never crosses the gateway/SPA wire.
-export interface BrowserWebRTCSessionOptions {
+export interface BrowserWebRTCSessionOptions { // not-wire-format: local constructor options for the client-side PC state machine (timer durations + injected RTCPeerConnection factory for tests); never serialized, never crosses the gateway/SPA boundary
   /**
    * Factory for the underlying `RTCPeerConnection` — injected so tests can
    * supply a fake without a real WebRTC implementation. Defaults to a real
