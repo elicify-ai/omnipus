@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/chromedp/chromedp"
+
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
@@ -82,11 +84,11 @@ func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
 	mgrB := newTestManager(t, cfg)
 	mgrB.AttachSharedChrome(coord, "agent-b")
 
-	urlA, ctxA, err := coord.Register(context.Background(), "agent-a", mgrA)
+	rootA, ctxA, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register A: %v", err)
 	}
-	urlB, ctxB, err := coord.Register(context.Background(), "agent-b", mgrB)
+	rootB, ctxB, err := coord.Register(context.Background(), "agent-b", mgrB)
 	if err != nil {
 		t.Fatalf("Register B: %v", err)
 	}
@@ -94,8 +96,19 @@ func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
 	if pid == 0 {
 		t.Fatal("expected a live Chrome pid after Register")
 	}
-	if urlA != urlB {
-		t.Fatalf("both agents should dial the SAME shared Chrome URL; got A=%q B=%q", urlA, urlB)
+	// CRIT-001: there is no per-agent URL anymore — both agents drive chromedp
+	// CHILD contexts of the SAME shared rootCtx (one CDP pipe, multiplexed).
+	// Assert that identity directly via the underlying *chromedp.Browser
+	// pointer (rootA/rootB themselves are distinct context.Context values —
+	// each Register call wraps a fresh child — but both must resolve to the
+	// one shared Browser).
+	brA := chromedp.FromContext(rootA)
+	brB := chromedp.FromContext(rootB)
+	if brA == nil || brB == nil || brA.Browser == nil || brB.Browser == nil {
+		t.Fatal("expected both Register calls to return a context bound to a live *chromedp.Browser")
+	}
+	if brA.Browser != brB.Browser {
+		t.Fatal("both agents should share the SAME underlying Chrome (*chromedp.Browser)")
 	}
 	if ctxA == "" || ctxB == "" || ctxA == ctxB {
 		t.Fatalf("expected two distinct non-empty browser context ids; got A=%q B=%q", ctxA, ctxB)

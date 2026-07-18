@@ -44,7 +44,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
-	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
 // ExitSandboxConfig is the Sprint-J-specific exit code for Apply/Install
@@ -380,12 +379,12 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 				bindPorts = append(bindPorts, uint16(p))
 			}
 		}
-		// Symmetric with the ConnectPortRules append below: the managed
-		// Chromium needs to bind the DevTools HTTP server on browser.DebugPort
-		// before the gateway can dial it. Without this allow-rule, Chrome
-		// hits `bind() failed: Permission denied` from Landlock and aborts
-		// every browser.* tool call under sandbox=enforce on ABI ≥ 4.
-		bindPorts = append(bindPorts, uint16(browser.DebugPort))
+		// NOTE (WebRTC build W1-A / CRIT-001): the managed Chromium used to
+		// need a bind-port allow-rule here for its fixed DevTools TCP port
+		// (browser.DebugPort, 9223) — removed along with that port. CDP now
+		// flows over Chromium's --remote-debugging-pipe (inherited fd 3/4;
+		// pkg/tools/browser/cdppipe), which needs no bind() at all, so there
+		// is nothing to allow-list for it anymore.
 	}
 	policy := sandbox.DefaultPolicy(opts.HomePath, allowedPaths, warnFn, bindPorts)
 
@@ -407,16 +406,14 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 			}
 			policy.ConnectPortRules = append(policy.ConnectPortRules, extra...)
 		}
-		// v0.1 fix for "browser.navigate: dial tcp 127.0.0.1:<random>:
-		// connect: permission denied". The managed Chromium binds its
-		// DevTools WebSocket to browser.DebugPort (a fixed loopback port);
-		// without allow-listing it here, the gateway's chromedp client
-		// can't dial Chrome and every browser.* tool call fails with
-		// EACCES. Always added — the cost is one extra port on a loopback-
-		// only allow-list, and gating it on "browser tool enabled" would
-		// add config plumbing without a real security benefit (the SSRF
-		// checker still validates every navigation URL at the app layer).
-		policy.ConnectPortRules = append(policy.ConnectPortRules, sandbox.NetPortRule{Port: uint16(browser.DebugPort)})
+		// NOTE (WebRTC build W1-A / CRIT-001): this used to also allow-list
+		// browser.DebugPort (9223) here — the v0.1 fix for "browser.navigate:
+		// dial tcp 127.0.0.1:9223: connect: permission denied", since the
+		// managed Chromium's DevTools WebSocket bound a fixed loopback TCP
+		// port the gateway's chromedp client had to dial. That port is gone:
+		// CDP now flows over Chromium's --remote-debugging-pipe (inherited fd
+		// 3/4; pkg/tools/browser/cdppipe) entirely within this OS process, so
+		// there is no loopback connect(2) to allow-list for it anymore.
 	}
 	result.Policy = policy
 

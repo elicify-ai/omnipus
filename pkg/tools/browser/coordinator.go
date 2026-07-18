@@ -5,13 +5,52 @@ package browser
 // context. Per-agent BrowserManagers connect to it via a remote allocator and
 // re-adopt a coordinator-owned browser context non-owningly.
 //
+// CRIT-001 (live-browser-video-streaming / ADR-044 §6.0.3, ported into this
+// branch by the WebRTC build's W1-A task): CDP now flows over Chromium's
+// --remote-debugging-pipe (inherited fd 3/4, NUL-delimited JSON) via
+// pkg/tools/browser/cdppipe — there is NO TCP debug port, NO /json HTTP
+// surface, and NO ws:// URL, so a co-tenant process cannot reach CDP on any
+// kernel. Consequences carried here:
+//   - The single-launch guarantee moved from the net.Listen(":9223") bind to
+//     an O_EXCL/flock lockfile (coordinator_lock_{unix,other}.go); the
+//     ownership marker stays the identity layer (pid + product).
+//   - In-process CDP sharing is chromedp CHILD contexts of rootCtx (one pipe,
+//     multiplexed), NOT RemoteAllocator(ws://9223) — the pipe is PRIVATE to
+//     the launcher (this OS process), so any cross-OS-process CDP consumer
+//     (e.g. an external CLI) MUST route through the gateway API instead of
+//     dialing the browser directly. Register returns the shared rootCtx
+//     itself (not a URL); manager.go's ensureStarted builds its allocCtx
+//     directly from it — see bootstrapBrowserCtx's doc comment for why a
+//     context whose Browser is already populated safely produces
+//     c.first==false child contexts without needing chromedp's
+//     RemoteAllocator special-case.
+//
+// PARTIALLY changed from the pre-pipe design (WebRTC build W1-A): Register
+// still keeps this branch's per-agent ISOLATION MODEL — one dedicated,
+// coordinator-owned browser context per agent, not the archive's shared
+// "encoder tab in the DEFAULT browser context" scheme — but the CDP call
+// that creates each context switched from chromedp.WithNewBrowserContext()
+// to a raw CDP CreateBrowserContext + CreateTarget(WithNewWindow(true))
+// pair. Verified against real Chrome (149 over this branch's pipe launch;
+// the archive independently records the same finding on 151):
+// WithNewBrowserContext()'s internal CreateTarget call omits WithNewWindow,
+// which fails "-32000 no browser is open" against a brand-new, zero-window
+// browser context on full-Chrome new-headless. WithNewWindow(true) fixes
+// that one CDP call; it is NOT the archive's WithBackground(true) foreground-
+// steal workaround (irrelevant here — no encoder tab exists in this
+// coordinator). See Register's doc comment for the full rationale, and
+// RemoveAgent's for the disposal consequence (chromedp's implicit
+// browserContextOwner auto-dispose no longer fires; disposal is explicit via
+// disposeBrowserContextRaw).
+//
 // Load-bearing invariants (grill C1 / spec §3 Stream A):
 //   - CRIT-002/C1: a manager reload (any Settings save) must NOT kill Chrome and
 //     must NOT dispose the agent's browser context. The coordinator owns both.
-//   - CRIT-003: WithNewBrowserContext is called ONLY on the coordinator's own
-//     long-lived chromedp context (which lives on the *AgentLoop and therefore
-//     survives ReloadProviderAndConfig). No manager path ever calls it; managers
-//     only re-adopt via WithExistingBrowserContext (non-owning, no auto-dispose).
+//   - CRIT-003: the agent's owning browser context is created ONLY on the
+//     coordinator's own long-lived chromedp context (which lives on the
+//     *AgentLoop and therefore survives ReloadProviderAndConfig). No manager
+//     path ever creates one; managers only re-adopt via
+//     WithExistingBrowserContext (non-owning, no auto-dispose).
 //   - FR-008/R3: the Chrome process is killed exactly once, only by Shutdown
 //     (gateway Close). Release + reload never touch the process.
 //
@@ -25,7 +64,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +74,8 @@ import (
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/extensions"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -43,23 +83,22 @@ import (
 
 // ownershipMarkerOwner is the owner string stamped into the shared-Chrome
 // ownership marker (shared-chrome.pid). Its presence + a live pid is the proof
-// that a 9223 holder is OUR Chrome (ADR-043 D1 / grill M2). Its ABSENCE on a
-// held port means the holder is foreign and must be rejected, never silently
-// driven.
+// that the process holding the launch lockfile is OUR Chrome (ADR-043 D1 /
+// grill M2). CRIT-001 replaced the old net.Listen(":9223") port bind with an
+// O_EXCL/flock lockfile, so the marker is now the identity layer over the
+// lock: a held lock whose marker is absent or whose marker pid is dead is
+// treated as stale (removable), never silently driven.
 const ownershipMarkerOwner = "omnipus"
 
-// sharedChromeCDPURL is the WebSocket URL every registered manager dials to
-// reach the one shared Chrome. chromedp's RemoteAllocator resolves the actual
-// browser debugger endpoint from this via its default /json/version lookup.
-func sharedChromeCDPURL() string {
-	return fmt.Sprintf("ws://127.0.0.1:%d", DebugPort)
-}
-
 // agentBrowserContext is a coordinator-owned CDP browser context for one agent
-// (spec D2). The owning chromedp context (ctx/cancel) lives on the COORDINATOR
-// (created with WithNewBrowserContext, so chromedp sets browserContextOwner=
-// true and disposes it when cancel is called). The manager only ever sees the
-// BrowserContextID and re-adopts it non-owningly.
+// (spec D2). The owning chromedp context (ctx/cancel) lives on the
+// COORDINATOR, created via raw CDP (target.CreateBrowserContext +
+// CreateTarget WithNewWindow(true) — see Register's doc comment for why, not
+// chromedp.WithNewBrowserContext()), so chromedp's own browserContextOwner
+// flag is NEVER set for these and cancel() alone does not dispose the CDP
+// browser context — RemoveAgent/disposeBrowserContextRaw do that explicitly.
+// The manager only ever sees the BrowserContextID and re-adopts it
+// non-owningly.
 type agentBrowserContext struct {
 	browserCtxID cdp.BrowserContextID
 	ctx          context.Context
@@ -96,15 +135,37 @@ type BrowserCoordinator struct {
 
 	mu sync.Mutex // bookkeeping lock — see file doc for discipline
 
+	// pipeLauncher launches the one shared Chrome over the CDP pipe transport
+	// (CRIT-001 — no TCP port). A field so tests inject a fake and never spawn
+	// real Chrome; defaults to launchManagedPipe (exec_resolver.go).
+	pipeLauncher func(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error)
+
 	// Chrome process state (lives on the coordinator; managers never touch it).
-	launched    bool
-	launching   bool            // single-flight: a launch is in progress
-	launchDone  *sync.Cond      // signaled when a launch completes (nil-safe via mu)
-	allocCtx    context.Context // chromedp ExecAllocator context (cancel => kill Chrome)
-	allocCancel context.CancelFunc
-	rootCtx     context.Context // first chromedp context from allocCtx (binds *Browser)
-	rootCancel  context.CancelFunc
-	cmd         *exec.Cmd // Chrome process handle (captured via ModifyCmdFunc) — for PID + crash Wait
+	launched   bool
+	launching  bool       // single-flight: a launch is in progress
+	launchDone *sync.Cond // signaled when a launch completes (nil-safe via mu)
+	// rootCtx is the chromedp context returned by the pipe allocator (binds the
+	// shared *Browser). In-process managers drive the shared Chrome through
+	// chromedp CHILD contexts of this (one pipe, multiplexed) — NOT a
+	// RemoteAllocator(ws://) connection, which no longer exists (CRIT-001).
+	rootCtx context.Context
+	// rootCancel tears the pipe allocator down: it cancels the chromedp
+	// context, closes the pipe (Chrome exits), and reaps the process. The
+	// pre-pipe allocCtx/allocCancel pair (a separate ExecAllocator context) is
+	// gone — the pipe transport has exactly one teardown handle.
+	rootCancel context.CancelFunc
+	cmd        *exec.Cmd // Chrome process handle (captured via cdppipe ModifyCmd) — the ONLY PID source (Browser.Process() is nil over the pipe)
+	// lockFile holds the O_EXCL/flock single-launch lock (CRIT-001) for the
+	// coordinator's lifetime. Released (flock LOCK_UN + close) on Shutdown and
+	// on crash-relaunch. Replaces the removed net.Listen(":9223") atomic guard.
+	lockFile *os.File
+
+	// loadedExtensionID is the id Chrome assigned the last successfully
+	// loaded extension (LoadExtension / the launchChrome auto-load below).
+	// Empty until a load succeeds. WebRTC build hook (W1-A item 3): exposed
+	// for the gateway's future encoder-extension wiring; nothing in this
+	// package sets cfg.ExtensionDir/ExtensionID today.
+	loadedExtensionID string
 
 	// Per-agent owning browser contexts. Survive manager reload (Release only
 	// drops the manager ref, not this entry). Cleared on crash (CRIT-001:
@@ -139,6 +200,7 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) 
 		maxTotalTabs: maxTotalTabs,
 		contexts:     make(map[string]*agentBrowserContext),
 		managers:     make(map[string]*BrowserManager),
+		pipeLauncher: launchManagedPipe,
 	}
 	c.launchDone = sync.NewCond(&c.mu)
 	return c
@@ -149,14 +211,21 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) 
 // keep total browsing RSS under ~2.5 GB on a typical 8 GB+ host. Tunable.
 const defaultTotalTabs = 30
 
-// Register associates mgr with the coordinator and returns the cdpURL to dial +
-// the agent's STABLE browser-context id. THE COORDINATOR CREATES+OWNS the
-// context: WithNewBrowserContext is called on the coordinator's own long-lived
+// Register associates mgr with the coordinator and returns the coordinator's
+// SHARED root chromedp context (rootCtx) + the agent's STABLE browser-context
+// id. CRIT-001: the manager builds its allocCtx directly from rootCtx and
+// drives the shared Chrome through chromedp CHILD contexts of it (one CDP
+// pipe, multiplexed) — there is no RemoteAllocator dial anymore (the pipe has
+// no ws:// URL and is private to this OS process). THE COORDINATOR
+// CREATES+OWNS the context: it is created on the coordinator's own long-lived
 // chromedp context (which survives reload because ReloadProviderAndConfig
-// reuses the same *AgentLoop). The manager re-adopts it non-owningly via
-// WithExistingBrowserContext(id) — INVARIANT CRIT-003: no manager path ever
-// calls WithNewBrowserContext (that would auto-dispose on the manager's
-// reload-time cancel, destroying cookies every Settings save).
+// reuses the same *AgentLoop) via raw CDP CreateBrowserContext +
+// CreateTarget(WithNewWindow(true)) — see the "create the agent's owning
+// browser context" block below for why not chromedp.WithNewBrowserContext().
+// The manager re-adopts it non-owningly via WithExistingBrowserContext(id) —
+// INVARIANT CRIT-003: no manager path ever creates a browser context itself
+// (that would auto-dispose on the manager's reload-time cancel, destroying
+// cookies every Settings save).
 //
 // Launches Chrome if none is live. The blocking launch + CDP context-create
 // run with c.mu RELEASED (ADR-038 no-lock-across-blocking-call; the launch can
@@ -164,17 +233,17 @@ const defaultTotalTabs = 30
 // CDP handshake for seconds). Concurrent Register callers serialize on the
 // single-flight launch (c.launching / c.launchDone); the winner launches, the
 // losers wait and then observe c.launched.
-func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *BrowserManager) (cdpURL string, browserCtxID cdp.BrowserContextID, err error) {
+func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *BrowserManager) (rootCtx context.Context, browserCtxID cdp.BrowserContextID, err error) {
 	if agentID == "" {
-		return "", "", fmt.Errorf("browser: coordinator.Register requires a non-empty agentID")
+		return nil, "", fmt.Errorf("browser: coordinator.Register requires a non-empty agentID")
 	}
 	if mgr == nil {
-		return "", "", fmt.Errorf("browser: coordinator.Register requires a non-nil manager")
+		return nil, "", fmt.Errorf("browser: coordinator.Register requires a non-nil manager")
 	}
 
 	// Ensure Chrome is live (single-flight; releases c.mu across the launch).
 	if err := c.ensureLaunched(ctx); err != nil {
-		return "", "", err
+		return nil, "", err
 	}
 
 	// Re-use an existing context for this agent if one already exists (reload
@@ -192,27 +261,62 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 	// never-started manager is a no-op.
 	c.mu.Lock()
 	c.managers[agentID] = mgr
+	rootCtx = c.rootCtx
 	if ac, ok := c.contexts[agentID]; ok && ac != nil {
 		bid := ac.browserCtxID
 		c.mu.Unlock()
-		return sharedChromeCDPURL(), bid, nil
+		return rootCtx, bid, nil
 	}
-	rootCtx := c.rootCtx
 	c.mu.Unlock()
 
 	// Create the agent's owning browser context ON THE COORDINATOR'S root
-	// context. WithNewBrowserContext panics if c.first is true — rootCtx is the
-	// first context (binds the *Browser), so a child created from it is NOT
-	// first, which is the safe case (mirrors the D2 spike test exactly).
-	agentCtx, agentCancel := chromedp.NewContext(rootCtx, chromedp.WithNewBrowserContext())
+	// context — via RAW CDP (target.CreateBrowserContext + target.CreateTarget
+	// WithNewWindow(true)) rather than chromedp.WithNewBrowserContext().
+	//
+	// WHY (WebRTC build W1-A finding, verified against real Chrome 149 over
+	// cdppipe — the SAME underlying CDP behavior the archive branch's
+	// coordinator.go documents hitting on Chrome 151): chromedp's
+	// WithNewBrowserContext() internally issues
+	// target.CreateTarget("about:blank").WithBrowserContextID(bid) WITHOUT
+	// WithNewWindow(true) (chromedp v0.15.1 chromedp.go:375-378). A freshly
+	// created browser context has NO window yet, and on full-Chrome
+	// --headless (new headless) over the CDP pipe that CreateTarget call
+	// fails verbatim with "Failed to open new tab - no browser is open
+	// (-32000)" — reproduced directly against this coordinator's real launch
+	// path before this fix landed. WithNewWindow(true) gives the new context
+	// its own window, which fixes it. This is a narrow, targeted fix for that
+	// one CDP call — NOT the archive's broader "encoder-tab-in-default-
+	// context" redesign (which additionally used WithBackground(true) to
+	// avoid stealing an encoder tab's foreground slot; there is no encoder
+	// tab in this coordinator, so that flag is deliberately omitted).
+	//
+	// Consequence: chromedp's own browserContextOwner auto-dispose-on-cancel
+	// (set only inside its WithNewBrowserContext path, chromedp.go:367-373)
+	// does NOT fire for a context built this way — ac.cancel() alone would
+	// only close the tab, not the whole browser context/cookie partition.
+	// RemoveAgent below therefore disposes explicitly via
+	// disposeBrowserContextRaw (see its doc comment).
+	rc := chromedp.FromContext(rootCtx)
+	if rc == nil || rc.Browser == nil {
+		return nil, "", fmt.Errorf("browser: coordinator: shared Chrome not ready while registering agent %q", agentID)
+	}
+	bid, bcErr := target.CreateBrowserContext().Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	if bcErr != nil {
+		return nil, "", fmt.Errorf("browser: coordinator: failed to create browser context for agent %q: %w", agentID, bcErr)
+	}
+	tid, ctErr := target.CreateTarget("about:blank").
+		WithBrowserContextID(bid).
+		WithNewWindow(true).
+		Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	if ctErr != nil {
+		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
+		return nil, "", fmt.Errorf("browser: coordinator: failed to open first tab for agent %q: %w", agentID, ctErr)
+	}
+	agentCtx, agentCancel := chromedp.NewContext(rootCtx, chromedp.WithTargetID(tid))
 	if err := chromedp.Run(agentCtx); err != nil {
 		agentCancel()
-		return "", "", fmt.Errorf("browser: coordinator: failed to create browser context for agent %q: %w", agentID, err)
-	}
-	bid := chromedp.FromContext(agentCtx).BrowserContextID
-	if bid == "" {
-		agentCancel()
-		return "", "", fmt.Errorf("browser: coordinator: browser context for agent %q came back with an empty id", agentID)
+		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
+		return nil, "", fmt.Errorf("browser: coordinator: failed to attach browser context for agent %q: %w", agentID, err)
 	}
 
 	c.mu.Lock()
@@ -222,8 +326,9 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 	// the redundant duplicate to avoid leaking a context.
 	if existing, ok := c.contexts[agentID]; ok && existing != nil {
 		c.mu.Unlock()
-		agentCancel() // discard our redundant context; the existing one wins
-		return sharedChromeCDPURL(), existing.browserCtxID, nil
+		agentCancel()                   // discard our redundant context (closes its tab)...
+		c.disposeBrowserContextRaw(bid) // ...and its browser context/partition (no auto-dispose — see above)
+		return rootCtx, existing.browserCtxID, nil
 	}
 	c.contexts[agentID] = &agentBrowserContext{
 		browserCtxID: bid,
@@ -238,7 +343,7 @@ func (c *BrowserCoordinator) Register(ctx context.Context, agentID string, mgr *
 		"total_contexts": c.contextCount(),
 		"total_managers": c.managerCount(),
 	})
-	return sharedChromeCDPURL(), bid, nil
+	return rootCtx, bid, nil
 }
 
 // Release drops an agent's manager ref on reload. Does NOT kill Chrome and does
@@ -278,11 +383,10 @@ func (c *BrowserCoordinator) Release(agentID string) int {
 
 // RemoveAgent disposes a REMOVED agent's browser context + drops its manager
 // ref (W4). Unlike Release (reload — the context is preserved for re-adoption),
-// RemoveAgent CANCELS the owning chromedp context so chromedp runs
-// Target.disposeBrowserContext, freeing that agent's cookie/localStorage
-// partition. Called by registerSharedTools for agentIDs present in the
-// coordinator's map but no longer in cfg.Agents. Safe to call for an agentID
-// that was never registered (no-op).
+// RemoveAgent frees that agent's cookie/localStorage partition. Called by
+// registerSharedTools for agentIDs present in the coordinator's map but no
+// longer in cfg.Agents. Safe to call for an agentID that was never registered
+// (no-op).
 func (c *BrowserCoordinator) RemoveAgent(agentID string) {
 	c.mu.Lock()
 	mgr := c.managers[agentID]
@@ -295,16 +399,57 @@ func (c *BrowserCoordinator) RemoveAgent(agentID string) {
 	if mgr != nil && !stopping {
 		mgr.dropConnection()
 	}
-	// Cancel the OWNING context (WithNewBrowserContext marked it owner, so
-	// chromedp disposes the CDP browser context on cancel). This is the
-	// difference from Release: a truly-removed agent's partition is freed,
-	// not preserved.
-	if ac != nil && ac.cancel != nil && !stopping {
-		ac.cancel()
+	if ac != nil && !stopping {
+		// Cancel first (closes the agent's tab / releases chromedp's
+		// bookkeeping goroutines for this context), then explicitly dispose
+		// the browser context via raw CDP. This is the difference from
+		// Release: a truly-removed agent's partition is freed, not preserved.
+		//
+		// NOT chromedp's implicit browserContextOwner auto-dispose-on-cancel:
+		// Register (W1-A) creates this context via raw CDP
+		// (target.CreateBrowserContext + CreateTarget WithNewWindow(true), a
+		// -32000 workaround — see Register's doc comment), not
+		// chromedp.WithNewBrowserContext(), so that chromedp-internal flag is
+		// never set and cancel() alone would leak the partition.
+		if ac.cancel != nil {
+			ac.cancel()
+		}
+		c.disposeBrowserContextRaw(ac.browserCtxID)
 	}
 	logger.InfoCF("browser", "coordinator: removed agent (context disposed)", map[string]any{
 		"agent_id": agentID,
 	})
+}
+
+// disposeBrowserContextRaw explicitly disposes a browser context via raw CDP
+// (target.DisposeBrowserContext). Required because Register (W1-A) creates
+// each agent's browser context via raw CDP rather than
+// chromedp.WithNewBrowserContext() (see Register's doc comment for why), so
+// chromedp's own browserContextOwner auto-dispose-on-cancel never fires for
+// these contexts — ac.cancel() alone only closes the tab, not the whole
+// context/cookie partition. Runs with c.mu NOT held. A no-op (best-effort
+// WARN log on failure) when the shared Chrome is no longer live or bid is
+// empty — nothing to dispose once the process is gone.
+func (c *BrowserCoordinator) disposeBrowserContextRaw(bid cdp.BrowserContextID) {
+	if bid == "" {
+		return
+	}
+	c.mu.Lock()
+	rootCtx := c.rootCtx
+	c.mu.Unlock()
+	if rootCtx == nil {
+		return
+	}
+	rc := chromedp.FromContext(rootCtx)
+	if rc == nil || rc.Browser == nil {
+		return
+	}
+	if err := target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser)); err != nil {
+		logger.WarnCF("browser", "coordinator: failed to dispose browser context", map[string]any{
+			"browser_ctx_id": string(bid),
+			"error":          err.Error(),
+		})
+	}
 }
 
 // RegisteredAgents returns a snapshot of agentIDs currently in the coordinator's
@@ -421,6 +566,25 @@ func (c *BrowserCoordinator) totalOpenTabsLocked() int {
 	return n
 }
 
+// RootContext returns the coordinator's SHARED, session-independent root
+// chromedp context (the same rootCtx Register returns) — the context every
+// agent's browser context is a CHILD of, over the one multiplexed CDP pipe.
+// Used by callers that only hold a *BrowserManager (not the coordinator
+// itself).
+//
+// ok is false when no Chrome is currently live — never launched yet, or torn
+// down by Shutdown/a crash awaiting relaunch. Callers MUST treat ok=false as
+// "no shared root available right now" and degrade cleanly rather than using
+// a nil/stale context.
+func (c *BrowserCoordinator) RootContext() (context.Context, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rootCtx == nil {
+		return nil, false
+	}
+	return c.rootCtx, true
+}
+
 // PID returns the shared Chrome process pid (0 if none live) — the R1/R3
 // regression tests observe reload-no-kill + Close-only-kill through this.
 func (c *BrowserCoordinator) PID() int {
@@ -441,6 +605,49 @@ func (c *BrowserCoordinator) KillCount() int {
 	return c.killCount
 }
 
+// LoadExtension installs the unpacked extension at c.cfg.ExtensionDir into the
+// shared Chrome via CDP Extensions.loadUnpacked — requires the running Chrome
+// to have been launched with --remote-debugging-pipe (always true here) and
+// --enable-unsafe-extension-debugging (managedExecAllocatorOpts adds it
+// whenever cfg.ExtensionID is set). WebRTC build hook (W1-A item 3): exposed
+// for the gateway's future encoder-extension wiring (recapture/reload
+// scenarios) — nothing in this package calls it except launchChrome's
+// best-effort auto-load below. Returns the extension id Chrome assigned,
+// which should match cfg.ExtensionID when the manifest pins a "key" (wave-plan
+// key decision 1).
+func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	rootCtx := c.rootCtx
+	dir := c.cfg.ExtensionDir
+	c.mu.Unlock()
+	if rootCtx == nil {
+		return "", fmt.Errorf("browser: coordinator: cannot load extension — shared Chrome is not live")
+	}
+	if dir == "" {
+		return "", fmt.Errorf("browser: coordinator: no ExtensionDir configured")
+	}
+	rc := chromedp.FromContext(rootCtx)
+	if rc == nil || rc.Browser == nil {
+		return "", fmt.Errorf("browser: coordinator: shared Chrome browser handle unavailable")
+	}
+	id, err := extensions.LoadUnpacked(dir).Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	if err != nil {
+		return "", fmt.Errorf("browser: coordinator: Extensions.loadUnpacked failed: %w", err)
+	}
+	c.mu.Lock()
+	c.loadedExtensionID = id
+	c.mu.Unlock()
+	return id, nil
+}
+
+// LoadedExtensionID returns the id of the last successfully loaded extension
+// (empty if none has loaded yet). WebRTC build hook (W1-A item 3).
+func (c *BrowserCoordinator) LoadedExtensionID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.loadedExtensionID
+}
+
 // Shutdown disposes all contexts + kills the Chrome process. Called ONLY by
 // gateway Close() — the SOLE process-kill path (FR-008 / MIN-008). Idempotent.
 func (c *BrowserCoordinator) Shutdown() {
@@ -450,9 +657,13 @@ func (c *BrowserCoordinator) Shutdown() {
 		return
 	}
 	c.shutdown = true
-	// Dispose every agent's owning browser context (canceling the owning
-	// chromedp context runs chromedp's Target.disposeBrowserContext, since
-	// WithNewBrowserContext marked these contexts as owner).
+	// Cancel every agent's owning context (closes its tab / releases
+	// chromedp's bookkeeping goroutines). No explicit
+	// target.disposeBrowserContext CDP round-trip here (unlike RemoveAgent):
+	// the pipe allocator is about to be killed below (rootCancel + the
+	// process SIGKILL), which destroys every browser context along with the
+	// whole Chrome process — an explicit per-context dispose call would be a
+	// wasted CDP round-trip against a process already on its way down.
 	for id, ac := range c.contexts {
 		if ac != nil && ac.cancel != nil {
 			ac.cancel()
@@ -460,28 +671,26 @@ func (c *BrowserCoordinator) Shutdown() {
 		delete(c.contexts, id)
 	}
 	rootCancel := c.rootCancel
-	allocCancel := c.allocCancel
+	lockFile := c.lockFile
 	c.rootCancel = nil
-	c.allocCancel = nil
 	c.rootCtx = nil
-	c.allocCtx = nil
+	c.lockFile = nil
 	c.cmd = nil
 	c.launched = false
 	c.killCount++
 	c.mu.Unlock()
 
-	// Kill the Chrome process: cancel the root chromedp context first (graceful
-	// — lets chromedp close the browser connection + targets), then cancel the
-	// ExecAllocator context (chromedp sends SIGKILL to the process). Order
-	// matters: rootCancel before allocCancel so chromedp's teardown runs against
-	// a still-live allocator.
+	// Kill the Chrome process by canceling the pipe allocator context:
+	// cdppipe's CancelFunc cancels the chromedp context, closes the pipe
+	// (Chrome observes EOF and exits), and reaps the process. This is the ONE
+	// teardown handle in the pipe model (the pre-pipe rootCancel+allocCancel
+	// pair is gone).
 	if rootCancel != nil {
 		rootCancel()
 	}
-	if allocCancel != nil {
-		allocCancel()
-	}
-	logger.InfoCF("browser", "coordinator: shared Chrome shut down (process killed)", map[string]any{
+	// Release the single-launch lock so a fresh gateway can take it (CRIT-001).
+	releaseLaunchLock(lockFile)
+	logger.InfoCF("browser", "coordinator: shared Chrome shut down (process killed, launch lock released)", map[string]any{
 		"kill_count": c.killCount,
 	})
 }
@@ -556,33 +765,29 @@ func (c *BrowserCoordinator) ensureLaunched(ctx context.Context) error {
 	}
 
 	// CRIT-1 (Shutdown races in-flight launch → orphan Chrome): there is a
-	// window between chromedp.Run succeeding (Chrome alive) and launchChrome
-	// installing c.allocCancel/c.rootCancel (~the marker write + lock dance).
-	// If Shutdown runs in that window it sees nil cancels, logs a FALSE
-	// "process killed", and returns — then launchChrome installs the LIVE
-	// Chrome's cancels AFTER Shutdown, producing an unkillable orphan. Close
-	// the window: re-check c.shutdown now (launchChrome has installed the
-	// cancels by the time it returned nil). If Shutdown won the race, tear
-	// down the just-launched Chrome ourselves and return an error; do NOT set
-	// c.launched=true. (If Shutdown already read non-nil cancels and called
-	// them, they are nil here — no double-kill; chromedp cancels are
-	// idempotent regardless.)
+	// window between the pipe launch succeeding (Chrome alive) and
+	// launchChrome installing c.rootCancel/c.lockFile. If Shutdown runs in
+	// that window it sees nil cancels, logs a FALSE "process killed", and
+	// returns — then launchChrome installs the LIVE Chrome's cancel AFTER
+	// Shutdown, producing an unkillable orphan. Close the window: re-check
+	// c.shutdown now (launchChrome has installed the cancel + lock by the
+	// time it returned nil). If Shutdown won the race, tear down the
+	// just-launched Chrome + release the lock ourselves and return an error;
+	// do NOT set c.launched=true. (cdppipe's CancelFunc is idempotent, so a
+	// double-cancel is harmless.)
 	c.mu.Lock()
 	if c.shutdown {
 		rootCancel := c.rootCancel
-		allocCancel := c.allocCancel
+		lockFile := c.lockFile
 		c.rootCtx = nil
 		c.rootCancel = nil
-		c.allocCtx = nil
-		c.allocCancel = nil
+		c.lockFile = nil
 		c.cmd = nil
 		c.mu.Unlock()
 		if rootCancel != nil {
 			rootCancel()
 		}
-		if allocCancel != nil {
-			allocCancel()
-		}
+		releaseLaunchLock(lockFile)
 		return fmt.Errorf("browser: shared Chrome launch aborted by concurrent shutdown")
 	}
 	c.launched = true
@@ -590,17 +795,30 @@ func (c *BrowserCoordinator) ensureLaunched(ctx context.Context) error {
 	return nil
 }
 
-// launchChrome does the blocking work of starting the one shared Chrome. Called
-// with c.mu NOT held. On success, populates c.allocCtx/allocCancel/rootCtx/
-// rootCancel/cmd and writes the ownership marker. On failure, tears down any
-// half-built state.
+// launchChrome does the blocking work of starting the one shared Chrome over
+// the CDP pipe (CRIT-001 — no TCP port). Called with c.mu NOT held. On success
+// it holds the single-launch lock and populates c.rootCtx/rootCancel/cmd/
+// lockFile and writes the ownership marker. On failure it tears down any
+// half-built state (including releasing the lock).
 func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
-	// Preflight: the fixed CDP port must be free, AND any existing holder must
-	// be identifiable as ours (ownership marker) — never silently drive a
-	// foreign Chrome (grill M2 / FR-007).
-	if err := c.preflightPort(); err != nil {
+	// Single-launch atomicity via an O_EXCL/flock lockfile (CRIT-001): the
+	// removed net.Listen(":9223") bind was the atomic guard, and the CDP pipe
+	// has no port, so a cross-process lockfile takes its place. The ownership
+	// marker stays the identity layer (pid + product) — see takeLaunchLock. A
+	// held lock with a live omnipus pid means a prior gateway's Chrome is
+	// still running.
+	lockFile, err := c.takeLaunchLock()
+	if err != nil {
 		return err
 	}
+	// Release the lock on ANY failure below; success clears this flag so the
+	// coordinator keeps the lock for its lifetime.
+	releaseLockOnErr := true
+	defer func() {
+		if releaseLockOnErr {
+			releaseLaunchLock(lockFile)
+		}
+	}()
 
 	if err := os.MkdirAll(c.cfg.ProfileDir, 0o700); err != nil {
 		return fmt.Errorf("browser: coordinator: cannot create profile directory %s: %w", c.cfg.ProfileDir, err)
@@ -614,42 +832,41 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		return fmt.Errorf("browser: coordinator: cannot locate chromium: %w", err)
 	}
 
-	opts := managedExecAllocatorOpts(execPath, c.cfg)
-	// Capture the Chrome *exec.Cmd so PID() can report it and the launcher-wait
-	// crash detector can observe process exit.
-	opts = append(opts, chromedp.ModifyCmdFunc(func(cmd *exec.Cmd) {
-		c.mu.Lock()
-		c.cmd = cmd
-		c.mu.Unlock()
-	}))
+	cmdline := managedExecAllocatorOpts(c.cfg)
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	rootCtx, rootCancel := chromedp.NewContext(allocCtx)
-	// Actually launch Chrome (blocking CDP handshake). chromedp.Run on the root
-	// context is the one place the browser process is spawned.
-	if err := chromedp.Run(rootCtx); err != nil {
-		rootCancel()
-		allocCancel()
+	// Launch over the pipe (fail closed — err reports launch + CDP
+	// connectivity failure directly). The launcher is a seam so tests never
+	// spawn real Chrome.
+	launch := c.pipeLauncher
+	if launch == nil {
+		launch = launchManagedPipe
+	}
+	res, err := launch(ctx, execPath, pipeLaunchConfig{
+		args:        cmdline.Args,
+		env:         cmdline.Env,
+		userDataDir: c.cfg.ProfileDir,
+	})
+	if err != nil {
 		c.mu.Lock()
 		c.cmd = nil
 		c.mu.Unlock()
-		return fmt.Errorf("browser: coordinator: failed to launch shared Chrome: %w", err)
+		return fmt.Errorf("browser: coordinator: failed to launch shared Chrome over the CDP pipe: %w", err)
 	}
 
-	// Stamp the ownership marker now that we have a live pid.
+	// PID from the captured *exec.Cmd — chromedp.Browser.Process() is nil
+	// under the pipe allocator (cdppipe/doc.go), so the *exec.Cmd is the ONLY
+	// PID source.
 	pid := 0
-	if b := chromedp.FromContext(rootCtx).Browser; b != nil {
-		if p := b.Process(); p != nil {
-			pid = p.Pid
-		}
+	if res.cmd != nil && res.cmd.Process != nil {
+		pid = res.cmd.Process.Pid
 	}
-	product := readBrowserProduct(rootCtx)
-	// MED-2: a pid of 0 (Process()==nil — e.g. chromedp couldn't capture the
-	// cmd handle) MUST NOT be written as a marker. preflightPort treats a held
-	// port + a marker with a dead/zero pid as FOREIGN (the dead pid can't be
-	// holding the port), so a 0 marker would cause the NEXT launch to reject
-	// our own live Chrome as foreign. Skip the write + warn instead; the hard
-	// guarantee is the port-bind preflight, the marker is the identity layer.
+	product := readBrowserProduct(res.rootCtx)
+	// MED-2: a pid of 0 (Process()==nil — e.g. cdppipe couldn't capture the
+	// cmd handle) MUST NOT be written as a marker: takeLaunchLock treats a
+	// held lock whose marker pid is dead/zero as stale (removable), so a 0
+	// marker could let a second launch clobber the lock while our Chrome is
+	// live. The hard guarantee is the flock; the marker is the identity/
+	// diagnostic layer.
 	if pid > 0 {
 		if werr := c.writeOwnershipMarker(pid, product); werr != nil {
 			logger.WarnCF("browser", "coordinator: failed to write ownership marker (continuing)", map[string]any{
@@ -657,30 +874,48 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 			})
 		}
 	} else {
-		logger.WarnCF("browser", "coordinator: could not capture Chrome pid — ownership marker NOT written (preflight identity check disabled until a pid is available)", nil)
+		logger.WarnCF("browser", "coordinator: could not capture Chrome pid over the pipe — ownership marker NOT written (preflight identity check disabled until a pid is available)", nil)
 	}
 
 	c.mu.Lock()
-	c.allocCtx = allocCtx
-	c.allocCancel = allocCancel
-	c.rootCtx = rootCtx
-	c.rootCancel = rootCancel
+	c.rootCtx = res.rootCtx
+	c.rootCancel = res.cancel
+	c.cmd = res.cmd
+	c.lockFile = lockFile
 	managersCopy := make([]*BrowserManager, 0, len(c.managers))
 	for _, m := range c.managers {
 		managersCopy = append(managersCopy, m)
 	}
-	browser := chromedp.FromContext(rootCtx).Browser
+	sharedBrowser := res.browser
 	c.mu.Unlock()
 
-	// Arm the launcher-wait crash detector (grill M1 / R2). browser.LostConnection
-	// closes when the CDP transport drops — the canonical, race-free signal that
-	// the Chrome process has died (chromedp's own allocator goroutine also Wait()s
-	// the process; we do NOT call cmd.Wait() ourselves to avoid racing it).
-	if browser != nil {
-		go c.watchForCrash(browser, managersCopy)
+	// The coordinator now owns the lock for its lifetime — do NOT release on
+	// the deferred error path (only Shutdown / crash-relaunch releases it).
+	releaseLockOnErr = false
+
+	// WebRTC build W1-A item 3: best-effort auto-load of the configured
+	// extension (empty ExtensionDir/ExtensionID today — no caller sets them
+	// yet, so this is inert until the gateway wires the capture extension in
+	// a later wave). A load failure never fails the Chrome launch itself —
+	// browsing tools must keep working even if the optional extension can't
+	// load.
+	if c.cfg.ExtensionDir != "" && c.cfg.ExtensionID != "" {
+		if _, lerr := c.LoadExtension(context.Background()); lerr != nil {
+			logger.WarnCF("browser", "coordinator: failed to auto-load configured extension (continuing without it)", map[string]any{
+				"error": lerr.Error(),
+			})
+		}
 	}
 
-	logger.InfoCF("browser", "coordinator: shared Chrome launched", map[string]any{
+	// Arm the launcher-wait crash detector (grill M1 / R2). browser.LostConnection
+	// closes when the pipe drops — the canonical, race-free signal that the Chrome
+	// process has died (cdppipe's own goroutine also watches it + reaps the
+	// process; we do NOT call cmd.Wait() ourselves to avoid racing it).
+	if sharedBrowser != nil {
+		go c.watchForCrash(sharedBrowser, managersCopy)
+	}
+
+	logger.InfoCF("browser", "coordinator: shared Chrome launched (CDP over pipe, no TCP port)", map[string]any{
 		"pid":       pid,
 		"exec_path": execPath,
 		"product":   product,
@@ -711,10 +946,11 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 		return // shutting down, or already marked dead by a prior detection
 	}
 	c.launched = false
+	oldCancel := c.rootCancel
+	oldLock := c.lockFile
 	c.rootCtx = nil
 	c.rootCancel = nil
-	c.allocCtx = nil
-	c.allocCancel = nil
+	c.lockFile = nil
 	c.cmd = nil
 	// CRIT-001: all agent contexts are gone with the process. Clear them so the
 	// next Register creates FRESH empty contexts (not stale, dead ids).
@@ -726,6 +962,18 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 		managersCopy = append(managersCopy, m)
 	}
 	c.mu.Unlock()
+
+	// Cancel the dead pipe allocator (idempotent — cdppipe's own
+	// LostConnection goroutine already fired it; this just reaps
+	// deterministically) and RELEASE the single-launch lock BEFORE
+	// relaunching. The relaunch below re-acquires the lock via a fresh open
+	// FD; keeping the old FD's flock held would make takeLaunchLock
+	// self-deadlock (two open descriptions of the same file contend, even in
+	// one process).
+	if oldCancel != nil {
+		oldCancel()
+	}
+	releaseLaunchLock(oldLock)
 
 	logger.WarnCF("browser", "coordinator: shared Chrome connection lost — resetting connectors + relaunching", nil)
 
@@ -750,43 +998,65 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	}
 }
 
-// preflightPort verifies the fixed CDP debug port is free, and — if it is held —
-// that the holder is identifiable as OUR Chrome via the ownership marker (grill
-// M2 / FR-007). A foreign/unrelated holder is rejected with a clear error, never
-// silently driven. Runs with c.mu NOT held.
-func (c *BrowserCoordinator) preflightPort() error {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", DebugPort))
-	if err == nil {
-		// Port is free — nothing is squatting it. Close the probe and launch.
-		if closeErr := ln.Close(); closeErr != nil {
-			logger.WarnCF("browser", "coordinator: preflight: failed to close probe listener", map[string]any{
-				"port":  DebugPort,
-				"error": closeErr.Error(),
-			})
-		}
-		return nil
+// lockPath is the single-launch lockfile (CRIT-001). It lives in the profile
+// dir so it shares the shared Chrome's directory lifecycle.
+func (c *BrowserCoordinator) lockPath() string {
+	return filepath.Join(c.cfg.ProfileDir, "shared-chrome.lock")
+}
+
+// takeLaunchLock acquires the exclusive shared-Chrome single-launch lock
+// (CRIT-001), replacing the removed net.Listen(":9223") atomic guard. Returns
+// the held *os.File the caller keeps open for the coordinator's lifetime (and
+// releases via releaseLaunchLock). Runs with c.mu NOT held.
+//
+// Ownership is proven WITHOUT a port: a held lock whose ownership marker names
+// a LIVE omnipus pid means a prior gateway's Chrome is still running (rejected
+// with a clear error). A held lock with a missing/dead-pid marker is a stale
+// lockfile left by a crashed prior process (only reachable off Unix, where
+// flock does not auto-release) — it is cleared and re-acquired once. The
+// pre-pipe "foreign Chrome squatting our port" case is gone: nothing but an
+// omnipus coordinator ever locks this file (it lives inside our own profile
+// dir), so a held-but-unidentifiable lock always means "stale", never
+// "foreign", and is safe to clear rather than reject.
+func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
+	path := c.lockPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("browser: coordinator: cannot create lock directory for %s: %w", path, err)
 	}
-	// Port is held. Determine whether the holder is OUR Chrome (ownership
-	// marker with a live pid) or foreign. This is the grill M2 launch-vs-spoof
-	// guard: the CDP endpoint carries no identity token, so the marker is the
-	// only way to tell our Chrome from an operator's unrelated one.
+
+	f, ok, err := acquireLaunchLock(path)
+	if err != nil {
+		return nil, fmt.Errorf("browser: coordinator: cannot open shared-Chrome launch lock %s: %w", path, err)
+	}
+	if ok {
+		return f, nil
+	}
+
+	// Lock held. Prove the holder identity via the ownership marker (the
+	// marker is the identity layer now the port is gone). A live omnipus pid
+	// → a prior gateway's Chrome is genuinely still running.
 	pid, owner, markerErr := c.readOwnershipMarker()
-	if markerErr == nil && owner == ownershipMarkerOwner && pid > 0 {
-		if pidAlive(pid) {
-			return fmt.Errorf(
-				"browser: CDP debug port %d is held by a prior omnipus gateway's Chrome (pid %d) still running — "+
-					"stop that gateway/process (or remove %s) before starting a new one",
-				DebugPort, pid, c.markerPath())
-		}
-		// Marker exists but its pid is dead → stale leftover marker from a
-		// crashed/killed prior Chrome. The port is held by something ELSE (the
-		// dead pid can't be holding it) → foreign. Fall through to foreign error.
+	if markerErr == nil && owner == ownershipMarkerOwner && pid > 0 && pidAlive(pid) {
+		return nil, fmt.Errorf(
+			"browser: the shared-Chrome launch lock %s is held by a prior omnipus gateway's Chrome (pid %d) still running — "+
+				"stop that gateway/process before starting a new one",
+			path, pid)
 	}
-	return fmt.Errorf(
-		"browser: CDP debug port %d is already in use by a non-omnipus process — "+
-			"the coordinator will not drive a foreign Chrome (grill M2); "+
-			"stop that process, or point tools.browser.cdp_url at an external Chrome",
-		DebugPort)
+
+	// Marker missing or its pid is dead → a stale lockfile from a crashed
+	// process. Clear it and retry once (a no-op on Unix, where flock
+	// auto-releases so the first acquire would already have succeeded).
+	if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+		return nil, fmt.Errorf("browser: coordinator: cannot clear stale launch lock %s: %w", path, rmErr)
+	}
+	f, ok, err = acquireLaunchLock(path)
+	if err != nil {
+		return nil, fmt.Errorf("browser: coordinator: cannot re-acquire launch lock %s: %w", path, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("browser: the shared-Chrome launch lock %s is held by another live process", path)
+	}
+	return f, nil
 }
 
 // cleanStaleSingletons removes Chromium's stale SingletonLock/Cookie/Socket
@@ -870,7 +1140,9 @@ func (c *BrowserCoordinator) readOwnershipMarker() (pid int, owner string, err e
 
 // pidAlive reports whether the given pid is currently a running process. On
 // non-Unix platforms it conservatively reports true (the marker check is a
-// best-effort guard; the hard guarantee is the port-bind preflight).
+// best-effort guard; the hard guarantee is the single-launch lockfile — flock
+// on Unix (coordinator_lock_unix.go), O_EXCL on other platforms
+// (coordinator_lock_other.go) — not a port bind, which CRIT-001 removed).
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
