@@ -7,6 +7,19 @@ package browser
 // identical to the pre-ADR-043 manager methods; only the storage was extracted
 // into a reusable struct so the coordinator can resolve without owning a
 // *BrowserManager.
+//
+// WebRTC build (browser-video-2, W1-A): the LAUNCH side of this file (below
+// execPathCaches) was reworked from a fixed-TCP-debug-port chromedp
+// ExecAllocator to Chromium's --remote-debugging-pipe transport
+// (pkg/tools/browser/cdppipe — no TCP port, no /json HTTP surface; ported
+// verbatim from the archive feature/live-browser-video-streaming branch,
+// EC-3/CRIT-001). managedExecAllocatorOpts now renders RAW Chrome argv/env
+// instead of a []chromedp.ExecAllocatorOption, because cdppipe drives Chrome
+// directly by argv — there is no chromedp.NewExecAllocator in this path
+// anymore. Both the coordinator's launch path (coordinator.go) and the
+// manager's no-coordinator managed-mode fallback (manager.go's
+// ensureStarted) render their cmdline through managedExecAllocatorOpts and
+// launch through launchManagedPipe, so the two never diverge (MAJ-001).
 
 import (
 	"context"
@@ -21,51 +34,203 @@ import (
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/cdppipe"
 )
 
-// managedExecAllocatorOpts builds the chromedp ExecAllocator options for a
-// managed Chrome launch from execPath + cfg. Shared by the coordinator's launch
-// path (coordinator.go) and the manager's no-coordinator fallback (ensureStarted
-// managed-mode) so the two never diverge. This is the exact option set that
-// lived inline in manager.go's ensureStarted pre-ADR-043.
-func managedExecAllocatorOpts(execPath string, cfg BrowserConfig) []chromedp.ExecAllocatorOption {
-	// Point Chrome's HOME and XDG dirs at the profile directory so stray writes
-	// (Crash Reports, GPUCache, Singleton locks) land inside the Landlock-
-	// allowed workspace instead of $HOME/.config/google-chrome.
-	chromeHome := cfg.ProfileDir
+// managedChromeCmdline is the rendered command line + environment for a
+// managed Chrome launch over the CDP pipe transport (cdppipe). It REPLACES
+// the pre-pipe []chromedp.ExecAllocatorOption return: cdppipe drives Chrome
+// directly by argv (there is no chromedp.NewExecAllocator anymore), so the
+// flag set is rendered to raw Chrome flags here and fed to
+// cdppipe.PipeOptions.Args, and the process env to cdppipe.PipeOptions.Env.
+// There is NO --remote-debugging-port — CDP flows over the inherited fd 3/4
+// pipe (no TCP surface; EC-3/CRIT-001).
+type managedChromeCmdline struct {
+	Args []string
+	Env  []string
+}
 
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(execPath),
-		chromedp.UserDataDir(cfg.ProfileDir),
-		chromedp.DisableGPU,
-		chromedp.Flag("no-first-run", true),
-		chromedp.Flag("no-default-browser-check", true),
-		chromedp.Flag("disable-crash-reporter", true),
-		chromedp.Flag("disable-breakpad", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("remote-debugging-port", browserDebugPort),
-		chromedp.Env(
-			"HOME="+chromeHome,
-			"XDG_CONFIG_HOME="+filepath.Join(chromeHome, "config"),
-			"XDG_CACHE_HOME="+filepath.Join(chromeHome, "cache"),
-		),
-		chromedp.WindowSize(1280, 720),
-		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("lang", "en-US"),
-	)
-
-	if cfg.Headless {
-		opts = append(opts, chromedp.Headless)
+// chromeHardeningBaseFlags returns the hardening flag set shared by every
+// managed Chrome process this package launches, rendered as raw argv so
+// cdppipe can pass them straight to exec.Command. The set mirrors
+// chromedp.DefaultExecAllocatorOptions (the Puppeteer hardening defaults
+// chromedp applies automatically under NewExecAllocator) plus the pre-video
+// omnipus additions (crash-reporter/breakpad off, stealth pair, window size,
+// forced software/SwiftShader rendering) and the conditional --no-sandbox —
+// i.e. the exact effective flag set the pre-pipe managedExecAllocatorOpts
+// produced via chromedp.DefaultExecAllocatorOptions[:] + its own appends,
+// now hand-rendered because the pipe transport drives Chrome by argv, not
+// chromedp options.
+//
+// Two deliberate DIVERGENCES from that prior effective set (WebRTC build
+// task W1-A, both required for the tabCapture MV3 extension capture path):
+//
+//   - --disable-extensions is OMITTED. chromedp.DefaultExecAllocatorOptions
+//     includes Flag("disable-extensions", true), so it WAS in the prior
+//     effective flag set. It is dropped here because the coordinator now
+//     supports loading the gateway's capture extension via
+//     Extensions.loadUnpacked (see launchChrome / LoadExtension in
+//     coordinator.go) — --disable-extensions would defeat that even with
+//     --allowlisted-extension-id set.
+//   - --mute-audio is OMITTED from the headless flags this file adds (see
+//     managedExecAllocatorOpts). chromedp.Headless (also folded into
+//     DefaultExecAllocatorOptions) sets --mute-audio alongside --headless
+//     and --hide-scrollbars, so it WAS also in the prior effective set —
+//     implicitly, not via an explicit chromedp.Flag call, which is why a
+//     grep-level read of the pre-pipe code can miss it. It is dropped here
+//     to keep audio rendering intact for tabCapture (wave-plan key decision
+//     6 / spike Q2: capture is proven to work whether or not --mute-audio is
+//     present, so this is a safe, deliberate choice, not a regression risk).
+//
+// cdppipe itself contributes the pipe-specific flags (--remote-debugging-pipe,
+// --no-first-run, --no-default-browser-check, --user-data-dir, about:blank),
+// so they are deliberately omitted here (cdppipe/allocator.go's buildArgs).
+func chromeHardeningBaseFlags() []string {
+	args := []string{
+		"--disable-background-networking",
+		"--enable-features=NetworkService,NetworkServiceInProcess",
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-breakpad",
+		"--disable-client-side-phishing-detection",
+		"--disable-default-apps",
+		"--disable-dev-shm-usage",
+		"--disable-features=site-per-process,Translate,BlinkGenPropertyTrees",
+		"--disable-hang-monitor",
+		"--disable-ipc-flooding-protection",
+		"--disable-popup-blocking",
+		"--disable-prompt-on-repost",
+		"--disable-renderer-backgrounding",
+		"--disable-sync",
+		"--force-color-profile=srgb",
+		"--metrics-recording-only",
+		"--safebrowsing-disable-auto-update",
+		"--password-store=basic",
+		"--use-mock-keychain",
+		// chromedp.DisableGPU: force software rendering (+ SwiftShader
+		// fallback, required on Chromium 139+).
+		"--disable-gpu",
+		"--enable-unsafe-swiftshader",
+		// omnipus additions (pre-pipe managedExecAllocatorOpts).
+		"--disable-crash-reporter",
+		"--disable-blink-features=AutomationControlled",
+		"--lang=en-US",
+		"--window-size=1280,720",
 	}
 
 	// Chromium's zygote sandbox depends on new user namespaces, which the
-	// gateway's Landlock+PR_SET_NO_NEW_PRIVS policy blocks. The gateway already
-	// enforces an outer sandbox, so Chrome's inner sandbox is redundant.
+	// gateway's Landlock+PR_SET_NO_NEW_PRIVS policy blocks. The gateway
+	// already enforces an outer sandbox, so Chrome's inner sandbox is
+	// redundant.
 	if os.Getenv("OMNIPUS_BROWSER_NO_SANDBOX") != "0" {
-		opts = append(opts, chromedp.NoSandbox)
+		args = append(args, "--no-sandbox")
 	}
-	return opts
+	return args
+}
+
+// managedExecAllocatorOpts renders the Chrome command line for a managed
+// launch over the CDP pipe. Shared by the coordinator's launch path
+// (coordinator.go) and the manager's no-coordinator fallback (ensureStarted
+// managed-mode) so the two never diverge (MAJ-001 "every managed launch
+// rides one transport").
+//
+// cfg.Headless is honored directly (append --headless + --hide-scrollbars
+// only when true) rather than the pre-pipe code's redundant
+// chromedp.DefaultExecAllocatorOptions-always-includes-Headless() +
+// conditional-re-append shape, which made cfg.Headless a no-op in practice
+// (Chrome was always headless regardless of its value). DefaultConfig sets
+// Headless:true and nothing in the codebase sets it false, so this is a
+// behavior-preserving cleanup, not a functional change.
+//
+// cfg.ExtensionID gates --allowlisted-extension-id + the CDP
+// Extensions.loadUnpacked precondition flag --enable-unsafe-extension-
+// debugging (WebRTC build W1-A item 3): both are required together for the
+// coordinator's post-launch Extensions.loadUnpacked call (see
+// coordinator.go's LoadExtension) to succeed. Requires cfg.ExtensionID
+// specifically (not just ExtensionDir) because the wave-plan's extension-ID
+// model pins a deterministic ID via the manifest's "key" before launch — the
+// caller always knows the ID by the time it sets ExtensionDir.
+func managedExecAllocatorOpts(cfg BrowserConfig) managedChromeCmdline {
+	// Point Chrome's HOME and XDG dirs at the profile directory so stray
+	// writes (Crash Reports, GPUCache, Singleton locks) land inside the
+	// Landlock-allowed workspace instead of $HOME/.config/google-chrome.
+	chromeHome := cfg.ProfileDir
+
+	args := chromeHardeningBaseFlags()
+	if cfg.Headless {
+		args = append(args, "--headless", "--hide-scrollbars")
+	}
+	if cfg.ExtensionID != "" {
+		args = append(args,
+			"--allowlisted-extension-id="+cfg.ExtensionID,
+			"--enable-unsafe-extension-debugging",
+		)
+	}
+
+	env := []string{
+		"HOME=" + chromeHome,
+		"XDG_CONFIG_HOME=" + filepath.Join(chromeHome, "config"),
+		"XDG_CACHE_HOME=" + filepath.Join(chromeHome, "cache"),
+	}
+	return managedChromeCmdline{Args: args, Env: env}
+}
+
+// pipeLaunchConfig is the argv/env/profile a managed Chrome launch feeds to
+// the CDP pipe transport (cdppipe.NewPipeAllocator).
+type pipeLaunchConfig struct {
+	args        []string
+	env         []string
+	userDataDir string
+}
+
+// pipeLaunchResult is what a managed CDP-pipe launch hands back. cmd is the
+// captured Chrome *exec.Cmd — the ONLY source of the PID/crash handle,
+// because chromedp.Browser.Process() returns nil under the pipe allocator
+// (see cdppipe/doc.go). browser is the shared *chromedp.Browser whose
+// LostConnection channel callers watch for crashes; it may be nil in test
+// seams.
+type pipeLaunchResult struct {
+	rootCtx context.Context
+	cancel  context.CancelFunc
+	cmd     *exec.Cmd
+	browser *chromedp.Browser
+}
+
+// launchManagedPipe is the real managed-Chrome launcher: it starts Chrome
+// under --remote-debugging-pipe via cdppipe (NO TCP port; EC-3/CRIT-001) and
+// returns a chromedp root context ready for child contexts, the teardown
+// CancelFunc, the captured *exec.Cmd (PID/crash handle), and the shared
+// *chromedp.Browser. It is the default launcher for BOTH the coordinator's
+// pipeLauncher seam and the manager's pipeLauncherFn seam; tests inject fakes
+// so they never spawn real Chrome.
+//
+// ctx is accepted for seam symmetry but the browser's lifetime is bound to
+// context.Background() (per cdppipe's contract, and because the shared
+// Chrome must outlive any single request/tool call — exactly as the pre-pipe
+// chromedp.NewExecAllocator(context.Background(), ...) did).
+func launchManagedPipe(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error) {
+	_ = ctx
+	var captured *exec.Cmd
+	rootCtx, cancel, err := cdppipe.NewPipeAllocator(context.Background(), execPath, cdppipe.PipeOptions{
+		Args:        cfg.args,
+		Env:         cfg.env,
+		UserDataDir: cfg.userDataDir,
+		// Capture the *exec.Cmd — the only PID/crash handle under the pipe
+		// allocator (chromedp.Browser.Process() is nil here). cdppipe wires
+		// the fd 3/4 ExtraFiles AFTER this hook, so it is safe to only read
+		// cmd here.
+		ModifyCmd: func(cmd *exec.Cmd) { captured = cmd },
+		Logf:      func(f string, a ...any) { logger.DebugCF("browser", fmt.Sprintf(f, a...), nil) },
+		Errf:      func(f string, a ...any) { logger.WarnCF("browser", fmt.Sprintf(f, a...), nil) },
+	})
+	if err != nil {
+		return nil, err
+	}
+	var browser *chromedp.Browser
+	if cc := chromedp.FromContext(rootCtx); cc != nil {
+		browser = cc.Browser
+	}
+	return &pipeLaunchResult{rootCtx: rootCtx, cancel: cancel, cmd: captured, browser: browser}, nil
 }
 
 // execPathCaches holds the success/failure caches for Chromium-binary
