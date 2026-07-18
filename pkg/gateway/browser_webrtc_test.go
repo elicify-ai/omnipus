@@ -507,6 +507,116 @@ func TestCaptureIngestWSHandler_TokenMismatchClosesConnection(t *testing.T) {
 	require.Error(t, readErr, "a token-mismatched hello must close the connection with no further frames")
 }
 
+// TestCaptureIngestWSHandler_RejectsNonWebSocketUpgrade covers the
+// ServeHTTP branch BETWEEN the loopback gate and the WS upgrade — a
+// loopback request that never sets an Upgrade:websocket header must be
+// rejected with 426 (Upgrade Required), never silently 200/close. Gap-sweep
+// addition (W2-C): this specific branch had no coverage — only the
+// non-loopback (403, TestCaptureIngestWSHandler_RejectsNonLoopback) and
+// token-mismatch paths were tested.
+func TestCaptureIngestWSHandler_RejectsNonWebSocketUpgrade(t *testing.T) {
+	_, al := newBrowserWSTestHandler(t, nil)
+	handler := newCaptureIngestWSHandler(al, newCaptureRegistry())
+
+	req := httptest.NewRequest("GET", "/api/v1/browser/capture-ingest", nil)
+	req.RemoteAddr = "127.0.0.1:54321" // loopback -- must pass the FIRST gate
+	// Deliberately NO Upgrade header.
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, 426, rec.Code, "a loopback, non-WS-upgrade request must be rejected with 426 Upgrade Required")
+}
+
+// TestCaptureIngestWSHandler_MalformedFirstFrame_NotHello_ClosesConnection
+// covers serveConn's "not_hello" branch: a first frame that is either
+// invalid JSON or valid JSON with the wrong `type` (i.e. not
+// browser_capture_hello) must close the connection immediately, exactly
+// like a token mismatch — before ANY session lookup is attempted. Gap-sweep
+// addition (W2-C): only the valid-hello/wrong-token path
+// (TestCaptureIngestWSHandler_TokenMismatchClosesConnection) was covered;
+// this proves the type-discriminator gate itself is enforced.
+func TestCaptureIngestWSHandler_MalformedFirstFrame_NotHello_ClosesConnection(t *testing.T) {
+	_, al := newBrowserWSTestHandler(t, nil)
+	reg := newCaptureRegistry()
+	var calls int32
+	cs, err := browser.NewCaptureSessionWithDeps(nil, "agent-a", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+	reg.set("agent-a", cs)
+
+	handler := newCaptureIngestWSHandler(al, reg)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/api/v1/browser/capture-ingest"
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	conn, resp, err := dialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// A syntactically valid frame, but the WRONG type (not
+	// browser_capture_hello) -- must be treated identically to garbage JSON.
+	wrongType := generated.BrowserCaptureControlFrame{
+		Type:   string(generated.WsFrameTypeBrowserCaptureControl),
+		Action: "ping",
+	}
+	data, err := json.Marshal(wrongType)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	_, _, readErr := conn.ReadMessage()
+	require.Error(t, readErr, "a non-hello first frame must close the connection with no further frames")
+}
+
+// TestCaptureIngestWSHandler_ValidateInbound_RejectsSchemaInvalidHello
+// proves gateway.validate_inbound is actually WIRED on the capture-ingest
+// socket (not just that the BrowserCaptureHelloFrame.yaml schema itself is
+// correct in isolation -- see TestWebRTCFrameSchemasRoundTrip in
+// browser_webrtc_contract_test.go for that): a hello frame with a
+// schema-invalid token (shorter than the schema's minLength:16) must be
+// rejected via the "schema_invalid" branch of serveConn, closing the
+// connection, before token lookup ever runs -- distinct from a
+// well-formed-but-wrong token (TestCaptureIngestWSHandler_TokenMismatchClosesConnection,
+// which is a "token_mismatch" rejection reachable only once schema
+// validation has already passed or is disabled). Gap-sweep addition (W2-C).
+func TestCaptureIngestWSHandler_ValidateInbound_RejectsSchemaInvalidHello(t *testing.T) {
+	_, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Gateway.ValidateInbound = true
+	})
+	reg := newCaptureRegistry()
+	handler := newCaptureIngestWSHandler(al, reg)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/api/v1/browser/capture-ingest"
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	conn, resp, err := dialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// token is well under BrowserCaptureHelloFrame.yaml's minLength:16 --
+	// schema-invalid regardless of whether any session's real token matches.
+	tooShort := generated.BrowserCaptureHelloFrame{
+		Type:       string(generated.WsFrameTypeBrowserCaptureHello),
+		Token:      "short",
+		ExtVersion: "1.0.0",
+	}
+	data, err := json.Marshal(tooShort)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	_, _, readErr := conn.ReadMessage()
+	require.Error(t, readErr, "a schema-invalid hello (token too short) must close the connection when validate_inbound is enabled")
+}
+
 func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) {
 	_, al := newBrowserWSTestHandler(t, nil)
 	reg := newCaptureRegistry()
