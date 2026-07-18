@@ -1018,15 +1018,15 @@ components:
           # the SPA mid-rollout.
           additionalProperties: true
           description: >
-            Optional per-message metadata. Phase 1 (FR-010) adds `model_name`:
-            when the user picks a model in the chat composer, the picker
-            value is sent as `metadata.model_name` so the server routes
-            THIS turn to the chosen model. The server falls back to the
-            agent's `model` config when this field is absent.
-            `workspace_setup_kickoff` (boolean): when true, the server treats
-            this message as the one-time workspace setup kickoff for
-            `metadata.workspace_id` — recorded as a system-role transcript
-            entry, and the workspace's `setup_pending` flag is cleared.
+            Optional per-message metadata. Typed keys today: `model_name`
+            (Phase 1, FR-010) — when the user picks a model in the chat
+            composer, the picker value is sent as `metadata.model_name` so
+            the server routes this turn to the chosen model, falling back to
+            the agent's `model` config when absent; `workspace_id` — the
+            active workspace this chat belongs to; and
+            `workspace_setup_kickoff` (boolean) — a one-time marker that this
+            message is the workspace setup kickoff for
+            `metadata.workspace_id`.
           properties:
             model_name:
               type: string
@@ -1037,6 +1037,17 @@ components:
                 falls back to agent config otherwise. Empty string is
                 treated as absent.
               example: "z-ai/glm-5-turbo"
+            workspace_setup_kickoff:
+              type: boolean
+              description: >
+                One-time marker that this message is the workspace-setup
+                kickoff turn for `metadata.workspace_id`. When true, the
+                server records a system-role transcript entry and clears
+                that workspace's `setup_pending` flag exactly once
+                (idempotency-guarded); a duplicate kickoff is rejected with
+                an error frame rather than silently re-running. Absent/false
+                for ordinary messages.
+              example: true
 
     CancelFrame:
       title: CancelFrame
