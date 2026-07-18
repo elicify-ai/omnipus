@@ -112,6 +112,19 @@ vi.mock('@/components/chat/ChatControls', () => ({
   ChatControls: () => <div data-testid="chat-controls-mock">ChatControls</div>,
 }))
 
+// Workspace-setup kickoff (Unit C) — mocked to a no-op. This suite covers
+// the container's OWN layout/session-lifecycle concerns, not the kickoff
+// mechanics (those have dedicated coverage in
+// src/hooks/useWorkspaceSetupKickoff.test.ts and
+// src/store/chat.workspace-setup-kickoff.test.ts). Mocking it here (rather
+// than letting the real hook import '@/store/chat') avoids dragging chat.ts's
+// module-load-time registerChatSetReplaying/registerChatResetForReplay/
+// registerSyncChatForeground calls into this file's already-partial
+// '@/store/session' mock above, which doesn't export those.
+vi.mock('@/hooks/useWorkspaceSetupKickoff', () => ({
+  useWorkspaceSetupKickoff: vi.fn(),
+}))
+
 // ── Component under test ───────────────────────────────────────────────────────
 import { WorkspaceTabContainer } from './WorkspaceTabContainer'
 

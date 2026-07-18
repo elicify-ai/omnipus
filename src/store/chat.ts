@@ -5,7 +5,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import type { Message, ToolCall } from '@/lib/api'
+import type { Message, ToolCall, AgentKind } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
@@ -19,6 +19,17 @@ import { logDiagnostic } from '@/lib/telemetry'
 // Maximum messages kept in the visible ring buffer per session.
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
 export const MAX_MESSAGES_PER_SESSION = 500
+
+// Unit C: kickoff content template for sendWorkspaceSetupKickoff — sent as
+// the (synthetic, never user-visible) first turn of a freshly-created
+// workspace. The backend records the message this content rides on as a
+// SYSTEM-role transcript entry (centered pill on replay), not a user
+// message, so this text is never shown verbatim in the UI — it only
+// instructs Ava what to do; her own reply is what the user actually reads.
+// Exported (module-level constant fn) so tests can assert on the exact
+// content without duplicating the template.
+export const buildWorkspaceSetupKickoffContent = (workspaceName: string): string =>
+  `The workspace "${workspaceName}" was just created. Introduce yourself and interview the user about this workspace's purpose so you can determine which agents and skills its team needs, then set up the team.`
 
 // Maximum byte size of a tool result stored in client state; oversized results become a sentinel.
 const MAX_TOOL_RESULT_BYTES = 50_000
@@ -807,6 +818,37 @@ interface ChatStore {
   sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string }) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
+  /**
+   * Unit C: auto-triggers Ava's (or whichever agent leads the workspace's
+   * core_team) workspace-setup interview the first time a freshly-created
+   * workspace (server-seeded `setup_pending: true`) is opened with no
+   * conversation yet. Reuses `sendMessage`'s no-active-session ("new turn")
+   * wire mechanics — pending `'__pending'` placeholder bucket,
+   * `_validateOutboundFrame`, `isStreaming`, rollback-on-send-failure — MINUS
+   * any user-visible bubble: the backend records this turn's kickoff frame
+   * as a SYSTEM-role transcript entry (centered pill on replay), not a user
+   * message, so rendering an optimistic user bubble here would show text the
+   * user never typed. No `session_id` is sent — the server mints one and
+   * acks with `session_started`, same as any other first message.
+   *
+   * Sets the active agent (mirrors `AgentPicker`'s auto-select:
+   * `setActiveSession` with the resolved agent's id+type) so the
+   * composer/thread header show the agent immediately, without depending on
+   * `AgentPicker`'s own effect having already run.
+   *
+   * Bails silently (returns `false`, no toast) when offline, mid-stream, or
+   * a conversation already exists (`activeSessionId !== null`) — this must
+   * never fire over an existing chat. Returns `true` once the frame is
+   * handed to `connection.send` successfully. The caller (
+   * `useWorkspaceSetupKickoff`) uses the return value to decide whether to
+   * optimistically clear `setup_pending` in the workspaces query cache.
+   */
+  sendWorkspaceSetupKickoff: (opts: {
+    workspaceId: string
+    workspaceName: string
+    agentId: string
+    agentType: AgentKind | null
+  }) => boolean
   /**
    * Cancels the target session's in-flight turn (sends the `cancel` WS frame
    * and marks its last assistant message interrupted). `sessionId` optionally
@@ -1993,6 +2035,79 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
       }
   },
+
+    sendWorkspaceSetupKickoff: (opts) => {
+      const { workspaceId, workspaceName, agentId, agentType } = opts
+      const { connection, isConnected } = useConnectionStore.getState()
+      const { activeSessionId } = useSessionStore.getState()
+      const { isStreaming } = get()
+
+      // Never kick off over an offline connection, a mid-turn stream, or an
+      // existing conversation — mirrors sendMessage's own guards, but as an
+      // outright bail (no queueing, no toast): a missed kickoff simply
+      // leaves `setup_pending` true, so the calling hook can retry on the
+      // next render once the blocking condition clears.
+      if (!connection || !isConnected) return false
+      if (isStreaming) return false
+      if (activeSessionId !== null) return false
+
+      const content = buildWorkspaceSetupKickoffContent(workspaceName)
+      const pendingSid = '__pending'
+      const assistantMsg: ChatMessage = {
+        id: generateId(),
+        session_id: pendingSid,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        status: 'streaming',
+        isStreaming: true,
+      }
+
+      // Render ONLY the optimistic streaming assistant placeholder — no user
+      // bubble. This turn's "user" content is a synthetic instruction the
+      // backend records as a SYSTEM-role transcript entry (a centered pill
+      // on replay), not something the user typed, so echoing it as a user
+      // bubble here would show text the user never wrote.
+      withBucket(pendingSid, (b) => {
+        const allMsgs = [...getMessages(b), assistantMsg]
+        return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
+      })
+      // Activate the pending bucket AND select the agent in one write —
+      // mirrors AgentPicker's auto-select (setActiveSession with the
+      // resolved agent's id+type) so the composer/thread header show the
+      // agent immediately, same as sendMessage's own no-session branch
+      // activates '__pending' as foreground.
+      useSessionStore.getState().setActiveSession(pendingSid, agentId, agentType)
+
+      const payload = {
+        type: 'message' as const,
+        content,
+        agent_id: agentId,
+        metadata: {
+          workspace_id: workspaceId,
+          workspace_setup_kickoff: true,
+        },
+      }
+      get()._validateOutboundFrame(payload, pendingSid)
+      const sent = connection.send(payload)
+
+      if (!sent) {
+        // Drop the empty placeholder — there is no user-typed content to
+        // preserve/retry here (unlike sendMessage's failure rollback, which
+        // keeps the user's bubble as an 'error' Retry affordance).
+        withBucket(pendingSid, (b) => {
+          const msgs = getMessages(b).filter((m) => m.id !== assistantMsg.id)
+          return { ...applyMessageArray(msgs, b), isStreaming: false }
+        })
+        useConnectionStore.getState().setConnectionError(
+          'Could not start the workspace setup interview — connection dropped. Please try again.'
+        )
+        maybeDrainNext()
+        return false
+      }
+
+      return true
+    },
 
     cancelStream: (sessionId) => {
       const { connection } = useConnectionStore.getState()
