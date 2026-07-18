@@ -46,6 +46,7 @@
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestWebRTCEndToEndInProcess$' -p 1 ./pkg/gateway/
 //
 // never the full gateway suite / ./....
+
 package gateway
 
 import (
@@ -222,7 +223,11 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 	}
 	cleanups = append(cleanups, func() { pc.Close() })
 
-	video, videoErr := pion.NewTrackLocalStaticSample(pion.RTPCodecCapability{MimeType: pion.MimeTypeVP8}, "video", "w2c-e2e-encoder")
+	video, videoErr := pion.NewTrackLocalStaticSample(
+		pion.RTPCodecCapability{MimeType: pion.MimeTypeVP8},
+		"video",
+		"w2c-e2e-encoder",
+	)
 	if videoErr != nil {
 		return nil, fmt.Errorf("new video track: %w", videoErr)
 	}
@@ -230,7 +235,11 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 		return nil, fmt.Errorf("add video track: %w", addErr)
 	}
 
-	audio, audioErr := pion.NewTrackLocalStaticSample(pion.RTPCodecCapability{MimeType: pion.MimeTypeOpus}, "audio", "w2c-e2e-encoder")
+	audio, audioErr := pion.NewTrackLocalStaticSample(
+		pion.RTPCodecCapability{MimeType: pion.MimeTypeOpus},
+		"audio",
+		"w2c-e2e-encoder",
+	)
 	if audioErr != nil {
 		return nil, fmt.Errorf("new audio track: %w", audioErr)
 	}
@@ -268,7 +277,9 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 		return nil, fmt.Errorf("unexpected capture-ingest reply: %+v", answerFrame)
 	}
 
-	if setErr := pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answerFrame.Sdp}); setErr != nil {
+	if setErr := pc.SetRemoteDescription(
+		pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answerFrame.Sdp},
+	); setErr != nil {
 		return nil, fmt.Errorf("set remote description (capture answer): %w", setErr)
 	}
 
@@ -458,27 +469,29 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	pumpStop := make(chan struct{})
 	t.Cleanup(func() { close(pumpStop) })
 
-	fakeStarter := browser.EncoderStarter(func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
-		encMu.Lock()
-		encState.starterCalls++
-		encState.mintedToken = tokenHex
-		encState.ingestURL = ingestURL
-		encState.stunServer = stunServer
-		encMu.Unlock()
+	fakeStarter := browser.EncoderStarter(
+		func(_ context.Context, _ *browser.BrowserManager, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
+			encMu.Lock()
+			encState.starterCalls++
+			encState.mintedToken = tokenHex
+			encState.ingestURL = ingestURL
+			encState.stunServer = stunServer
+			encMu.Unlock()
 
-		enc, startErr := startE2EFakeEncoder(ingestURL, tokenHex)
-		if startErr != nil {
-			return nil, nil, fmt.Errorf("e2e fake encoder: %w", startErr)
-		}
-		enc.startPumping(pumpStop)
+			enc, startErr := startE2EFakeEncoder(ingestURL, tokenHex)
+			if startErr != nil {
+				return nil, nil, fmt.Errorf("e2e fake encoder: %w", startErr)
+			}
+			enc.startPumping(pumpStop)
 
-		encMu.Lock()
-		encState.enc = enc
-		encMu.Unlock()
+			encMu.Lock()
+			encState.enc = enc
+			encMu.Unlock()
 
-		tabCtx, cancel := context.WithCancel(context.Background())
-		return tabCtx, cancel, nil
-	})
+			tabCtx, cancel := context.WithCancel(context.Background())
+			return tabCtx, cancel, nil
+		},
+	)
 
 	// dcFramesObserved counts InputSink invocations that made it all the way
 	// through the REAL production webrtcInputSink(mgr) — i.e. proves
@@ -550,8 +563,11 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	if firstType.Type == string(generated.WsFrameTypeBrowserWebrtcState) {
 		var early webrtcStateFrameDecoder
 		require.NoError(t, json.Unmarshal(firstData, &early))
-		t.Fatalf("handleWebRTCOffer failed before answering (available=%v reason=%q) — fake encoder start error, see logs",
-			early.Available, early.Reason)
+		t.Fatalf(
+			"handleWebRTCOffer failed before answering (available=%v reason=%q) — fake encoder start error, see logs",
+			early.Available,
+			early.Reason,
+		)
 	}
 	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcAnswer), firstType.Type)
 	var answerFrame generated.BrowserWebRTCAnswerFrame
@@ -576,11 +592,19 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	stunServer := encState.stunServer
 	encMu.Unlock()
 	require.Equal(t, 1, starterCalls, "EncoderStarter must be invoked exactly once (one active stream per agent)")
-	require.Equal(t, cs.TokenHex(), mintedToken, "EncoderStarter must receive the SAME token ValidateToken checks against")
+	require.Equal(
+		t,
+		cs.TokenHex(),
+		mintedToken,
+		"EncoderStarter must receive the SAME token ValidateToken checks against",
+	)
 	require.Contains(t, ingestURL, fmt.Sprintf(":%d/api/v1/browser/capture-ingest", port),
 		"EncoderStarter must receive the production-computed ingest URL, pointed at THIS test's own listener")
-	require.Empty(t, stunServer,
-		"EncoderStarter must receive the configured stunServer verbatim (this test leaves WebRTCStunServer empty — host-only ICE)")
+	require.Empty(
+		t,
+		stunServer,
+		"EncoderStarter must receive the configured stunServer verbatim (this test leaves WebRTCStunServer empty — host-only ICE)",
+	)
 
 	e2eSetAnswer := func(pc *pion.PeerConnection, sdp string) {
 		require.NoError(t, pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: sdp}))
@@ -597,8 +621,22 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	videoAtT2 := viewer.videoPkts.Load()
 	audioAtT2 := viewer.audioPkts.Load()
 
-	require.Greaterf(t, videoAtT2, videoAtT0, "video packet count must grow over ~2s (got %d -> %d)", videoAtT0, videoAtT2)
-	require.Greaterf(t, audioAtT2, audioAtT0, "audio packet count must grow over ~2s (got %d -> %d)", audioAtT0, audioAtT2)
+	require.Greaterf(
+		t,
+		videoAtT2,
+		videoAtT0,
+		"video packet count must grow over ~2s (got %d -> %d)",
+		videoAtT0,
+		videoAtT2,
+	)
+	require.Greaterf(
+		t,
+		audioAtT2,
+		audioAtT0,
+		"audio packet count must grow over ~2s (got %d -> %d)",
+		audioAtT0,
+		audioAtT2,
+	)
 	t.Logf("OBSERVED packet growth over 2s: video %d -> %d, audio %d -> %d", videoAtT0, videoAtT2, audioAtT0, audioAtT2)
 
 	stats := cs.Stats()
@@ -626,7 +664,10 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	e2eWaitCond(t, e2eWait, "DC input frame to reach the production InputSink (webrtcInputSink)", func() bool {
 		return dcFramesObserved.Load() > 0
 	})
-	t.Logf("OBSERVED %d data-channel input frame(s) reach webrtcInputSink -> browserInputFrameToLiveInput -> mgr.Live().Input", dcFramesObserved.Load())
+	t.Logf(
+		"OBSERVED %d data-channel input frame(s) reach webrtcInputSink -> browserInputFrameToLiveInput -> mgr.Live().Input",
+		dcFramesObserved.Load(),
+	)
 
 	// (d) viewer detach decrements the capture session's refcount.
 	require.Equal(t, 1, cs.ViewerCount(), "exactly one WebRTC viewer must be attached before detach")

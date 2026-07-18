@@ -1270,10 +1270,14 @@ func (lv *LiveView) pauseScreencast() bool {
 
 	stopListen()
 	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), page.StopScreencast()); err != nil {
-		logger.WarnCF("browser", "live view: pause screencast (WebRTC covering every viewer) — stop failed", map[string]any{
-			"error":      err.Error(),
-			"session_id": lv.sessionID,
-		})
+		logger.WarnCF(
+			"browser",
+			"live view: pause screencast (WebRTC covering every viewer) — stop failed",
+			map[string]any{
+				"error":      err.Error(),
+				"session_id": lv.sessionID,
+			},
+		)
 	}
 	return true
 }

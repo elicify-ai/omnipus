@@ -1131,5 +1131,10 @@ func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(
 
 	lv.onTabsChanged(nil, 0)
 
-	require.Equal(t, 1, relay.recaptureCount(), "an active-tab switch must call cs.Recapture(), which signals the relay")
+	require.Equal(
+		t,
+		1,
+		relay.recaptureCount(),
+		"an active-tab switch must call cs.Recapture(), which signals the relay",
+	)
 }

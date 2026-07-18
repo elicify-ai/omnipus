@@ -80,13 +80,20 @@ func TestCaptureSession_ReconcileScreencast_PausesWhenWebRTCCoversEveryJPEGViewe
 	lv.mu.Unlock()
 
 	if !paused {
-		t.Error("ReconcileScreencast: screencast should be PAUSED once WebRTC covers the only JPEG viewer, but pausedForWebRTC=false")
+		t.Error(
+			"ReconcileScreencast: screencast should be PAUSED once WebRTC covers the only JPEG viewer, but pausedForWebRTC=false",
+		)
 	}
 	if active {
-		t.Error("ReconcileScreencast: the CDP screencast subscription should have been torn down when paused, but isActiveLocked()=true")
+		t.Error(
+			"ReconcileScreencast: the CDP screencast subscription should have been torn down when paused, but isActiveLocked()=true",
+		)
 	}
 	if viewerCount != 1 {
-		t.Errorf("ReconcileScreencast: pausing must not touch viewer registrations, got %d viewers, want 1", viewerCount)
+		t.Errorf(
+			"ReconcileScreencast: pausing must not touch viewer registrations, got %d viewers, want 1",
+			viewerCount,
+		)
 	}
 }
 
@@ -112,10 +119,14 @@ func TestCaptureSession_ReconcileScreencast_StaysResumedWithAJPEGOnlyViewer(t *t
 	lv.mu.Unlock()
 
 	if paused {
-		t.Error("ReconcileScreencast: must NOT pause while a JPEG-only viewer remains attached (mixed-viewer case), but pausedForWebRTC=true")
+		t.Error(
+			"ReconcileScreencast: must NOT pause while a JPEG-only viewer remains attached (mixed-viewer case), but pausedForWebRTC=true",
+		)
 	}
 	if !active {
-		t.Error("ReconcileScreencast: the screencast must stay running for the JPEG-only viewer, but isActiveLocked()=false")
+		t.Error(
+			"ReconcileScreencast: the screencast must stay running for the JPEG-only viewer, but isActiveLocked()=false",
+		)
 	}
 }
 
@@ -180,7 +191,9 @@ func TestCaptureSession_ReconcileScreencast_RemoveViewerResumesDecision(t *testi
 	pausedAfterRemove := lv.pausedForWebRTC
 	lv.mu.Unlock()
 	if pausedAfterRemove {
-		t.Error("ReconcileScreencast: RemoveViewer must resolve to \"resume\" (clear pausedForWebRTC) once no WebRTC viewers remain")
+		t.Error(
+			"ReconcileScreencast: RemoveViewer must resolve to \"resume\" (clear pausedForWebRTC) once no WebRTC viewers remain",
+		)
 	}
 }
 
@@ -213,7 +226,9 @@ func TestCaptureSession_ReconcileScreencast_ResumesOnStop(t *testing.T) {
 	pausedAfterStop := lv.pausedForWebRTC
 	lv.mu.Unlock()
 	if pausedAfterStop {
-		t.Error("ReconcileScreencast: Stop() must resume (clear pausedForWebRTC) now that WebRTC capture has stopped entirely")
+		t.Error(
+			"ReconcileScreencast: Stop() must resume (clear pausedForWebRTC) now that WebRTC capture has stopped entirely",
+		)
 	}
 }
 
@@ -293,7 +308,14 @@ func TestLiveView_Attach_WhilePausedDeliversCachedFrameWithoutRestartingScreenca
 	lv.lastFrame = &cached
 
 	var got *LiveFrame
-	controlledByOther, err := lv.attach(context.Background(), "late-viewer", func(f LiveFrame) { got = &f }, nil, nil, nil)
+	controlledByOther, err := lv.attach(
+		context.Background(),
+		"late-viewer",
+		func(f LiveFrame) { got = &f },
+		nil,
+		nil,
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("attach() while paused: %v", err)
 	}
@@ -307,7 +329,9 @@ func TestLiveView_Attach_WhilePausedDeliversCachedFrameWithoutRestartingScreenca
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	if lv.listenCtx != nil {
-		t.Error("attach() while paused started a fresh CDP screencast subscription (listenCtx != nil), want it left alone")
+		t.Error(
+			"attach() while paused started a fresh CDP screencast subscription (listenCtx != nil), want it left alone",
+		)
 	}
 	if !lv.pausedForWebRTC {
 		t.Error("attach() while paused cleared pausedForWebRTC, want it untouched -- resuming is the caller's job")
@@ -334,6 +358,8 @@ func TestLiveView_ResumeScreencast_ClearsFlagWhenNoViewersRemain(t *testing.T) {
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	if lv.pausedForWebRTC {
-		t.Error("resumeScreencast() left pausedForWebRTC=true with zero viewers, want it cleared so a future Attach starts fresh")
+		t.Error(
+			"resumeScreencast() left pausedForWebRTC=true with zero viewers, want it cleared so a future Attach starts fresh",
+		)
 	}
 }

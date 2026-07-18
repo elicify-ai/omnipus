@@ -159,7 +159,13 @@ type CaptureSession struct {
 // message from every viewer (the gateway builds this — see
 // browser_webrtc.go's webrtcInputSink — so this package never needs
 // pkg/api/generated), and logf is a structured log sink (nil-safe).
-func NewCaptureSession(mgr *BrowserManager, agentID string, cfg webrtc.Config, sink webrtc.InputSink, logf func(string, ...any)) (*CaptureSession, error) {
+func NewCaptureSession(
+	mgr *BrowserManager,
+	agentID string,
+	cfg webrtc.Config,
+	sink webrtc.InputSink,
+	logf func(string, ...any),
+) (*CaptureSession, error) {
 	token := make([]byte, captureTokenBytes)
 	if _, err := rand.Read(token); err != nil {
 		return nil, fmt.Errorf("capture session: mint token: %w", err)
@@ -178,7 +184,13 @@ func NewCaptureSession(mgr *BrowserManager, agentID string, cfg webrtc.Config, s
 // signaling handler tests construct a real *CaptureSession with these two
 // seams faked, exercising the actual CaptureSession lifecycle logic against
 // fake relay/encoder machinery — wave-plan W2-A's testing note).
-func NewCaptureSessionWithDeps(mgr *BrowserManager, agentID string, relay RelaySession, startEncoder EncoderStarter, logf func(string, ...any)) (*CaptureSession, error) {
+func NewCaptureSessionWithDeps(
+	mgr *BrowserManager,
+	agentID string,
+	relay RelaySession,
+	startEncoder EncoderStarter,
+	logf func(string, ...any),
+) (*CaptureSession, error) {
 	token := make([]byte, captureTokenBytes)
 	if _, err := rand.Read(token); err != nil {
 		return nil, fmt.Errorf("capture session: mint token: %w", err)
@@ -186,7 +198,14 @@ func NewCaptureSessionWithDeps(mgr *BrowserManager, agentID string, relay RelayS
 	return newCaptureSessionWithDeps(mgr, agentID, relay, startEncoder, token, logf), nil
 }
 
-func newCaptureSessionWithDeps(mgr *BrowserManager, agentID string, relay RelaySession, startEncoder EncoderStarter, token []byte, logf func(string, ...any)) *CaptureSession {
+func newCaptureSessionWithDeps(
+	mgr *BrowserManager,
+	agentID string,
+	relay RelaySession,
+	startEncoder EncoderStarter,
+	token []byte,
+	logf func(string, ...any),
+) *CaptureSession {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -232,7 +251,11 @@ type captureInjectPayload struct {
 // target document's own scripts, per its CDP doc comment), then navigates to
 // chrome-extension://<captureext.ExtensionID>/encoder.html. stunServer (may
 // be empty) is forwarded into the injected captureInjectPayload verbatim.
-func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, ingestURL, stunServer string) (context.Context, context.CancelFunc, error) {
+func defaultEncoderStarter(
+	ctx context.Context,
+	mgr *BrowserManager,
+	tokenHex, ingestURL, stunServer string,
+) (context.Context, context.CancelFunc, error) {
 	if mgr == nil {
 		return nil, nil, fmt.Errorf("capture session: no browser manager")
 	}
@@ -247,7 +270,9 @@ func defaultEncoderStarter(ctx context.Context, mgr *BrowserManager, tokenHex, i
 	// 2. Ensure the capture extension is loaded into the shared Chrome.
 	coord := mgr.Coordinator()
 	if coord == nil {
-		return nil, nil, fmt.Errorf("capture session: no shared-Chrome coordinator attached (WebRTC capture requires the shared-Chrome coordinator)")
+		return nil, nil, fmt.Errorf(
+			"capture session: no shared-Chrome coordinator attached (WebRTC capture requires the shared-Chrome coordinator)",
+		)
 	}
 	if coord.LoadedExtensionID() != captureext.ExtensionID {
 		if _, err := coord.LoadExtension(ctx); err != nil {
@@ -345,7 +370,13 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 			cs.mu.Unlock()
 		}()
 
-		tabCtx, tabCancel, startErr := cs.startEncoder(ctx, cs.mgr, hex.EncodeToString(cs.token), ingestURL, cs.stunServer)
+		tabCtx, tabCancel, startErr := cs.startEncoder(
+			ctx,
+			cs.mgr,
+			hex.EncodeToString(cs.token),
+			ingestURL,
+			cs.stunServer,
+		)
 		if startErr != nil {
 			cs.mu.Lock()
 			cs.startErr = startErr
@@ -449,7 +480,10 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 		stopped := cs.stopped
 		cs.mu.Unlock()
 		if stopped {
-			cs.logf("capture[%s]: bring agent tab to front: session already stopped, skipping (would have stolen window focus for nothing)", cs.agentID)
+			cs.logf(
+				"capture[%s]: bring agent tab to front: session already stopped, skipping (would have stolen window focus for nothing)",
+				cs.agentID,
+			)
 			return
 		}
 		// runCtx is deliberately derived from tabCtx alone, NOT from ctx —
@@ -463,7 +497,11 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 		if runErr := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
 			return page.BringToFront().Do(c)
 		})); runErr != nil {
-			cs.logf("capture[%s]: bring agent tab to front failed (capture may fall back to first-tab resolution): %v", cs.agentID, runErr)
+			cs.logf(
+				"capture[%s]: bring agent tab to front failed (capture may fall back to first-tab resolution): %v",
+				cs.agentID,
+				runErr,
+			)
 		}
 	}()
 	// This select is what actually honors ctx's cancellation (Start's ctx)
@@ -473,7 +511,11 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 	select {
 	case <-done:
 	case <-time.After(bringToFrontTimeout):
-		cs.logf("capture[%s]: bring agent tab to front: timed out after %s waiting for session resolution (capture proceeds; may fall back to first-tab resolution)", cs.agentID, bringToFrontTimeout)
+		cs.logf(
+			"capture[%s]: bring agent tab to front: timed out after %s waiting for session resolution (capture proceeds; may fall back to first-tab resolution)",
+			cs.agentID,
+			bringToFrontTimeout,
+		)
 	case <-ctx.Done():
 	}
 }
@@ -548,7 +590,10 @@ func (cs *CaptureSession) TokenHex() string {
 // {action, reason} to the encoder over the raw ingest WS (NOT a WebRTC data
 // channel — recapture/shutdown are signaled on the signaling connection
 // itself, independent of whether media has even connected yet).
-func (cs *CaptureSession) BindIngest(send func(action string, reason *string) error, closeConn func()) (previousClose func(), epoch uint64) {
+func (cs *CaptureSession) BindIngest(
+	send func(action string, reason *string) error,
+	closeConn func(),
+) (previousClose func(), epoch uint64) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	previousClose = cs.ingestClose

@@ -39,7 +39,10 @@ import (
 // (browser_ws_test.go) but accepts a mutate func, the way
 // newBrowserWSTestHandler does — this file's tests need both audit
 // visibility AND per-test config control (ExecPath, CaptureSharedContext).
-func newFixWaveHandlerWithAudit(t *testing.T, mutate func(cfg *config.Config)) (*BrowserWSHandler, *agent.AgentLoop, string) {
+func newFixWaveHandlerWithAudit(
+	t *testing.T,
+	mutate func(cfg *config.Config),
+) (*BrowserWSHandler, *agent.AgentLoop, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
@@ -207,8 +210,13 @@ func TestWatchEncoderLiveness_StopsStaleSessionAndNotifiesAttachedViewer(t *test
 
 	go handler.watchEncoderLiveness(cs, "watchdog-agent")
 
-	require.Eventually(t, func() bool { return atomic.LoadInt32(&onStoppedCalls) == 1 }, 2*time.Second, 5*time.Millisecond,
-		"watchdog must stop a session with no ping beacon within staleAfter")
+	require.Eventually(
+		t,
+		func() bool { return atomic.LoadInt32(&onStoppedCalls) == 1 },
+		2*time.Second,
+		5*time.Millisecond,
+		"watchdog must stop a session with no ping beacon within staleAfter",
+	)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
@@ -249,7 +257,12 @@ func TestWatchEncoderLiveness_ExitsOnDoneWithoutStopping(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("watchEncoderLiveness did not exit after cs.Done() closed")
 	}
-	require.Equal(t, 1, relay.closeCount(), "relay.Close must have been called exactly once (no double-stop from the watchdog)")
+	require.Equal(
+		t,
+		1,
+		relay.closeCount(),
+		"relay.Close must have been called exactly once (no double-stop from the watchdog)",
+	)
 }
 
 // ---------------------------------------------------------------------------

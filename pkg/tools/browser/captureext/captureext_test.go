@@ -46,7 +46,7 @@ func TestExtensionIDFromPublicKeyDER_KnownVector(t *testing.T) {
 		t.Fatalf("read embedded manifest: %v", err)
 	}
 	var doc manifestKeyDoc
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	if err = json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("parse embedded manifest: %v", err)
 	}
 
@@ -199,8 +199,10 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 		`chromeMediaSource:\s*'tab',\s*chromeMediaSourceId:\s*streamId,\s*minWidth:\s*capW,\s*minHeight:\s*capH,\s*maxWidth:\s*capW,\s*maxHeight:\s*capH,`,
 	)
 	if !videoMandatoryBlock.MatchString(content) {
-		t.Error("encoder.js: expected chromeMediaSourceId immediately followed by minWidth/minHeight/maxWidth/maxHeight " +
-			"(all pinned to capW/capH) in the SAME video.mandatory getUserMedia block — letterbox regression guard (W3 fix 5)")
+		t.Error(
+			"encoder.js: expected chromeMediaSourceId immediately followed by minWidth/minHeight/maxWidth/maxHeight " +
+				"(all pinned to capW/capH) in the SAME video.mandatory getUserMedia block — letterbox regression guard (W3 fix 5)",
+		)
 	}
 
 	// (b) offer-answer timeout arm (fix-wave C, review-flagged gap): a
@@ -225,7 +227,9 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 	// was deliberately stripped — it must never silently creep back in via a
 	// copy-paste from an old branch/backup.
 	if strings.Contains(content, "__omnipusMeasureAudioRMS") {
-		t.Error("encoder.js: __omnipusMeasureAudioRMS scaffolding must stay removed (was diagnostic-only, already stripped)")
+		t.Error(
+			"encoder.js: __omnipusMeasureAudioRMS scaffolding must stay removed (was diagnostic-only, already stripped)",
+		)
 	}
 }
 
@@ -245,7 +249,7 @@ func TestSeed_Idempotent(t *testing.T) {
 	// first boot; a second Seed() call must NOT clobber it.
 	sentinelPath := filepath.Join(dir1, "manifest.json")
 	sentinel := []byte(`{"manifest_version":3,"version":"1.0.0","sentinel":"user-edited"}`)
-	if err := os.WriteFile(sentinelPath, sentinel, 0o644); err != nil {
+	if err = os.WriteFile(sentinelPath, sentinel, 0o644); err != nil {
 		t.Fatalf("write sentinel: %v", err)
 	}
 

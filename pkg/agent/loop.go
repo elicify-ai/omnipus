@@ -1761,9 +1761,14 @@ func registerSharedTools(
 				// "not_capable"-equivalent (no ExtensionDir set, so LoadExtension
 				// is never attempted) — it must never abort ordinary browser-tool
 				// registration for this agent.
-				if extDir, seedErr := captureext.Seed(filepath.Join(config.OmnipusHomeDir(), "browser")); seedErr != nil {
-					logger.WarnCF("agent", "WebRTC capture extension seed failed — live-view WebRTC will report not_capable",
-						map[string]any{"error": seedErr.Error()})
+				if extDir, seedErr := captureext.Seed(
+					filepath.Join(config.OmnipusHomeDir(), "browser"),
+				); seedErr != nil {
+					logger.WarnCF(
+						"agent",
+						"WebRTC capture extension seed failed — live-view WebRTC will report not_capable",
+						map[string]any{"error": seedErr.Error()},
+					)
 				} else {
 					browserCfg.ExtensionDir = extDir
 					browserCfg.ExtensionID = captureext.ExtensionID

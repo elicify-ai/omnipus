@@ -101,7 +101,11 @@ func TestWaitForTracksVideoOnlyAfterGrace(t *testing.T) {
 		t.Fatal("waitForTracks returned an audio track that was never set")
 	}
 	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
-		t.Errorf("waitForTracks returned after %s, want it to wait out the %s audio grace first", elapsed, 100*time.Millisecond)
+		t.Errorf(
+			"waitForTracks returned after %s, want it to wait out the %s audio grace first",
+			elapsed,
+			100*time.Millisecond,
+		)
 	}
 }
 

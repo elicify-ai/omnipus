@@ -223,7 +223,11 @@ func TestClassifyVideoCapabilityWithExec_Table(t *testing.T) {
 		withExec := ClassifyVideoCapabilityWithExec("", root)
 		base := ClassifyVideoCapability(root)
 		if withExec != base {
-			t.Fatalf("ClassifyVideoCapabilityWithExec(\"\", root) = %+v, want it to equal ClassifyVideoCapability(root) = %+v (delegation)", withExec, base)
+			t.Fatalf(
+				"ClassifyVideoCapabilityWithExec(\"\", root) = %+v, want it to equal ClassifyVideoCapability(root) = %+v (delegation)",
+				withExec,
+				base,
+			)
 		}
 		if !withExec.Capable {
 			t.Fatalf("expected Capable=true with a full-Chrome build seeded, got %+v", withExec)
@@ -235,7 +239,11 @@ func TestClassifyVideoCapabilityWithExec_Table(t *testing.T) {
 		withExecEmpty := ClassifyVideoCapabilityWithExec("", emptyRoot)
 		baseEmpty := ClassifyVideoCapability(emptyRoot)
 		if withExecEmpty != baseEmpty {
-			t.Fatalf("ClassifyVideoCapabilityWithExec(\"\", emptyRoot) = %+v, want it to equal ClassifyVideoCapability(emptyRoot) = %+v", withExecEmpty, baseEmpty)
+			t.Fatalf(
+				"ClassifyVideoCapabilityWithExec(\"\", emptyRoot) = %+v, want it to equal ClassifyVideoCapability(emptyRoot) = %+v",
+				withExecEmpty,
+				baseEmpty,
+			)
 		}
 		if withExecEmpty.Capable {
 			t.Fatal("expected not-capable with an empty install root and no exec_path override")
@@ -339,6 +347,9 @@ func TestCaptureVideoCapability_RequiresSharedContextEnabled(t *testing.T) {
 	coord.SetCaptureSharedContext(true)
 	got = mgr.CaptureVideoCapability()
 	if !got.Capable {
-		t.Fatalf("CaptureVideoCapability = Capable=false after enabling shared-context capture, want true (reason=%q)", got.Reason)
+		t.Fatalf(
+			"CaptureVideoCapability = Capable=false after enabling shared-context capture, want true (reason=%q)",
+			got.Reason,
+		)
 	}
 }

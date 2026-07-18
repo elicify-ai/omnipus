@@ -52,6 +52,7 @@ func (f *fakeRelay) HandleIngestOffer(sdp string) (string, error) { return "inge
 func (f *fakeRelay) HandleViewerOffer(viewerID, sdp string) (string, error) {
 	return "viewer-answer-" + viewerID, nil
 }
+
 func (f *fakeRelay) CloseViewer(viewerID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -316,6 +317,16 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	// isolation that write would permanently pollute this pod's real
 	// $OMNIPUS_HOME/browser/chromium directory for every other test/process
 	// on the box, not just leak state within this test run.
+	// Force the exec resolver onto the managed install path (the fake binary
+	// below), bypassing its $PATH lookup of a real google-chrome/chromium.
+	// Without this, a runner that happens to have real Chrome installed (GH
+	// Actions ubuntu-latest images do) resolves to it INSTEAD of the fake
+	// binary this test relies on for a deterministic, fast launch failure —
+	// resolveExecPath (exec_resolver.go's execPathCaches.resolve) tries $PATH
+	// BEFORE the managed install root unless this override is set. See
+	// exec_resolver.go's resolve doc comment.
+	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
+
 	tmpDir := t.TempDir()
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
@@ -340,7 +351,11 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	fakeBin := filepath.Join(fakeBinDir, "chrome")
 	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 1\n"), 0o755))
 
-	require.True(t, browser.ClassifyVideoCapability(installRoot).Capable, "capability gate must now report Capable=true")
+	require.True(
+		t,
+		browser.ClassifyVideoCapability(installRoot).Capable,
+		"capability gate must now report Capable=true",
+	)
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState
@@ -659,7 +674,11 @@ func TestCaptureIngestWSHandler_ValidateInbound_RejectsSchemaInvalidHello(t *tes
 
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
 	_, _, readErr := conn.ReadMessage()
-	require.Error(t, readErr, "a schema-invalid hello (token too short) must close the connection when validate_inbound is enabled")
+	require.Error(
+		t,
+		readErr,
+		"a schema-invalid hello (token too short) must close the connection when validate_inbound is enabled",
+	)
 }
 
 func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) {
@@ -707,7 +726,11 @@ func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) 
 	// conn1 must be closed by the server once conn2's hello supersedes it.
 	conn1.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
 	_, _, readErr := conn1.ReadMessage()
-	require.Error(t, readErr, "the OLD ingest connection must be closed once a second hello with the same token arrives")
+	require.Error(
+		t,
+		readErr,
+		"the OLD ingest connection must be closed once a second hello with the same token arrives",
+	)
 }
 
 // ── ADR-048 condition-2 fence (re-scoped 2026-07-18) ─────────────────────────
@@ -726,6 +749,13 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
 	}
+	// See TestHandleWebRTCOffer_CapableButLaunchFails' identical Setenv for
+	// why: forces the exec resolver onto the fake managed binary below
+	// instead of a real Chrome the runner might have on $PATH. This
+	// particular test denies at the fence before ever reaching a real
+	// launch attempt, but the override is set for defense-in-depth
+	// consistency with its sibling fence tests in this file.
+	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
@@ -748,7 +778,13 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 
 	// Another agent's capture session, actively viewed.
 	var calls int32
-	otherCS, err := browser.NewCaptureSessionWithDeps(nil, "other-agent", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
+	otherCS, err := browser.NewCaptureSessionWithDeps(
+		nil,
+		"other-agent",
+		&fakeRelay{},
+		fakeEncoderStarter(&calls, nil),
+		nil,
+	)
 	require.NoError(t, err)
 	otherCS.AddViewer("their-viewer")
 	handler.captures.set("other-agent", otherCS)
@@ -791,6 +827,12 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 	if runtime.GOOS != "linux" {
 		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
 	}
+	// See TestHandleWebRTCOffer_CapableButLaunchFails' identical Setenv for
+	// why: this test's ladder proceeds past the fence into a real launch
+	// attempt for the requesting agent, which must hit the fake managed
+	// binary below deterministically rather than a real Chrome the runner
+	// might have on $PATH.
+	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
@@ -812,7 +854,13 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 
 	// Another agent's capture session with NO viewers (grace-period leftover).
 	var calls int32
-	otherCS, err := browser.NewCaptureSessionWithDeps(nil, "other-agent", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
+	otherCS, err := browser.NewCaptureSessionWithDeps(
+		nil,
+		"other-agent",
+		&fakeRelay{},
+		fakeEncoderStarter(&calls, nil),
+		nil,
+	)
 	require.NoError(t, err)
 	handler.captures.set("other-agent", otherCS)
 	t.Cleanup(otherCS.Stop)

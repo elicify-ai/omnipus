@@ -12,6 +12,7 @@
 // browser_webrtc_fixwave_test.go's fixtures (newBrowserWSTestHandler,
 // newFixWaveHandlerWithAudit, newTestBrowserWSConn/drainOneFrame/
 // decodeWebRTCState, fakeRelay/fakeEncoderStarter).
+
 package gateway
 
 import (
@@ -58,6 +59,13 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	if runtime.GOOS != "linux" {
 		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
 	}
+	// Force the exec resolver onto the managed install path (the fake binary
+	// below), bypassing its $PATH lookup of a real google-chrome/chromium —
+	// a runner with real Chrome installed (GH Actions ubuntu-latest images
+	// do) would otherwise resolve to it INSTEAD of the fake binary this test
+	// relies on for a deterministic launch failure past the fence. See
+	// exec_resolver.go's execPathCaches.resolve doc comment.
+	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
@@ -103,7 +111,9 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	select {
 	case <-done:
 		handler.captureFenceMu.Unlock()
-		t.Fatal("handleWebRTCOffer completed its fence-check+ensure section while captureFenceMu was held externally — the critical section is not actually serialized (TOCTOU fix 3a regressed)")
+		t.Fatal(
+			"handleWebRTCOffer completed its fence-check+ensure section while captureFenceMu was held externally — the critical section is not actually serialized (TOCTOU fix 3a regressed)",
+		)
 	case <-time.After(300 * time.Millisecond):
 		// Expected: still blocked on the mutex.
 	}
@@ -137,6 +147,9 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	if runtime.GOOS != "linux" {
 		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
 	}
+	// See TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure's
+	// identical Setenv for why.
+	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
 	handler, al, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
@@ -159,12 +172,14 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	startCalled := make(chan struct{})
 	releaseStart := make(chan struct{})
 	t.Cleanup(func() { close(releaseStart) })
-	starter := browser.EncoderStarter(func(context.Context, *browser.BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
-		close(startCalled)
-		<-releaseStart
-		ctx, cancel := context.WithCancel(context.Background())
-		return ctx, cancel, nil
-	})
+	starter := browser.EncoderStarter(
+		func(context.Context, *browser.BrowserManager, string, string, string) (context.Context, context.CancelFunc, error) {
+			close(startCalled)
+			<-releaseStart
+			ctx, cancel := context.WithCancel(context.Background())
+			return ctx, cancel, nil
+		},
+	)
 	otherCS, err := browser.NewCaptureSessionWithDeps(nil, "other-agent-starting", &fakeRelay{}, starter, nil)
 	require.NoError(t, err)
 	handler.captures.set("other-agent-starting", otherCS)
@@ -179,7 +194,11 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 		t.Fatal("otherCS.Start() never invoked its EncoderStarter")
 	}
 	require.True(t, otherCS.IsStarting(), "otherCS must be observed mid-Start() at this point")
-	require.Zero(t, otherCS.ViewerCount(), "otherCS must look viewerless — AddViewer has not run yet, exactly the pre-fix false-supersede trigger")
+	require.Zero(
+		t,
+		otherCS.ViewerCount(),
+		"otherCS must look viewerless — AddViewer has not run yet, exactly the pre-fix false-supersede trigger",
+	)
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState
@@ -211,13 +230,21 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	// sets reason=multi_agent_capture_denied.
 	for _, r := range readBrowserAuditRecords(t, auditDir) {
 		if r.Event == audit.EventBrowserWebRTCStreamStartFailed {
-			assert.NotEqual(t, "multi_agent_capture_denied", r.Fields["reason"],
-				"the requesting agent's offer must not be denied at the fence just because another agent's session is still starting")
+			assert.NotEqual(
+				t,
+				"multi_agent_capture_denied",
+				r.Fields["reason"],
+				"the requesting agent's offer must not be denied at the fence just because another agent's session is still starting",
+			)
 		}
 	}
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
-	require.False(t, got.Available, "this chrome-less harness must fail at launch (proved it proceeded PAST the fence, not denied by it)")
+	require.False(
+		t,
+		got.Available,
+		"this chrome-less harness must fail at launch (proved it proceeded PAST the fence, not denied by it)",
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +275,13 @@ func TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPin
 	relay.setStats(webrtc.Stats{HasVideo: true, VideoPackets: 100}) // frozen for the whole test
 
 	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, "watchdog-stall-agent", relay, fakeEncoderStarter(&calls, nil), nil)
+	cs, err := browser.NewCaptureSessionWithDeps(
+		nil,
+		"watchdog-stall-agent",
+		relay,
+		fakeEncoderStarter(&calls, nil),
+		nil,
+	)
 	require.NoError(t, err)
 	_, err = cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
 	require.NoError(t, err)
@@ -276,8 +309,13 @@ func TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPin
 
 	go handler.watchEncoderLiveness(cs, "watchdog-stall-agent")
 
-	require.Eventually(t, func() bool { return atomic.LoadInt32(&onStoppedCalls) == 1 }, 2*time.Second, 5*time.Millisecond,
-		"watchdog must stop a session whose VideoPackets never advances across consecutive ticks with an attached viewer, despite a fresh ping beacon")
+	require.Eventually(
+		t,
+		func() bool { return atomic.LoadInt32(&onStoppedCalls) == 1 },
+		2*time.Second,
+		5*time.Millisecond,
+		"watchdog must stop a session whose VideoPackets never advances across consecutive ticks with an attached viewer, despite a fresh ping beacon",
+	)
 }
 
 // TestWatchEncoderLiveness_DoesNotStop_WhenVideoPacketsAdvancing is the
@@ -297,7 +335,13 @@ func TestWatchEncoderLiveness_DoesNotStop_WhenVideoPacketsAdvancing(t *testing.T
 
 	relay := &fakeRelay{}
 	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, "watchdog-progress-agent", relay, fakeEncoderStarter(&calls, nil), nil)
+	cs, err := browser.NewCaptureSessionWithDeps(
+		nil,
+		"watchdog-progress-agent",
+		relay,
+		fakeEncoderStarter(&calls, nil),
+		nil,
+	)
 	require.NoError(t, err)
 	_, err = cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
 	require.NoError(t, err)
@@ -332,7 +376,11 @@ func TestWatchEncoderLiveness_DoesNotStop_WhenVideoPacketsAdvancing(t *testing.T
 	t.Cleanup(cs.Stop)
 
 	time.Sleep(300 * time.Millisecond) // ~60 check ticks with continuous packet progress
-	require.Zero(t, atomic.LoadInt32(&onStoppedCalls), "watchdog must not stop a session whose VideoPackets keeps advancing")
+	require.Zero(
+		t,
+		atomic.LoadInt32(&onStoppedCalls),
+		"watchdog must not stop a session whose VideoPackets keeps advancing",
+	)
 
 	select {
 	case <-watchdogDone:
@@ -425,10 +473,21 @@ func TestCaptureIngestConn_SendJSON_WriteDeadlineBoundsWedgedWrite(t *testing.T)
 
 	select {
 	case sendErr := <-errCh:
-		require.Error(t, sendErr, "sendJSON must eventually fail once the wedged peer stops draining the connection (never got backpressure within 500 writes — increase payload/iterations if this flakes)")
-		require.Contains(t, sendErr.Error(), "capture-ingest: write frame", "the failure must surface as the write-frame error path")
+		require.Error(
+			t,
+			sendErr,
+			"sendJSON must eventually fail once the wedged peer stops draining the connection (never got backpressure within 500 writes — increase payload/iterations if this flakes)",
+		)
+		require.Contains(
+			t,
+			sendErr.Error(),
+			"capture-ingest: write frame",
+			"the failure must surface as the write-frame error path",
+		)
 	case <-time.After(15 * time.Second):
-		t.Fatal("sendJSON never returned — SetWriteDeadline is not bounding the write (this is exactly the fix-wave HIGH bug: a wedged encoder socket blocking forever, which would wedge CaptureSession.Stop() permanently)")
+		t.Fatal(
+			"sendJSON never returned — SetWriteDeadline is not bounding the write (this is exactly the fix-wave HIGH bug: a wedged encoder socket blocking forever, which would wedge CaptureSession.Stop() permanently)",
+		)
 	}
 }
 

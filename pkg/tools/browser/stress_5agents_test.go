@@ -320,6 +320,9 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 	topLevel := countTopLevelChromeProcesses(cfg.ExecPath)
 	t.Logf("top-level chrome/chrome-headless-shell processes: %d", topLevel)
 	if topLevel != 1 {
-		t.Errorf("expected exactly 1 top-level chrome/chrome-headless-shell process (one shared Chrome); got %d", topLevel)
+		t.Errorf(
+			"expected exactly 1 top-level chrome/chrome-headless-shell process (one shared Chrome); got %d",
+			topLevel,
+		)
 	}
 }
