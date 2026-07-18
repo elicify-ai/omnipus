@@ -352,31 +352,51 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 	return ranNow, startErr
 }
 
+// bringToFrontTimeout bounds the ENTIRE bringAgentTabToFront effort —
+// session resolution AND the tab-focus action together, not just the
+// chromedp.Run half. cs.mgr.Session() takes no context parameter, so the
+// first call for an agent whose shared Chrome has never launched yet blocks
+// for as long as that launch takes: up to cdppipe's CDP-liveness-probe dial
+// timeout (~20s, cdppipe.defaultDialTimeout) if the resolved Chromium binary
+// is slow, broken, or unreachable. An earlier version of this function only
+// timed the chromedp.Run half, leaving Session()'s own resolution unbounded
+// on the capture-start critical path — directly contradicting this
+// function's "best-effort, a transient CDP hiccup must not cost the viewer
+// their stream" design intent (regression: TestWebRTCEndToEndInProcess
+// flaked on CI-worker CPU contention, spending most of the viewer's own
+// answer-read deadline blocked here against a deliberately-broken decoy
+// exec_path before this fix).
+const bringToFrontTimeout = 5 * time.Second
+
 // bringAgentTabToFront focuses this agent's current active tab (Page.
 // bringToFront on the DefaultSessionID session's active-tab context) so
 // encoder.js's active-in-last-focused-window tab resolution binds THIS
 // agent's tab — see the call site in Start for the full rationale.
-// Best-effort by design: on any failure the capture proceeds with the
-// historical fallback resolution (first non-extension tab) rather than
+// Best-effort by design: on any failure OR timeout the capture proceeds with
+// the historical fallback resolution (first non-extension tab) rather than
 // failing the whole start — a transient CDP hiccup must not cost the viewer
 // their stream. A no-op when cs.mgr is nil (test-construction pattern).
 func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 	if cs.mgr == nil {
 		return
 	}
-	tabCtx, err := cs.mgr.Session(DefaultSessionID)
-	if err != nil {
-		cs.logf("capture[%s]: bring agent tab to front: resolve session: %v", cs.agentID, err)
-		return
-	}
-	runCtx, cancel := context.WithTimeout(tabCtx, 5*time.Second)
-	defer cancel()
-	// Honor the caller's ctx cancellation too (Start's ctx), without making
-	// runCtx a child of it — tabCtx must stay the chromedp parent so the run
-	// targets the agent tab.
+	// Session resolution AND chromedp.Run both happen inside this one
+	// goroutine, raced against bringToFrontTimeout as a single bound — see
+	// that const's doc comment for why Session() itself must be included,
+	// not just the chromedp.Run call.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		tabCtx, err := cs.mgr.Session(DefaultSessionID)
+		if err != nil {
+			cs.logf("capture[%s]: bring agent tab to front: resolve session: %v", cs.agentID, err)
+			return
+		}
+		// Honor the caller's ctx cancellation too (Start's ctx), without
+		// making runCtx a child of it — tabCtx must stay the chromedp
+		// parent so the run targets the agent tab.
+		runCtx, cancel := context.WithTimeout(tabCtx, bringToFrontTimeout)
+		defer cancel()
 		if runErr := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
 			return page.BringToFront().Do(c)
 		})); runErr != nil {
@@ -385,6 +405,8 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 	}()
 	select {
 	case <-done:
+	case <-time.After(bringToFrontTimeout):
+		cs.logf("capture[%s]: bring agent tab to front: timed out after %s waiting for session resolution (capture proceeds; may fall back to first-tab resolution)", cs.agentID, bringToFrontTimeout)
 	case <-ctx.Done():
 	}
 }
