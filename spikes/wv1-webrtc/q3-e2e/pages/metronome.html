@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WV1 Metronome — beep+flash sync target</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #050505; color: #eee; font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; overflow: hidden; }
+  body.flash { background: #ffffff; color: #000; }
+  #wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; }
+  #tick { font-size: 18vw; font-weight: bold; font-variant-numeric: tabular-nums; }
+  #clock { font-size: 4vw; margin-top: 2vh; font-variant-numeric: tabular-nums; }
+  #label { font-size: 2vw; opacity: .6; margin-top: 1vh; text-align: center; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="tick">0</div>
+  <div id="clock">--:--:--.---</div>
+  <div id="label">WV1 metronome — flash + 880Hz/150ms beep, once per second (A/V sync proof)</div>
+</div>
+<script>
+'use strict';
+const BEAT = 1.0;        // seconds between beats
+const BEEP_DUR = 0.15;   // seconds
+const FREQ = 880;        // Hz
+const LOOKAHEAD = 0.1;   // schedule beats within this window (seconds)
+const SCHEDULE_INTERVAL_MS = 25;
+
+let ctx = null;
+let nextBeatTime = 0;
+let tickCount = 0;
+let started = false;
+
+function startAudio() {
+  if (started) return;
+  started = true;
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  ctx.resume().catch(() => {});
+  nextBeatTime = ctx.currentTime + 0.2;
+  setInterval(scheduler, SCHEDULE_INTERVAL_MS);
+  requestAnimationFrame(updateClock);
+}
+
+function scheduler() {
+  while (nextBeatTime < ctx.currentTime + LOOKAHEAD) {
+    scheduleBeat(nextBeatTime);
+    nextBeatTime += BEAT;
+  }
+}
+
+// Both the audible beep and the visual flash are derived from the SAME
+// scheduled time `time` (Web Audio's high-precision clock): the oscillator
+// is started precisely at `time` via the Web Audio scheduler, and the
+// flash is triggered via a setTimeout whose delay is computed from that
+// same `time` minus the current audio clock. A human seeing the flash and
+// hearing the beep together is direct evidence of A/V sync through the
+// whole capture->WebRTC->relay->viewer pipeline.
+function scheduleBeat(time) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = FREQ;
+  gain.gain.setValueAtTime(0.0001, time);
+  gain.gain.exponentialRampToValueAtTime(0.9, time + 0.01);
+  gain.gain.setValueAtTime(0.9, time + BEEP_DUR - 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, time + BEEP_DUR);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(time);
+  osc.stop(time + BEEP_DUR + 0.02);
+
+  const delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
+  tickCount++;
+  document.getElementById('tick').textContent = String(tickCount);
+  setTimeout(() => {
+    document.body.classList.add('flash');
+    setTimeout(() => document.body.classList.remove('flash'), BEEP_DUR * 1000);
+  }, delayMs);
+}
+
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toISOString().split('T')[1].replace('Z', '');
+  requestAnimationFrame(updateClock);
+}
+
+// This page is opened in the encoder Chrome with
+// --autoplay-policy=no-user-gesture-required, so AudioContext.resume()
+// succeeds without a gesture. Click fallback covers manual/human testing
+// in a normal browser tab where autoplay policy applies.
+window.addEventListener('load', startAudio);
+document.body.addEventListener('click', startAudio);
+</script>
+</body>
+</html>

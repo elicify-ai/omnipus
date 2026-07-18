@@ -97,8 +97,44 @@ build -o wv1spike . && nohup ./wv1spike > server.out 2>&1 & disown`
 
 ---
 
+## Q3 — end-to-end video + audio TOGETHER through the target pipeline: **YES (proven in-pod)**
+
+**Verdict: the full target architecture works as one flow** — headless Chrome tab
+capture (video+audio MediaStream via the Q2 extension recipe) → WebRTC → **Pion
+relay in Go (raw RTP forwarding, no transcoding)** → viewer browser rendering both
+tracks. Spike code: `spikes/wv1-webrtc/q3-e2e/` (server superset keeps the Q1 test
+page at `/q1`; viewer at `/view`; captured content is a `/metronome` page whose
+screen flash coincides with a 1Hz beep, so A/V sync is human-verifiable).
+
+Measured (39s sustained run, scripted viewer):
+- Codecs negotiated **VP8 + Opus**; RTP counters climbing on ingest AND viewer,
+  `packetsLost=0`; **framesDecoded 1172 @ 30.0fps steady**, 800×600.
+- **Audio RMS on the received track pulsed at exactly 1.00s intervals** (12
+  consecutive peaks, max 0.637) — real tab audio, matching the metronome, in sync
+  with the tick counter visible in decoded frames.
+- **Encoder kill/restart mid-run recovered cleanly** — new ingest PC with fresh
+  SSRCs replaced the old one; viewers resumed.
+
+Build-phase learnings (carry into the ADR/implementation):
+1. Pion needs explicit `MediaEngine.RegisterDefaultCodecs()` +
+   `RegisterDefaultInterceptors()` for media — the Q1 data-channel-only defaults
+   won't negotiate Chrome's VP8/Opus offer.
+2. SFU pattern: one shared `TrackLocalStaticRTP` per kind, `AddTrack`ed to every
+   viewer PC — N viewers, zero transcoding, worked first try.
+3. **PLI goes to the encoder's PC** (`ingestPC.WriteRTCP` with the remote track's
+   `MediaSSRC`) on viewer join + a short periodic burst, or late viewers never get
+   a keyframe.
+4. RTP/RTCP drain goroutines on both `RTPReceiver` and `RTPSender` are load-bearing
+   (buffer stalls otherwise).
+5. Self-consuming `tabCapture` inside the extension page (no separate consumer tab)
+   is simpler than Q2's cross-tab pattern and reliable across launches.
+
+---
+
 ## Gate status
 
-Q2 = YES (done). Q1 = pending one external run. Both YES → amend/supersede ADR-044
+Q2 = YES (done). Q3 e2e = YES (done, in-pod). Q1 = pending one external run
+(operator: open `/view` — a connected `srflx/udp` pair there proves traversal with
+real media, superseding the `/q1` data-channel-only test). Both YES → amend/supersede ADR-044
 (promote Option B / Pion to Accepted, encode the Q2 recipe + Q1 traversal findings)
 → `/plan-spec` → implement (wave pattern + 7-reviewer gate + UAT).
