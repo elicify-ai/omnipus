@@ -89,6 +89,24 @@ func (r *captureRegistry) removeIfCurrent(agentID string, cs *browser.CaptureSes
 	r.mu.Unlock()
 }
 
+// otherSessions returns a snapshot of every registered capture session whose
+// agentID differs from exclude — the ADR-048 condition-2 fence uses it to
+// detect a genuinely conflicting (actively-viewed) capture and to supersede
+// viewerless leftovers. Stopped sessions are removed from the registry by
+// their onStopped hook (see ensureCaptureSession), so entries here are
+// live-or-gracing sessions only.
+func (r *captureRegistry) otherSessions(exclude string) map[string]*browser.CaptureSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]*browser.CaptureSession, len(r.sessions))
+	for id, cs := range r.sessions {
+		if id != exclude {
+			out[id] = cs
+		}
+	}
+	return out
+}
+
 // findByToken scans active sessions for one whose minted token matches
 // candidateHex (ValidateToken does the actual constant-time compare per
 // candidate — wave-plan W2-A item 3). Returns ("", nil) if no session
@@ -187,25 +205,40 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		return
 	}
 
-	// ADR-048 condition 2 (fix 6): the multi-agent capture-target gap. In
-	// shared-default-context capture mode the encoder always captures
-	// whichever tab is GLOBALLY active, not necessarily this agent's — so
-	// with a SECOND agent already holding a live browser session, which
-	// agent a viewer actually sees is ambiguous. Only checked when about to
-	// start a BRAND NEW capture session for this agent (mgr.CaptureSession()
-	// == nil); a second viewer offer for an agent whose session is already
+	// ADR-048 condition 2 (fix 6, re-scoped after the 2026-07-18 UAT
+	// "video black when the agent drives" root-cause): the multi-agent
+	// capture conflict. The fence used to deny a new capture whenever ANY
+	// other agent merely had a live browser session — which made the panel
+	// permanently video-less in the most ordinary single-user flow (human
+	// tests agent A's panel → chats with agent B whose tools open B's own
+	// session → every subsequent panel attach, to EITHER agent, was denied
+	// until restart). Two changes make that blanket deny unnecessary:
+	// CaptureSession.Start now brings the requesting agent's tab to front
+	// before the encoder resolves its capture target (so a NEW capture
+	// deterministically binds THIS agent's tab even with other agents'
+	// windows present), and the true remaining conflict — one shared Chrome
+	// cannot serve two SIMULTANEOUSLY-VIEWED captures whose focus demands
+	// fight — is precisely detectable via the capture registry. So: deny
+	// only when another agent's capture session is still actively viewed;
+	// silently supersede (Stop) viewerless leftovers (grace-period sessions
+	// whose panel already detached). Only checked when about to start a
+	// BRAND NEW capture session for this agent (mgr.CaptureSession() ==
+	// nil); a second viewer offer for an agent whose session is already
 	// running just joins it, which is always fine regardless of what other
 	// agents are doing.
 	if mgr.CaptureSession() == nil {
-		if coord := mgr.Coordinator(); coord != nil {
-			if other, found := firstOtherLiveAgent(coord.LiveSessionAgents(), frame.AgentId); found {
-				slog.Warn("browser-webrtc: capture denied — shared default-context capture is single-agent in v1 (ADR-048 condition 2)",
+		for other, otherCS := range h.captures.otherSessions(frame.AgentId) {
+			if otherCS.ViewerCount() > 0 {
+				slog.Warn("browser-webrtc: capture denied — another agent's capture session is actively viewed (ADR-048 condition 2, shared default-context capture is single-capture in v1)",
 					"agent_id", frame.AgentId, "other_live_agent_id", other)
 				h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "error")
 				h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStartFailed,
 					map[string]any{"session_id": sessID, "reason": "multi_agent_capture_denied", "other_agent_id": other})
 				return
 			}
+			slog.Info("browser-webrtc: superseding another agent's viewerless capture session",
+				"agent_id", frame.AgentId, "superseded_agent_id", other)
+			otherCS.Stop()
 		}
 	}
 
@@ -259,18 +292,6 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		SessionId: &sessID,
 	}, dropContext(sessID, viewerID, "webrtc-answer"))
 	h.sendWebRTCState(wc, sessID, viewerID, true, true, stats.HasAudio, "")
-}
-
-// firstOtherLiveAgent returns the first agentID in ids that is NOT exclude —
-// used by the ADR-048 condition-2 multi-agent capture fence to name the
-// other agent in its denial log line.
-func firstOtherLiveAgent(ids []string, exclude string) (string, bool) {
-	for _, id := range ids {
-		if id != exclude {
-			return id, true
-		}
-	}
-	return "", false
 }
 
 // webrtcUnavailableReason evaluates the ADR-047 D3 / ADR-048 condition-3

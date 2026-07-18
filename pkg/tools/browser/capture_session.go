@@ -322,6 +322,27 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 		cs.tabCancel = tabCancel
 		cs.started = true
 		cs.mu.Unlock()
+		// Deterministic capture-target binding (UAT 2026-07-18 "video black
+		// when the agent drives" root cause): encoder.js resolves its capture
+		// target as "the ACTIVE tab in the LAST-FOCUSED window"
+		// (findActiveTargetTab). The encoder target startEncoder just created
+		// lives in its own freshly-created window, which is the last-focused
+		// window at resolution time — the active-tab query then finds only
+		// the (filtered-out) extension page and falls back to "first
+		// non-extension tab", i.e. the OLDEST tab in the shared Chrome. With
+		// one agent that is coincidentally correct; with a second agent's
+		// session present the fallback binds the WRONG agent's tab. Bringing
+		// the REQUESTING agent's active tab to front here — after the
+		// encoder-target creation (the last window-focus-stealing step) and
+		// strictly before the encoder resolves its target (which happens only
+		// after its page loads AND the ingest-WS hello/config round-trip
+		// completes) — makes the last-focused window deterministically this
+		// agent's, so the active-tab query resolves it directly, no fallback.
+		// This is what lets handleWebRTCOffer's ADR-048 condition-2 fence be
+		// scoped to ACTIVELY-VIEWED conflicting captures instead of denying
+		// on any other live agent session. (Same BringToFront-before-capture
+		// precedent as live.go's StartScreencast/rebindScreencast.)
+		cs.bringAgentTabToFront(ctx)
 		cs.logf("capture[%s]: started (encoder page navigating)", cs.agentID)
 	})
 
@@ -329,6 +350,43 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 	startErr := cs.startErr
 	cs.mu.Unlock()
 	return ranNow, startErr
+}
+
+// bringAgentTabToFront focuses this agent's current active tab (Page.
+// bringToFront on the DefaultSessionID session's active-tab context) so
+// encoder.js's active-in-last-focused-window tab resolution binds THIS
+// agent's tab — see the call site in Start for the full rationale.
+// Best-effort by design: on any failure the capture proceeds with the
+// historical fallback resolution (first non-extension tab) rather than
+// failing the whole start — a transient CDP hiccup must not cost the viewer
+// their stream. A no-op when cs.mgr is nil (test-construction pattern).
+func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
+	if cs.mgr == nil {
+		return
+	}
+	tabCtx, err := cs.mgr.Session(DefaultSessionID)
+	if err != nil {
+		cs.logf("capture[%s]: bring agent tab to front: resolve session: %v", cs.agentID, err)
+		return
+	}
+	runCtx, cancel := context.WithTimeout(tabCtx, 5*time.Second)
+	defer cancel()
+	// Honor the caller's ctx cancellation too (Start's ctx), without making
+	// runCtx a child of it — tabCtx must stay the chromedp parent so the run
+	// targets the agent tab.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if runErr := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+			return page.BringToFront().Do(c)
+		})); runErr != nil {
+			cs.logf("capture[%s]: bring agent tab to front failed (capture may fall back to first-tab resolution): %v", cs.agentID, runErr)
+		}
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 // Relay returns this session's RelaySession (the Pion-backed webrtc.Session
