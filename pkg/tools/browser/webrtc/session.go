@@ -11,6 +11,15 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+// Available reports whether this build compiles in the real Pion-backed
+// Session (true here; false in stub.go's lite build). Exported so a caller
+// deciding the ADR-047 D3 gate ladder (wave-plan W2-A: "WebRTCEnabled, then
+// lite/webrtc.ErrUnavailable, then ClassifyVideoCapability, else attempt a
+// real offer") can distinguish "this binary has no WebRTC at all" from a
+// runtime failure WITHOUT first standing up a capture session/encoder page
+// just to provoke an ErrUnavailable from a real call.
+var Available = true
+
 // Session is the SFU-style forwarding state shared by the ingest leg (the
 // headless-Chrome tabCapture encoder page connects via HandleIngestOffer) and
 // the viewer legs (external browsers connect via HandleViewerOffer). Exactly

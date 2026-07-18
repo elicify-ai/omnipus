@@ -265,6 +265,13 @@ type BrowserManager struct {
 	// (those paths use Chrome's default "" browser context).
 	browserCtxID cdp.BrowserContextID
 
+	// capture/captureMu (ADR-047, wave-plan W2-A) hold this manager's single
+	// active WebRTC CaptureSession, guarded by their own mutex — see
+	// CaptureSession()/EnsureCaptureSession()'s doc comments for why this is
+	// deliberately NOT m.mu.
+	capture   *CaptureSession
+	captureMu sync.Mutex
+
 	// pendingAdopt tracks CDP target IDs currently being adopted (ADR-041
 	// D2's adoptTarget), mirroring `pending`'s exact race-guard shape: the
 	// best-effort passive listener (installTargetListenerLocked) and a
@@ -369,6 +376,112 @@ func (m *BrowserManager) Live() *LiveViewRegistry {
 func (m *BrowserManager) AttachSharedChrome(coordinator *BrowserCoordinator, agentID string) {
 	m.coordinator = coordinator
 	m.agentID = agentID
+}
+
+// InstallRoot returns the managed-Chromium install root this manager's
+// config resolves to (see InstallRootForProfileDir) — the same directory
+// installer.go's EnsureChromium/EnsureChromiumFullBuild install into and
+// capability.go's ClassifyVideoCapability inspects. WebRTC build (W2-A):
+// exposed so the gateway's WebRTC availability gate can classify video
+// capability for this agent's managed Chrome without duplicating the
+// ProfileDir-derived path arithmetic.
+func (m *BrowserManager) InstallRoot() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return InstallRootForProfileDir(m.cfg.ProfileDir)
+}
+
+// AgentID returns the agent identifier this manager was attached to via
+// AttachSharedChrome (empty in remote-CDP-override mode or before
+// attachment). WebRTC build (W2-A): the capture session needs it for
+// logging/audit context without reaching into an unexported field from
+// outside this package.
+func (m *BrowserManager) AgentID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.agentID
+}
+
+// Coordinator returns the shared-Chrome coordinator this manager is attached
+// to (nil in remote-CDP-override mode or the no-coordinator test fallback —
+// see AttachSharedChrome). WebRTC build (W2-A): the capture session needs it
+// to load/verify the capture extension (BrowserCoordinator.LoadExtension)
+// before creating the encoder page.
+func (m *BrowserManager) Coordinator() *BrowserCoordinator {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.coordinator
+}
+
+// CaptureSession returns this manager's active WebRTC CaptureSession, or nil
+// if none has been created yet (ADR-047 D2, wave-plan W2-A). Guarded by its
+// own mutex (m.captureMu), deliberately separate from m.mu, because
+// CaptureSession's own lifecycle methods call back into m.Session()/
+// m.createTab() etc., which take m.mu themselves — holding m.mu across that
+// would deadlock.
+func (m *BrowserManager) CaptureSession() *CaptureSession {
+	m.captureMu.Lock()
+	defer m.captureMu.Unlock()
+	return m.capture
+}
+
+// EnsureCaptureSession returns this manager's existing CaptureSession, or
+// lazily constructs one via newFn if none exists yet. newFn is called at
+// most once per manager (subsequent viewers reuse the same session, "one
+// active stream per agent" — wave-plan W2-A item 4); it receives no
+// arguments because every dependency a production CaptureSession needs
+// (this manager, its agent id, WebRTC config, the input sink) is already
+// known to the caller's closure. newFn's error (NewCaptureSession's own
+// crypto/rand.Read failure — effectively never happens, but MUST NOT be
+// silently swallowed) is propagated to the caller rather than caching a nil
+// session, so a transient failure doesn't wedge this manager into always
+// returning nil for the rest of the process's life.
+func (m *BrowserManager) EnsureCaptureSession(newFn func() (*CaptureSession, error)) (*CaptureSession, error) {
+	m.captureMu.Lock()
+	defer m.captureMu.Unlock()
+	if m.capture != nil {
+		return m.capture, nil
+	}
+	cs, err := newFn()
+	if err != nil {
+		return nil, err
+	}
+	m.capture = cs
+	return cs, nil
+}
+
+// defaultSessionBrowserCtx returns the DefaultSessionID session's browserCtx
+// (the long-lived chromedp handle OpenTab reuses to append sibling tabs — see
+// its doc comment), or nil if that session has no browsing context yet.
+// WebRTC build (W2-A): defaultEncoderStarter uses this to create the
+// encoder-page target as a sibling of the agent's own tab, in the SAME
+// browser context/window, WITHOUT registering it in m.sessions[...].tabs
+// (unlike OpenTab, whose whole point is to add a tab the agent/user tab
+// strip shows).
+func (m *BrowserManager) defaultSessionBrowserCtx() context.Context {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	se, ok := m.sessions[DefaultSessionID]
+	if !ok {
+		return nil
+	}
+	return se.browserCtx
+}
+
+// ClearCaptureSession drops this manager's CaptureSession reference,
+// provided it still IS cur (guards against a stale caller clearing a session
+// that was already replaced by a newer one — mirrors the "only touch the
+// entry if it still points at what I expect" discipline used throughout this
+// package, e.g. removeViewer in the webrtc package). Called once a
+// CaptureSession has fully stopped (grace-timer fire, browser death, or
+// manager Shutdown) so the NEXT viewer offer creates a fresh session rather
+// than reusing torn-down state.
+func (m *BrowserManager) ClearCaptureSession(cur *CaptureSession) {
+	m.captureMu.Lock()
+	defer m.captureMu.Unlock()
+	if m.capture == cur {
+		m.capture = nil
+	}
 }
 
 // blockedSchemes are URL schemes that bypass network-level SSRF and must be

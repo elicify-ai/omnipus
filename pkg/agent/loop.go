@@ -43,6 +43,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 	"github.com/elicify-ai/omnipus/pkg/voice"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -1676,6 +1677,29 @@ func registerSharedTools(
 				// every display-less server deployment (the common case).
 				// There is no supported way to run non-headless today.
 				browserCfg.PersistSession = cfg.Tools.Browser.PersistSession
+
+				// WebRTC build (ADR-047, wave-plan W2-A): seed the gateway-owned
+				// tabCapture capture extension into $OMNIPUS_HOME/browser/
+				// (config.OmnipusHomeDir()/browser — the helper, never an ad-hoc
+				// join) and wire ExtensionDir/ExtensionID onto browserCfg so the
+				// coordinator's launch flags (--allowlisted-extension-id,
+				// --enable-unsafe-extension-debugging — exec_resolver.go) apply
+				// and its post-launch auto-load (coordinator.go's launchChrome)
+				// picks it up. Seed is atomic/idempotent (captureext.Seed) and
+				// harmless even when WebRTC ends up gated off at request time
+				// (WebRTCEnabled=false, lite build, or ClassifyVideoCapability
+				// not_capable) — the extension simply never gets used. Best-effort:
+				// a seed failure only means the WebRTC capture path degrades to
+				// "not_capable"-equivalent (no ExtensionDir set, so LoadExtension
+				// is never attempted) — it must never abort ordinary browser-tool
+				// registration for this agent.
+				if extDir, seedErr := captureext.Seed(filepath.Join(config.OmnipusHomeDir(), "browser")); seedErr != nil {
+					logger.WarnCF("agent", "WebRTC capture extension seed failed — live-view WebRTC will report not_capable",
+						map[string]any{"error": seedErr.Error()})
+				} else {
+					browserCfg.ExtensionDir = extDir
+					browserCfg.ExtensionID = captureext.ExtensionID
+				}
 
 				// Use the singleton SSRF checker (built from config, honors
 				// allow_internal). Fall back to a default checker (no allowlist)

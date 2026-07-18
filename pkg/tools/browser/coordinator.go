@@ -630,7 +630,19 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	if rc == nil || rc.Browser == nil {
 		return "", fmt.Errorf("browser: coordinator: shared Chrome browser handle unavailable")
 	}
-	id, err := extensions.LoadUnpacked(dir).Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	// WithEnableInIncognito(true) (WebRTC build W2-A): every per-agent browser
+	// context this coordinator creates is a raw CDP
+	// target.CreateBrowserContext — which cdproto's own doc comment
+	// describes as "similar to an incognito profile" — never the DEFAULT
+	// browser context Extensions.loadUnpacked otherwise scopes to. The
+	// capture extension's encoder page is deliberately opened INSIDE the
+	// capturing agent's own context/window (capture_session.go's
+	// defaultEncoderStarter — required so encoder.js's
+	// chrome.tabs.query({lastFocusedWindow:true}) resolves to that agent's
+	// own tab, not some other agent's), so without this flag Chrome would
+	// refuse to navigate the encoder target to chrome-extension://<id>/... in
+	// any context but the default one.
+	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(rootCtx, rc.Browser))
 	if err != nil {
 		return "", fmt.Errorf("browser: coordinator: Extensions.loadUnpacked failed: %w", err)
 	}

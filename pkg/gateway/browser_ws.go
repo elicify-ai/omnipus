@@ -154,6 +154,17 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// just because it landed inside the same 2s window. See handleInput's
 	// doc comment.
 	lastInputErrorMessage string
+
+	// webrtcAgentID/webrtcCapture track this connection's attached WebRTC
+	// viewer (ADR-047 D4, wave-plan W2-A) — separate from the JPEG
+	// screencast attachment above (sessionID/mgr), since both paths can be
+	// active simultaneously on the SAME connection per ADR-047 D3 (JPEG
+	// keeps running as the automatic fallback tier while WebRTC streams).
+	// webrtcAgentID != "" iff a browser_webrtc_offer has succeeded and not
+	// yet been torn down (viewer detach, connection close, or a stream
+	// failure).
+	webrtcAgentID string
+	webrtcCapture *browser.CaptureSession
 }
 
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
@@ -175,6 +186,12 @@ type BrowserWSHandler struct {
 	// until all connections have fully torn down (test cleanup, mirroring
 	// WSHandler.Wait()).
 	activeConns sync.WaitGroup
+
+	// captures is the ADR-047 / wave-plan W2-A per-agent WebRTC capture
+	// session registry (browser_webrtc.go), shared with the capture-ingest
+	// WS handler so a browser_capture_hello can locate the CaptureSession
+	// its token belongs to.
+	captures *captureRegistry
 }
 
 // newBrowserWSHandler constructs a BrowserWSHandler. allowedOrigin is the
@@ -188,6 +205,7 @@ func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string) *Brow
 		upgrader: websocket.Upgrader{
 			CheckOrigin: wsCheckOrigin(allowedOrigin),
 		},
+		captures: newCaptureRegistry(),
 	}
 }
 
@@ -417,6 +435,9 @@ func (h *BrowserWSHandler) readLoop(
 		if state.mgr != nil && state.sessionID != "" {
 			h.detach(state.mgr, state.sessionID, viewerID, userID)
 		}
+		if state.webrtcAgentID != "" && state.webrtcCapture != nil {
+			h.detachWebRTCViewer(&state, viewerID)
+		}
 	}()
 
 	for {
@@ -477,6 +498,11 @@ func (h *BrowserWSHandler) readLoop(
 			h.handleTabAction(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
 			h.handleDetach(wc, &state, viewerID, userID)
+			if state.webrtcAgentID != "" && state.webrtcCapture != nil {
+				h.detachWebRTCViewer(&state, viewerID)
+			}
+		case string(generated.WsFrameTypeBrowserWebrtcOffer):
+			h.handleWebRTCOffer(wc, &state, viewerID, userID, data, cfg)
 		default:
 			wc.sendCriticalGen(generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
@@ -660,6 +686,46 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 		return
 	}
 
+	in := browserInputFrameToLiveInput(frame)
+
+	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
+		if browser.IsBenignLiveInputError(err) {
+			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
+			return
+		}
+		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
+		message := fmt.Sprintf("browser input failed: %s", err)
+		now := time.Now()
+		// B4 (7-reviewer finding): a navigate error is one-per-Enter and
+		// user-initiated, unlike the high-frequency mouse_move/etc kinds this
+		// cooldown exists to tame. The SPA clears its error banner
+		// optimistically on every navigate submit, so suppressing a
+		// byte-identical repeat here — the same URL rejected twice in a row
+		// — would leave the user looking at NO error after resubmitting,
+		// even though their submission was refused again. Navigate errors
+		// therefore always emit; every other kind keeps the content-aware
+		// cooldown.
+		throttled := !inputKindIsDiscrete(frame.Kind) &&
+			message == state.lastInputErrorMessage &&
+			now.Sub(state.lastInputErrorSentAt) < minInputErrorInterval
+		if !throttled {
+			state.lastInputErrorSentAt = now
+			state.lastInputErrorMessage = message
+			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, message),
+				dropContext(state.sessionID, viewerID, "input-error"))
+		}
+	}
+}
+
+// browserInputFrameToLiveInput converts a generated.BrowserInputFrame into
+// the engine-level browser.LiveInput dispatchInput expects. Extracted from
+// handleInput (ADR-047 / wave-plan W2-A item 4) so the WS input path
+// (handleInput, above) and the WebRTC data-channel input path
+// (browser_webrtc.go's webrtcInputSink) convert EXACTLY the same way and can
+// never drift — both funnel into the SAME
+// state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in) call this
+// function's result feeds.
+func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.LiveInput {
 	in := browser.LiveInput{Kind: frame.Kind}
 	if frame.X != nil {
 		in.X = *frame.X
@@ -700,34 +766,7 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	if frame.Modifiers != nil {
 		in.Modifiers = *frame.Modifiers
 	}
-
-	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
-		if browser.IsBenignLiveInputError(err) {
-			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
-			return
-		}
-		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
-		message := fmt.Sprintf("browser input failed: %s", err)
-		now := time.Now()
-		// B4 (7-reviewer finding): a navigate error is one-per-Enter and
-		// user-initiated, unlike the high-frequency mouse_move/etc kinds this
-		// cooldown exists to tame. The SPA clears its error banner
-		// optimistically on every navigate submit, so suppressing a
-		// byte-identical repeat here — the same URL rejected twice in a row
-		// — would leave the user looking at NO error after resubmitting,
-		// even though their submission was refused again. Navigate errors
-		// therefore always emit; every other kind keeps the content-aware
-		// cooldown.
-		throttled := !inputKindIsDiscrete(frame.Kind) &&
-			message == state.lastInputErrorMessage &&
-			now.Sub(state.lastInputErrorSentAt) < minInputErrorInterval
-		if !throttled {
-			state.lastInputErrorSentAt = now
-			state.lastInputErrorMessage = message
-			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, message),
-				dropContext(state.sessionID, viewerID, "input-error"))
-		}
-	}
+	return in
 }
 
 // inputKindIsDiscrete reports whether an input kind is a one-shot action
