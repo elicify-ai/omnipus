@@ -1058,9 +1058,22 @@ export function BrowserLiveView({
   // close race) falls through to WS rather than silently dropping the
   // event — mirrors every other `sendX` failure-recovery pattern in this
   // file (see e.g. `takeWheelIfNeeded`'s `sendControl('take')` handling).
+  //
+  // `forceWs` (UAT 2026-07-18, reviewer finding): the ONE exception to
+  // DC-first. An implicit click-to-drive take sends `browser_control{take}`
+  // over the WS, but the DC is a wholly separate transport with NO ordering
+  // guarantee relative to it — a same-gesture `mouse_down` (or a `mouse_up`,
+  // which would leave the remote page with a stuck-held button) riding the
+  // DC can reach the server BEFORE the take is processed and be silently
+  // dropped as not-controlling. Every input belonging to the implicit-take
+  // gesture (down/moves/up — the callers pass their gesture's implicit-drive
+  // flag) therefore rides the SAME WS as the take frame, whose in-order
+  // delivery guarantees the server sees take → down → … → up. Subsequent
+  // gestures (ack landed, implicit window closed on pointerup) use the DC
+  // as usual.
   const dispatchInput = useCallback(
-    (input: Omit<BrowserInputFrame, 'type'>): boolean => {
-      if (mediaStream && inputChannelOpenRef.current && webrtcRef.current) {
+    (input: Omit<BrowserInputFrame, 'type'>, opts?: { forceWs?: boolean }): boolean => {
+      if (!opts?.forceWs && mediaStream && inputChannelOpenRef.current && webrtcRef.current) {
         const sent = webrtcRef.current.sendInput(JSON.stringify({ type: 'browser_input', ...input }))
         if (sent) return true
       }
@@ -1123,7 +1136,12 @@ export function BrowserLiveView({
     // while still driving could leak into the tab a frame later, after
     // watch-only has already taken over.
     if (!canDispatchInput(implicitDriveRef.current)) return
-    dispatchInput({ kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers })
+    // forceWs while the implicit-take gesture is still open — see
+    // dispatchInput's own doc comment (WS/DC ordering).
+    dispatchInput(
+      { kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers },
+      { forceWs: implicitDriveRef.current },
+    )
   }, [canDispatchInput, dispatchInput])
 
   const scheduleMoveFlush = useCallback(() => {
@@ -1538,8 +1556,12 @@ export function BrowserLiveView({
       // acquiring the lock. Either way, dispatch this SAME input
       // immediately: same-connection WS message ordering guarantees the
       // server processes the `browser_control{take}` frame before this
-      // `browser_input{mouse_down}` frame, so there's no need to wait for
-      // the round-trip ack before dispatching.
+      // `browser_input{mouse_down}` frame — WHICH IS EXACTLY WHY the
+      // dispatch below rides the WS (forceWs), never the DC: the data
+      // channel is a separate transport with no ordering guarantee against
+      // the WS take frame (see dispatchInput's doc comment; UAT 2026-07-18
+      // reviewer finding — the DC-routed first click could reach the server
+      // pre-take and be dropped as not-controlling).
       takeWheelIfNeeded()
       implicitDriveRef.current = true
     }
@@ -1548,13 +1570,16 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    dispatchInput({
-      kind: 'mouse_down',
-      x: device.x,
-      y: device.y,
-      button: mapMouseButton(e.button),
-      modifiers: computeModifiers(e),
-    })
+    dispatchInput(
+      {
+        kind: 'mouse_down',
+        x: device.x,
+        y: device.y,
+        button: mapMouseButton(e.button),
+        modifiers: computeModifiers(e),
+      },
+      { forceWs: implicitDriveRef.current },
+    )
   }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded, mapPointerToDeviceCoords, dispatchInput])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -1582,13 +1607,20 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    dispatchInput({
-      kind: 'mouse_up',
-      x: device.x,
-      y: device.y,
-      button: mapMouseButton(e.button),
-      modifiers: computeModifiers(e),
-    })
+    // forceWs when this gesture implicitly took the wheel — a DC-routed
+    // mouse_up racing ahead of the WS take frame would be dropped as
+    // not-controlling and leave the remote page holding a stuck button
+    // (see dispatchInput's doc comment).
+    dispatchInput(
+      {
+        kind: 'mouse_up',
+        x: device.x,
+        y: device.y,
+        button: mapMouseButton(e.button),
+        modifiers: computeModifiers(e),
+      },
+      { forceWs: wasImplicitDrive },
+    )
   }, [annotateMode, finalizeSelection, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
 
   const handleSendAnnotation = useCallback(() => {

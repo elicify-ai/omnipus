@@ -135,6 +135,22 @@ beforeEach(() => {
   useUiStore.setState({ toasts: [] })
 })
 
+/** Take the wheel via an implicit-drive click AND land the server's
+ * 'controlling' ack, then clear the send mocks — so the assertions that
+ * follow exercise an ORDINARY acked-driving gesture. Needed because the
+ * implicit-take gesture itself deliberately rides the WS regardless of DC
+ * state (UAT 2026-07-18: the DC has no ordering guarantee against the WS
+ * `browser_control{take}` frame — see dispatchInput's forceWs doc comment),
+ * so DC-routing behavior is only observable on a LATER gesture. */
+function ackDriving(container: HTMLElement) {
+  fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
+  fireEvent.pointerUp(container, { clientX: 10, clientY: 10 })
+  act(() => wsCallbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' }))
+  mockMachineSendInput.mockClear()
+  mockSendInput.mockClear()
+  mockSendControl.mockClear()
+}
+
 describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2-B)', () => {
   it('JPEG mode (no mediaStream): pointer input always goes over WS, even if the DC happens to report open', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
@@ -154,6 +170,7 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
     // Never fire onInputChannelOpen — the DC never reports open.
     const container = stubFrameRect()
     stubVideoDims()
+    ackDriving(container)
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
@@ -161,12 +178,13 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('video mode, DC open: mouse_down goes over the data channel as a JSON-serialized BrowserInputFrame, not WS', () => {
+  it('video mode, DC open, acked driving: mouse_down goes over the data channel as a JSON-serialized BrowserInputFrame, not WS', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
     const container = stubFrameRect()
     stubVideoDims()
+    ackDriving(container)
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
@@ -183,11 +201,7 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
     const container = stubFrameRect()
     stubVideoDims()
     // Take the wheel first (idle → you-driving) via an implicit-drive click.
-    fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
-    fireEvent.pointerUp(container, { clientX: 10, clientY: 10 })
-    mockMachineSendInput.mockClear()
-    mockSendInput.mockClear()
-    act(() => wsCallbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' }))
+    ackDriving(container)
 
     fireEvent.keyDown(container, { key: 'a' })
 
@@ -198,12 +212,13 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
   })
 
   it('video mode, DC open, but the DC send itself fails: falls through to WS rather than dropping the event', () => {
-    mockMachineSendInput.mockReturnValueOnce(false)
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
     const container = stubFrameRect()
     stubVideoDims()
+    ackDriving(container)
+    mockMachineSendInput.mockReturnValueOnce(false)
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
@@ -218,11 +233,39 @@ describe('BrowserLiveView — input routing: data channel vs WS (WebRTC build W2
     act(() => machineCallbacksRef.current.onInputChannelClose?.())
     const container = stubFrameRect()
     stubVideoDims()
+    ackDriving(container)
 
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
     expect(mockMachineSendInput).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
+  })
+
+  it('implicit-take gesture (UAT 2026-07-18): with the DC open, the WHOLE acquiring gesture — mouse_down, coalesced moves, mouse_up — rides the WS so it can never race ahead of the browser_control{take} frame; the NEXT acked gesture uses the DC', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame()
+    act(() => machineCallbacksRef.current.onInputChannelOpen?.())
+    const container = stubFrameRect()
+    stubVideoDims()
+
+    // Gesture 1 — implicit take while idle. Everything rides WS, DC untouched.
+    fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
+    fireEvent.pointerUp(container, { clientX: 12, clientY: 12 })
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
+
+    // Ack lands; gesture 2 is ordinary acked driving — DC-first again.
+    act(() => wsCallbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' }))
+    mockMachineSendInput.mockClear()
+    mockSendInput.mockClear()
+    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
+    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)).toEqual(
+      expect.objectContaining({ kind: 'mouse_down' }),
+    )
   })
 })
 
@@ -253,7 +296,7 @@ describe('BrowserLiveView — control/navigate/tab-action always ride WS, even i
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'reload' }))
   })
 
-  it('take/release control frames never touch the data channel — only the pointer input riding alongside the implicit take does', () => {
+  it('take/release control frames never touch the data channel — and the pointer input riding alongside the implicit take rides the SAME WS (ordering guarantee, UAT 2026-07-18)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -263,14 +306,15 @@ describe('BrowserLiveView — control/navigate/tab-action always ride WS, even i
     // The first pointerdown while idle implicitly takes the wheel — this
     // sends `browser_control{take}` on WS (sendControl is a wholly separate
     // method from dispatchInput; there is no code path by which it could
-    // ever reach the DC) AND dispatches the mouse_down itself, which DOES
-    // route over the DC per the ordinary input rule.
+    // ever reach the DC) AND dispatches the mouse_down itself over the SAME
+    // WS (dispatchInput forceWs): the DC has no ordering guarantee relative
+    // to the WS, so a DC-routed first click could reach the server before
+    // the take and be dropped as not-controlling.
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
     expect(mockSendControl).toHaveBeenCalledWith('take')
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
-    expect(payload).toEqual(expect.objectContaining({ kind: 'mouse_down' }))
+    expect(mockMachineSendInput).not.toHaveBeenCalled()
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 })
 
