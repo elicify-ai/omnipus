@@ -6,20 +6,28 @@
 //
 // Threats from the insider-pentest report:
 //
-//	C5-DIRECT  — agent A directly references agent B's path. The defense
-//	             is `isCrossAgentPath` in pkg/tools/filesystem.go:97, which
-//	             matches "another agent's workspace" by detecting a sibling
-//	             entry under the agents/ directory and rejecting the path
-//	             before the file open. Today: enforced by every tool that
-//	             routes paths through validatePathWithAllowPaths. The test
-//	             PASSES today and acts as a regression guard.
+//	C5-DIRECT  — agent A directly references agent B's path. ADR-046
+//	             retired the old `isCrossAgentPath` heuristic (which derived
+//	             the agents/ root by walking up from the CALLER's own
+//	             workspace — a gap under a re-rooted Workspace turn); the
+//	             defense is now ResolvePath's plain within-effective-
+//	             working-directory check (fspolicy.FSScopeConfined):
+//	             agent B's path simply does not resolve inside agent A's
+//	             WorkDir, so it is rejected as ErrOutsideScope before any
+//	             file open — with fspolicy.IsCarveOut as an UNCONDITIONAL
+//	             second layer anchored on the boot-known $OMNIPUS_HOME
+//	             (covers cases the plain WorkDir check alone would not,
+//	             e.g. a re-rooted Workspace turn reaching into agents/).
+//	             Today: enforced by every tool that routes its path
+//	             argument through ResolvePath. The test PASSES today and
+//	             acts as a regression guard.
 //
 //	C5-SYMLINK — agent A creates a symlink in its OWN workspace pointing
-//	             to agent B's secret file, then opens the symlink. The
-//	             current `validatePathWithAllowPaths` resolves symlinks
-//	             via filepath.EvalSymlinks BEFORE the within-workspace
-//	             check, so the tool does see the real cross-agent target
-//	             and rejects the read. Test PASSES today.
+//	             to agent B's secret file, then opens the symlink.
+//	             ResolvePath resolves symlinks (resolveRealpathUnderWorkDir,
+//	             via filepath.EvalSymlinks) BEFORE the within-WorkDir check,
+//	             so the tool sees the real cross-agent target and rejects
+//	             the read. Test PASSES today.
 //
 // Both tests are written as table-driven assertions over the FS-touching
 // builtins. Adding a new FS tool that takes a path argument requires
@@ -147,12 +155,12 @@ func readDenyPredicate(t *testing.T, name string, res *ToolResult) bool {
 // against agent A's workspace and the call references a path inside
 // agent B. The expected outcome is denial (IsError=true) for every tool.
 //
-// Today: passes for every tool that routes through
-// validatePathWithAllowPaths because that helper detects sibling-agent
-// paths via isCrossAgentPath.
+// Today: passes for every tool that routes its path argument through
+// ResolvePath, which rejects agent B's path as outside agent A's effective
+// working directory (ErrOutsideScope) before any file open.
 func TestRedteam_CrossAgent_DirectRead(t *testing.T) {
 	t.Logf(
-		"documents C5-DIRECT (cross-agent direct read) from insider-pentest report; current control is isCrossAgentPath",
+		"documents C5-DIRECT (cross-agent direct read) from insider-pentest report; current control is ResolvePath's within-WorkDir check + fspolicy.IsCarveOut",
 	)
 
 	cases := []crossAgentDirectCase{
@@ -245,12 +253,13 @@ func TestRedteam_CrossAgent_DirectRead(t *testing.T) {
 // A's workspace?" — would say yes and let the read through. The defense
 // requires resolving the symlink and re-checking the resolved target.
 //
-// Current implementation: validatePathWithAllowPaths calls
-// filepath.EvalSymlinks AFTER the workspace-prefix check and rejects
-// when the resolved path falls outside the workspace.
+// Current implementation: ResolvePath (resolveRealpathUnderWorkDir) calls
+// filepath.EvalSymlinks as part of resolving the raw path to its realpath,
+// BEFORE the within-WorkDir containment check, and rejects when the
+// resolved path falls outside the effective working directory.
 func TestRedteam_CrossAgent_SymlinkRead(t *testing.T) {
 	t.Logf(
-		"documents C5-SYMLINK (cross-agent symlink read) from insider-pentest report; current control is EvalSymlinks in validatePathWithAllowPaths",
+		"documents C5-SYMLINK (cross-agent symlink read) from insider-pentest report; current control is EvalSymlinks in ResolvePath's realpath resolution",
 	)
 
 	cases := []crossAgentDirectCase{

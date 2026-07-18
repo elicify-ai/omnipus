@@ -23,7 +23,7 @@ func newConcurrentTestAgentLoop(t *testing.T) (*AgentLoop, *bus.MessageBus) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -248,7 +248,7 @@ func TestSessionWorker_AdmissionRejection(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
@@ -262,10 +262,7 @@ func TestSessionWorker_AdmissionRejection(t *testing.T) {
 	release := make(chan struct{})
 	blockingProvider := &blockingMockProvider{releaseAll: release}
 
-	al, err := NewAgentLoop(cfg, msgBus, blockingProvider)
-	if err != nil {
-		t.Fatalf("NewAgentLoop: %v", err)
-	}
+	al := mustNewAgentLoop(t, cfg, msgBus, blockingProvider)
 	defer al.Close()
 
 	// Set soft cap to 2 so the third session is rejected.
@@ -466,7 +463,7 @@ func TestSessionWorker_PanicStillPublishesTerminalFrame(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

@@ -141,7 +141,7 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18802, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: workspaceDir,
+				Home:      workspaceDir,
 				ModelName: "iron-provider",
 				MaxTokens: 4096,
 			},

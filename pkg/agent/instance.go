@@ -42,7 +42,7 @@ type AgentInstance struct {
 	// slice reaches the agent every entry carries a populated Provider (or an
 	// empty one if no configured provider matched).
 	FallbackModels            []config.FallbackModel
-	Workspace                 string
+	Home                      string
 	MaxIterations             int
 	MaxTokens                 int
 	Temperature               float64
@@ -119,7 +119,7 @@ func NewAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 ) *AgentInstance {
-	workspace := resolveAgentWorkspace(agentCfg, defaults)
+	workspace := resolveAgentHome(agentCfg, defaults)
 	// H11: escalate MkdirAll failure to Error — a missing workspace is serious.
 	if mkErr := os.MkdirAll(workspace, 0o755); mkErr != nil {
 		logger.ErrorCF("agent", "Failed to create agent workspace directory",
@@ -341,7 +341,7 @@ func NewAgentInstance(
 		Model:                     model,
 		Fallbacks:                 fallbacks,
 		FallbackModels:            fallbackModels,
-		Workspace:                 workspace,
+		Home:                      workspace,
 		MaxIterations:             maxIter,
 		MaxTokens:                 maxTokens,
 		Temperature:               temperature,
@@ -513,7 +513,7 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		Model:                     model,
 		Fallbacks:                 a.Fallbacks,
 		FallbackModels:            a.FallbackModels,
-		Workspace:                 a.Workspace,
+		Home:                      a.Home,
 		MaxIterations:             a.MaxIterations,
 		MaxTokens:                 a.MaxTokens,
 		Temperature:               a.Temperature,
@@ -783,36 +783,37 @@ func (a *AgentInstance) IsWorker() bool {
 	return a.AgentType == string(config.AgentTypeWorker)
 }
 
-// ResolveAgentWorkspace exports resolveAgentWorkspace (below) for cross-
+// ResolveAgentHome exports resolveAgentHome (below) for cross-
 // package use, mirroring the "exported wrapper for cross-package test/tooling
 // use" pattern already established in pkg/agent/runner/buildargs_crosspkg.go
 // for that package's own unexported internals. Added so pkg/gateway's
 // executor-smoke-test endpoint (POST /api/v1/agents/executor-smoke-test) can
 // resolve EXACTLY the same directory a real subagent_3p delegation would
-// run in (see external_dispatch.go, which calls resolveAgentWorkspace
+// run in (see external_dispatch.go, which calls resolveAgentHome
 // in-package via NewAgentInstance) when the smoke test names a real, saved
 // agent_id — instead of always running in a disposable ephemeral scratch
 // directory that carries none of the agent's real project files or
 // AGENTS.md/CLAUDE.md/opencode.json context. Pure path computation: unlike
 // NewAgentInstance's own call site, this does NOT create the directory —
 // callers that need the directory to exist must os.MkdirAll it themselves,
-// same as every other resolveAgentWorkspace caller does.
+// same as every other resolveAgentHome caller does.
 //
-// Naming note: "workspace" here means AgentConfig.Workspace, a plain
+// Naming note: "workspace" here means AgentConfig.Home (this field was
+// named "Workspace" before the ADR-046 "agent home" rename), a plain
 // per-agent directory-path field — NOT pkg/workspace.Workspace, Omnipus's
 // separate multi-agent Workspace feature (CoreTeam, REST-CRUD, delegation
 // graph, $OMNIPUS_HOME/workspaces/{id}/). No AgentConfig field binds an
 // agent to one of those, and real subagent_3p dispatch (ADR-032) never
 // consults that package at all. The two concepts share an English word by
 // historical accident, not by design — do not conflate them.
-func ResolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	return resolveAgentWorkspace(agentCfg, defaults)
+func ResolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+	return resolveAgentHome(agentCfg, defaults)
 }
 
-// resolveAgentWorkspace determines the workspace directory for an agent.
-func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {
-		return expandHome(strings.TrimSpace(agentCfg.Workspace))
+// resolveAgentHome determines the workspace directory for an agent.
+func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+	if agentCfg != nil && strings.TrimSpace(agentCfg.Home) != "" {
+		return expandHome(strings.TrimSpace(agentCfg.Home))
 	}
 	// Use the configured default workspace (respects OMNIPUS_HOME) for the
 	// legacy "main" agent identity. The agentCfg.Default flag means "this agent
@@ -821,7 +822,7 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 	// get its own per-agent workspace (FUNC-11). Only the literal "main" sentinel
 	// identity falls back to the shared default workspace.
 	if agentCfg == nil || agentCfg.ID == "" || routing.NormalizeAgentID(agentCfg.ID) == routing.DefaultAgentID {
-		return expandHome(defaults.Workspace)
+		return expandHome(defaults.Home)
 	}
 	// Per-agent isolated workspace (FUNC-11). Each custom agent gets its own
 	// directory under $OMNIPUS_HOME/agents/{id}/ (or ~/.omnipus/agents/{id}/ when
@@ -845,7 +846,7 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 		logger.WarnCF("agent", "Agent workspace path escapes base directory; using fallback",
 			map[string]any{"agent_id": agentCfg.ID, "resolved": resolved})
 		return filepath.Join(
-			expandHome(defaults.Workspace),
+			expandHome(defaults.Home),
 			"..",
 			"workspace-"+routing.NormalizeAgentID(agentCfg.ID),
 		)

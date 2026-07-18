@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -605,6 +606,79 @@ func TestSeed_ConcurrentBoot_NoDoubleSeed(t *testing.T) {
 		"exactly one default workspace must be created even under concurrent boot; got %d", defaultCount)
 }
 
+// TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd (ADR-046 P1, FR-008 /
+// US-3 AS-4) proves ensureDefaultWorkspace's upgrade back-fill path: when a
+// default workspace ALREADY exists (the upgraded-install case), calling
+// ensureDefaultWorkspace again must:
+//  1. Back-fill any built-in-roster member missing from the existing
+//     CoreTeam (here: "ray" was omitted from the pre-existing team, e.g. a
+//     coreagent added after the operator's original install).
+//  2. Leave a custom agent the operator added to the team by hand
+//     ("hand-added-custom") untouched — never removed.
+//  3. NEVER add "never-on-team-custom" (a second custom agent present in
+//     cfg.Agents.List but never added to this workspace) — the back-fill is
+//     built-in-roster-only.
+//  4. Leave w.Delegation completely unchanged — expanding/back-filling a
+//     team must never create or imply a Delegation[] trust edge (FR-038).
+func TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd(t *testing.T) {
+	home := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "mia", Type: config.AgentTypeCore},
+				{ID: "jim", Type: config.AgentTypeCore},
+				{ID: "ava", Type: config.AgentTypeCore},
+				{ID: "ray", Type: config.AgentTypeCore},
+				{ID: "worker", Type: config.AgentTypeWorker},
+				{ID: "planner", Type: config.AgentTypeWorker},
+				{ID: "explorer", Type: config.AgentTypeWorker},
+				{ID: "researcher", Type: config.AgentTypeWorker},
+				{ID: "hand-added-custom", Type: config.AgentTypeCustom},
+				{ID: "never-on-team-custom", Type: config.AgentTypeCustom},
+			},
+		},
+	}
+
+	// Simulate an upgraded install: a pre-existing default workspace missing
+	// "ray" from the built-in roster, but WITH a custom agent an operator
+	// added by hand, and a pre-existing delegation edge.
+	now := time.Now().UTC().Format(time.RFC3339)
+	ws := storedWorkspace{
+		ID:        "existing-default-ws",
+		Name:      "My Workspace",
+		Status:    "active",
+		IsDefault: true,
+		CoreTeam:  []string{"mia", "jim", "ava", "worker", "planner", "explorer", "researcher", "hand-added-custom"},
+		Delegation: []storedDelegationEdge{
+			{FromAgent: "jim", ToAgent: "worker", Modes: nil},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, writeWorkspaceFile(home, ws))
+	preUpgradeDelegation := append([]storedDelegationEdge(nil), ws.Delegation...)
+
+	require.NoError(t, ensureDefaultWorkspace(home, "alice", cfg),
+		"ensureDefaultWorkspace must not error when a default workspace already exists")
+
+	wss, err := listWorkspaceFiles(home)
+	require.NoError(t, err)
+	require.Len(t, wss, 1, "no second default workspace must be created")
+	got := wss[0]
+
+	assert.True(t, got.IsDefault)
+	assert.Contains(t, got.CoreTeam, "ray", "the missing built-in roster member must be back-filled")
+	assert.Contains(t, got.CoreTeam, "hand-added-custom",
+		"a custom agent already on the team must never be removed by the back-fill")
+	assert.NotContains(t, got.CoreTeam, "never-on-team-custom",
+		"a custom agent NOT already on the team must never be auto-added by the back-fill")
+	assert.ElementsMatch(t,
+		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher", "hand-added-custom"},
+		got.CoreTeam)
+	assert.Equal(t, preUpgradeDelegation, got.Delegation,
+		"back-filling the roster must NEVER create or imply a Delegation[] trust edge (FR-038)")
+}
+
 // TestHandleWorkspaces_InboxAutoCreated verifies that GET /api/v1/workspaces on a fresh home dir
 // returns a project with is_default=true and display name="Main".
 //
@@ -1136,4 +1210,64 @@ func TestHandleWorkspaces_RepositorySchemeValidation_PUT(t *testing.T) {
 	api.HandleWorkspaces(wBad, rBad)
 	assert.Equal(t, http.StatusBadRequest, wBad.Code,
 		"PUT with javascript: URL must return 400; body=%s", wBad.Body.String())
+}
+
+// TestLogWorkspacelessAgents_WarnsOnlyForNonMembers (ADR-046 P1, FR-007/008)
+// proves the boot-time diagnostic: given three configured agents — one a
+// member of a real on-disk workspace, two members of nothing — exactly one
+// WARN log line is emitted naming both non-member IDs (sorted), and the
+// member is never mentioned. Also proves it is a genuine no-op (no warning
+// at all) when every configured agent already has a workspace.
+func TestLogWorkspacelessAgents_WarnsOnlyForNonMembers(t *testing.T) {
+	home := t.TempDir()
+
+	wsDir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	wsJSON := `{"id":"ws-1","core_team":["member-agent"]}`
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "ws-1.json"), []byte(wsJSON), 0o644))
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{ID: "member-agent"},
+				{ID: "orphan-b"},
+				{ID: "orphan-a"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	logWorkspacelessAgents(home, cfg)
+
+	var found map[string]any
+	var lines int
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		lines++
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &entry), "parse log line %q", line)
+		found = entry
+	}
+	require.Equal(t, 1, lines, "expected exactly one log line; got:\n%s", buf.String())
+	require.NotNil(t, found)
+	assert.Equal(t, "orphan-a,orphan-b", found["agent_ids"],
+		"must name both non-member agents, sorted, and never the member")
+	assert.NotContains(t, fmt.Sprint(found["agent_ids"]), "member-agent")
+	assert.EqualValues(t, 2, found["count"])
+
+	// No configured agent is workspace-less: must be a silent no-op.
+	buf.Reset()
+	cfg2 := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{{ID: "member-agent"}},
+		},
+	}
+	logWorkspacelessAgents(home, cfg2)
+	assert.Empty(t, buf.String(), "must not log anything when every configured agent has a workspace")
 }

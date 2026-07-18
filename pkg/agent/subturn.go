@@ -276,9 +276,9 @@ func resolveDelegateSoul(al *AgentLoop, agentID string) string {
 			continue
 		}
 		ac := cfg.Agents.List[i]
-		ws := ac.Workspace
+		ws := ac.Home
 		if ws == "" {
-			ws = cfg.Agents.Defaults.Workspace
+			ws = cfg.Agents.Defaults.Home
 		}
 		if ws == "" {
 			return ""
@@ -622,7 +622,7 @@ func spawnSubTurn(
 		Model:                     execModel,
 		Fallbacks:                 execSource.Fallbacks,
 		FallbackModels:            execSource.FallbackModels,
-		Workspace:                 execSource.Workspace,
+		Home:                      execSource.Home,
 		MaxIterations:             execSource.MaxIterations,
 		MaxTokens:                 execSource.MaxTokens,
 		Temperature:               execSource.Temperature,

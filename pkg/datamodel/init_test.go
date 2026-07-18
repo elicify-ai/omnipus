@@ -125,7 +125,7 @@ func TestAgentWorkspaceInitialization(t *testing.T) {
 	require.NoError(t, Init(omnipusHome))
 
 	agentID := "general-assistant"
-	require.NoError(t, InitAgentWorkspace(omnipusHome, agentID))
+	require.NoError(t, InitAgentHome(omnipusHome, agentID))
 
 	base := filepath.Join(omnipusHome, "agents", agentID)
 
@@ -150,11 +150,11 @@ func TestWorkspaceIsolation(t *testing.T) {
 	omnipusHome := filepath.Join(home, ".omnipus")
 	require.NoError(t, Init(omnipusHome))
 
-	require.NoError(t, InitAgentWorkspace(omnipusHome, "agent-a"))
-	require.NoError(t, InitAgentWorkspace(omnipusHome, "agent-b"))
+	require.NoError(t, InitAgentHome(omnipusHome, "agent-a"))
+	require.NoError(t, InitAgentHome(omnipusHome, "agent-b"))
 
-	workspaceA := AgentWorkspacePath(omnipusHome, "agent-a")
-	workspaceB := AgentWorkspacePath(omnipusHome, "agent-b")
+	workspaceA := AgentHomePath(omnipusHome, "agent-a")
+	workspaceB := AgentHomePath(omnipusHome, "agent-b")
 
 	// Write a file in agent-a's workspace.
 	secretFile := filepath.Join(workspaceA, "sessions", "secret.txt")
@@ -182,11 +182,11 @@ func TestWorkspaceIsolation(t *testing.T) {
 	assert.NotEqual(t, workspaceA, workspaceB, "workspaces must be at different paths")
 }
 
-// TestAgentWorkspaceDefaultPath verifies AgentWorkspacePath returns the correct default.
+// TestAgentHomeDefaultPath verifies AgentHomePath returns the correct default.
 // Traces to: wave1-core-foundation-spec.md Scenario: Agent workspace defaults (US-7 AC3)
-func TestAgentWorkspaceDefaultPath(t *testing.T) {
+func TestAgentHomeDefaultPath(t *testing.T) {
 	home := "/home/user/.omnipus"
-	path := AgentWorkspacePath(home, "my-agent")
+	path := AgentHomePath(home, "my-agent")
 	expected := "/home/user/.omnipus/agents/my-agent"
 	assert.Equal(t, expected, path)
 }

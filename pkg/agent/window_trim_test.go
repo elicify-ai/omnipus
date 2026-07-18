@@ -30,7 +30,7 @@ func buildTrimTestAgentLoop(t *testing.T, contextWindow, maxTokens int) (*AgentL
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
+				Home:              tmpDir,
 				ModelName:         "test-model",
 				ContextWindow:     contextWindow,
 				MaxTokens:         maxTokens,

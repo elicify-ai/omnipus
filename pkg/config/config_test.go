@@ -231,7 +231,7 @@ func TestConfig_BackwardCompat_NoAgentsList(t *testing.T) {
 func TestDefaultConfig_WorkspacePath(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Agents.Defaults.Workspace == "" {
+	if cfg.Agents.Defaults.Home == "" {
 		t.Error("Workspace should not be empty")
 	}
 }
@@ -474,7 +474,7 @@ func TestSaveConfig_FiltersVirtualModels(t *testing.T) {
 func TestConfig_Complete(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Agents.Defaults.Workspace == "" {
+	if cfg.Agents.Defaults.Home == "" {
 		t.Error("Workspace should not be empty")
 	}
 	if cfg.Agents.Defaults.Temperature != nil {
@@ -832,8 +832,8 @@ func TestDefaultConfig_WorkspacePath_Default(t *testing.T) {
 	cfg := DefaultConfig()
 	want := filepath.Join(fakeHome, ".omnipus", "workspace")
 
-	if cfg.Agents.Defaults.Workspace != want {
-		t.Errorf("Default workspace path = %q, want %q", cfg.Agents.Defaults.Workspace, want)
+	if cfg.Agents.Defaults.Home != want {
+		t.Errorf("Default workspace path = %q, want %q", cfg.Agents.Defaults.Home, want)
 	}
 }
 
@@ -843,8 +843,8 @@ func TestDefaultConfig_WorkspacePath_WithOmnipusHome(t *testing.T) {
 	cfg := DefaultConfig()
 	want := filepath.Join("/custom/omnipus/home", "workspace")
 
-	if cfg.Agents.Defaults.Workspace != want {
-		t.Errorf("Workspace path with OMNIPUS_HOME = %q, want %q", cfg.Agents.Defaults.Workspace, want)
+	if cfg.Agents.Defaults.Home != want {
+		t.Errorf("Workspace path with OMNIPUS_HOME = %q, want %q", cfg.Agents.Defaults.Home, want)
 	}
 }
 

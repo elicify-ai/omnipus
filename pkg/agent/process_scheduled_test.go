@@ -114,7 +114,7 @@ func schedTestLoop(t *testing.T) (*AgentLoop, string) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
@@ -129,6 +129,13 @@ func schedTestLoop(t *testing.T) (*AgentLoop, string) {
 
 // registerAgent registers an agent with the given id, provider, and default flag
 // into the loop's registry, returning the instance.
+//
+// ADR-046 P1 (FR-007/008): this bypasses cfg.Agents.List entirely (it writes
+// directly into al.registry.agents, AFTER mustNewAgentLoop already ran), so
+// mustNewAgentLoop's own workspace-membership seeding never saw id coming.
+// ProcessScheduled runs this agent as itself (owner-pinned, never the
+// default), so it must be workspace-scoped too — seed its membership here,
+// at the exact point id is introduced.
 func registerAgent(
 	t *testing.T,
 	al *AgentLoop,
@@ -137,13 +144,14 @@ func registerAgent(
 	isDefault bool,
 ) *AgentInstance {
 	t.Helper()
+	seedTestWorkspaceMembershipForIDs(t, []string{id})
 	cfg := al.cfg
 	ag := NewAgentInstance(
 		&config.AgentConfig{ID: id, Name: id, Default: isDefault},
 		&cfg.Agents.Defaults, cfg, provider,
 	)
-	ag.Workspace = filepath.Join(home, "agents", id)
-	ag.ContextBuilder = NewContextBuilder(ag.Workspace).WithAgentInfo(id, id)
+	ag.Home = filepath.Join(home, "agents", id)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
 	al.registry.mu.Lock()
 	al.registry.agents[id] = ag
 	al.registry.mu.Unlock()
@@ -385,7 +393,7 @@ func schedTestLoopWithAudit(t *testing.T) (*AgentLoop, string, string) {
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = workspaceDir
+	cfg.Agents.Defaults.Home = workspaceDir
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10

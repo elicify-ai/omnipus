@@ -218,6 +218,17 @@ func getGlobalConfigDir() string {
 	return filepath.Join(home, pkg.DefaultOmnipusHome)
 }
 
+// globalSkillsDir returns the fixed, install-wide skills directory
+// ($OMNIPUS_HOME/skills) — the GLOBAL registry every agent's SkillsLoader
+// (via NewContextBuilder below) and install_skill (tools.NewInstallSkillTool,
+// ADR-046 FR-009) both target, as opposed to a per-agent/per-workspace path.
+// Extracted so install_skill shares the EXACT same computation
+// NewContextBuilder already used inline, so every agent's SkillsLoader and
+// install_skill always agree on where the global skills directory lives.
+func globalSkillsDir() string {
+	return filepath.Join(getGlobalConfigDir(), "skills")
+}
+
 func NewContextBuilder(workspace string) *ContextBuilder {
 	// builtin skills: skills directory in current project
 	// Use the skills/ directory under the current working directory
@@ -233,11 +244,9 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 		}
 		builtinSkillsDir = filepath.Join(wd, "skills")
 	}
-	globalSkillsDir := filepath.Join(getGlobalConfigDir(), "skills")
-
 	return &ContextBuilder{
 		workspace:    workspace,
-		skillsLoader: skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
+		skillsLoader: skills.NewSkillsLoader(workspace, globalSkillsDir(), builtinSkillsDir),
 		memory:       NewMemoryStore(workspace, omnipusHome()),
 	}
 }

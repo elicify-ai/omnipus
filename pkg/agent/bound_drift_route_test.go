@@ -25,7 +25,7 @@ func TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	// mia is the global default chat agent; "ray" is NOT in the list (deleted).
 	cfg.Agents.List = []config.AgentConfig{
@@ -93,7 +93,7 @@ func TestResolveMessageRoute_Unbound_DefaultUnchanged(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
@@ -140,7 +140,7 @@ func TestResolveMessageRoute_BoundDrift_WorkerAgent_LoopLevel(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
@@ -199,7 +199,7 @@ func TestGetDriftDropped_InitiallyZero(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 
 	msgBus := bus.NewMessageBus()
@@ -231,7 +231,7 @@ func TestDriftDrop_SingleEmission_ViaProcessMessage(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
-	cfg.Agents.Defaults.Workspace = filepath.Join(home, "default-workspace")
+	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},

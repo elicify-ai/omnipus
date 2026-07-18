@@ -60,7 +60,7 @@ func NewAgentRegistry(
 	defaultInstance.SetAgentType("core")
 	registry.agents[DefaultAgentID] = defaultInstance
 	logger.InfoCF("agent", "Registered default agent (main)", map[string]any{
-		"workspace": defaultInstance.Workspace,
+		"workspace": defaultInstance.Home,
 		"model":     defaultInstance.Model,
 	})
 
@@ -90,7 +90,7 @@ func NewAgentRegistry(
 			map[string]any{
 				"agent_id":  id,
 				"name":      ac.Name,
-				"workspace": instance.Workspace,
+				"workspace": instance.Home,
 				"model":     instance.Model,
 			})
 	}

@@ -55,17 +55,17 @@ func newTestRestAPIWithAgent(t *testing.T) *restAPI {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{
 				{
-					ID:        "01JXTESTAGENTSTARTTEST001",
-					Name:      "Test Agent",
-					Default:   true,
-					Type:      config.AgentTypeCustom,
-					Workspace: agentWorkspace,
+					ID:      "01JXTESTAGENTSTARTTEST001",
+					Name:    "Test Agent",
+					Default: true,
+					Type:    config.AgentTypeCustom,
+					Home:    agentWorkspace,
 				},
 			},
 		},

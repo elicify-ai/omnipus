@@ -43,7 +43,7 @@ func TestListMCPServers_EnabledField(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -309,7 +309,7 @@ func TestListMCPServers_ReportsToolCountFromRegistry(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
@@ -368,7 +368,7 @@ func TestListMCPServers_ReturnsNonSecretConfigForEdit(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
@@ -424,7 +424,7 @@ func TestPatchMCPServer_RejectsTransportMismatch(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{Servers: map[string]config.MCPServerConfig{
@@ -462,7 +462,7 @@ func TestPatchMCPServer_RejectsCommandOnRemote(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{Servers: map[string]config.MCPServerConfig{

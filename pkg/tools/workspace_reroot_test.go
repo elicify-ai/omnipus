@@ -356,9 +356,12 @@ func TestListDir_FlagOn_CannotEscapeWorkspace(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestExecCwd_FlagOn_EscapeViaExplicitCwdBlocked verifies that bash's
-// app-level cwd safety guard (resolveCWD -> validatePathWithAllowPaths +
-// symlink re-resolution, ADR-036/FR-B2/FR-B13) blocks an explicit `cwd`
-// argument that escapes the re-rooted workspace, even when sandbox=off
+// app-level cwd safety guard (resolveCWD -> ResolvePath, which performs
+// carve-out checking, workspace-containment, and symlink re-resolution in
+// one chokepoint as of ADR-046 P1 — resolveCWD previously called the since-
+// retired validatePathWithAllowPaths, ADR-036/FR-B2/FR-B13) blocks an
+// explicit `cwd` argument that escapes the re-rooted workspace, even when
+// sandbox=off
 // (no kernel Landlock). The guard is app-level and runs regardless of sandbox
 // mode. Mirrors TestExecCwd_ReflectsEffectiveRoot for sandbox mode setup.
 //

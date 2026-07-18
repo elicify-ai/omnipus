@@ -29,7 +29,7 @@ func TestUpdateAgent_InvalidatesPreamble(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults = config.AgentDefaults{
-		Workspace: tmpDir,
+		Home:      tmpDir,
 		ModelName: "test-model",
 		MaxTokens: 4096,
 	}

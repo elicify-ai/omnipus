@@ -56,7 +56,7 @@ func newEnableReloadTestAPI(t *testing.T, reloadFn func() error) (*restAPI, *int
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "claude-sonnet-4-6",
 				MaxTokens: 4096,
 			},

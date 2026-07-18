@@ -60,8 +60,8 @@
 //     tokens, ...).
 //   - Working directory: when the request's agent_id names a real, saved
 //     agent, the run happens in THAT agent's own dedicated directory
-//     ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — the same one
-//     agent.ResolveAgentWorkspace / a real subagent_3p delegation would
+//     ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Home — the same one
+//     agent.ResolveAgentHome / a real subagent_3p delegation would
 //     use) — UNLESS that agent is a member of a real pkg/workspace.Workspace's
 //     CoreTeam (workspace.FindForAgent), in which case the smoke-test runs in
 //     that Workspace's dedicated project-work subdirectory
@@ -331,9 +331,9 @@ func (a *restAPI) runExecutorSmokeTest(
 
 	// Working-directory resolution: when agentID names a real, saved agent,
 	// run in THAT agent's own dedicated directory — the same place a genuine
-	// subagent_3p delegation to it would run (agent.ResolveAgentWorkspace,
+	// subagent_3p delegation to it would run (agent.ResolveAgentHome,
 	// the same helper NewAgentInstance uses in-package). This is
-	// AgentConfig.Workspace, the separate, multi-agent pkg/workspace.Workspace
+	// AgentConfig.Home, the separate, multi-agent pkg/workspace.Workspace
 	// feature (CoreTeam/REST-CRUD/delegation graph). If agentID is ALSO a
 	// member of a real Workspace's CoreTeam, that Workspace's own shared
 	// directory overrides the agent's private one below — mirroring the exact
@@ -362,7 +362,7 @@ func (a *restAPI) runExecutorSmokeTest(
 	)
 	cfg := a.agentLoop.GetConfig()
 	if agentCfg := findAgentConfig(cfg, agentID); agentCfg != nil {
-		resolved := agent.ResolveAgentWorkspace(agentCfg, &cfg.Agents.Defaults)
+		resolved := agent.ResolveAgentHome(agentCfg, &cfg.Agents.Defaults)
 		// CoreTeam override: an agent that belongs to a Workspace's team runs
 		// in the Workspace's dedicated project-work subdirectory
 		// (workspaces/<id>/work/, workspace.SafeWorkDir) instead of its
@@ -381,7 +381,7 @@ func (a *restAPI) runExecutorSmokeTest(
 					"agent_id", agentID, "workspace_id", wsID, "error", wsErr)
 			}
 		}
-		// Defensive MkdirAll: agent.ResolveAgentWorkspace is pure path
+		// Defensive MkdirAll: agent.ResolveAgentHome is pure path
 		// computation (see its doc) — the directory is normally already
 		// created, either at agent-creation time (rest.go's
 		// agentWorkspacePath, called from createAgent/getAgent/listAgents) or

@@ -41,7 +41,7 @@ func TestExecuteReload_MarksDegradedOnCredInjectionFailure(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
@@ -152,7 +152,7 @@ func TestExecuteReload_RejectsOnCorruptedEnabledChannelCredential(t *testing.T) 
 	baseCfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},

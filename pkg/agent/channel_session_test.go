@@ -51,7 +51,7 @@ func makeLoopWithSharedStore(t *testing.T) (*AgentLoop, *session.UnifiedStore) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace:         workspace,
+				Home:              workspace,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,

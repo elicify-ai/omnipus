@@ -71,7 +71,7 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "claude-sonnet-4-6",
 				MaxTokens: 4096,
 			},
@@ -159,7 +159,7 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "gpt-4o",
 				MaxTokens: 4096,
 			},
@@ -243,7 +243,7 @@ func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "gemini-flash",
 				MaxTokens: 4096,
 			},
@@ -338,7 +338,7 @@ func TestHandleProviders_CredStoreRef_Resolved_IsConnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Workspace: tmpDir,
+				Home:      tmpDir,
 				ModelName: "claude-haiku",
 				MaxTokens: 4096,
 			},
