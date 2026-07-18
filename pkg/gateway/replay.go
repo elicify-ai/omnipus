@@ -266,7 +266,11 @@ func streamReplay(
 		// are unaffected by this branch — they carry ParentToolCallID (not
 		// ParentSpawnCallID) and are already correctly nested under the
 		// spawn/delegate span by the isNested/parentIsSpawn logic below.
-		if entry.ParentSpawnCallID != "" {
+		// IsDelegateChildEntry() is the single shared predicate for this skip —
+		// pkg/gateway/rest.go's REST cold-load handlers (getSession/
+		// getSessionMessages) apply the exact same check via the exact same
+		// method so the two paths cannot drift out of sync again.
+		if entry.IsDelegateChildEntry() {
 			continue
 		}
 

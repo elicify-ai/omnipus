@@ -780,6 +780,26 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// filterDelegateChildEntries drops every transcript entry produced by a CHILD
+// delegation sub-turn (session.TranscriptEntry.IsDelegateChildEntry()) before
+// a REST cold-load response is built. This mirrors pkg/gateway/replay.go's
+// live-reconnect replay filter (same shared predicate, see
+// IsDelegateChildEntry's doc comment) — without it, a fresh page load/reopen
+// of a session that included a delegation dumped the delegate's own raw
+// intermediate narration and final report (plus any "[external-cli
+// permission]" lines) as top-level main-chat bubbles that a live reconnect
+// never showed.
+func filterDelegateChildEntries(entries []session.TranscriptEntry) []session.TranscriptEntry {
+	filtered := make([]session.TranscriptEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDelegateChildEntry() {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
+}
+
 func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
 	store := a.resolveSessionStore(id)
 	if store == nil {
@@ -797,6 +817,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
+	messages = filterDelegateChildEntries(messages)
 	// Detect ghost sessions: if the session references an agent that no longer
 	// exists in the current config, surface agent_removed=true so the frontend
 	// can show the read-only "Agent removed" banner (#103).
@@ -832,6 +853,7 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
+	messages = filterDelegateChildEntries(messages)
 	// Coerce nil → empty slice so JSON marshals as [] not null. The SPA's
 	// fetchSessionMessages validates via z.array(WireMessageSchema), which
 	// rejects null — a fresh session with no transcript would surface as
