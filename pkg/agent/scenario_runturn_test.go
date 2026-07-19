@@ -8,7 +8,9 @@
 // leaf helpers directly.
 //
 // The bridge established here unblocks V2.D (RecoverOrphanedToolCalls integration
-// test) and the 9 currently-skipped t.Skip scenarios in pkg/gateway/api_e2e_test.go.
+// test) and the Plan-3 Layer-3/Axis-3 e2e scenarios (their placeholder t.Skip
+// stubs were deliberately removed 2026-07-19 — write those tests against this
+// bridge when implementing them; the Plan 3 doc remains the spec).
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G step 1
 
