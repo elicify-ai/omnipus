@@ -33,7 +33,9 @@ const milestoneTagPrefix = "milestone:"
 
 // maxMilestoneSuffixHeadroom reserves room for a worst-case "-999"
 // disambiguation suffix so the final "milestone:<name>[-N]" tag never
-// exceeds maxTagRunes regardless of collision depth (FR-027).
+// exceeds maxTagRunes for up to 999 collisions (FR-027) — a 1000th collision
+// ("-1000", 5 digits) would exceed this reserved headroom; that depth is not
+// bounded/handled specially, only the up-to-999 case this const sizes for.
 const maxMilestoneSuffixHeadroom = 4 // len("-999")
 
 // legacyMilestone mirrors the on-disk shape of a pre-removal

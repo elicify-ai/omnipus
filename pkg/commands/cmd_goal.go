@@ -8,7 +8,7 @@ package commands
 // Why nil Handler here specifically: setting a goal must run a REAL worker
 // turn (round 1 IS the first judged turn), which only the agent loop's LLM
 // call can do; a synchronous Handler replies immediately and never reaches
-// the LLM (executor.go's OutcomePassthrough contract). pkg/agent/loop.go's
+// the LLM (executor.go's OutcomePassthrough contract). pkg/agent/goal_loop.go's
 // applyGoalCommandPrompt hook (mirroring applyMemoryCommandPrompt/
 // applyExplicitSkillCommand's "rewrite opts.UserMessage, matched=true" shape)
 // runs BEFORE the registered-command dispatch path and handles all four
@@ -35,8 +35,8 @@ func goalCommand() Definition {
 }
 
 // GoalClearAliases lists the verbs that clear an active goal (FR-070). Used
-// by pkg/agent/loop.go's applyGoalCommandPrompt to recognize any of them as
-// "clear", not just the literal word "clear".
+// by pkg/agent/goal_loop.go's applyGoalCommandPrompt to recognize any of them
+// as "clear", not just the literal word "clear".
 func GoalClearAliases() []string {
 	return []string{"clear", "stop", "off", "reset", "cancel", "none"}
 }

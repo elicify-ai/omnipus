@@ -129,8 +129,10 @@ const (
 // single-instance overlap guard on Tick (FR-063), not by this type itself
 // (a second construction is harmless; a second concurrent Start's ticker
 // would simply have its Tick calls no-op against the first's overlap guard
-// IF they shared a mutex, which they do not across two instances — Wave 2-C
-// MUST only construct and Start one instance; see this wave's final report).
+// IF they shared a mutex, which they do not across two instances — the
+// gateway boot path MUST only construct and Start one instance; see
+// gateway.go's setupAndStartServices, the sole production call site of
+// agent.NewPlanEngine + PlanEngine.Start).
 type PlanEngine struct {
 	agentLoop  *AgentLoop
 	planStore  *plan.Store
@@ -611,11 +613,9 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	}
 
 	criteria := p.DoD
-	usedSoftTier := false
 	if len(criteria) == 0 {
 		if soft := SoftTierCriterion(p.Title, p.Description, p.Goal); soft != nil {
 			criteria = []task.AcceptanceCriterion{*soft}
-			usedSoftTier = true
 		}
 	}
 	if len(criteria) == 0 {
@@ -624,7 +624,6 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		pe.completePlan(p)
 		return
 	}
-	_ = usedSoftTier // reserved for future differentiated logging; not currently branched on
 
 	result := pe.judge.JudgeCriteria(ctx, JudgeCriteriaInput{
 		Scope:           task.VerdictScopePlan,

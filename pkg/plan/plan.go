@@ -232,12 +232,18 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	FailedReason   FailedReason `json:"failed_reason,omitempty"`
 	// Progress is done/total over member tasks (R4/C19/M7). It is
 	// server-computed READ-TIME ONLY by scanning the task store for
-	// plan_id == this plan's ID (see ComputeProgress) — Create/Update never
-	// set or persist it, so a value present on disk is only ever a stale
-	// snapshot a caller mistakenly wrote; readers should treat ComputeProgress
-	// as authoritative, not this field, unless they wrote it themselves in
-	// the same read.
-	Progress float64 `json:"progress,omitempty"`
+	// plan_id == this plan's ID (see ComputeProgress). json:"-" (review r1
+	// type-design fix, was "progress,omitempty"): Create/Update must NEVER
+	// persist this field — the prior omitempty tag let a caller who
+	// mistakenly populated it on an in-memory *Plan before calling
+	// Create/Update silently write a stale snapshot to disk (nothing
+	// rejected it, per this comment's own prior "a value present on disk is
+	// only ever a stale snapshot a caller mistakenly wrote" admission).
+	// json:"-" makes the "never persisted" guarantee structural — every
+	// write path's own json.Marshal now drops it unconditionally — instead
+	// of a doc-comment convention callers had to remember. Readers should
+	// treat ComputeProgress as authoritative, never this field.
+	Progress float64 `json:"-"`
 	// HandoverText is the plan engine's (Wave 2-B, pkg/agent's PlanEngine)
 	// latest wind-down/steering note: per-criterion unmet reasons after an
 	// UNMET plan-judge round (evaluator-optimizer steering, mirrors

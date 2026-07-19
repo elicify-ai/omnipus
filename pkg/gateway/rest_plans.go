@@ -36,9 +36,37 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+// validatePlanOwnerAgent rejects a plan owner_agent_id that is not a
+// registered agent, or that IS registered but is a System Agent or a worker
+// (review r1 m1: the prior format-only validateEntityID check let a
+// typo'd/nonexistent id, or a non-chat-target agent that can never actually
+// be woken at a plan decision point, through unrejected). OwnerAgentID's own
+// doc comment on plan.Plan ("the agent woken at plan decision points, ADR
+// D4") requires a real, addressable agent — mirrors
+// AgentConfig.IsChatTarget's exact "not worker, not system" rule (the same
+// rule routing/default-agent resolution already uses to exclude
+// non-addressable agent kinds).
+func validatePlanOwnerAgent(cfg *config.Config, ownerAgentID string) error {
+	if cfg == nil {
+		return fmt.Errorf("owner_agent_id %q is not a registered agent", ownerAgentID)
+	}
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID != ownerAgentID {
+			continue
+		}
+		if !cfg.Agents.List[i].IsChatTarget() {
+			return fmt.Errorf(
+				"owner_agent_id %q is a System Agent or worker and cannot own a plan", ownerAgentID)
+		}
+		return nil
+	}
+	return fmt.Errorf("owner_agent_id %q is not a registered agent", ownerAgentID)
+}
 
 // isPlanValidationErr reports whether err is a user-facing validation error
 // (400) rather than an internal failure (500). All plan.Store validation
@@ -417,6 +445,10 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, http.StatusBadRequest, "invalid owner_agent_id")
 		return
 	}
+	if err := validatePlanOwnerAgent(a.agentLoop.GetConfig(), req.OwnerAgentId); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	c := a.callerIdentity(r)
 	p := &plan.Plan{
@@ -549,6 +581,36 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
+	// review r1 m6: DoD and owner_agent_id are frozen once the plan has left
+	// draft. DoD is the contract the plan judge adjudicates against — letting
+	// it change mid-flight (approved/running/done/failed) could invalidate
+	// in-progress or already-recorded judge rounds retroactively. Owner is
+	// who gets woken at plan decision points (Plan.OwnerAgentID's own doc
+	// comment) — reassigning it mid-flight would silently redirect wake
+	// notifications away from whoever is actually watching this plan run.
+	// Bounds is deliberately NOT frozen here: an operator may legitimately
+	// want to extend a running plan's idle-expiry/judge-round budget.
+	if req.Dod != nil || req.OwnerAgentId != nil {
+		existing, gerr := a.planStore.Get(id)
+		if gerr != nil {
+			if errors.Is(gerr, plan.ErrNotFound) {
+				jsonErr(w, http.StatusNotFound, "plan not found")
+				return
+			}
+			slog.Error("rest: plan get failed (pre-update state check)", "id", id, "error", gerr)
+			jsonErr(w, http.StatusInternalServerError, "could not read plan")
+			return
+		}
+		if existing.State != plan.StateDraft {
+			if req.Dod != nil {
+				jsonErr(w, http.StatusConflict, "dod cannot be changed once the plan has left draft state")
+				return
+			}
+			jsonErr(w, http.StatusConflict, "owner_agent_id cannot be changed once the plan has left draft state")
+			return
+		}
+	}
+
 	patch := plan.Patch{}
 	if req.Title != nil {
 		patch.Title = req.Title
@@ -562,6 +624,10 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 	if req.OwnerAgentId != nil {
 		if err := validateEntityID(*req.OwnerAgentId); err != nil {
 			jsonErr(w, http.StatusBadRequest, "invalid owner_agent_id")
+			return
+		}
+		if err := validatePlanOwnerAgent(a.agentLoop.GetConfig(), *req.OwnerAgentId); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		patch.OwnerAgentID = req.OwnerAgentId
