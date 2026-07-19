@@ -51,7 +51,11 @@ jobs:
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
           custom-allsigned-prcomment: 'All contributors have signed the CLA. ✅'
           # Don't gate bots or elicify.ai maintainers (covered by employment/contract).
-          allowlist: 'dependabot[bot],dependabot-preview[bot],github-actions[bot],renovate[bot],daniel-piatkowski-ai,*[bot]'
+          # 'Claude' covers the four historical Co-Authored-By trailers already on the
+          # release/v0.1.1 lineage (4a7cc392, 023a27c7, afb50950, 5d907d17) — an AI
+          # assistant is not a copyright holder, so no CLA applies. Repo policy still
+          # forbids adding new agent co-author trailers (see CLAUDE.md).
+          allowlist: 'dependabot[bot],dependabot-preview[bot],github-actions[bot],renovate[bot],daniel-piatkowski-ai,Claude,*[bot]'
           # Re-ask for a signature if the CLA changes (bump to version2, etc.).
           # signatures stay valid per-version.
           lock-pullrequest-aftermerge: false
