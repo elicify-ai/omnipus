@@ -158,6 +158,15 @@ type Config struct {
 	// Empty/disabled in Wave 1; parsed now so forward-compatible configs load cleanly.
 	Sandbox OmnipusSandboxConfig `json:"sandbox,omitempty" yaml:"-"`
 
+	// Planning holds the Planning & Goals epic's global loop bounds — Plan
+	// judge rounds, /goal, /loop, per-task attempt ceilings, the global
+	// active-loop admission cap, and the machine-check timeout (ADR-049 D7,
+	// spec Part A §G). Populated by DefaultConfig, range-validated at boot
+	// (validateBootConfig, mirrors OmnipusSandboxConfig/PortRange.Validate).
+	// Per-entity overrides (plan.PlanBounds, task.Task.MaxAttempts) take
+	// precedence over these global values. No token/money fields (NFR-1).
+	Planning PlanningConfig `json:"planning,omitempty" yaml:"-"`
+
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.

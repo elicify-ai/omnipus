@@ -276,6 +276,74 @@ func validateBootConfig(cfg *Config) error {
 		return err
 	}
 
+	// --- ADR-049 D7: Planning bounds (spec Part A §G) ---
+	// Every field, when non-zero, must be >=1; zero applies the documented
+	// default (mirrors PortRange.IsZero's default-apply pattern above).
+	// CheckTimeoutSeconds additionally has an upper bound [1, 3600].
+	if cfg.Planning.TaskMaxAttempts == 0 {
+		cfg.Planning.TaskMaxAttempts = DefaultTaskMaxAttempts
+	}
+	if cfg.Planning.TaskMaxAttempts < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.TaskMaxAttempts=%d must be at least 1",
+			cfg.Planning.TaskMaxAttempts,
+		)
+	}
+	if cfg.Planning.GoalMaxRounds == 0 {
+		cfg.Planning.GoalMaxRounds = DefaultGoalMaxRounds
+	}
+	if cfg.Planning.GoalMaxRounds < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.GoalMaxRounds=%d must be at least 1",
+			cfg.Planning.GoalMaxRounds,
+		)
+	}
+	if cfg.Planning.PlanJudgeMaxRounds == 0 {
+		cfg.Planning.PlanJudgeMaxRounds = DefaultPlanJudgeMaxRounds
+	}
+	if cfg.Planning.PlanJudgeMaxRounds < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.PlanJudgeMaxRounds=%d must be at least 1",
+			cfg.Planning.PlanJudgeMaxRounds,
+		)
+	}
+	if cfg.Planning.LoopMaxRuns == 0 {
+		cfg.Planning.LoopMaxRuns = DefaultLoopMaxRuns
+	}
+	if cfg.Planning.LoopMaxRuns < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.LoopMaxRuns=%d must be at least 1",
+			cfg.Planning.LoopMaxRuns,
+		)
+	}
+	if cfg.Planning.IdleExpiryDays == 0 {
+		cfg.Planning.IdleExpiryDays = DefaultIdleExpiryDays
+	}
+	if cfg.Planning.IdleExpiryDays < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.IdleExpiryDays=%d must be at least 1",
+			cfg.Planning.IdleExpiryDays,
+		)
+	}
+	if cfg.Planning.GlobalActiveLoopCap == 0 {
+		cfg.Planning.GlobalActiveLoopCap = DefaultGlobalActiveLoopCap
+	}
+	if cfg.Planning.GlobalActiveLoopCap < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.GlobalActiveLoopCap=%d must be at least 1",
+			cfg.Planning.GlobalActiveLoopCap,
+		)
+	}
+	if cfg.Planning.CheckTimeoutSeconds == 0 {
+		cfg.Planning.CheckTimeoutSeconds = DefaultCheckTimeoutSeconds
+	}
+	if cfg.Planning.CheckTimeoutSeconds < 1 || cfg.Planning.CheckTimeoutSeconds > 3600 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.CheckTimeoutSeconds=%d is out of range [1, 3600]",
+			cfg.Planning.CheckTimeoutSeconds,
+		)
+	}
+
 	// Apply defaults for ServeWorkspace durations.
 	if cfg.Tools.ServeWorkspace.MaxDurationSeconds == 0 {
 		cfg.Tools.ServeWorkspace.MaxDurationSeconds = 86400 // 24 h
