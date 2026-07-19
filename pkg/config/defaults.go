@@ -365,6 +365,20 @@ func DefaultConfig() *Config {
 				"delete_agent":             "ask", // irreversible delete
 			},
 		},
+		// Planning holds the Planning & Goals epic's global loop bounds
+		// (ADR-049 D7, spec Part A §G). Populated explicitly here (rather than
+		// left zero and default-applied only at boot) so a fresh install's
+		// config.json is self-documenting; validateBootConfig still applies
+		// the same defaults for any field an operator zeroes out later.
+		Planning: PlanningConfig{
+			TaskMaxAttempts:     DefaultTaskMaxAttempts,
+			GoalMaxRounds:       DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:  DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:         DefaultLoopMaxRuns,
+			IdleExpiryDays:      DefaultIdleExpiryDays,
+			GlobalActiveLoopCap: DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds: DefaultCheckTimeoutSeconds,
+		},
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,
 			FilterMinLength:     8,
