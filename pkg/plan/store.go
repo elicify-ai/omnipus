@@ -233,6 +233,9 @@ type Patch struct {
 	LastActivityAt *string
 	PlanPhase      *PlanPhase
 	FailedReason   *FailedReason
+	// HandoverText sets Plan.HandoverText (Wave 2-B engine steering/handover
+	// note). See that field's doc comment on Plan.
+	HandoverText *string
 }
 
 // Update applies patch to the plan identified by id and persists the result.
@@ -325,6 +328,12 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			return nil, verr("invalid failed_reason %q", *patch.FailedReason)
 		}
 		p.FailedReason = *patch.FailedReason
+	}
+	if patch.HandoverText != nil {
+		if len([]rune(*patch.HandoverText)) > maxPlanHandoverRunes {
+			return nil, verr("handover_text must be %d characters or fewer", maxPlanHandoverRunes)
+		}
+		p.HandoverText = *patch.HandoverText
 	}
 	if patch.State != nil {
 		if !IsValidState(*patch.State) {

@@ -190,10 +190,12 @@ func validatePlanBounds(b *PlanBounds) error {
 
 // maxPlanTitleRunes / maxPlanGoalRunes / maxPlanDescriptionRunes bound
 // Plan.Title / Plan.Goal / Plan.Description (spec Part A §A).
+// maxPlanHandoverRunes bounds Plan.HandoverText (Wave 2-B).
 const (
 	maxPlanTitleRunes       = 200
 	maxPlanGoalRunes        = 2000
 	maxPlanDescriptionRunes = 2000
+	maxPlanHandoverRunes    = 8000
 )
 
 // Plan is the on-disk Plan entity stored at
@@ -236,6 +238,13 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	// as authoritative, not this field, unless they wrote it themselves in
 	// the same read.
 	Progress float64 `json:"progress,omitempty"`
+	// HandoverText is the plan engine's (Wave 2-B, pkg/agent's PlanEngine)
+	// latest wind-down/steering note: per-criterion unmet reasons after an
+	// UNMET plan-judge round (evaluator-optimizer steering, mirrors
+	// task.Task's Result-as-steering-carrier convention), or the graceful
+	// wind-down summary written on a terminal brake (judge rounds exhausted,
+	// idle expiry, stop). Server-set only; not part of plan authoring.
+	HandoverText string `json:"handover_text,omitempty"`
 
 	// --- attribution + lifecycle timestamps (RFC 3339 UTC) ---
 	Owner       string `json:"owner,omitempty"`
@@ -262,6 +271,9 @@ func (p *Plan) normalize() error {
 	}
 	if len([]rune(p.Description)) > maxPlanDescriptionRunes {
 		return verr("description must be %d characters or fewer", maxPlanDescriptionRunes)
+	}
+	if len([]rune(p.HandoverText)) > maxPlanHandoverRunes {
+		return verr("handover_text must be %d characters or fewer", maxPlanHandoverRunes)
 	}
 	if p.WorkspaceID == "" {
 		return verr("workspace_id is required")
