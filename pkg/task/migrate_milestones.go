@@ -272,7 +272,36 @@ func migrateOneTaskFile(path string, mapping map[string]milestoneTagAssignment, 
 		}
 	}
 	if !hasTag {
+		// review r2 MED-1: a task already AT (or within one of) the
+		// maxTagsPerTask cap would otherwise make normalizeTags below ERROR
+		// (not truncate) once the milestone tag pushes it over. That error
+		// currently sets migrationFailures>0 in the caller, which blocks
+		// Phase 3 from ever writing the sentinel (see
+		// MigrateMilestonesToTags' own Phase-3 comment) — so a SINGLE such
+		// task re-runs the WHOLE migration on every boot forever, blocking
+		// finalization for every task, not just this one. This is a
+		// permanent, deterministic condition caused SPECIFICALLY by this
+		// migration's own append (re-running produces the exact same 17th
+		// tag every time), not a transient I/O fault, so it must not block
+		// indefinitely: drop the least-significant (oldest, front-of-list)
+		// PRE-EXISTING tag(s) to make room, with an explicit WARN, then
+		// still finalize. Scoped to ONLY the append-caused case — if the
+		// task was ALREADY over the cap before this append (a pre-existing
+		// data-integrity issue unrelated to this migration), wasAtOrUnderCap
+		// is false and the block below is skipped, so normalizeTags still
+		// correctly errors out and surfaces that as a migration failure
+		// needing operator attention, exactly as before this fix.
+		wasAtOrUnderCap := len(tags) <= maxTagsPerTask
 		tags = append(tags, entry.Tag) // idempotent: only appended once ever.
+		if wasAtOrUnderCap {
+			for len(tags) > maxTagsPerTask {
+				dropped := tags[0]
+				tags = tags[1:]
+				slog.Warn("task: milestone migration: task already at tag cap — dropped oldest "+
+					"existing tag to make room for the migrated milestone tag",
+					"file", filepath.Base(path), "dropped_tag", dropped, "milestone_tag", entry.Tag)
+			}
+		}
 	}
 	// m5 fix (review r1): route the appended list through the SAME
 	// normalizeTags the store's own Create/Update write path uses, instead of
