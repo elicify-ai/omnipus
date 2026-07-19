@@ -603,6 +603,15 @@ type TaskOccurrenceSet = {
   task_id: string;
   occurrences_ms: Array<number>;
   day_buckets: Array<DayBucket>;
+  occurrence_runs?:
+    | Array<{
+        occurrence_ms: number;
+        status: "in_progress" | "done" | "failed";
+        run_id: string;
+        session_id: string;
+        has_result: boolean;
+      }>
+    | undefined;
   truncated: boolean;
 };
 type DayBucket = {
@@ -610,6 +619,14 @@ type DayBucket = {
   count: number;
   first_ms: number;
   interval_ms: number | null;
+  run_counts?:
+    | {
+        scheduled: number;
+        in_progress: number;
+        done: number;
+        failed: number;
+      }
+    | undefined;
 };
 type ChannelConfigureRequest = Partial<
   {
@@ -2082,11 +2099,30 @@ export const DayBucket: z.ZodType<DayBucket> = z.object({
   count: z.number().int(),
   first_ms: z.number().int(),
   interval_ms: z.number().int().nullable(),
+  run_counts: z
+    .object({
+      scheduled: z.number().int(),
+      in_progress: z.number().int(),
+      done: z.number().int(),
+      failed: z.number().int(),
+    })
+    .optional(),
 });
 export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
   task_id: z.string(),
   occurrences_ms: z.array(z.number().int()),
   day_buckets: z.array(DayBucket),
+  occurrence_runs: z
+    .array(
+      z.object({
+        occurrence_ms: z.number().int(),
+        status: z.enum(["in_progress", "done", "failed"]),
+        run_id: z.string(),
+        session_id: z.string(),
+        has_result: z.boolean(),
+      })
+    )
+    .optional(),
   truncated: z.boolean(),
 });
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
@@ -2118,6 +2154,17 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     completed_at: z.string().datetime({ offset: true }),
   })
   .partial();
+export const TaskRun = z.object({
+  run_id: z.string(),
+  task_id: z.string(),
+  occurrence_ms: z.number().int().nullable(),
+  status: z.enum(["in_progress", "done", "failed"]),
+  result: z.string().max(50000).optional(),
+  session_id: z.string(),
+  kind: z.enum(["scheduled", "manual"]),
+  started_at: z.string().datetime({ offset: true }),
+  ended_at: z.string().datetime({ offset: true }).nullable(),
+});
 export const McpServer = z
   .object({
     id: z.string(),
@@ -6181,6 +6228,39 @@ Polled by the SPA StatusBar every 15 seconds.
   },
   {
     method: "get",
+    path: "/tasks/:id/runs",
+    alias: "listTaskRuns",
+    description: `Returns every execution record (TaskRun) for a task, newest first (ADR-050 / task-run-history-spec §3.6) — the authoritative history list, independent of whether the task&#x27;s current trigger can still project a run&#x27;s occurrence_ms (a series whose schedule was edited still lists every past run). Retention-bounded (day-partitioned sweep with a keep-newest-day floor); full result strings. Read-only; no state change. Rate-limited by the same dedicated taskReadLimiter (240 requests/min) as GET /tasks/occurrences.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(TaskRun),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/tasks/:id/subtasks",
     alias: "listSubtasks",
     description: `Returns all subtasks (children with this parent_task_id).`,
@@ -7195,7 +7275,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
 
 export const AuthFrame = z
   .object({
@@ -7410,6 +7490,16 @@ export const TaskStatusChangedFrame = z
     task_id: z.string().min(1),
     status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
+  })
+  .strict();
+
+export const TaskRunStatusFrame = z
+  .object({
+    type: z.literal("task_run_status"),
+    task_id: z.string().min(1),
+    run_id: z.string().min(1),
+    occurrence_ms: z.number().int(),
+    status: z.enum(["in_progress", "done", "failed"]),
   })
   .strict();
 
@@ -7783,6 +7873,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   SubagentStartFrame,
   SubagentEndFrame,
   TaskStatusChangedFrame,
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
   RateLimitFrame,

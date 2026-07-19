@@ -454,6 +454,8 @@ components:
       $ref: ./components/schemas/TaskOccurrenceSet.yaml
     DayBucket:
       $ref: ./components/schemas/DayBucket.yaml
+    TaskRun:
+      $ref: ./components/schemas/TaskRun.yaml
     ProviderUpdateRequest:
       $ref: ./components/schemas/ProviderUpdateRequest.yaml
     ProviderValidation:
@@ -4679,6 +4681,45 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+  /tasks/{id}/runs:
+    get:
+      operationId: listTaskRuns
+      summary: List a task's run history
+      description: >
+        Returns every execution record (TaskRun) for a task, newest first
+        (ADR-050 / task-run-history-spec §3.6) — the authoritative history
+        list, independent of whether the task's current trigger can still
+        project a run's occurrence_ms (a series whose schedule was edited
+        still lists every past run). Retention-bounded (day-partitioned
+        sweep with a keep-newest-day floor); full result strings. Read-only;
+        no state change. Rate-limited by the same dedicated taskReadLimiter
+        (240 requests/min) as GET /tasks/occurrences.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Array of run records, newest first. Empty array when the task has no runs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TaskRun'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
   /mcp-servers:
     get:
       operationId: listMcpServers

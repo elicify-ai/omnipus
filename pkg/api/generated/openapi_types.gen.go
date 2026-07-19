@@ -2711,6 +2711,66 @@ func (e TaskCreateRequestTriggerType) Valid() bool {
 	}
 }
 
+// Defines values for TaskOccurrenceSetOccurrenceRunsStatus.
+const (
+	TaskOccurrenceSetOccurrenceRunsStatusDone       TaskOccurrenceSetOccurrenceRunsStatus = "done"
+	TaskOccurrenceSetOccurrenceRunsStatusFailed     TaskOccurrenceSetOccurrenceRunsStatus = "failed"
+	TaskOccurrenceSetOccurrenceRunsStatusInProgress TaskOccurrenceSetOccurrenceRunsStatus = "in_progress"
+)
+
+// Valid indicates whether the value is a known member of the TaskOccurrenceSetOccurrenceRunsStatus enum.
+func (e TaskOccurrenceSetOccurrenceRunsStatus) Valid() bool {
+	switch e {
+	case TaskOccurrenceSetOccurrenceRunsStatusDone:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusFailed:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusInProgress:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskRunKind.
+const (
+	TaskRunKindManual    TaskRunKind = "manual"
+	TaskRunKindScheduled TaskRunKind = "scheduled"
+)
+
+// Valid indicates whether the value is a known member of the TaskRunKind enum.
+func (e TaskRunKind) Valid() bool {
+	switch e {
+	case TaskRunKindManual:
+		return true
+	case TaskRunKindScheduled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskRunStatus.
+const (
+	TaskRunStatusDone       TaskRunStatus = "done"
+	TaskRunStatusFailed     TaskRunStatus = "failed"
+	TaskRunStatusInProgress TaskRunStatus = "in_progress"
+)
+
+// Valid indicates whether the value is a known member of the TaskRunStatus enum.
+func (e TaskRunStatus) Valid() bool {
+	switch e {
+	case TaskRunStatusDone:
+		return true
+	case TaskRunStatusFailed:
+		return true
+	case TaskRunStatusInProgress:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskUpdateRequestStatus.
 const (
 	TaskUpdateRequestStatusBlocked    TaskUpdateRequestStatus = "blocked"
@@ -2785,22 +2845,22 @@ func (e TaskUpdateRequestTodosStatus) Valid() bool {
 
 // Defines values for TaskUpdateRequestTriggerType.
 const (
-	Every     TaskUpdateRequestTriggerType = "every"
-	Manual    TaskUpdateRequestTriggerType = "manual"
-	Once      TaskUpdateRequestTriggerType = "once"
-	Recurring TaskUpdateRequestTriggerType = "recurring"
+	TaskUpdateRequestTriggerTypeEvery     TaskUpdateRequestTriggerType = "every"
+	TaskUpdateRequestTriggerTypeManual    TaskUpdateRequestTriggerType = "manual"
+	TaskUpdateRequestTriggerTypeOnce      TaskUpdateRequestTriggerType = "once"
+	TaskUpdateRequestTriggerTypeRecurring TaskUpdateRequestTriggerType = "recurring"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestTriggerType enum.
 func (e TaskUpdateRequestTriggerType) Valid() bool {
 	switch e {
-	case Every:
+	case TaskUpdateRequestTriggerTypeEvery:
 		return true
-	case Manual:
+	case TaskUpdateRequestTriggerTypeManual:
 		return true
-	case Once:
+	case TaskUpdateRequestTriggerTypeOnce:
 		return true
-	case Recurring:
+	case TaskUpdateRequestTriggerTypeRecurring:
 		return true
 	default:
 		return false
@@ -4700,6 +4760,16 @@ type DayBucket struct {
 
 	// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
 	IntervalMs *int64 `json:"interval_ms"`
+
+	// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > in_progress > done > scheduled) and tooltip breakdown read this object when present.
+	RunCounts *struct {
+		Done       int32 `json:"done"`
+		Failed     int32 `json:"failed"`
+		InProgress int32 `json:"in_progress"`
+
+		// Scheduled Occurrences on this day with no run yet (future, or "no record").
+		Scheduled int32 `json:"scheduled"`
+	} `json:"run_counts,omitempty"`
 }
 
 // DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
@@ -7568,7 +7638,35 @@ type TaskOccurrenceSet struct {
 
 		// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
 		IntervalMs *int64 `json:"interval_ms"`
+
+		// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > in_progress > done > scheduled) and tooltip breakdown read this object when present.
+		RunCounts *struct {
+			Done       int32 `json:"done"`
+			Failed     int32 `json:"failed"`
+			InProgress int32 `json:"in_progress"`
+
+			// Scheduled Occurrences on this day with no run yet (future, or "no record").
+			Scheduled int32 `json:"scheduled"`
+		} `json:"run_counts,omitempty"`
 	} `json:"day_buckets"`
+
+	// OccurrenceRuns Additive per-occurrence run overlay (ADR-050 RD6 / task-run-history-spec §3.7), scoped strictly to this set's individual `occurrences_ms[]` instants (never bucket members — inherits the existing ≤500/task cap, no new cap). Read-only, purely additive (ADR-050 RD11 — no migration); absent (or empty) until the occurrence-overlay handler populates it.
+	OccurrenceRuns *[]struct {
+		// HasResult Whether the matched run carries a non-empty result. The full result text is fetched per-run (not inlined here) via GET /tasks/{id}/runs.
+		HasResult bool `json:"has_result"`
+
+		// OccurrenceMs The occurrence instant (from occurrences_ms[]) this overlay entry describes.
+		OccurrenceMs int64 `json:"occurrence_ms"`
+
+		// RunId The matched run's ID (ULID).
+		RunId string `json:"run_id"`
+
+		// SessionId The matched run's chat session ID.
+		SessionId string `json:"session_id"`
+
+		// Status The matched run's status.
+		Status TaskOccurrenceSetOccurrenceRunsStatus `json:"status"`
+	} `json:"occurrence_runs,omitempty"`
 
 	// OccurrencesMs Individual occurrence instants (Unix epoch milliseconds) not folded into a day bucket — every day in range when the query span is ≤ 8×24h (Week/Day views), or days with ≤ 3 occurrences when the span is > 8×24h (overview ranges, e.g. Month). Capped at 500 per task per request.
 	OccurrencesMs []int64 `json:"occurrences_ms"`
@@ -7579,6 +7677,45 @@ type TaskOccurrenceSet struct {
 	// Truncated True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
 	Truncated bool `json:"truncated"`
 }
+
+// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status.
+type TaskOccurrenceSetOccurrenceRunsStatus string
+
+// TaskRun One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
+type TaskRun struct {
+	// EndedAt RFC 3339 timestamp when the run closed. Null while in_progress.
+	EndedAt *time.Time `json:"ended_at"`
+
+	// Kind How the run started — an automatic trigger fire, or a user Run-now.
+	Kind TaskRunKind `json:"kind"`
+
+	// OccurrenceMs The scheduled RRULE instant this run realizes (the calendar join key, Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
+	OccurrenceMs *int64 `json:"occurrence_ms"`
+
+	// Result Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
+	Result *string `json:"result,omitempty"`
+
+	// RunId Stable ULID identifying this run across its open and close records.
+	RunId string `json:"run_id"`
+
+	// SessionId The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward.
+	SessionId string `json:"session_id"`
+
+	// StartedAt RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
+	StartedAt time.Time `json:"started_at"`
+
+	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`).
+	Status TaskRunStatus `json:"status"`
+
+	// TaskId The task this run belongs to.
+	TaskId string `json:"task_id"`
+}
+
+// TaskRunKind How the run started — an automatic trigger fire, or a user Run-now.
+type TaskRunKind string
+
+// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`).
+type TaskRunStatus string
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 // ## Tier 2 (now) `type` is one of:

@@ -1068,6 +1068,12 @@ func TestContract_TaskOccurrenceSet_NilOccurrencesMsRejected(t *testing.T) {
 			DayStartMs int64  `json:"day_start_ms"`
 			FirstMs    int64  `json:"first_ms"`
 			IntervalMs *int64 `json:"interval_ms"`
+			RunCounts  *struct {
+				Done       int32 `json:"done"`
+				Failed     int32 `json:"failed"`
+				InProgress int32 `json:"in_progress"`
+				Scheduled  int32 `json:"scheduled"`
+			} `json:"run_counts,omitempty"`
 		}{},
 		OccurrencesMs: nil, // bug: nil slice marshals to null
 		Truncated:     false,

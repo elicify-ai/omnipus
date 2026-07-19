@@ -40,6 +40,52 @@ properties:
       8×24h) on query-tz days with more than 3 occurrences (D6).
     items:
       $ref: ./DayBucket.yaml
+  occurrence_runs:
+    type: array
+    description: >
+      Additive per-occurrence run overlay (ADR-050 RD6 / task-run-history-spec
+      §3.7), scoped strictly to this set's individual `occurrences_ms[]`
+      instants (never bucket members — inherits the existing ≤500/task cap,
+      no new cap). Read-only, purely additive (ADR-050 RD11 — no migration);
+      absent (or empty) until the occurrence-overlay handler populates it.
+    items:
+      type: object
+      required:
+        - occurrence_ms
+        - status
+        - run_id
+        - session_id
+        - has_result
+      additionalProperties: false
+      properties:
+        occurrence_ms:
+          type: integer
+          format: int64
+          description: The occurrence instant (from occurrences_ms[]) this overlay entry describes.
+          example: 1784620800000
+        status:
+          type: string
+          enum:
+            - in_progress
+            - done
+            - failed
+          description: The matched run's status.
+          example: "done"
+        run_id:
+          type: string
+          description: The matched run's ID (ULID).
+          example: "01J8Z3K2R9G4S6M0N1P2Q3R4S5"
+        session_id:
+          type: string
+          description: The matched run's chat session ID.
+          example: "session-uuid"
+        has_result:
+          type: boolean
+          description: >
+            Whether the matched run carries a non-empty result. The full
+            result text is fetched per-run (not inlined here) via
+            GET /tasks/{id}/runs.
+          example: true
   truncated:
     type: boolean
     description: >

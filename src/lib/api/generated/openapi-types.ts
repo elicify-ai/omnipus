@@ -1954,6 +1954,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/{id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a task's run history
+         * @description Returns every execution record (TaskRun) for a task, newest first (ADR-050 / task-run-history-spec §3.6) — the authoritative history list, independent of whether the task's current trigger can still project a run's occurrence_ms (a series whose schedule was edited still lists every past run). Retention-bounded (day-partitioned sweep with a keep-newest-day floor); full result strings. Read-only; no state change. Rate-limited by the same dedicated taskReadLimiter (240 requests/min) as GET /tasks/occurrences.
+         */
+        get: operations["listTaskRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp-servers": {
         parameters: {
             query?: never;
@@ -6731,6 +6751,36 @@ export interface components {
             occurrences_ms: number[];
             /** @description Aggregated days — only populated for overview-range queries (span > 8×24h) on query-tz days with more than 3 occurrences (D6). */
             day_buckets: components["schemas"]["DayBucket"][];
+            /** @description Additive per-occurrence run overlay (ADR-050 RD6 / task-run-history-spec §3.7), scoped strictly to this set's individual `occurrences_ms[]` instants (never bucket members — inherits the existing ≤500/task cap, no new cap). Read-only, purely additive (ADR-050 RD11 — no migration); absent (or empty) until the occurrence-overlay handler populates it. */
+            occurrence_runs?: {
+                /**
+                 * Format: int64
+                 * @description The occurrence instant (from occurrences_ms[]) this overlay entry describes.
+                 * @example 1784620800000
+                 */
+                occurrence_ms: number;
+                /**
+                 * @description The matched run's status.
+                 * @example done
+                 * @enum {string}
+                 */
+                status: "in_progress" | "done" | "failed";
+                /**
+                 * @description The matched run's ID (ULID).
+                 * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
+                 */
+                run_id: string;
+                /**
+                 * @description The matched run's chat session ID.
+                 * @example session-uuid
+                 */
+                session_id: string;
+                /**
+                 * @description Whether the matched run carries a non-empty result. The full result text is fetched per-run (not inlined here) via GET /tasks/{id}/runs.
+                 * @example true
+                 */
+                has_result: boolean;
+            }[];
             /**
              * @description True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
              * @example false
@@ -6766,6 +6816,86 @@ export interface components {
              * @example 1800000
              */
             interval_ms: number | null;
+            /** @description Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > in_progress > done > scheduled) and tooltip breakdown read this object when present. */
+            run_counts?: {
+                /**
+                 * Format: int32
+                 * @description Occurrences on this day with no run yet (future, or "no record").
+                 * @example 26
+                 */
+                scheduled: number;
+                /**
+                 * Format: int32
+                 * @example 0
+                 */
+                in_progress: number;
+                /**
+                 * Format: int32
+                 * @example 12
+                 */
+                done: number;
+                /**
+                 * Format: int32
+                 * @example 2
+                 */
+                failed: number;
+            };
+        };
+        /**
+         * TaskRun
+         * @description One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
+         */
+        TaskRun: {
+            /**
+             * @description Stable ULID identifying this run across its open and close records.
+             * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
+             */
+            run_id: string;
+            /**
+             * @description The task this run belongs to.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            task_id: string;
+            /**
+             * Format: int64
+             * @description The scheduled RRULE instant this run realizes (the calendar join key, Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
+             * @example 1784620800000
+             */
+            occurrence_ms: number | null;
+            /**
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`).
+             * @example done
+             * @enum {string}
+             */
+            status: "in_progress" | "done" | "failed";
+            /**
+             * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
+             * @example Found 3 anomalies in the gateway logs.
+             */
+            result?: string;
+            /**
+             * @description The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward.
+             * @example session-uuid
+             */
+            session_id: string;
+            /**
+             * @description How the run started — an automatic trigger fire, or a user Run-now.
+             * @example scheduled
+             * @enum {string}
+             */
+            kind: "scheduled" | "manual";
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
+             * @example 2026-07-20T09:00:00Z
+             */
+            started_at: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp when the run closed. Null while in_progress.
+             * @example 2026-07-20T09:05:30Z
+             */
+            ended_at: string | null;
         };
         /**
          * ProviderUpdateRequest
@@ -11920,6 +12050,32 @@ export interface operations {
             409: components["responses"]["409Conflict"];
         };
     };
+    listTaskRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of run records, newest first. Empty array when the task has no runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRun"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     listMcpServers: {
         parameters: {
             query?: never;
@@ -13078,6 +13234,7 @@ export type Todo = components["schemas"]["Todo"];
 export type TaskTrigger = components["schemas"]["TaskTrigger"];
 export type TaskOccurrenceSet = components["schemas"]["TaskOccurrenceSet"];
 export type DayBucket = components["schemas"]["DayBucket"];
+export type TaskRun = components["schemas"]["TaskRun"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];

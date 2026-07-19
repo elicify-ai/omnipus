@@ -89,6 +89,8 @@ channels:
         $ref: '#/components/messages/SubagentEndFrame'
       TaskStatusChangedFrame:
         $ref: '#/components/messages/TaskStatusChangedFrame'
+      TaskRunStatusFrame:
+        $ref: '#/components/messages/TaskRunStatusFrame'
       ReplayMessageFrame:
         $ref: '#/components/messages/ReplayMessageFrame'
       ReplayErrorFrame:
@@ -373,6 +375,22 @@ operations:
       A task's status changed. The SPA invalidates its tasks query cache.
     messages:
       - $ref: '#/channels/chat/messages/TaskStatusChangedFrame'
+
+  receiveTaskRunStatus:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A task RUN's status changed (open or close), stamped with its
+      occurrence_ms when it realizes a scheduled recurring instant
+      (ADR-050 / task-run-history-spec §3.8). Distinct from
+      TaskStatusChangedFrame: a recurring occurrence's queued→in_progress→
+      done transition does not move Task.status between distinct values the
+      calendar reads, so this additive frame is what drives a live
+      per-occurrence chip update. The SPA invalidates its task-occurrences
+      and task-runs query caches on receipt.
+    messages:
+      - $ref: '#/channels/chat/messages/TaskRunStatusFrame'
 
   receiveReplayMessage:
     action: receive
@@ -846,6 +864,14 @@ components:
       payload:
         $ref: '#/components/schemas/TaskStatusChangedFrame'
 
+    TaskRunStatusFrame:
+      name: TaskRunStatusFrame
+      title: task_run_status
+      summary: A task run opened or closed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/TaskRunStatusFrame'
+
     ReplayMessageFrame:
       name: ReplayMessageFrame
       title: replay_message
@@ -1118,6 +1144,7 @@ components:
         - subagent_start
         - subagent_end
         - task_status_changed
+        - task_run_status
         - replay_message
         - replay_error
         - rate_limit
@@ -1777,6 +1804,45 @@ components:
             - failed
         agent_id:
           type: string
+
+    TaskRunStatusFrame:
+      title: TaskRunStatusFrame
+      description: >
+        Server → client task RUN status updated (open or close). Additive
+        alongside TaskStatusChangedFrame (ADR-050 / task-run-history-spec
+        §3.8) — emitted at run open and close so the calendar's
+        per-occurrence chip can update live without a full refetch.
+      type: object
+      required:
+        - type
+        - task_id
+        - run_id
+        - occurrence_ms
+        - status
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: task_run_status
+        task_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        occurrence_ms:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The scheduled RRULE instant this run realizes (the calendar join
+            key). Null for an ad-hoc/once/manual run.
+        status:
+          type: string
+          enum:
+            - in_progress
+            - done
+            - failed
 
     ReplayMessageFrame:
       title: ReplayMessageFrame

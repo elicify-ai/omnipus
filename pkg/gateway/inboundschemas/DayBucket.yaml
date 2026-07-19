@@ -43,3 +43,36 @@ properties:
       null when the rule is irregular (BY*-modified) and spacing varies — the
       client falls back to a "· {count}×/day" label.
     example: 1800000
+  run_counts:
+    type: object
+    description: >
+      Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec
+      §3.7), computed by scanning this day's actual TaskRun records — NOT by
+      enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 —
+      no migration); absent until the occurrence-overlay handler populates
+      it. The client's worst-wins glyph (failed > in_progress > done >
+      scheduled) and tooltip breakdown read this object when present.
+    required:
+      - scheduled
+      - in_progress
+      - done
+      - failed
+    additionalProperties: false
+    properties:
+      scheduled:
+        type: integer
+        format: int32
+        description: Occurrences on this day with no run yet (future, or "no record").
+        example: 26
+      in_progress:
+        type: integer
+        format: int32
+        example: 0
+      done:
+        type: integer
+        format: int32
+        example: 12
+      failed:
+        type: integer
+        format: int32
+        example: 2

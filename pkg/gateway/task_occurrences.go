@@ -99,11 +99,24 @@ const (
 // not-wire-format: local alias for the generated inline struct; see
 // gen.TaskOccurrenceSet.DayBuckets / contracts/components/schemas/DayBucket.yaml
 // for the authoritative shape.
+//
+// RunCounts (ADR-050 / task-run-history-spec §3.7) is an additive field on
+// the wire schema, present here only so this alias stays assignable against
+// the generated type — every call site below leaves it nil/unset. Populating
+// it (scanning each day's actual TaskRun records via pkg/task.RunsInRange) is
+// a LATER wave's job, not this one's; see the run-history spec's "Occurrence
+// overlay" seam (buildOneOccurrenceSet).
 type wireDayBucket = struct {
 	Count      int32  `json:"count"`
 	DayStartMs int64  `json:"day_start_ms"`
 	FirstMs    int64  `json:"first_ms"`
 	IntervalMs *int64 `json:"interval_ms"`
+	RunCounts  *struct {
+		Done       int32 `json:"done"`
+		Failed     int32 `json:"failed"`
+		InProgress int32 `json:"in_progress"`
+		Scheduled  int32 `json:"scheduled"`
+	} `json:"run_counts,omitempty"`
 }
 
 // buildOccurrenceSets is the pure orchestration entry point: expands every
