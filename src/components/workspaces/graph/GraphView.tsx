@@ -12,9 +12,10 @@ import {
   type NodeMouseHandler,
   type NodeTypes,
 } from '@xyflow/react'
-import { GraphIcon } from '@phosphor-icons/react'
+import { CaretDown, GraphIcon, StackIcon } from '@phosphor-icons/react'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import type { Task } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { TaskNode } from './TaskNode'
 import {
   buildTaskGraph,
@@ -42,6 +43,20 @@ interface GraphViewProps {
   onTaskClick: (task: Task) => void
   /** Id of the currently-open task, so its node renders selected. */
   selectedTaskId?: string | null
+  /**
+   * Scope the canvas to a single Plan's member tasks + edges (Plan Swimlane
+   * board redesign — the Board's lane ⑂ button sets this and navigates here).
+   * `null`/`undefined` = whole-workspace "All" mode.
+   */
+  planId?: string | null
+  /**
+   * Whole-workspace "All" mode only (ignored when `planId` is set): collapse
+   * non-DAG-relevant (unlinked) tasks into a single tray instead of rendering
+   * a field of disconnected one-time-task dots. Defaults to false so existing
+   * callers/tests that render every visible task as a node are unaffected —
+   * the real Graph tab (WorkspaceGraphTab) opts in explicitly.
+   */
+  collapseOrphans?: boolean
 }
 
 /**
@@ -50,11 +65,21 @@ interface GraphViewProps {
  * TaskNode, and wires pan/zoom + minimap + controls. Clicking a node opens the
  * task detail via `onTaskClick`.
  *
- * Layout is memoised on the tasks/agents identity and only recomputed when
- * those change — performant for ~50–100 nodes.
+ * Layout is memoised on the tasks/agents/planId identity and only recomputed
+ * when those change — performant for ~50–100 nodes.
  */
-function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphViewProps) {
-  const layout = useMemo(() => buildTaskGraph(tasks, agents), [tasks, agents])
+function GraphViewInner({
+  tasks,
+  agents,
+  onTaskClick,
+  selectedTaskId,
+  planId = null,
+  collapseOrphans = false,
+}: GraphViewProps) {
+  const layout = useMemo(
+    () => buildTaskGraph(tasks, agents, planId != null ? { planId } : { collapseOrphans }),
+    [tasks, agents, planId, collapseOrphans],
+  )
 
   // `onTaskClick` is commonly passed as a fresh inline arrow function by the
   // parent (e.g. WorkspaceGraphTab's `onTaskClick={(task) => setSelectedTaskId(task.id)}`)
@@ -132,7 +157,16 @@ function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphVie
   const canvasRef = useRef<HTMLDivElement>(null)
   useLibraryTabIndex(canvasRef)
 
-  if (layout.nodes.length === 0) {
+  // Plan scope with fewer than 2 members can't have a dependency edge at
+  // all — mirrors the Board disabling its lane ⑂ button in the same case.
+  if (planId != null && layout.nodes.length < 2) {
+    return <GraphPlanEmptyState />
+  }
+
+  // Truly nothing to show: no DAG-relevant nodes AND nothing collapsed into
+  // the tray either (collapseOrphans off, or the workspace is genuinely
+  // empty).
+  if (layout.nodes.length === 0 && layout.unlinked.length === 0) {
     return <GraphEmptyState />
   }
 
@@ -174,6 +208,74 @@ function GraphViewInner({ tasks, agents, onTaskClick, selectedTaskId }: GraphVie
           className="!bottom-4 !right-4"
         />
       </ReactFlow>
+      {layout.unlinked.length > 0 && (
+        <UnlinkedTasksTray tasks={layout.unlinked} onTaskClick={onTaskClick} />
+      )}
+    </div>
+  )
+}
+
+interface UnlinkedTasksTrayProps {
+  tasks: Task[]
+  onTaskClick: (task: Task) => void
+}
+
+/**
+ * Attention/Gestalt-grounded collapse of one-time tasks with no DAG structure
+ * (see `isDagRelevant` in taskGraph.ts) — a single chip instead of a field of
+ * disconnected dots. Expands into a scrollable list on click so the collapsed
+ * tasks stay discoverable (recognition, not memory); clicking a listed task
+ * opens it via the same `onTaskClick` a node click uses.
+ */
+function UnlinkedTasksTray({ tasks, onTaskClick }: UnlinkedTasksTrayProps) {
+  const [expanded, setExpanded] = useState(false)
+  if (tasks.length === 0) return null
+
+  return (
+    <div className="absolute left-4 top-4 z-10 max-w-[280px]" data-testid="unlinked-tasks-tray">
+      <button tabIndex={0}
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        aria-controls="unlinked-tasks-tray-list"
+        className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] transition-colors hover:border-[var(--color-accent)]/50"
+      >
+        <StackIcon size={13} weight="bold" className="text-[var(--color-muted)]" />
+        {tasks.length} unlinked task{tasks.length === 1 ? '' : 's'}
+        <CaretDown
+          size={11}
+          className={cn('text-[var(--color-muted)] transition-transform', expanded && 'rotate-180')}
+        />
+      </button>
+
+      {expanded && (
+        <div
+          id="unlinked-tasks-tray-list"
+          role="list"
+          aria-label="Unlinked tasks"
+          className="mt-1.5 max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] py-1 shadow-[0_4px_16px_rgba(0,0,0,0.4)]"
+        >
+          {tasks.map((task) => {
+            const visual = statusVisual(task.status)
+            return (
+              <button tabIndex={0}
+                key={task.id}
+                type="button"
+                role="listitem"
+                onClick={() => onTaskClick(task)}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+              >
+                <span
+                  aria-hidden
+                  className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                  style={{ backgroundColor: visual.color }}
+                />
+                <span className="truncate">{task.title}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -198,6 +300,37 @@ function GraphEmptyState() {
         <p className="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
           Create a task on the Board and its dependencies will graph here — laid
           out left to right, with live status colour and a traceable critical path.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Friendly empty state for a plan scoped to fewer than 2 member tasks — a
+ * dependency edge needs at least two tasks to exist. Mirrors the Board
+ * disabling its lane ⑂ (graph) action in the same case.
+ */
+function GraphPlanEmptyState() {
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center p-6"
+      data-testid="graph-plan-empty-state"
+    >
+      <div className="flex max-w-sm flex-col items-center text-center">
+        <div className="relative mb-5">
+          <div className="absolute inset-0 rounded-2xl bg-[var(--color-accent)]/10 blur-xl" />
+          <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-[var(--color-accent)]/30 bg-[var(--color-surface-2)]">
+            <GraphIcon size={30} weight="duotone" className="text-[var(--color-accent)]" />
+          </div>
+        </div>
+        <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
+          This plan has no dependencies yet
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+          Add a second task to this plan and link it with a dependency to see
+          its DAG here — laid out left to right, with live status colour and a
+          traceable critical path.
         </p>
       </div>
     </div>
