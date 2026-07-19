@@ -5338,7 +5338,7 @@ type McpServerCreate struct {
 // McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 type McpServerCreateTransport string
 
-// McpServerTestResponse Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server (without changing any state) and reports whether it succeeded and which tools it exposed.
+// McpServerTestResponse Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that attempts to connect to the configured MCP server via a temporary connection and reports whether it succeeded and which tools it exposed. On success, if the server is enabled in config, the global MCP kill-switch (tools.mcp.enabled) is also on, and the server is not currently connected in the live manager, this additionally triggers a live reconciliation pass to bring the real connection in line with what the test just proved reachable. When the global kill-switch is off, the message notes that MCP is globally disabled instead of silently skipping reconciliation. A failed test never changes any state.
 type McpServerTestResponse struct {
 	// Message Human-readable result (connection summary, or the failure reason).
 	Message string `json:"message"`

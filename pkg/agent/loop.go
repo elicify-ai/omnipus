@@ -3128,7 +3128,15 @@ func (al *AgentLoop) Close() {
 		}
 	}()
 
+	// Mark the runtime closed and take the manager as one step under initMu
+	// so no ReconcileMCP pass — in flight or launched after this point — can
+	// observe a manager that is mid-teardown: ReconcileMCP checks isClosed()
+	// immediately after acquiring initMu and returns without touching
+	// anything once it is set.
+	al.mcp.initMu.Lock()
+	al.mcp.setClosed()
 	mcpManager := al.mcp.takeManager()
+	al.mcp.initMu.Unlock()
 
 	if mcpManager != nil {
 		if err := mcpManager.Close(); err != nil {
@@ -3779,6 +3787,32 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// The old registry's resources (session file handles) will be GC'd when
 	// no more references exist. This trades a brief fd leak during reload
 	// for crash safety.
+
+	// Reconcile live MCP connections against the just-swapped config, and —
+	// unconditionally — re-register every already-connected server's tools
+	// onto the brand-new registry above (NewAgentRegistry gives every agent a
+	// fresh, empty Tools registry, which would otherwise silently drop MCP
+	// tools on every hot reload / settings save). Must run after al.mu.Unlock
+	// (ReconcileMCP takes al.mcp.initMu and reads al.cfg under its own
+	// al.mu.RLock snapshot, and al.registry via GetRegistry — both would
+	// deadlock if called while al.mu is still held here) and must not fail
+	// the reload — a broken MCP server config shouldn't block a
+	// provider/config swap that otherwise already succeeded. A
+	// canceled/expired ctx means the pass never actually ran (reconcileLocked
+	// checks ctx.Err() before touching anything) rather than having hit a
+	// real per-server or systemic failure, so — unlike other errors, which
+	// are just logged — that specific case also clears the initialized latch:
+	// otherwise, if an earlier pass had ever succeeded, ensureMCPInitialized's
+	// fast path would keep taking the "already done" shortcut forever and the
+	// next turn's MCP state would never actually be reconciled. Other errors
+	// are surfaced via MCPServerStatus / a later successful pass instead.
+	if err := al.ReconcileMCP(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			al.mcp.clearInitialized()
+		}
+		logger.WarnCF("agent", "MCP reconciliation failed after config reload",
+			map[string]any{"error": err.Error()})
+	}
 
 	logger.InfoCF("agent", "Provider and config reloaded successfully",
 		map[string]any{

@@ -6032,7 +6032,7 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 		a.addMCPServer(w, r)
 
 	case r.Method == http.MethodDelete && sub != "" && subSuffix == "":
-		a.deleteMCPServer(w, serverID)
+		a.deleteMCPServer(w, r, serverID)
 
 	case r.Method == http.MethodGet && serverID != "" && subSuffix == "tools":
 		a.listMCPServerTools(w, serverID)
@@ -6053,17 +6053,42 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 // while leaving real config I/O / parse failures to surface as 500.
 var errMCPNotFound = errors.New("mcp server not found")
 
+// mcpLiveStatus maps AgentLoop.MCPServerStatus's live status string
+// ("connected"|"error"|"disconnected") to the generated McpServerStatus enum,
+// alongside the live tool_count (entries this server has in the central MCP
+// registry; 0 when unset or not connected). addMCPServer, patchMCPServer, and
+// listMCPServers all derive status/tool_count through this single path so the
+// three endpoints never disagree on what "connected" means.
+func (a *restAPI) mcpLiveStatus(name string) (gen.McpServerStatus, int) {
+	status, toolCount, _ := a.agentLoop.MCPServerStatus(name)
+	switch status {
+	case "connected":
+		return gen.McpServerStatusConnected, toolCount
+	case "error":
+		return gen.McpServerStatusError, toolCount
+	default:
+		return gen.McpServerStatusDisconnected, toolCount
+	}
+}
+
 // listMCPServers reads configured MCP servers from config and returns them as
-// McpServer[] (contracts/components/schemas/McpServer.yaml). G6: status reflects
-// the live MCP manager (a server present in the manager is "connected"), and
-// tool_count is the number of tools that server registered in the MCP registry
-// (matching GET /mcp-servers/{id}/tools). When MCP is disabled / not yet
-// connected, status is "disconnected" with tool_count 0.
+// McpServer[] (contracts/components/schemas/McpServer.yaml). G6: status comes from
+// mcpLiveStatus (AgentLoop.MCPServerStatus), the SAME live-reconciliation state
+// addMCPServer/patchMCPServer/deleteMCPServer read back after a config write — a
+// server actually connected via the live manager reports "connected", a server
+// that failed to connect reports "error", and anything else (disabled,
+// reconciliation never ran) reports "disconnected". tool_count is sourced from
+// a.mcpRegistry directly (matching GET /mcp-servers/{id}/tools) rather than
+// mcpLiveStatus's own tool_count — see the inline comment below. tools (sorted
+// tool names) is populated from the same a.mcpRegistry pass, and omitted when
+// the server has no registered tools.
 func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
-	cfg := a.agentLoop.GetConfig()
-	mgr := a.agentLoop.GetMCPManager()
-	result := make([]gen.McpServer, 0, len(cfg.Tools.MCP.Servers))
-	for name, srv := range cfg.Tools.MCP.Servers {
+	// MCPServersSnapshot (not GetConfig().Tools.MCP.Servers) — ranging the live
+	// map directly races the sysagent config-mutation path, which mutates it
+	// in place while holding the agent loop's write lock.
+	servers := a.agentLoop.MCPServersSnapshot()
+	result := make([]gen.McpServer, 0, len(servers))
+	for name, srv := range servers {
 		transport := gen.McpServerTransportStdio
 		switch srv.Type {
 		case "sse":
@@ -6073,17 +6098,21 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		}
 		enabled := srv.Enabled
 
-		status := gen.McpServerStatusDisconnected
-		if mgr != nil {
-			if _, ok := mgr.GetServer(name); ok {
-				status = gen.McpServerStatusConnected
-			}
-		}
+		// Status comes from the same live-reconciliation state add/patch/delete
+		// read back (mcpLiveStatus), but tool_count is sourced from a.mcpRegistry
+		// directly — as before this fix — rather than mcpLiveStatus's own
+		// tool_count (which reads the AgentLoop's central registry). In production
+		// these are the SAME registry instance (gateway.go wires both to
+		// centralMCPReg), but keeping this path independent matches the existing
+		// GET /mcp-servers/{id}/tools contract, which also reads a.mcpRegistry.
+		status, _ := a.mcpLiveStatus(name)
 		toolCount := 0
+		var toolNames []string
 		if a.mcpRegistry != nil {
 			for _, e := range a.mcpRegistry.Describe() {
 				if e.ServerID == name {
 					toolCount++
+					toolNames = append(toolNames, e.Name)
 				}
 			}
 		}
@@ -6095,6 +6124,10 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			Status:    status,
 			ToolCount: toolCount,
 			Enabled:   &enabled,
+		}
+		if len(toolNames) > 0 {
+			sort.Strings(toolNames)
+			entry.Tools = &toolNames
 		}
 		// Non-secret config fields for edit pre-fill (#437).
 		if srv.Command != "" {
@@ -6142,8 +6175,11 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 // If the server has no registered tools (e.g. not yet connected), returns an empty list.
 // 404 if serverID is not present in the config.
 func (a *restAPI) listMCPServerTools(w http.ResponseWriter, serverID string) {
-	cfg := a.agentLoop.GetConfig()
-	if _, exists := cfg.Tools.MCP.Servers[serverID]; !exists {
+	// MCPServersSnapshot (not GetConfig().Tools.MCP.Servers) — indexing the
+	// live map directly races the sysagent config-mutation path, which
+	// mutates it in place while holding the agent loop's write lock.
+	servers := a.agentLoop.MCPServersSnapshot()
+	if _, exists := servers[serverID]; !exists {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", serverID))
 		return
 	}
@@ -6162,6 +6198,9 @@ func (a *restAPI) listMCPServerTools(w http.ResponseWriter, serverID string) {
 // addMCPServer handles POST /api/v1/mcp-servers.
 // Accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml).
 // Transport must be one of: stdio, sse, http (enforced by enum validation).
+// After the config write, live-reconciles the MCP manager (AgentLoop.ReconcileMCP)
+// so the server actually connects and its tools register before the response is
+// built — status/tool_count reflect the real outcome, not a hardcoded placeholder.
 // Returns the new McpServer entry shaped per contracts/components/schemas/McpServer.yaml.
 func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	var req gen.McpServerCreate
@@ -6238,6 +6277,12 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		if _, exists := servers[req.Name]; exists {
 			return fmt.Errorf("mcp server %q already exists", req.Name)
 		}
+		// Adding a server is explicit operator intent to use MCP — flip the global
+		// kill-switch on in the same write so ReconcileMCP's desired set isn't
+		// forced empty by a still-false tools.mcp.enabled (default on fresh
+		// installs). PATCH/delete deliberately do NOT touch this flag: turning
+		// MCP off globally is a separate, explicit action.
+		mcp["enabled"] = true
 		entry := map[string]any{
 			"enabled": true,
 			"type":    transport,
@@ -6274,6 +6319,16 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// Config write succeeded — reconcile the live manager so the server actually
+	// connects instead of sitting "disconnected" until a full gateway
+	// restart. Best-effort: a reconcile failure/timeout does not undo the config
+	// write or fail the request — the operator can retry via PATCH/reload, and the
+	// response status below honestly reflects whatever the live state ended up as.
+	rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+		slog.Warn("rest: add mcp server: live reconcile failed", "server", req.Name, "error", err)
+	}
+	cancel()
 	// Map the transport string to the generated enum value for the response.
 	var respTransport gen.McpServerTransport
 	switch transport {
@@ -6284,12 +6339,13 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	default:
 		respTransport = gen.McpServerTransportStdio
 	}
+	status, toolCount := a.mcpLiveStatus(req.Name)
 	resp := gen.McpServer{
 		Id:        req.Name,
 		Name:      req.Name,
 		Transport: respTransport,
-		Status:    gen.McpServerStatusDisconnected,
-		ToolCount: 0,
+		Status:    status,
+		ToolCount: toolCount,
 	}
 	jsonCreated(w, resp)
 }
@@ -6324,7 +6380,11 @@ func mcpURLSchemeValid(rawURL string) bool {
 	}
 }
 
-func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
+// deleteMCPServer handles DELETE /api/v1/mcp-servers/{id}. Removes the server
+// from config, then live-reconciles the MCP manager (AgentLoop.ReconcileMCP) so
+// a connected server is actually disconnected and its tools evicted from the
+// central/per-agent registries, rather than lingering live until restart.
+func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid server id")
 		return
@@ -6357,23 +6417,64 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
 		return
 	}
+	// Config write succeeded — reconcile the live manager so the removed server is
+	// actually disconnected (DisconnectServer) and its tools evicted from the
+	// central/per-agent registries, rather than lingering connected until restart.
+	rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+		slog.Warn("rest: delete mcp server: live reconcile failed", "server", id, "error", err)
+	}
+	cancel()
 	jsonOK(w, map[string]string{"status": "removed", "id": id})
 }
 
 // testMCPServer handles POST /api/v1/mcp-servers/{id}/test (G7).
 // Opens a temporary MCP manager, attempts to connect to the configured server,
-// reports the result, then closes the manager. No persistent state is changed.
-// Returns McpServerTestResponse: success=true on live connection, success=false (HTTP 200)
-// when the server is unreachable or misconfigured.
-func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id string) {
+// and reports the result, then closes the temporary manager. The test
+// connection itself changes no persistent state beyond the heal described
+// below. Returns McpServerTestResponse: success=true on live connection,
+// success=false (HTTP 200) when the server is unreachable or misconfigured
+// (including a relative env_file the gateway cannot resolve).
+//
+// Heal on success: a successful test proves the server is reachable, so if it
+// is enabled in config, the global tools.mcp.enabled kill-switch is ALSO on,
+// and it is not yet connected in the live manager (e.g. it failed to connect
+// at boot, or was added before the kill-switch was flipped on), this triggers
+// a real AgentLoop.ReconcileMCP pass to bring the live state in line with what
+// the test just proved works — a manual "Test" click on a stuck server
+// doubles as an unstick, instead of leaving the operator to separately toggle
+// enabled off/on to force a reconnect. When the global flag is off, no
+// reconcile can bring the server live (ReconcileMCP's desired set is forced
+// empty), so the success message says so instead of silently doing nothing.
+// This is the ONLY state change the endpoint makes, and only follows from
+// success; a failed test never triggers reconciliation.
+func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid server id")
 		return
 	}
-	cfg := a.agentLoop.GetConfig()
-	srv, exists := cfg.Tools.MCP.Servers[id]
+	// MCPServersSnapshot (not GetConfig().Tools.MCP.Servers) — ranging/indexing
+	// the live map directly races the sysagent config-mutation path, which
+	// mutates it in place while holding the agent loop's write lock.
+	servers := a.agentLoop.MCPServersSnapshot()
+	srv, exists := servers[id]
 	if !exists {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
+		return
+	}
+
+	// Resolve a relative env_file against the same workspace path production
+	// reconciliation uses, so the throwaway test connection sees the same
+	// environment a real connect would — otherwise "Test" could report success
+	// for a server that fails to actually connect once reconciled (or vice
+	// versa). A resolution error is a test failure, not a 500: it is exactly
+	// the misconfiguration the test button exists to surface.
+	resolvedSrv, err := mcp.ResolveServerEnvFile(srv, a.agentLoop.MCPWorkspacePath())
+	if err != nil {
+		jsonOK(w, gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("env_file: %s", err.Error()),
+		})
 		return
 	}
 
@@ -6387,7 +6488,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id strin
 		}
 	}()
 
-	if err := tmpMgr.ConnectServer(ctx, id, srv); err != nil {
+	if err := tmpMgr.ConnectServer(ctx, id, resolvedSrv); err != nil {
 		resp := gen.McpServerTestResponse{
 			Success: false,
 			Message: fmt.Sprintf("connection failed: %s", err.Error()),
@@ -6414,6 +6515,27 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id strin
 	sort.Strings(toolNames)
 
 	msg := fmt.Sprintf("connected successfully; %d tool(s) available", toolCount)
+
+	// Heal: the throwaway connection just proved the server is reachable. If
+	// config still has it enabled, the global kill-switch is on, and the LIVE
+	// manager doesn't have it up (status != "connected"), run a real reconcile
+	// so this success is not wasted — the operator's next GET reflects a
+	// genuinely connected server instead of "disconnected"/"error" despite the
+	// test that just passed. When the global flag is off, ReconcileMCP's
+	// desired set would be empty regardless of this server's own Enabled bit,
+	// so a reconcile here would be a silent no-op — skip it and say so instead.
+	if srv.Enabled {
+		if !a.agentLoop.GetConfig().Tools.MCP.Enabled {
+			msg += " (MCP is globally disabled — enable tools.mcp.enabled to connect)"
+		} else if status, _, _ := a.agentLoop.MCPServerStatus(id); status != "connected" {
+			rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+			if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+				slog.Warn("rest: test mcp server: heal reconcile failed", "id", id, "error", err)
+			}
+			cancel()
+		}
+	}
+
 	resp := gen.McpServerTestResponse{
 		Success:   true,
 		Message:   msg,
@@ -6426,7 +6548,12 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, _ *http.Request, id strin
 // patchMCPServer handles PATCH /api/v1/mcp-servers/{id} (G8).
 // Merges the provided (non-nil) fields from McpServerUpdate into the stored config
 // entry; omitted fields are preserved. Validates transport-specific constraints
-// when URL is changed.
+// when URL is changed. An explicit {enabled: true} also flips the global
+// tools.mcp.enabled kill-switch on in the same write (mirrors addMCPServer;
+// {enabled: false} and any other field never touch the global flag). After the
+// config write, live-reconciles the MCP manager (AgentLoop.ReconcileMCP) so the
+// live connection is reconnected with the new config (or disconnected, if the
+// patch disabled it) before the response is built.
 func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid server id")
@@ -6528,6 +6655,18 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 		servers[id] = updatedMap
 		updatedEntry = current
+
+		// An explicit PATCH {enabled: true} is operator intent to (re)connect
+		// this server, exactly like addMCPServer's own auto-enable — flip the
+		// global kill-switch on in the same write so ReconcileMCP's desired set
+		// isn't forced empty by a still-false tools.mcp.enabled (the
+		// upgraded-install trap: an operator re-enables a server that was
+		// disabled before the global flag existed, Test succeeds, but nothing
+		// ever connects because the flag itself was never on). Any other PATCH
+		// — including {enabled: false} — leaves the global flag untouched.
+		if req.Enabled != nil && *req.Enabled {
+			mcpSection["enabled"] = true
+		}
 		return nil
 	}); err != nil {
 		if mcpPatchValidationMsg != "" {
@@ -6542,6 +6681,15 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// Config write succeeded — reconcile the live manager so an edited server
+	// (changed command/url/args/env/headers, or toggled enabled) is reconnected
+	// with the new config, or disconnected if the patch disabled it, instead of
+	// the live connection silently drifting from what config.json now says.
+	rctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	if err := a.agentLoop.ReconcileMCP(rctx); err != nil {
+		slog.Warn("rest: patch mcp server: live reconcile failed", "server", id, "error", err)
+	}
+	cancel()
 
 	transport := gen.McpServerTransportStdio
 	switch updatedEntry.Type {
@@ -6551,12 +6699,13 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		transport = gen.McpServerTransportHttp
 	}
 	enabled := updatedEntry.Enabled
+	status, toolCount := a.mcpLiveStatus(id)
 	resp := gen.McpServer{
 		Id:        id,
 		Name:      id,
 		Transport: transport,
-		Status:    gen.McpServerStatusDisconnected,
-		ToolCount: 0,
+		Status:    status,
+		ToolCount: toolCount,
 		Enabled:   &enabled,
 	}
 	jsonOK(w, resp)

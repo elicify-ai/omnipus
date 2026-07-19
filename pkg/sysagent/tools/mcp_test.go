@@ -7,6 +7,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +77,12 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	}
 	if len(srv.Args) != 2 || srv.Env["ROOT"] != "/tmp" {
 		t.Fatalf("args/env not persisted: %+v", srv)
+	}
+	// Adding a server must also flip the global MCP kill-switch on, in the
+	// same config write, or the newly added server is silently ignored by
+	// ReconcileMCP (desired set is empty when Tools.MCP.Enabled=false).
+	if !cfg.Tools.MCP.Enabled {
+		t.Fatalf("want cfg.Tools.MCP.Enabled=true after add_mcp_server, got false")
 	}
 
 	// --- list shows it ---
@@ -150,6 +157,279 @@ func TestMCPAdd_TransportValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMCPAdd_GlobalKillSwitchGating asserts add_mcp_server's global
+// tools.mcp.enabled auto-enable is gated correctly: it fires only for the
+// fresh-install case (flag off, no other server already enabled), and
+// leaves an operator's deliberate kill-switch alone when other servers are
+// already enabled under it.
+func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
+	t.Run("flips when no other server is enabled", func(t *testing.T) {
+		deps, cfg := newTestDeps()
+		add := systools.NewMCPAddTool(deps)
+		res := add.Execute(context.Background(), map[string]any{"name": "fresh-srv", "command": "npx"})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("add returned error: %s", res.ForLLM)
+		}
+		if !cfg.Tools.MCP.Enabled {
+			t.Fatalf("want cfg.Tools.MCP.Enabled=true (fresh-install auto-enable), got false")
+		}
+		note, _ := m["note"].(string)
+		if !strings.Contains(note, "Global MCP enable was off — turned on.") {
+			t.Fatalf("note should disclose the flip, got: %q", note)
+		}
+	})
+
+	t.Run("does not flip when another server is already enabled under an off switch", func(t *testing.T) {
+		deps, cfg := newTestDeps()
+		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+			"existing-enabled": {Enabled: true, Type: "stdio", Command: "npx"},
+		}
+		add := systools.NewMCPAddTool(deps)
+		res := add.Execute(context.Background(), map[string]any{"name": "gated-srv", "command": "npx"})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("add returned error: %s", res.ForLLM)
+		}
+		if cfg.Tools.MCP.Enabled {
+			t.Fatalf("want cfg.Tools.MCP.Enabled to remain false (operator kill-switch), got true")
+		}
+		if _, ok := cfg.Tools.MCP.Servers["gated-srv"]; !ok {
+			t.Fatalf("the new server must still be saved even though the global flag was not flipped")
+		}
+		note, _ := m["note"].(string)
+		if !strings.Contains(note, "MCP is globally disabled") {
+			t.Fatalf("note should disclose that MCP is globally disabled, got: %q", note)
+		}
+		if !strings.Contains(note, "tools.mcp.enabled") {
+			t.Fatalf("note should tell the operator which flag to enable, got: %q", note)
+		}
+	})
+}
+
+// TestMCPAdd_ReconcileAndStatus asserts add_mcp_server calls the live
+// reconciliation hook and builds an honest response from MCPStatus, covering
+// each status branch plus the nil-funcs fallback.
+func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
+	t.Run("connected", func(t *testing.T) {
+		deps, _ := newTestDeps()
+		var reconcileCalls int
+		var reconciledHadDeadline bool
+		deps.ReconcileMCP = func(ctx context.Context) error {
+			reconcileCalls++
+			if ctx != nil {
+				_, reconciledHadDeadline = ctx.Deadline()
+			}
+			return nil
+		}
+		deps.MCPStatus = func(name string) (string, int, string) {
+			if name != "srv-connected" {
+				t.Fatalf("MCPStatus called with unexpected name %q", name)
+			}
+			return "connected", 3, ""
+		}
+		add := systools.NewMCPAddTool(deps)
+		res := add.Execute(context.Background(), map[string]any{"name": "srv-connected", "command": "npx"})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("add returned error: %s", res.ForLLM)
+		}
+		if reconcileCalls != 1 {
+			t.Fatalf("want ReconcileMCP called once, got %d", reconcileCalls)
+		}
+		if !reconciledHadDeadline {
+			t.Fatalf("ReconcileMCP context missing or has no deadline (want 20s timeout)")
+		}
+		if m["status"] != "connected" {
+			t.Fatalf("want status=connected, got %v", m["status"])
+		}
+		if tc, ok := m["tool_count"].(float64); !ok || tc != 3 {
+			t.Fatalf("want tool_count=3, got %v", m["tool_count"])
+		}
+		note, _ := m["note"].(string)
+		if !strings.Contains(note, "3 tool(s) registered") {
+			t.Fatalf("note should mention tool count, got: %q", note)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		deps, _ := newTestDeps()
+		deps.ReconcileMCP = func(ctx context.Context) error { return nil }
+		deps.MCPStatus = func(name string) (string, int, string) {
+			return "error", 0, "connection refused"
+		}
+		add := systools.NewMCPAddTool(deps)
+		res := add.Execute(context.Background(), map[string]any{"name": "srv-error", "command": "npx"})
+		m := resultJSON(t, res.ForLLM)
+		// The config write DID succeed — this must still be success=true.
+		if m["success"] == false {
+			t.Fatalf("add should still succeed (config was saved) even when connect fails: %s", res.ForLLM)
+		}
+		if m["status"] != "error" {
+			t.Fatalf("want status=error, got %v", m["status"])
+		}
+		note, _ := m["note"].(string)
+		if !strings.Contains(note, "connection refused") {
+			t.Fatalf("note should include the connect error, got: %q", note)
+		}
+		if !strings.Contains(note, "Server saved") {
+			t.Fatalf("note should be honest that the config write succeeded, got: %q", note)
+		}
+	})
+
+	t.Run("disconnected", func(t *testing.T) {
+		deps, _ := newTestDeps()
+		deps.ReconcileMCP = func(ctx context.Context) error { return nil }
+		deps.MCPStatus = func(name string) (string, int, string) {
+			return "disconnected", 0, ""
+		}
+		add := systools.NewMCPAddTool(deps)
+		res := add.Execute(context.Background(), map[string]any{"name": "srv-disc", "command": "npx"})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("add returned error: %s", res.ForLLM)
+		}
+		if m["status"] != "disconnected" {
+			t.Fatalf("want status=disconnected, got %v", m["status"])
+		}
+		note, _ := m["note"].(string)
+		if strings.Contains(note, "connects on the next agent-loop reload") {
+			t.Fatalf("disconnected note must not claim it will connect, got: %q", note)
+		}
+	})
+
+	t.Run("reconcile error is logged but does not fail the add", func(t *testing.T) {
+		deps, _ := newTestDeps()
+		deps.ReconcileMCP = func(ctx context.Context) error { return fmt.Errorf("boom") }
+		add := systools.NewMCPAddTool(deps)
+		res := add.Execute(context.Background(), map[string]any{"name": "srv-reconcile-err", "command": "npx"})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("add should still succeed when reconcile itself errors (config write succeeded): %s", res.ForLLM)
+		}
+		// No MCPStatus wired alongside the erroring ReconcileMCP: falls back to
+		// the honest reload-based note rather than fabricating a status.
+		if _, hasStatus := m["status"]; hasStatus {
+			t.Fatalf("status field should be absent when MCPStatus is nil, got: %s", res.ForLLM)
+		}
+		// The reconcile error must not be silently swallowed: the note must
+		// surface it rather than claiming the generic "connects on the next
+		// agent-loop reload" fallback, which would falsely imply reconcile
+		// was never attempted.
+		note, _ := m["note"].(string)
+		if !strings.Contains(note, "boom") {
+			t.Fatalf("note must surface the reconcile error, got: %q", note)
+		}
+		if strings.Contains(note, "connects on the next agent-loop reload") {
+			t.Fatalf(
+				"note must not use the never-attempted-reconcile fallback when reconcile actually errored, got: %q",
+				note,
+			)
+		}
+	})
+
+	t.Run("nil funcs use fallback note and no status field", func(t *testing.T) {
+		deps, _ := newTestDeps() // ReconcileMCP and MCPStatus left nil
+		add := systools.NewMCPAddTool(deps)
+		res := add.Execute(context.Background(), map[string]any{"name": "srv-nil", "command": "npx"})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("add returned error: %s", res.ForLLM)
+		}
+		if _, hasStatus := m["status"]; hasStatus {
+			t.Fatalf("status field should be absent when MCPStatus is nil, got: %s", res.ForLLM)
+		}
+		note, _ := m["note"].(string)
+		if !strings.Contains(note, "connects on the next agent-loop reload") {
+			t.Fatalf("nil-funcs fallback note changed unexpectedly: %q", note)
+		}
+	})
+}
+
+// TestMCPRemove_Reconcile asserts remove_mcp_server calls the live
+// reconciliation hook and adjusts its note accordingly.
+func TestMCPRemove_Reconcile(t *testing.T) {
+	t.Run("reconcile wired", func(t *testing.T) {
+		deps, cfg := newTestDeps()
+		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
+		}
+		var reconcileCalls int
+		var reconciledHadDeadline bool
+		deps.ReconcileMCP = func(ctx context.Context) error {
+			reconcileCalls++
+			if ctx != nil {
+				_, reconciledHadDeadline = ctx.Deadline()
+			}
+			return nil
+		}
+		remove := systools.NewMCPRemoveTool(deps)
+		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("remove returned error: %s", res.ForLLM)
+		}
+		if reconcileCalls != 1 {
+			t.Fatalf("want ReconcileMCP called once, got %d", reconcileCalls)
+		}
+		if !reconciledHadDeadline {
+			t.Fatalf("ReconcileMCP context missing or has no deadline (want 20s timeout)")
+		}
+		note, _ := m["note"].(string)
+		if note != "Server disconnected and removed." {
+			t.Fatalf("want the reconciled note, got: %q", note)
+		}
+		if _, ok := cfg.Tools.MCP.Servers["srv"]; ok {
+			t.Fatalf("server still present in cfg after remove")
+		}
+	})
+
+	t.Run("reconcile nil falls back to old note", func(t *testing.T) {
+		deps, cfg := newTestDeps() // ReconcileMCP left nil
+		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
+		}
+		remove := systools.NewMCPRemoveTool(deps)
+		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf("remove returned error: %s", res.ForLLM)
+		}
+		note, _ := m["note"].(string)
+		if note != "Server removed from config. Its tools are unregistered on the next agent-loop reload." {
+			t.Fatalf("want the fallback note, got: %q", note)
+		}
+	})
+
+	t.Run("reconcile error is logged but does not fail the remove", func(t *testing.T) {
+		deps, cfg := newTestDeps()
+		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
+		}
+		deps.ReconcileMCP = func(ctx context.Context) error { return fmt.Errorf("boom") }
+		remove := systools.NewMCPRemoveTool(deps)
+		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		m := resultJSON(t, res.ForLLM)
+		if m["success"] == false {
+			t.Fatalf(
+				"remove should still succeed when reconcile itself errors (config removal succeeded): %s",
+				res.ForLLM,
+			)
+		}
+		// A reconcile error must not be papered over with the optimistic
+		// "disconnected and removed" note — that asserts a live-side outcome
+		// (the disconnect) that was never actually observed.
+		note, _ := m["note"].(string)
+		wantNote := "Removed from config; live disconnect may not have completed: boom"
+		if note != wantNote {
+			t.Fatalf("want honest reconcile-error note %q, got %q", wantNote, note)
+		}
+		if _, ok := cfg.Tools.MCP.Servers["srv"]; ok {
+			t.Fatalf("server still present in cfg after remove despite reconcile error")
+		}
+	})
 }
 
 // TestGetUsageTool_BasicBehaviour asserts that get_usage (the replacement for

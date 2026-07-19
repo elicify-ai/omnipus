@@ -1,8 +1,15 @@
 title: McpServerTestResponse
 description: >
   Result of POST /mcp-servers/{id}/test — an on-demand connectivity probe that
-  attempts to connect to the configured MCP server (without changing any state)
-  and reports whether it succeeded and which tools it exposed.
+  attempts to connect to the configured MCP server via a temporary connection
+  and reports whether it succeeded and which tools it exposed. On success, if
+  the server is enabled in config, the global MCP kill-switch
+  (tools.mcp.enabled) is also on, and the server is not currently connected in
+  the live manager, this additionally triggers a live reconciliation pass to
+  bring the real connection in line with what the test just proved reachable.
+  When the global kill-switch is off, the message notes that MCP is globally
+  disabled instead of silently skipping reconciliation. A failed test never
+  changes any state.
 type: object
 required:
   - success

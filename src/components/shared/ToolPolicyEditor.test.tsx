@@ -765,9 +765,11 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
   // ── 2. Global exact-key deny locks less-restrictive controls on the MCP row ──
 
   it('a global exact-key deny locks allow+ask and keeps deny enabled on the MCP row', async () => {
-    // globalPolicies uses an exact key matching the MCP tool name.
-    // (The glob pattern mcp_myserver.* would NOT work for MCP tool names because
-    // resolvePolicy's glob check tests prefix + '.', but MCP names use underscores.)
+    // globalPolicies uses an exact key matching the MCP tool name. resolvePolicy
+    // also resolves '_*' wildcards now (e.g. mcp_myserver_*), so a bulk-deny key
+    // would work too — the exact key is used here as a deliberate, more targeted
+    // test of the exact-match path specifically, not because the wildcard form
+    // is unsupported.
     const globalPolicies: ToolPolicyValue = {
       policies: { mcp_myserver_search: 'deny' },
     }
