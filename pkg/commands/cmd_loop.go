@@ -3,8 +3,9 @@ package commands
 // loopCommand is the `/loop` slash command family (ADR-049 D6, spec Part B
 // US-9): `/loop every <interval> <prompt>` (interval mode), `/loop <prompt>`
 // (self-paced mode), bare `/loop` (status), `/loop stop` (cancel). Like
-// goalCommand, this is agent-delivery with Handler: nil — pkg/agent/loop.go's
-// applyLoopCommandPrompt hook does all the real work (cron job creation,
+// goalCommand, this is agent-delivery with Handler: nil —
+// pkg/agent/loop_command.go's applyLoopCommandPrompt hook does all the real
+// work (cron job creation,
 // status formatting, stop) BEFORE the registered-command dispatch path is
 // ever reached, mirroring applyGoalCommandPrompt's shape exactly. Starting or
 // stopping a loop needs no LLM call (it is pure scheduling bookkeeping), so

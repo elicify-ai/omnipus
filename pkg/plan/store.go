@@ -391,6 +391,22 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		p.ActiveLoop = *patch.ActiveLoop
 	}
 
+	// review r1 type-design: route the fully-patched plan through the SAME
+	// normalize() Create uses (apply patch -> normalize -> write) rather than
+	// relying solely on the per-field checks above, which each validate only
+	// the field THEY touch and can miss a cross-field invariant a patch
+	// combination violates (e.g. FailedReason set without State==failed in
+	// the same call — the per-field FailedReason check above only validates
+	// the enum value, not this coupling; normalize() re-checks the whole
+	// object). Every field normalize() re-validates (title/goal/description/
+	// workspace_id/owner_agent_id/state/DoD/bounds) already has an on-disk
+	// value that passed normalize() at Create time or a prior Update, so
+	// these re-checks are a no-op whenever the field itself wasn't patched
+	// this call.
+	if err := p.normalize(); err != nil {
+		return nil, err
+	}
+
 	p.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(p); err != nil {
 		return nil, err

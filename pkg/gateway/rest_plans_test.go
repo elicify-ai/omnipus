@@ -455,3 +455,111 @@ func TestPlanEngineBoot_ConstructStartStop(t *testing.T) {
 	require.Len(t, emitted, 1)
 	assert.Equal(t, "draft", emitted[0].State)
 }
+
+// TestPlanOwnerAgent_ValidationRejectsUnregisteredSystemAndWorker is review
+// r1 m1: the prior owner_agent_id check on both POST (create) and PUT was
+// format-only (validateEntityID, a path-traversal guard) — it let a
+// typo'd/nonexistent agent id, a System Agent, or a worker through
+// unrejected, even though Plan.OwnerAgentID's own doc comment requires "the
+// agent woken at plan decision points" (a real, addressable agent — none of
+// those three kinds can ever actually be woken: nonexistent has no
+// destination, System Agents are never chat targets (ADR-049 D3), workers
+// are delegation-only labor with no standalone turn to wake).
+func TestPlanOwnerAgent_ValidationRejectsUnregisteredSystemAndWorker(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List,
+		config.AgentConfig{ID: "judge-agent", Name: "Judge", Type: config.AgentTypeSystem},
+		config.AgentConfig{ID: "worker-agent", Name: "Worker", Type: config.AgentTypeWorker},
+	)
+	wsID := createTestWorkspace(t, api, "Owner Validation WS")
+
+	cases := []struct {
+		name    string
+		ownerID string
+	}{
+		{"unregistered", "nonexistent-agent-id"},
+		{"system_agent", "judge-agent"},
+		{"worker_agent", "worker-agent"},
+	}
+	for _, tc := range cases {
+		t.Run("create_"+tc.name, func(t *testing.T) {
+			w := postPlan(t, api, wsID,
+				`{"workspace_id":"`+wsID+`","title":"Bad Owner `+tc.name+`","owner_agent_id":"`+tc.ownerID+`"}`)
+			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+		})
+	}
+
+	// A valid plan to exercise the PUT path against.
+	wCreate := postPlan(t, api, wsID,
+		`{"workspace_id":"`+wsID+`","title":"Valid Owner","owner_agent_id":"`+testPlansAgentID+`"}`)
+	require.Equal(t, http.StatusCreated, wCreate.Code, "body=%s", wCreate.Body.String())
+	var p gen.Plan
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	for _, tc := range cases {
+		t.Run("put_"+tc.name, func(t *testing.T) {
+			w := putPlan(t, api, p.Id, `{"owner_agent_id":"`+tc.ownerID+`"}`)
+			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+		})
+	}
+}
+
+// TestPlanPut_DoDAndOwnerFrozenOnceNotDraft is review r1 m6: DoD and
+// owner_agent_id must become immutable once a plan leaves draft state — DoD
+// is the contract the plan judge adjudicates against (changing it mid-flight
+// could invalidate in-progress/already-recorded judge rounds), and owner is
+// who gets woken at plan decision points (reassigning it mid-flight would
+// silently redirect wake notifications). Bounds must stay mutable in any
+// state (an operator may legitimately extend a running plan's budget), and a
+// state-neutral field like title must also stay editable.
+func TestPlanPut_DoDAndOwnerFrozenOnceNotDraft(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List,
+		config.AgentConfig{ID: "other-owner-agent", Name: "Other Owner", Type: config.AgentTypeCustom, Default: false})
+	wsID := createTestWorkspace(t, api, "Freeze WS")
+
+	wCreate := postPlan(t, api, wsID,
+		`{"workspace_id":"`+wsID+`","title":"Freeze Me","owner_agent_id":"`+testPlansAgentID+`"}`)
+	require.Equal(t, http.StatusCreated, wCreate.Code, "body=%s", wCreate.Body.String())
+	var p gen.Plan
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	// DoD and owner_agent_id are still mutable in draft.
+	wDraftDoD := putPlan(t, api, p.Id,
+		`{"dod":[{"kind":"prose","text":"ship it","author":{"kind":"user","id":"tester"}}]}`)
+	require.Equal(t, http.StatusOK, wDraftDoD.Code, "body=%s", wDraftDoD.Body.String())
+	wDraftOwner := putPlan(t, api, p.Id, `{"owner_agent_id":"other-owner-agent"}`)
+	require.Equal(t, http.StatusOK, wDraftOwner.Code, "body=%s", wDraftOwner.Body.String())
+	// Put the owner back for the rest of this test.
+	wDraftOwnerBack := putPlan(t, api, p.Id, `{"owner_agent_id":"`+testPlansAgentID+`"}`)
+	require.Equal(t, http.StatusOK, wDraftOwnerBack.Code, "body=%s", wDraftOwnerBack.Body.String())
+
+	// draft -> approved.
+	wApprove := postPlanAction(t, api, p.Id, "approve")
+	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
+
+	// DoD and owner_agent_id must now be REJECTED (409, state conflict).
+	wApprovedDoD := putPlan(t, api, p.Id,
+		`{"dod":[{"kind":"prose","text":"changed mid-flight","author":{"kind":"user","id":"tester"}}]}`)
+	assert.Equal(t, http.StatusConflict, wApprovedDoD.Code, "body=%s", wApprovedDoD.Body.String())
+	wApprovedOwner := putPlan(t, api, p.Id, `{"owner_agent_id":"other-owner-agent"}`)
+	assert.Equal(t, http.StatusConflict, wApprovedOwner.Code, "body=%s", wApprovedOwner.Body.String())
+
+	// Bounds and title must still be editable once approved.
+	wApprovedBounds := putPlan(t, api, p.Id, `{"bounds":{"idle_expiry_days":14}}`)
+	assert.Equal(t, http.StatusOK, wApprovedBounds.Code, "body=%s", wApprovedBounds.Body.String())
+	wApprovedTitle := putPlan(t, api, p.Id, `{"title":"Still Editable"}`)
+	assert.Equal(t, http.StatusOK, wApprovedTitle.Code, "body=%s", wApprovedTitle.Body.String())
+
+	// Confirm the rejected DoD/owner writes did NOT silently apply.
+	wGet := getPlan(t, api, p.Id)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var final gen.Plan
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &final))
+	assert.Equal(t, testPlansAgentID, final.OwnerAgentId, "owner must still be the original owner")
+	require.NotNil(t, final.Dod)
+	require.Len(t, *final.Dod, 1)
+	assert.Equal(t, "ship it", (*final.Dod)[0].Text, "DoD must still be the draft-state value")
+}

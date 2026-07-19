@@ -12,17 +12,21 @@
 // the seeded Judge System Agent's identity (coreagent.IDJudge), whose
 // rubric is its AgentConfig.Rubric field (pkg/config/config.go).
 //
-// JudgeCriteria is the single reusable entrypoint for BOTH the task
-// goal-loop (task_executor.go, this wave) and the Wave 2-B plan engine's
-// plan-level judge (SD-B8: same seeded Judge, no second seeded agent) — see
-// its doc comment for the exact call shape.
+// JudgeCriteria is the single reusable entrypoint for ALL THREE scopes that
+// adjudicate a completion claim: the task goal-loop (task_executor.go's
+// adjudicateClaim, task.VerdictScopeTask), the Wave 2-B plan engine's
+// plan-level judge (plan_engine.go's runPlanJudgeRound, SD-B8,
+// task.VerdictScopePlan), and the session-level `/goal` loop
+// (goal_loop.go's checkGoalLoopAfterTurn, task.VerdictScopeGoal) — same
+// seeded Judge, no second/third seeded agent for any scope. See this
+// function's own doc comment for the exact call shape.
 //
-// Known gap (documented, not fabricated): FR-053/OBS-003 call for "workspace
-// file diffs" as part of the judge's evidence ordering. No existing API for
-// collecting a workspace's file diff was found reachable from pkg/agent's
-// scope in this wave; the prose judge call proceeds with machine-check
-// evidence + criteria + the worker's claim only. Flagged for a follow-up
-// wave (see this backend-lead's final report).
+// Known gap (documented, not fabricated; accepted-with-issue per the
+// architect's ADR-049 review r1 verdict, not scheduled for this epic):
+// FR-053/OBS-003 call for "workspace file diffs" as part of the judge's
+// evidence ordering. No existing API for collecting a workspace's file diff
+// was found reachable from pkg/agent's scope; the prose judge call proceeds
+// with machine-check evidence + criteria + the worker's claim only.
 package agent
 
 import (

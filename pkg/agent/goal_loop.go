@@ -5,7 +5,7 @@
 // goal_loop.go implements `/goal <condition>` (ADR-049 D6/D7, spec Part B
 // US-8): a proof-driven session loop where a round = one worker turn plus
 // its judge evaluation (D7/MIN-001). Command parsing/persistence lives in
-// applyGoalCommandPrompt (the loop.go:9582 handleCommand rewrite-hook
+// applyGoalCommandPrompt (the AgentLoop.handleCommand rewrite-hook
 // precedent, mirroring applyMemoryCommandPrompt); the judge-gated round
 // advance itself lives in checkGoalLoopAfterTurn, called once from
 // runAgentLoop right after every natural turn stop (fast no-op unless the
@@ -230,9 +230,10 @@ var goalJudgeRoundTimeout = planJudgeRoundTimeout //nolint:gochecknoglobals
 // after every natural (non-aborted) turn stop — a fast no-op unless the
 // turn's session carries an active goal. On an unmet verdict with rounds
 // remaining, it appends a follow-up bus.InboundMessage to result.followUps
-// (the existing turn re-inject seam, loop.go:5832) carrying the judge's
-// reason as steering — runAgentLoop's own followUps-publish loop then
-// re-enters the turn machinery for the next round.
+// (the existing turn re-inject seam, runAgentLoop's own followUps-publish
+// loop right after its checkGoalLoopAfterTurn call) carrying the judge's
+// reason as steering — that loop then re-enters the turn machinery for the
+// next round.
 func (al *AgentLoop) checkGoalLoopAfterTurn(
 	ctx context.Context,
 	agentInst *AgentInstance,

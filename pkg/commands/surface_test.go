@@ -332,8 +332,11 @@ func containsSubstring(s, sub string) bool {
 
 // TestBuiltinDefinitions_CountsAndSurfaces verifies the complete set.
 // Updated for D1 (skill removed: 11→10 canonical), D7/D9 (agents+skills gain
-// SurfaceWeb: 5→6 web), and the memory commands (remember/recall/retrospective,
-// all-surface: 10→13 canonical, 6→9 web).
+// SurfaceWeb: 5→6 web), the memory commands (remember/recall/retrospective,
+// all-surface: 10→13 canonical, 6→9 web), and ADR-049 D6's /goal + /loop
+// commands (both all-surface [Web, CLI, Channel], non-hidden, DeliveryAgent:
+// 13→15 canonical, 9→11 web, 13→15 CLI — review r1 comment/golden-count fix;
+// this test was left stale when /goal and /loop were registered).
 func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	defs := BuiltinDefinitions()
 
@@ -347,10 +350,11 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		}
 	}
 
-	// 13 canonical (skill removed D1; remember/recall/retrospective added) + 5
-	// hidden/deprecated = 18 total.
-	if canonical != 13 {
-		t.Errorf("expected 13 canonical commands (skill removed D1, memory commands added), got %d", canonical)
+	// 15 canonical (skill removed D1; remember/recall/retrospective + goal/loop
+	// added) + 5 hidden/deprecated = 20 total.
+	if canonical != 15 {
+		t.Errorf("expected 15 canonical commands (skill removed D1, memory + goal/loop commands added), got %d",
+			canonical)
 	}
 	if hidden != 5 {
 		t.Errorf(
@@ -360,27 +364,29 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	}
 
 	// Web surface: new, help, model, cancel, agents, skills, remember, recall,
-	// retrospective = 9 (D7/D9 added agents+skills; memory commands are all-surface).
+	// retrospective, goal, loop = 11 (D7/D9 added agents+skills; memory
+	// commands and goal/loop are all-surface).
 	webCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceWeb) {
 			webCount++
 		}
 	}
-	if webCount != 9 {
-		t.Errorf("expected 9 web-surface canonical commands (D7/D9 + memory commands added), got %d", webCount)
+	if webCount != 11 {
+		t.Errorf("expected 11 web-surface canonical commands (D7/D9 + memory + goal/loop commands added), got %d",
+			webCount)
 	}
 
-	// CLI/Channel surface: all 13 canonical
+	// CLI/Channel surface: all 15 canonical
 	cliCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceCLI) {
 			cliCount++
 		}
 	}
-	if cliCount != 13 {
+	if cliCount != 15 {
 		t.Errorf(
-			"expected 13 CLI-surface canonical commands (skill removed D1, memory commands added), got %d",
+			"expected 15 CLI-surface canonical commands (skill removed D1, memory + goal/loop commands added), got %d",
 			cliCount,
 		)
 	}

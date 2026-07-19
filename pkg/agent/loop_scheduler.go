@@ -167,9 +167,14 @@ func (s *LoopScheduler) RemoveJob(jobID string) bool {
 }
 
 // RunScheduled implements cron.ScheduledRunner. It fires exactly one /loop
-// run: increments run_count (persisted before checking the bound, so a
-// crash mid-run never re-fires the same count — mirrors the task attempt
-// counter's "persist first" discipline), stops the loop on reaching
+// run: runs the turn via ProcessScheduled, THEN persists the incremented
+// run_count (review r1 comment fix — the prior wording claimed run_count was
+// "persisted before checking the bound", but it is actually persisted AFTER
+// the run completes, alongside LoopLastActivityAt, in the SAME SetMeta call
+// the bound check reads next; a crash mid-run therefore re-fires the same
+// count on the next cron tick rather than skipping it — there is no
+// "persist first" discipline here, unlike the task attempt counter this
+// comment used to (incorrectly) claim mirrors), stops the loop on reaching
 // LoopMaxRuns (FR-072's run-count boundary), and for self-paced mode
 // schedules the next one-shot fire from the run's own LOOP_NEXT reply
 // marker (falling back to a fixed delay, WARN-logged, if the model did not
