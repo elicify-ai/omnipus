@@ -252,6 +252,170 @@ func TestRruleExpansion_RegularArithmeticDSTDedup(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestRruleExpansion_MinutelyDSTDedup
+// ---------------------------------------------------------------------------
+//
+// The regular-arithmetic dedup used to be adjacent-only (see the retired
+// comment on TestRruleExpansion_RegularArithmeticDSTDedup above), which only
+// ever caught DST collisions exactly 1 k-step apart — true for FREQ=HOURLY
+// (period == the Berlin 1h gap, so the colliding pair IS adjacent) but FALSE
+// for FREQ=MINUTELY (period 1min): the 60 nonexistent 02:00-02:59 wall-clock
+// minute labels each shift forward onto a distinct native 03:00-03:59
+// label, 60 k-steps later — far outside an adjacent-only dedup's reach, and
+// each pair lands in REVERSE generation order once the native labels are
+// reached (see regularOccurrencesInRange's doc), so the raw k-ordered output
+// is non-monotonic. This test exercises FREQ=MINUTELY directly over the
+// Berlin 2026-03-29 spring-forward civil day (verified against tzdata, see
+// TestRruleExpansion_WallClockDST's comment) via the full ExpandRRULE entry
+// point (sort + full dedup, both the regular-arithmetic and — after this
+// fix — the irregular path share the same dedupSortedMs).
+func TestRruleExpansion_MinutelyDSTDedup(t *testing.T) {
+	berlin := mustLoc(t, "Europe/Berlin")
+	// DTSTART precedes both subtests' query ranges (2026-03-24 and
+	// 2026-03-29) so both are genuinely in-range, not before DTSTART.
+	dtstart := time.Date(2026, 3, 20, 0, 0, 0, 0, berlin).UnixMilli()
+
+	t.Run("spring-forward civil day: 1440 wall-clock labels dedup to 1380 unique instants", func(t *testing.T) {
+		from := time.Date(2026, 3, 29, 0, 0, 0, 0, berlin).UnixMilli()
+		to := time.Date(2026, 3, 30, 0, 0, 0, 0, berlin).UnixMilli()
+
+		instants, truncated, err := ExpandRRULE("FREQ=MINUTELY", dtstart, "Europe/Berlin", from, to, 5000)
+		if err != nil {
+			t.Fatalf("ExpandRRULE: %v", err)
+		}
+		if truncated {
+			t.Fatalf("unexpected truncation")
+		}
+		if len(instants) != 1380 {
+			t.Fatalf(
+				"expected exactly 1380 unique minutely instants (1440 wall-clock labels minus 60 "+
+					"spring-forward collisions), got %d", len(instants),
+			)
+		}
+
+		seen := make(map[int64]bool, len(instants))
+		for i, ms := range instants {
+			if seen[ms] {
+				t.Fatalf("occurrence[%d] = %d is a duplicate instant — dedup failed", i, ms)
+			}
+			seen[ms] = true
+			if i > 0 && ms <= instants[i-1] {
+				t.Fatalf(
+					"occurrence[%d] = %d is not strictly after occurrence[%d] = %d (not ascending)",
+					i, ms, i-1, instants[i-1],
+				)
+			}
+		}
+	})
+
+	t.Run("non-transition civil day: exact 1440, unaffected by the fix", func(t *testing.T) {
+		day := time.Date(2026, 3, 24, 0, 0, 0, 0, berlin)
+		from := day.UnixMilli()
+		to := day.AddDate(0, 0, 1).UnixMilli()
+
+		instants, truncated, err := ExpandRRULE("FREQ=MINUTELY", dtstart, "Europe/Berlin", from, to, 5000)
+		if err != nil {
+			t.Fatalf("ExpandRRULE: %v", err)
+		}
+		if truncated {
+			t.Fatalf("unexpected truncation")
+		}
+		if len(instants) != 1440 {
+			t.Fatalf("expected exactly 1440 instants (full day, no DST), got %d", len(instants))
+		}
+	})
+}
+
+// TestCountRegularInRange_MinutelyDSTDedup pins CountRegularInRange's
+// spring-forward subtraction (springForwardCollisionCount, rrule.go) for
+// FREQ=MINUTELY: the naive k-range count over the Berlin 2026-03-29
+// spring-forward civil day is the raw 1440 wall-clock labels; subtracting
+// the 60-label collision (see TestRruleExpansion_MinutelyDSTDedup) makes it
+// exact at 1380, matching ExpandRRULE's deduped count exactly (not merely
+// within a documented ±1). A non-transition day is unaffected (exact 1440,
+// the plain no-DST case, matching CountRegularInRange's pre-existing
+// behavior).
+func TestCountRegularInRange_MinutelyDSTDedup(t *testing.T) {
+	berlin := mustLoc(t, "Europe/Berlin")
+	dtstart := time.Date(2026, 3, 20, 0, 0, 0, 0, berlin).UnixMilli()
+
+	t.Run("spring-forward civil day: exact 1380, not the raw 1440", func(t *testing.T) {
+		from := time.Date(2026, 3, 29, 0, 0, 0, 0, berlin).UnixMilli()
+		to := time.Date(2026, 3, 30, 0, 0, 0, 0, berlin).UnixMilli()
+
+		count, firstMs, hasAny, err := CountRegularInRange("FREQ=MINUTELY", dtstart, "Europe/Berlin", from, to)
+		if err != nil {
+			t.Fatalf("CountRegularInRange: %v", err)
+		}
+		if !hasAny {
+			t.Fatalf("expected hasAny=true")
+		}
+		if count != 1380 {
+			t.Fatalf("expected count=1380, got %d", count)
+		}
+		if firstMs != from {
+			t.Fatalf("expected firstMs=%d (dtstart is minute-aligned), got %d", from, firstMs)
+		}
+	})
+
+	t.Run("non-transition civil day: exact 1440", func(t *testing.T) {
+		from := time.Date(2026, 3, 24, 0, 0, 0, 0, berlin).UnixMilli()
+		to := time.Date(2026, 3, 25, 0, 0, 0, 0, berlin).UnixMilli()
+
+		count, _, hasAny, err := CountRegularInRange("FREQ=MINUTELY", dtstart, "Europe/Berlin", from, to)
+		if err != nil {
+			t.Fatalf("CountRegularInRange: %v", err)
+		}
+		if !hasAny {
+			t.Fatalf("expected hasAny=true")
+		}
+		if count != 1440 {
+			t.Fatalf("expected count=1440 (a full 24h day at 1/min, no DST), got %d", count)
+		}
+	})
+}
+
+// TestNextOccurrenceAfter_MinutelyDSTProgress pins the REQUIRED property
+// documented on NextOccurrenceAfter (rrule.go): even though seekK's binary
+// search assumes regularOccurrenceAt(k) is monotonic in k — briefly false
+// inside a spring-forward collision window — every returned occurrence is
+// still strictly greater than the afterMs it was asked for, by construction
+// (seekK re-verifies its predicate at the k it settles on, it never assumes
+// it). A scheduler repeatedly re-arming off this function's own result must
+// therefore always advance: never stall, never repeat, never go backward,
+// even stepping straight across the Berlin 2026-03-29 transition.
+func TestNextOccurrenceAfter_MinutelyDSTProgress(t *testing.T) {
+	berlin := mustLoc(t, "Europe/Berlin")
+	dtstart := time.Date(2026, 3, 29, 0, 0, 0, 0, berlin).UnixMilli()
+
+	after := time.Date(2026, 3, 29, 1, 30, 0, 0, berlin).UnixMilli() // shortly before the gap
+	end := time.Date(2026, 3, 29, 5, 0, 0, 0, berlin).UnixMilli()    // comfortably past the gap
+
+	prev := after
+	steps := 0
+	for prev < end {
+		got, ok, err := NextOccurrenceAfter("FREQ=MINUTELY", dtstart, "Europe/Berlin", prev)
+		if err != nil {
+			t.Fatalf("NextOccurrenceAfter(%d): %v", prev, err)
+		}
+		if !ok {
+			t.Fatalf("NextOccurrenceAfter(%d): expected ok=true (MINUTELY never exhausts)", prev)
+		}
+		if got <= prev {
+			t.Fatalf("NextOccurrenceAfter(%d) = %d did not strictly advance (stall/repeat/backward)", prev, got)
+		}
+		prev = got
+		steps++
+		if steps > 1000 {
+			t.Fatalf("exceeded 1000 steps without reaching %d — looks like a stall loop", end)
+		}
+	}
+	if steps == 0 {
+		t.Fatalf("test setup error: loop never ran")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Test 5: TestRruleExpansion_Monthly31Clamp
 // ---------------------------------------------------------------------------
 

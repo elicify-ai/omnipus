@@ -711,31 +711,26 @@ func TestOccurrences_WireArraysNeverNull(t *testing.T) {
 	})
 }
 
-// --- CountRegularInRange DST-transition-day ±1 bound -------------------------
+// --- CountRegularInRange DST-transition-day exactness ------------------------
 
 // TestCountRegularInRange_DSTTransitionDayBound pins task.CountRegularInRange's
-// documented caveat (pkg/task/rrule.go, CountRegularInRange doc comment):
-// "on the (at most 1-2 per year) specific calendar day(s) a DST transition
-// falls inside the query range, a sub-daily regular rule's count can be off
-// by at most 1 relative to a full enumeration ... bounded to the transition
-// day(s) only; all other days are exact." That claim was previously pinned
-// by nothing — every existing bucket test (row 8/9 above, row 16/18 in
-// TestOccurrences_BucketingAndCaps) uses either a DST-free January span or a
-// fixed UTC rule tz.
+// DST correction (pkg/task/rrule.go, CountRegularInRange doc comment): the
+// naive k-range count on a spring-forward transition day used to overcount
+// by exactly 1 for HOURLY (documented as an "off by at most 1" caveat); it
+// is now arithmetically corrected (springForwardCollisionCount), so the
+// transition day's count is EXACT, matching every other day — not merely
+// bounded. This test name is kept for history/grep continuity even though
+// the behavior it pins is no longer a bound but an equality.
 //
 // This drives it through the REAL production path (buildOccurrenceSets ->
 // regularRruleDayFn -> task.CountRegularInRange, exactly what powers the
 // overview DayBucket.count wire field) with a plain FREQ=HOURLY rule (no
 // BY* — provably regular) over a 10-day Europe/Berlin range including the
 // verified 2026-03-29 spring-forward day (see pkg/task/rrule_test.go's own
-// comment on that date), asserting:
-//   - the transition day's bucket count is within ±1 of an independent
-//     brute-force reference (task.ExpandRRULE, which dedupes DST-collided
-//     instants) for that same day — and pins the currently-observed skew
-//     (count = brute-force + 1) so a silent change either direction is
-//     caught, not just a widening past the documented bound.
-//   - every OTHER day's bucket count matches the brute-force reference
-//     EXACTLY (diff = 0).
+// comment on that date), asserting every day's bucket count — the
+// transition day included — matches an independent brute-force reference
+// (task.ExpandRRULE, which dedupes DST-collided instants) EXACTLY
+// (diff = 0).
 func TestCountRegularInRange_DSTTransitionDayBound(t *testing.T) {
 	berlin := mustLoc(t, "Europe/Berlin")
 
@@ -791,28 +786,14 @@ func TestCountRegularInRange_DSTTransitionDayBound(t *testing.T) {
 
 		if dayFrom == transitionDayStart {
 			checkedTransitionDay = true
-			diff := got - want
-			if diff < -1 || diff > 1 {
-				t.Errorf(
-					"transition day %v: count=%d, brute-force(deduped)=%d, diff=%d exceeds the documented ±1 bound",
-					time.UnixMilli(dayFrom).In(berlin), got, want, diff,
-				)
+		}
+		if got != want {
+			kind := "non-transition"
+			if dayFrom == transitionDayStart {
+				kind = "transition"
 			}
-			// Pin the currently-observed skew direction/magnitude (regression
-			// guard, not a spec requirement): CountRegularInRange's k-range
-			// arithmetic does not dedup the collapsed spring-forward pair the
-			// way the enumerated/brute-force path does, so it overcounts by
-			// exactly 1 on this specific transition.
-			if got != want+1 {
-				t.Errorf(
-					"transition day %v: got count=%d, want exactly brute-force+1=%d "+
-						"(pin of the documented, bounded overcount — if this changed, re-verify it's still within ±1)",
-					time.UnixMilli(dayFrom).In(berlin), got, want+1,
-				)
-			}
-		} else if got != want {
-			t.Errorf("non-transition day %v: count=%d, brute-force=%d — must be EXACT (diff=%d)",
-				time.UnixMilli(dayFrom).In(berlin), got, want, got-want)
+			t.Errorf("%s day %v: count=%d, brute-force=%d — must be EXACT (diff=%d)",
+				kind, time.UnixMilli(dayFrom).In(berlin), got, want, got-want)
 		}
 	}
 	if !checkedTransitionDay {

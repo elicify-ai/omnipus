@@ -257,21 +257,83 @@ func RegularPeriodMs(rruleBody string, dtstartMs int64, tz string) (periodMs int
 	if !isStructurallyRegular(opt) || !regularSafeForFreq(opt.Freq, opt.Dtstart) {
 		return 0, false, nil
 	}
-	interval := int64(intervalOf(opt))
-	switch opt.Freq {
+	periodMs, ok = regularPeriodMsForFreq(opt.Freq, int64(intervalOf(opt)))
+	return periodMs, ok, nil
+}
+
+// regularPeriodMsForFreq returns the fixed millisecond spacing between
+// consecutive occurrences for freq at the given interval, for the
+// frequencies with no calendar-length variability
+// (SECONDLY/MINUTELY/HOURLY/DAILY/WEEKLY); ok is false for MONTHLY/YEARLY
+// (28-31 day months, 365-366 day years — not a single interval_ms). Shared
+// by the public RegularPeriodMs and by CountRegularInRange's DST-collision
+// subtraction (springForwardCollisionCount) — both need the identical
+// period-ms rule, computed once here rather than duplicated.
+func regularPeriodMsForFreq(freq rrule.Frequency, interval int64) (periodMs int64, ok bool) {
+	switch freq {
 	case rrule.SECONDLY:
-		return interval * 1000, true, nil
+		return interval * 1000, true
 	case rrule.MINUTELY:
-		return interval * 60 * 1000, true, nil
+		return interval * 60 * 1000, true
 	case rrule.HOURLY:
-		return interval * 60 * 60 * 1000, true, nil
+		return interval * 60 * 60 * 1000, true
 	case rrule.DAILY:
-		return interval * 24 * 60 * 60 * 1000, true, nil
+		return interval * 24 * 60 * 60 * 1000, true
 	case rrule.WEEKLY:
-		return interval * 7 * 24 * 60 * 60 * 1000, true, nil
+		return interval * 7 * 24 * 60 * 60 * 1000, true
 	default: // MONTHLY, YEARLY excluded above by regularSafeForFreq's default true — but guard anyway
-		return 0, false, nil
+		return 0, false
 	}
+}
+
+// springForwardCollisionCount returns the correction CountRegularInRange
+// must SUBTRACT from its naive k-range count (lastKExclusive - firstK) for
+// [fromMs, toMs): that k-range counts WALL-CLOCK LABELS, not distinct
+// instants. On a spring-forward transition (offset increase of gapMs), the
+// gapMs/periodMs nonexistent wall-clock labels inside the gap each shift
+// forward onto a distinct native post-transition label — floor(gapMs /
+// periodMs) collisions, each collapsing a pair of labels to one real instant
+// (see regularOccurrencesInRange's doc) — so the naive count is exactly
+// that many too high, per transition. This generalizes the previous
+// adjacent-pair special case exactly: HOURLY's 1h period against a 1h gap
+// gives floor(3600000/3600000)=1 (what used to be a documented "off by at
+// most 1" is now subtracted exactly); DAILY's period vastly exceeds any
+// realistic gap, giving floor(.../86400000)=0 (no correction, matching that
+// DAILY never collides with itself).
+//
+// Fall-back (offset DECREASES) transitions are NOT corrected: the
+// first-occurrence-wins policy (resolveWallClock) already yields exactly
+// one instant per wall-clock label there, with no over- or under-count to
+// fix.
+//
+// Bounded, not iterative: walks zone transitions via Time.ZoneBounds (Go
+// 1.19+), which are O(1) per call; any realistic query span (per the
+// endpoint's own range limits) has at most a small handful of transitions,
+// so this is O(1) overall, never proportional to fromMs..toMs's length.
+func springForwardCollisionCount(loc *time.Location, fromMs, toMs, periodMs int64) int {
+	if periodMs <= 0 {
+		return 0
+	}
+	total := 0
+	t := time.UnixMilli(fromMs).In(loc)
+	for i := 0; i < 64; i++ { // defense-in-depth; a realistic span has far fewer transitions
+		_, end := t.ZoneBounds()
+		if end.IsZero() {
+			break // fixed-offset zone, or the current zone extends to the end of time
+		}
+		endMs := end.UnixMilli()
+		if endMs >= toMs {
+			break // next transition is at/after the range end — nothing more to find
+		}
+		before := end.Add(-time.Nanosecond)
+		_, offBefore := before.Zone()
+		_, offAfter := end.Zone()
+		if gapSec := offAfter - offBefore; gapSec > 0 {
+			total += int(int64(gapSec) * 1000 / periodMs)
+		}
+		t = end
+	}
+	return total
 }
 
 // ---------------------------------------------------------------------------
@@ -345,12 +407,45 @@ func seekK(lo int, pred func(k int) bool) int {
 	return right
 }
 
+// dedupSortedMs removes exact-duplicate values from a slice already sorted
+// ascending, returning a slice (reusing the input's backing array) with no
+// duplicates. A DST spring-forward collision can produce duplicate instants
+// that are far apart in GENERATION order (k-step for the regular-arithmetic
+// path, iterator order for the irregular path — see
+// regularOccurrencesInRange and ExpandRRULE) but, once sorted by value, any
+// two equal instants are necessarily adjacent — so a single post-sort
+// adjacent scan catches every duplicate regardless of how far apart the
+// colliding generators were.
+func dedupSortedMs(sorted []int64) []int64 {
+	if len(sorted) == 0 {
+		return sorted
+	}
+	out := sorted[:1]
+	for _, ms := range sorted[1:] {
+		if ms != out[len(out)-1] {
+			out = append(out, ms)
+		}
+	}
+	return out
+}
+
 // regularOccurrencesInRange derives, purely arithmetically (seekK, never a
 // walk proportional to elapsed history), the occurrences of a
-// provably-regular rule within [fromMs, toMs), capped at cap, with adjacent
-// identical instants deduped (the wall-clock stepping that generates
-// HOURLY/MINUTELY/SECONDLY candidates can collide across a spring-forward
-// gap the same way an explicit BYHOUR list can — see package doc).
+// provably-regular rule within [fromMs, toMs), capped at limit.
+//
+// The wall-clock stepping that generates HOURLY/MINUTELY/SECONDLY candidates
+// can collide across a spring-forward gap the same way an explicit BYHOUR
+// list can (see package doc) — but NOT necessarily at adjacent k: for a
+// period shorter than the gap (e.g. MINUTELY across a 1h gap), gap/period
+// consecutive nonexistent wall-clock labels (60 for MINUTELY) each shift
+// forward onto a distinct native label, so the colliding pair is gap/period
+// k-steps apart, not 1. (HOURLY, whose period equals a typical 1h gap, is
+// the one case where the collision IS adjacent — that's the only case an
+// adjacent-only dedup would have caught.) So: collect every in-range raw
+// instant first (still bounded by limit, so a huge range stops), THEN sort
+// by value and fully dedup — correct regardless of the k-distance between
+// colliding instants, and the common no-DST case (already strictly
+// increasing in k) is unaffected in output, just re-sorted (a no-op).
 func regularOccurrencesInRange(
 	dtstart time.Time,
 	loc *time.Location,
@@ -370,9 +465,8 @@ func regularOccurrencesInRange(
 	}
 
 	k := occAtOrAfter(fromMs)
-	var out []int64
+	var raw []int64
 	truncated := false
-	var lastMs int64 = -1
 	for {
 		if count > 0 && k >= count {
 			break
@@ -385,17 +479,16 @@ func regularOccurrencesInRange(
 		if ms >= toMs {
 			break
 		}
-		if ms != lastMs {
-			out = append(out, ms)
-			lastMs = ms
-			if len(out) >= limit {
-				truncated = true
-				break
-			}
+		raw = append(raw, ms)
+		if len(raw) >= limit {
+			truncated = true // raw generation hit the cap (may include not-yet-deduped entries)
+			break
 		}
 		k++
 	}
-	return out, truncated
+
+	sort.Slice(raw, func(i, j int) bool { return raw[i] < raw[j] })
+	return dedupSortedMs(raw), truncated
 }
 
 // CountRegularInRange returns the O(1)-arithmetic (never iterated
@@ -404,15 +497,18 @@ func regularOccurrencesInRange(
 // first in-range occurrence (DayBucket.first_ms). hasAny is false when the
 // range contains none (including past COUNT exhaustion or UNTIL).
 //
-// Known, deliberate limitation: on the (at most 1-2 per year) specific
-// calendar day(s) a DST transition falls inside the query range, a
-// sub-daily regular rule's count can be off by at most 1 relative to a full
-// enumeration, because that day's wall-clock stepping can collapse two
-// candidates into one instant (spring-forward) — collapsing that boundary
-// case exactly would require iterating the transition day, which conflicts
-// with the O(1)-without-iteration mandate (Occurrence expansion endpoint
-// §"Caps and work budget"). The error is bounded to the transition day(s)
-// only; all other days are exact.
+// DST correction: the naive k-range count (lastKExclusive - firstK) counts
+// wall-clock LABELS, not distinct instants, so it overcounts by exactly the
+// number of spring-forward label collisions in range (see
+// springForwardCollisionCount's doc) — arithmetically subtracted below via
+// the same bounded (Time.ZoneBounds-walk, at most a handful of transitions
+// per query span) mechanism for every sub-daily regular frequency, so this
+// is exact, not merely bounded-by-±1, for SECONDLY/MINUTELY/HOURLY/
+// DAILY/WEEKLY. (Previously this was a documented "off by at most 1 on the
+// transition day" caveat for HOURLY-and-shorter rules; that caveat is
+// resolved by this subtraction, not merely narrowed.) MONTHLY/YEARLY are
+// unaffected either way — their period vastly exceeds any DST gap, so they
+// never collide with themselves.
 func CountRegularInRange(
 	rruleBody string,
 	dtstartMs int64,
@@ -466,6 +562,9 @@ func CountRegularInRange(
 		return occ.UnixMilli() >= toMs
 	})
 	n := lastKExclusive - firstK
+	if periodMs, ok := regularPeriodMsForFreq(opt.Freq, int64(interval)); ok {
+		n -= springForwardCollisionCount(loc, fromMs, toMs, periodMs)
+	}
 	if n <= 0 {
 		n = 1
 	}
@@ -630,6 +729,14 @@ func ExpandRRULE(rruleBody string, dtstartMs int64, tz string, fromMs, toMs int6
 	}
 	out, truncated := generateIrregular(rr, loc, fromMs, toMs, limit)
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	// generateIrregular already dedupes ADJACENT (iterator-order) duplicates
+	// as a cheap pre-filter, but a BY*-modified sub-hourly rule's iterator
+	// order need not match sorted-by-value order across a DST collision (the
+	// same non-adjacent-in-generation-order collision regularOccurrencesInRange
+	// guards against — see its doc and dedupSortedMs). A full post-sort dedup
+	// catches those too, so ExpandRRULE's returned slice is always sorted
+	// ascending AND free of exact duplicates, regardless of path.
+	out = dedupSortedMs(out)
 	return out, truncated, nil
 }
 
@@ -645,6 +752,26 @@ func ExpandRRULE(rruleBody string, dtstartMs int64, tz string, fromMs, toMs int6
 // elapsed history via seekK); COUNT-free irregular rules seed rrule-go's
 // iterator at the FREQ period containing afterMs; COUNT-bearing irregular
 // rules walk from DTSTART, bounded by the validated COUNT cap (<= 100,000).
+//
+// Regular-path progress guarantee, and its bounded imprecision: seekK's
+// binary search assumes regularOccurrenceAt(k) is monotonic in k, which
+// briefly fails inside a spring-forward DST collision window (up to
+// gap/period wall-clock labels there resolve out of order — see
+// regularOccurrencesInRange's doc). That does NOT put the caller at risk of
+// a stall or a repeated/backward fire: seekK's returned k always satisfies
+// its predicate by construction (the predicate is re-checked, not assumed,
+// at every candidate it settles on), so the returned instant is always
+// strictly greater than afterMs — re-arming a scheduler off this function's
+// result always advances, even across the transition (regression-tested by
+// TestNextOccurrenceAfter_MinutelyDSTProgress). The accepted, bounded
+// limitation is precision, not progress: within that same narrow window the
+// binary search's non-monotonicity means the returned occurrence is not
+// always provably the very-first candidate after afterMs — it can land on
+// any valid, actually-occurring minute within the gap's width instead of
+// the earliest one. The error is bounded to that single transition's gap
+// width (e.g. at most ~60 minutes for a 1h gap at MINUTELY) and self-heals
+// on the next fire once wall-clock stepping resumes strictly increasing
+// past the gap.
 func NextOccurrenceAfter(rruleBody string, dtstartMs int64, tz string, afterMs int64) (int64, bool, error) {
 	loc, err := loadTZ(tz)
 	if err != nil {
