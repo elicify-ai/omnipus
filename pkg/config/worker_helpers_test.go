@@ -111,7 +111,7 @@ func TestIsExternalCLIWorkerID(t *testing.T) {
 	}
 }
 
-// TestIsWorkerAndChatTarget verifies the worker classification helpers.
+// TestIsWorkerAndChatTarget verifies the worker/system classification helpers.
 func TestIsWorkerAndChatTarget(t *testing.T) {
 	worker := AgentConfig{ID: "w", Type: AgentTypeWorker}
 	if !worker.IsWorker() {
@@ -121,13 +121,28 @@ func TestIsWorkerAndChatTarget(t *testing.T) {
 		t.Fatal("a worker must NOT be a chat target")
 	}
 
-	for _, ty := range []AgentType{AgentTypeCore, AgentTypeCustom, AgentTypeSystem, ""} {
+	// ADR-049 D3: a System Agent (Type=system) is NOT a chat target either — it
+	// is excluded from default-fallback/routing/delegation/team enumeration, so
+	// IsChatTarget()==false, exactly like a worker.
+	system := AgentConfig{ID: "judge", Type: AgentTypeSystem}
+	if system.IsWorker() {
+		t.Fatal("a System Agent must report IsWorker()==false")
+	}
+	if !system.IsSystem() {
+		t.Fatal("AgentTypeSystem agent must report IsSystem()==true")
+	}
+	if system.IsChatTarget() {
+		t.Fatal("a System Agent must NOT be a chat target (ADR-049 D3)")
+	}
+
+	// Every OTHER non-worker type is a chat target.
+	for _, ty := range []AgentType{AgentTypeCore, AgentTypeCustom, ""} {
 		a := AgentConfig{ID: "a", Type: ty}
 		if a.IsWorker() {
 			t.Fatalf("non-worker type %q must report IsWorker()==false", ty)
 		}
 		if !a.IsChatTarget() {
-			t.Fatalf("non-worker type %q must be a chat target", ty)
+			t.Fatalf("non-worker, non-system type %q must be a chat target", ty)
 		}
 	}
 }

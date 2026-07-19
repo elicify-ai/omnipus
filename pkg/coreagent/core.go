@@ -46,6 +46,17 @@ const (
 	IDPlanner    CoreAgentID = "planner"
 	IDExplorer   CoreAgentID = "explorer"
 	IDResearcher CoreAgentID = "researcher"
+	// IDJudge is the seeded System Agent (ADR-049 D3, Planning & Goals epic). It
+	// is NOT a base/core agent and NOT a subagent-tier worker: it is the first
+	// member of the "System Agents" category — a seeded, locked, NON-privileged
+	// internal-LLM agent that executes as a no-tools structured judging call.
+	// It is seeded via SystemAgents() through a path SEPARATE from the All()
+	// core/worker loop (so ByID/IsCoreAgent never classify it as core), carries
+	// Type=AgentTypeSystem, is never a chat target, never the default, never a
+	// delegation/binding/team target, and is subject to SEC-26 like any
+	// non-core agent. Only its Model/Provider and Rubric are editable; every
+	// other identity/type/locked/policy field is re-enforced on every boot.
+	IDJudge CoreAgentID = "judge"
 	// IDMax is intentionally absent: Max was retired from the 4-base roster
 	// in Spec-3 (v0.1.0 foundation). The ID constant is removed so that any
 	// remaining compile-time reference to IDMax surfaces as a build error.
@@ -116,6 +127,42 @@ func BaseAgents() []*CoreAgent {
 		Ava(),
 		Ray(),
 	}
+}
+
+// systemAgentIDs is the set of seeded System-Agent IDs (ADR-049 D3). Kept
+// DISJOINT from All()/BaseAgents()/the subagent tier so a System Agent is never
+// classified as core (ByID/IsCoreAgent) or worker (IsSubagentTierID). The Judge
+// is the only member today; the category is designed to grow (future System
+// Agents are seed-only, non-privileged, and — except the Judge, which is
+// additionally non-disable-able — may be disable-able).
+var systemAgentIDs = map[CoreAgentID]bool{
+	IDJudge: true,
+}
+
+// IsSystemAgentID reports whether the id is a seeded System Agent (Type=system).
+func IsSystemAgentID(id CoreAgentID) bool { return systemAgentIDs[id] }
+
+// SystemAgents returns the System-Agents roster (ADR-049 D3), parallel to
+// BaseAgents(). It is DELIBERATELY not part of All(): SeedConfig walks it via a
+// dedicated System-Agents path so the Judge never enters the core/worker
+// re-enforcement loop, and ByID/IsCoreAgent (which iterate All()) never treat a
+// System Agent as core. Ordering is display order for the Agents-screen "System"
+// section.
+func SystemAgents() []*CoreAgent {
+	return []*CoreAgent{
+		Judge(),
+	}
+}
+
+// SystemAgentByID looks up a System Agent by ID. Returns nil if the id is not a
+// seeded System Agent.
+func SystemAgentByID(id CoreAgentID) *CoreAgent {
+	for _, a := range SystemAgents() {
+		if a.ID == id {
+			return a
+		}
+	}
+	return nil
 }
 
 // ByID looks up a core agent by ID. Returns nil if not found.
@@ -700,6 +747,42 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	return denyAllThenOverride(nil)
 }
 
+// systemAgentSeed returns the constructor-seeded, fully-enumerated ALL-DENY tool
+// policy for a System Agent (ADR-049 D3). A System Agent (the Judge) executes as
+// a no-tools structured LLM call — it never invokes a builtin tool — so every
+// static builtin name is seeded to "deny". Building the map via
+// denyAllThenOverride(nil) (one literal "deny" entry per allStaticToolNames)
+// keeps config.ValidateToolPolicyCoverage gap-free for the System Agent under
+// Constraint #6 (no default-policy fallback): every (judge, tool) pair resolves
+// from an explicit literal entry, exactly like every core agent.
+//
+// The returned map is an independent allocation — callers may mutate it safely.
+func systemAgentSeed(_ CoreAgentID) map[string]config.ToolPolicy {
+	return denyAllThenOverride(nil)
+}
+
+// judgeDefaultRubric is the Judge System Agent's default system prompt / judging
+// rubric (ADR-049 D3, seeded into AgentConfig.Rubric on fresh install). It is
+// EDITABLE by the operator — SeedConfig backfills it only when empty and never
+// overwrites an operator edit — so this constant is the fresh-install default,
+// not a hardcoded runtime value. The Judge engine (Wave 2) renders this together
+// with the criteria/evidence/worker-summary and requires a strict per-criterion
+// {met, reason} JSON verdict; absence of evidence for a criterion is scored
+// unmet (fail-closed, NFR-2).
+const judgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine.
+
+You receive: a unit's acceptance criteria (machine-check evidence records and prose criteria), the relevant file diffs, and the worker's own last completion summary. The worker's summary is a CLAIM, never a verdict — judge only against the criteria and the real evidence.
+
+Rules:
+- Evaluate EACH criterion independently. For every criterion decide met=true or met=false and give a concise, specific reason grounded in the evidence.
+- A criterion with no supporting evidence is met=false (fail-closed). Never assume success from the worker's claim alone.
+- A machine check counts as met ONLY when its recorded evidence shows the expected exit code; a timed-out, denied, or oversize check is met=false.
+- Do not run tools, do not request more information, do not speculate. Judge only what you are given.
+- The overall verdict is met=true ONLY when every criterion is met=true.
+
+Return ONLY valid JSON of the shape:
+{"met": <bool>, "criteria": [{"id": "<criterion-id>", "met": <bool>, "reason": "<why>"}], "summary": "<one-line overall reason>"}`
+
 // coreAgentSkills returns the seeded per-agent skill allowlist (FR-9.4). The
 // allowlist is enforced at skill-resolution time (default-DENY): a core agent
 // can only resolve/invoke the skills returned here. The matrix:
@@ -1053,7 +1136,128 @@ func SeedConfig(cfg *config.Config) bool {
 		cfg.Agents.List = append(cfg.Agents.List, newAgent)
 		modified = true
 	}
+
+	// --- System Agents (ADR-049 D3) ---
+	// Seeded via a path SEPARATE from the All() core/worker loops above so a
+	// System Agent (the Judge) is never classified as core (ByID/IsCoreAgent
+	// iterate All(), which excludes SystemAgents()). Every identity/type/locked/
+	// tool-policy field is re-enforced on EVERY boot (tamper protection, mirrors
+	// the core re-enforcement loop); only Model/Provider and the Rubric are
+	// operator-editable and therefore preserved across boots (Rubric is
+	// backfilled only when empty, exactly like the skills-allowlist migration).
+	if seedSystemAgents(cfg, existing) {
+		modified = true
+	}
+
 	return modified
+}
+
+// seedSystemAgents creates or re-enforces every System Agent (ADR-049 D3) in
+// cfg.Agents.List. `existing` is the fresh-boot presence set built at the top of
+// SeedConfig. Returns true when it modified cfg. Split out of SeedConfig so the
+// System-Agents path is testable and visibly independent of the core/worker
+// loops.
+func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
+	modified := false
+	for _, sa := range SystemAgents() {
+		policies := systemAgentSeed(sa.ID)
+		if !existing[string(sa.ID)] {
+			// Fresh seed: locked, non-default, all-deny, Type=system. Rubric
+			// seeded from the compiled default (operator-editable thereafter).
+			cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+				ID:          string(sa.ID),
+				Name:        sa.Name,
+				Description: sa.Description,
+				Color:       sa.Color,
+				Icon:        sa.Icon,
+				Type:        config.AgentTypeSystem,
+				Locked:      true,
+				Default:     false,
+				Rubric:      judgeDefaultRubric,
+				Tools: &config.AgentToolsCfg{
+					Builtin: config.AgentBuiltinToolsCfg{
+						Policies: policies,
+					},
+				},
+			})
+			modified = true
+			continue
+		}
+		// Idempotent re-enforcement of an EXISTING System Agent (tamper
+		// protection). Find it by ID and repair every non-editable field.
+		for i := range cfg.Agents.List {
+			a := &cfg.Agents.List[i]
+			if a.ID != string(sa.ID) {
+				continue
+			}
+			if !a.Locked {
+				a.Locked = true
+				modified = true
+			}
+			if a.Type != config.AgentTypeSystem {
+				a.Type = config.AgentTypeSystem
+				modified = true
+			}
+			// A System Agent is never a chat target, so it can never be the
+			// routing default — clear a stray/tampered Default flag.
+			if a.Default {
+				a.Default = false
+				modified = true
+			}
+			if a.Name != sa.Name {
+				a.Name = sa.Name
+				modified = true
+			}
+			if a.Description != sa.Description {
+				a.Description = sa.Description
+				modified = true
+			}
+			if a.Color != sa.Color {
+				a.Color = sa.Color
+				modified = true
+			}
+			if a.Icon != sa.Icon {
+				a.Icon = sa.Icon
+				modified = true
+			}
+			// Re-enforce the all-deny tool policy on EVERY boot. This is stricter
+			// than the core-agent loop (which preserves operator tool edits)
+			// BECAUSE the System Agent's no-tools contract is a hard invariant
+			// (it executes as a no-tools structured call), not an operator
+			// preference — and it keeps ValidateToolPolicyCoverage gap-free.
+			if a.Tools == nil {
+				a.Tools = &config.AgentToolsCfg{}
+			}
+			if !toolPolicyMapsEqual(a.Tools.Builtin.Policies, policies) {
+				a.Tools.Builtin.Policies = policies
+				modified = true
+			}
+			// Rubric is operator-editable: backfill the default ONLY when empty
+			// (upgrade from a release that predated the field) — never overwrite
+			// an operator edit. Model/Provider are likewise left untouched.
+			if a.Rubric == "" {
+				a.Rubric = judgeDefaultRubric
+				modified = true
+			}
+			break
+		}
+	}
+	return modified
+}
+
+// toolPolicyMapsEqual reports whether two tool-policy maps have identical keys
+// and values. Used by seedSystemAgents to re-enforce the all-deny policy only
+// when it actually drifted, avoiding a spurious config write on every boot.
+func toolPolicyMapsEqual(a, b map[string]config.ToolPolicy) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
 }
 
 // NewCustomAgentToolsCfg returns the default AgentToolsCfg for a newly created
@@ -1265,6 +1469,29 @@ func Researcher() *CoreAgent {
 			"recall_memory", "remember",
 			"send_message",
 		},
+	}
+}
+
+// Judge returns the Judge System Agent (ADR-049 D3). It is a System Agent
+// (Type=system, seeded via SystemAgents()), NOT a core/base agent and NOT a
+// worker: locked identity, never a chat target, never the default, non-privileged
+// (subject to SEC-26). It carries NO tools — its constructor-seeded policy is
+// all-deny (systemAgentSeed) because the Judge executes as a no-tools structured
+// LLM call. Its "prompt" is the editable Rubric stored on AgentConfig (seeded
+// from judgeDefaultRubric), NOT a compiled entry in the prompts map — which is
+// why the Judge is deliberately excluded from All() and from init()'s
+// compiled-prompt invariant.
+func Judge() *CoreAgent {
+	return &CoreAgent{
+		ID:       IDJudge,
+		Name:     "Judge",
+		Subtitle: "Acceptance-Criteria Evaluator",
+		Description: "Impartial acceptance-criteria evaluator for the Planning & Goals engine. " +
+			"Makes out-of-turn, no-tools structured judging calls; not a chat persona.",
+		Color: "#64748B",
+		Icon:  "gavel",
+		// No tools: the Judge is a no-tools structured LLM call (all-deny seed).
+		DefaultTools: nil,
 	}
 }
 

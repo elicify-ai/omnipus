@@ -245,9 +245,9 @@ func TestCreateAgent_TypeCore_Rejected(t *testing.T) {
 }
 
 // TestCreateAgent_TypeSystem_Rejected proves "system" is a seeded-only
-// classification and is not creatable from the API. SeedConfig does not
-// seed any system agents in v0.1.0; only the legacy wire contract honors
-// them if config.json already contains one.
+// classification and is not creatable from the API. ADR-049 D3: System Agents
+// (the Judge category) are seeded exclusively via coreagent.SeedConfig; the REST
+// create path rejects type:system with a precise 400.
 func TestCreateAgent_TypeSystem_Rejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
@@ -258,8 +258,8 @@ func TestCreateAgent_TypeSystem_Rejected(t *testing.T) {
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "must be one of Main, Subagent, subagent_3p",
-		"the rejection must name the type-validity rule")
+	assert.Contains(t, strings.ToLower(w.Body.String()), "system agents are not creatable",
+		"ADR-049 D3: the rejection must name the seed-only System Agent rule")
 }
 
 // TestCreateAgent_TypeUnknown_Rejected proves any non-enum value is 400.

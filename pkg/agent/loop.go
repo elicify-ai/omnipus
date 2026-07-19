@@ -1695,6 +1695,15 @@ func registerSharedTools(
 				var infos []tools.AgentInfo
 				for _, id := range registry.ListAgentIDs() {
 					if a, ok := registry.GetAgent(id); ok {
+						// ADR-049 D3: System Agents (the Judge) are excluded from
+						// list_agents — it is the delegation picker ("resolve agent
+						// names to IDs before delegating"), and a System Agent is
+						// never a delegation target (nor a chat target). Excluding it
+						// here keeps the picker consistent with the workspace
+						// delegation graph, which never contains a System Agent.
+						if a.AgentType == string(config.AgentTypeSystem) {
+							continue
+						}
 						infos = append(infos, tools.AgentInfo{ID: a.ID, Name: a.Name, Type: "custom"})
 					}
 				}
