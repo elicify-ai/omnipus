@@ -29,7 +29,12 @@ properties:
     enum:
       - task
       - plan
-    description: Whether this verdict judges a task attempt or a plan round.
+      - goal
+    description: >
+      Whether this verdict judges a task attempt, a plan round, or a `/goal`
+      session round (ADR-049 Part B US-8). A `goal` verdict carries neither
+      `task_id` nor `plan_id` — it is correlated by the session the
+      `judge_verdict` transcript entry is written into.
     example: "task"
   task_id:
     type: string

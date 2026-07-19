@@ -8063,11 +8063,11 @@ export interface components {
              */
             id: string;
             /**
-             * @description Whether this verdict judges a task attempt or a plan round.
+             * @description Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
              * @example task
              * @enum {string}
              */
-            scope: "task" | "plan";
+            scope: "task" | "plan" | "goal";
             /**
              * @description Task being judged. Present when `scope == task`.
              * @example 550e8400-e29b-41d4-a716-446655440000

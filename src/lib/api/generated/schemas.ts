@@ -118,7 +118,7 @@ type ToolCall = {
 };
 type JudgeVerdict = {
   id: string;
-  scope: "task" | "plan";
+  scope: "task" | "plan" | "goal";
   task_id?: string | undefined;
   plan_id?: string | undefined;
   round: number;
@@ -1174,7 +1174,7 @@ export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
 });
 export const JudgeVerdict: z.ZodType<JudgeVerdict> = z.object({
   id: z.string(),
-  scope: z.enum(["task", "plan"]),
+  scope: z.enum(["task", "plan", "goal"]),
   task_id: z.string().optional(),
   plan_id: z.string().optional(),
   round: z.number().int().gte(1),
@@ -8107,7 +8107,7 @@ export const JudgeVerdictFrame = z
   .object({
     type: z.literal("judge_verdict"),
     id: z.string(),
-    scope: z.enum(["task", "plan"]),
+    scope: z.enum(["task", "plan", "goal"]),
     task_id: z.string().optional(),
     plan_id: z.string().optional(),
     round: z.number().int().min(1),

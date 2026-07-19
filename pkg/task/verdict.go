@@ -8,10 +8,15 @@
 // entry (pkg/session/daypartition.go).
 package task
 
-// The two JudgeVerdict.Scope values.
+// The three JudgeVerdict.Scope values.
 const (
 	VerdictScopeTask = "task"
 	VerdictScopePlan = "plan"
+	// VerdictScopeGoal marks a verdict produced for a `/goal <condition>`
+	// session round (ADR-049 Part B US-8). A goal-scope verdict carries
+	// neither TaskID nor PlanID — it is correlated by the session the
+	// judge_verdict transcript entry is written into.
+	VerdictScopeGoal = "goal"
 )
 
 // CriterionVerdict is the judge's per-criterion outcome making up one
@@ -38,7 +43,7 @@ type CriterionVerdict struct {
 type JudgeVerdict struct {
 	// ID is the server-set verdict identifier (UUID).
 	ID string `json:"id"`
-	// Scope is "task" or "plan".
+	// Scope is "task", "plan", or "goal".
 	Scope string `json:"scope"`
 	// TaskID is set when Scope == VerdictScopeTask.
 	TaskID string `json:"task_id,omitempty"`

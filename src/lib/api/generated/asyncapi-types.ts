@@ -540,7 +540,7 @@ export interface PlanStatusFrame {
 export interface JudgeVerdictFrame {
   type: "judge_verdict";
   id: string;
-  scope: "task" | "plan";
+  scope: "task" | "plan" | "goal";
   task_id?: string;
   plan_id?: string;
   round: number;
