@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -562,6 +562,65 @@ export const BrowserCaptureControlFrame = z
   })
   .strict();
 
+export const GoalStatusFrame = z
+  .object({
+    type: z.literal("goal_status"),
+    session_id: z.string().min(1),
+    condition: z.string(),
+    round: z.number().int().min(0),
+    max_rounds: z.number().int().min(1),
+    latest_reason: z.string(),
+    active_loops: z.number().int().min(0),
+    cap: z.number().int().min(1),
+    state: z.enum(["active", "paused_judge_unavailable", "brake_fired", "cleared"]),
+  })
+  .strict();
+
+export const LoopStatusFrame = z
+  .object({
+    type: z.literal("loop_status"),
+    session_id: z.string().min(1),
+    mode: z.enum(["interval", "self_paced"]),
+    run: z.number().int().min(0),
+    max_runs: z.number().int().min(1),
+    next_delay: z.number().int().optional(),
+    state: z.string(),
+  })
+  .strict();
+
+export const PlanStatusFrame = z
+  .object({
+    type: z.literal("plan_status"),
+    plan_id: z.string(),
+    state: z.enum(["draft", "approved", "running", "done", "failed"]),
+    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle"]),
+    progress: z.number().min(0).max(1),
+    paused_reason: z.string().optional(),
+  })
+  .strict();
+
+export const JudgeVerdictFrame = z
+  .object({
+    type: z.literal("judge_verdict"),
+    id: z.string(),
+    scope: z.enum(["task", "plan"]),
+    task_id: z.string().optional(),
+    plan_id: z.string().optional(),
+    round: z.number().int().min(1),
+    met: z.boolean(),
+    per_criterion: z.array(z
+    .object({
+      criterion_id: z.string().min(1),
+      met: z.boolean(),
+      reason: z.string(),
+    })
+    .strict()),
+    model: z.string(),
+    judged_at: z.string(),
+    judge_agent_id: z.string(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -612,6 +671,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserCaptureOfferFrame,
   BrowserCaptureAnswerFrame,
   BrowserCaptureControlFrame,
+  GoalStatusFrame,
+  LoopStatusFrame,
+  PlanStatusFrame,
+  JudgeVerdictFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

@@ -53,7 +53,11 @@ export type WsFrameType =
   | "browser_capture_hello"
   | "browser_capture_offer"
   | "browser_capture_answer"
-  | "browser_capture_control";
+  | "browser_capture_control"
+  | "goal_status"
+  | "loop_status"
+  | "plan_status"
+  | "judge_verdict";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -502,6 +506,55 @@ export interface BrowserCaptureControlFrame {
   reason?: string;
 }
 
+export interface GoalStatusFrame {
+  type: "goal_status";
+  session_id: string;
+  condition: string;
+  round: number;
+  max_rounds: number;
+  latest_reason: string;
+  active_loops: number;
+  cap: number;
+  state: "active" | "paused_judge_unavailable" | "brake_fired" | "cleared";
+}
+
+export interface LoopStatusFrame {
+  type: "loop_status";
+  session_id: string;
+  mode: "interval" | "self_paced";
+  run: number;
+  max_runs: number;
+  next_delay?: number;
+  state: string;
+}
+
+export interface PlanStatusFrame {
+  type: "plan_status";
+  plan_id: string;
+  state: "draft" | "approved" | "running" | "done" | "failed";
+  plan_phase: "dispatching" | "judging" | "synthesizing" | "idle";
+  progress: number;
+  paused_reason?: string;
+}
+
+export interface JudgeVerdictFrame {
+  type: "judge_verdict";
+  id: string;
+  scope: "task" | "plan";
+  task_id?: string;
+  plan_id?: string;
+  round: number;
+  met: boolean;
+  per_criterion: Array<{
+    criterion_id: string;
+    met: boolean;
+    reason: string;
+  }>;
+  model: string;
+  judged_at: string;
+  judge_agent_id: string;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -551,7 +604,11 @@ export type WsFrame =
   | BrowserCaptureHelloFrame
   | BrowserCaptureOfferFrame
   | BrowserCaptureAnswerFrame
-  | BrowserCaptureControlFrame;
+  | BrowserCaptureControlFrame
+  | GoalStatusFrame
+  | LoopStatusFrame
+  | PlanStatusFrame
+  | JudgeVerdictFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -611,4 +668,8 @@ export type ServerFrame =
   | BrowserCaptureHelloFrame
   | BrowserCaptureOfferFrame
   | BrowserCaptureAnswerFrame
-  | BrowserCaptureControlFrame;
+  | BrowserCaptureControlFrame
+  | GoalStatusFrame
+  | LoopStatusFrame
+  | PlanStatusFrame
+  | JudgeVerdictFrame;

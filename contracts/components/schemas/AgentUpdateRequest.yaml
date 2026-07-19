@@ -184,3 +184,11 @@ properties:
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
+  rubric:
+    type: string
+    description: >
+      New System Agent rubric prompt (ADR-049 D3). Only accepted for
+      `type: system` agents (e.g. the Judge) — rejected 400 on all other
+      agent types. This is the only prompt-equivalent field a locked System
+      Agent accepts (`soul` is rejected on locked agents).
+    example: "You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone..."

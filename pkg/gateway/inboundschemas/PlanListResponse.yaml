@@ -1,0 +1,16 @@
+title: PlanListResponse
+description: List response for GET /workspaces/{id}/plans (mirrors the removed MilestoneListResponse).
+type: object
+required:
+  - plans
+  - total
+additionalProperties: false
+properties:
+  plans:
+    type: array
+    items:
+      $ref: ./Plan.yaml
+    description: Plans for this workspace.
+  total:
+    type: integer
+    description: Total number of plans for this workspace.

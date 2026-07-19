@@ -1,0 +1,104 @@
+title: AcceptanceCriterion
+description: >
+  A single Definition-of-Done criterion on a Task (`task.criteria[]`) or Plan
+  (`plan.dod[]`) — ADR-049 D2/D5/FR-3. `kind: check` criteria are
+  machine-checkable: a command dispatched through the assignee agent's own
+  `bash` tool machinery (never a parallel judge-owned exec path) whose exit
+  code produces unfakeable `EvidenceRecord` evidence. `kind: prose` criteria
+  are free-text statements judged by the Judge System Agent's LLM call against
+  evidence-first input. Every criterion records its author identity (agent or
+  user); absence of evidence/verdict never defaults to `met` (NFR-2,
+  fail-closed).
+type: object
+required:
+  - kind
+  - text
+  - author
+  - status
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: >
+      Server-set criterion identifier (UUID). Absent on a create-time
+      payload; always present once persisted.
+    example: "550e8400-e29b-41d4-a716-446655440010"
+  kind:
+    type: string
+    enum:
+      - check
+      - prose
+    description: >
+      `check` = machine-checkable command with an expected exit code, run via
+      the assignee's `bash` tool. `prose` = free-text statement judged by the
+      Judge System Agent.
+    example: "check"
+  text:
+    type: string
+    minLength: 1
+    maxLength: 1000
+    description: >
+      The criterion statement (`kind: prose`) or a human-readable description
+      of what the check verifies (`kind: check`).
+    example: "All new pkg/plan tests pass"
+  check:
+    type: object
+    description: >
+      Present iff `kind == check` (400 if present with `kind == prose` — no
+      mixed shape); required iff `kind == check` (400 if absent). Dispatched
+      through the assignee agent's existing `bash` tool machinery (ADR D2
+      rule 1) — same tool registry, policy resolution, sandbox enforcement,
+      and audit trail as any other `bash` call. Policy `allow` runs; `ask`
+      resolves to deny (no interactive approver mid-loop); `deny` fails the
+      criterion closed.
+    required:
+      - command
+      - expected_exit_code
+    additionalProperties: false
+    properties:
+      command:
+        type: string
+        minLength: 1
+        description: Shell command run through the assignee's `bash` tool.
+        example: "go test ./pkg/plan/... -run TestPlanStore_CreatePersists"
+      expected_exit_code:
+        type: integer
+        minimum: 0
+        maximum: 255
+        description: Exit code that counts as PASS (`met`) for this check.
+        example: 0
+  author:
+    type: object
+    description: >
+      Recorded identity of whoever authored this criterion (ADR D2 rule 3;
+      mandatory — 400 if absent). A cross-agent-authored machine check
+      (author identity != assignee agent id) requires assignee-owner
+      confirmation unless waived by a workspace setting.
+    required:
+      - kind
+      - id
+    additionalProperties: false
+    properties:
+      kind:
+        type: string
+        enum:
+          - agent
+          - user
+        description: Whether this criterion was authored by an agent or a human user.
+        example: "agent"
+      id:
+        type: string
+        minLength: 1
+        description: Agent ID or username of the author.
+        example: "jim"
+  status:
+    type: string
+    enum:
+      - pending
+      - met
+      - unmet
+    description: >
+      Per-run judgement status. `pending` before any judge round; `met` /
+      `unmet` set by the most recent `JudgeVerdict.per_criterion` entry.
+      Absence of evidence/a verdict never defaults to `met` (NFR-2).
+    example: "pending"

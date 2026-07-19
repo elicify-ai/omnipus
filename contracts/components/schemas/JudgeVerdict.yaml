@@ -1,0 +1,77 @@
+title: JudgeVerdict
+description: >
+  A single judge adjudication of a task attempt or plan round (ADR-049
+  D2/D4). Persisted alongside the run and also emitted as (a) a
+  session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`)
+  and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact
+  shape so they cannot silently disagree (review Q3). Absence of a verdict
+  never defaults to success (NFR-2, fail-closed): a judge that is merely
+  unavailable (throttled/cost-capped/provider error/timeout) does NOT produce
+  a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+type: object
+required:
+  - id
+  - scope
+  - round
+  - met
+  - per_criterion
+  - model
+  - judged_at
+  - judge_agent_id
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Server-set verdict identifier (UUID).
+    example: "550e8400-e29b-41d4-a716-446655440020"
+  scope:
+    type: string
+    enum:
+      - task
+      - plan
+    description: Whether this verdict judges a task attempt or a plan round.
+    example: "task"
+  task_id:
+    type: string
+    description: Task being judged. Present when `scope == task`.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  plan_id:
+    type: string
+    description: Plan being judged. Present when `scope == plan`.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  round:
+    type: integer
+    minimum: 1
+    description: >
+      Attempt/round index (ADR D7 — a "round" is one worker turn plus its
+      judge evaluation).
+    example: 1
+  met:
+    type: boolean
+    description: >
+      Overall PASS/FAIL verdict across all criteria. Fail-closed default
+      `false` — absence of a verdict never defaults to `true` (NFR-2).
+    example: false
+  per_criterion:
+    type: array
+    items:
+      $ref: ./CriterionVerdict.yaml
+    description: Per-criterion outcomes making up the overall verdict.
+  model:
+    type: string
+    description: >
+      Judge model used to produce this verdict (transparency / NFR-5
+      metering).
+    example: "z-ai/glm-5-turbo"
+  judged_at:
+    type: string
+    format: date-time
+    description: RFC 3339 UTC timestamp when the verdict was produced.
+    example: "2026-07-19T12:05:00Z"
+  judge_agent_id:
+    type: string
+    description: >
+      ID of the Judge System Agent that produced this verdict (NFR-5
+      correlation — usage metering is attributed to this `agent_id` alongside
+      the plan/task/goal correlation IDs).
+    example: "judge"

@@ -26,6 +26,14 @@ properties:
     type: string
     description: Optional usage hint.
     example: "/model [name]"
+  argument_hint:
+    type: string
+    description: >
+      Optional ghost-text hint for the command's argument (ADR-049 D6/SD-C7,
+      e.g. `/goal` hints `<condition>`, `/loop` hints `[interval] [prompt]`).
+      Rendered as placeholder text in the composer immediately after the
+      command is inserted. Absent when the command takes no arguments.
+    example: "<condition>"
   aliases:
     type: array
     description: >

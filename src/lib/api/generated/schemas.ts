@@ -65,7 +65,14 @@ type SessionDetail = {
 type Message = {
   id: string;
   type?:
-    | ("message" | "compaction" | "system" | "tool_call" | "turn_canceled")
+    | (
+        | "message"
+        | "compaction"
+        | "system"
+        | "tool_call"
+        | "turn_canceled"
+        | "judge_verdict"
+      )
     | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
@@ -85,6 +92,7 @@ type Message = {
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
+  verdict?: JudgeVerdict | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -107,6 +115,23 @@ type ToolCall = {
   parameters?: {} | undefined;
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
+};
+type JudgeVerdict = {
+  id: string;
+  scope: "task" | "plan";
+  task_id?: string | undefined;
+  plan_id?: string | undefined;
+  round: number;
+  met: boolean;
+  per_criterion: Array<CriterionVerdict>;
+  model: string;
+  judged_at: string;
+  judge_agent_id: string;
+};
+type CriterionVerdict = {
+  criterion_id: string;
+  met: boolean;
+  reason: string;
 };
 type Agent = {
   id: string;
@@ -134,6 +159,7 @@ type Agent = {
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
+  rubric?: string | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: {
@@ -301,6 +327,7 @@ type AgentUpdateRequest = Partial<{
   skills: Array<string>;
   voice: string | null;
   executor: ExecutorConfig;
+  rubric: string;
 }>;
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -411,7 +438,11 @@ type Task = {
   todos?: Array<Todo> | undefined;
   parent_task_id?: string | undefined;
   workspace_id: string;
-  milestone_id?: string | undefined;
+  tags?: Array<string> | undefined;
+  plan_id?: string | undefined;
+  criteria?: Array<AcceptanceCriterion> | undefined;
+  attempt_count?: number | undefined;
+  max_attempts?: (number | null) | undefined;
   trigger?: TaskTrigger | undefined;
   due?: string | undefined;
   surface?: ("user" | "heartbeat") | undefined;
@@ -444,6 +475,22 @@ type Task = {
 type Todo = {
   text: string;
   status: "pending" | "in_progress" | "completed";
+};
+type AcceptanceCriterion = {
+  id?: string | undefined;
+  kind: "check" | "prose";
+  text: string;
+  check?:
+    | {
+        command: string;
+        expected_exit_code: number;
+      }
+    | undefined;
+  author: {
+    kind: "agent" | "user";
+    id: string;
+  };
+  status: "pending" | "met" | "unmet";
 };
 type TaskTrigger = {
   type: "manual" | "once" | "every" | "recurring";
@@ -564,7 +611,10 @@ type TaskCreateRequest = {
   todos?: Array<Todo> | undefined;
   parent_task_id?: string | undefined;
   workspace_id: string;
-  milestone_id?: string | undefined;
+  tags?: Array<string> | undefined;
+  plan_id?: string | undefined;
+  criteria?: Array<AcceptanceCriterion> | undefined;
+  max_attempts?: (number | null) | undefined;
   due?: string | undefined;
   surface?: ("user" | "heartbeat") | undefined;
   source_channel?: string | undefined;
@@ -589,7 +639,10 @@ type TaskUpdateRequest = Partial<{
   trigger: TaskTrigger;
   due: string;
   clear_due: boolean;
-  milestone_id: string;
+  tags: Array<string>;
+  plan_id: string;
+  criteria: Array<AcceptanceCriterion>;
+  max_attempts: number | null;
   surface: "user" | "heartbeat";
   result: string;
   artifacts: Array<string>;
@@ -774,20 +827,69 @@ type WorkspaceDelegationEdge = {
 type WorkspaceDelegationUpdateRequest = {
   edges: Array<WorkspaceDelegationEdge>;
 };
-type MilestoneListResponse = {
-  milestones: Array<Milestone>;
-  total: number;
-};
-type Milestone = {
+type Plan = {
   id: string;
   workspace_id: string;
-  name: string;
+  title: string;
+  goal?: string | undefined;
   description?: string | undefined;
-  due_date?: (string | null) | undefined;
+  state: "draft" | "approved" | "running" | "done" | "failed";
+  plan_phase?:
+    | ("dispatching" | "judging" | "synthesizing" | "idle")
+    | undefined;
+  failed_reason?:
+    | ("judge_rounds_exhausted" | "stopped_by_user" | "idle_expired")
+    | undefined;
+  owner_agent_id: string;
+  dod?: Array<AcceptanceCriterion> | undefined;
+  bounds?:
+    | Partial<{
+        plan_judge_max_rounds: number;
+        idle_expiry_days: number;
+      }>
+    | undefined;
+  judge_rounds?: number | undefined;
+  active_loop?: boolean | undefined;
+  paused_reason?: string | undefined;
+  last_activity_at?: string | undefined;
+  progress?: number | undefined;
+  owner: string;
+  created_by: string;
   created_at: string;
   updated_at: string;
-  owner?: string | undefined;
-  progress?: number | undefined;
+  approved_at?: string | undefined;
+  started_at?: string | undefined;
+  completed_at?: string | undefined;
+};
+type PlanCreateRequest = {
+  workspace_id: string;
+  title: string;
+  goal?: string | undefined;
+  description?: string | undefined;
+  owner_agent_id: string;
+  dod?: Array<AcceptanceCriterion> | undefined;
+  bounds?:
+    | Partial<{
+        plan_judge_max_rounds: number;
+        idle_expiry_days: number;
+      }>
+    | undefined;
+};
+type PlanUpdateRequest = Partial<{
+  title: string;
+  goal: string;
+  description: string;
+  state: "draft" | "approved" | "running" | "done" | "failed";
+  owner_agent_id: string;
+  dod: Array<AcceptanceCriterion>;
+  bounds: Partial<{
+    plan_judge_max_rounds: number;
+    idle_expiry_days: number;
+  }>;
+}>;
+type PlanListResponse = {
+  plans: Array<Plan>;
+  total: number;
 };
 type AgentTokenEntry = {
   agent_id: string;
@@ -1065,10 +1167,34 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
   result: z.object({}).partial().passthrough().optional(),
   parent_tool_call_id: z.string().optional(),
 });
+export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
+  criterion_id: z.string().min(1),
+  met: z.boolean(),
+  reason: z.string(),
+});
+export const JudgeVerdict: z.ZodType<JudgeVerdict> = z.object({
+  id: z.string(),
+  scope: z.enum(["task", "plan"]),
+  task_id: z.string().optional(),
+  plan_id: z.string().optional(),
+  round: z.number().int().gte(1),
+  met: z.boolean(),
+  per_criterion: z.array(CriterionVerdict),
+  model: z.string(),
+  judged_at: z.string().datetime({ offset: true }),
+  judge_agent_id: z.string(),
+});
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
   type: z
-    .enum(["message", "compaction", "system", "tool_call", "turn_canceled"])
+    .enum([
+      "message",
+      "compaction",
+      "system",
+      "tool_call",
+      "turn_canceled",
+      "judge_verdict",
+    ])
     .optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
@@ -1088,6 +1214,7 @@ export const Message: z.ZodType<Message> = z.object({
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
+  verdict: JudgeVerdict.optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
@@ -1191,6 +1318,7 @@ export const Agent: z.ZodType<Agent> = z
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
+    rubric: z.string().optional(),
   })
   .passthrough();
 export const AgentCreateRequestMain =
@@ -1349,6 +1477,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     skills: z.array(z.string()),
     voice: z.string().nullable(),
     executor: ExecutorConfig,
+    rubric: z.string(),
   })
   .partial();
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
@@ -1860,6 +1989,7 @@ export const SlashCommand = z.object({
   label: z.string(),
   description: z.string(),
   usage: z.string().optional(),
+  argument_hint: z.string().optional(),
   aliases: z.array(z.string()).optional(),
   available_while_streaming: z.boolean().optional(),
   delivery: z.enum(["client", "agent"]),
@@ -1973,6 +2103,19 @@ export const Todo: z.ZodType<Todo> = z.object({
   text: z.string().min(1).max(500),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
+export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
+  id: z.string().optional(),
+  kind: z.enum(["check", "prose"]),
+  text: z.string().min(1).max(1000),
+  check: z
+    .object({
+      command: z.string().min(1),
+      expected_exit_code: z.number().int().gte(0).lte(255),
+    })
+    .optional(),
+  author: z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1) }),
+  status: z.enum(["pending", "met", "unmet"]),
+});
 export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
   type: z.enum(["manual", "once", "every", "recurring"]),
   config: z
@@ -2007,7 +2150,11 @@ export const Task: z.ZodType<Task> = z
     todos: z.array(Todo).optional(),
     parent_task_id: z.string().optional(),
     workspace_id: z.string(),
-    milestone_id: z.string().optional(),
+    tags: z.array(z.string().max(64)).max(16).optional(),
+    plan_id: z.string().optional(),
+    criteria: z.array(AcceptanceCriterion).optional(),
+    attempt_count: z.number().int().gte(0).optional(),
+    max_attempts: z.number().int().gte(1).nullish(),
     trigger: TaskTrigger.optional(),
     due: z.string().datetime({ offset: true }).optional(),
     surface: z.enum(["user", "heartbeat"]).optional().default("user"),
@@ -2053,7 +2200,10 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   todos: z.array(Todo).optional(),
   parent_task_id: z.string().optional(),
   workspace_id: z.string(),
-  milestone_id: z.string().optional(),
+  tags: z.array(z.string().max(64)).max(16).optional(),
+  plan_id: z.string().optional(),
+  criteria: z.array(AcceptanceCriterion).optional(),
+  max_attempts: z.number().int().gte(1).nullish(),
   due: z.string().datetime({ offset: true }).optional(),
   surface: z.enum(["user", "heartbeat"]).optional().default("user"),
   source_channel: z.string().optional(),
@@ -2080,7 +2230,10 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     trigger: TaskTrigger,
     due: z.string().datetime({ offset: true }),
     clear_due: z.boolean(),
-    milestone_id: z.string(),
+    tags: z.array(z.string().max(64)).max(16),
+    plan_id: z.string(),
+    criteria: z.array(AcceptanceCriterion),
+    max_attempts: z.number().int().gte(1).nullable(),
     surface: z.enum(["user", "heartbeat"]),
     result: z.string().max(50000),
     artifacts: z.array(z.string()),
@@ -2317,37 +2470,6 @@ export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
 export const WorkspaceInstructionsRequest = z.object({
   content: z.string().max(262144),
 });
-export const Milestone: z.ZodType<Milestone> = z
-  .object({
-    id: z.string(),
-    workspace_id: z.string(),
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000).optional(),
-    due_date: z.string().nullish(),
-    created_at: z.string().datetime({ offset: true }),
-    updated_at: z.string().datetime({ offset: true }),
-    owner: z.string().optional(),
-    progress: z.number().gte(0).lte(1).optional(),
-  })
-  .passthrough();
-export const MilestoneListResponse: z.ZodType<MilestoneListResponse> = z
-  .object({ milestones: z.array(Milestone), total: z.number().int() })
-  .passthrough();
-export const MilestoneCreateRequest = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000).optional(),
-    due_date: z.string().nullish(),
-  })
-  .passthrough();
-export const MilestoneUpdateRequest = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000),
-    due_date: z.string().nullable(),
-  })
-  .partial()
-  .passthrough();
 export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
   .object({
     agent_id: z.string(),
@@ -2465,6 +2587,90 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
 export const RetentionUpdateRequest = z
   .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
   .partial();
+export const Plan: z.ZodType<Plan> = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string().min(1).max(200),
+  goal: z.string().max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  state: z.enum(["draft", "approved", "running", "done", "failed"]),
+  plan_phase: z
+    .enum(["dispatching", "judging", "synthesizing", "idle"])
+    .optional()
+    .default("idle"),
+  failed_reason: z
+    .enum(["judge_rounds_exhausted", "stopped_by_user", "idle_expired"])
+    .optional(),
+  owner_agent_id: z.string(),
+  dod: z.array(AcceptanceCriterion).optional(),
+  bounds: z
+    .object({
+      plan_judge_max_rounds: z.number().int().gte(1),
+      idle_expiry_days: z.number().int().gte(1),
+    })
+    .partial()
+    .optional(),
+  judge_rounds: z.number().int().gte(0).optional(),
+  active_loop: z.boolean().optional(),
+  paused_reason: z.string().optional(),
+  last_activity_at: z.string().datetime({ offset: true }).optional(),
+  progress: z.number().gte(0).lte(1).optional(),
+  owner: z.string(),
+  created_by: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+  updated_at: z.string().datetime({ offset: true }),
+  approved_at: z.string().datetime({ offset: true }).optional(),
+  started_at: z.string().datetime({ offset: true }).optional(),
+  completed_at: z.string().datetime({ offset: true }).optional(),
+});
+export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
+  workspace_id: z.string(),
+  title: z.string().min(1).max(200),
+  goal: z.string().max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  owner_agent_id: z.string().min(1),
+  dod: z.array(AcceptanceCriterion).optional(),
+  bounds: z
+    .object({
+      plan_judge_max_rounds: z.number().int().gte(1),
+      idle_expiry_days: z.number().int().gte(1),
+    })
+    .partial()
+    .optional(),
+});
+export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
+  .object({
+    title: z.string().min(1).max(200),
+    goal: z.string().max(2000),
+    description: z.string().max(2000),
+    state: z.enum(["draft", "approved", "running", "done", "failed"]),
+    owner_agent_id: z.string().min(1),
+    dod: z.array(AcceptanceCriterion),
+    bounds: z
+      .object({
+        plan_judge_max_rounds: z.number().int().gte(1),
+        idle_expiry_days: z.number().int().gte(1),
+      })
+      .partial(),
+  })
+  .partial();
+export const PlanListResponse: z.ZodType<PlanListResponse> = z.object({
+  plans: z.array(Plan),
+  total: z.number().int(),
+});
+export const EvidenceRecord = z.object({
+  id: z.string(),
+  task_id: z.string(),
+  criterion_id: z.string(),
+  attempt: z.number().int().gte(1),
+  command: z.string(),
+  exit_code: z.number().int(),
+  output: z.string(),
+  truncated: z.boolean(),
+  timed_out: z.boolean(),
+  policy_denied: z.boolean(),
+  recorded_at: z.string().datetime({ offset: true }),
+});
 
 const endpoints = makeApi([
   {
@@ -5912,7 +6118,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/tasks",
     alias: "listTasks",
-    description: `Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped.
+    description: `Returns tasks in a workspace, filterable by status, agent, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and &#x60;surface: user&#x60; tasks are returned; use the filters to widen. Workspace-scoped.
 `,
     requestFormat: "json",
     parameters: [
@@ -5938,11 +6144,6 @@ Polled by the SPA StatusBar every 15 seconds.
       },
       {
         name: "agent_id",
-        type: "Query",
-        schema: z.string().optional(),
-      },
-      {
-        name: "milestone_id",
         type: "Query",
         schema: z.string().optional(),
       },
@@ -6939,171 +7140,6 @@ Returns HTTP 201 on success.
       },
     ],
   },
-  {
-    method: "get",
-    path: "/workspaces/:id/milestones",
-    alias: "listWorkspaceMilestones",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: MilestoneListResponse,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/workspaces/:id/milestones",
-    alias: "createWorkspaceMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: MilestoneCreateRequest,
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/workspaces/:id/milestones/:milestoneId",
-    alias: "getWorkspaceMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/workspaces/:id/milestones/:milestoneId",
-    alias: "updateWorkspaceMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: MilestoneUpdateRequest,
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "delete",
-    path: "/workspaces/:id/milestones/:milestoneId",
-    alias: "deleteWorkspaceMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: z.void(),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
 ]);
 
 export const api = new Zodios(endpoints);
@@ -7117,7 +7153,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -7686,6 +7722,65 @@ export const BrowserCaptureControlFrame = z
   })
   .strict();
 
+export const GoalStatusFrame = z
+  .object({
+    type: z.literal("goal_status"),
+    session_id: z.string().min(1),
+    condition: z.string(),
+    round: z.number().int().min(0),
+    max_rounds: z.number().int().min(1),
+    latest_reason: z.string(),
+    active_loops: z.number().int().min(0),
+    cap: z.number().int().min(1),
+    state: z.enum(["active", "paused_judge_unavailable", "brake_fired", "cleared"]),
+  })
+  .strict();
+
+export const LoopStatusFrame = z
+  .object({
+    type: z.literal("loop_status"),
+    session_id: z.string().min(1),
+    mode: z.enum(["interval", "self_paced"]),
+    run: z.number().int().min(0),
+    max_runs: z.number().int().min(1),
+    next_delay: z.number().int().optional(),
+    state: z.string(),
+  })
+  .strict();
+
+export const PlanStatusFrame = z
+  .object({
+    type: z.literal("plan_status"),
+    plan_id: z.string(),
+    state: z.enum(["draft", "approved", "running", "done", "failed"]),
+    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle"]),
+    progress: z.number().min(0).max(1),
+    paused_reason: z.string().optional(),
+  })
+  .strict();
+
+export const JudgeVerdictFrame = z
+  .object({
+    type: z.literal("judge_verdict"),
+    id: z.string(),
+    scope: z.enum(["task", "plan"]),
+    task_id: z.string().optional(),
+    plan_id: z.string().optional(),
+    round: z.number().int().min(1),
+    met: z.boolean(),
+    per_criterion: z.array(z
+    .object({
+      criterion_id: z.string().min(1),
+      met: z.boolean(),
+      reason: z.string(),
+    })
+    .strict()),
+    model: z.string(),
+    judged_at: z.string(),
+    judge_agent_id: z.string(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -7736,6 +7831,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserCaptureOfferFrame,
   BrowserCaptureAnswerFrame,
   BrowserCaptureControlFrame,
+  GoalStatusFrame,
+  LoopStatusFrame,
+  PlanStatusFrame,
+  JudgeVerdictFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

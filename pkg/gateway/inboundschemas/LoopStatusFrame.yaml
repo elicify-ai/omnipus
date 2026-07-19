@@ -1,0 +1,65 @@
+title: LoopStatusFrame
+description: >
+  Server → client. Status push for a session's active `/loop` (ADR-049
+  D6/D7/US-9). Emitted on run completion, state change, and stop.
+  Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy
+  lives inline in contracts/asyncapi.yaml components.schemas (AsyncAPI does
+  not resolve cross-file $ref for its own codegen) — this file exists for
+  the Constraint #8 5-step process and the inboundschemas sync; keep both
+  in sync by hand.
+type: object
+required:
+  - type
+  - session_id
+  - mode
+  - run
+  - max_runs
+  - state
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: loop_status
+  session_id:
+    type: string
+    minLength: 1
+    description: Session this loop belongs to.
+  mode:
+    type: string
+    enum:
+      - interval
+      - self_paced
+    description: >
+      `interval` — fixed cadence via a cron `every` job in `continue`
+      session mode. `self_paced` — the agent chooses its own next delay +
+      reason each run, scheduled as one-shot `at` jobs.
+    example: "interval"
+  run:
+    type: integer
+    minimum: 0
+    description: Runs completed so far.
+    example: 12
+  max_runs:
+    type: integer
+    minimum: 1
+    description: Run ceiling (default 100) before the loop stops itself.
+    example: 100
+  next_delay:
+    type: integer
+    format: int64
+    description: >
+      Milliseconds until the next scheduled run. Present for `interval`
+      mode (the fixed interval) and for `self_paced` mode once the agent
+      has scheduled its next one-shot run; absent immediately after a
+      self-paced run completes and before the next delay is chosen.
+    example: 300000
+  state:
+    type: string
+    description: >
+      Current state of this loop (runtime vocabulary owned by the loop
+      engine, ADR-049 Part B). Not yet a closed enum in this contract wave
+      — Part B's implementation names the literal values (analogous to
+      GoalStatusFrame's active/paused_judge_unavailable/brake_fired/cleared)
+      when the runtime lands; this field stays a plain string so the wire
+      shape does not need a breaking change when it does.
+    example: "active"

@@ -1,0 +1,78 @@
+title: GoalStatusFrame
+description: >
+  Server → client. Status push for a session's active `/goal` loop
+  (ADR-049 D6/D7/US-8). Emitted on round completion, state change, and
+  clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+  Canonical copy lives inline in contracts/asyncapi.yaml
+  components.schemas (AsyncAPI does not resolve cross-file $ref for its own
+  codegen) — this file exists for the Constraint #8 5-step process and the
+  inboundschemas sync; keep both in sync by hand.
+type: object
+required:
+  - type
+  - session_id
+  - condition
+  - round
+  - max_rounds
+  - latest_reason
+  - active_loops
+  - cap
+  - state
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: goal_status
+  session_id:
+    type: string
+    minLength: 1
+    description: Session this goal loop belongs to.
+  condition:
+    type: string
+    description: The proof-driven condition text set by `/goal <condition>`.
+    example: "make the tests pass"
+  round:
+    type: integer
+    minimum: 0
+    description: >
+      Rounds consumed so far (ADR D7 — one round = one worker turn plus its
+      judge evaluation).
+    example: 3
+  max_rounds:
+    type: integer
+    minimum: 1
+    description: Round ceiling (default 20) before the goal loop wakes the owner.
+    example: 20
+  latest_reason:
+    type: string
+    description: >
+      Most recent judge reason fed forward as steering (evaluator-optimizer
+      pattern). Empty string before the first round completes.
+    example: "3 tests still failing in pkg/plan"
+  active_loops:
+    type: integer
+    minimum: 0
+    description: >
+      Current count of globally active loops (running plans + active
+      `/goal` sessions + enabled `/loop` jobs — Round-1 Grill Reconciliation
+      R5) toward the global cap.
+    example: 4
+  cap:
+    type: integer
+    minimum: 1
+    description: Global active-loop cap (default 16).
+    example: 16
+  state:
+    type: string
+    enum:
+      - active
+      - paused_judge_unavailable
+      - brake_fired
+      - cleared
+    description: >
+      Current state of this goal loop (Part C `GoalIndicator` render
+      states). `active` iterating normally. `paused_judge_unavailable` the
+      judge call is temporarily unavailable; no round increment while
+      paused. `brake_fired` a bound (rounds/idle) was reached; winding
+      down. `cleared` the goal was explicitly cleared/stopped.
+    example: "active"
