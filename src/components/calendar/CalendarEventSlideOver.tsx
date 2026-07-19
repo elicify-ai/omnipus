@@ -80,6 +80,10 @@ import {
 } from '@/components/calendar/RecurrenceEditor'
 import { useOccurrences } from '@/lib/calendar/useOccurrences'
 import type { TaskOccurrenceSet } from '@/lib/api/generated/openapi-types'
+import { TaskRunStatusField } from '@/components/workspaces/TaskRunStatusField'
+import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
+import { TaskResultField } from '@/components/workspaces/TaskResultField'
+import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
 
 export interface CalendarEventSlideOverProps {
   open: boolean
@@ -513,6 +517,22 @@ export function CalendarEventSlideOver({
                   <li key={ms}>{formatFullDateTime(ms)}</li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* Task-lifecycle sections — EDIT mode only. Recurring tasks are
+              excluded from Board/List (US-3), so this slide-over is a
+              recurring task's ONLY surface — without these, its checklist,
+              run status, result, and chat link would be reachable nowhere.
+              Reused verbatim from TaskDetailPanel (single source of truth);
+              they run their OWN mutations, independent of the Save button
+              above, which governs only title/agent/instruction/recurrence. */}
+          {isEdit && task && (
+            <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">
+              <TaskRunStatusField task={task} />
+              <TaskChecklistField task={task} />
+              <TaskResultField task={task} />
+              <OpenInChatButton task={task} onNavigate={() => onOpenChange(false)} />
             </div>
           )}
         </div>

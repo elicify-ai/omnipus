@@ -59,6 +59,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchWorkspaceDelegation: vi.fn(),
     createTask: vi.fn(),
     updateTask: vi.fn(),
+    // Task-lifecycle sections (edit mode only): TaskChecklistField's own
+    // checklist mutation.
+    setTaskTodos: vi.fn().mockResolvedValue({}),
     tasksQueryKeys: { list: () => ['tasks'] },
   }
 })
@@ -66,6 +69,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import {
   createTask,
   updateTask,
+  setTaskTodos,
   fetchWorkspaceDelegation,
   ApiError,
 } from '@/lib/api'
@@ -73,6 +77,14 @@ import {
 const mockUseOccurrences = vi.fn()
 vi.mock('@/lib/calendar/useOccurrences', () => ({
   useOccurrences: (...args: unknown[]) => mockUseOccurrences(...args),
+}))
+
+// OpenInChatButton (task-lifecycle sections, edit mode only) calls
+// useNavigate() from @tanstack/react-router — mock it so the button's click
+// handler is assertable without a real Router context.
+const mockNavigate = vi.fn()
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => mockNavigate,
 }))
 
 const mockAddToast = vi.fn()
@@ -194,9 +206,11 @@ function fillPrompt(text = 'Summarize the last run and flag anomalies.') {
 
 beforeEach(() => {
   vi.mocked(createTask).mockReset()
-  vi.mocked(updateTask).mockReset()
+  vi.mocked(updateTask).mockReset().mockResolvedValue(makeTask() as never)
+  vi.mocked(setTaskTodos).mockReset().mockResolvedValue({} as never)
   vi.mocked(fetchWorkspaceDelegation).mockReset().mockRejectedValue(new Error('not mocked'))
   mockAddToast.mockReset()
+  mockNavigate.mockReset()
   mockUseOccurrences.mockReset().mockReturnValue({ data: [], isError: false, isLoading: false })
 })
 
@@ -602,5 +616,108 @@ describe('CalendarEventSlideOver — real Custom flow via RecurrenceEditor widge
     expect(body.trigger?.config?.rrule).toContain('INTERVAL=2')
     expect(body.trigger?.config?.rrule).toContain('BYDAY=MO')
     expect(body.trigger?.config?.rrule).toContain('COUNT=10')
+  })
+})
+
+// ── Task-lifecycle sections (edit mode only) ───────────────────────────────
+//
+// Recurring tasks are excluded from Board/List (US-3), so this slide-over is
+// their ONLY surface — these sections reuse TaskDetailPanel's own shared
+// components (TaskRunStatusField / TaskChecklistField / TaskResultField /
+// OpenInChatButton) verbatim. Create mode must show none of them; edit mode
+// always shows the run-status badge, with Checklist/Result/Open-in-Chat
+// self-gating exactly as they do inside TaskDetailPanel.
+
+describe('CalendarEventSlideOver — task-lifecycle sections (edit mode only)', () => {
+  it('create mode shows none of the four task-lifecycle sections', async () => {
+    renderSlideOver({ task: null })
+    await screen.findByLabelText(/title/i)
+
+    expect(screen.queryByTestId('task-run-status-badge')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/new checklist item/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /run now/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /open in chat/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/^result$/i)).not.toBeInTheDocument()
+  })
+
+  it('edit mode always renders the run-status badge, and shows "Run now" for a startable task', async () => {
+    const task = makeTask({ id: 'task-edit-1', status: 'next' })
+    renderSlideOver({ task })
+
+    expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Next')
+    expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
+  })
+
+  it('"Run now" calls updateTask with {status: "in_progress"}', async () => {
+    const task = makeTask({ id: 'task-edit-run', status: 'next' })
+    renderSlideOver({ task })
+
+    fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith(
+      'task-edit-run',
+      { status: 'in_progress' },
+    ))
+  })
+
+  it('checklist toggle calls setTaskTodos with the flipped item', async () => {
+    const task = makeTask({
+      id: 'task-edit-checklist',
+      todos: [{ text: 'Flip me', status: 'pending' as const }],
+    })
+    renderSlideOver({ task })
+
+    fireEvent.click(await screen.findByLabelText(/toggle flip me/i))
+
+    await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalledWith(
+      'task-edit-checklist',
+      [{ text: 'Flip me', status: 'completed' }],
+    ))
+  })
+
+  it('checklist add calls setTaskTodos with the appended item', async () => {
+    const task = makeTask({ id: 'task-edit-checklist-add', todos: [] })
+    renderSlideOver({ task })
+
+    const input = await screen.findByLabelText(/new checklist item/i)
+    fireEvent.change(input, { target: { value: 'New item' } })
+    fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
+
+    await waitFor(() => expect(vi.mocked(setTaskTodos)).toHaveBeenCalledWith(
+      'task-edit-checklist-add',
+      [{ text: 'New item', status: 'pending' }],
+    ))
+  })
+
+  it('Result renders only for a done/failed task carrying a result', async () => {
+    const doneTask = makeTask({ id: 'task-edit-result', status: 'done', result: 'All good.' })
+    const { unmount } = renderSlideOver({ task: doneTask })
+    expect(await screen.findByText('All good.')).toBeInTheDocument()
+    unmount()
+
+    const nextTask = makeTask({ id: 'task-edit-no-result', status: 'next' })
+    renderSlideOver({ task: nextTask })
+    await screen.findByLabelText(/title/i)
+    expect(screen.queryByText(/^result$/i)).not.toBeInTheDocument()
+  })
+
+  it('Open in Chat renders only when session_id is set, and navigates + closes the slide-over on click', async () => {
+    const taskNoSession = makeTask({ id: 'task-edit-no-session' })
+    const { unmount } = renderSlideOver({ task: taskNoSession })
+    await screen.findByLabelText(/title/i)
+    expect(screen.queryByRole('button', { name: /open in chat/i })).not.toBeInTheDocument()
+    unmount()
+
+    const onOpenChange = vi.fn()
+    const taskWithSession = makeTask({ id: 'task-edit-session', session_id: 'sess-cal-1' })
+    renderSlideOver({ task: taskWithSession, onOpenChange })
+
+    const btn = await screen.findByRole('button', { name: /open in chat/i })
+    fireEvent.click(btn)
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/sessions/$sessionId', params: { sessionId: 'sess-cal-1' } }),
+    ))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 })

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, Link } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import {
   fetchAgents,
   buildTaskAssigneeItems,
@@ -10,14 +10,13 @@ import {
   fetchTasks,
   updateTask,
   deleteTask,
-  setTaskTodos,
   setTaskDependencies,
   isApiError,
   milestonesQueryKeys,
   workspacesQueryKeys,
   tasksQueryKeys,
 } from '@/lib/api'
-import type { Task, TaskUpdateRequest, Todo } from '@/lib/api'
+import type { Task, TaskUpdateRequest } from '@/lib/api'
 import {
   Sheet,
   SheetContent,
@@ -26,7 +25,6 @@ import {
 } from '@/components/ui/sheet'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Textarea } from '@/components/ui/textarea'
-import { Input } from '@/components/ui/input'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -47,6 +45,10 @@ import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { canDropTransition } from '@/components/workspaces/BoardView'
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
+import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
+import { TaskResultField } from '@/components/workspaces/TaskResultField'
+import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
+import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
 import {
   Play,
   Copy,
@@ -54,13 +56,8 @@ import {
   Check,
   Robot,
   X,
-  ChatCircle,
   ArrowCounterClockwise,
-  CheckSquare,
-  Square,
-  CircleHalf,
   Trash,
-  Plus,
   CaretDown,
   CalendarBlank,
 } from '@phosphor-icons/react'
@@ -77,28 +74,9 @@ import {
 } from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
-
-// User-settable status options (blocked is excluded — it is backend-derived and read-only)
-// Theme-token colours. `text-[color:…]` keeps these as inline-var text colours
-// (no raw Tailwind palette) so the panel tracks "The Sovereign Deep" tokens.
-const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
-  { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
-  { value: 'next',        label: 'Next',        color: 'text-[color:var(--color-accent)]' },
-  { value: 'planning',    label: 'Planning',    color: 'text-[color:var(--color-muted)]' },
-  { value: 'in_progress', label: 'In Progress', color: 'text-[color:var(--color-warning)]' },
-  { value: 'done',        label: 'Done',        color: 'text-[color:var(--color-success)]' },
-  { value: 'failed',      label: 'Failed',      color: 'text-[color:var(--color-error)]' },
-]
-
-const STATUS_BADGE: Record<string, string> = {
-  inbox:       'text-[var(--color-muted)] bg-white/5',
-  next:        'text-[color:var(--color-accent)] bg-[var(--color-accent)]/10',
-  planning:    'text-[color:var(--color-muted)] bg-white/5',
-  in_progress: 'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
-  blocked:     'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
-  done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',
-  failed:      'text-[color:var(--color-error)] bg-[var(--color-error)]/10',
-}
+// STATUS_OPTIONS / STATUS_BADGE live in taskStatusConfig.ts — single source
+// of truth shared with TaskRunStatusField (the calendar's read-only status
+// badge). See that file for details.
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
   1: { label: 'P1 — Critical',  color: 'text-[color:var(--color-error)]' },
@@ -123,13 +101,11 @@ interface TaskDetailPanelProps {
 export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(task?.workspace_id ?? '')
-  const [newTodo, setNewTodo] = useState('')
   // Inline field errors — surfaced instead of silently discarding invalid input.
   const [triggerError, setTriggerError] = useState('')
   const [dueError, setDueError] = useState('')
@@ -159,7 +135,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
     setSelectedWorkspaceId(task?.workspace_id ?? '')
-    setNewTodo('')
     setTriggerError('')
     setDueError('')
     setStatusError('')
@@ -172,7 +147,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // one-time trigger changes — including the same-identity resync described
   // above (a due/trigger PATCH's own success should still reflect the saved
   // value once the query refetches). Split out from the effect above so this
-  // resync can never touch promptDraft/editingPrompt/todos/errors.
+  // resync can never touch promptDraft/editingPrompt/errors (todos are now
+  // TaskChecklistField's own state, keyed on task.id).
   useEffect(() => {
     setTriggerAtDraft(typeof task?.trigger?.config?.at_ms === 'number' ? new Date(task.trigger.config.at_ms) : null)
     setDueDraft(datetimeLocalToDate(task?.due))
@@ -272,18 +248,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     },
   })
 
-  // Todos checklist — replace atomically via PUT /tasks/{id}/todos
-  const { mutate: doSetTodos } = useMutation({
-    mutationFn: (todos: Todo[]) => {
-      if (!task) return Promise.reject(new Error('No task selected'))
-      return setTaskTodos(task.id, todos)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
-    },
-    onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update checklist', variant: 'error' }),
-  })
+  // Todos checklist — see TaskChecklistField (shared with the calendar's
+  // recurring-task edit slide-over) for the setTaskTodos mutation + handlers.
 
   // Dependencies — replace atomically via PUT /tasks/{id}/dependencies
   const { mutate: doSetDeps } = useMutation({
@@ -351,33 +317,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       doUpdate({ prompt: trimmed || undefined })
     }
     setEditingPrompt(false)
-  }
-
-  function handleToggleTodo(index: number) {
-    if (!task) return
-    const todos = (task.todos ?? []).map((t, i) => {
-      if (i !== index) return t
-      // Cycle: completed → pending; anything else → completed.
-      // in_progress is shown distinctly but clicking it marks it completed.
-      const next = t.status === 'completed' ? 'pending' : 'completed'
-      return { ...t, status: next } as Todo
-    })
-    doSetTodos(todos)
-  }
-
-  function handleAddTodo() {
-    if (!task) return
-    const text = newTodo.trim()
-    if (!text) return
-    const todos = [...(task.todos ?? []), { text, status: 'pending' as const }]
-    doSetTodos(todos)
-    setNewTodo('')
-  }
-
-  function handleRemoveTodo(index: number) {
-    if (!task) return
-    const todos = (task.todos ?? []).filter((_, i) => i !== index)
-    doSetTodos(todos)
   }
 
   function handleToggleDep(id: string) {
@@ -452,16 +391,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     doUpdate({ status: target })
   }
 
-  async function handleCopyResult() {
-    if (!task?.result) return
-    try {
-      await navigator.clipboard.writeText(task.result)
-      addToast({ message: 'Result copied to clipboard.', variant: 'success' })
-    } catch {
-      addToast({ message: 'Failed to copy to clipboard.', variant: 'error' })
-    }
-  }
-
   async function handleCopyPath(path: string) {
     try {
       await navigator.clipboard.writeText(path)
@@ -491,9 +420,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const isStartable = task.status === 'inbox' || task.status === 'next' || task.status === 'planning'
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
-  const showResult = (task.status === 'done' || task.status === 'failed') && !!task.result
-  const todos = task.todos ?? []
-  const doneTodos = todos.filter((t: Todo) => t.status === 'completed').length
   const blockedBy = task.blocked_by ?? []
   const triggerKind: TriggerKind = task.trigger?.type ?? 'manual'
 
@@ -814,78 +740,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         )}
       </Field>
 
-      {/* Todos checklist (editable: add / toggle / remove) */}
-      <Field label={`Checklist${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}>
-        <div className="space-y-1">
-          {todos.map((todo: Todo, idx: number) => (
-            <div
-              key={idx}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
-            >
-              <button tabIndex={0}
-                type="button"
-                onClick={() => handleToggleTodo(idx)}
-                aria-label={`Toggle ${todo.text}`}
-                role="checkbox"
-                aria-checked={
-                  todo.status === 'completed' ? true : todo.status === 'in_progress' ? 'mixed' : false
-                }
-                className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
-              >
-                {todo.status === 'completed' ? (
-                  <CheckSquare size={13} className="shrink-0 text-[color:var(--color-success)]" />
-                ) : todo.status === 'in_progress' ? (
-                  <CircleHalf size={13} className="shrink-0 text-[color:var(--color-warning)]" />
-                ) : (
-                  <Square size={13} className="shrink-0 text-[var(--color-muted)]" />
-                )}
-                <span className={cn(
-                  'flex-1 text-[var(--color-secondary)]',
-                  todo.status === 'completed' && 'line-through text-[var(--color-muted)]',
-                  todo.status === 'in_progress' && 'text-[color:var(--color-warning)]',
-                )}>
-                  {todo.text}
-                </span>
-              </button>
-              <button tabIndex={0}
-                type="button"
-                onClick={() => handleRemoveTodo(idx)}
-                aria-label={`Remove checklist item ${todo.text}`}
-                className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
-              >
-                <Trash size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-2 mt-1.5">
-          <Input
-            aria-label="New checklist item"
-            value={newTodo}
-            onChange={(e) => setNewTodo(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                handleAddTodo()
-              }
-            }}
-            placeholder="Add a checklist item…"
-            maxLength={500}
-            className="text-xs flex-1 h-8"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 px-2 shrink-0"
-            onClick={handleAddTodo}
-            aria-label="Add checklist item"
-            disabled={!newTodo.trim()}
-          >
-            <Plus size={13} />
-          </Button>
-        </div>
-      </Field>
+      {/* Todos checklist (editable: add / toggle / remove) — shared with the
+          calendar's recurring-task edit slide-over (TaskChecklistField). */}
+      <TaskChecklistField task={task} />
 
       {/* Start button — inbox / next / planning tasks */}
       {isStartable && (
@@ -912,40 +769,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </Button>
       )}
 
-      {/* Open in Chat — when session_id is set */}
-      {task.session_id && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full gap-2 text-xs h-8"
-          onClick={() => {
-            void navigate({ to: '/sessions/$sessionId', params: { sessionId: task.session_id! } })
-            onClose()
-          }}
-        >
-          <ChatCircle size={13} />
-          Open in Chat
-        </Button>
-      )}
+      {/* Open in Chat — when session_id is set — shared with the calendar's
+          recurring-task edit slide-over (OpenInChatButton). */}
+      <OpenInChatButton task={task} onNavigate={onClose} />
 
-      {/* Result section — done or failed */}
-      {showResult && task.result && (
-        <Field label="Result">
-          <div className={cn('relative', isFailed && 'ring-1 ring-[var(--color-error)]/30 rounded-md')}>
-            <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">
-              {task.result}
-            </pre>
-            <button tabIndex={0}
-              type="button"
-              onClick={handleCopyResult}
-              className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
-              aria-label="Copy result"
-            >
-              <Copy size={11} /> Copy
-            </button>
-          </div>
-        </Field>
-      )}
+      {/* Result section — done or failed — shared with the calendar's
+          recurring-task edit slide-over (TaskResultField). */}
+      <TaskResultField task={task} />
 
       {/* Artifacts */}
       {(task.artifacts?.length ?? 0) > 0 && (
