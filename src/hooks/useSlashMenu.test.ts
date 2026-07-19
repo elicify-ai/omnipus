@@ -65,6 +65,14 @@ let skillsOverride: typeof mockSkills | null = null
 // doesn't apply here either.
 let commandsQueryIsError = false
 
+// Round-1 review addition: mutable per-test override for the ['commands']
+// query, mirroring `mentionAgentsOverride`/`skillsOverride` above. Only the
+// argument_hint-ghost-for-agent-delivery-commands tests need commands beyond
+// the shared `mockCommands` fixture (whose one agent-delivery entry,
+// "/handoff", deliberately carries no argument_hint) — overriding here keeps
+// every other test's exact command-list/order assertions untouched.
+let commandsOverride: typeof mockCommands | null = null
+
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
@@ -75,7 +83,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'commands') {
         return commandsQueryIsError
           ? { data: undefined, isError: true, refetch: vi.fn() }
-          : { data: mockCommands, isError: false, refetch: vi.fn() }
+          : { data: commandsOverride ?? mockCommands, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') return { data: skillsOverride ?? mockSkills, isError: false, refetch: vi.fn() }
       if (Array.isArray(key) && key[0] === 'agents') return { data: mentionAgentsOverride ?? mockAgents, isError: false, refetch: vi.fn() }
@@ -151,6 +159,7 @@ beforeEach(() => {
   commandsQueryIsError = false
   mentionAgentsOverride = null
   skillsOverride = null
+  commandsOverride = null
 })
 
 afterEach(() => {
@@ -526,6 +535,121 @@ describe('useSlashMenu — skill selection and ghost text', () => {
 
     act(() => result.current.onInputChange('/code-review do something'))
     expect(result.current.showGhostText).toBe(false)
+  })
+})
+
+// Round-1 review addition (SD-C7/R3): the SAME argument_hint ghost-text
+// mechanism the skill-selection tests above exercise also applies to
+// agent-delivery COMMANDS (executeSlashCommand's `def.delivery === 'agent'`
+// branch, useSlashMenu.ts:699-716) — e.g. `/goal` -> `<condition>`, `/loop`
+// -> a loop-config hint. The shared `mockCommands` fixture's one
+// agent-delivery entry ("/handoff") deliberately carries no argument_hint
+// (see the existing "inserts as text instead of running locally" test
+// above), so this uses `commandsOverride` to add agent-delivery commands
+// that DO declare one.
+describe('useSlashMenu — agent-delivery command argument_hint ghost text (SD-C7/R3)', () => {
+  const goalCommand = {
+    name: 'goal',
+    label: '/goal',
+    description: 'Run a goal-loop session',
+    delivery: 'agent',
+    available_while_streaming: false,
+    argument_hint: '<condition>',
+  }
+  const loopCommand = {
+    name: 'loop',
+    label: '/loop',
+    description: 'Run a bounded loop session',
+    delivery: 'agent',
+    available_while_streaming: false,
+    argument_hint: '<task description>',
+  }
+
+  it('selecting "/goal" (agent-delivery) shows its argument_hint as ghost text, same as a skill', () => {
+    commandsOverride = [...mockCommands, goalCommand, loopCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/goal'))
+    const item = result.current.slashItems.find((i) => i.key === '/goal')!
+    act(() => item.onSelect())
+
+    // executeSlashCommand's agent branch inserts "/goal " as text (does not
+    // send/clear) and arms the ghost — simulate the composer's own onChange
+    // firing with that inserted value, matching the skill-ghost tests' shape.
+    expect(composerRuntime.setText).toHaveBeenCalledWith('/goal ')
+    act(() => result.current.onInputChange('/goal '))
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<condition>')
+  })
+
+  it('selecting "/loop" (agent-delivery) shows ITS OWN argument_hint, not /goal\'s (proves the hint is per-command, not a hardcoded string)', () => {
+    commandsOverride = [...mockCommands, goalCommand, loopCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/loop'))
+    const item = result.current.slashItems.find((i) => i.key === '/loop')!
+    act(() => item.onSelect())
+
+    expect(composerRuntime.setText).toHaveBeenCalledWith('/loop ')
+    act(() => result.current.onInputChange('/loop '))
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<task description>')
+  })
+
+  it('an agent-delivery command with NO argument_hint ("/handoff") shows no ghost at all (unlike a skill, which falls back to the generic placeholder)', () => {
+    // executeSlashCommand's agent branch (useSlashMenu.ts:699-716) only arms
+    // ghostCommandLabel/ghostCommandArgumentHint when `def.argument_hint` is
+    // truthy; with no hint it explicitly nulls both rather than falling back
+    // to GHOST_TEXT_PLACEHOLDER the way completeSkillName does for skills —
+    // an intentional asymmetry between the two ghost pairs.
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/handoff')!
+    act(() => item.onSelect())
+
+    act(() => result.current.onInputChange('/handoff '))
+    expect(result.current.showGhostText).toBe(false)
+    expect(result.current.ghostText).toBe('')
+  })
+
+  it('the command ghost disappears once the user types past the exact "/<label> " value, same as the skill ghost', () => {
+    commandsOverride = [...mockCommands, goalCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/goal'))
+    const item = result.current.slashItems.find((i) => i.key === '/goal')!
+    act(() => item.onSelect())
+    act(() => result.current.onInputChange('/goal '))
+    expect(result.current.showGhostText).toBe(true)
+
+    act(() => result.current.onInputChange('/goal errors > 0'))
+    expect(result.current.showGhostText).toBe(false)
+  })
+
+  it('selecting a skill ghost then a command ghost switches to the NEW pair (SD-C7 mutual exclusivity)', () => {
+    commandsOverride = [...mockCommands, goalCommand]
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    // Arm the skill ghost first.
+    act(() => result.current.onInputChange('/web'))
+    const skillItem = result.current.slashItems.find((i) => i.key === 'web-research')!
+    act(() => skillItem.onSelect())
+    act(() => result.current.onInputChange('/web-research '))
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<query>')
+
+    // Now select the agent-delivery command. `setInputValue` runs
+    // synchronously inside `onSelect` (executeSlashCommand), so the new
+    // command-ghost pair is already showing immediately — no separate
+    // onInputChange needed. Critically, the text is `<condition>` (the
+    // NEW pair), not a stale `<query>` left over from the skill selection.
+    act(() => result.current.onInputChange('/goal'))
+    const cmdItem = result.current.slashItems.find((i) => i.key === '/goal')!
+    act(() => cmdItem.onSelect())
+    expect(result.current.showGhostText).toBe(true)
+    expect(result.current.ghostText).toBe('<condition>')
   })
 })
 
