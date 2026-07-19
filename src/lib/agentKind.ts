@@ -15,6 +15,17 @@ export function isWorkerType(type: string | null | undefined): boolean {
 }
 
 /**
+ * Locked System Agent (Judge, ADR-049 D3) — never a chat target, never a
+ * delegation/team-picker candidate, never deletable/disable-able/★-eligible.
+ * Distinct from `core` (the built-in Main-agent roster): a `system` agent is
+ * excluded from `mainAgents` entirely and rendered in its own locked section
+ * (SD-C16).
+ */
+export function isSystemType(type: string | null | undefined): boolean {
+  return type === 'system'
+}
+
+/**
  * Worker that runs on an external CLI (claude-code / codex / opencode).
  *
  * TYPE-STRING-ONLY check — it can only ever be true for `subagent_3p`. A
@@ -40,6 +51,8 @@ export interface AgentKindFlags { // not-wire-format: UI-only kind classificatio
   isExternal: boolean
   /** Worker on the Omnipus engine (worker && !external). */
   isNativeWorker: boolean
+  /** Locked System Agent (Judge) — ADR-049 D3. Never a chat target, never a default-agent candidate. */
+  isSystem: boolean
 }
 
 /**
@@ -64,5 +77,6 @@ export function agentKindFlags(agent: {
     isWorker: isWorkerKind,
     isExternal,
     isNativeWorker: isWorkerKind && !isExternal,
+    isSystem: isSystemType(type),
   }
 }

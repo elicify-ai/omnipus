@@ -1123,7 +1123,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // locally-editable executor state: a `Subagent` is always native and a
   // `subagent_3p` is always external — only the legacy `worker` type is
   // ambiguous and falls back to the fetched agent's executor.kind.
-  const { isLocked, isWorker: isWorkerAgent, isExternal: isExternalAgent, isNativeWorker: isNativeWorkerAgent } = agentKindFlags(agent)
+  const { isLocked, isWorker: isWorkerAgent, isExternal: isExternalAgent, isNativeWorker: isNativeWorkerAgent, isSystem: isSystemAgent } = agentKindFlags(agent)
   // Past the early returns, `agent` is non-null and `agentId` is the id used
   // to fetch it. Narrow once for child components that take `string`.
   const resolvedAgentId = agentId as string
@@ -1189,8 +1189,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   this editable (operator decision 2026-07-03 — execution/
                   identity display knobs unhide for locked). Hidden for
                   workers — the locked concept makes "default" a non-worker
-                  concept. */}
-              {!isWorkerAgent && (
+                  concept. ADR-049 D3/SD-C18: also hidden for System agents
+                  (the Judge) — unlike core, a System agent is never
+                  ★-eligible at all. */}
+              {!isWorkerAgent && !isSystemAgent && (
                 <div
                   data-testid="default-toggle-row"
                   className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
@@ -2274,7 +2276,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           operator sees it before any field interactions. Uses the same
           amber/warning visual language as the executor-external-cli
           callout (sibling concept — "this agent is special, read the
-          caveat before editing"). Hidden for non-locked agents. */}
+          caveat before editing"). Hidden for non-locked agents.
+          ADR-049 SD-C18: extended to System agents (the Judge) too, with
+          copy naming what IS still editable (model/provider/rubric) rather
+          than the core banner's blanket "most fields are read-only". */}
       {agent.type === 'core' && agent.locked && (
         <div
           role="alert"
@@ -2286,6 +2291,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <div className="font-semibold text-[var(--color-error)]">This is a built-in core agent</div>
             <div className="text-[var(--color-muted)] mt-1">
               Most fields are read-only. To create your own chat colleague, use the + Add Main button.
+            </div>
+          </div>
+        </div>
+      )}
+      {isSystemAgent && agent.locked && (
+        <div
+          role="alert"
+          data-testid="locked-banner"
+          className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
+        >
+          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
+          <div className="text-sm">
+            <div className="font-semibold text-[var(--color-error)]">System agent</div>
+            <div className="text-[var(--color-muted)] mt-1">
+              Model, provider and rubric are editable; identity is locked.
             </div>
           </div>
         </div>

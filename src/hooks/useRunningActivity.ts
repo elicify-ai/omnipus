@@ -40,6 +40,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import type { SpanStep, SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
+import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
 
@@ -83,7 +84,59 @@ export interface BashActivityItem {
   durationMs?: number
 }
 
-export type ActivityItem = AgentActivityItem | BashActivityItem
+/**
+ * ADR-049 D2/D4/US-13/SD-C11 — a live judge-verdict push, always terminal
+ * (the wire has no "judge started" frame — only the completed verdict is
+ * ever pushed, so this item never appears in `running`, only
+ * `recentlyFinished`; it must stay expandable even though it has no
+ * `steps`, mirroring the "zero steps but a final result" span case).
+ *
+ * `status` reuses the shared `ActivityStatus` vocabulary so `isFailedStatus`
+ * (ActivityBar.tsx) and `getSpanStatusDot` (toolStatusConfig.tsx) keep
+ * working unmodified: `met: true` → 'success', `met: false` → 'error' (an
+ * unmet verdict is treated as the "failure" the retained-failure
+ * reachability rule (US-13 AS-7) means by "a judge call fails" — the wire
+ * has no separate judge-infrastructure-failure signal at all, since a judge
+ * that is merely unavailable produces no verdict/frame whatsoever, ADR D7).
+ *
+ * `criterionVerdicts[].text` is the raw `criterion_id` (a UUID) — the live
+ * frame carries no criterion TITLE lookup (that lives on the originating
+ * Task's `AcceptanceCriterion[]`, which this global, task-agnostic feed has
+ * no access to), so this renders the real identifier available rather than
+ * fabricating a label.
+ *
+ * `spend` is NOT populated: `JudgeVerdictFrame`/`JudgeVerdict` (contracts
+ * C11/C20, Wave 0) carry no tokens/cost field today, only `Message.tokens`/
+ * `Message.cost` do (and only on the PERSISTED transcript twin, not the live
+ * push) — see this wave's report for the flagged contract gap against
+ * AS-5/SC-048's "spend visible" requirement.
+ */
+export interface JudgeActivityItem {
+  kind: 'judge'
+  key: string // verdict id
+  scope: 'task' | 'plan'
+  taskId?: string
+  planId?: string
+  round: number
+  met: boolean
+  criterionVerdicts: { text: string; met: boolean; reason: string }[]
+  model: string
+  judgeAgentId: string
+  judgedAt: string
+  status: ActivityStatus
+  /**
+   * Always absent — a judge call has no wire-level "started" moment to
+   * measure elapsed time from (see this interface's doc comment). Declared
+   * (rather than omitted) so every `ActivityItem` union member shares the
+   * same optional key, letting existing call sites that generically read
+   * `someItem.durationMs` off the union (e.g. `ActivityPanel.tsx`,
+   * `useRunningActivity.test.ts`) keep compiling without a per-call-site
+   * `item.kind` narrowing check.
+   */
+  durationMs?: undefined
+}
+
+export type ActivityItem = AgentActivityItem | BashActivityItem | JudgeActivityItem
 
 export interface RunningActivity {
   runningCount: number
@@ -349,6 +402,8 @@ function groupBashSessions(orderedCalls: ToolCall[]): Map<string, BashSessionSta
 export function useRunningActivity(): RunningActivity {
   const messages = useChatStore((s) => s.messages)
   const toolCalls = useChatStore((s) => s.toolCalls)
+  // ADR-049 D2/D4/US-13: global (session-agnostic) judge-verdict feed — see judgeActivity.ts.
+  const judgeVerdicts = useJudgeActivityStore((s) => s.verdicts)
 
   // Reused ['agents'] query (prefetched by AppShell) — no extra network request.
   const { data: agents = [] } = useQuery({
@@ -436,6 +491,33 @@ export function useRunningActivity(): RunningActivity {
     }
     if (isRunning) running.push(item)
     else recentlyFinished.push(item)
+  }
+
+  // ADR-049 D2/D4/US-13/SD-C11: judge verdicts are a GLOBAL feed (the wire
+  // frame carries no session_id — see judgeActivity.ts), always terminal —
+  // there is no "judge started" frame, only the completed verdict push, so
+  // every item here goes straight to recentlyFinished, sharing the same
+  // RECENTLY_FINISHED_CAP with agent/bash items via the shared slice below.
+  for (const verdict of judgeVerdicts) {
+    const item: JudgeActivityItem = {
+      kind: 'judge',
+      key: verdict.id,
+      scope: verdict.scope,
+      taskId: verdict.task_id,
+      planId: verdict.plan_id,
+      round: verdict.round,
+      met: verdict.met,
+      criterionVerdicts: verdict.per_criterion.map((cv) => ({
+        text: cv.criterion_id,
+        met: cv.met,
+        reason: cv.reason,
+      })),
+      model: verdict.model,
+      judgeAgentId: verdict.judge_agent_id,
+      judgedAt: verdict.judged_at,
+      status: verdict.met ? 'success' : 'error',
+    }
+    recentlyFinished.push(item)
   }
 
   return {

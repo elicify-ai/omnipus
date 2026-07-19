@@ -235,6 +235,17 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // skill declares one.
   const [ghostSkillId, setGhostSkillId] = useState<string | null>(null)
   const [ghostArgumentHint, setGhostArgumentHint] = useState<string | null>(null)
+  // SD-C7/R3: same ghost mechanism as skills, generalized for a
+  // `delivery: agent` SLASH COMMAND (e.g. `/goal`) that declares an
+  // `argument_hint` (contract row C16, Wave 0). Kept as a SEPARATE pair of
+  // state vars rather than reusing ghostSkillId/ghostArgumentHint because the
+  // two construct their "does the current text still match?" check
+  // differently: a skill's stored id has no leading slash (`/${id} `), while
+  // a command's `label` already includes it (`${label} `) — conflating them
+  // would require a discriminant anyway, so two clearly-named pairs is
+  // simpler than one pair plus a kind flag.
+  const [ghostCommandLabel, setGhostCommandLabel] = useState<string | null>(null)
+  const [ghostCommandArgumentHint, setGhostCommandArgumentHint] = useState<string | null>(null)
   // Fix A (bugfixes3 sign-off) — ref mirror of `ghostSkillId`, kept current
   // every render (not inside an effect). The composerRuntime subscription
   // effect below is registered once per `composerRuntime` identity, not
@@ -246,6 +257,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // resubscribe/unsubscribe pair on every ghost-text change.
   const ghostSkillIdRef = useRef(ghostSkillId)
   ghostSkillIdRef.current = ghostSkillId
+  // Same ref-mirror rationale as ghostSkillIdRef, for the command ghost pair.
+  const ghostCommandLabelRef = useRef(ghostCommandLabel)
+  ghostCommandLabelRef.current = ghostCommandLabel
   // Fix 2: last-announced mention selection — see mentionAnnouncement's doc
   // comment on UseSlashMenuResult.
   const [mentionAnnouncement, setMentionAnnouncement] = useState<string | null>(null)
@@ -367,6 +381,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
         setGhostSkillId(null)
         setGhostArgumentHint(null)
       }
+      const currentGhostCommandLabel = ghostCommandLabelRef.current
+      if (currentGhostCommandLabel && runtimeText !== `${currentGhostCommandLabel} `) {
+        setGhostCommandLabel(null)
+        setGhostCommandArgumentHint(null)
+      }
       if (runtimeText.startsWith('/') || runtimeText.startsWith('@')) {
         setSlashOpen(true)
       } else {
@@ -429,6 +448,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       label: cmd.label,
       description: cmd.description,
       section: 'commands' as const,
+      // SD-C7/R3: surface the command's argument_hint as row help text, same
+      // as skills — `/goal` shows `<condition>` instead of no hint at all.
+      argumentHint: cmd.argument_hint,
       onSelect: () => executeSlashCommand(cmd.label),
     }))
   })()
@@ -678,6 +700,18 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       // Insert "/name " as text so the user can complete it and send.
       composerRuntime.setText(`${def.label} `)
       setInputValue(`${def.label} `)
+      // SD-C7/R3: show the command's argument_hint as ghost text (e.g.
+      // `/goal ` → `<condition>`) when it declares one, reusing the same
+      // ghost-overlay render path as skills (ChatScreen.tsx's `showGhostText`/
+      // `ghostText`). Falls back to no ghost (generic `<message>` placeholder
+      // is shown by the render layer) when the command has no argument_hint.
+      if (def.argument_hint) {
+        setGhostCommandLabel(def.label)
+        setGhostCommandArgumentHint(def.argument_hint)
+      } else {
+        setGhostCommandLabel(null)
+        setGhostCommandArgumentHint(null)
+      }
       return
     }
 
@@ -779,6 +813,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       setGhostSkillId(null)
       setGhostArgumentHint(null)
     }
+    // Same clearing rule for a command ghost (SD-C7).
+    if (ghostCommandLabel && val !== `${ghostCommandLabel} `) {
+      setGhostCommandLabel(null)
+      setGhostCommandArgumentHint(null)
+    }
     // Leading "/" opens the command/skill palette, leading "@" opens the
     // agent-mention menu — mid-text "@" (e.g. "hello @x") must NOT trigger,
     // hence startsWith rather than includes. Every keystroke re-runs this
@@ -795,6 +834,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // Delay so mouseDown on slash item fires first
     setGhostSkillId(null)
     setGhostArgumentHint(null)
+    setGhostCommandLabel(null)
+    setGhostCommandArgumentHint(null)
     setTimeout(closeSlash, 150)
   }
 
@@ -858,8 +899,20 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
   }
 
-  const showGhostText = ghostSkillId !== null && inputValue === `/${ghostSkillId} `
-  const ghostText = ghostArgumentHint ?? GHOST_TEXT_PLACEHOLDER
+  // SD-C7: a skill-ghost and a command-ghost are mutually exclusive by
+  // construction (completeSkillName and executeSlashCommand's agent branch
+  // each clear the OTHER pair before/without setting their own), but derive
+  // each "is it actually showing right now" check independently rather than
+  // assuming that invariant, so `ghostText` never has to guess which pair is
+  // the active one.
+  const showSkillGhost = ghostSkillId !== null && inputValue === `/${ghostSkillId} `
+  const showCommandGhost = ghostCommandLabel !== null && inputValue === `${ghostCommandLabel} `
+  const showGhostText = showSkillGhost || showCommandGhost
+  const ghostText = showSkillGhost
+    ? (ghostArgumentHint ?? GHOST_TEXT_PLACEHOLDER)
+    : showCommandGhost
+      ? (ghostCommandArgumentHint ?? GHOST_TEXT_PLACEHOLDER)
+      : ''
 
   return {
     inputValue,

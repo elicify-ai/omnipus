@@ -1095,6 +1095,20 @@ interface MessageBase { // not-wire-format
    * text — just don't show anything when the field is empty).
    */
   model?: string
+  /**
+   * ADR-049 D2/SD-A14/SD-C10: classification carried through from the wire
+   * `Message.type` (generated `openapi-types.ts`) for the one variant SPA
+   * rendering cares about — `'judge_verdict'` — so the chat store/renderers
+   * can recognise a persisted judge-verdict transcript entry (cold-load or
+   * WS replay) and route it through `shouldRenderJudgeVerdictInThread`
+   * (toolVisibility.ts) instead of the normal role-based rows. Other wire
+   * `type` values ('message'/'compaction'/'system'/'tool_call'/
+   * 'turn_canceled') are not modeled here — this SPA-internal `Message`
+   * union already has its own, richer per-role shape for those.
+   */
+  type?: 'judge_verdict'
+  /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
+  verdict?: JudgeVerdict
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.

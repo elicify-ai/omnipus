@@ -145,6 +145,10 @@ function AgentsLibraryView({
 }: AgentsLibraryViewProps) {
   const [workspaceFilter, setWorkspaceFilter] = useState<string>('all')
   const [filterMenuOpen, setFilterMenuOpen] = useState(false)
+  // System section disclosure — collapsed by default (unlike the Built-in
+  // roster's load-dependent adaptive expand, this niche admin section has no
+  // "roster is otherwise empty" case to auto-open for).
+  const [systemOpen, setSystemOpen] = useState<string | undefined>(undefined)
 
   // Resolve the workspace object for the current filter (for label display).
   const activeWorkspace = workspaces.find((ws) => ws.id === workspaceFilter)
@@ -158,9 +162,14 @@ function AgentsLibraryView({
           return ws?.core_team?.includes(agent.id) ?? false
         })
 
-  const mainAgents = filteredAgents.filter((a) => !isWorker(a) && !(a.type === 'core' && a.locked))
+  // ADR-049 D3/SD-C16: type:system (the locked Judge) is neither a Main chat
+  // colleague nor part of the Built-in core roster — it gets its own locked
+  // section below, and is excluded here so it never silently renders as a
+  // Main agent.
+  const mainAgents = filteredAgents.filter((a) => !isWorker(a) && !(a.type === 'core' && a.locked) && a.type !== 'system')
   const workerAgents = filteredAgents.filter(isWorker)
   const builtInAgents = filteredAgents.filter((a) => a.type === 'core' && a.locked)
+  const systemAgents = filteredAgents.filter((a) => a.type === 'system')
 
   const cliAvailable: Record<WizardCli, boolean> = {
     'claude-code': hostClis.claude.installed,
@@ -476,6 +485,41 @@ function AgentsLibraryView({
               </Accordion>
             </section>
           )}
+
+          {/* System agents — ADR-049 D3/FR-095/SD-C16: a locked, non-chat,
+              non-delegable roster (the seeded Judge). Cloned from the
+              Built-in accordion above, minus onSetDefault (mirrors
+              WorkerCard — System agents are never ★-eligible). */}
+          {systemAgents.length > 0 && (
+            <section data-testid="system-agents-section">
+              <Accordion
+                type="single"
+                collapsible
+                value={systemOpen}
+                onValueChange={setSystemOpen}
+              >
+                <AccordionItem value="system">
+                  <AccordionTrigger data-testid="system-agents-trigger">
+                    <div className="text-left">
+                      <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                        System
+                      </h2>
+                      <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                        System agents — locked, run out-of-turn (Judge). Not a chat target, not delegable.
+                      </p>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
+                      {systemAgents.map((agent) => (
+                        <AgentCard key={agent.id} agent={agent} />
+                      ))}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </section>
+          )}
         </div>
       )}
     </div>
@@ -514,7 +558,7 @@ export function AgentListScreen() {
   useEffect(() => {
     if (isLoading || initialOpenApplied.current) return
     initialOpenApplied.current = true
-    const hasCustom = agents.some((a) => !isWorker(a) && !(a.type === 'core' && a.locked))
+    const hasCustom = agents.some((a) => !isWorker(a) && !(a.type === 'core' && a.locked) && a.type !== 'system')
     setBuiltInOpen(hasCustom ? undefined : 'built-in')
   }, [isLoading, agents])
 

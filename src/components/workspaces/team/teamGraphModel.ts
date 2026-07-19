@@ -323,12 +323,13 @@ export function buildTeamGraphModel(
 
 // ── Mutations (immutable) ────────────────────────────────────────────────────
 
-export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member'
+export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member' | 'system-target'
 
 /**
  * Validate a candidate edge from → to against the current edit state.
  *   - no self-edges (A → A)
  *   - both endpoints must be team members
+ *   - target must not be a System agent (ADR-049 D3/SD-C17)
  *   - no duplicate (from, to) pair
  *
  * Delegation is BOUNDED, not tier-gated: the Sprint-3 backend unlocked onward
@@ -339,15 +340,25 @@ export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member'
  * NOT block a worker source — doing so would make the FE unable to draw the very
  * Planner→Researcher edge the backend seeds. The trailing `workerIds` param is
  * kept for signature stability with the call sites but no longer gates the edge.
+ *
+ * `isSystemTarget` (SD-C17, defense-in-depth): a System agent (the Judge)
+ * cannot become a team member through the supported flow at all
+ * (`AddAgentPicker.tsx` already excludes `type: 'system'`), so this branch is
+ * normally unreachable — but `validateConnection` had no type gate of its
+ * own, so a hand-constructed/legacy edge targeting a System agent would have
+ * silently validated. Optional (defaults to `false`) so existing callers that
+ * don't yet resolve a target's type keep their current behavior.
  */
 export function validateConnection(
   from: string,
   to: string,
   state: TeamEditState,
   _workerIds?: ReadonlySet<string>,
+  isSystemTarget?: boolean,
 ): ConnectionRejection | null {
   if (from === to) return 'self-edge'
   if (!state.members.includes(from) || !state.members.includes(to)) return 'not-member'
+  if (isSystemTarget) return 'system-target'
   if (state.edges.some((e) => e.from === from && e.to === to)) return 'duplicate'
   return null
 }
@@ -357,6 +368,7 @@ export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
   'self-edge': 'An agent cannot delegate to itself.',
   duplicate: 'That delegation edge already exists.',
   'not-member': 'Both agents must be on the team first.',
+  'system-target': 'System agents cannot be a delegation target.',
 }
 
 /**
@@ -383,10 +395,11 @@ export function rejectionMessageForFailedConnection(
   isValid: boolean | null,
   state: TeamEditState,
   workerIds?: ReadonlySet<string>,
+  isSystemTarget?: boolean,
 ): string | null {
   if (isValid !== false) return null
   if (!fromId || !toId) return null
-  const reason = validateConnection(fromId, toId, state, workerIds)
+  const reason = validateConnection(fromId, toId, state, workerIds, isSystemTarget)
   if (reason === null) return null
   return REJECTION_MESSAGE[reason] ?? 'Connection not allowed.'
 }

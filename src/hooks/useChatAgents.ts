@@ -78,7 +78,10 @@ export function useChatAgents(): UseChatAgentsResult {
   const chatAgents = useMemo(
     () =>
       agents
-        .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a))
+        // ADR-049 D3: type:system (the locked Judge) is never a chat target —
+        // it must not appear in the AgentPicker dropdown or the "@" mention
+        // menu, both of which consume this hook.
+        .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a) && a.type !== 'system')
         .filter((a) => !teamIds || teamIds.length === 0 || teamIds.includes(a.id)),
     [agents, teamIds],
   )
