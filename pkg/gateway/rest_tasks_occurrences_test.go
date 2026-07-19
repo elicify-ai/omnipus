@@ -343,17 +343,23 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		assert.Len(t, sets[0].DayBuckets, 10)
 	})
 
-	t.Run("terminal task omitted (selection predicate)", func(t *testing.T) {
-		// newTestRestAPIAlignedStores (not newTestRestAPIWithHome): the recurring
-		// task now carries agent_id="main" (store.validateScheduledAgentAssignment
-		// requires it), so advanceTaskToDone's walk through in_progress goes
-		// through the real StartTaskNow launch path (rest_tasks.go ~L1000), which
-		// 503s with a nil taskExecutor — this harness wires one up (same
-		// precedent as TestHandleTaskPatch_InProgress_WithKnownAgent).
+	t.Run("done recurring task (non-exhausted) still returns future occurrences", func(t *testing.T) {
+		// Regression coverage for "a recurring/every task fires once then
+		// dies": a per-run `done` status must NOT hide a repeating series
+		// from the calendar — the scheduler itself keeps arming this task's
+		// next occurrence (pkg/agent/task_trigger.go OnTaskUpserted), so the
+		// occurrences endpoint's selection predicate must keep rendering it
+		// too. newTestRestAPIAlignedStores (not newTestRestAPIWithHome): the
+		// recurring task carries agent_id="main"
+		// (store.validateScheduledAgentAssignment requires it), so
+		// advanceTaskToDone's walk through in_progress goes through the real
+		// StartTaskNow launch path (rest_tasks.go ~L1000), which 503s with a
+		// nil taskExecutor — this harness wires one up (same precedent as
+		// TestHandleTaskPatch_InProgress_WithKnownAgent).
 		api := newTestRestAPIAlignedStores(t)
 		wsID := ensureTestWorkspace(t, api)
 		dtstart := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
-		tsk := createRecurringTaskViaAPI(t, api, wsID, "WillBeDone", "FREQ=DAILY", dtstart, "UTC", "")
+		tsk := createRecurringTaskViaAPI(t, api, wsID, "WillBeDoneButKeepsFiring", "FREQ=DAILY", dtstart, "UTC", "")
 		advanceTaskToDone(t, api, tsk.Id)
 
 		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -368,7 +374,75 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 		var sets []gen.TaskOccurrenceSet
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &sets))
-		assert.Empty(t, sets, "a terminal (done) task must never render occurrences — the scheduler would never arm it")
+		require.Len(t, sets, 1,
+			"a done recurring task with a non-exhausted rule must still render its future occurrences")
+		assert.Equal(t, tsk.Id, sets[0].TaskId)
+		// A 5-day span is within the 8x24h detail-mode threshold (D6), so
+		// instants land in OccurrencesMs (raw), not DayBuckets (overview-mode
+		// only) — see the "the_occurrences_sub-path..." bucketed-shape
+		// subtest above for the >8-day overview-mode/DayBuckets case.
+		assert.NotEmpty(t, sets[0].OccurrencesMs, "FREQ=DAILY over 5 days (detail mode) must yield raw instants")
+	})
+
+	t.Run("exhausted recurring task (done, COUNT reached) returns none", func(t *testing.T) {
+		api := newTestRestAPIAlignedStores(t)
+		wsID := ensureTestWorkspace(t, api)
+		dtstart := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
+		tsk := createRecurringTaskViaAPI(t, api, wsID, "ExhaustedAndDone", "FREQ=DAILY;COUNT=1", dtstart, "UTC", "")
+		advanceTaskToDone(t, api, tsk.Id)
+
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		to := from.AddDate(0, 0, 5)
+		params := url.Values{
+			"workspace_id": {wsID},
+			"from_ms":      {strconv.FormatInt(from.UnixMilli(), 10)},
+			"to_ms":        {strconv.FormatInt(to.UnixMilli(), 10)},
+			"tz":           {"UTC"},
+		}
+		w := getOccurrences(t, api, params)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+		var sets []gen.TaskOccurrenceSet
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &sets))
+		assert.Empty(t, sets,
+			"an exhausted (COUNT reached) recurring series has no future occurrences even though it "+
+				"is now selection-eligible as a repeating trigger — buildOccurrenceSets omits it naturally")
+	})
+
+	t.Run("done once task still omitted (non-repeating trigger)", func(t *testing.T) {
+		api := newTestRestAPIAlignedStores(t)
+		wsID := ensureTestWorkspace(t, api)
+		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+		atMs := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
+		body := fmt.Sprintf(
+			`{"title":"OnceDone","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"once","config":{"at_ms":%d}}}`,
+			wsID,
+			atMs,
+		)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/tasks"
+		api.HandleTasks(w, r)
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+		var tsk gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+		advanceTaskToDone(t, api, tsk.Id)
+
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		to := from.AddDate(0, 0, 5)
+		params := url.Values{
+			"workspace_id": {wsID},
+			"from_ms":      {strconv.FormatInt(from.UnixMilli(), 10)},
+			"to_ms":        {strconv.FormatInt(to.UnixMilli(), 10)},
+			"tz":           {"UTC"},
+		}
+		wOcc := getOccurrences(t, api, params)
+		require.Equal(t, http.StatusOK, wOcc.Code, "body=%s", wOcc.Body.String())
+		var sets []gen.TaskOccurrenceSet
+		require.NoError(t, json.Unmarshal(wOcc.Body.Bytes(), &sets))
+		assert.Empty(t, sets,
+			"a done `once` task must stay omitted — its single occurrence IS its whole series, "+
+				"unlike a recurring/every trigger")
 	})
 
 	t.Run(

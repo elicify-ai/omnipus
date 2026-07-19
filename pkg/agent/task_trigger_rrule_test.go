@@ -887,3 +887,148 @@ func TestTriggerScheduler_LegacyPathUnchanged(t *testing.T) {
 		}
 	})
 }
+
+// -----------------------------------------------------------------------------
+// Regression: recurring/every task fires once then dies
+// -----------------------------------------------------------------------------
+
+// TestTriggerScheduler_RecurringSurvivesRunCompletion is the regression test
+// for "a recurring/every task fires exactly once, then dies". Dispatch is
+// asynchronous in production (SpawnTriggeredRun/ExecuteTask launch
+// `go te.runTask(...)` and return immediately), so RunScheduled's own
+// exit-path re-arm (rearmRrule) always runs — and arms the next occurrence —
+// BEFORE that async run finishes. The bug was that the async run's LATER
+// terminal status landing (via a task_update tool call or a REST PATCH) also
+// calls NotifyTaskUpserted → OnTaskUpserted, which unconditionally removed
+// ANY terminal task's job — deleting the job rearmRrule had just armed.
+//
+// This test reproduces that exact production sequence without needing the
+// full async executor: fire the trigger (which re-arms via rearmRrule
+// exactly as production does, since the dispatch recorder returns
+// immediately like the real fire-and-forget dispatch), THEN simulate the
+// async run's later completion by setting the store task to `done` and
+// calling OnTaskUpserted with it — the SAME call NotifyTaskUpserted makes in
+// production (pkg/agent/loop.go NotifyTaskUpserted, invoked from
+// taskUpdate.SetOnComplete / the REST PATCH handler) — and asserts the job
+// the fire just armed is STILL present afterwards.
+//
+// Before the fix (OnTaskUpserted's unconditional `terminal ⇒ remove`): this
+// test FAILS — the completion call removes the job, leaving 0 armed jobs.
+// After the fix (isRepeating survives terminal): this test PASSES — the
+// series stays armed at its correct next occurrence.
+func TestTriggerScheduler_RecurringSurvivesRunCompletion(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-survives-completion", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+
+	if n := len(rec.calls()); n != 1 {
+		t.Fatalf("expected 1 dispatch, got %d", n)
+	}
+
+	// The fire's own exit-path re-arm (rearmRrule) must already have armed
+	// the next occurrence — production's dispatch (SpawnTriggeredRun) only
+	// launches the async run and returns immediately, exactly like this
+	// test's dispatch recorder, so RunScheduled always reaches rearmRrule
+	// before that run's own completion could possibly land.
+	armedAfterFire := jobsForTask(sched, tsk.ID)
+	if len(armedAfterFire) != 1 {
+		t.Fatalf("expected exactly 1 armed job right after the fire, got %d", len(armedAfterFire))
+	}
+	wantNext := dtstart + oneDayMs
+	if armedAfterFire[0].Schedule.AtMS == nil || *armedAfterFire[0].Schedule.AtMS != wantNext {
+		t.Fatalf("armed job AtMS = %v, want %d", derefI64(armedAfterFire[0].Schedule.AtMS), wantNext)
+	}
+
+	// Simulate the async run completing to `done` LATER, and the production
+	// notification path that follows it: NotifyTaskUpserted -> OnTaskUpserted
+	// with the now-terminal task snapshot.
+	doneStatus := task.StatusDone
+	completed, err := store.Update(tsk.ID, task.Patch{Status: &doneStatus})
+	if err != nil {
+		t.Fatalf("store.Update to done: %v", err)
+	}
+	sched.OnTaskUpserted(completed)
+
+	armedAfterCompletion := jobsForTask(sched, tsk.ID)
+	if len(armedAfterCompletion) != 1 {
+		t.Fatalf("REGRESSION: the async completion's OnTaskUpserted call removed the job the fire had "+
+			"just armed (recurring series died after exactly one fire) — got %d jobs, want 1",
+			len(armedAfterCompletion))
+	}
+	if armedAfterCompletion[0].Schedule.AtMS == nil || *armedAfterCompletion[0].Schedule.AtMS != wantNext {
+		t.Fatalf("job surviving completion has AtMS = %v, want %d (unchanged next occurrence)",
+			derefI64(armedAfterCompletion[0].Schedule.AtMS), wantNext)
+	}
+}
+
+// TestTriggerScheduler_RecurringMultiFireAcrossCompletions is the multi-fire
+// proof: a FREQ=DAILY;COUNT=3 series must fire exactly 3 times across 3
+// simulated async completions (not once), then retire cleanly with no
+// re-arm once the series is exhausted — including immediately after the
+// LAST completion's own OnTaskUpserted call, proving that call does not
+// resurrect an already-exhausted series.
+func TestTriggerScheduler_RecurringMultiFireAcrossCompletions(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-multi-fire", "FREQ=DAILY;COUNT=3", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	// The first advance crosses only the first occurrence (dtstart); each
+	// subsequent advance crosses exactly one more daily occurrence. Crossing
+	// more than one occurrence per advance would let rearmRrule skip straight
+	// to a LATER occurrence's boundary, undercounting the fires this test
+	// means to force one at a time.
+	advances := []time.Duration{2 * time.Minute, 24 * time.Hour, 24 * time.Hour}
+	doneStatus := task.StatusDone
+
+	for i, adv := range advances {
+		fireNum := i + 1
+
+		clk.Advance(adv)
+		sched.RunDueJobs(clk.Now())
+		sched.WaitForLane()
+
+		if n := len(rec.calls()); n != fireNum {
+			t.Fatalf("after fire %d: expected %d cumulative dispatches, got %d", fireNum, fireNum, n)
+		}
+
+		// Simulate that fire's async run completing to `done`, and the
+		// production notification path (NotifyTaskUpserted) that follows.
+		completed, err := store.Update(tsk.ID, task.Patch{Status: &doneStatus})
+		if err != nil {
+			t.Fatalf("fire %d: store.Update to done: %v", fireNum, err)
+		}
+		sched.OnTaskUpserted(completed)
+
+		if fireNum < 3 {
+			jobs := jobsForTask(sched, tsk.ID)
+			if len(jobs) != 1 {
+				t.Fatalf("after fire %d completion: expected 1 armed job for the next occurrence, got %d",
+					fireNum, len(jobs))
+			}
+			wantNext := dtstart + int64(fireNum)*oneDayMs
+			if jobs[0].Schedule.AtMS == nil || *jobs[0].Schedule.AtMS != wantNext {
+				t.Fatalf("after fire %d: armed job AtMS = %v, want %d",
+					fireNum, derefI64(jobs[0].Schedule.AtMS), wantNext)
+			}
+			// SpawnReset (called by RunScheduled on the NEXT advance) resets
+			// any non-in_progress status back to `next` on its own — mirrors
+			// production, where nothing manually resets status between fires.
+		}
+	}
+
+	if n := len(rec.calls()); n != 3 {
+		t.Fatalf("expected the COUNT=3 series to fire exactly 3 times total, got %d", n)
+	}
+	if jobs := jobsForTask(sched, tsk.ID); len(jobs) != 0 {
+		t.Fatalf("expected the exhausted COUNT=3 series to retire with no job after the 3rd fire's "+
+			"completion, got %d", len(jobs))
+	}
+}

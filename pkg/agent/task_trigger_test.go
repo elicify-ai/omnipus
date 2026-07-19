@@ -346,7 +346,11 @@ func TestTriggerReconcile_RegistersExistingTasks(t *testing.T) {
 		Type:   task.TriggerManual,
 		Config: task.TriggerConfig{},
 	})
-	// A terminal task — must NOT be registered. Transition next→in_progress→done.
+	// A terminal `every` (REPEATING) task — MUST still be registered: a
+	// per-run done/failed status does not end a repeating series (this is
+	// the "recurring/every task fires once then dies" bug this fix
+	// addresses — see OnTaskUpserted's doc comment). Transition
+	// next→in_progress→done.
 	t4 := makeTask(t, store, "agent-x", &task.Trigger{
 		Type:   task.TriggerEvery,
 		Config: task.TriggerConfig{EveryMs: int64P(int64(60_000))},
@@ -358,6 +362,19 @@ func TestTriggerReconcile_RegistersExistingTasks(t *testing.T) {
 	doneStatus := task.StatusDone
 	if _, err := store.Update(t4.ID, task.Patch{Status: &doneStatus}); err != nil {
 		t.Fatalf("store.Update done: %v", err)
+	}
+	// A terminal `once` (NON-repeating) task — must still NOT be registered:
+	// a fire-and-forget trigger's single occurrence IS its whole series, so
+	// unlike t4 above this one stays retired. Transition next→in_progress→done.
+	t5 := makeTask(t, store, "agent-x", &task.Trigger{
+		Type:   task.TriggerOnce,
+		Config: task.TriggerConfig{AtMs: int64P(fireAt)},
+	})
+	if _, err := store.Update(t5.ID, task.Patch{Status: &inProgStatus}); err != nil {
+		t.Fatalf("store.Update t5 in_progress: %v", err)
+	}
+	if _, err := store.Update(t5.ID, task.Patch{Status: &doneStatus}); err != nil {
+		t.Fatalf("store.Update t5 done: %v", err)
 	}
 
 	sched := NewTaskTriggerScheduler(storePath, store, nil)
@@ -391,8 +408,13 @@ func TestTriggerReconcile_RegistersExistingTasks(t *testing.T) {
 	if registered[t3.ID] {
 		t.Errorf("Reconcile registered manual-trigger task %q (should be skipped)", t3.ID)
 	}
-	if registered[t4.ID] {
-		t.Errorf("Reconcile registered terminal task %q (should be skipped)", t4.ID)
+	if !registered[t4.ID] {
+		t.Errorf("Reconcile did not re-register terminal-but-repeating (every) task %q "+
+			"(a per-run done status must not end a repeating series)", t4.ID)
+	}
+	if registered[t5.ID] {
+		t.Errorf("Reconcile registered a terminal once-trigger task %q "+
+			"(a fire-and-forget trigger's single occurrence IS its whole series; must stay retired)", t5.ID)
 	}
 }
 

@@ -354,11 +354,41 @@ func (s *TaskTriggerScheduler) Reconcile() error {
 //
 // A job is NOT registered when:
 //   - trigger is nil or type==manual (no scheduled firing)
-//   - task is terminal (done/failed)
+//   - task is terminal (done/failed) AND its trigger does NOT repeat — a
+//     `once` (or no-trigger) task's terminal status really does mean its one
+//     and only occurrence is over
 //   - task surface is heartbeat (the heartbeat service owns those recurring fires;
 //     registering here would cause double-firing)
-//   - trigger is an RRULE recurring trigger whose series is already exhausted
-//     (COUNT reached or past UNTIL) — retired silently, no WARN
+//   - trigger is a REPEATING trigger (recurring/every) whose series is already
+//     exhausted (COUNT reached or past UNTIL for an rrule; `every` never
+//     exhausts) — retired silently, no WARN
+//
+// A REPEATING trigger (recurring/every) that is terminal is deliberately NOT
+// removed by the terminal check above — `done`/`failed` reflects only the
+// outcome of the single RUN that just finished, not that the series itself
+// has ended. Bug fixed here: dispatch is asynchronous (SpawnTriggeredRun /
+// ExecuteTask launch `go te.runTask(...)` and return immediately), so
+// RunScheduled's own exit-path re-arm (rearmRrule) always runs and arms the
+// next occurrence BEFORE that async run finishes. When it later finishes and
+// its terminal status lands — via a task_update tool call or a REST PATCH,
+// both of which call NotifyTaskUpserted → this method — the previous,
+// unconditional "terminal ⇒ remove" rule deleted the job rearmRrule had just
+// armed, silently ending the series after exactly one fire. A terminal
+// repeating task now falls through to the normal (re)registration path
+// below instead, exactly as a non-terminal upsert would. The series' only
+// TRUE end conditions remain trigger removal/change-to-manual (noTrigger
+// above) and RRULE exhaustion (handled below via errRruleExhausted).
+//
+// Race note: because both this path and rearmRrule (task_trigger.go) route
+// through replaceJobLocked under mu, and triggerToCronSchedule/
+// NextOccurrenceAfter is a pure function of (rule, now), a fire's own
+// rearmRrule call and this OnTaskUpserted call (fired later, once the async
+// run's terminal status lands) can legitimately both attempt to register a
+// job for the same task around the same time. In the ordinary case neither
+// call observes an occurrence boundary crossing between them, so they
+// compute the IDENTICAL next-occurrence time — whichever runs second just
+// atomically replaces an equivalent job with a new job ID under mu; there is
+// no torn or double-registered state, and no wrong occurrence is ever armed.
 //
 // The remove-old→register-new→map-write sequence is one atomic critical
 // section under mu (Scheduler rule 4), closing the check-then-register window
@@ -375,9 +405,17 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 
 	noTrigger := t.Trigger == nil || t.Trigger.Type == task.TriggerManual
 	terminal := task.IsTerminal(t.Status)
+	// isRepeating: a recurring (rrule or legacy cron_expr) or every trigger's
+	// series survives a per-run terminal status — see the doc comment above.
+	// `once` is deliberately excluded: its single occurrence IS its whole
+	// series, so a terminal `once` task is still removed exactly as before.
+	isRepeating := t.Trigger != nil &&
+		(t.Trigger.Type == task.TriggerRecurring || t.Trigger.Type == task.TriggerEvery)
 
-	if noTrigger || terminal {
-		// Remove any existing job for this task (trigger was cleared or task ended).
+	if noTrigger || (terminal && !isRepeating) {
+		// Remove any existing job for this task (trigger was cleared, the
+		// task ended with a non-repeating trigger, or there is nothing to
+		// track).
 		s.OnTaskDeleted(t.ID)
 		return
 	}
@@ -644,18 +682,29 @@ func (s *TaskTriggerScheduler) rearmRrule(t *task.Task, fireGen string) {
 	slog.Debug("task_trigger: rrule re-armed next occurrence", "task_id", t.ID, "job_id", job.ID)
 }
 
-// RunRecoverySweep scans every non-terminal RRULE-triggered task and re-arms
-// any whose tracked job has gone missing or dead (Scheduler rule 6:
-// crash-recovery + observability), and escalates any persistently-unreadable
-// task file to a loud ERROR log (H2). It is exported so tests can invoke it
-// deterministically instead of waiting on the 5-minute ticker; the ticker
-// started by Start calls this same method in production.
+// RunRecoverySweep scans every RRULE-triggered task (terminal-but-repeating
+// included, see below) and re-arms any whose tracked job has gone missing or
+// dead (Scheduler rule 6: crash-recovery + observability), and escalates any
+// persistently-unreadable task file to a loud ERROR log (H2). It is exported
+// so tests can invoke it deterministically instead of waiting on the
+// 5-minute ticker; the ticker started by Start calls this same method in
+// production.
 //
 // "Armed" (isArmed) is: a registered job exists AND (its NextRunAtMS is
 // non-nil and >= now, OR it is currently Running). The Running disjunct is
 // load-bearing — RunDueJobs clears NextRunAtMS before dispatch, so an
 // in-flight fire (re-arm pending on its exit path) must never be treated as
 // orphaned and re-armed out from under itself.
+//
+// Terminal-but-repeating is a CANDIDATE, not a skip (companion to the
+// OnTaskUpserted fix): an RRULE task's `done`/`failed` status does not mean
+// its series ended — only trigger removal or RRULE exhaustion does. Skipping
+// terminal tasks here would leave a crash-orphaned repeating series (e.g. one
+// left behind by a pre-fix build across an upgrade, or a genuine crash
+// between SpawnReset and the terminal write landing) permanently dead until
+// the next full boot Reconcile. Exhaustion is still handled below exactly as
+// for a non-terminal candidate — triggerToCronSchedule returns
+// errRruleExhausted and the task is left with no job, not resurrected.
 //
 // H1: a job that is neither armed nor Running but is still tracked and
 // resolves in the cron engine, with NextRunAtMS nil, is AMBIGUOUS rather
@@ -679,9 +728,6 @@ func (s *TaskTriggerScheduler) RunRecoverySweep() {
 		if t.Trigger == nil || t.Trigger.Type != task.TriggerRecurring ||
 			t.Trigger.Config.Rrule == nil || *t.Trigger.Config.Rrule == "" {
 			continue // sweep recovery is scoped to already-RRULE triggers
-		}
-		if task.IsTerminal(t.Status) {
-			continue
 		}
 
 		s.mu.Lock()

@@ -194,16 +194,29 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Task selection (spec "Occurrence expansion endpoint"): expand only
-	// tasks the scheduler would actually arm — the SAME non-terminal,
-	// non-heartbeat predicate TaskTriggerScheduler.OnTaskUpserted applies
-	// before registering a job (pkg/agent/task_trigger.go OnTaskUpserted's
-	// early skips). Terminal and heartbeat-surface tasks are omitted
-	// entirely so the calendar never renders an occurrence that will not
-	// fire; buildOccurrenceSets further filters by trigger FLAVOR
-	// (recurring/every only).
+	// tasks the scheduler would actually arm — the SAME predicate
+	// TaskTriggerScheduler.OnTaskUpserted applies before registering a job
+	// (pkg/agent/task_trigger.go OnTaskUpserted's early skips). Heartbeat
+	// -surface tasks are always omitted (the heartbeat service owns those
+	// fires). A terminal task is omitted UNLESS its trigger REPEATS
+	// (recurring/every): a per-run done/failed status does not end a
+	// repeating series (see OnTaskUpserted's doc comment) — the scheduler
+	// re-arms a terminal recurring/every task's next occurrence exactly as it
+	// would a non-terminal one, so the calendar must keep rendering it too.
+	// A truly exhausted RRULE series (COUNT/UNTIL) naturally yields zero
+	// occurrences from buildOccurrenceSets below and is omitted that way, not
+	// by this predicate. A terminal `once`/manual task is still omitted here
+	// (isRepeating is false for them) — its single occurrence IS its whole
+	// series — and would be omitted a second time regardless by
+	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring/every only).
 	eligible := make([]task.Task, 0, len(tasks))
 	for _, t := range tasks {
-		if task.IsTerminal(t.Status) || t.EffectiveSurface() == task.SurfaceHeartbeat {
+		if t.EffectiveSurface() == task.SurfaceHeartbeat {
+			continue
+		}
+		isRepeating := t.Trigger != nil &&
+			(t.Trigger.Type == task.TriggerRecurring || t.Trigger.Type == task.TriggerEvery)
+		if task.IsTerminal(t.Status) && !isRepeating {
 			continue
 		}
 		eligible = append(eligible, t)
