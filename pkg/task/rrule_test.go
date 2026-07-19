@@ -141,7 +141,14 @@ func TestRruleExpansion_WallClockDST(t *testing.T) {
 		dtstart := time.Date(2026, 3, 25, 0, 0, 0, 0, berlin).UnixMilli()
 		from := time.Date(2026, 3, 29, 0, 0, 0, 0, berlin).UnixMilli()
 		to := time.Date(2026, 3, 30, 0, 0, 0, 0, berlin).UnixMilli()
-		instants, truncated, err := ExpandRRULE("FREQ=DAILY;BYHOUR=2,3;BYMINUTE=30", dtstart, "Europe/Berlin", from, to, 10)
+		instants, truncated, err := ExpandRRULE(
+			"FREQ=DAILY;BYHOUR=2,3;BYMINUTE=30",
+			dtstart,
+			"Europe/Berlin",
+			from,
+			to,
+			10,
+		)
 		if err != nil {
 			t.Fatalf("ExpandRRULE: %v", err)
 		}
@@ -167,7 +174,14 @@ func TestRruleExpansion_Monthly31Clamp(t *testing.T) {
 	dtstart := time.Date(2026, 7, 31, 9, 0, 0, 0, time.UTC).UnixMilli()
 	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 	to := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-	instants, truncated, err := ExpandRRULE("FREQ=MONTHLY;BYMONTHDAY=28,29,30,31;BYSETPOS=-1", dtstart, "UTC", from, to, 10)
+	instants, truncated, err := ExpandRRULE(
+		"FREQ=MONTHLY;BYMONTHDAY=28,29,30,31;BYSETPOS=-1",
+		dtstart,
+		"UTC",
+		from,
+		to,
+		10,
+	)
 	if err != nil {
 		t.Fatalf("ExpandRRULE: %v", err)
 	}
@@ -247,7 +261,14 @@ func TestRruleExpansion_EndConditions(t *testing.T) {
 		dtstart := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC).UnixMilli()
 		from := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 		to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-		instants, truncated, err := ExpandRRULE("FREQ=WEEKLY;BYDAY=MO;UNTIL=20260112T090000Z", dtstart, "UTC", from, to, 100)
+		instants, truncated, err := ExpandRRULE(
+			"FREQ=WEEKLY;BYDAY=MO;UNTIL=20260112T090000Z",
+			dtstart,
+			"UTC",
+			from,
+			to,
+			100,
+		)
 		if err != nil {
 			t.Fatalf("ExpandRRULE: %v", err)
 		}
@@ -529,7 +550,10 @@ func TestCountRegularInRange_AgedDtstartLongSpan(t *testing.T) {
 		t.Fatalf("expected count %d, got %d", wantCount, count)
 	}
 	if elapsed > 500*time.Millisecond {
-		t.Fatalf("expected O(1)-bounded arithmetic, took %v (looks like an iteration proportional to span/history)", elapsed)
+		t.Fatalf(
+			"expected O(1)-bounded arithmetic, took %v (looks like an iteration proportional to span/history)",
+			elapsed,
+		)
 	}
 
 	periodMs, ok, err := RegularPeriodMs("FREQ=MINUTELY", dtstart, "UTC")

@@ -6,8 +6,10 @@ package task
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -98,6 +100,154 @@ func TestUpdatePartial(t *testing.T) {
 	// Unspecified fields preserved.
 	if got.WorkspaceID != "ws" || got.Action != ActionLLM {
 		t.Fatalf("update clobbered other fields: %+v", got)
+	}
+}
+
+// TestStoreListWithUnreadable verifies the H2 fix's new method: List
+// continues to silently skip a present-but-unreadable task file (unchanged
+// behavior), while ListWithUnreadable additionally surfaces its ID so a
+// caller (the trigger scheduler's Reconcile/RunRecoverySweep) can act on it.
+func TestStoreListWithUnreadable(t *testing.T) {
+	s := newStore(t)
+
+	good := mkTask("good", "ws-1")
+	if err := s.Create(good); err != nil {
+		t.Fatalf("Create good: %v", err)
+	}
+
+	// Simulate a corrupted/unparsable task file directly on disk — the
+	// shape store.load() cannot recover from (json.Unmarshal failure).
+	const corruptID = "corrupt-task-id"
+	corruptPath := filepath.Join(s.dir, corruptID+".json")
+	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt file: %v", err)
+	}
+
+	tasks, unreadable, err := s.ListWithUnreadable(Filter{})
+	if err != nil {
+		t.Fatalf("ListWithUnreadable: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != good.ID {
+		t.Fatalf("expected exactly the good task in the readable set, got %+v", tasks)
+	}
+	if len(unreadable) != 1 || unreadable[0] != corruptID {
+		t.Fatalf("expected unreadable = [%q], got %v", corruptID, unreadable)
+	}
+
+	// List (pre-existing, widely-called method) must behave exactly as
+	// before: silently skip the corrupt file, no error.
+	listOnly, err := s.List(Filter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listOnly) != 1 || listOnly[0].ID != good.ID {
+		t.Fatalf("List regressed: expected exactly the good task, got %+v", listOnly)
+	}
+}
+
+// TestStoreUpdateWithPrior_ConcurrentAtomicity proves the M-BE1 fix: because
+// UpdateWithPrior loads `prior` inside the SAME per-task-lock critical
+// section that performs the write, N concurrent UpdateWithPrior calls
+// against the same task form one unbroken chain — each call's `prior` title
+// equals either the task's original title or some other call's `updated`
+// title, and exactly one call (the lock's first winner) has prior == the
+// original title. A separate pre-write Get (the pre-fix pattern) cannot
+// guarantee this: two goroutines can both read the same state before either
+// has written, so a later writer's recorded "prior" would not reflect an
+// earlier writer's already-landed write even though the writes themselves
+// were correctly serialized.
+func TestStoreUpdateWithPrior_ConcurrentAtomicity(t *testing.T) {
+	s := newStore(t)
+	initial := mkTask("chain-start", "ws-1")
+	if err := s.Create(initial); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	const n = 20
+	type transition struct {
+		priorTitle   string
+		updatedTitle string
+	}
+	var (
+		mu    sync.Mutex
+		chain []transition
+		wg    sync.WaitGroup
+	)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			newTitle := fmt.Sprintf("title-%02d", i)
+			updated, prior, err := s.UpdateWithPrior(initial.ID, Patch{Title: &newTitle})
+			if err != nil {
+				t.Errorf("UpdateWithPrior(%d): %v", i, err)
+				return
+			}
+			mu.Lock()
+			chain = append(chain, transition{priorTitle: prior.Title, updatedTitle: updated.Title})
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+
+	if len(chain) != n {
+		t.Fatalf("expected %d recorded transitions, got %d", n, len(chain))
+	}
+
+	// Every recorded `prior` must be either the original title or some other
+	// transition's `updated` title — never a value no write ever actually
+	// produced (which would indicate a stale, non-atomic read).
+	validPriors := map[string]bool{initial.Title: true}
+	for _, tr := range chain {
+		validPriors[tr.updatedTitle] = true
+	}
+	firstCount := 0
+	for i, tr := range chain {
+		if !validPriors[tr.priorTitle] {
+			t.Errorf("transition %d: prior %q was never a real prior state", i, tr.priorTitle)
+		}
+		if tr.priorTitle == tr.updatedTitle {
+			t.Errorf("transition %d: prior == updated (%q) — no actual write observed", i, tr.priorTitle)
+		}
+		if tr.priorTitle == initial.Title {
+			firstCount++
+		}
+	}
+	if firstCount != 1 {
+		t.Errorf("expected exactly 1 transition whose prior is the original title (the lock's first winner), got %d",
+			firstCount)
+	}
+
+	// Every `updated` title must be some OTHER transition's `prior`, except
+	// for whichever call is chronologically last (no successor yet exists).
+	usedAsPrior := map[string]int{}
+	for _, tr := range chain {
+		usedAsPrior[tr.priorTitle]++
+	}
+	missingSuccessor := 0
+	for _, tr := range chain {
+		if usedAsPrior[tr.updatedTitle] == 0 {
+			missingSuccessor++
+		}
+	}
+	if missingSuccessor != 1 {
+		t.Errorf("expected exactly 1 transition with no successor (the last writer), got %d", missingSuccessor)
+	}
+
+	final, err := s.Get(initial.ID)
+	if err != nil {
+		t.Fatalf("Get final: %v", err)
+	}
+	lastTitle := final.Title
+	found := false
+	for _, tr := range chain {
+		if tr.updatedTitle == lastTitle {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("final persisted title %q does not match any recorded transition's updated title", lastTitle)
 	}
 }
 

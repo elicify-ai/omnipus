@@ -203,20 +203,44 @@ func (s *Store) scanTaskIDs() ([]string, error) {
 
 // List returns all tasks matching filter, sorted by priority ASC then
 // created_at ASC. Unreadable/corrupt files are logged at Warn and skipped.
+// Delegates to ListWithUnreadable and discards the unreadable-ID set —
+// callers that need to know WHICH IDs were skipped (H2: the recovery-sweep
+// rediscovery path) use ListWithUnreadable directly.
 func (s *Store) List(filter Filter) ([]Task, error) {
+	tasks, _, err := s.ListWithUnreadable(filter)
+	return tasks, err
+}
+
+// ListWithUnreadable behaves exactly like List (same filtering, same sort,
+// same Warn log per skipped file) but additionally returns the IDs of task
+// files that exist on disk but could not be read/parsed (corrupt,
+// permission-denied, mid-write, etc.).
+//
+// H2: List's silent Warn+skip made a persistently-unreadable RRULE-trigger
+// task invisible to the one mechanism meant to rediscover and rescue it —
+// the trigger scheduler's boot Reconcile and crash-recovery sweep both
+// enumerate candidates via a List-shaped call, so a corrupted task file was
+// never a candidate for recovery, forever, with no attribution beyond a
+// generic unattributed WARN. Callers that need to escalate on persistent
+// unreadability (RunRecoverySweep, Reconcile) use this method instead of
+// List so they can log loudly, by task ID, when a file stays unreadable
+// across repeated observations.
+func (s *Store) ListWithUnreadable(filter Filter) (tasks []Task, unreadableIDs []string, err error) {
 	ids, err := s.scanTaskIDs()
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []Task{}, nil
+			return []Task{}, nil, nil
 		}
-		return nil, fmt.Errorf("task: list dir: %w", err)
+		return nil, nil, fmt.Errorf("task: list dir: %w", err)
 	}
 
 	result := make([]Task, 0, len(ids))
+	var unreadable []string
 	for _, id := range ids {
 		t, err := s.load(id)
 		if err != nil {
 			slog.Warn("task: skip unreadable task file", "id", id, "error", err)
+			unreadable = append(unreadable, id)
 			continue
 		}
 		if !filter.matches(t) {
@@ -232,7 +256,7 @@ func (s *Store) List(filter Filter) ([]Task, error) {
 		}
 		return result[i].CreatedAt < result[j].CreatedAt
 	})
-	return result, nil
+	return result, unreadable, nil
 }
 
 // Get returns the task with the given id, or ErrNotFound if absent.
@@ -511,7 +535,10 @@ func validateRRULE(cfg TriggerConfig) error {
 		return verr("trigger config.rrule could not be validated: %v", err)
 	}
 	if !live {
-		return verr("trigger config.rrule never fires within %d years of config.dtstart_ms (rule never fires)", rruleLivenessYears)
+		return verr(
+			"trigger config.rrule never fires within %d years of config.dtstart_ms (rule never fires)",
+			rruleLivenessYears,
+		)
 	}
 
 	// §6: COUNT bound.
@@ -635,15 +662,54 @@ func validateTransition(from, to Status, internal bool) error {
 
 // Update applies patch to the task identified by id and persists the result.
 // It validates field constraints and the blocked_by DAG (when blocked_by is
-// changed). It takes the per-task lock internally.
+// changed). It takes the per-task lock internally. Delegates to
+// UpdateWithPrior and discards the prior-state snapshot — callers that need
+// the immediately-prior task (M-BE1: an atomic audit diff) use
+// UpdateWithPrior directly.
 func (s *Store) Update(id string, patch Patch) (*Task, error) {
-	if err := validateID(id); err != nil {
-		return nil, err
+	updated, _, err := s.UpdateWithPrior(id, patch)
+	return updated, err
+}
+
+// UpdateWithPrior behaves exactly like Update but additionally returns a
+// snapshot of the task as it stood IMMEDIATELY BEFORE patch was applied,
+// captured under the SAME per-task lock as the write.
+//
+// M-BE1: a separate pre-patch store.Get() (taken before, not under, the
+// write's lock) has a TOCTOU window — under two concurrent PATCHes to the
+// same task, the second call's "prior" read can complete before the first
+// call's write lands, then the first call's write lands, then the second
+// call's own write lands on top of it; the second call's recorded "prior"
+// is stale (it never reflects the first call's write) even though it was
+// read before its own write. Loading `prior` here, inside the same
+// mu.Lock()/Unlock() span that updateLocked's own write executes in, closes
+// that window: because the per-task StripedLock fully serializes every
+// read-modify-write on this task ID, whichever call's critical section runs
+// second is guaranteed to load the state the first call's write just
+// produced.
+//
+// prior is a value copy, safe to read after this call returns even though
+// updateLocked performs its own independent load+mutate+write against a
+// separate in-memory Task built from the same file content.
+func (s *Store) UpdateWithPrior(id string, patch Patch) (updated *Task, prior *Task, err error) {
+	if err = validateID(id); err != nil {
+		return nil, nil, err
 	}
 	mu := s.lock.Get(id)
 	mu.Lock()
 	defer mu.Unlock()
-	return s.updateLocked(id, patch)
+
+	before, err := s.load(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	priorCopy := *before
+
+	updated, err = s.updateLocked(id, patch)
+	if err != nil {
+		return nil, nil, err
+	}
+	return updated, &priorCopy, nil
 }
 
 // updateLocked is the body of Update; the caller must hold the per-task lock.

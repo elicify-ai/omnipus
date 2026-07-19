@@ -351,7 +351,15 @@ func seekK(lo int, pred func(k int) bool) int {
 // identical instants deduped (the wall-clock stepping that generates
 // HOURLY/MINUTELY/SECONDLY candidates can collide across a spring-forward
 // gap the same way an explicit BYHOUR list can — see package doc).
-func regularOccurrencesInRange(dtstart time.Time, loc *time.Location, freq rrule.Frequency, interval, count int, until time.Time, fromMs, toMs int64, cap int) ([]int64, bool) {
+func regularOccurrencesInRange(
+	dtstart time.Time,
+	loc *time.Location,
+	freq rrule.Frequency,
+	interval, count int,
+	until time.Time,
+	fromMs, toMs int64,
+	limit int,
+) ([]int64, bool) {
 	occAtOrAfter := func(target int64) int {
 		return seekK(0, func(k int) bool {
 			if count > 0 && k >= count {
@@ -380,7 +388,7 @@ func regularOccurrencesInRange(dtstart time.Time, loc *time.Location, freq rrule
 		if ms != lastMs {
 			out = append(out, ms)
 			lastMs = ms
-			if len(out) >= cap {
+			if len(out) >= limit {
 				truncated = true
 				break
 			}
@@ -405,7 +413,12 @@ func regularOccurrencesInRange(dtstart time.Time, loc *time.Location, freq rrule
 // with the O(1)-without-iteration mandate (Occurrence expansion endpoint
 // §"Caps and work budget"). The error is bounded to the transition day(s)
 // only; all other days are exact.
-func CountRegularInRange(rruleBody string, dtstartMs int64, tz string, fromMs, toMs int64) (count int, firstMs int64, hasAny bool, err error) {
+func CountRegularInRange(
+	rruleBody string,
+	dtstartMs int64,
+	tz string,
+	fromMs, toMs int64,
+) (count int, firstMs int64, hasAny bool, err error) {
 	if fromMs >= toMs {
 		return 0, 0, false, errors.New("rrule: fromMs must be before toMs")
 	}
@@ -473,7 +486,13 @@ func CountRegularInRange(rruleBody string, dtstartMs int64, tz string, fromMs, t
 // the stepped date) so any implicit (no-BYHOUR) time-of-day rrule-go would
 // otherwise infer from Dtstart is unaffected by AddDate/time.Date drift on a
 // DST-transition day.
-func fastForwardAnchor(dtstart time.Time, loc *time.Location, freq rrule.Frequency, interval int, target time.Time) time.Time {
+func fastForwardAnchor(
+	dtstart time.Time,
+	loc *time.Location,
+	freq rrule.Frequency,
+	interval int,
+	target time.Time,
+) time.Time {
 	if interval <= 0 {
 		interval = 1
 	}
@@ -529,7 +548,7 @@ func fastForwardAnchor(dtstart time.Time, loc *time.Location, freq rrule.Frequen
 // anchor by the caller), collecting DST-normalized, deduped occurrences
 // within [fromMs, toMs), capped at cap, bounded by iterationCeiling as a
 // defense-in-depth safety valve.
-func generateIrregular(rr *rrule.RRule, loc *time.Location, fromMs, toMs int64, cap int) ([]int64, bool) {
+func generateIrregular(rr *rrule.RRule, loc *time.Location, fromMs, toMs int64, limit int) ([]int64, bool) {
 	next := rr.Iterator()
 	var out []int64
 	truncated := false
@@ -554,7 +573,7 @@ func generateIrregular(rr *rrule.RRule, loc *time.Location, fromMs, toMs int64, 
 		out = append(out, ms)
 		lastMs = ms
 		haveLast = true
-		if len(out) >= cap {
+		if len(out) >= limit {
 			truncated = true
 			break
 		}
@@ -570,12 +589,12 @@ func generateIrregular(rr *rrule.RRule, loc *time.Location, fromMs, toMs int64, 
 // any error from this function to 400). Provably-regular rules (IsRegular)
 // are derived by O(1) arithmetic; irregular rules use rrule-go, fast-forward
 // seeded per the Aged DTSTART policy.
-func ExpandRRULE(rruleBody string, dtstartMs int64, tz string, fromMs, toMs int64, cap int) ([]int64, bool, error) {
+func ExpandRRULE(rruleBody string, dtstartMs int64, tz string, fromMs, toMs int64, limit int) ([]int64, bool, error) {
 	if fromMs >= toMs {
 		return nil, false, errors.New("rrule: fromMs must be before toMs")
 	}
-	if cap <= 0 {
-		cap = 1
+	if limit <= 0 {
+		limit = 1
 	}
 	loc, err := loadTZ(tz)
 	if err != nil {
@@ -587,7 +606,17 @@ func ExpandRRULE(rruleBody string, dtstartMs int64, tz string, fromMs, toMs int6
 	}
 
 	if isStructurallyRegular(opt) && regularSafeForFreq(opt.Freq, opt.Dtstart) {
-		out, truncated := regularOccurrencesInRange(opt.Dtstart, loc, opt.Freq, intervalOf(opt), opt.Count, opt.Until, fromMs, toMs, cap)
+		out, truncated := regularOccurrencesInRange(
+			opt.Dtstart,
+			loc,
+			opt.Freq,
+			intervalOf(opt),
+			opt.Count,
+			opt.Until,
+			fromMs,
+			toMs,
+			limit,
+		)
 		return out, truncated, nil
 	}
 
@@ -599,7 +628,7 @@ func ExpandRRULE(rruleBody string, dtstartMs int64, tz string, fromMs, toMs int6
 	if err != nil {
 		return nil, false, fmt.Errorf("rrule: build: %w", err)
 	}
-	out, truncated := generateIrregular(rr, loc, fromMs, toMs, cap)
+	out, truncated := generateIrregular(rr, loc, fromMs, toMs, limit)
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, truncated, nil
 }
@@ -763,8 +792,8 @@ func HasOccurrenceWithinYears(rruleBody string, dtstartMs int64, tz string, year
 // caller); subsequent occurrences are first + k*everyMs. Occurrences before
 // fromMs are omitted (the caller passes max(nowMs, rangeFromMs) as fromMs to
 // satisfy "no backward extrapolation"); capped at cap with truncated=true.
-func ProjectEveryMs(firstMs, everyMs, fromMs, toMs int64, cap int) ([]int64, bool) {
-	if everyMs <= 0 || fromMs >= toMs || cap <= 0 {
+func ProjectEveryMs(firstMs, everyMs, fromMs, toMs int64, limit int) ([]int64, bool) {
+	if everyMs <= 0 || fromMs >= toMs || limit <= 0 {
 		return nil, false
 	}
 	k := int64(0)
@@ -780,7 +809,7 @@ func ProjectEveryMs(firstMs, everyMs, fromMs, toMs int64, cap int) ([]int64, boo
 		}
 		if ms >= fromMs {
 			out = append(out, ms)
-			if len(out) >= cap {
+			if len(out) >= limit {
 				truncated = true
 				break
 			}

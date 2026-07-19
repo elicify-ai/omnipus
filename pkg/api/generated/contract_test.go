@@ -1049,6 +1049,106 @@ func TestContract_Task_Differentiation(t *testing.T) {
 	mustPassComponent(t, "Task", f2)
 }
 
+// ── TaskOccurrenceSet ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskOccurrenceSet.yaml (required:
+// [task_id, occurrences_ms, day_buckets, truncated]; both array fields are
+// non-nullable). Mirrors TestContract_SessionStateFrame_NilPendingApprovalsRejected
+// above — proves nil really does marshal to null in this codebase (which is
+// what makes the pkg/gateway/task_occurrences.go buildOneOccurrenceSet
+// nil-guard load-bearing) and that a null-bearing payload is rejected by the
+// schema.
+
+func TestContract_TaskOccurrenceSet_NilOccurrencesMsRejected(t *testing.T) {
+	// nil OccurrencesMs -> JSON null -> schema requires type: array, no null.
+	// Traces to: TaskOccurrenceSet.yaml (occurrences_ms: type: array, required)
+	fixture := TaskOccurrenceSet{
+		TaskId: "task-1",
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+		}{},
+		OccurrencesMs: nil, // bug: nil slice marshals to null
+		Truncated:     false,
+	}
+
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"occurrences_ms":null`,
+		"nil slice must marshal to null to exercise the bug path")
+
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "TaskOccurrenceSet", raw)
+	assert.Error(t, validationErr,
+		"occurrences_ms:null MUST fail validation — schema requires type: array")
+}
+
+func TestContract_TaskOccurrenceSet_NilDayBucketsRejected(t *testing.T) {
+	// nil DayBuckets -> JSON null -> schema requires type: array, no null.
+	// Traces to: TaskOccurrenceSet.yaml (day_buckets: type: array, required)
+	fixture := TaskOccurrenceSet{
+		TaskId:        "task-1",
+		OccurrencesMs: []int64{},
+		DayBuckets:    nil, // bug: nil slice marshals to null
+		Truncated:     false,
+	}
+
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"day_buckets":null`,
+		"nil slice must marshal to null to exercise the bug path")
+
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "TaskOccurrenceSet", raw)
+	assert.Error(t, validationErr,
+		"day_buckets:null MUST fail validation — schema requires type: array")
+}
+
+func TestContract_TaskOccurrenceSet_Populated(t *testing.T) {
+	// Both arrays non-empty. Traces to: TaskOccurrenceSet.yaml
+	mustPassComponent(t, "TaskOccurrenceSet", FixtureTaskOccurrenceSet_Populated())
+}
+
+func TestContract_TaskOccurrenceSet_BucketsOnly(t *testing.T) {
+	// Edge: day_buckets populated, occurrences_ms empty-but-non-nil (the
+	// "dense overview" shape — every day bucketed). Traces to:
+	// TaskOccurrenceSet.yaml — occurrences_ms has no minItems, so [] is valid.
+	mustPassComponent(t, "TaskOccurrenceSet", FixtureTaskOccurrenceSet_BucketsOnly())
+}
+
+func TestContract_TaskOccurrenceSet_OccurrencesOnly(t *testing.T) {
+	// Edge: occurrences_ms populated, day_buckets empty-but-non-nil (the
+	// "detail mode" shape — never bucketed). Traces to:
+	// TaskOccurrenceSet.yaml — day_buckets has no minItems, so [] is valid.
+	mustPassComponent(t, "TaskOccurrenceSet", FixtureTaskOccurrenceSet_OccurrencesOnly())
+}
+
+func TestContract_TaskOccurrenceSet_Differentiation(t *testing.T) {
+	// The three properly-initialized fixtures (the healthy counterparts to
+	// the two NilXxxRejected tests above) must all produce different,
+	// null-free JSON and all pass schema validation cleanly.
+	f1 := FixtureTaskOccurrenceSet_Populated()
+	f2 := FixtureTaskOccurrenceSet_BucketsOnly()
+	f3 := FixtureTaskOccurrenceSet_OccurrencesOnly()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	raw3, err := json.Marshal(f3)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, string(raw1), string(raw2))
+	assert.NotEqual(t, string(raw1), string(raw3))
+	assert.NotEqual(t, string(raw2), string(raw3))
+
+	assert.NotContains(t, string(raw1), "null", "properly-initialized fixture must never contain a null field")
+	assert.NotContains(t, string(raw2), "null", "properly-initialized fixture must never contain a null field")
+	assert.NotContains(t, string(raw3), "null", "properly-initialized fixture must never contain a null field")
+
+	mustPassComponent(t, "TaskOccurrenceSet", f1)
+	mustPassComponent(t, "TaskOccurrenceSet", f2)
+	mustPassComponent(t, "TaskOccurrenceSet", f3)
+}
+
 // ── McpServer ─────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/McpServer.yaml
 

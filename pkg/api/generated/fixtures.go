@@ -2622,3 +2622,77 @@ func FixtureSlashCommand_WithAliasesAndStreaming() SlashCommand {
 func FixtureSlashCommand_ZeroValue() SlashCommand {
 	return SlashCommand{}
 }
+
+// ── TaskOccurrenceSet ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskOccurrenceSet.yaml,
+// contracts/components/schemas/DayBucket.yaml
+// Regression guard: occurrences_ms/day_buckets are both `required`,
+// non-nullable array fields (TaskOccurrenceSet.yaml) with no `omitempty` on
+// the generated struct — a bare nil Go slice marshals to JSON null, which
+// fails schema validation (see
+// TestContract_TaskOccurrenceSet_NilOccurrencesMsRejected /
+// TestContract_TaskOccurrenceSet_NilDayBucketsRejected below). Every fixture
+// here is deliberately built with a literal `[]int64{...}` / composite
+// literal rather than a nil var, so each constructor is itself schema-valid
+// — mirroring the fix in pkg/gateway/task_occurrences.go's
+// buildOneOccurrenceSet, which normalizes both fields to non-nil before
+// constructing the real response.
+
+// FixtureTaskOccurrenceSet_Populated — both occurrences_ms and day_buckets
+// non-empty: a legal wire shape per the schema (occurrences_ms carries the
+// <=3/day raw days, day_buckets the >3/day aggregated days of the SAME
+// task's response).
+func FixtureTaskOccurrenceSet_Populated() TaskOccurrenceSet {
+	interval := int64(1800000)
+	return TaskOccurrenceSet{
+		TaskId:        "550e8400-e29b-41d4-a716-446655440000",
+		OccurrencesMs: []int64{1784620800000, 1785225600000},
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+		}{
+			{Count: 48, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval},
+		},
+		Truncated: false,
+	}
+}
+
+// FixtureTaskOccurrenceSet_BucketsOnly — the "dense overview" edge shape:
+// day_buckets populated, occurrences_ms empty-but-NON-NIL (the
+// buildOverview "every day is dense enough to bucket" case — was the
+// occurrences_ms:null bug's exact shape before the fix).
+func FixtureTaskOccurrenceSet_BucketsOnly() TaskOccurrenceSet {
+	interval := int64(60000)
+	return TaskOccurrenceSet{
+		TaskId:        "550e8400-e29b-41d4-a716-446655440001",
+		OccurrencesMs: []int64{},
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+		}{
+			{Count: 1440, DayStartMs: 1784592000000, FirstMs: 1784592000000, IntervalMs: &interval},
+		},
+		Truncated: false,
+	}
+}
+
+// FixtureTaskOccurrenceSet_OccurrencesOnly — the "detail mode" edge shape:
+// occurrences_ms populated, day_buckets empty-but-NON-NIL (detail mode never
+// buckets — was the day_buckets:null bug's exact shape before the fix).
+func FixtureTaskOccurrenceSet_OccurrencesOnly() TaskOccurrenceSet {
+	return TaskOccurrenceSet{
+		TaskId:        "550e8400-e29b-41d4-a716-446655440002",
+		OccurrencesMs: []int64{1784620800000, 1784624400000, 1784628000000},
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+		}{},
+		Truncated: false,
+	}
+}

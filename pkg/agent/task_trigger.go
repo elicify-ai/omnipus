@@ -112,6 +112,36 @@ type TaskTriggerScheduler struct {
 	// an edit-during-fire interleaving — see TestTriggerScheduler_EditDuringFire).
 	// Guarded by mu.
 	rearmTestHook func()
+
+	// spawnResetTestHook, when set, is invoked by RunScheduled immediately
+	// before it calls store.SpawnReset (test-only seam for deterministically
+	// forcing the task-deleted-mid-fire race — F5, see
+	// TestTriggerScheduler_SpawnResetTaskNotFound_NoReArm). Guarded by mu.
+	spawnResetTestHook func()
+
+	// ambiguousSweeps tracks, per task ID, the number of consecutive
+	// RunRecoverySweep observations that found that task's tracked job in
+	// the H1 "ambiguous" shape: present, State.NextRunAtMS nil, and
+	// State.Running false. RunDueJobs clears NextRunAtMS (under cs.mu)
+	// before dispatching, and executeJobByID does not persist
+	// State.Running=true until AFTER it acquires a lane slot on the
+	// (8-slot) semaphore — so a due-but-queued dispatch under lane
+	// saturation is, for a sweep landing in that window, byte-for-byte the
+	// same shape as a genuine pre-Running-flag crash orphan. Escalating to
+	// a re-arm only once the SAME task stays in that shape across two
+	// consecutive sweeps gives one full recoverySweepInterval tick for a
+	// legitimately queued dispatch to resolve before it is treated as dead.
+	// Guarded by mu; an entry is deleted whenever that task is observed
+	// armed again or its job is replaced.
+	ambiguousSweeps map[string]int
+
+	// unreadableSweeps tracks, per task ID, how many consecutive
+	// Reconcile/RunRecoverySweep observations found that task's file
+	// unreadable (H2). Surfaced in the escalated ERROR log
+	// (logUnreadableTasks) so operators can see how long a recurring series
+	// has been silently dead. Guarded by mu; an ID is dropped once a scan no
+	// longer reports it (the file became readable again, or was deleted).
+	unreadableSweeps map[string]int
 }
 
 // NewTaskTriggerScheduler creates a scheduler that uses a dedicated CronService
@@ -225,6 +255,46 @@ func (s *TaskTriggerScheduler) getRearmTestHook() func() {
 	return s.rearmTestHook
 }
 
+// SetSpawnResetTestHook installs a callback invoked by RunScheduled
+// immediately before its store.SpawnReset call (test-only seam: F5's
+// regression test uses it to deterministically delete the task in the
+// window between RunScheduled's earlier store.Get — which has already
+// succeeded by the time this hook fires — and the SpawnReset call, forcing
+// SpawnReset to observe task.ErrNotFound). Pass nil to clear it (the
+// default; production never sets one).
+func (s *TaskTriggerScheduler) SetSpawnResetTestHook(fn func()) {
+	s.mu.Lock()
+	s.spawnResetTestHook = fn
+	s.mu.Unlock()
+}
+
+func (s *TaskTriggerScheduler) getSpawnResetTestHook() func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.spawnResetTestHook
+}
+
+// jobSpecFor builds the cron.JobSpec used to (re-)register t's trigger job:
+// the "task:<id>" name, the owner-sentinel fallback for a task with no
+// assigned agent (see taskTriggerOwnerSentinel's doc comment), and the
+// payload Message carrying the task ID so RunScheduled can look it up.
+// OnTaskUpserted, rearmRrule, and RunRecoverySweep each feed this straight
+// into replaceJobLocked unchanged — extracted here so the three previously
+// hand-duplicated, byte-for-byte copies cannot drift apart.
+func (s *TaskTriggerScheduler) jobSpecFor(t *task.Task, sched cron.CronSchedule) cron.JobSpec {
+	ownerID := t.AgentID
+	if ownerID == "" {
+		ownerID = taskTriggerOwnerSentinel
+	}
+	return cron.JobSpec{
+		Name:     fmt.Sprintf("task:%s", t.ID),
+		Schedule: sched,
+		// Message carries the task ID so RunScheduled can look it up.
+		Message: t.ID,
+		AgentID: ownerID,
+	}
+}
+
 // RunDueJobs calls the underlying CronService.RunDueJobs with the given time.
 // Exported for deterministic testing: tests that inject a fake Clock drive
 // dispatch by calling RunDueJobs(clk.Now()) directly, bypassing wall-clock sleep.
@@ -244,10 +314,11 @@ func (s *TaskTriggerScheduler) WaitForLane() {
 // is also the documented crash-recovery path for the boot window (Scheduler
 // rule 6): OnTaskUpserted re-arms the next future occurrence for each one.
 func (s *TaskTriggerScheduler) Reconcile() error {
-	tasks, err := s.store.List(task.Filter{})
+	tasks, unreadableIDs, err := s.store.ListWithUnreadable(task.Filter{})
 	if err != nil {
 		return fmt.Errorf("task_trigger: reconcile list: %w", err)
 	}
+	s.logUnreadableTasks(unreadableIDs, s.now().UnixMilli())
 	for i := range tasks {
 		s.OnTaskUpserted(&tasks[i])
 	}
@@ -324,26 +395,10 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 		return
 	}
 
-	// AgentID owner sentinel: cron's executeJobByID skips a job when a runner IS
-	// set AND job.AgentID == "". TaskTriggerScheduler is the runner and does not
-	// require an owner — it uses the task ID from the payload. When the task has
-	// no assigned agent, use the sentinel so the owner-missing guard does not
-	// suppress the fire.
-	ownerID := t.AgentID
-	if ownerID == "" {
-		ownerID = taskTriggerOwnerSentinel
-	}
 	generation := triggerGeneration(t.Trigger)
 
 	s.mu.Lock()
-	job, err := s.replaceJobLocked(t.ID, cron.JobSpec{
-		Name:     fmt.Sprintf("task:%s", t.ID),
-		Schedule: sched,
-		// Message carries the task ID so RunScheduled can look it up.
-		Message: t.ID,
-		AgentID: ownerID,
-		// DeleteAfterRun is handled inside cron for "at" schedules automatically.
-	}, generation)
+	job, err := s.replaceJobLocked(t.ID, s.jobSpecFor(t, sched), generation)
 	s.mu.Unlock()
 	if err != nil {
 		slog.Error("task_trigger: failed to register cron job",
@@ -366,7 +421,11 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 // acquired only while mu is already held (scheduler-mutex → engine-mutex
 // ordering) — cs's callers (RemoveJob/AddJobFull) never themselves try to
 // acquire mu, so this ordering can never invert.
-func (s *TaskTriggerScheduler) replaceJobLocked(taskID string, spec cron.JobSpec, generation string) (*cron.CronJob, error) {
+func (s *TaskTriggerScheduler) replaceJobLocked(
+	taskID string,
+	spec cron.JobSpec,
+	generation string,
+) (*cron.CronJob, error) {
 	if existing, ok := s.taskToJob[taskID]; ok {
 		s.cs.RemoveJob(existing.jobID)
 		delete(s.taskToJob, taskID)
@@ -452,9 +511,30 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 		fireGen = triggerGeneration(t.Trigger)
 	}
 
+	// Test seam (F5 determinism, TestTriggerScheduler_SpawnResetTaskNotFound_NoReArm):
+	// fires immediately before SpawnReset so a test can force the task to be
+	// deleted in the exact window this fix closes — after the store.Get
+	// above already succeeded, but before SpawnReset's own read.
+	if hook := s.getSpawnResetTestHook(); hook != nil {
+		hook()
+	}
+
 	// Reset the task to `next` for a fresh run.
 	fresh, err := s.store.SpawnReset(taskID)
 	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			// F5: the task was deleted in the window between the store.Get
+			// above (which succeeded) and this SpawnReset call. Route to the
+			// same cleanup as the earlier ErrNotFound branch — remove the
+			// orphan job, do NOT fall through to the isRrule re-arm below
+			// (which would re-arm a stale snapshot of a task that no longer
+			// exists).
+			slog.Info("task_trigger: task not found on spawn reset (deleted mid-fire), removing orphan job",
+				"task_id", taskID, "job_id", job.ID)
+			s.OnTaskDeleted(taskID)
+			s.cs.RemoveJob(job.ID)
+			return "", nil
+		}
 		if errors.Is(err, task.ErrAlreadyRunning) {
 			// Task is in_progress — overlap guard fires. Benign skip: the next
 			// interval will re-fire. Do not stomp an in-flight run.
@@ -531,11 +611,6 @@ func (s *TaskTriggerScheduler) rearmRrule(t *task.Task, fireGen string) {
 		return
 	}
 
-	ownerID := t.AgentID
-	if ownerID == "" {
-		ownerID = taskTriggerOwnerSentinel
-	}
-
 	// Test seam (edit-during-fire determinism, TestTriggerScheduler_EditDuringFire):
 	// fires before this re-arm's critical section begins so a test can force a
 	// concurrent OnTaskUpserted to run to completion first, making the
@@ -560,12 +635,7 @@ func (s *TaskTriggerScheduler) rearmRrule(t *task.Task, fireGen string) {
 		return
 	}
 
-	job, err := s.replaceJobLocked(t.ID, cron.JobSpec{
-		Name:     fmt.Sprintf("task:%s", t.ID),
-		Schedule: sched,
-		Message:  t.ID,
-		AgentID:  ownerID,
-	}, fireGen)
+	job, err := s.replaceJobLocked(t.ID, s.jobSpecFor(t, sched), fireGen)
 	if err != nil {
 		slog.Error("task_trigger: rrule re-arm: failed to register cron job",
 			"task_id", t.ID, "error", err)
@@ -576,7 +646,8 @@ func (s *TaskTriggerScheduler) rearmRrule(t *task.Task, fireGen string) {
 
 // RunRecoverySweep scans every non-terminal RRULE-triggered task and re-arms
 // any whose tracked job has gone missing or dead (Scheduler rule 6:
-// crash-recovery + observability). It is exported so tests can invoke it
+// crash-recovery + observability), and escalates any persistently-unreadable
+// task file to a loud ERROR log (H2). It is exported so tests can invoke it
 // deterministically instead of waiting on the 5-minute ticker; the ticker
 // started by Start calls this same method in production.
 //
@@ -585,13 +656,21 @@ func (s *TaskTriggerScheduler) rearmRrule(t *task.Task, fireGen string) {
 // load-bearing — RunDueJobs clears NextRunAtMS before dispatch, so an
 // in-flight fire (re-arm pending on its exit path) must never be treated as
 // orphaned and re-armed out from under itself.
+//
+// H1: a job that is neither armed nor Running but is still tracked and
+// resolves in the cron engine, with NextRunAtMS nil, is AMBIGUOUS rather
+// than an immediate orphan — see shouldReArmLocked's doc comment. Only a
+// task with no tracked job at all (or a tracked job ID that no longer
+// resolves) is re-armed immediately, with no grace period.
 func (s *TaskTriggerScheduler) RunRecoverySweep() {
-	tasks, err := s.store.List(task.Filter{})
+	tasks, unreadableIDs, err := s.store.ListWithUnreadable(task.Filter{})
 	if err != nil {
 		slog.Error("task_trigger: recovery sweep: list tasks failed", "error", err)
 		return
 	}
 	nowMs := s.now().UnixMilli()
+	s.logUnreadableTasks(unreadableIDs, nowMs)
+
 	for i := range tasks {
 		t := &tasks[i]
 		if t.EffectiveSurface() == task.SurfaceHeartbeat {
@@ -605,9 +684,10 @@ func (s *TaskTriggerScheduler) RunRecoverySweep() {
 			continue
 		}
 
-		// Cheap unlocked pre-check: skip the RRULE computation below for the
-		// common case (already healthy).
-		if s.isArmed(t.ID, nowMs) {
+		s.mu.Lock()
+		reArm := s.shouldReArmLocked(t.ID, nowMs)
+		s.mu.Unlock()
+		if !reArm {
 			continue
 		}
 
@@ -621,24 +701,16 @@ func (s *TaskTriggerScheduler) RunRecoverySweep() {
 			continue // exhaustion is not an orphan — retire silently, legitimately
 		}
 
-		ownerID := t.AgentID
-		if ownerID == "" {
-			ownerID = taskTriggerOwnerSentinel
-		}
-
 		s.mu.Lock()
 		if s.isArmedLocked(t.ID, nowMs) {
-			// Healed by a concurrent registration between the pre-check above
-			// and acquiring the lock — no-op (closes that TOCTOU window).
+			// Healed by a concurrent registration between shouldReArmLocked
+			// above and acquiring the lock again here — no-op (closes that
+			// TOCTOU window). Mirrors the pre-H1 recheck exactly.
 			s.mu.Unlock()
 			continue
 		}
-		job, err := s.replaceJobLocked(t.ID, cron.JobSpec{
-			Name:     fmt.Sprintf("task:%s", t.ID),
-			Schedule: sched,
-			Message:  t.ID,
-			AgentID:  ownerID,
-		}, fireGen)
+		job, err := s.replaceJobLocked(t.ID, s.jobSpecFor(t, sched), fireGen)
+		delete(s.ambiguousSweeps, t.ID) // fresh job installed: reset the streak
 		s.mu.Unlock()
 		if err != nil {
 			slog.Error("task_trigger: recovery sweep: failed to re-arm orphaned rrule task",
@@ -672,6 +744,118 @@ func (s *TaskTriggerScheduler) isArmedLocked(taskID string, nowMs int64) bool {
 		return true
 	}
 	return job.State.NextRunAtMS != nil && *job.State.NextRunAtMS >= nowMs
+}
+
+// shouldReArmLocked is RunRecoverySweep's per-task orphan/ambiguous
+// classification and streak bookkeeping (H1). Caller must hold mu.
+//
+// isArmedLocked alone cannot distinguish a true crash orphan from a
+// due-but-queued dispatch: RunDueJobs clears a job's State.NextRunAtMS
+// (under cs.mu) before dispatching it, and executeJobByID does not persist
+// State.Running=true until AFTER it acquires a lane slot on the cron
+// engine's bounded (8-slot) semaphore. Under lane saturation, a sweep tick
+// landing in that window sees a legitimately queued fire in EXACTLY the
+// same shape as a genuine "crashed between the clear and the Running flag"
+// orphan: job present, NextRunAtMS nil, not Running.
+//
+// Classification:
+//   - No tracked job for taskID, or the tracked job ID no longer resolves in
+//     the cron engine: an immediate, unambiguous orphan — re-arm now (same
+//     behavior as before this fix; there is nothing to wait on).
+//   - Tracked job is Running, or has a live future NextRunAtMS: armed —
+//     healthy, no action. Any ambiguous streak recorded for this task is
+//     cleared (Running flipping true, or a fresh NextRunAtMS appearing, both
+//     mean the earlier ambiguity has resolved favorably).
+//   - Tracked job is present, not Running, with a NextRunAtMS that is
+//     non-nil but stale (< now): NOT the queued-dispatch shape (that always
+//     has NextRunAtMS==nil) — a genuine orphan, re-armed immediately as
+//     before.
+//   - Tracked job is present, not Running, NextRunAtMS nil: ambiguous. Bumps
+//     a per-task consecutive-sweep counter (ambiguousSweeps) and reports
+//     "re-arm" only once the SAME task has been observed in this shape on
+//     two consecutive sweeps. A genuinely queued dispatch resolves — Running
+//     flips true, or the fire completes and its own exit path installs a
+//     fresh job — well within one recoverySweepInterval tick; a real dead
+//     orphan does not, and gets re-armed on the second observation.
+func (s *TaskTriggerScheduler) shouldReArmLocked(taskID string, nowMs int64) bool {
+	tracked, ok := s.taskToJob[taskID]
+	if !ok {
+		delete(s.ambiguousSweeps, taskID)
+		return true
+	}
+	job, ok := s.cs.GetJob(tracked.jobID)
+	if !ok {
+		delete(s.ambiguousSweeps, taskID)
+		return true
+	}
+	if job.State.Running {
+		delete(s.ambiguousSweeps, taskID)
+		return false
+	}
+	if job.State.NextRunAtMS != nil {
+		armed := *job.State.NextRunAtMS >= nowMs
+		delete(s.ambiguousSweeps, taskID)
+		return !armed
+	}
+
+	// Ambiguous shape: job present, NextRunAtMS nil, not Running.
+	if s.ambiguousSweeps == nil {
+		s.ambiguousSweeps = make(map[string]int)
+	}
+	s.ambiguousSweeps[taskID]++
+	return s.ambiguousSweeps[taskID] >= 2
+}
+
+// logUnreadableTasks is H2's rediscovery/observability fix. store.List (and
+// the readable half of ListWithUnreadable) silently Warn+skips a
+// present-but-unreadable task file — corrupt, permission-denied, or
+// otherwise unparsable — which made a dead RRULE-trigger series invisible to
+// both boot Reconcile and the crash-recovery sweep, the very mechanisms
+// meant to rescue it, forever, with only a generic unattributed WARN.
+//
+// Both Reconcile and RunRecoverySweep call this with the unreadableIDs
+// ListWithUnreadable reports alongside the readable task set. For every ID
+// that isn't currently armed (i.e. does not still have a live tracked job —
+// an older registration from before the file went bad, whose own exit path
+// or next staleness check will keep surfacing this independently), it logs
+// at ERROR (not WARN) with the task ID front-and-center and a running
+// consecutive-observation streak, so a persistently-dead recurring series is
+// loud instead of silent. The streak for any ID no longer reported
+// unreadable (it became readable again, or the file was deleted) is
+// dropped.
+func (s *TaskTriggerScheduler) logUnreadableTasks(unreadableIDs []string, nowMs int64) {
+	current := make(map[string]bool, len(unreadableIDs))
+	for _, id := range unreadableIDs {
+		current[id] = true
+	}
+
+	s.mu.Lock()
+	if s.unreadableSweeps == nil {
+		s.unreadableSweeps = make(map[string]int)
+	}
+	for id := range s.unreadableSweeps {
+		if !current[id] {
+			delete(s.unreadableSweeps, id)
+		}
+	}
+	streaks := make(map[string]int, len(unreadableIDs))
+	for _, id := range unreadableIDs {
+		s.unreadableSweeps[id]++
+		streaks[id] = s.unreadableSweeps[id]
+	}
+	s.mu.Unlock()
+
+	for _, id := range unreadableIDs {
+		if s.isArmed(id, nowMs) {
+			// A live tracked job still exists (registered before the file
+			// went bad) — less urgent right now; it will go stale and be
+			// caught by the orphan/ambiguous path (or this same ERROR log
+			// on a later sweep once it's no longer armed) on its own.
+			continue
+		}
+		slog.Error("task_trigger: task file unreadable, cannot verify or re-arm trigger",
+			"task_id", id, "consecutive_sweeps", streaks[id])
+	}
 }
 
 // NextRunAtMSForTask returns taskID's currently-tracked job's live

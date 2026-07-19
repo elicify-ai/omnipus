@@ -15,10 +15,13 @@ package gateway
 // full pkg/gateway suite locally, OOM risk in the devpod).
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/adhocore/gronx"
+
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -156,8 +159,10 @@ func TestOccurrences_LegacyCronAndEveryMs(t *testing.T) {
 			t.Fatalf("buildOccurrenceSets: %v", err)
 		}
 		if len(sets) != 0 {
-			t.Errorf("got %d occurrence sets for a range fully in the past, want 0 (task omitted, no backward extrapolation)",
-				len(sets))
+			t.Errorf(
+				"got %d occurrence sets for a range fully in the past, want 0 (task omitted, no backward extrapolation)",
+				len(sets),
+			)
 		}
 	})
 
@@ -205,7 +210,13 @@ func TestOccurrences_BucketingAndCaps(t *testing.T) {
 				},
 			},
 		}}
-		sets, err := buildOccurrenceSets(tasks, rangeStart.UnixMilli(), rangeEnd.UnixMilli(), "Europe/Berlin", noEveryAnchor)
+		sets, err := buildOccurrenceSets(
+			tasks,
+			rangeStart.UnixMilli(),
+			rangeEnd.UnixMilli(),
+			"Europe/Berlin",
+			noEveryAnchor,
+		)
 		if err != nil {
 			t.Fatalf("buildOccurrenceSets: %v", err)
 		}
@@ -426,97 +437,108 @@ func TestOccurrences_BucketingAndCaps(t *testing.T) {
 		}
 	})
 
-	t.Run("row 17: a plain regular FREQ=MINUTELY over a 400-day span renders complete buckets, truncated:false", func(t *testing.T) {
-		dtstart := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
-		from := dtstart
-		to := from.AddDate(0, 0, 400) // the endpoint's max legal span
-		tasks := []task.Task{{
-			ID: "minutely-task",
-			Trigger: &task.Trigger{
-				Type: task.TriggerRecurring,
-				Config: task.TriggerConfig{
-					Rrule:     ptr("FREQ=MINUTELY"),
-					DtstartMs: ptr(dtstart.UnixMilli()),
-					Tz:        ptr("UTC"),
+	t.Run(
+		"row 17: a plain regular FREQ=MINUTELY over a 400-day span renders complete buckets, truncated:false",
+		func(t *testing.T) {
+			dtstart := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
+			from := dtstart
+			to := from.AddDate(0, 0, 400) // the endpoint's max legal span
+			tasks := []task.Task{{
+				ID: "minutely-task",
+				Trigger: &task.Trigger{
+					Type: task.TriggerRecurring,
+					Config: task.TriggerConfig{
+						Rrule:     ptr("FREQ=MINUTELY"),
+						DtstartMs: ptr(dtstart.UnixMilli()),
+						Tz:        ptr("UTC"),
+					},
 				},
-			},
-		}}
-		start := time.Now()
-		sets, err := buildOccurrenceSets(tasks, from.UnixMilli(), to.UnixMilli(), "UTC", noEveryAnchor)
-		elapsed := time.Since(start)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if elapsed > 3*time.Second {
-			t.Errorf("buildOccurrenceSets took %s for a regular rule — arithmetic derivation should be near-instant, "+
-				"not proportional to the 400-day*1440/day occurrence count (a linear walk would be far slower)", elapsed)
-		}
-		if len(sets) != 1 {
-			t.Fatalf("got %d occurrence sets, want 1", len(sets))
-		}
-		if sets[0].Truncated {
-			t.Errorf("truncated = true, want false (provably regular -> arithmetic, never iterated, never truncated)")
-		}
-		if len(sets[0].OccurrencesMs) != 0 {
-			t.Errorf("OccurrencesMs = %v, want none (every day is dense, all bucketed)", sets[0].OccurrencesMs)
-		}
-		if len(sets[0].DayBuckets) != 400 {
-			t.Fatalf("got %d day buckets, want 400 (one per day in the span)", len(sets[0].DayBuckets))
-		}
-		for i, b := range sets[0].DayBuckets {
-			if b.Count != 1440 {
-				t.Errorf("bucket[%d].Count = %d, want 1440 (a full UTC day at 1/min)", i, b.Count)
+			}}
+			start := time.Now()
+			sets, err := buildOccurrenceSets(tasks, from.UnixMilli(), to.UnixMilli(), "UTC", noEveryAnchor)
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatalf("buildOccurrenceSets: %v", err)
 			}
-			if b.IntervalMs == nil || *b.IntervalMs != 60000 {
-				t.Errorf("bucket[%d].IntervalMs = %v, want 60000", i, b.IntervalMs)
+			if elapsed > 3*time.Second {
+				t.Errorf(
+					"buildOccurrenceSets took %s for a regular rule — arithmetic derivation should be near-instant, "+
+						"not proportional to the 400-day*1440/day occurrence count (a linear walk would be far slower)",
+					elapsed,
+				)
 			}
-		}
-	})
+			if len(sets) != 1 {
+				t.Fatalf("got %d occurrence sets, want 1", len(sets))
+			}
+			if sets[0].Truncated {
+				t.Errorf(
+					"truncated = true, want false (provably regular -> arithmetic, never iterated, never truncated)",
+				)
+			}
+			if len(sets[0].OccurrencesMs) != 0 {
+				t.Errorf("OccurrencesMs = %v, want none (every day is dense, all bucketed)", sets[0].OccurrencesMs)
+			}
+			if len(sets[0].DayBuckets) != 400 {
+				t.Fatalf("got %d day buckets, want 400 (one per day in the span)", len(sets[0].DayBuckets))
+			}
+			for i, b := range sets[0].DayBuckets {
+				if b.Count != 1440 {
+					t.Errorf("bucket[%d].Count = %d, want 1440 (a full UTC day at 1/min)", i, b.Count)
+				}
+				if b.IntervalMs == nil || *b.IntervalMs != 60000 {
+					t.Errorf("bucket[%d].IntervalMs = %v, want 60000", i, b.IntervalMs)
+				}
+			}
+		},
+	)
 
-	t.Run("row 17d: a regular dense rule with a DTSTART 2 years before the range is still O(1)-bounded", func(t *testing.T) {
-		dtstart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) // ~2 years before the range below
-		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-		to := from.AddDate(0, 0, 9) // > 8 days -> overview mode
-		tasks := []task.Task{{
-			ID: "aged-dtstart-task",
-			Trigger: &task.Trigger{
-				Type: task.TriggerRecurring,
-				Config: task.TriggerConfig{
-					Rrule:     ptr("FREQ=MINUTELY"),
-					DtstartMs: ptr(dtstart.UnixMilli()),
-					Tz:        ptr("UTC"),
+	t.Run(
+		"row 17d: a regular dense rule with a DTSTART 2 years before the range is still O(1)-bounded",
+		func(t *testing.T) {
+			dtstart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) // ~2 years before the range below
+			from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			to := from.AddDate(0, 0, 9) // > 8 days -> overview mode
+			tasks := []task.Task{{
+				ID: "aged-dtstart-task",
+				Trigger: &task.Trigger{
+					Type: task.TriggerRecurring,
+					Config: task.TriggerConfig{
+						Rrule:     ptr("FREQ=MINUTELY"),
+						DtstartMs: ptr(dtstart.UnixMilli()),
+						Tz:        ptr("UTC"),
+					},
 				},
-			},
-		}}
-		start := time.Now()
-		sets, err := buildOccurrenceSets(tasks, from.UnixMilli(), to.UnixMilli(), "UTC", noEveryAnchor)
-		elapsed := time.Since(start)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if elapsed > 2*time.Second {
-			t.Errorf("buildOccurrenceSets took %s with a 2-year-aged DTSTART — must fast-forward arithmetically "+
-				"(seekK), never walk from DTSTART", elapsed)
-		}
-		if len(sets) != 1 {
-			t.Fatalf("got %d occurrence sets, want 1", len(sets))
-		}
-		if sets[0].Truncated {
-			t.Errorf("truncated = true, want false")
-		}
-		if len(sets[0].DayBuckets) != 9 {
-			t.Fatalf("got %d day buckets, want 9", len(sets[0].DayBuckets))
-		}
-		for i, b := range sets[0].DayBuckets {
-			if b.Count != 1440 {
-				t.Errorf("bucket[%d].Count = %d, want 1440", i, b.Count)
+			}}
+			start := time.Now()
+			sets, err := buildOccurrenceSets(tasks, from.UnixMilli(), to.UnixMilli(), "UTC", noEveryAnchor)
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatalf("buildOccurrenceSets: %v", err)
 			}
-			wantDayStart := from.AddDate(0, 0, i).UnixMilli()
-			if b.DayStartMs != wantDayStart {
-				t.Errorf("bucket[%d].DayStartMs = %d, want %d", i, b.DayStartMs, wantDayStart)
+			if elapsed > 2*time.Second {
+				t.Errorf("buildOccurrenceSets took %s with a 2-year-aged DTSTART — must fast-forward arithmetically "+
+					"(seekK), never walk from DTSTART", elapsed)
 			}
-		}
-	})
+			if len(sets) != 1 {
+				t.Fatalf("got %d occurrence sets, want 1", len(sets))
+			}
+			if sets[0].Truncated {
+				t.Errorf("truncated = true, want false")
+			}
+			if len(sets[0].DayBuckets) != 9 {
+				t.Fatalf("got %d day buckets, want 9", len(sets[0].DayBuckets))
+			}
+			for i, b := range sets[0].DayBuckets {
+				if b.Count != 1440 {
+					t.Errorf("bucket[%d].Count = %d, want 1440", i, b.Count)
+				}
+				wantDayStart := from.AddDate(0, 0, i).UnixMilli()
+				if b.DayStartMs != wantDayStart {
+					t.Errorf("bucket[%d].DayStartMs = %d, want %d", i, b.DayStartMs, wantDayStart)
+				}
+			}
+		},
+	)
 
 	t.Run("zero-occurrence task is omitted; empty result is [] never nil", func(t *testing.T) {
 		// COUNT=3 exhausted well before the queried range: an exhausted
@@ -571,4 +593,266 @@ func int64SlicesEqual(a, b []int64) bool {
 		}
 	}
 	return true
+}
+
+// --- Byte-level wire regression: nil slices must never marshal to null ------
+
+// TestOccurrences_WireArraysNeverNull is the byte-level regression guard for
+// the CRITICAL nil-slice bug found by three independent reviewers:
+// gen.TaskOccurrenceSet.OccurrencesMs/DayBuckets are both `required`,
+// non-nullable array fields on the wire (TaskOccurrenceSet.yaml) and the
+// generated Go struct has no `omitempty` on either — so a bare nil Go slice
+// marshals via encoding/json as `null`, which the SPA's zod edge validation
+// (non-nullable z.array(...)) rejects outright, dropping the entire
+// occurrence set client-side (recurring task chips silently vanish).
+//
+// The existing TestOccurrences_LegacyCronAndEveryMs/BucketingAndCaps tests
+// above assert via len()/assert.Empty on the *typed*, already-unmarshaled
+// []gen.TaskOccurrenceSet — which is BLIND to null-vs-[] (json.Unmarshal
+// turns both a JSON `null` and a JSON `[]` back into an equally
+// zero-length/nil Go slice). Only a raw-JSON-TEXT assertion (as here, via
+// json.Marshal + substring check — the exact marshaling writeJSON/jsonOK
+// perform in rest_tasks.go's HandleTaskOccurrences) can catch this class of
+// bug; that's why this is a separate test rather than an addition to the
+// existing typed assertions.
+func TestOccurrences_WireArraysNeverNull(t *testing.T) {
+	t.Run("detail mode: day_buckets marshals as [] not null when only occurrences_ms is populated", func(t *testing.T) {
+		// Same shape as the "169h fall-back-week" case above: a dense hourly
+		// rule over a detail-mode (<=8*24h) span populates occMs but NEVER
+		// touches buckets in any detail-mode branch (rrule/cron/every_ms
+		// detail paths all assign only occMs) — pre-fix, `buckets` stayed
+		// the bare `var buckets []wireDayBucket` nil zero value.
+		from := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+		to := from.Add(169 * time.Hour) // < 192h -> detail mode
+		tasks := []task.Task{{
+			ID: "hourly-task",
+			Trigger: &task.Trigger{
+				Type: task.TriggerRecurring,
+				Config: task.TriggerConfig{
+					Rrule:     ptr("FREQ=HOURLY"),
+					DtstartMs: ptr(from.UnixMilli()),
+					Tz:        ptr("UTC"),
+				},
+			},
+		}}
+		sets, err := buildOccurrenceSets(tasks, from.UnixMilli(), to.UnixMilli(), "UTC", noEveryAnchor)
+		if err != nil {
+			t.Fatalf("buildOccurrenceSets: %v", err)
+		}
+		if len(sets) != 1 {
+			t.Fatalf("got %d occurrence sets, want 1", len(sets))
+		}
+		if len(sets[0].OccurrencesMs) == 0 {
+			t.Fatalf("test setup produced no occurrences — widen the range")
+		}
+
+		raw, err := json.Marshal(sets[0])
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		got := string(raw)
+		if strings.Contains(got, `"day_buckets":null`) {
+			t.Errorf("day_buckets marshaled as null (the CRITICAL wire bug — the SPA drops the whole set): %s", got)
+		}
+		if !strings.Contains(got, `"day_buckets":[]`) {
+			t.Errorf(`day_buckets must marshal as the literal "day_buckets":[], got: %s`, got)
+		}
+	})
+
+	t.Run("dense overview mode: occurrences_ms marshals as [] not null when every day is bucketed", func(t *testing.T) {
+		// Same shape as the "row 17" case above: a provably-regular
+		// FREQ=MINUTELY rule over an overview-mode span is dense enough
+		// (1440/day) that EVERY day is bucketed and none fall into the raw
+		// path — pre-fix, buildOverview's `res.raw` (which flows straight
+		// into occMs) stayed the bare `var res overviewResult` nil zero
+		// value.
+		dtstart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+		from := dtstart
+		to := from.AddDate(0, 0, 9) // > 8 days -> overview mode
+		tasks := []task.Task{{
+			ID: "minutely-task",
+			Trigger: &task.Trigger{
+				Type: task.TriggerRecurring,
+				Config: task.TriggerConfig{
+					Rrule:     ptr("FREQ=MINUTELY"),
+					DtstartMs: ptr(dtstart.UnixMilli()),
+					Tz:        ptr("UTC"),
+				},
+			},
+		}}
+		sets, err := buildOccurrenceSets(tasks, from.UnixMilli(), to.UnixMilli(), "UTC", noEveryAnchor)
+		if err != nil {
+			t.Fatalf("buildOccurrenceSets: %v", err)
+		}
+		if len(sets) != 1 {
+			t.Fatalf("got %d occurrence sets, want 1", len(sets))
+		}
+		if len(sets[0].DayBuckets) == 0 {
+			t.Fatalf("test setup produced no day buckets — widen the range/increase density")
+		}
+		if len(sets[0].OccurrencesMs) != 0 {
+			t.Fatalf(
+				"test setup produced %d raw occurrences — every day must be dense enough to bucket for this test to be meaningful",
+				len(sets[0].OccurrencesMs),
+			)
+		}
+
+		raw, err := json.Marshal(sets[0])
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		got := string(raw)
+		if strings.Contains(got, `"occurrences_ms":null`) {
+			t.Errorf("occurrences_ms marshaled as null (the CRITICAL wire bug — the SPA drops the whole set): %s", got)
+		}
+		if !strings.Contains(got, `"occurrences_ms":[]`) {
+			t.Errorf(`occurrences_ms must marshal as the literal "occurrences_ms":[], got: %s`, got)
+		}
+	})
+}
+
+// --- Spec dataset row pins ---------------------------------------------------
+// docs/internal/specs/calendar-recurrence-redesign-spec.md, "Dataset:
+// Occurrence expansion (server)" — rows 1, 8, 9, pinned to their exact
+// literal expected values.
+
+func TestOccurrences_SpecDatasetRows(t *testing.T) {
+	t.Run("row 1: weekly MO 09:00, range spanning exactly 4 Mondays -> 4 instants at 09:00", func(t *testing.T) {
+		dtstart := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC)
+		for dtstart.Weekday() != time.Monday {
+			dtstart = dtstart.AddDate(0, 0, 1)
+		}
+		from := dtstart
+		to := dtstart.AddDate(0, 0, 28) // exactly 4 weeks: covers weeks 0,1,2,3; excludes the 5th Monday
+
+		tasks := []task.Task{{
+			ID: "weekly-monday-task",
+			Trigger: &task.Trigger{
+				Type: task.TriggerRecurring,
+				Config: task.TriggerConfig{
+					Rrule: ptr(
+						"FREQ=WEEKLY",
+					), // no BY* modifiers -> structurally regular (fires on DTSTART's weekday)
+					DtstartMs: ptr(dtstart.UnixMilli()),
+					Tz:        ptr("UTC"),
+				},
+			},
+		}}
+		sets, err := buildOccurrenceSets(tasks, from.UnixMilli(), to.UnixMilli(), "UTC", noEveryAnchor)
+		if err != nil {
+			t.Fatalf("buildOccurrenceSets: %v", err)
+		}
+		if len(sets) != 1 {
+			t.Fatalf("got %d occurrence sets, want 1", len(sets))
+		}
+		set := sets[0]
+		if len(set.DayBuckets) != 0 {
+			t.Errorf(
+				"DayBuckets = %v, want none (a weekly rule never exceeds the >3/day bucketing threshold)",
+				set.DayBuckets,
+			)
+		}
+		if len(set.OccurrencesMs) != 4 {
+			t.Fatalf("got %d occurrences, want exactly 4 (spec dataset row 1)", len(set.OccurrencesMs))
+		}
+		for i, ms := range set.OccurrencesMs {
+			want := dtstart.AddDate(0, 0, 7*i)
+			got := time.UnixMilli(ms).UTC()
+			if !got.Equal(want) {
+				t.Errorf("occurrence[%d] = %v, want %v", i, got, want)
+			}
+			if got.Weekday() != time.Monday {
+				t.Errorf("occurrence[%d] weekday = %v, want Monday", i, got.Weekday())
+			}
+			if got.Hour() != 9 || got.Minute() != 0 || got.Second() != 0 {
+				t.Errorf("occurrence[%d] time-of-day = %02d:%02d:%02d, want 09:00:00 (rule tz, UTC here)",
+					i, got.Hour(), got.Minute(), got.Second())
+			}
+		}
+	})
+
+	t.Run("row 8: every_ms=1800000 over a 42-day range -> one 48-count DayBucket per calendar day", func(t *testing.T) {
+		const everyMs = int64(1800000) // 30 min
+		anchorMs := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+		anchor := func(string) (int64, bool) { return anchorMs, true }
+		fromMs := anchorMs
+		toMs := anchorMs + 42*24*60*60*1000 // exactly 42 days -> overview mode
+
+		tasks := []task.Task{{
+			ID: "every-30min-task",
+			Trigger: &task.Trigger{
+				Type:   task.TriggerEvery,
+				Config: task.TriggerConfig{EveryMs: ptr(everyMs)},
+			},
+		}}
+		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", anchor)
+		if err != nil {
+			t.Fatalf("buildOccurrenceSets: %v", err)
+		}
+		if len(sets) != 1 {
+			t.Fatalf("got %d occurrence sets, want 1", len(sets))
+		}
+		set := sets[0]
+		if len(set.OccurrencesMs) != 0 {
+			t.Errorf(
+				"OccurrencesMs = %v, want none (every day is dense enough to bucket, per spec dataset row 8's note)",
+				set.OccurrencesMs,
+			)
+		}
+		if len(set.DayBuckets) != 42 {
+			t.Fatalf(
+				"got %d day buckets, want exactly 42 (spec dataset row 8: one DayBucket per calendar day)",
+				len(set.DayBuckets),
+			)
+		}
+		for i, b := range set.DayBuckets {
+			if b.Count != 48 {
+				t.Errorf("bucket[%d].Count = %d, want 48 (30-min interval over a full day: 1440/30)", i, b.Count)
+			}
+			if b.IntervalMs == nil || *b.IntervalMs != everyMs {
+				t.Errorf(
+					"bucket[%d].IntervalMs = %v, want %d (spec dataset row 8: interval_ms set)",
+					i,
+					b.IntervalMs,
+					everyMs,
+				)
+			}
+		}
+	})
+
+	t.Run("row 9: every_ms=1800000 over a 1-day range -> 48 raw instants (detail mode)", func(t *testing.T) {
+		const everyMs = int64(1800000) // 30 min
+		anchorMs := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+		anchor := func(string) (int64, bool) { return anchorMs, true }
+		fromMs := anchorMs
+		toMs := anchorMs + 24*60*60*1000 // 1 day -> detail mode
+
+		tasks := []task.Task{{
+			ID: "every-30min-task",
+			Trigger: &task.Trigger{
+				Type:   task.TriggerEvery,
+				Config: task.TriggerConfig{EveryMs: ptr(everyMs)},
+			},
+		}}
+		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", anchor)
+		if err != nil {
+			t.Fatalf("buildOccurrenceSets: %v", err)
+		}
+		if len(sets) != 1 {
+			t.Fatalf("got %d occurrence sets, want 1", len(sets))
+		}
+		set := sets[0]
+		if len(set.DayBuckets) != 0 {
+			t.Errorf("DayBuckets = %v, want none (detail mode never buckets)", set.DayBuckets)
+		}
+		if len(set.OccurrencesMs) != 48 {
+			t.Fatalf(
+				"got %d occurrences, want exactly 48 (spec dataset row 9: 24h / 30min = 48)",
+				len(set.OccurrencesMs),
+			)
+		}
+		if set.Truncated {
+			t.Errorf("truncated = true, want false (48 well under the 500 cap)")
+		}
+	})
 }

@@ -879,19 +879,18 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 		patch.Todos = &todos
 	}
-	// FR-022 audit prerequisite: capture the trigger as it stood BEFORE this
-	// patch, so auditTriggerChange (below, after a successful Update) can
-	// diff old vs new. A dedicated read here — rather than reusing one of
-	// the other conditional reads in this handler — keeps this block
-	// correct regardless of which other fields are present in the same
-	// PATCH (same rationale as the AgentId branch's existingForAgentCheck
-	// read above). gErr is ignored here: a NotFound (or any other read
-	// failure) surfaces identically via the Update call below.
+	// FR-022 audit prerequisite: patch.Trigger is built here; the prior
+	// trigger snapshot itself is captured atomically below by
+	// UpdateWithPrior (M-BE1), under the SAME per-task lock as the write —
+	// closing the TOCTOU window a separate pre-patch Get() had under two
+	// concurrent same-task trigger PATCHes (the second call's "prior" read
+	// could complete before the first call's write landed, then the first
+	// call's write would land, then the second call's own write would land
+	// on top of it — leaving the second call's recorded "prior" stale, never
+	// reflecting the first call's write even though both calls' own writes
+	// were correctly serialized by the store's per-task lock).
 	var priorTriggerForAudit *task.Trigger
 	if req.Trigger != nil {
-		if existingForTriggerAudit, gErr := a.taskStore.Get(id); gErr == nil {
-			priorTriggerForAudit = existingForTriggerAudit.Trigger
-		}
 		tr := buildTrigger(
 			string(req.Trigger.Type),
 			req.Trigger.Config.AtMs,
@@ -946,7 +945,11 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 	}
 
-	updated, err := a.taskStore.Update(id, patch)
+	// M-BE1: UpdateWithPrior captures the pre-patch task snapshot under the
+	// same per-task lock as the write, so priorTriggerForAudit below is the
+	// true immediately-prior state rather than a separately-read, possibly
+	// stale one (see the doc comment above patch.Trigger's construction).
+	updated, priorForUpdate, err := a.taskStore.UpdateWithPrior(id, patch)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			jsonErr(w, http.StatusNotFound, "task not found")
@@ -959,6 +962,9 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		slog.Error("rest: task update failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not update task")
 		return
+	}
+	if req.Trigger != nil && priorForUpdate != nil {
+		priorTriggerForAudit = priorForUpdate.Trigger
 	}
 
 	// If the task transitioned INTO in_progress (from a different state) and has

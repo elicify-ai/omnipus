@@ -5,10 +5,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -158,9 +161,29 @@ func TestTriggerScheduler_RruleRearmAllPaths(t *testing.T) {
 			return errors.New("boom: simulated dispatch failure")
 		}
 
+		jobsBefore := jobsForTask(sched, tsk.ID)
+		if len(jobsBefore) != 1 {
+			t.Fatalf("setup: expected 1 initial job, got %d", len(jobsBefore))
+		}
+
 		clk.Advance(2 * time.Minute)
-		sched.RunDueJobs(clk.Now())
-		sched.WaitForLane()
+
+		// Sev 7 (Test-9 falsifiability): call RunScheduled directly and assert
+		// its return value. Driving this only through RunDueJobs/WaitForLane
+		// (as a prior version of this test did) never observes RunScheduled's
+		// return at all — the fired job is removed and replaced by
+		// replaceJobLocked's own remove-then-add regardless of what
+		// RunScheduled returns, so an assertion phrased only in terms of
+		// dispatch count and re-armed schedule would pass even if RunScheduled
+		// wrongly surfaced an error here.
+		msg, err := sched.RunScheduled(context.Background(), &jobsBefore[0])
+		if err != nil {
+			t.Fatalf("RunScheduled must return a nil error on an rrule dispatch failure "+
+				"(Scheduler rule 3: the re-arm IS the retry, no backoff), got %v", err)
+		}
+		if msg != "" {
+			t.Fatalf("RunScheduled returned message %q, want empty", msg)
+		}
 
 		if n := len(rec.calls()); n != 1 {
 			t.Fatalf("expected dispatch to have been attempted once, got %d calls", n)
@@ -289,18 +312,24 @@ func TestTriggerScheduler_RruleRearmAllPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("SweepHealsBothOrphanShapesButSparesInFlight", func(t *testing.T) {
+	t.Run("SweepHealsOrphanShapesButSparesInFlightAndAmbiguousFirstStrike", func(t *testing.T) {
 		sched, store, clk, rec := newTriggerSchedulerForTest(t)
 
 		// (a) Untracked orphan: exists in the store, non-terminal, RRULE — but
 		// OnTaskUpserted was never called, so the scheduler never tracked it.
+		// This is an immediate, unambiguous orphan (H1: no tracked job at all
+		// to be ambiguous about) — healed on the very first sweep.
 		farDtstart := secondAligned(clk.Now().Add(10 * 24 * time.Hour))
 		untrackedTsk := makeRruleTask(t, store, "agent-orphan-untracked", "FREQ=DAILY", farDtstart, "UTC")
 
-		// (b) Dead-entry orphan: tracked and registered, then surgically
-		// mutated to the exact "crash between RunDueJobs' clear and the
-		// dispatch goroutine setting Running=true" shape the engine is known to
-		// produce: NextRunAtMS cleared, Running false, job still present.
+		// (b) Ambiguous ("dead-entry") shape: tracked and registered, then
+		// surgically mutated to the exact "crash between RunDueJobs' clear and
+		// the dispatch goroutine setting Running=true" shape the engine is
+		// known to produce: NextRunAtMS cleared, Running false, job still
+		// present. H1: this is indistinguishable from a legitimately queued
+		// dispatch on a single snapshot, so it must NOT be re-armed on the
+		// first sweep — only after a SECOND consecutive sweep observes the
+		// same shape.
 		deadTsk := makeRruleTask(t, store, "agent-orphan-dead", "FREQ=DAILY", farDtstart, "UTC")
 		sched.OnTaskUpserted(deadTsk)
 		deadJobsBefore := jobsForTask(sched, deadTsk.ID)
@@ -344,23 +373,49 @@ func TestTriggerScheduler_RruleRearmAllPaths(t *testing.T) {
 			t.Fatalf("setup: expected in-flight job Running=true, got ok=%v job=%+v", ok, job)
 		}
 
+		// First sweep: (a) is healed immediately (true orphan, no grace
+		// period). (b) is the ambiguous "queued dispatch" shape (H1) — it
+		// must NOT be re-armed yet, only its consecutive-sweep streak bumped.
+		// (c) must be untouched.
 		sched.RunRecoverySweep()
 
-		// (a) and (b) must be healed.
 		if jobs := jobsForTask(sched, untrackedTsk.ID); len(jobs) != 1 {
 			t.Fatalf("sweep did not re-arm the untracked orphan, got %d jobs", len(jobs))
 		} else if jobs[0].State.NextRunAtMS == nil {
 			t.Fatal("untracked-orphan re-armed job has a nil NextRunAtMS")
 		}
 		if jobs := jobsForTask(sched, deadTsk.ID); len(jobs) != 1 {
-			t.Fatalf("sweep did not re-arm the dead-entry orphan, got %d jobs", len(jobs))
+			t.Fatalf("expected the ambiguous dead-entry job to still be present after one sweep, got %d jobs",
+				len(jobs))
+		} else if jobs[0].ID != deadJob.ID {
+			t.Fatal("H1: ambiguous dead-entry shape was re-armed after only ONE sweep — " +
+				"must wait for a second consecutive ambiguous sweep")
+		}
+
+		inFlightJobsAfterFirstSweep := jobsForTask(sched, inFlightTsk.ID)
+		if len(inFlightJobsAfterFirstSweep) != 1 || inFlightJobsAfterFirstSweep[0].ID != origInFlightJobID {
+			t.Fatalf("first sweep must not touch an in-flight fire: jobs=%+v, want unchanged job %q",
+				inFlightJobsAfterFirstSweep, origInFlightJobID)
+		}
+		if !inFlightJobsAfterFirstSweep[0].State.Running {
+			t.Fatal("in-flight job State.Running was cleared by the first sweep (must stay true)")
+		}
+
+		// Second consecutive sweep: the SAME ambiguous shape persists for (b)
+		// (nothing about deadTsk's job changed between sweeps), so H1's
+		// two-strike rule now escalates it to a true-orphan re-arm.
+		sched.RunRecoverySweep()
+
+		if jobs := jobsForTask(sched, deadTsk.ID); len(jobs) != 1 {
+			t.Fatalf("second sweep did not re-arm the dead-entry orphan, got %d jobs", len(jobs))
 		} else if jobs[0].ID == deadJob.ID {
-			t.Fatal("dead-entry orphan job was not replaced (same job ID survived)")
+			t.Fatal("dead-entry orphan job was not replaced after two consecutive ambiguous sweeps " +
+				"(same job ID survived)")
 		} else if jobs[0].State.NextRunAtMS == nil {
 			t.Fatal("dead-entry orphan re-armed job has a nil NextRunAtMS")
 		}
 
-		// (c) must be left completely untouched by the sweep: same job ID,
+		// (c) must be left completely untouched by either sweep: same job ID,
 		// still Running.
 		inFlightJobsDuring := jobsForTask(sched, inFlightTsk.ID)
 		if len(inFlightJobsDuring) != 1 || inFlightJobsDuring[0].ID != origInFlightJobID {
@@ -395,6 +450,223 @@ func TestTriggerScheduler_RruleRearmAllPaths(t *testing.T) {
 				derefI64(finalInFlightJobs[0].Schedule.AtMS), wantNext)
 		}
 	})
+}
+
+// -----------------------------------------------------------------------------
+// H1: TestTriggerScheduler_AmbiguousSweepRequiresTwoStrikes
+// -----------------------------------------------------------------------------
+
+// TestTriggerScheduler_AmbiguousSweepRequiresTwoStrikes is H1's focused
+// regression, isolated from the multi-shape interaction covered by
+// SweepHealsOrphanShapesButSparesInFlightAndAmbiguousFirstStrike above: a
+// due-but-queued dispatch (RunDueJobs already cleared NextRunAtMS;
+// executeJobByID has not yet persisted Running=true, e.g. because it is
+// still queued on the cron engine's lane semaphore) is, on a single sweep
+// snapshot, byte-for-byte the same shape as a true crash orphan — job
+// present, NextRunAtMS nil, not Running. The sweep must not re-arm on the
+// first observation of that shape; only after the SAME task stays in it
+// across two consecutive sweeps.
+func TestTriggerScheduler_AmbiguousSweepRequiresTwoStrikes(t *testing.T) {
+	sched, store, clk, _ := newTriggerSchedulerForTest(t)
+
+	farDtstart := secondAligned(clk.Now().Add(10 * 24 * time.Hour))
+	tsk := makeRruleTask(t, store, "agent-ambiguous", "FREQ=DAILY", farDtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	jobsBefore := jobsForTask(sched, tsk.ID)
+	if len(jobsBefore) != 1 {
+		t.Fatalf("setup: expected 1 initial job, got %d", len(jobsBefore))
+	}
+	origJob := jobsBefore[0]
+
+	// Fabricate the queued-dispatch shape directly, mirroring exactly what
+	// RunDueJobs + a not-yet-scheduled executeJobByID would leave behind.
+	mutated := origJob
+	mutated.State.NextRunAtMS = nil
+	mutated.State.Running = false
+	if err := sched.cs.UpdateJob(&mutated); err != nil {
+		t.Fatalf("mutate job state: %v", err)
+	}
+
+	sched.RunRecoverySweep()
+	if jobs := jobsForTask(sched, tsk.ID); len(jobs) != 1 || jobs[0].ID != origJob.ID {
+		t.Fatalf("first ambiguous sweep must NOT re-arm; jobs=%+v, want unchanged job %q", jobs, origJob.ID)
+	}
+
+	sched.RunRecoverySweep()
+	jobsAfterSecond := jobsForTask(sched, tsk.ID)
+	if len(jobsAfterSecond) != 1 || jobsAfterSecond[0].ID == origJob.ID {
+		t.Fatalf("second consecutive ambiguous sweep must re-arm; jobs=%+v, want a NEW job replacing %q",
+			jobsAfterSecond, origJob.ID)
+	}
+	if jobsAfterSecond[0].State.NextRunAtMS == nil {
+		t.Fatal("re-armed job has a nil NextRunAtMS")
+	}
+
+	t.Run("StreakResetsWhenArmedInBetween", func(t *testing.T) {
+		// A fresh task: one ambiguous sweep (streak=1), then the job
+		// resolves favorably (Running flips true, as a genuinely queued
+		// dispatch would), then goes back to the ambiguous shape. The streak
+		// must have been cleared by the intervening armed observation, so
+		// this requires two MORE consecutive ambiguous sweeps, not one.
+		sched2, store2, clk2, _ := newTriggerSchedulerForTest(t)
+		dt := secondAligned(clk2.Now().Add(10 * 24 * time.Hour))
+		tsk2 := makeRruleTask(t, store2, "agent-ambiguous-reset", "FREQ=DAILY", dt, "UTC")
+		sched2.OnTaskUpserted(tsk2)
+
+		jobs2 := jobsForTask(sched2, tsk2.ID)
+		if len(jobs2) != 1 {
+			t.Fatalf("setup: expected 1 initial job, got %d", len(jobs2))
+		}
+		orig2 := jobs2[0]
+
+		ambiguous := orig2
+		ambiguous.State.NextRunAtMS = nil
+		ambiguous.State.Running = false
+		if err := sched2.cs.UpdateJob(&ambiguous); err != nil {
+			t.Fatalf("mutate job state: %v", err)
+		}
+
+		sched2.RunRecoverySweep() // strike 1
+		if jobs := jobsForTask(sched2, tsk2.ID); len(jobs) != 1 || jobs[0].ID != orig2.ID {
+			t.Fatalf("first ambiguous sweep must NOT re-arm; jobs=%+v", jobs)
+		}
+
+		// Resolve favorably: Running flips true (as if the dispatch finally
+		// got its lane slot), clearing the streak per shouldReArmLocked.
+		running := orig2
+		running.State.Running = true
+		if err := sched2.cs.UpdateJob(&running); err != nil {
+			t.Fatalf("mutate job state to Running: %v", err)
+		}
+		sched2.RunRecoverySweep() // observes armed, clears streak
+		if jobs := jobsForTask(sched2, tsk2.ID); len(jobs) != 1 || jobs[0].ID != orig2.ID {
+			t.Fatalf("armed observation must leave the job untouched; jobs=%+v", jobs)
+		}
+
+		// Back to ambiguous.
+		backToAmbiguous := orig2
+		backToAmbiguous.State.NextRunAtMS = nil
+		backToAmbiguous.State.Running = false
+		if err := sched2.cs.UpdateJob(&backToAmbiguous); err != nil {
+			t.Fatalf("mutate job state back to ambiguous: %v", err)
+		}
+
+		sched2.RunRecoverySweep() // strike 1 again (streak was reset)
+		if jobs := jobsForTask(sched2, tsk2.ID); len(jobs) != 1 || jobs[0].ID != orig2.ID {
+			t.Fatalf("streak must have reset: this sweep must NOT re-arm; jobs=%+v", jobs)
+		}
+
+		sched2.RunRecoverySweep() // strike 2: now re-arms
+		if jobs := jobsForTask(sched2, tsk2.ID); len(jobs) != 1 || jobs[0].ID == orig2.ID {
+			t.Fatalf("second post-reset ambiguous sweep must re-arm; jobs=%+v", jobs)
+		}
+	})
+}
+
+// -----------------------------------------------------------------------------
+// H2: TestTriggerScheduler_UnreadableTaskEscalatesToError
+// -----------------------------------------------------------------------------
+
+// TestTriggerScheduler_UnreadableTaskEscalatesToError is H2's regression:
+// unlike the pre-existing TaskUnreadableThenSweepRecovers subtest (which
+// restores the file BEFORE the sweep runs), this corrupts the task file and
+// runs the sweep WITHOUT restoring it — the exact hole H2 closes, where
+// store.List's silent Warn+skip made the file invisible to the recovery
+// mechanism forever. Asserts the escalated ERROR fires with the task ID
+// surfaced, via slog's default handler swapped for a capturing one.
+func TestTriggerScheduler_UnreadableTaskEscalatesToError(t *testing.T) {
+	sched, store, clk, _ := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-unreadable-sweep", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	// Corrupt the file, then let the already-tracked job fire: RunScheduled's
+	// store.Get fails on the corrupt file (task-unreadable exit, no re-arm),
+	// and the fired "at" job is deleted by the engine's own DeleteAfterRun
+	// regardless (same mechanics as the pre-existing
+	// TaskUnreadableThenSweepRecovers subtest). This leaves the task
+	// "isn't currently armed" (isArmed reads live cron state: the tracked
+	// job ID no longer resolves) — the precondition logUnreadableTasks
+	// requires before it logs. Without firing the job first, the tracked
+	// job would still have a live future NextRunAtMS and read as armed,
+	// suppressing the ERROR log entirely.
+	taskPath := filepath.Join(store.Dir(), tsk.ID+".json")
+	if err := os.WriteFile(taskPath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt task file: %v", err)
+	}
+
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+
+	var logBuf bytes.Buffer
+	origLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	sched.RunRecoverySweep()
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "level=ERROR") {
+		t.Fatalf("expected an ERROR-level log entry for the unreadable task, got log:\n%s", logged)
+	}
+	if !strings.Contains(logged, "task file unreadable") {
+		t.Fatalf("expected the unreadable-task ERROR message, got log:\n%s", logged)
+	}
+	if !strings.Contains(logged, tsk.ID) {
+		t.Fatalf("expected the unreadable task's ID %q in the log, got log:\n%s", tsk.ID, logged)
+	}
+	if !strings.Contains(logged, "consecutive_sweeps=1") {
+		t.Fatalf("expected consecutive_sweeps=1 on the first observation, got log:\n%s", logged)
+	}
+
+	// A second consecutive sweep (still uncorrected) must escalate the
+	// streak counter.
+	logBuf.Reset()
+	sched.RunRecoverySweep()
+	if !strings.Contains(logBuf.String(), "consecutive_sweeps=2") {
+		t.Fatalf("expected consecutive_sweeps=2 on the second observation, got log:\n%s", logBuf.String())
+	}
+}
+
+// -----------------------------------------------------------------------------
+// F5: TestTriggerScheduler_SpawnResetTaskNotFound_NoReArm
+// -----------------------------------------------------------------------------
+
+// TestTriggerScheduler_SpawnResetTaskNotFound_NoReArm is F5's regression:
+// RunScheduled already special-cases task.ErrNotFound from its EARLIER
+// store.Get (removes the job, no re-arm) but, before this fix, did not
+// special-case the same error from the LATER store.SpawnReset call — which
+// can return it if the task is deleted in the exact window between the two
+// calls. Uses the spawnResetTestHook seam (mirrors the existing
+// rearmTestHook pattern) to force that window deterministically: the hook
+// fires after store.Get has already succeeded but immediately before
+// SpawnReset's own read, where it deletes the task out from under the fire.
+func TestTriggerScheduler_SpawnResetTaskNotFound_NoReArm(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-spawnreset-notfound", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	sched.SetSpawnResetTestHook(func() {
+		if _, err := store.Delete(tsk.ID); err != nil {
+			t.Errorf("simulated concurrent delete: store.Delete: %v", err)
+		}
+	})
+
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+
+	if n := len(rec.calls()); n != 0 {
+		t.Fatalf("dispatch should not run when SpawnReset finds the task deleted, got %d calls", n)
+	}
+	if jobs := jobsForTask(sched, tsk.ID); len(jobs) != 0 {
+		t.Fatalf("F5: expected no job re-armed after SpawnReset ErrNotFound (task deleted mid-fire), got %d", len(jobs))
+	}
 }
 
 // -----------------------------------------------------------------------------

@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"github.com/adhocore/gronx"
+
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -277,6 +278,21 @@ func buildOneOccurrenceSet(
 	if len(occMs) == 0 && len(buckets) == 0 {
 		return gen.TaskOccurrenceSet{}, false // zero-occurrence tasks are omitted
 	}
+	// gen.TaskOccurrenceSet.OccurrencesMs/DayBuckets are both `required`,
+	// non-nullable array fields on the wire (TaskOccurrenceSet.yaml); a bare
+	// nil Go slice marshals to JSON `null`, which the SPA's zod edge
+	// validation rejects (the whole set then gets dropped client-side).
+	// Detail mode never touches `buckets` (only occMs is populated), and
+	// overview mode with a fully-dense rule can leave `occMs` nil (every day
+	// bucketed, see buildOverview) — normalize both to non-nil empty slices
+	// here, the single choke point every branch above funnels through,
+	// mirroring toWireTodos' make(..., 0, ...) convention in rest_tasks.go.
+	if occMs == nil {
+		occMs = []int64{}
+	}
+	if buckets == nil {
+		buckets = []wireDayBucket{}
+	}
 	return gen.TaskOccurrenceSet{
 		TaskId:        t.ID,
 		OccurrencesMs: occMs,
@@ -325,7 +341,12 @@ type overviewResult struct {
 // never rendering a day as complete when it is actually unknown, per the
 // spec's "stop, and the client renders a truncation marker on the last
 // covered day" rule.
-func buildOverview(loc *time.Location, fromMs, toMs int64, intervalMs *int64, dayFn overviewDayFn) (overviewResult, error) {
+func buildOverview(
+	loc *time.Location,
+	fromMs, toMs int64,
+	intervalMs *int64,
+	dayFn overviewDayFn,
+) (overviewResult, error) {
 	var res overviewResult
 	budgetLeft := perTaskIterationBudget
 
@@ -368,6 +389,18 @@ dayLoop:
 			}
 		}
 		day = next
+	}
+	// Normalize at the source too (defense-in-depth alongside the
+	// buildOneOccurrenceSet choke point): res.raw/res.buckets are only ever
+	// appended to above, so a day-walk that never appends to one of them
+	// (e.g. a fully-dense range leaves res.raw nil; a range with no day
+	// exceeding the >3 bucketing threshold leaves res.buckets nil) would
+	// otherwise hand back a bare nil slice.
+	if res.raw == nil {
+		res.raw = []int64{}
+	}
+	if res.buckets == nil {
+		res.buckets = []wireDayBucket{}
 	}
 	return res, nil
 }
@@ -509,8 +542,8 @@ func everyMsDayFn(anchorMs, everyMs int64) overviewDayFn {
 // zone-mapping). The first call is inclusive (captures a tick exactly at
 // fromMs, honoring the half-open [from, to) contract); subsequent calls are
 // exclusive (advance strictly past the last found tick).
-func expandCronServerZone(expr string, fromMs, toMs int64, cap int) ([]int64, bool) {
-	if cap <= 0 || fromMs >= toMs {
+func expandCronServerZone(expr string, fromMs, toMs int64, limit int) ([]int64, bool) {
+	if limit <= 0 || fromMs >= toMs {
 		return nil, false
 	}
 	cur := time.UnixMilli(fromMs)
@@ -527,7 +560,7 @@ func expandCronServerZone(expr string, fromMs, toMs int64, cap int) ([]int64, bo
 			break
 		}
 		out = append(out, ms)
-		if len(out) >= cap {
+		if len(out) >= limit {
 			truncated = true
 			break
 		}

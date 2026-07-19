@@ -222,19 +222,22 @@ func TestValidateTrigger_RruleInputBounds(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrValidation))
 	})
 
-	t.Run("row7: foreign BYSECOND rejected (first pair looks ~24h apart, defeats a naive first-pair check)", func(t *testing.T) {
-		// DTSTART second is 15; BYSECOND=0,30 shares neither value.
-		dtstart := dtstartMsAt(t, tz, 2026, 1, 5, 9, 0, 15)
-		rrule := "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0,30"
-		tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{
-			Rrule:     &rrule,
-			DtstartMs: &dtstart,
-			Tz:        &tz,
-		}}
-		err := ValidateTrigger(tr)
-		require.Error(t, err, "BYSECOND values foreign to the DTSTART second must be rejected")
-		assert.True(t, errors.Is(err, ErrValidation))
-	})
+	t.Run(
+		"row7: foreign BYSECOND rejected (first pair looks ~24h apart, defeats a naive first-pair check)",
+		func(t *testing.T) {
+			// DTSTART second is 15; BYSECOND=0,30 shares neither value.
+			dtstart := dtstartMsAt(t, tz, 2026, 1, 5, 9, 0, 15)
+			rrule := "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0,30"
+			tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{
+				Rrule:     &rrule,
+				DtstartMs: &dtstart,
+				Tz:        &tz,
+			}}
+			err := ValidateTrigger(tr)
+			require.Error(t, err, "BYSECOND values foreign to the DTSTART second must be rejected")
+			assert.True(t, errors.Is(err, ErrValidation))
+		},
+	)
 
 	t.Run("row8: foreign BYSECOND rejected (30s gaps)", func(t *testing.T) {
 		// DTSTART second is 0; BYSECOND=0,30 includes a foreign value (30).
@@ -263,8 +266,8 @@ func TestValidateTrigger_RruleInputBounds(t *testing.T) {
 		elapsed := time.Since(start)
 		require.Error(t, err, "a rule that can never fire (Feb 31) must be rejected")
 		assert.True(t, errors.Is(err, ErrValidation))
-		assert.Lessf(t, elapsed, 2*time.Second,
-			"liveness bound must complete quickly, not stall; took %s", elapsed)
+		assert.Lessf(t, elapsed, 1*time.Second,
+			"liveness bound must complete quickly (SC-008: <1s), not stall; took %s", elapsed)
 	})
 
 	t.Run("row11: rrule longer than 512 characters rejected", func(t *testing.T) {

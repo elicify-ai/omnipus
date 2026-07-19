@@ -44,7 +44,13 @@ import (
 // createRecurringTaskViaAPI POSTs a task with a `recurring` RRULE trigger and
 // returns the wire struct. surface, when non-empty, is passed through
 // (e.g. "heartbeat" for the selection-predicate tests).
-func createRecurringTaskViaAPI(t *testing.T, api *restAPI, wsID, title, rrule string, dtstartMs int64, tz, surface string) gen.Task {
+func createRecurringTaskViaAPI(
+	t *testing.T,
+	api *restAPI,
+	wsID, title, rrule string,
+	dtstartMs int64,
+	tz, surface string,
+) gen.Task {
 	t.Helper()
 	surfaceField := ""
 	if surface != "" {
@@ -52,14 +58,25 @@ func createRecurringTaskViaAPI(t *testing.T, api *restAPI, wsID, title, rrule st
 	}
 	body := fmt.Sprintf(
 		`{"title":%q,"action":"llm","workspace_id":%q,"trigger":{"type":"recurring","config":{"rrule":%q,"dtstart_ms":%d,"tz":%q}}%s}`,
-		title, wsID, rrule, dtstartMs, tz, surfaceField,
+		title,
+		wsID,
+		rrule,
+		dtstartMs,
+		tz,
+		surfaceField,
 	)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/tasks"
 	api.HandleTasks(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "createRecurringTaskViaAPI: POST must return 201; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusCreated,
+		w.Code,
+		"createRecurringTaskViaAPI: POST must return 201; body=%s",
+		w.Body.String(),
+	)
 	var tsk gen.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
 	return tsk
@@ -93,7 +110,16 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		wsID := ensureTestWorkspace(t, api)
 		dtstart := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC).UnixMilli()
 
-		tsk := createRecurringTaskViaAPI(t, api, wsID, "Biweekly", "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10", dtstart, "Europe/Berlin", "")
+		tsk := createRecurringTaskViaAPI(
+			t,
+			api,
+			wsID,
+			"Biweekly",
+			"FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10",
+			dtstart,
+			"Europe/Berlin",
+			"",
+		)
 		require.NotNil(t, tsk.Trigger)
 		assert.EqualValues(t, "recurring", tsk.Trigger.Type)
 		require.NotNil(t, tsk.Trigger.Config.Rrule)
@@ -213,23 +239,38 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		}{
 			{
 				"COUNT exceeds the 100,000 cap",
-				fmt.Sprintf(`{"type":"recurring","config":{"rrule":"FREQ=DAILY;COUNT=100001","dtstart_ms":%d,"tz":"UTC"}}`, dtstart),
+				fmt.Sprintf(
+					`{"type":"recurring","config":{"rrule":"FREQ=DAILY;COUNT=100001","dtstart_ms":%d,"tz":"UTC"}}`,
+					dtstart,
+				),
 			},
 			{
 				"both rrule and cron_expr present",
-				fmt.Sprintf(`{"type":"recurring","config":{"rrule":"FREQ=DAILY","cron_expr":"0 9 * * MON","dtstart_ms":%d,"tz":"UTC"}}`, dtstart),
+				fmt.Sprintf(
+					`{"type":"recurring","config":{"rrule":"FREQ=DAILY","cron_expr":"0 9 * * MON","dtstart_ms":%d,"tz":"UTC"}}`,
+					dtstart,
+				),
 			},
 			{
 				"FREQ=SECONDLY rejected outright",
-				fmt.Sprintf(`{"type":"recurring","config":{"rrule":"FREQ=SECONDLY","dtstart_ms":%d,"tz":"UTC"}}`, dtstart),
+				fmt.Sprintf(
+					`{"type":"recurring","config":{"rrule":"FREQ=SECONDLY","dtstart_ms":%d,"tz":"UTC"}}`,
+					dtstart,
+				),
 			},
 			{
 				"never-matching rule (Feb 31) rejected via the liveness bound",
-				fmt.Sprintf(`{"type":"recurring","config":{"rrule":"FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=31","dtstart_ms":%d,"tz":"UTC"}}`, dtstart),
+				fmt.Sprintf(
+					`{"type":"recurring","config":{"rrule":"FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=31","dtstart_ms":%d,"tz":"UTC"}}`,
+					dtstart,
+				),
 			},
 			{
 				"unloadable tz rejected",
-				fmt.Sprintf(`{"type":"recurring","config":{"rrule":"FREQ=DAILY","dtstart_ms":%d,"tz":"Not/AZone"}}`, dtstart),
+				fmt.Sprintf(
+					`{"type":"recurring","config":{"rrule":"FREQ=DAILY","dtstart_ms":%d,"tz":"Not/AZone"}}`,
+					dtstart,
+				),
 			},
 			{
 				"neither rrule nor cron_expr present",
@@ -315,32 +356,40 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		assert.Empty(t, sets, "a terminal (done) task must never render occurrences — the scheduler would never arm it")
 	})
 
-	t.Run("heartbeat-surface task omitted (selection predicate); a user-surface sibling still renders", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
-		wsID := ensureTestWorkspace(t, api)
-		dtstart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
-		hb := createRecurringTaskViaAPI(t, api, wsID, "Heartbeat", "FREQ=DAILY", dtstart, "UTC", "heartbeat")
-		visible := createRecurringTaskViaAPI(t, api, wsID, "Visible", "FREQ=DAILY", dtstart, "UTC", "")
+	t.Run(
+		"heartbeat-surface task omitted (selection predicate); a user-surface sibling still renders",
+		func(t *testing.T) {
+			api := newTestRestAPIWithHome(t)
+			wsID := ensureTestWorkspace(t, api)
+			dtstart := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
+			hb := createRecurringTaskViaAPI(t, api, wsID, "Heartbeat", "FREQ=DAILY", dtstart, "UTC", "heartbeat")
+			visible := createRecurringTaskViaAPI(t, api, wsID, "Visible", "FREQ=DAILY", dtstart, "UTC", "")
 
-		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-		to := from.AddDate(0, 0, 5)
-		params := url.Values{
-			"workspace_id": {wsID},
-			"from_ms":      {strconv.FormatInt(from.UnixMilli(), 10)},
-			"to_ms":        {strconv.FormatInt(to.UnixMilli(), 10)},
-			"tz":           {"UTC"},
-		}
-		w := getOccurrences(t, api, params)
-		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		var sets []gen.TaskOccurrenceSet
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &sets))
-		var ids []string
-		for _, s := range sets {
-			ids = append(ids, s.TaskId)
-		}
-		assert.NotContains(t, ids, hb.Id, "surface:heartbeat task must never render occurrences (heartbeat service owns its fires)")
-		assert.Contains(t, ids, visible.Id, "a plain user-surface sibling with the same rule must still render")
-	})
+			from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			to := from.AddDate(0, 0, 5)
+			params := url.Values{
+				"workspace_id": {wsID},
+				"from_ms":      {strconv.FormatInt(from.UnixMilli(), 10)},
+				"to_ms":        {strconv.FormatInt(to.UnixMilli(), 10)},
+				"tz":           {"UTC"},
+			}
+			w := getOccurrences(t, api, params)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			var sets []gen.TaskOccurrenceSet
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &sets))
+			ids := make([]string, 0, len(sets))
+			for _, s := range sets {
+				ids = append(ids, s.TaskId)
+			}
+			assert.NotContains(
+				t,
+				ids,
+				hb.Id,
+				"surface:heartbeat task must never render occurrences (heartbeat service owns its fires)",
+			)
+			assert.Contains(t, ids, visible.Id, "a plain user-surface sibling with the same rule must still render")
+		},
+	)
 
 	t.Run("zero-occurrence task omitted; empty result is [] never null", func(t *testing.T) {
 		api := newTestRestAPIWithHome(t)
@@ -358,7 +407,12 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		}
 		w := getOccurrences(t, api, params)
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		assert.Equal(t, "[]", strings.TrimSpace(w.Body.String()), "an empty result must serialize as [] on the wire, never null")
+		assert.Equal(
+			t,
+			"[]",
+			strings.TrimSpace(w.Body.String()),
+			"an empty result must serialize as [] on the wire, never null",
+		)
 	})
 
 	t.Run("400 on invalid range/span/tz", func(t *testing.T) {
