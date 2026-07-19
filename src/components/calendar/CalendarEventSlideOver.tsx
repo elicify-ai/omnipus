@@ -56,6 +56,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { FormError } from '@/components/ui/FormError'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
@@ -148,7 +149,8 @@ export function CalendarEventSlideOver({
   const isEditingExistingRrule = isEdit && isRruleTrigger(task.trigger)
 
   const [title, setTitle] = useState('')
-  const [agentId, setAgentId] = useState('__none__')
+  const [agentId, setAgentId] = useState('')
+  const [prompt, setPrompt] = useState('')
   const [anchorDate, setAnchorDate] = useState<Date | null>(null)
   const [recurrence, setRecurrence] = useState<RecurrenceValue>({ kind: 'none' })
   const [recurrenceValid, setRecurrenceValid] = useState(true)
@@ -169,7 +171,8 @@ export function CalendarEventSlideOver({
 
     if (task) {
       setTitle(task.title)
-      setAgentId(task.agent_id || '__none__')
+      setAgentId(task.agent_id || '')
+      setPrompt(task.prompt || '')
       if (isRruleTrigger(task.trigger)) {
         const dtstartMs = task.trigger.config.dtstart_ms as number
         const rruleBody = task.trigger.config.rrule as string
@@ -185,7 +188,8 @@ export function CalendarEventSlideOver({
       }
     } else {
       setTitle('')
-      setAgentId('__none__')
+      setAgentId('')
+      setPrompt('')
       setAnchorDate(initialDate ?? new Date())
       setRecurrence({ kind: 'none' })
     }
@@ -294,6 +298,16 @@ export function CalendarEventSlideOver({
     setSaveError(null)
   }
 
+  // A scheduled task's agent is its only executor and its prompt is its only
+  // instruction (Task.Prompt — pkg/agent/task_executor.go:462) — a fired
+  // task with neither gets nothing to do and no one to do it. Both are
+  // therefore hard-required, gating Save reactively (like `recurrenceValid`)
+  // rather than only on click — a fresh panel cannot be saved until both are
+  // set. Title stays click-validated (existing behavior, unchanged).
+  const agentSelected = agentId.trim().length > 0
+  const trimmedPrompt = prompt.trim()
+  const promptEmpty = trimmedPrompt.length === 0
+
   function handleSave() {
     // F4 defense-in-depth: the Save button is already disabled while the
     // Repeat section reports an invalid state, but don't rely on that alone
@@ -307,6 +321,12 @@ export function CalendarEventSlideOver({
       return
     }
     setTitleError('')
+    // Defense-in-depth (mirrors the recurrence check above): Save is already
+    // disabled while these are unset, but don't rely on that alone.
+    if (!agentSelected || promptEmpty) {
+      setSaveError('Select an agent and add instructions before saving.')
+      return
+    }
     if (!anchorDate) {
       setSaveError('Pick a date and time for this event.')
       return
@@ -327,7 +347,8 @@ export function CalendarEventSlideOver({
     if (task) {
       updateMutation.mutate({
         title: trimmed,
-        agent_id: agentId === '__none__' ? '' : agentId,
+        agent_id: agentId,
+        prompt: trimmedPrompt,
         trigger,
       })
     } else {
@@ -337,13 +358,14 @@ export function CalendarEventSlideOver({
         workspace_id: workspaceId,
         surface: 'user',
         priority: 3,
-        agent_id: agentId === '__none__' ? undefined : agentId,
+        agent_id: agentId,
+        prompt: trimmedPrompt,
         trigger,
       })
     }
   }
 
-  const saveDisabled = isPending || !recurrenceValid
+  const saveDisabled = isPending || !recurrenceValid || !agentSelected || promptEmpty
 
   return (
     <Sheet open={open} onOpenChange={(next) => { if (!next) onOpenChange(false) }}>
@@ -371,29 +393,57 @@ export function CalendarEventSlideOver({
             <FormError id="ces-title-error" error={titleError || null} />
           </div>
 
-          {/* Agent */}
+          {/* Agent — required: a scheduled task's only executor. */}
           <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Agent</Label>
+            <Label className="text-[var(--color-secondary)]">
+              Agent <span className="text-[var(--color-error)]">*</span>
+            </Label>
             <SmartSelect
               value={agentId}
               onValueChange={setAgentId}
-              placeholder={teamLoading ? 'Loading team…' : 'Unassigned'}
+              placeholder={teamLoading ? 'Loading team…' : 'Select an agent'}
               disabled={teamLoading}
               triggerClassName="h-9 text-sm"
               ariaLabel="Agent"
-              items={[
-                { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                ...buildTaskAssigneeItems(agents, {
-                  teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
-                  currentAssigneeId: task?.agent_id,
-                }),
-              ]}
+              items={buildTaskAssigneeItems(agents, {
+                teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
+                currentAssigneeId: task?.agent_id,
+              })}
             />
             {teamError && (
               <p className="text-xs text-[var(--color-muted)]">
                 Team list unavailable — showing all agents
               </p>
             )}
+            <FormError
+              id="ces-agent-error"
+              error={agentSelected ? null : 'Select an agent to run this task.'}
+            />
+          </div>
+
+          {/* Instruction (prompt) — required: the agent's only execution
+              instruction each time this task fires (Task.Prompt,
+              pkg/agent/task_executor.go:462). Empty prompt → the agent gets
+              only "# Task: <title>" and nothing to actually do. */}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ces-prompt" className="text-[var(--color-secondary)]">
+              Instruction <span className="text-[var(--color-error)]">*</span>
+            </Label>
+            <Textarea
+              id="ces-prompt"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="Describe what the agent should do each time this runs…"
+              rows={4}
+              maxLength={10000}
+              className="text-xs font-mono resize-none"
+              aria-invalid={promptEmpty}
+              aria-describedby={promptEmpty ? 'ces-prompt-error' : undefined}
+            />
+            <FormError
+              id="ces-prompt-error"
+              error={promptEmpty ? 'Instructions are required.' : null}
+            />
           </div>
 
           {/* Date & time (the recurrence anchor) */}

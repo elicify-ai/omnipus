@@ -46,11 +46,16 @@ beforeAll(() => {
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
+// Agent is now a required field (operator decision — a scheduled task's only
+// executor). One selectable agent, so the roster is never empty and Save can
+// be enabled in every create/save flow below.
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn().mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', locked: true, status: 'idle', soul: '' },
+    ]),
     fetchWorkspaceDelegation: vi.fn(),
     createTask: vi.fn(),
     updateTask: vi.fn(),
@@ -168,6 +173,25 @@ async function pickRepeatOption(label: string) {
   fireEvent.click(option)
 }
 
+// Agent required (operator decision) — every create/save flow must pick the
+// one mocked agent before Save/Create enables. Waits for the team-scope
+// query (mocked to reject → `unscoped` fallback) to settle so the SmartSelect
+// is no longer disabled by `teamLoading`.
+async function selectAgent(name = 'Mia') {
+  const trigger = await screen.findByRole('combobox', { name: 'Agent' })
+  await waitFor(() => expect(trigger).not.toBeDisabled())
+  fireEvent.click(trigger)
+  const option = await screen.findByRole('option', { name })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
+
+// Instruction (prompt) required (operator decision) — the agent's only
+// execution instruction each time the task fires.
+function fillPrompt(text = 'Summarize the last run and flag anomalies.') {
+  fireEvent.change(screen.getByLabelText(/instruction/i), { target: { value: text } })
+}
+
 beforeEach(() => {
   vi.mocked(createTask).mockReset()
   vi.mocked(updateTask).mockReset()
@@ -200,6 +224,8 @@ describe('CalendarEventSlideOver — create: recurring rule (US-1 AS-1/3)', () =
     renderSlideOver({ task: null, initialDate: ANCHOR })
 
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Weekly sync' } })
+    await selectAgent()
+    fillPrompt('Summarize weekly progress.')
 
     openRepeatDropdown()
     await pickRepeatOption('Weekly on Monday')
@@ -212,6 +238,8 @@ describe('CalendarEventSlideOver — create: recurring rule (US-1 AS-1/3)', () =
     expect(body.title).toBe('Weekly sync')
     expect(body.surface).toBe('user')
     expect(body.workspace_id).toBe('ws-1')
+    expect(body.agent_id).toBe('mia')
+    expect(body.prompt).toBe('Summarize weekly progress.')
     expect(body.trigger?.type).toBe('recurring')
     expect(body.trigger?.config?.rrule).toContain('FREQ=WEEKLY')
     expect(body.trigger?.config?.rrule).toContain('BYDAY=MO')
@@ -228,6 +256,8 @@ describe('CalendarEventSlideOver — create: "Does not repeat" (US-1 AS-6)', () 
     renderSlideOver({ task: null, initialDate })
 
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'One-off check' } })
+    await selectAgent()
+    fillPrompt('Run the one-off check.')
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -237,14 +267,74 @@ describe('CalendarEventSlideOver — create: "Does not repeat" (US-1 AS-6)', () 
     expect(body.surface).toBe('user')
     expect(body.priority).toBe(3)
     expect(body.action).toBe('llm')
-    expect(body.prompt).toBeUndefined()
+    expect(body.agent_id).toBe('mia')
+    expect(body.prompt).toBe('Run the one-off check.')
   })
 
-  it('requires a title before saving', async () => {
+  it('requires a title before saving (Agent + Instruction filled, Title left blank)', async () => {
     renderSlideOver({ task: null })
+    // Agent and Instruction are also required and gate Save reactively — fill
+    // them so Save is enabled, isolating the title-specific click validation.
+    await selectAgent()
+    fillPrompt()
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
     expect(await screen.findByText(/title is required/i)).toBeInTheDocument()
     expect(vi.mocked(createTask)).not.toHaveBeenCalled()
+  })
+})
+
+describe('CalendarEventSlideOver — Agent and Instruction are required (operator decision)', () => {
+  it('disables Save until an agent is selected', async () => {
+    renderSlideOver({ task: null })
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Needs an agent' } })
+    fillPrompt()
+
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled()
+    expect(screen.getByText(/select an agent to run this task/i)).toBeInTheDocument()
+
+    await selectAgent()
+    expect(screen.getByRole('button', { name: /^create$/i })).not.toBeDisabled()
+  })
+
+  it('disables Save until the Instruction field is non-empty', async () => {
+    renderSlideOver({ task: null })
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Needs instructions' } })
+    await selectAgent()
+
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled()
+    expect(screen.getByText(/instructions are required/i)).toBeInTheDocument()
+
+    fillPrompt('Now it has something to do.')
+    expect(screen.getByRole('button', { name: /^create$/i })).not.toBeDisabled()
+  })
+
+  it('a create body carries the real prompt text and a required agent_id (never undefined/empty)', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeTask() as never)
+    renderSlideOver({ task: null })
+
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Nightly digest' } })
+    await selectAgent()
+    fillPrompt('Compile the nightly digest and post it to #ops.')
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.agent_id).toBe('mia')
+    expect(body.agent_id).not.toBe('')
+    expect(body.agent_id).toBeDefined()
+    expect(body.prompt).toBe('Compile the nightly digest and post it to #ops.')
+  })
+
+  it('editing a task loads its existing prompt into the Instruction field', async () => {
+    const task = makeTask({
+      agent_id: 'mia',
+      prompt: 'Existing scheduled instructions.',
+    })
+    renderSlideOver({ task })
+
+    const promptField = await screen.findByLabelText(/instruction/i)
+    expect(promptField).toHaveValue('Existing scheduled instructions.')
   })
 })
 
@@ -264,12 +354,17 @@ describe('CalendarEventSlideOver — edit: Timezone Semantics §1 / FR-024 (gril
 describe('CalendarEventSlideOver — edit: FR-024 anchor invariance', () => {
   it('title-only edit sends the ORIGINAL trigger byte-identical (no re-anchor)', async () => {
     vi.mocked(updateTask).mockResolvedValueOnce(makeTask() as never)
+    // Fixture predates the Agent/Instruction requirement (no agent_id/prompt) —
+    // fill both so Save enables, then verify they ride along in the body
+    // without disturbing the byte-identical trigger invariant below.
     const task = makeTask({ trigger: RRULE_TRIGGER })
     renderSlideOver({ task })
 
     const titleInput = await screen.findByLabelText(/title/i)
     expect(titleInput).toHaveValue('Weekly report')
     fireEvent.change(titleInput, { target: { value: 'Weekly report v2' } })
+    await selectAgent()
+    fillPrompt('Summarize this week.')
 
     // Never touched the Date & time field or the Repeat section.
     expect(screen.queryByTestId('reanchor-notice')).not.toBeInTheDocument()
@@ -280,7 +375,32 @@ describe('CalendarEventSlideOver — edit: FR-024 anchor invariance', () => {
     const [calledId, data] = vi.mocked(updateTask).mock.calls[0]
     expect(calledId).toBe('task-1')
     expect(data.title).toBe('Weekly report v2')
+    expect(data.agent_id).toBe('mia')
+    expect(data.prompt).toBe('Summarize this week.')
     // Byte-identical: same rrule, dtstart_ms, and tz as the original trigger.
+    expect(data.trigger).toEqual(RRULE_TRIGGER)
+  })
+
+  it('a prompt/agent-only edit (Title, Date & time, Repeat all untouched) still sends the ORIGINAL trigger byte-identical', async () => {
+    // ADD test 5 (spec): prompt and agent are NOT schedule fields — an edit
+    // that touches only them must not perturb `buildTriggerForSave`'s
+    // byte-identical path any more than a title-only edit does.
+    vi.mocked(updateTask).mockResolvedValueOnce(makeTask() as never)
+    const task = makeTask({ trigger: RRULE_TRIGGER, agent_id: 'mia', prompt: 'Old instructions.' })
+    renderSlideOver({ task })
+
+    await screen.findByLabelText(/title/i)
+    expect(screen.getByLabelText(/instruction/i)).toHaveValue('Old instructions.')
+    fillPrompt('New instructions only.')
+
+    expect(screen.queryByTestId('reanchor-notice')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
+    const [, data] = vi.mocked(updateTask).mock.calls[0]
+    expect(data.title).toBe('Weekly report')
+    expect(data.prompt).toBe('New instructions only.')
     expect(data.trigger).toEqual(RRULE_TRIGGER)
   })
 
@@ -290,6 +410,8 @@ describe('CalendarEventSlideOver — edit: FR-024 anchor invariance', () => {
     renderSlideOver({ task })
 
     await screen.findByLabelText(/title/i)
+    await selectAgent()
+    fillPrompt()
     // The fixture's COUNT=10 end condition doesn't match the plain "weekly"
     // preset (which is "Never"-ending) — it loads as Custom, which is
     // correct: this test only cares that changing it re-anchors.
@@ -322,6 +444,8 @@ describe('CalendarEventSlideOver — server validation error (FR-006)', () => {
     renderSlideOver({ task: null })
 
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Poll inbox' } })
+    await selectAgent()
+    fillPrompt()
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -394,6 +518,8 @@ describe('CalendarEventSlideOver — real Custom flow via RecurrenceEditor widge
     renderSlideOver({ task })
 
     await screen.findByLabelText(/title/i)
+    await selectAgent()
+    fillPrompt()
     expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Custom')
 
     // Widget 1: the "Repeat every" interval number input.
@@ -422,6 +548,10 @@ describe('CalendarEventSlideOver — real Custom flow via RecurrenceEditor widge
     renderSlideOver({ task })
 
     await screen.findByLabelText(/title/i)
+    // Agent + Instruction are also required — fill both first so the
+    // recurrence-validity gate is what's under test below, not these.
+    await selectAgent()
+    fillPrompt()
     expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Custom')
     expect(screen.getByRole('button', { name: /^save$/i })).not.toBeDisabled()
 
@@ -448,6 +578,8 @@ describe('CalendarEventSlideOver — real Custom flow via RecurrenceEditor widge
     renderSlideOver({ task: null, initialDate: ANCHOR })
 
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Sprint sync' } })
+    await selectAgent()
+    fillPrompt()
     expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Does not repeat')
 
     // Pick "Custom…" — the dropdown must STAY on Custom and reveal the widgets.

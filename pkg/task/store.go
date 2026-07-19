@@ -318,6 +318,43 @@ func (t *Task) normalize() error {
 			return err
 		}
 	}
+	if err := t.validateScheduledAgentAssignment(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateScheduledAgentAssignment rejects a task that would fire on its own
+// schedule with no agent to execute it. A trigger is AUTO-FIRING — the task
+// executor dispatches it with no human present to step in — for
+// once/every/recurring; `manual` (or no trigger at all) starts only when a
+// human explicitly runs it, so an empty AgentID there is a legitimate
+// human-only task (the executor's own dispatch guard,
+// pkg/agent/task_executor.go, treats AgentID=="" as exactly that). Combined
+// with an agent-executable action (ActionLLM — Tier 2's only action), an
+// auto-firing trigger with no assigned agent is a dead task: it will fire and
+// have nothing to run. Operator decision: reject this at the API/store layer
+// (Create and Update alike) rather than silently persisting a task that can
+// never be dispatched — this also closes the raw-API/agent-tool path, not
+// just the SPA form.
+func (t *Task) validateScheduledAgentAssignment() error {
+	if t.Trigger == nil {
+		return nil
+	}
+	switch t.Trigger.Type {
+	case TriggerOnce, TriggerEvery, TriggerRecurring:
+	default:
+		return nil
+	}
+	if t.Action != ActionLLM {
+		return nil
+	}
+	if t.AgentID == "" {
+		return verr(
+			"a scheduled (once/every/recurring) task must be assigned to an agent (agent_id is required when trigger.type=%q)",
+			t.Trigger.Type,
+		)
+	}
 	return nil
 }
 
@@ -859,6 +896,13 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	}
 	if patch.SourceChatID != nil {
 		t.SourceChatID = *patch.SourceChatID
+	}
+
+	// Re-check with the fully-patched task: a patch that ARMS an auto-firing
+	// trigger on an agentless task, or CLEARS the agent off an already-scheduled
+	// task, must be rejected the same as Create would reject it (normalize).
+	if err := t.validateScheduledAgentAssignment(); err != nil {
+		return nil, err
 	}
 
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)

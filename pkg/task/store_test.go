@@ -644,6 +644,7 @@ func TestTriggerPersisted(t *testing.T) {
 	s := newStore(t)
 	cron := "0 9 * * MON"
 	tk := mkTask("recurring", "ws")
+	tk.AgentID = "agent-1"
 	tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
 	if err := s.Create(tk); err != nil {
 		t.Fatal(err)
@@ -668,6 +669,7 @@ func TestTriggerPersisted_Rrule(t *testing.T) {
 	tz := "Europe/Berlin"
 
 	tk := mkTask("recurring-rrule", "ws")
+	tk.AgentID = "agent-1"
 	tk.Trigger = &Trigger{
 		Type:   TriggerRecurring,
 		Config: TriggerConfig{Rrule: &rruleBody, DtstartMs: &dtstartMs, Tz: &tz},
@@ -699,6 +701,135 @@ func TestTriggerPersisted_Rrule(t *testing.T) {
 	if got.Trigger.Config.CronExpr != nil {
 		t.Fatalf("trigger config.cron_expr unexpectedly set: %+v", got.Trigger.Config)
 	}
+}
+
+// TestScheduledAgentAssignment covers validateScheduledAgentAssignment: an
+// auto-firing trigger (once/every/recurring) on an llm task fires with no
+// human present, so it must carry an assigned agent — reject at Create AND
+// Update, on both packages' entry points (normalize/updateLocked). `manual`
+// (or no trigger) starts only when a human explicitly runs it, so an empty
+// AgentID there is a legitimate human-only task and must NOT be rejected.
+func TestScheduledAgentAssignment(t *testing.T) {
+	at := int64(1781000000000)
+	cron := "0 9 * * MON"
+
+	t.Run("create: once/recurring + llm + no agent is rejected", func(t *testing.T) {
+		s := newStore(t)
+		for _, tr := range []*Trigger{
+			{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
+			{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+		} {
+			tk := mkTask("scheduled-no-agent", "ws")
+			tk.Trigger = tr
+			err := s.Create(tk)
+			if err == nil {
+				t.Fatalf("trigger %q: expected error, task created with empty agent_id", tr.Type)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("trigger %q: expected ErrValidation, got %v", tr.Type, err)
+			}
+		}
+	})
+
+	t.Run("create: once/recurring + llm + agent is accepted", func(t *testing.T) {
+		s := newStore(t)
+		for _, tr := range []*Trigger{
+			{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
+			{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+		} {
+			tk := mkTask("scheduled-with-agent", "ws")
+			tk.AgentID = "agent-1"
+			tk.Trigger = tr
+			if err := s.Create(tk); err != nil {
+				t.Fatalf("trigger %q: unexpected error: %v", tr.Type, err)
+			}
+		}
+	})
+
+	t.Run("create: manual + no agent is accepted (human-only task)", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("manual-no-agent", "ws")
+		tk.Trigger = &Trigger{Type: TriggerManual}
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("manual trigger with no agent should be accepted: %v", err)
+		}
+		// No trigger at all (nil) must also be accepted with no agent.
+		tk2 := mkTask("no-trigger-no-agent", "ws")
+		if err := s.Create(tk2); err != nil {
+			t.Fatalf("task with no trigger and no agent should be accepted: %v", err)
+		}
+	})
+
+	t.Run("update: arming a recurring trigger on an agentless task is rejected", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("becomes-scheduled", "ws")
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+		_, err := s.Update(tk.ID, Patch{Trigger: &tr})
+		if err == nil {
+			t.Fatal("expected error arming a recurring trigger on an agentless task")
+		}
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("update: clearing the agent off an already-scheduled task is rejected", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("scheduled", "ws")
+		tk.AgentID = "agent-1"
+		tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		empty := ""
+		_, err := s.Update(tk.ID, Patch{AgentID: &empty})
+		if err == nil {
+			t.Fatal("expected error clearing agent_id off a scheduled task")
+		}
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("update: assigning an agent to an already-scheduled task succeeds", func(t *testing.T) {
+		s := newStore(t)
+		// Task was never persisted agentless-and-scheduled (Create would reject
+		// that combination) — build it up via Update from a manual task instead,
+		// mirroring how the SPA/API would legitimately reach this state: create
+		// manual, then arm the trigger and assign the agent together.
+		tk := mkTask("becomes-assigned", "ws")
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create manual precursor: %v", err)
+		}
+		agentID := "agent-1"
+		everyTrigger := &Trigger{Type: TriggerEvery, Config: TriggerConfig{EveryMs: ptr(int64(60000))}}
+		got, err := s.Update(tk.ID, Patch{AgentID: &agentID, Trigger: &everyTrigger})
+		if err != nil {
+			t.Fatalf("assigning agent alongside the trigger should succeed: %v", err)
+		}
+		if got.AgentID != agentID || got.Trigger == nil || got.Trigger.Type != TriggerEvery {
+			t.Fatalf("update did not persist trigger+agent together: %+v", got)
+		}
+	})
+
+	t.Run("update: manual task stays valid with no agent", func(t *testing.T) {
+		s := newStore(t)
+		tk := mkTask("manual-update", "ws")
+		if err := s.Create(tk); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		newTitle := "renamed"
+		got, err := s.Update(tk.ID, Patch{Title: &newTitle})
+		if err != nil {
+			t.Fatalf("no-op-trigger update on an agentless manual task should succeed: %v", err)
+		}
+		if got.Title != newTitle {
+			t.Fatalf("title not updated: %+v", got)
+		}
+	})
 }
 
 // --- workspace scoping ---

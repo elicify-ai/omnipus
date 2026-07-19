@@ -309,6 +309,15 @@ test(
 
       await page.locator('#ces-title').fill(title);
 
+      // A scheduled agent task requires an assigned agent AND an instruction
+      // (an unassigned or instruction-less scheduled task has no-one / nothing
+      // to run — enforced client-side by a disabled Save and server-side by a
+      // 400). Fill both here, BEFORE the recurrence rejection sub-check below,
+      // so that sub-check isolates recurrence validity (not agent/prompt).
+      await page.getByRole('button', { name: 'Agent' }).click();
+      await page.getByRole('option', { name: /Mia/ }).first().click();
+      await page.locator('#ces-prompt').fill('Post the sprint status summary to the team channel.');
+
       // Open the Repeat dropdown and select "Custom…".
       await page.locator('#recurrence-preset').click();
       await page.getByRole('option', { name: 'Custom…' }).click();

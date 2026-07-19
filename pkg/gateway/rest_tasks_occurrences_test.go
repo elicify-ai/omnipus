@@ -44,6 +44,13 @@ import (
 // createRecurringTaskViaAPI POSTs a task with a `recurring` RRULE trigger and
 // returns the wire struct. surface, when non-empty, is passed through
 // (e.g. "heartbeat" for the selection-predicate tests).
+//
+// A recurring+llm task must carry an agent_id (store.validateScheduledAgentAssignment
+// — a scheduled task with no agent is a dead task, rejected at Create). "main"
+// is the test harness's always-registered default agent sentinel
+// (agent.DefaultAgentID); it is put on wsID's core team here (mirroring
+// TestHandleTaskPatch_InProgress_WithKnownAgent's setWorkspaceCoreTeam
+// precedent) so validateTaskAgentID's team-membership check accepts it.
 func createRecurringTaskViaAPI(
 	t *testing.T,
 	api *restAPI,
@@ -52,12 +59,13 @@ func createRecurringTaskViaAPI(
 	tz, surface string,
 ) gen.Task {
 	t.Helper()
+	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
 	surfaceField := ""
 	if surface != "" {
 		surfaceField = fmt.Sprintf(`,"surface":%q`, surface)
 	}
 	body := fmt.Sprintf(
-		`{"title":%q,"action":"llm","workspace_id":%q,"trigger":{"type":"recurring","config":{"rrule":%q,"dtstart_ms":%d,"tz":%q}}%s}`,
+		`{"title":%q,"action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"recurring","config":{"rrule":%q,"dtstart_ms":%d,"tz":%q}}%s}`,
 		title,
 		wsID,
 		rrule,
@@ -151,8 +159,9 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		api.auditor = logger
 
 		wsID := ensureTestWorkspace(t, api)
+		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
 		body := fmt.Sprintf(
-			`{"title":"Legacy","action":"llm","workspace_id":%q,"trigger":{"type":"recurring","config":{"cron_expr":"0 9 * * MON"}}}`,
+			`{"title":"Legacy","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"recurring","config":{"cron_expr":"0 9 * * MON"}}}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -335,7 +344,13 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 	})
 
 	t.Run("terminal task omitted (selection predicate)", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
+		// newTestRestAPIAlignedStores (not newTestRestAPIWithHome): the recurring
+		// task now carries agent_id="main" (store.validateScheduledAgentAssignment
+		// requires it), so advanceTaskToDone's walk through in_progress goes
+		// through the real StartTaskNow launch path (rest_tasks.go ~L1000), which
+		// 503s with a nil taskExecutor — this harness wires one up (same
+		// precedent as TestHandleTaskPatch_InProgress_WithKnownAgent).
+		api := newTestRestAPIAlignedStores(t)
 		wsID := ensureTestWorkspace(t, api)
 		dtstart := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
 		tsk := createRecurringTaskViaAPI(t, api, wsID, "WillBeDone", "FREQ=DAILY", dtstart, "UTC", "")

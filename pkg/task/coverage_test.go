@@ -1134,6 +1134,7 @@ func TestUpdateClearsTrigger(t *testing.T) {
 	s := newStore(t)
 	cron := "0 9 * * MON"
 	tk := mkTask("t", "ws")
+	tk.AgentID = "agent-1"
 	tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
 	mustCreate(t, s, tk)
 

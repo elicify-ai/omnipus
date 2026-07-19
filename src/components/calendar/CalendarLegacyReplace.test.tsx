@@ -56,11 +56,16 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }))
 
+// Agent is now a required field on CalendarEventSlideOver (operator decision
+// — a scheduled task's only executor). One selectable agent, so Save can be
+// enabled in the legacy-replace save flows below.
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn().mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', locked: true, status: 'idle', soul: '' },
+    ]),
     fetchSubtasks: vi.fn().mockResolvedValue([]),
     fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
@@ -162,6 +167,23 @@ async function pickRepeatOption(label: string) {
   fireEvent.click(option)
 }
 
+// Agent required (operator decision) — save flows must pick the one mocked
+// agent before Save enables. Waits for the team-scope query (mocked to
+// reject → `unscoped` fallback) to settle so the SmartSelect isn't disabled.
+async function selectAgent(name = 'Mia') {
+  const trigger = await screen.findByRole('combobox', { name: 'Agent' })
+  await waitFor(() => expect(trigger).not.toBeDisabled())
+  fireEvent.click(trigger)
+  const option = await screen.findByRole('option', { name })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
+
+// Instruction (prompt) required (operator decision).
+function fillPrompt(text = 'Post the reminder to the team channel.') {
+  fireEvent.change(screen.getByLabelText(/instruction/i), { target: { value: text } })
+}
+
 beforeEach(() => {
   vi.mocked(createTask).mockReset()
   vi.mocked(updateTask).mockReset().mockResolvedValue(makeTask() as never)
@@ -199,6 +221,8 @@ describe('CalendarEventSlideOver — legacy trigger (US-5, D8)', () => {
   it('saving a new rule replaces the trigger outright: recurring + rrule + browser tz, old keys gone', async () => {
     renderSlideOver(cronTask)
     await screen.findByTestId('legacy-trigger-note')
+    await selectAgent()
+    fillPrompt()
 
     // "Daily" is weekday-independent — safe regardless of what real day the
     // suite runs on (the legacy Date & time field defaults to "now", per D8's
@@ -223,6 +247,8 @@ describe('CalendarEventSlideOver — legacy trigger (US-5, D8)', () => {
   it('grill-code FIX 1 (CRITICAL): a title-only edit on a legacy task PRESERVES the original trigger, never converts to `once`', async () => {
     renderSlideOver(cronTask)
     await screen.findByTestId('legacy-trigger-note')
+    await selectAgent()
+    fillPrompt()
 
     // Never touch the Repeat section (stays "Does not repeat") — only edit
     // the title, exactly like the byte-identical RRULE-edit test above.
