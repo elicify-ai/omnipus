@@ -77,12 +77,17 @@ var judgeSleepFn = sleepWithContext //nolint:gochecknoglobals
 // pipeline runs — defense in depth against a pathological tool result.
 const machineCheckOutputCap = 256 * 1024
 
-// exitCodeSuffixRe extracts the real process exit code that ExecTool's own
-// foregroundResultFromSandbox (pkg/tools/shell.go) appends to ForLLM on a
-// non-zero exit ("[Command exited with code N]"). tools.ToolResult carries
-// no structured exit-code field (pkg/tools/result.go) — this is the only way
-// to recover the real code without a parallel exec path (forbidden by D2
-// rule 1) or a pkg/tools change (out of this wave's file scope).
+// exitCodeSuffixRe extracts the real process exit code from ExecTool's
+// human-readable ForLLM text suffix ("[Command exited with code N]",
+// pkg/tools/shell.go). review r2 HIGH-1: this is now a FALLBACK ONLY, used
+// when result.ExitCode (the structured, truncation-immune field on
+// tools.ToolResult, pkg/tools/result.go) is nil — e.g. a test double or any
+// other bash-tool implementation that predates that field. The text suffix
+// is NOT authoritative: shell.go's maxForegroundOutputLen truncation can cut
+// the real (appended-last, pre-truncation) suffix away on a large output
+// while leaving an earlier, worker-embedded fake suffix as the text's last
+// occurrence — exactly the spoof this regex path cannot fully close on its
+// own, which is why the structured field is now the primary source.
 var exitCodeSuffixRe = regexp.MustCompile(`\[Command exited with code (-?\d+)\]`)
 
 // judgeTimedOutMarker matches ExecTool's own timeout message text
@@ -343,24 +348,33 @@ func (al *AgentLoop) runMachineCheck(
 }
 
 // interpretBashResult recovers the real exit code and timeout status from a
-// bash-tool ToolResult (see exitCodeSuffixRe's doc comment for why this
-// regex-based recovery is necessary rather than a structured field).
+// bash-tool ToolResult.
 //
 // result.IsError is AUTHORITATIVE (ExecTool sets IsError = ExitCode != 0,
 // pkg/tools/shell.go) — it is never overridden by anything a worker's own
 // command could have printed to stdout/stderr. Without this, a worker
 // command could spoof success by echoing its own fake
 // "[Command exited with code 0]" suffix into output while the real command
-// actually failed; exitCodeSuffixRe would find that leftmost fake match and
-// the check would wrongly pass (review r1 M1, silent-failure CRITICAL).
+// actually failed (review r1 M1, silent-failure CRITICAL).
 //
-//   - !IsError: the real command genuinely exited 0 — trust it directly,
-//     no regex needed.
-//   - IsError: the real command did NOT exit 0. Take the LAST occurrence of
-//     the suffix (ExecTool always appends its own real one last; an
-//     earlier occurrence in the command's own output can only be a spoof
-//     attempt) and only trust it when it reports a genuinely non-zero
-//     code — a spoofed "...code 0]" suffix can never mask a real failure.
+//   - !IsError: the real command genuinely exited 0 — trust it directly, no
+//     further parsing needed.
+//   - IsError: the real command did NOT exit 0.
+//   - result.ExitCode set (review r2 HIGH-1, the common case for a real
+//     ExecTool foreground run): trust it directly — it is the real process
+//     exit code, set structurally before any output truncation/spoofing
+//     could touch it, never scraped from worker-controlled text. A
+//     self-contradictory ExitCode==0 alongside IsError==true fails closed
+//     to the -1 sentinel rather than being trusted.
+//   - result.ExitCode nil (a test double, or a producer that predates the
+//     structured field): FALL BACK to exitCodeSuffixRe, taking the LAST
+//     occurrence of the text suffix — an earlier occurrence in the
+//     command's own output can only be a spoof attempt — and only trusting
+//     it when it reports a genuinely non-zero code. NOTE this fallback is
+//     text-based and thus reproduces the exact truncation gap the
+//     structured field exists to close (see exitCodeSuffixRe's own doc
+//     comment) — it is retained only for producers that don't set
+//     ExitCode, not as an equally-trustworthy alternative.
 //     No match, or a non-numeric/zero match, fails closed to the -1
 //     sentinel, which can never equal a criterion's declared 0..255
 //     expected code, so it always fails closed. This also covers the
@@ -380,6 +394,12 @@ func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int,
 	}
 	if !result.IsError {
 		return false, 0, output
+	}
+	if result.ExitCode != nil {
+		if code := *result.ExitCode; code != 0 {
+			return false, code, output
+		}
+		return false, -1, output
 	}
 	if matches := exitCodeSuffixRe.FindAllStringSubmatch(output, -1); len(matches) > 0 {
 		last := matches[len(matches)-1]

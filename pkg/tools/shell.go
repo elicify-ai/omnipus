@@ -820,6 +820,16 @@ func foregroundResultFromSandbox(res sandbox.Result, timeoutSeconds int32) *Tool
 		}
 	}
 
+	// review r2 HIGH-1: capture the real exit code in the structured,
+	// truncation-immune field FIRST (see ToolResult.ExitCode's doc comment) —
+	// this is what judge.go's interpretBashResult reads to adjudicate a
+	// machine-check criterion, never the text below. The human-readable
+	// suffix is appended AFTER truncateOutput (not before, as this used to
+	// do) so a large output can never truncate the AUTHORITATIVE suffix away
+	// while leaving an earlier, worker-embedded fake suffix as the text's
+	// last occurrence.
+	exitCode := res.ExitCode
+	output = truncateOutput(output)
 	if res.ExitCode != 0 {
 		output += fmt.Sprintf("\n\n[Command exited with code %d]", res.ExitCode)
 		if res.ExitCode == -1 {
@@ -827,11 +837,11 @@ func foregroundResultFromSandbox(res sandbox.Result, timeoutSeconds int32) *Tool
 		}
 	}
 
-	output = truncateOutput(output)
 	return &ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: res.ExitCode != 0,
+		ForLLM:   output,
+		ForUser:  output,
+		IsError:  res.ExitCode != 0,
+		ExitCode: &exitCode,
 	}
 }
 
@@ -922,15 +932,20 @@ func (t *ExecTool) runUnconstrained(
 		}
 	}
 
+	// review r2 HIGH-1: same fix as foregroundResultFromSandbox above — the
+	// structured field is set first (truncation-immune, authoritative for
+	// the judge), and the display suffix is appended AFTER truncation.
+	realExitCode := exitCode
+	output = truncateOutput(output)
 	if exitCode != 0 {
 		output += fmt.Sprintf("\n\n[Command exited with code %d]", exitCode)
 	}
 
-	output = truncateOutput(output)
 	return &ToolResult{
-		ForLLM:  output,
-		ForUser: output,
-		IsError: exitCode != 0,
+		ForLLM:   output,
+		ForUser:  output,
+		IsError:  exitCode != 0,
+		ExitCode: &realExitCode,
 	}
 }
 
