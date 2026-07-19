@@ -117,6 +117,7 @@ var (
 	ctxKeyCitationTracker     = &toolCtxKey{"citationTracker"}
 	ctxKeyDelegationDepth     = &toolCtxKey{"delegationDepth"}
 	ctxKeyToolCallID          = &toolCtxKey{"toolCallID"}
+	ctxKeyRunningTaskID       = &toolCtxKey{"runningTaskID"}
 )
 
 // ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
@@ -288,6 +289,28 @@ func WithToolCallID(ctx context.Context, toolCallID string) context.Context {
 // ToolCallID extracts the current tool call's own ID from ctx, or "" if unset.
 func ToolCallID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyToolCallID).(string)
+	return v
+}
+
+// WithRunningTaskID returns a child context carrying the ID of the task
+// currently being executed by the task-run turn in progress (review r2,
+// Chunk 1). TaskExecutor stamps this onto the turn's tool ctx at
+// task-dispatch time (runTask / runTaskFromInProgress, task_executor.go) so a
+// task-update tool call can tell whether IT is genuinely part of THAT task's
+// own executor run — the only run whose completion (finishTaskRun) ever
+// adjudicates a staged PendingJudgeClaim. An out-of-band call (this context
+// carries no running task, or a different one) must never stage a claim:
+// nothing would ever adjudicate it, stranding the task non-terminal forever.
+// Empty ("") for every non-task-run turn — interactive chat, /goal, /loop,
+// scheduled runs, and sub-turns all leave this unset.
+func WithRunningTaskID(ctx context.Context, taskID string) context.Context {
+	return context.WithValue(ctx, ctxKeyRunningTaskID, taskID)
+}
+
+// ToolRunningTaskID extracts the currently-executing task's ID from ctx, or
+// "" if unset (no task run in progress for this turn). See WithRunningTaskID.
+func ToolRunningTaskID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyRunningTaskID).(string)
 	return v
 }
 

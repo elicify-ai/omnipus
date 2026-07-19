@@ -325,6 +325,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	}))
 }
 
+// deferWorkspaceDoneClaimToJudge mirrors pkg/tools/task.go's
+// deferDoneClaimToJudge exactly (duplicated rather than exported/shared —
+// same "criteria/timestamp-helper dedup" scope call already accepted
+// elsewhere in this feature's review): a `status:"done"` write on a task WITH
+// explicit acceptance criteria (hard tier, non-Scratchpad) must be
+// adjudicated by the judge, never trusted as an immediate terminal write.
+func deferWorkspaceDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
+	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
+}
+
 // ---- update_task_in_workspace ----
 
 type TaskUpdateTool struct{ deps *Deps }
@@ -333,7 +343,7 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "update_task_in_workspace" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/planning/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list). Only provided fields are updated."
+	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/planning/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -348,6 +358,11 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			"agent_id":     map[string]any{"type": "string"},
 			"workspace_id": map[string]any{"type": "string"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
+			"result": map[string]any{
+				"type": "string",
+				"description": "Summary of what was accomplished (used as the judge's claim text when " +
+					"status:\"done\" is set on a task with acceptance criteria)",
+			},
 			"blocked_by": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
@@ -408,10 +423,35 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		patch.Prompt = &v
 		updated = append(updated, "prompt")
 	}
+	pendingJudgeNote := ""
 	if v, ok := args["status"].(string); ok && isValidTaskStatus(v) {
 		st := task.Status(v)
-		patch.Status = &st
-		updated = append(updated, "status")
+		if deferWorkspaceDoneClaimToJudge(existing, st) {
+			// review r2 Chunk 1: close the privileged-tool judge-bypass — this
+			// tool (update_task_in_workspace) previously wrote status:"done"
+			// straight to disk and advanced dependents directly, with no judge
+			// routing at all, for a task WITH acceptance criteria. Mirror the
+			// plain update_task gate: only stage a claim when this call is
+			// genuinely part of THAT task's own executor run (so
+			// finishTaskRun, the sole reader of PendingJudgeClaim, will
+			// adjudicate it) — otherwise reject outright rather than stage a
+			// claim nothing will ever adjudicate.
+			if tools.ToolRunningTaskID(ctx) != id {
+				return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
+					"this task has acceptance criteria — completion is adjudicated by the judge "+
+						"during a task run; it cannot be force-completed here", "status"))
+			}
+			claimText, _ := args["result"].(string)
+			patch.PendingJudgeClaim = &claimText
+			updated = append(updated, "pending_judge_claim")
+			pendingJudgeNote = "completion claim recorded — this task has acceptance criteria, so it is " +
+				"NOT yet done; the evidence-ladder judge will adjudicate your claim against the criteria " +
+				"before the task can reach a terminal status"
+			// Status is deliberately left unpatched — the judge decides.
+		} else {
+			patch.Status = &st
+			updated = append(updated, "status")
+		}
 	}
 	if v, ok := args["agent_id"].(string); ok && v != "" {
 		// subagent_3p (external-CLI) worker reassignment is no longer guarded
@@ -484,7 +524,11 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 				"completed_id", id, "advanced_ids", advanced)
 		}
 	}
-	return tools.NewToolResult(successJSON(map[string]any{"id": id, "updated_fields": updated}))
+	respFields := map[string]any{"id": id, "updated_fields": updated}
+	if pendingJudgeNote != "" {
+		respFields["pending_judge_note"] = pendingJudgeNote
+	}
+	return tools.NewToolResult(successJSON(respFields))
 }
 
 // isTaskNotFound reports whether err wraps task.ErrNotFound.
