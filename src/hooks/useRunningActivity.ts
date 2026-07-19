@@ -114,7 +114,7 @@ export interface BashActivityItem {
 export interface JudgeActivityItem {
   kind: 'judge'
   key: string // verdict id
-  scope: 'task' | 'plan'
+  scope: 'task' | 'plan' | 'goal'
   taskId?: string
   planId?: string
   round: number

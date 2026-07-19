@@ -603,7 +603,7 @@ export const JudgeVerdictFrame = z
   .object({
     type: z.literal("judge_verdict"),
     id: z.string(),
-    scope: z.enum(["task", "plan"]),
+    scope: z.enum(["task", "plan", "goal"]),
     task_id: z.string().optional(),
     plan_id: z.string().optional(),
     round: z.number().int().min(1),

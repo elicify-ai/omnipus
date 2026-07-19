@@ -1090,6 +1090,7 @@ func (e IntegrationProviderUpdateRequestKind) Valid() bool {
 
 // Defines values for JudgeVerdictScope.
 const (
+	JudgeVerdictScopeGoal JudgeVerdictScope = "goal"
 	JudgeVerdictScopePlan JudgeVerdictScope = "plan"
 	JudgeVerdictScopeTask JudgeVerdictScope = "task"
 )
@@ -1097,6 +1098,8 @@ const (
 // Valid indicates whether the value is a known member of the JudgeVerdictScope enum.
 func (e JudgeVerdictScope) Valid() bool {
 	switch e {
+	case JudgeVerdictScopeGoal:
+		return true
 	case JudgeVerdictScopePlan:
 		return true
 	case JudgeVerdictScopeTask:
@@ -1318,6 +1321,7 @@ func (e MessageType) Valid() bool {
 
 // Defines values for MessageVerdictScope.
 const (
+	MessageVerdictScopeGoal MessageVerdictScope = "goal"
 	MessageVerdictScopePlan MessageVerdictScope = "plan"
 	MessageVerdictScopeTask MessageVerdictScope = "task"
 )
@@ -1325,6 +1329,8 @@ const (
 // Valid indicates whether the value is a known member of the MessageVerdictScope enum.
 func (e MessageVerdictScope) Valid() bool {
 	switch e {
+	case MessageVerdictScopeGoal:
+		return true
 	case MessageVerdictScopePlan:
 		return true
 	case MessageVerdictScopeTask:
@@ -2767,6 +2773,7 @@ func (e SessionDetailMessagesType) Valid() bool {
 
 // Defines values for SessionDetailMessagesVerdictScope.
 const (
+	SessionDetailMessagesVerdictScopeGoal SessionDetailMessagesVerdictScope = "goal"
 	SessionDetailMessagesVerdictScopePlan SessionDetailMessagesVerdictScope = "plan"
 	SessionDetailMessagesVerdictScopeTask SessionDetailMessagesVerdictScope = "task"
 )
@@ -2774,6 +2781,8 @@ const (
 // Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictScope enum.
 func (e SessionDetailMessagesVerdictScope) Valid() bool {
 	switch e {
+	case SessionDetailMessagesVerdictScopeGoal:
+		return true
 	case SessionDetailMessagesVerdictScopePlan:
 		return true
 	case SessionDetailMessagesVerdictScopeTask:
@@ -5970,14 +5979,14 @@ type JudgeVerdict struct {
 	// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
 	Round int `json:"round"`
 
-	// Scope Whether this verdict judges a task attempt or a plan round.
+	// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 	Scope JudgeVerdictScope `json:"scope"`
 
 	// TaskId Task being judged. Present when `scope == task`.
 	TaskId *string `json:"task_id,omitempty"`
 }
 
-// JudgeVerdictScope Whether this verdict judges a task attempt or a plan round.
+// JudgeVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type JudgeVerdictScope string
 
 // LoginRequest Credentials for authenticating an existing user.
@@ -6411,7 +6420,7 @@ type Message struct {
 		// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
 		Round int `json:"round"`
 
-		// Scope Whether this verdict judges a task attempt or a plan round.
+		// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 		Scope MessageVerdictScope `json:"scope"`
 
 		// TaskId Task being judged. Present when `scope == task`.
@@ -6437,7 +6446,7 @@ type MessageToolCallsStatus string
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
 
-// MessageVerdictScope Whether this verdict judges a task attempt or a plan round.
+// MessageVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type MessageVerdictScope string
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
@@ -8123,7 +8132,7 @@ type SessionDetail struct {
 			// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
 			Round int `json:"round"`
 
-			// Scope Whether this verdict judges a task attempt or a plan round.
+			// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 			Scope SessionDetailMessagesVerdictScope `json:"scope"`
 
 			// TaskId Task being judged. Present when `scope == task`.
@@ -8252,7 +8261,7 @@ type SessionDetailMessagesToolCallsStatus string
 // SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type SessionDetailMessagesType string
 
-// SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt or a plan round.
+// SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
 
 // SessionDetailSessionStatus Current lifecycle status of the session.

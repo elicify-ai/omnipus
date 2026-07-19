@@ -3207,6 +3207,7 @@ components:
           enum:
             - task
             - plan
+            - goal
         task_id:
           type: string
         plan_id:
