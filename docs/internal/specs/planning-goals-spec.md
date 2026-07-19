@@ -462,16 +462,27 @@ migrateMilestonesToTags(home):
       assigned[tag] = m.ID
       mapping[m.ID] = {tag, m.DueDate, m.Name}
   # PHASE 2 — apply to member tasks (idempotent). Empty milestones logged.
+  # CRITICAL (C2 fix): the legacy milestone_id key is read from RAW JSON, NOT the
+  # Task struct — FR-032 removes Task.MilestoneID in this same epic, and json.Unmarshal
+  # silently drops keys with no struct field (pkg/task/store.go:97). The migration MUST
+  # parse each task file into a legacy-shaped view (map[string]json.RawMessage, or a
+  # dedicated legacyTask{MilestoneID,Tags,Due} struct) so the milestone linkage survives
+  # the field removal. Running the migration at store-load BEFORE any struct read is not
+  # sufficient on its own — the field is gone from the type, so raw-key parsing is required.
   emptyMilestones := mapping.keys()   # start "all empty", remove as members found
   for each task file t (under home/tasks):
-      if t.MilestoneID in mapping:
-          entry := mapping[t.MilestoneID]
-          if entry.tag not in t.Tags:  t.Tags.append(entry.tag)   # dedup ⇒ idempotent
-          if t.Due == "" && entry.dueDate != "":
-              t.Due = entry.dueDate + "T00:00:00Z"                # YYYY-MM-DD → RFC3339 (SD-A12)
-          t.MilestoneID = ""                                      # clear (field removed post-migration)
-          atomicWriteUnderStripedLock(t)
-          delete emptyMilestones[t.MilestoneID_original]
+      raw := parseLegacy(t)                                       # map[string]json.RawMessage
+      mid := raw["milestone_id"]                                  # legacy key, struct-independent
+      if mid in mapping:
+          entry := mapping[mid]
+          tags := raw["tags"]  (or [])
+          if entry.tag not in tags:  tags.append(entry.tag)       # dedup ⇒ idempotent
+          if raw["due"] == "" && entry.dueDate != "":
+              raw["due"] = entry.dueDate + "T00:00:00Z"           # YYYY-MM-DD → RFC3339 (SD-A12)
+          delete raw["milestone_id"]                              # drop legacy key on rewrite
+          raw["tags"] = tags
+          atomicWriteUnderStripedLock(t, raw)                     # write the merged raw doc
+          delete emptyMilestones[mid]                             # capture mid BEFORE any clear (m2 fix)
   for id in emptyMilestones:
       log.Info("milestone migration: empty milestone preserved as log entry",
                name=mapping[id].name, due_date=mapping[id].dueDate)   # a tag cannot exist unattached (D1 r2)
@@ -2696,6 +2707,124 @@ The per-Part registers (SD-A1..A14, SD-B1..B10, SD-C1..C18, plus each Part's Amb
 - **Regression contract change (Part B):** marker-as-claim means (a) no-signal is now *unmet/re-dispatch* not terminal-fail, and (b) explicit `update_task(done)` by an agent is now judged. These change two shipped behaviors; the ADR-043 parser is **extended, not forked**. → Grill: verify the existing `task_completion_contract_test.go` expectations are updated coherently, not deleted.
 
 No ambiguity remains OPEN/undecided; every item is either resolved in-spec or listed above for grill pressure.
+
+---
+
+# Round-1 Grill Reconciliation (AUTHORITATIVE — overrides per-Part text on conflict)
+
+> This section resolves the cross-part contradictions surfaced by grill round 1. Where it
+> conflicts with any per-Part statement, **this section wins**; implementers follow it. It is
+> the single source of truth for the shared schema seams the three Parts touch.
+
+## R1 — Canonical `PlanState` (resolves C1, M9)
+
+The wire `PlanState` enum has **exactly five values**, defined once in `Plan.yaml` (contract C2):
+`draft`, `approved`, `running`, `done`, `failed`. Part B's nine runtime states are re-expressed against these five:
+
+| Part B runtime state | Canonical representation |
+|---|---|
+| `draft` | `PlanState=draft` |
+| `active` | `PlanState=running`, `plan_phase=dispatching` |
+| `judging` | `PlanState=running`, `plan_phase=judging` |
+| `synthesizing` | `PlanState=running`, `plan_phase=synthesizing` |
+| `paused` | `PlanState=running`, `paused_reason` non-empty |
+| `done` | `PlanState=done` |
+| `failed` | `PlanState=failed`, `failed_reason=judge_rounds_exhausted` |
+| `stopped` | `PlanState=failed`, `failed_reason=stopped_by_user` |
+| `expired` | `PlanState=failed`, `failed_reason=idle_expired` |
+
+- New non-badged fields on `Plan` (Part A owns; add to `Plan.yaml`/struct): `plan_phase` (enum `dispatching|judging|synthesizing|idle`, default `idle`, runtime-only, **not** a `PlanState`) and `failed_reason` (enum `judge_rounds_exhausted|stopped_by_user|idle_expired`, set only when `PlanState=failed`). `paused_reason` and `active_loop` already exist in Part A's struct — reuse them; Part B does not introduce a parallel state field.
+- **Part C** badges only the five `PlanState` values (SD-C6 matrix is correct and complete); when `PlanState=running` it MAY show a secondary phase/paused chip from `plan_phase`/`paused_reason`, but never treats those as states. The SD-C6 "unknown → draft" fallback is removed (the enum is now closed and total).
+- **Approve gating (M9):** the `draft→approved` transition runs the approval check (DoD present AND every member task carries ≥1 criterion; 400 listing offenders otherwise — FR-084). The engine begins dispatch on `approved→running`. Part B's transition table is amended to include `approved` between `draft` and `running`; the transition matrix in Part A §"State machine" is canonical.
+- The global-active-loop count (R5) treats a plan as active iff `PlanState=running` (equivalently `active_loop=true`), independent of `plan_phase`.
+
+## R2 — Migration reads legacy `milestone_id` from raw JSON (resolves C2, m1, m2)
+
+Resolved inline in Part A migration pseudocode (Phase 2): the migration parses each task file into a legacy raw view (`map[string]json.RawMessage`) and reads the `milestone_id` key **struct-independently**, because FR-032 removes `Task.MilestoneID` and `json.Unmarshal` silently drops unknown keys (`pkg/task/store.go:97`). New mandatory test (supersedes the false-passing Test 28): **`TestMigrateMilestones_LegacyJSONAfterFieldRemoved`** — a task JSON literal containing `"milestone_id":"m1"` (with NO such struct field compiled in) still gains `milestone:<name>` after migration. m2 pseudocode bug (capture `mid` before any clear) is fixed in the same block. m1 (empty-milestone log accuracy after a partial-crash rerun) is an accepted best-effort limitation: **data integrity is unaffected** (SC-012 holds; tags/Due are byte-identical), only the empty-vs-had-members log line may differ on a crash rerun — documented, not blocking.
+
+## R3 — Canonical WS frames + `type` literals (resolves M1, M6)
+
+Four new AsyncAPI frames, each a one-file schema referenced from `asyncapi.yaml` with a matching `receive*` operation (mirroring `TaskStatusChangedFrame`/`receiveTaskStatusChanged`, `asyncapi.yaml:368-375`). The `type` discriminator literal is **canonical and used verbatim** in the Part A schema, Part B emission, and Part C consumer + tests (the `WsFrameSchema` union keys on the exact literal — no "spelling-agnostic" latitude):
+
+| Frame schema | canonical `type` literal | operation | payload |
+|---|---|---|---|
+| `GoalStatusFrame` | `goal_status` | `receiveGoalStatus` | condition, round, max_rounds, latest_reason, active_loops, cap, state |
+| `LoopStatusFrame` | `loop_status` | `receiveLoopStatus` | mode, run, max_runs, next_delay?, state |
+| `PlanStatusFrame` | `plan_status` | `receivePlanStatus` | plan_id, state, plan_phase, progress, paused_reason? |
+| `JudgeVerdictFrame` | `judge_verdict` | `receiveJudgeVerdict` | the `JudgeVerdict` payload (per-criterion met/reason) |
+
+- **Part C correction:** every `plan_status_changed` reference (FR-099, SD-C11, `chat.plan-status-frame.test.ts`) uses `plan_status`. Frame `type`s are `goal_status`/`loop_status`/`plan_status`/`judge_verdict` — no `_changed` suffix (that suffix belongs only to the pre-existing `task_status_changed`).
+- **`judge_verdict` has two carriers (M1):** the live **`JudgeVerdictFrame`** WS push (this table) AND the persisted transcript **`Message.type: judge_verdict`** (contract C12). Both carry the same `JudgeVerdict` shape (contract C11). ActivityPanel + optional thread rendering consume the frame live; session replay reads the transcript entry. Add `JudgeVerdictFrame` as **contract row C-new-1** to the C14 frame set.
+
+## R4 — Contract-surface additions (resolves M2, M5, M7; completes Constraint #8)
+
+Append these rows to the Part A contract-surface table (each follows the 5-step spec-first process):
+
+| # | Wire type / field | Schema file | Referenced from | Notes |
+|---|---|---|---|---|
+| C16 | `SlashCommand.argument_hint` (optional string) | edit `SlashCommand.yaml` | existing `/commands` response | enables `/goal`,`/loop` ghost text (SD-C7); Part C agent-delivery branch reuses the skill ghost path |
+| C17 | `Task.attempt_count` (int, read-only, server-set) | edit `Task.yaml` | already referenced | current run's attempt index; renders "attempt N/M" (FR-088) |
+| C18 | `Task.max_attempts` (optional int) + `TaskCreateRequest`/`TaskUpdateRequest` | edit those three | already referenced | per-task attempts override; nil ⇒ inherit `PlanningConfig.TaskMaxAttempts` |
+| C19 | `Plan.progress` (number 0..1, read-only) + `Plan.plan_phase` + `Plan.failed_reason` | edit `Plan.yaml` | `/plans` responses | `progress` server-computed at REST layer (like milestone counts); `plan_phase`/`failed_reason` per R1 |
+| C20 | `JudgeVerdictFrame` | `JudgeVerdictFrame.yaml` | `asyncapi.yaml` + `receiveJudgeVerdict` | live judge-verdict push (R3) |
+
+The standalone-task attempt counter lives on `Task` (C17), NOT in `UnifiedMeta` — it crosses the wire for the SPA. `UnifiedMeta` carries only the `/goal`/`/loop` **session** loop state (condition, round, mode, run, bounds), which is session-scoped and already Part B's domain.
+
+## R5 — Global active-loop cap authority (resolves M8, m5)
+
+The cap authority **co-locates with the single plan-engine instance** (the singleton with the cron-style overlap guard, ADR D4). There is no separately-mutated counter (avoids drift): at each loop-admission decision the engine computes the active count from persisted state — plans with `PlanState=running`, sessions with an active `/goal`, and enabled `/loop` cron jobs — reconciled at boot. A **standalone task attempt-loop counts as one active loop** (m5: SD-B4's garbled clause is superseded — a standalone task loop DOES count; task attempt-loops **inside** a running plan do NOT count individually, the plan counts as one). Admission is serialized by the engine's single-writer overlap guard, so the 15th/16th/17th-start race resolves deterministically (17th → rejected `active loops: 16/16`).
+
+## R6 — Origin gating positive predicate for channels (resolves M3, m7)
+
+`UserInitiated` is a turn-scoped boolean set explicitly at **each** message-origination point, fail-closed (any path not listed ⇒ false):
+
+| Origination point | `UserInitiated` |
+|---|---|
+| Web WS `message` handler (authenticated gateway user) | **true** |
+| Channel adapter inbound (Telegram/Discord/Slack/… real human `Sender`) | **true** |
+| Cron/scheduled runner (`exec.ProcessScheduled`) | **false** (regardless of surface — a cron job targeting a channel is still false) |
+| Async-notifier synthesized system message | **false** |
+| Delegated sub-turn (`spawnSubTurn`) | **false** |
+
+This makes `/goal`/`/loop` work for a genuine channel end-user (US-12 AS-7) while a cron-injected `/goal` stays inert (H7), because the discriminator is the **origination path**, not the surface or a web-only `GatewayUserID`. A channel message carries a real `Sender` but no `GatewayUserID`; the channel-inbound path sets `UserInitiated=true` directly. **m7:** "author differs from assignee" (cross-agent machine-check confirmation, Gap #2) is decided by author **identity ≠ assignee agent id**, regardless of author kind — a user-authored machine check on an agent-assigned task DOES require confirmation unless waived by the workspace setting (threat-model closure: no unattended check authored by a different principal runs under the assignee's `bash: allow` without an approval gate).
+
+## R7 — Part A Traceability Matrix (resolves M4)
+
+| Requirement | User Story | BDD Scenario(s) | Test Name(s) |
+|---|---|---|---|
+| FR-001 Plan entity persists | US-1 | Operator creates a plan with a DoD criterion | `TestPlanStore_CreatePersists` |
+| FR-002 same-workspace plan_id FK | US-1 | Task in a foreign workspace cannot reference a plan | `TestTask_PlanIDWorkspaceGuard` |
+| FR-003/004 Plan state machine | US-1 | Plan state transitions (outline) | `TestPlan_StateTransitions` |
+| FR-005 persisted plan counters | US-1 | (added) Plan counters survive reload | `TestPlan_CountersPersistAndReload` |
+| FR-006 delete running plan rejected | US-1 | Deleting a running plan is rejected | `TestPlan_DeleteRunningRejected` |
+| FR-007 membership computed read-time | US-1 | Deleting a draft plan clears plan_id | `TestPlan_MembershipComputed` |
+| FR-008..011 tags normalize/validate/dedup/cap | US-2 | Tag normalization and validation (outline) | `TestTask_TagValidation` |
+| FR-012 no global tag registry | US-2 | (added) same tag in two workspaces unrelated | `TestTask_TagWorkspaceScoped` |
+| FR-013..017 migration name→tag/collision/due/empty/idempotent | US-2 | Milestone migration scenarios (5) | `TestMigrateMilestones_*` incl. `TestMigrateMilestones_LegacyJSONAfterFieldRemoved` (R2) |
+| FR-018 criterion author recorded | US-3 | (added) author recorded at authorship time | `TestCriterion_AuthorRecorded` |
+| FR-019..024 criterion/evidence validation + redaction + retention | US-3 | Criterion validation (outline); evidence redaction/truncation | `TestCriterion_Validate`, `TestEvidence_RedactBeforeTruncate`, `TestEvidence_DeletedWithTask` |
+| FR-025..031 migration properties | US-2 | Re-run no-op; crash re-runs identically; empty preserved | `TestMigrateMilestones_Idempotent`, `_CrashSafe`, `_EmptyLogged` |
+| FR-032 MilestoneID removed | US-2 | (regression) removal list | `TestTask_NoMilestoneField` (compile-time + JSON) |
+| FR-033..038 Judge seeding/lifecycle/privilege | US-4 | Judge seed; system-agent create/delete/disable rejected; SEC-26 applies | `TestSeed_JudgeSystemAgent`, `TestAgents_SystemTypeUncreatable`, `TestAgents_JudgeUndeletable`, `TestRatelimit_SystemNotPrivileged` |
+| FR-039 per-entity bounds resolution | US-1/US-4 | (added) Plan.Bounds/Task.MaxAttempts precedence over global | `TestBounds_PerEntityOverridesGlobal` |
+
+SC-001..015 map onto these tests; SC-012 (migration data integrity) is covered by `TestMigrateMilestones_LegacyJSONAfterFieldRemoved` + `_CrashSafe`.
+
+## R8 — set_todos exemption gets coverage (resolves M10)
+
+New BDD (Part B feature "Task goal-loop"):
+**Scenario: Scratchpad set_todos task is never dispatched into a goal loop** — *Traces to*: US-5, AS (D5 exemption); *Category*: Edge Case — **Given** a task created via `set_todos` (`Scratchpad=true`), **When** the plan engine / task drain scans for dispatchable work, **Then** the scratchpad task is skipped (never enters an attempt loop, never judged) **And** no criteria are required of it. New test **`TestTaskExecutor_ScratchpadExemptFromGoalLoop`**; add the FR-048 row to Part B's traceability matrix.
+
+## R9 — Minor closures
+
+- **m3 (evidence ExitCode sentinel):** on timeout or policy-deny the authoritative signals are the `TimedOut`/`PolicyDenied` bools; `ExitCode` is set to **-1** (sentinel) in those cases; consumers MUST check the bools before interpreting `ExitCode`.
+- **m4 (post-backoff cadence):** after the 3-step judge backoff (60/120/300s) is exhausted, retries continue at **300s** intervals until the loop's idle-expiry (7d) fires — a permanently-unavailable judge ends the loop via calendar brake, never via a false verdict.
+- **m6 (FR→test mismaps):** FR-074 (session-ownership/role gating) traces to a real new test **`TestRoleGating_SessionOwnership`** (not the origin-gating test); FR-090 (goal-loop status affordance) traces to **`TaskCard.goalLoopStatus.test.tsx`** (not the tags test). Both tests are added.
+- **o1 (SC-025 margin):** a check exceeding its 60s deadline is killed within **≤5s** of the deadline (bounded-margin quantified).
+
+## Reconciliation → new/changed test obligations (carried into the wave plan)
+
+`TestMigrateMilestones_LegacyJSONAfterFieldRemoved`, `TestPlan_CountersPersistAndReload`, `TestTask_TagWorkspaceScoped`, `TestCriterion_AuthorRecorded`, `TestBounds_PerEntityOverridesGlobal`, `TestTaskExecutor_ScratchpadExemptFromGoalLoop`, `TestRoleGating_SessionOwnership`, `TaskCard.goalLoopStatus.test.tsx`, plus the `JudgeVerdictFrame` zod-edge validation test and the `plan_status` (not `_changed`) frame test.
 
 ---
 
