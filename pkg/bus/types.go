@@ -101,6 +101,24 @@ type InboundMessage struct {
 	// by reopening the conversation).
 	AsyncTranscriptSessionID string            `json:"async_transcript_session_id,omitempty"`
 	Metadata                 map[string]string `json:"metadata,omitempty"`
+	// UserInitiated is a fail-closed origin signal for the Planning & Goals
+	// epic's origin gating (ADR-049 Gap #8/r2, spec Part B FR-075/SD-B6/R6):
+	// true ONLY when this message originates from a genuine, live human
+	// action — the gateway webchat WS `message` handler (pkg/gateway/
+	// websocket.go) or a channel adapter's inbound dispatch of a real
+	// platform sender (pkg/channels/base.go HandleMessage). Every other
+	// producer of an InboundMessage (async-notifier synthesized system
+	// messages, followUps/steering re-injection, ProcessDirect/
+	// ProcessDirectWithChannel) MUST leave this false — it is NOT set
+	// automatically, so a future producer that forgets to set it fails
+	// closed (cannot start a /goal or /loop) rather than failing open.
+	// Scheduled/cron runs (exec.ProcessScheduled) and task/sub-turn runs
+	// (processTaskDirect/spawnSubTurn) never construct an InboundMessage at
+	// all — they call runAgentLoop directly with their own processOptions,
+	// which also defaults UserInitiated to false. This field is internal
+	// agent<->channel plumbing (pkg/bus is not part of the gateway/SPA wire
+	// boundary, Constraint #8) — not a wire type.
+	UserInitiated bool `json:"user_initiated,omitempty"`
 }
 
 type OutboundMessage struct {

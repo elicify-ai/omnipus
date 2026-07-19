@@ -66,6 +66,27 @@ type MetaPatch struct {
 	// WorkspaceID tags the session with the active workspace (M4 workspace→turn
 	// binding). Only written when non-nil; empty string clears the tag.
 	WorkspaceID *string
+
+	// Goal loop fields (ADR-049 D6/D7, /goal). Only non-nil fields are
+	// written; callers that want to CLEAR a goal must pass an empty-string
+	// GoalCondition explicitly (matching the TaskID clear convention).
+	GoalCondition    *string
+	GoalRoundsUsed   *int
+	GoalMaxRounds    *int
+	GoalLatestReason *string
+	GoalStartedAt    *string
+
+	// Loop fields (ADR-049 D6/D7, /loop). Only non-nil fields are written;
+	// callers that want to CLEAR a loop must pass an empty-string LoopMode
+	// explicitly.
+	LoopMode        *string
+	LoopPrompt      *string
+	LoopRunCount    *int
+	LoopMaxRuns     *int
+	LoopIntervalMS  *int64
+	LoopNextDelayMS *int64
+	LoopJobID       *string
+	LoopStartedAt   *string
 }
 
 // UnifiedMeta extends SessionMeta with the session type field.
@@ -560,6 +581,45 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	if patch.WorkspaceID != nil {
 		meta.WorkspaceID = *patch.WorkspaceID
+	}
+	if patch.GoalCondition != nil {
+		meta.GoalCondition = *patch.GoalCondition
+	}
+	if patch.GoalRoundsUsed != nil {
+		meta.GoalRoundsUsed = *patch.GoalRoundsUsed
+	}
+	if patch.GoalMaxRounds != nil {
+		meta.GoalMaxRounds = *patch.GoalMaxRounds
+	}
+	if patch.GoalLatestReason != nil {
+		meta.GoalLatestReason = *patch.GoalLatestReason
+	}
+	if patch.GoalStartedAt != nil {
+		meta.GoalStartedAt = *patch.GoalStartedAt
+	}
+	if patch.LoopMode != nil {
+		meta.LoopMode = *patch.LoopMode
+	}
+	if patch.LoopPrompt != nil {
+		meta.LoopPrompt = *patch.LoopPrompt
+	}
+	if patch.LoopRunCount != nil {
+		meta.LoopRunCount = *patch.LoopRunCount
+	}
+	if patch.LoopMaxRuns != nil {
+		meta.LoopMaxRuns = *patch.LoopMaxRuns
+	}
+	if patch.LoopIntervalMS != nil {
+		meta.LoopIntervalMS = *patch.LoopIntervalMS
+	}
+	if patch.LoopNextDelayMS != nil {
+		meta.LoopNextDelayMS = *patch.LoopNextDelayMS
+	}
+	if patch.LoopJobID != nil {
+		meta.LoopJobID = *patch.LoopJobID
+	}
+	if patch.LoopStartedAt != nil {
+		meta.LoopStartedAt = *patch.LoopStartedAt
 	}
 	meta.UpdatedAt = time.Now().UTC()
 	return us.writeMetaLocked(sessionID, meta)

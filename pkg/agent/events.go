@@ -85,6 +85,18 @@ const (
 	// mirrors EventKindTaskStatusChanged's broadcast, not EventKindNotification's
 	// per-recipient filter).
 	EventKindPlanStatusChanged
+	// EventKindGoalStatusChanged is emitted whenever a session's `/goal` loop
+	// state changes (set, round advance, met, bound reached, cleared —
+	// ADR-049 D6/D7, spec Part B US-8). The WS forwarder turns it into a
+	// goal_status frame, broadcast to every connection (mirrors
+	// EventKindPlanStatusChanged/EventKindTaskStatusChanged's broadcast — the
+	// SPA filters by session_id client-side).
+	EventKindGoalStatusChanged
+	// EventKindLoopStatusChanged is emitted whenever a session's `/loop` state
+	// changes (set, run fired, run-cap reached, stop — ADR-049 D6/D7, spec
+	// Part B US-9). The WS forwarder turns it into a loop_status frame,
+	// broadcast to every connection.
+	EventKindLoopStatusChanged
 
 	eventKindCount
 )
@@ -121,6 +133,8 @@ var eventKindNames = [...]string{
 	"notification",
 	"task_status_changed",
 	"plan_status_changed",
+	"goal_status_changed",
+	"loop_status_changed",
 }
 
 // String returns the stable string form of an EventKind.
@@ -581,4 +595,31 @@ type PlanStatusChangedPayload struct {
 	PlanPhase    string  `json:"plan_phase"`
 	Progress     float64 `json:"progress"`
 	PausedReason string  `json:"paused_reason,omitempty"`
+}
+
+// GoalStatusChangedPayload carries a session's `/goal` loop status for the
+// SPA (ADR-049 D6/D7, spec Part B US-8). The WS forwarder turns this into a
+// goal_status frame (generated.GoalStatusFrame). Session-scoped — SessionID
+// is the transcript session the goal belongs to.
+type GoalStatusChangedPayload struct {
+	SessionID    string `json:"session_id"`
+	Condition    string `json:"condition"`
+	Round        int    `json:"round"`
+	MaxRounds    int    `json:"max_rounds"`
+	LatestReason string `json:"latest_reason"`
+	ActiveLoops  int    `json:"active_loops"`
+	Cap          int    `json:"cap"`
+	State        string `json:"state"`
+}
+
+// LoopStatusChangedPayload carries a session's `/loop` status for the SPA
+// (ADR-049 D6/D7, spec Part B US-9). The WS forwarder turns this into a
+// loop_status frame (generated.LoopStatusFrame). Session-scoped.
+type LoopStatusChangedPayload struct {
+	SessionID string `json:"session_id"`
+	Mode      string `json:"mode"`
+	Run       int    `json:"run"`
+	MaxRuns   int    `json:"max_runs"`
+	NextDelay *int   `json:"next_delay,omitempty"`
+	State     string `json:"state"`
 }
