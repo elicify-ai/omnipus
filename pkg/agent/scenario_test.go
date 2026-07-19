@@ -59,24 +59,6 @@ func findAgent(cfg *config.Config, id string) *config.AgentConfig {
 }
 
 // ==================================================================================
-// Scenario 1: HandoffRayToMaxPreservesTranscript
-// BDD: Given an active session with Ray, When handoff to Max is triggered,
-//
-//	Then the session switches to Max, transcript contains entries from both agents.
-//
-// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 1
-// ==================================================================================
-func TestScenario1HandoffRayToMaxPreservesTranscript(t *testing.T) {
-	t.Skip(
-		"harness ready (A1 complete); test body not yet implemented — requires full WS chat pipeline, tracked in Plan 3 §Layer 2, scenario 1",
-	)
-	// When StartTestGateway lands in pkg/agent/testutil/gateway_harness.go:
-	//   gw := testutil.StartTestGateway(t, testutil.WithAgents(rayMaxAgents), testutil.WithScenario(...))
-	//   Initiate a session with Ray, send a message, trigger handoff to Max.
-	//   Assert: session.ActiveAgentID == "max", transcript has entries labeled both "ray" and "max".
-}
-
-// ==================================================================================
 // Scenario 2: AvaCreatesAgentPenny
 // BDD: Given Ava agent is active, When system.agent.create is called with name="Penny",
 //
@@ -195,47 +177,6 @@ func TestScenario5RateLimitFiresOnThirdCall(t *testing.T) {
 	assert.False(t, d3.Allowed, "third LLM call exceeding limit must be denied")
 	assert.NotEmpty(t, d3.PolicyRule, "rate-limit denial must include a policy rule explanation")
 	assert.Greater(t, d3.RetryAfterSeconds, 0.0, "denial must include retry_after > 0")
-}
-
-// ==================================================================================
-// Scenario 6: BrowserNavigateThenScreenshotChain
-// BDD: Given Chromium available, When navigate→screenshot tool sequence runs,
-//
-//	Then a media ref is produced and the mediaStore resolves it to > 5 KB.
-//
-// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 6
-// ==================================================================================
-func TestScenario6BrowserNavigateThenScreenshotChain(t *testing.T) {
-	t.Skip("harness ready (A1 complete); test body not yet implemented — " +
-		"requires real Chromium binary in CI, tracked in Plan 3 §Layer 2, scenario 6")
-	// When gateway harness and real Chromium are available:
-	//   gw := testutil.StartTestGateway(t, testutil.WithScenario(
-	//     testutil.NewScenario().
-	//       WithToolCall("browser.navigate", `{"url":"https://example.com"}`).
-	//       WithToolCall("browser.screenshot", `{}`).
-	//       WithText("done"),
-	//   ))
-	//   Open session, send user message, wait for done event.
-	//   Assert: last ToolResult.Content contains "media://" ref.
-	//   Assert: gw.MediaStore.Resolve(ref) returns data with len > 5120.
-}
-
-// ==================================================================================
-// Scenario 7: SessionCompactionPreservesKeyFacts
-// BDD: Given N turns after which compaction runs, When rebuilt context is examined,
-//
-//	Then lastCompactionSummary is set and critical fact from turn 1 still appears.
-//
-// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 7
-// ==================================================================================
-func TestScenario7SessionCompactionPreservesKeyFacts(t *testing.T) {
-	t.Skip(
-		"harness ready (A1 complete); blocked on multi-turn RunTurn API with accessible session metadata (lastCompactionSummary) — tracked in Plan 3 §Layer 2, scenario 7",
-	)
-	// When session compaction metadata is accessible:
-	//   Run N turns > SummarizeMessageThreshold.
-	//   Assert: session.Meta().LastCompactionSummary != "".
-	//   Assert: rebuilt context messages contain the critical fact from turn 1.
 }
 
 // ==================================================================================

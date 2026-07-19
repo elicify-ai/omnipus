@@ -288,14 +288,7 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
   })
 })
 
-// ── D1 (#334): Create-Agent defaults to Balanced ───────────────────────────────
-// The legacy 2-tab modal's Tools & Permissions tab + Balanced default are
-// folded into the new wizard's Advanced step, which is deferred per
-// CreateAgentWizard.tsx's file header. These tests are kept as `.skip`
-// so a follow-up PR can light them up when the Advanced step lands —
-// the Tools editor + Balanced preset are part of #334 follow-up work.
-
-describe.skip('D1: Create-Agent defaults to Balanced preset (#334) — deferred to Advanced step', () => {
-  it('the Tools tab is present and the Balanced preset is the default state', () => {})
-  it('submits with Balanced default policy when no changes made', () => {})
-})
+// D1 (#334, closed): the Tools editor + Balanced-preset tests belong to the
+// wizard's deferred Advanced step (see CreateAgentWizard.tsx header). Write
+// them WITH that feature when it lands — placeholder .skip stubs were removed
+// deliberately (they only added skip-noise to every run).
