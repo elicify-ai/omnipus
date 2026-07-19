@@ -314,6 +314,109 @@ func TestGoalLoop_UnmetVerdict_AdvancesRoundAndFeedsForward(t *testing.T) {
 	}
 }
 
+// TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal proves review r2 RV3: a
+// scheduled/loop turn (opts.UserInitiated=false, opts.SenderID="" — exactly
+// what ProcessScheduled's processOptions literal carries, since it is built
+// directly in loop.go and never threads through the msg-based path that sets
+// SenderID/UserInitiated) must NOT touch an active /goal loop on the same
+// session, even though opts.IsTaskRun is also false for that origin (/goal
+// and /loop can legitimately coexist on one session).
+func TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	goalOpts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &goalOpts)
+
+	// A judge provider that fails the test if ever called — a scheduled/loop
+	// turn must never reach the judge at all.
+	judgeFake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		t.Fatal("judge must NOT be called for a scheduled/loop turn on a goal-bearing session")
+		return nil, nil
+	}}
+	judgeInst.Provider = judgeFake
+
+	before, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mimics ProcessScheduled's own processOptions literal (loop.go ~L5156):
+	// built directly, so UserInitiated and SenderID are both left at their
+	// zero value — never through the msg-based path (processMessage) that
+	// sets SenderID from msg.Sender.CanonicalID and UserInitiated from
+	// msg.UserInitiated.
+	scheduledOpts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1",
+	}
+	result := &turnResult{finalContent: "scheduled run output, unrelated to the goal"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, scheduledOpts, result)
+
+	after, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GoalRoundsUsed != before.GoalRoundsUsed {
+		t.Fatalf("rounds_used changed from %d to %d — a scheduled/loop turn must not consume a goal round",
+			before.GoalRoundsUsed, after.GoalRoundsUsed)
+	}
+	if after.GoalCondition != before.GoalCondition {
+		t.Fatal("goal condition changed — a scheduled/loop turn must not touch the goal at all")
+	}
+	if len(result.followUps) != 0 {
+		t.Fatalf("expected no follow-up from a scheduled/loop turn, got %d", len(result.followUps))
+	}
+	if judgeFake.callCount() != 0 {
+		t.Fatal("judge must not have been called")
+	}
+}
+
+// TestGoalLoop_ReInjectedFollowUp_AdvancesGoal proves the counterpart: the
+// goal loop's own re-injected follow-up (SenderID == goalLoopFollowUpSenderID,
+// UserInitiated=false — exactly how processMessage rebuilds opts for the
+// republished bus.InboundMessage goal_loop.go itself constructs, since
+// msg.UserInitiated is never set true for that follow-up) still advances the
+// goal, despite UserInitiated being false.
+func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	goalOpts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &goalOpts)
+
+	judgeInst.Provider = unmetJudgeProvider("still not there")
+
+	// Mirrors what processMessage builds for the goal loop's own republished
+	// follow-up: SenderID threaded from msg.Sender.CanonicalID (goal_loop.go's
+	// InboundMessage carries Sender.CanonicalID: goalLoopFollowUpSenderID),
+	// UserInitiated left false (msg.UserInitiated is never set true for it).
+	followUpOpts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1",
+		SenderID: goalLoopFollowUpSenderID,
+	}
+	result := &turnResult{finalContent: "continuing to work on it"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, followUpOpts, result)
+
+	after, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GoalRoundsUsed != 1 {
+		t.Fatalf("rounds_used = %d, want 1 — the goal loop's own re-injected follow-up must still advance "+
+			"the round", after.GoalRoundsUsed)
+	}
+}
+
 func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, func(cfg *config.Config) {
 		cfg.Planning.GoalMaxRounds = 2
