@@ -1222,6 +1222,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 	}
 	centralMCPReg := tools.NewMCPRegistry()
+	// Wire the central registries into the agent loop so ReconcileMCP (triggered
+	// by REST/sysagent MCP writes and hot-reload) populates the SAME registry
+	// instance restAPI reads for GET /api/v1/tools and /mcp-servers tool_count —
+	// otherwise connected MCP tools would never surface outside the per-agent
+	// registries. Nil-safe on the AgentLoop side.
+	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
 
 	runningServices, err := setupAndStartServices(
 		cfg,
@@ -1348,6 +1354,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// fails OPEN.
 		DelegationDeny: agentLoop.NewSysagentDelegationDeny(),
 		ListSessions:   agentLoop.ListAllSessions,
+		// Live MCP reconciliation: without these, add/remove_mcp_server
+		// only persist config — the server never actually connects and its tools never
+		// reach the central/per-agent registries until the next hot reload or process restart.
+		ReconcileMCP: agentLoop.ReconcileMCP,
+		MCPStatus:    agentLoop.MCPServerStatus,
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 
@@ -1401,6 +1412,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		"general_builtins", generalBuiltinsRegistered,
 		"browser_builtins", browserBuiltinsRegistered,
 		"total", centralBuiltinReg.Count())
+
+	// centralBuiltinReg was just reassigned to a fresh instance above — re-wire
+	// it (and centralMCPReg, unchanged but re-asserted for clarity) into the
+	// agent loop so MCP name-collision admission (ValidateMCPName) checks
+	// against the live-deps builtin instance, not the pre-deps one the earlier
+	// SetCentralMCPRegistries call saw.
+	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
 
 	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
 	fmt.Println("Press Ctrl+C to stop")

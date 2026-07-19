@@ -7,13 +7,20 @@ package systools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// mcpReconcileTimeout bounds how long add/remove_mcp_server wait for live MCP
+// reconciliation (connect/disconnect + tool-registry sync) after a config
+// write, matching the REST handlers' timeout for the same operation.
+const mcpReconcileTimeout = 20 * time.Second
 
 // mcpURLSchemeValid reports whether rawURL is acceptable for an sse/http MCP
 // server endpoint. It mirrors the gateway's mcpURLSchemeValid
@@ -51,7 +58,7 @@ func NewMCPAddTool(d *Deps) *MCPAddTool      { return &MCPAddTool{deps: d} }
 func (t *MCPAddTool) Name() string           { return "add_mcp_server" }
 func (t *MCPAddTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *MCPAddTool) Description() string {
-	return "Add an MCP server to the configuration (tools.mcp.servers). The server is persisted to config.json and connects on next reload.\n" +
+	return "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count.\n" +
 		"Parameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env."
 }
 
@@ -70,7 +77,7 @@ func (t *MCPAddTool) Parameters() map[string]any {
 	}
 }
 
-func (t *MCPAddTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
@@ -124,6 +131,11 @@ func (t *MCPAddTool) Execute(_ context.Context, args map[string]any) *tools.Tool
 		Env:     envMap,
 	}
 
+	// flippedGlobalEnable/gatedGlobalDisabled record which of the two
+	// auto-enable outcomes below happened, so the result note can be honest
+	// about it (set inside the WithConfig closure, read after it returns).
+	var flippedGlobalEnable, gatedGlobalDisabled bool
+
 	if err := t.deps.WithConfig(func(cfg *config.Config) error {
 		if cfg.Tools.MCP.Servers == nil {
 			cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{}
@@ -132,6 +144,31 @@ func (t *MCPAddTool) Execute(_ context.Context, args map[string]any) *tools.Tool
 			return fmt.Errorf("mcp server %q already exists", name)
 		}
 		cfg.Tools.MCP.Servers[name] = entry
+		// Adding a server only to have it silently ignored by a disabled global
+		// kill-switch (tools.mcp.enabled defaults to false on a fresh install)
+		// would reproduce the exact "saved but never connects" bug this tool
+		// exists to avoid — but only for the fresh-install case. If the flag is
+		// off AND another server is already enabled under it, that is an
+		// operator's deliberate kill-switch, not an unconfigured default, and
+		// must not be silently overridden by adding one more server.
+		if !cfg.Tools.MCP.Enabled {
+			otherEnabled := false
+			for otherName, otherSrv := range cfg.Tools.MCP.Servers {
+				if otherName == name {
+					continue
+				}
+				if otherSrv.Enabled {
+					otherEnabled = true
+					break
+				}
+			}
+			if otherEnabled {
+				gatedGlobalDisabled = true
+			} else {
+				cfg.Tools.MCP.Enabled = true
+				flippedGlobalEnable = true
+			}
+		}
 		return nil
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
@@ -141,12 +178,71 @@ func (t *MCPAddTool) Execute(_ context.Context, args map[string]any) *tools.Tool
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	// Trigger live reconciliation so the server actually connects (and its
+	// tools get registered into the per-agent and central registries) instead
+	// of only being persisted to config.json. Nil in tests or when the
+	// gateway hasn't wired live MCP reconciliation.
+	var reconcileErr error
+	reconcileAttempted := t.deps.ReconcileMCP != nil
+	if reconcileAttempted {
+		rctx, cancel := context.WithTimeout(ctx, mcpReconcileTimeout)
+		reconcileErr = t.deps.ReconcileMCP(rctx)
+		cancel()
+		if reconcileErr != nil {
+			slog.Warn("add_mcp_server: live MCP reconciliation failed", "server", name, "error", reconcileErr)
+		}
+	}
+
+	result := map[string]any{
 		"name":      name,
 		"transport": transport,
 		"enabled":   true,
-		"note":      "Server added to config. It connects on the next agent-loop reload.",
-	}))
+	}
+	if t.deps.MCPStatus != nil {
+		status, toolCount, errMsg := t.deps.MCPStatus(name)
+		result["status"] = status
+		switch status {
+		case "connected":
+			result["tool_count"] = toolCount
+			result["note"] = fmt.Sprintf(
+				"Server connected; %d tool(s) registered and awaiting tool-policy assignment.", toolCount)
+		case "error":
+			// The config write DID succeed — only the live connection failed.
+			result["note"] = fmt.Sprintf(
+				"Server saved but connection failed: %s. Fix the config and try again.", errMsg)
+		default: // "disconnected"
+			result["note"] = "Server saved but not currently connected " +
+				"(server disabled, or live reconciliation is unavailable)."
+		}
+	} else if reconcileAttempted && reconcileErr != nil {
+		// Reconciliation actually ran and failed, but there is no MCPStatus
+		// readback to report a live status from. Say so explicitly rather
+		// than falling back to the "connects on next reload" note below,
+		// which would silently swallow a real reconcile error.
+		result["note"] = fmt.Sprintf(
+			"Server saved but live reconciliation failed: %s. Connection status is unknown.", reconcileErr)
+	} else {
+		// Either live reconciliation isn't wired at all (tests, or a
+		// partially wired gateway), or it ran and succeeded but there is no
+		// MCPStatus readback available. Reload now actually connects MCP
+		// servers (see AgentLoop.ReconcileMCP), so this note remains
+		// accurate even without a live status readback.
+		result["note"] = "Server added to config. It connects on the next agent-loop reload."
+	}
+
+	// Surface the global-kill-switch outcome honestly: an operator reading
+	// only the note above would otherwise have no way to tell a genuine
+	// connect failure apart from "saved, but MCP is globally disabled and
+	// nothing was even attempted."
+	switch {
+	case flippedGlobalEnable:
+		result["note"] = result["note"].(string) + " Global MCP enable was off — turned on."
+	case gatedGlobalDisabled:
+		result["note"] = result["note"].(string) +
+			" MCP is globally disabled — an operator must enable tools.mcp.enabled for this server to connect."
+	}
+
+	return tools.NewToolResult(successJSON(result))
 }
 
 // ---- system.mcp.remove ----
@@ -172,7 +268,7 @@ func (t *MCPRemoveTool) Parameters() map[string]any {
 	}
 }
 
-func (t *MCPRemoveTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	confirm, _ := args["confirm"].(bool)
 	if name == "" {
@@ -204,10 +300,31 @@ func (t *MCPRemoveTool) Execute(_ context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 
+	// Trigger live reconciliation so the server is actually disconnected (and
+	// its tools evicted from the per-agent and central registries) instead of
+	// only being dropped from config.json. Nil in tests or when the gateway
+	// hasn't wired live MCP reconciliation.
+	note := "Server removed from config. Its tools are unregistered on the next agent-loop reload."
+	if t.deps.ReconcileMCP != nil {
+		rctx, cancel := context.WithTimeout(ctx, mcpReconcileTimeout)
+		reconcileErr := t.deps.ReconcileMCP(rctx)
+		cancel()
+		if reconcileErr != nil {
+			// The config removal DID succeed — only the live disconnect is in
+			// doubt. Do not claim "disconnected and removed" when reconcile
+			// itself errored; that would assert a live-side outcome we did
+			// not actually observe.
+			slog.Warn("remove_mcp_server: live MCP reconciliation failed", "server", name, "error", reconcileErr)
+			note = fmt.Sprintf("Removed from config; live disconnect may not have completed: %s", reconcileErr)
+		} else {
+			note = "Server disconnected and removed."
+		}
+	}
+
 	return tools.NewToolResult(successJSON(map[string]any{
 		"name":    name,
 		"removed": true,
-		"note":    "Server removed from config. Its tools are unregistered on the next agent-loop reload.",
+		"note":    note,
 	}))
 }
 
