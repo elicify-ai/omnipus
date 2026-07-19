@@ -665,6 +665,14 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
 		return
 	}
+	// review r1 major M4/Gap #6: reject an unregistered or System Agent id
+	// before any workspace/session side effects.
+	if req.CoreTeam != nil {
+		if vErr := validateCoreTeamMembers(a.agentLoop.GetConfig(), *req.CoreTeam); vErr != nil {
+			jsonErr(w, http.StatusBadRequest, vErr.Error())
+			return
+		}
+	}
 
 	// Stamp the creating user's username as owner (attribution only, not a gate).
 	c := a.callerIdentity(r)
@@ -846,6 +854,14 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
 		return
+	}
+	// review r1 major M4/Gap #6: reject an unregistered or System Agent id
+	// before any workspace/session side effects (mirrors handleWorkspacePost).
+	if req.CoreTeam != nil {
+		if vErr := validateCoreTeamMembers(a.agentLoop.GetConfig(), *req.CoreTeam); vErr != nil {
+			jsonErr(w, http.StatusBadRequest, vErr.Error())
+			return
+		}
 	}
 	if req.Status != nil && !req.Status.Valid() {
 		jsonErr(w, http.StatusBadRequest, `status must be "active" or "archived"`)
@@ -1340,6 +1356,41 @@ func deduplicateStrings(in []string) []string {
 		}
 	}
 	return out
+}
+
+// validateCoreTeamMembers rejects a core_team containing an id that is not a
+// registered agent, or that IS registered but is a System Agent
+// (AgentConfig.IsSystem, Type=="system", ADR-049 D3) — review r1 major
+// M4/Gap #6. System Agents (e.g. the Judge) are seeded, locked, no-tools
+// internal-LLM agents that are NEVER chat targets and are documented as
+// "excluded from ... team rosters" by AgentConfig.IsSystem's own doc comment
+// (pkg/config/config.go), but neither handleWorkspacePost nor
+// handleWorkspacePut enforced that at the write path before this fix — a
+// caller could silently add a System Agent (or a typo'd/nonexistent id) to a
+// workspace's core_team with zero validation. Returns nil for an empty
+// coreTeam (nothing to validate).
+func validateCoreTeamMembers(cfg *config.Config, coreTeam []string) error {
+	if len(coreTeam) == 0 {
+		return nil
+	}
+	if cfg == nil {
+		return fmt.Errorf("core_team member %q is not a registered agent", coreTeam[0])
+	}
+	byID := make(map[string]*config.AgentConfig, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		byID[cfg.Agents.List[i].ID] = &cfg.Agents.List[i]
+	}
+	for _, id := range coreTeam {
+		ac, ok := byID[id]
+		if !ok {
+			return fmt.Errorf("core_team member %q is not a registered agent", id)
+		}
+		if ac.IsSystem() {
+			return fmt.Errorf(
+				"core_team member %q is a System Agent and cannot be added to a workspace team roster", id)
+		}
+	}
+	return nil
 }
 
 // unbindChannelInstancesForWorkspace disables and unbinds every channel instance

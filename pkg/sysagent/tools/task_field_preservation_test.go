@@ -28,6 +28,7 @@ import (
 
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestRegression_SysagentTaskUpdate_PreservesAllFields guards against the bug
@@ -190,11 +191,17 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 	create := systools.NewTaskCreateTool(deps)
 
 	// Create task 1: name="Alpha", status="inbox", agent_id="agent-1"
-	r1 := create.Execute(context.Background(), map[string]any{
+	//
+	// WithAgentID mirrors real dispatch (the tool registry always injects the
+	// calling agent's own ID before Execute) — needed here because criteria
+	// authorship (FR-6/D5, review r1 M5) is server-set from
+	// tools.ToolAgentID(ctx), never left blank.
+	r1 := create.Execute(tools.WithAgentID(context.Background(), "creator-agent"), map[string]any{
 		"name":         "Alpha",
 		"status":       "inbox",
 		"agent_id":     "agent-1",
 		"workspace_id": testWorkspaceID,
+		"criteria":     workspaceCriteriaArg(),
 	})
 	require.False(t, r1.IsError, "create Alpha must succeed; got: %s", r1.ForLLM)
 	var resp1 map[string]any
@@ -203,11 +210,12 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 	require.True(t, ok, "create must return an id; got: %v", resp1)
 
 	// Create task 2: name="Beta", status="next", agent_id="agent-2"
-	r2 := create.Execute(context.Background(), map[string]any{
+	r2 := create.Execute(tools.WithAgentID(context.Background(), "creator-agent"), map[string]any{
 		"name":         "Beta",
 		"status":       "next",
 		"agent_id":     "agent-2",
 		"workspace_id": testWorkspaceID,
+		"criteria":     workspaceCriteriaArg(),
 	})
 	require.False(t, r2.IsError, "create Beta must succeed; got: %s", r2.ForLLM)
 	var resp2 map[string]any

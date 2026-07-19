@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -100,6 +101,9 @@ type TaskCreateTool struct {
 	// A→B→A task→task chain cannot recurse unboundedly. Set via
 	// SetMaxDelegationDepth; 0 disables the bound (no caller should leave it 0).
 	maxDelegationDepth int
+	// bashPolicyChecker resolves an assignee agent's effective "bash" tool
+	// policy (ADR-049 D2 rule 5, FR-017/052). Set via SetBashPolicyChecker.
+	bashPolicyChecker func(assigneeAgentID string) (policy string, ok bool)
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -131,6 +135,80 @@ func (t *TaskCreateTool) SetDelegationDenyChecker(
 // SetOnCreate sets the callback invoked after a task is successfully created.
 func (t *TaskCreateTool) SetOnCreate(fn func(*task.Task)) {
 	t.onCreate = fn
+}
+
+// SetBashPolicyChecker installs the D2 rule 5 checker (ADR-049, FR-017/052):
+// resolves the assignee agent's effective "bash" tool policy so a create
+// whose criteria are ALL kind=check can be rejected as structurally
+// unsatisfiable when that policy is deny or ask (ask resolves to deny
+// unattended at judge time, D2 rule 2 — a machine check that can never even
+// run can never adjudicate MET). fn should return ok=false when the assignee
+// agent cannot be resolved at all.
+//
+// Mirrors the fail-closed-when-unwired discipline SetDelegationDenyChecker
+// documents above — an unwired checker is a configuration error, never a
+// permission grant. Do NOT default an unwired checker's outcome to "allow".
+func (t *TaskCreateTool) SetBashPolicyChecker(fn func(assigneeAgentID string) (policy string, ok bool)) {
+	t.bashPolicyChecker = fn
+}
+
+// parseCriteriaArgs converts the create_task tool's raw "criteria" argument
+// (a []any of map[string]any — the shape LLM tool-call arguments always
+// decode into) into []task.AcceptanceCriterion. Every criterion is
+// server-authored as the CALLING agent — agent-created criteria are, by
+// definition, agent-authored (SD-A7); author is never accepted from args.
+// Shape/length validation (kind enum, text bounds, check-shape-iff-kind,
+// ID/status defaulting) is left to the store's own normalizeCriteria,
+// invoked from Store.Create — this only handles the untyped-map decode.
+func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
+	out := make([]task.AcceptanceCriterion, 0, len(raw))
+	for i, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("criteria[%d]: must be an object", i)
+		}
+		kind, _ := m["kind"].(string)
+		text, _ := m["text"].(string)
+		c := task.AcceptanceCriterion{
+			Kind:   task.CriterionKind(kind),
+			Text:   text,
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
+		}
+		if chk, ok := m["check"].(map[string]any); ok {
+			command, _ := chk["command"].(string)
+			var expectedExitCode int
+			if v, ok := chk["expected_exit_code"].(float64); ok {
+				expectedExitCode = int(v)
+			}
+			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// allCheckCriteria reports whether criteria is non-empty and EVERY entry is
+// kind=check (ADR-049 D2 rule 5 gate condition).
+func allCheckCriteria(criteria []task.AcceptanceCriterion) bool {
+	if len(criteria) == 0 {
+		return false
+	}
+	for _, c := range criteria {
+		if c.Kind != task.KindCheck {
+			return false
+		}
+	}
+	return true
+}
+
+// describeBashPolicy renders a bashPolicyChecker result for an error message:
+// the resolved policy string, or "unresolvable" when the assignee agent
+// itself could not be found.
+func describeBashPolicy(policy string, ok bool) string {
+	if !ok {
+		return "unresolvable"
+	}
+	return policy
 }
 
 func (t *TaskCreateTool) Name() string           { return "create_task" }
@@ -172,8 +250,37 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "Task IDs this task is blocked by (optional). Each blocker must exist and be in the same workspace; a cycle is rejected.",
 			},
+			"criteria": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type": "string",
+							"enum": []string{"check", "prose"},
+							"description": "check: a shell command verified via the assignee's own bash tool; " +
+								"prose: a free-text statement judged by the Judge System Agent",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The criterion statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+						},
+					},
+					"required": []string{"kind", "text"},
+				},
+				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
+					"one criterion — an agent-created task with zero criteria is rejected.",
+			},
 		},
-		"required": []string{"title", "prompt", "agent_id"},
+		"required": []string{"title", "prompt", "agent_id", "criteria"},
 	}
 }
 
@@ -275,7 +382,10 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
 	// ADR-037: the legacy boolean delegateCheck fallback is retired — this is
-	// now the only gate.
+	// now the only gate. Checked BEFORE the criteria validation below so an
+	// unauthorized caller always gets a consistent delegation-denied response
+	// regardless of what else they did or didn't supply (authorization first,
+	// business-rule validation second).
 	//
 	// FAIL CLOSED, not open, when no checker is wired: an unwired deny-checker
 	// is a configuration error, never a permission grant. Unreachable in
@@ -298,6 +408,53 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 			Policy:        DenyTrustSet,
 			TargetAgentID: agentID,
 		})
+	}
+
+	// FR-6/D5 strict criteria enforcement (ADR-049, SD-A7, review r1 major
+	// M5): an agent-created task requires at least one acceptance criterion —
+	// human/UI creation (which never calls this tool) may still leave
+	// Criteria empty (the soft tier, judged against Prompt/title/description
+	// at judge time instead, ADR-049 D5). rawCriteria absent or an empty
+	// array both fail this check identically.
+	rawCriteria, _ := args["criteria"].([]any)
+	if len(rawCriteria) == 0 {
+		return ErrorResult(
+			"criteria is required: an agent-created task must supply at least one acceptance " +
+				"criterion (Definition of Done) — ADR-049 D5/SD-A7",
+		)
+	}
+	criteria, cErr := parseCriteriaArgs(rawCriteria, callerID)
+	if cErr != nil {
+		return ErrorResult(fmt.Sprintf("task_create failed: %v", cErr))
+	}
+
+	// D2 rule 5 (FR-017/052): an all-check criteria set can never be
+	// adjudicated MET if the assignee's effective bash policy is deny or ask
+	// (ask resolves to deny unattended at judge time, D2 rule 2) — the
+	// machine check could never even run. Reject at write time rather than
+	// let the task loop forever against a structurally unsatisfiable DoD.
+	if allCheckCriteria(criteria) {
+		if t.bashPolicyChecker == nil {
+			// FAIL CLOSED, not open, when no checker is wired — same rationale
+			// as the delegation gate above: an unwired checker is a
+			// configuration error, never a permission grant.
+			slog.Error("create_task: no bash-policy checker installed — denying an "+
+				"all-check criteria set by default",
+				"caller_id", callerID, "target_agent_id", agentID)
+			return ErrorResult(
+				"task_create failed: cannot verify the assignee's bash policy (D2 rule 5 checker not " +
+					"configured) — denying an all-machine-criteria create by default",
+			)
+		}
+		policy, ok := t.bashPolicyChecker(agentID)
+		if !ok || policy != string(config.ToolPolicyAllow) {
+			return ErrorResult(fmt.Sprintf(
+				"task_create failed: all criteria are machine-checkable (kind=check) but agent %q's "+
+					"effective bash policy is %q — this criteria set could never be satisfied "+
+					"(structurally unsatisfiable, ADR-049 D2 rule 5)",
+				agentID, describeBashPolicy(policy, ok),
+			))
+		}
 	}
 
 	// Task-mode recursion bound (SEC): a task_create issued from *within* a task
@@ -345,6 +502,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		WorkspaceID:     wsID,
 		Status:          task.StatusNext,
 		DelegationDepth: childDepth,
+		Criteria:        criteria,
 	}
 
 	// Propagate the originating channel so completed tasks can route results back.

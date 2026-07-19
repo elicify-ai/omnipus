@@ -50,6 +50,18 @@ func denyDelegationTo(forbidden string) func(ctx context.Context, caller, target
 	}
 }
 
+// workspaceCriteriaArg returns a minimal well-formed "criteria" tool-call
+// argument (one prose criterion) — the shape create_task_in_workspace's
+// Execute now requires at least one of, once agent_id is set (FR-6/D5 strict
+// criteria enforcement, review r1 major M5). Tests whose concern is
+// something other than criteria enforcement itself use this to stay
+// unaffected by that requirement.
+func workspaceCriteriaArg() []any {
+	return []any{
+		map[string]any{"kind": "prose", "text": "the work is done"},
+	}
+}
+
 // writeTask writes a task.Task directly to the home's tasks dir for setup.
 func writeTask(t *testing.T, home string, tk task.Task) {
 	t.Helper()
@@ -125,6 +137,7 @@ func TestCreateTaskInWorkspace_DelegationAllowed(t *testing.T) {
 		"name":         "Allowed delegation",
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "trusted-agent",
+		"criteria":     workspaceCriteriaArg(),
 	})
 	require.False(t, r1.IsError, "permitted delegation must succeed; got: %s", r1.ForLLM)
 
@@ -134,6 +147,7 @@ func TestCreateTaskInWorkspace_DelegationAllowed(t *testing.T) {
 		"name":         "Self-assigned",
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "caller-agent",
+		"criteria":     workspaceCriteriaArg(),
 	})
 	require.False(t, r2.IsError, "self-assignment must succeed; got: %s", r2.ForLLM)
 }
@@ -152,6 +166,7 @@ func TestCreateTaskInWorkspace_NilGateFailOpen(t *testing.T) {
 		"name":         "Unwired gate",
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "any-agent",
+		"criteria":     workspaceCriteriaArg(),
 	})
 	require.False(t, result.IsError, "unwired gate must fail-open; got: %s", result.ForLLM)
 }
@@ -408,6 +423,7 @@ func TestCreateTaskInWorkspace_AllowsSubagent3pWorker_WhenDelegationAllows(t *te
 		"name":         "Dispatched to external CLI",
 		"workspace_id": testWorkspaceID,
 		"agent_id":     externalCLIWorkerID,
+		"criteria":     workspaceCriteriaArg(),
 	})
 
 	require.False(t, result.IsError, "expected the subagent_3p target to be accepted; got: %s", result.ForLLM)

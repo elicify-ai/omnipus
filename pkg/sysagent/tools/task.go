@@ -14,6 +14,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -53,6 +54,58 @@ func validateBlockersSameWorkspace(store *task.Store, dependentWorkspaceID strin
 	return nil
 }
 
+// parseCriteriaArgsFromWorkspaceTool converts create_task_in_workspace's raw
+// "criteria" argument (a []any of map[string]any — the shape LLM tool-call
+// arguments always decode into) into []task.AcceptanceCriterion. Mirrors
+// pkg/tools/task.go's parseCriteriaArgs exactly (duplicated rather than
+// exported+imported: that helper is unexported package-internal to pkg/tools,
+// and this package must not reach into pkg/tools' internals). Every criterion
+// is server-authored as the CALLING agent — agent-created criteria are, by
+// definition, agent-authored (SD-A7); author is never accepted from args.
+// Shape/length validation is left to the store's own normalizeCriteria,
+// invoked from Store.Create.
+func parseCriteriaArgsFromWorkspaceTool(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
+	out := make([]task.AcceptanceCriterion, 0, len(raw))
+	for i, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("criteria[%d]: must be an object", i)
+		}
+		kind, _ := m["kind"].(string)
+		text, _ := m["text"].(string)
+		c := task.AcceptanceCriterion{
+			Kind:   task.CriterionKind(kind),
+			Text:   text,
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
+		}
+		if chk, ok := m["check"].(map[string]any); ok {
+			command, _ := chk["command"].(string)
+			var expectedExitCode int
+			if v, ok := chk["expected_exit_code"].(float64); ok {
+				expectedExitCode = int(v)
+			}
+			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// allCheckCriteriaWorkspace reports whether criteria is non-empty and EVERY
+// entry is kind=check (ADR-049 D2 rule 5 gate condition). Mirrors
+// pkg/tools/task.go's allCheckCriteria.
+func allCheckCriteriaWorkspace(criteria []task.AcceptanceCriterion) bool {
+	if len(criteria) == 0 {
+		return false
+	}
+	for _, c := range criteria {
+		if c.Kind != task.KindCheck {
+			return false
+		}
+	}
+	return true
+}
+
 // delegationDenied evaluates the FR-6.2 delegation gate for an update/delete
 // mutation that targets a task assigned to (or being reassigned to) targetAgentID.
 // It returns the structured denial to DENY, or nil to ALLOW. When the hook is
@@ -74,7 +127,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, planning, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by)."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, planning, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -92,6 +145,35 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "Task IDs this task is blocked by",
+			},
+			"criteria": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type": "string",
+							"enum": []string{"check", "prose"},
+							"description": "check: a shell command verified via the assignee's own bash tool; " +
+								"prose: a free-text statement judged by the Judge System Agent",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The criterion statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+						},
+					},
+					"required": []string{"kind", "text"},
+				},
+				"description": "Acceptance criteria (Definition of Done). REQUIRED (at least one) when " +
+					"agent_id is set — an agent-assigned task with zero criteria is rejected.",
 			},
 		},
 		"required": []string{"name", "workspace_id"},
@@ -158,6 +240,54 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		if denial := t.deps.DelegationDeny(ctx, caller, tk.AgentID); denial != nil {
 			return tools.DelegationDeniedResult(t.Name(), denial)
 		}
+	}
+
+	// FR-6/D5 strict criteria enforcement (ADR-049, SD-A7, review r1 major
+	// M5, parity with the plain create_task tool): an agent-ASSIGNED task
+	// requires at least one acceptance criterion — only meaningful once
+	// AgentID is set at all (an unassigned, human-tracking-only task never
+	// enters the goal loop/judge machinery, so criteria enforcement does not
+	// apply to it).
+	if tk.AgentID != "" {
+		rawCriteria, _ := args["criteria"].([]any)
+		if len(rawCriteria) == 0 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"criteria is required: an agent-assigned task must supply at least one acceptance "+
+					"criterion (Definition of Done) — ADR-049 D5/SD-A7", "criteria"))
+		}
+		criteria, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, caller)
+		if cErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", cErr.Error(), "criteria"))
+		}
+		// D2 rule 5 (FR-017/052): an all-check criteria set can never be
+		// adjudicated MET if the assignee's effective bash policy is deny or
+		// ask (ask resolves to deny unattended at judge time, D2 rule 2).
+		if allCheckCriteriaWorkspace(criteria) {
+			if t.deps.ResolveBashPolicy == nil {
+				// FAIL CLOSED, not open, when no checker is wired — same
+				// rationale as the delegation gate above.
+				slog.Error("create_task_in_workspace: no bash-policy resolver installed — denying an "+
+					"all-check criteria set by default",
+					"caller_id", caller, "target_agent_id", tk.AgentID)
+				return tools.ErrorResult(errorJSON("INVALID_INPUT",
+					"cannot verify the assignee's bash policy (D2 rule 5 resolver not configured) — "+
+						"denying an all-machine-criteria create by default", "criteria"))
+			}
+			policy, ok := t.deps.ResolveBashPolicy(tk.AgentID)
+			if !ok || policy != string(config.ToolPolicyAllow) {
+				resolved := "unresolvable"
+				if ok {
+					resolved = policy
+				}
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", fmt.Sprintf(
+					"all criteria are machine-checkable (kind=check) but agent %q's effective bash "+
+						"policy is %q — this criteria set could never be satisfied (structurally "+
+						"unsatisfiable, ADR-049 D2 rule 5)",
+					tk.AgentID, resolved,
+				), "criteria"))
+			}
+		}
+		tk.Criteria = criteria
 	}
 
 	if v, ok := args["due"].(string); ok && v != "" {

@@ -1360,7 +1360,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// bound at construction). MUST be wired in production — leaving it nil
 		// fails OPEN.
 		DelegationDeny: agentLoop.NewSysagentDelegationDeny(),
-		ListSessions:   agentLoop.ListAllSessions,
+		// D2 rule 5 (FR-017/052, review r1 major M5): create_task_in_workspace
+		// parity with the plain create_task tool's own bash-policy checker —
+		// MUST be wired in production, leaving it nil fails CLOSED (unlike
+		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
+		// comment.
+		ResolveBashPolicy: agentLoop.NewSysagentBashPolicyResolver(),
+		ListSessions:      agentLoop.ListAllSessions,
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 

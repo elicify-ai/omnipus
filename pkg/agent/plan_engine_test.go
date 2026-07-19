@@ -6,7 +6,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -228,6 +230,46 @@ func TestGlobalCap_RegisteredCountersContributeToTotal(t *testing.T) {
 	if ok || active != 16 || cap != 16 {
 		t.Fatalf("ok=%v active=%d cap=%d, want ok=false active=16 cap=16 (10 plans + 4 goal + 2 loop == cap)",
 			ok, active, cap)
+	}
+}
+
+// TestGlobalCap_AdmitFailsClosedOnCounterError is review r1 silent-failure
+// MEDIUM 3: a registered ActiveCounterFunc error must deny admission
+// (fail-closed), never silently count 0 for that kind and admit past the
+// cap on the (wrong) remainder — well under the numeric cap here (2 running
+// plans vs. cap 16) proves the denial comes from the error itself, not from
+// genuinely being at/over cap.
+func TestGlobalCap_AdmitFailsClosedOnCounterError(t *testing.T) {
+	h := newTestPlanEngine(t)
+	for i := 0; i < 2; i++ {
+		mustCreateRunningPlan(t, h.plans, fmt.Sprintf("p-%02d", i), "owner")
+	}
+	h.pe.RegisterActiveCounter("goal", func() (int, error) { return 0, errors.New("boom: counter unavailable") })
+
+	ok, active, cap := h.pe.Admit("goal")
+	if ok {
+		t.Fatalf("expected admission to be denied (fail-closed) when a registered counter errors, "+
+			"got ok=true active=%d cap=%d", active, cap)
+	}
+}
+
+// TestGlobalCap_AdmitFailsClosedOnPlanListError mirrors the counter-error
+// test above for the plan-store List call itself.
+func TestGlobalCap_AdmitFailsClosedOnPlanListError(t *testing.T) {
+	h := newTestPlanEngine(t)
+	// Corrupt the plans directory so plan.Store.List returns an error rather
+	// than an empty/zero result — a real read fault, not a contrived stub.
+	plansDir := h.pe.planStore.Dir()
+	if err := os.RemoveAll(plansDir); err != nil {
+		t.Fatalf("remove plans dir: %v", err)
+	}
+	if err := os.WriteFile(plansDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("replace plans dir with a file: %v", err)
+	}
+
+	ok, _, _ := h.pe.Admit("plan")
+	if ok {
+		t.Fatal("expected admission to be denied (fail-closed) when the plan store List call errors")
 	}
 }
 

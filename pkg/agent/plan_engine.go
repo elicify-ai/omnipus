@@ -941,8 +941,22 @@ func (pe *PlanEngine) Admit(kind string) (ok bool, active, cap int) {
 }
 
 func (pe *PlanEngine) admitLocked(kind string) (ok bool, active, capOut int) {
-	active = pe.computeActiveLocked()
+	active, reliable := pe.computeActiveLocked()
 	capOut = pe.resolveGlobalCap()
+	if !reliable {
+		// Fail CLOSED (review r1 silent-failure MEDIUM 3): the active count
+		// could not be computed reliably (a List/counter error below means
+		// `active` is a partial, possibly UNDER-count) — admitting on an
+		// unreliable read risks silently blowing past R5's global brake.
+		// Deny rather than risk it; the next Admit call (the caller always
+		// retries on its own cadence — /goal and /loop admission checks run
+		// per-command, the plan engine's own tryStartApprovedPlan runs every
+		// tick) gets a fresh chance once the underlying fault clears.
+		logger.WarnCF("plan_engine",
+			"admission check: active count unreliable (list/counter error) — denying (fail-closed)",
+			map[string]any{"kind": kind, "active": active, "cap": capOut})
+		return false, active, capOut
+	}
 	ok = active < capOut
 	logger.DebugCF("plan_engine", "admission check",
 		map[string]any{"kind": kind, "active": active, "cap": capOut, "admitted": ok})
@@ -951,12 +965,21 @@ func (pe *PlanEngine) admitLocked(kind string) (ok bool, active, capOut int) {
 
 // computeActiveLocked sums running plans (scanned directly) plus every
 // registered ActiveCounterFunc's current count. Caller must hold pe.mu.
-func (pe *PlanEngine) computeActiveLocked() int {
-	count := 0
+//
+// reliable is false when the plan-store List call OR ANY registered
+// ActiveCounterFunc call errored (review r1 silent-failure MEDIUM 3): the
+// returned count is then a partial, possibly UNDER-count that admitLocked
+// must never trust to admit past the cap — the pre-fix behavior counted a
+// failed source as 0 and happily admitted on the (silently wrong) remainder,
+// which could blow past R5's global active-loop brake during exactly the
+// kind of storage fault the cap exists to be resilient against.
+func (pe *PlanEngine) computeActiveLocked() (count int, reliable bool) {
+	reliable = true
 	runningPlans, err := pe.planStore.List(plan.Filter{})
 	if err != nil {
-		logger.WarnCF("plan_engine", "admission: list plans failed; counting 0 running plans",
+		logger.WarnCF("plan_engine", "admission: list plans failed",
 			map[string]any{"error": err.Error()})
+		reliable = false
 	} else {
 		for i := range runningPlans {
 			if runningPlans[i].State == plan.StateRunning {
@@ -967,13 +990,14 @@ func (pe *PlanEngine) computeActiveLocked() int {
 	for kind, fn := range pe.activeCounters {
 		n, err := fn()
 		if err != nil {
-			logger.WarnCF("plan_engine", "admission: active counter failed; counting 0 for this kind",
+			logger.WarnCF("plan_engine", "admission: active counter failed",
 				map[string]any{"kind": kind, "error": err.Error()})
+			reliable = false
 			continue
 		}
 		count += n
 	}
-	return count
+	return count, reliable
 }
 
 func (pe *PlanEngine) resolveGlobalCap() int {
