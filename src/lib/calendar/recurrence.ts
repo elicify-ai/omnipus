@@ -42,7 +42,7 @@ export type RecurrenceEndCondition =
  * (Outlook/Google convention: both "day N" and "the Nth weekday" are always
  * derived from the same anchor date, the toggle just picks which is stored).
  */
-export interface RecurrenceEditorState {
+export interface RecurrenceEditorState { // not-wire-format: internal editor view-model; never sent — compiled to the generated TaskTrigger.config before any request
   frequency: RecurrenceFrequency
   /** 1–99, always pre-clamped (see `clampInterval`). */
   interval: number
@@ -66,17 +66,17 @@ export interface RecurrenceEditorState {
  * (`cron_expr`/`every_ms`) task is the slide-over's concern (US-5), not this
  * leaf's.
  */
-export type RecurrenceValue = { kind: 'none' } | { kind: 'rrule'; state: RecurrenceEditorState }
+export type RecurrenceValue = { kind: 'none' } | { kind: 'rrule'; state: RecurrenceEditorState } // not-wire-format: internal editor union (none vs in-progress rule state); never crosses the gateway boundary
 
-/** The wire-shaped output of a compiled rule (FR-005). */
-export interface CompiledRecurrence {
+/** Intermediate compile output (FR-005); its 3 fields are copied into the generated TaskTrigger.config — it is not itself the wire type. */
+export interface CompiledRecurrence { // not-wire-format: local compile intermediate whose fields are spread into the generated TaskTrigger.config; never decoded from a response
   /** Bare RRULE body, no `RRULE:` prefix, e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. */
   rrule: string
   dtstart_ms: number
   tz: string
 }
 
-export interface RecurrencePreset {
+export interface RecurrencePreset { // not-wire-format: UI descriptor for the editor's preset dropdown (label + seed state); never serialized to the gateway
   id: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'weekday' | 'custom'
   label: string
   value: RecurrenceValue
@@ -522,7 +522,7 @@ export function parseRruleString(rruleBody: string, dtstartMs: number): Recurren
 
 // ─── Validation (FR-019) ────────────────────────────────────────────────────
 
-export interface RecurrenceValidity {
+export interface RecurrenceValidity { // not-wire-format: internal editor validation result driving the Save button (FR-019); never crosses the gateway boundary
   valid: boolean
   reason: string | null
 }

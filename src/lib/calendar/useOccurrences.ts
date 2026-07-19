@@ -125,7 +125,7 @@ if (
 
 // ── Fetch (tolerant per-item validation) ────────────────────────────────────────
 
-export interface FetchOccurrencesParams {
+export interface FetchOccurrencesParams { // not-wire-format: local fetch-fn args assembled into a query string; the wire response is the generated TaskOccurrenceSet
   workspaceId: string
   fromMs: number
   toMs: number
@@ -209,7 +209,7 @@ export async function fetchTaskOccurrences(
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export interface UseOccurrencesParams {
+export interface UseOccurrencesParams { // not-wire-format: internal React hook params (workspace + Date range + tz); never serialized as a request body
   workspaceId: string
   /** FullCalendar's `view.activeStart` (or `datesSet` arg `.start`) — inclusive. */
   activeStart: Date
