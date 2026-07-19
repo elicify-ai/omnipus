@@ -213,11 +213,10 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 
 	// FR-064/D7 idle-expiry (review r1): the job genuinely fired — this IS
 	// activity for the calendar-brake clock, persisted in the SAME write as
-	// run_count (crash-safety: both land together or neither does; see this
-	// function's own doc comment on the "persist first" discipline this
-	// mirrors). Bumped regardless of runErr — a scheduled run that actually
-	// executed (even one whose turn errored) is still real mechanical
-	// progress, not a judge-style unavailability pause.
+	// run_count (crash-safety: both land together or neither does). Bumped
+	// regardless of runErr — a scheduled run that actually executed (even
+	// one whose turn errored) is still real mechanical progress, not a
+	// judge-style unavailability pause.
 	activityNow := time.Now().UTC().Format(time.RFC3339)
 	if perr := store.SetMeta(sessionID, session.MetaPatch{
 		LoopRunCount:       &newRun,

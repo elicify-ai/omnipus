@@ -130,9 +130,11 @@ const (
 // (a second construction is harmless; a second concurrent Start's ticker
 // would simply have its Tick calls no-op against the first's overlap guard
 // IF they shared a mutex, which they do not across two instances — the
-// gateway boot path MUST only construct and Start one instance; see
-// gateway.go's setupAndStartServices, the sole production call site of
-// agent.NewPlanEngine + PlanEngine.Start).
+// gateway boot path MUST only construct one instance; see gateway.go's
+// setupAndStartServices, the sole construction site of agent.NewPlanEngine.
+// Start is also called by restartServices (gateway.go) on that SAME
+// instance, on every reload, after stopAndCleanupServices Stop()'d it — see
+// restartServices' own comment on why the engine is not reconstructed there).
 type PlanEngine struct {
 	agentLoop  *AgentLoop
 	planStore  *plan.Store

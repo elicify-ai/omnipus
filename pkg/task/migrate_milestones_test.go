@@ -296,12 +296,21 @@ func TestMigrateMilestones_PartialFailure_DoesNotFinalize(t *testing.T) {
 
 	writeMilestoneFixture(t, milestonesDir, "m1", "Q3", "2026-09-30")
 
-	sixteenTags := make([]string, 16)
-	for i := range sixteenTags {
-		sixteenTags[i] = "existing-tag-" + string(rune('a'+i))
+	// review r2 MED-1: a task with EXACTLY 16 pre-existing tags is no longer
+	// a poison pill — appending the migration's 17th (milestone) tag now
+	// gracefully drops the oldest pre-existing tag to make room and
+	// finalizes (see TestMigrateMilestones_AtTagCap_TrimsOldestAndFinalizes
+	// below). To keep testing the genuine "a single bad task file blocks
+	// the whole migration" contract, this fixture now uses a task ALREADY
+	// over the cap (17 tags) BEFORE the migration's append — a real,
+	// pre-existing data-integrity problem this migration cannot and must
+	// not silently paper over.
+	seventeenTags := make([]string, 17)
+	for i := range seventeenTags {
+		seventeenTags[i] = "existing-tag-" + string(rune('a'+i))
 	}
 	writeLegacyTaskFixture(t, tasksDir, "task-good", "ws-1", "m1", "", nil)
-	writeLegacyTaskFixture(t, tasksDir, "task-bad", "ws-1", "m1", "", sixteenTags)
+	writeLegacyTaskFixture(t, tasksDir, "task-bad", "ws-1", "m1", "", seventeenTags)
 
 	err := MigrateMilestonesToTags(home)
 	require.Error(t, err, "a partial per-file failure must surface as an error, not be silently swallowed")
@@ -335,4 +344,68 @@ func TestMigrateMilestones_PartialFailure_DoesNotFinalize(t *testing.T) {
 	assert.Len(t, goodAfterRetry.Tags, 1, "already-migrated task-good must not gain a duplicate tag on retry")
 	_, statErr = os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
 	assert.True(t, os.IsNotExist(statErr), "sentinel must still be withheld on a repeated failing retry")
+}
+
+// TestMigrateMilestones_AtTagCap_TrimsOldestAndFinalizes is the review r2
+// MED-1 regression test: a milestone-member task already at EXACTLY
+// maxTagsPerTask (16) pre-existing tags must not poison-pill the whole
+// migration. Appending the 17th (milestone) tag would otherwise make
+// normalizeTags error (not truncate), setting migrationFailures>0 and
+// permanently withholding the sentinel — re-running the WHOLE migration on
+// every future boot, blocking finalization for every task, not just this
+// one. The fix drops the oldest (front-of-list) pre-existing tag to make
+// room, logs a WARN, and finalizes normally.
+func TestMigrateMilestones_AtTagCap_TrimsOldestAndFinalizes(t *testing.T) {
+	home := t.TempDir()
+	milestonesDir := filepath.Join(home, "milestones")
+	tasksDir := filepath.Join(home, "tasks")
+
+	writeMilestoneFixture(t, milestonesDir, "m1", "Q3", "2026-09-30")
+
+	sixteenTags := make([]string, 16)
+	for i := range sixteenTags {
+		sixteenTags[i] = "existing-tag-" + string(rune('a'+i))
+	}
+	writeLegacyTaskFixture(t, tasksDir, "task-at-cap", "ws-1", "m1", "", sixteenTags)
+
+	err := MigrateMilestonesToTags(home)
+	require.NoError(t, err, "a task exactly at the tag cap must not block the whole migration")
+
+	tk := readTaskFixture(t, tasksDir, "task-at-cap")
+	assert.LessOrEqual(t, len(tk.Tags), maxTagsPerTask, "tags must be trimmed to fit the cap")
+	assert.Contains(t, tk.Tags, "milestone:q3", "the migrated milestone tag must be present")
+	assert.NotContains(t, tk.Tags, "existing-tag-a",
+		"the oldest (front-of-list) pre-existing tag must have been dropped to make room")
+	assert.Contains(t, tk.Tags, "existing-tag-p",
+		"the newest pre-existing tag (index 15, the 16th) must survive the trim")
+
+	_, statErr := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
+	assert.NoError(t, statErr, "completion sentinel must be written — migration must finalize")
+	_, statErr = os.Stat(milestonesDir)
+	assert.True(t, os.IsNotExist(statErr), "milestones dir must be removed after finalization")
+}
+
+// TestMigrateMilestones_AlreadyOverCap_StillFails proves the fix is scoped
+// correctly: a task ALREADY over maxTagsPerTask BEFORE the migration's own
+// append (a genuine pre-existing data-integrity problem, unrelated to this
+// migration) is NOT silently rescued — it must still surface as a migration
+// failure needing operator attention, exactly as before this fix.
+func TestMigrateMilestones_AlreadyOverCap_StillFails(t *testing.T) {
+	home := t.TempDir()
+	milestonesDir := filepath.Join(home, "milestones")
+	tasksDir := filepath.Join(home, "tasks")
+
+	writeMilestoneFixture(t, milestonesDir, "m1", "Q3", "2026-09-30")
+
+	seventeenTags := make([]string, 17)
+	for i := range seventeenTags {
+		seventeenTags[i] = "existing-tag-" + string(rune('a'+i))
+	}
+	writeLegacyTaskFixture(t, tasksDir, "task-already-over", "ws-1", "m1", "", seventeenTags)
+
+	err := MigrateMilestonesToTags(home)
+	require.Error(t, err, "a task already over the tag cap before this migration's own append must still fail")
+
+	_, statErr := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
+	assert.True(t, os.IsNotExist(statErr), "sentinel must not be written when a genuine data-integrity issue exists")
 }
