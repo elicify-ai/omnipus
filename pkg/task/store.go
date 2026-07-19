@@ -521,7 +521,12 @@ type Patch struct {
 	// MaxAttempts is a double pointer (mirrors Trigger): outer nil = unchanged,
 	// *outer nil = clear the override (inherit the global PlanningConfig
 	// default), *outer non-nil = set to that value.
-	MaxAttempts   **int
+	MaxAttempts **int
+	// AttemptCount is the runtime goal-loop's own write path for
+	// Task.AttemptCount (ADR-049 D7/R4/C17). Server-set only — the REST/PATCH
+	// wire boundary must never accept this field from a client; only the
+	// runtime engine (pkg/agent's TaskExecutor) writes it, once per attempt.
+	AttemptCount  *int
 	Surface       *Surface
 	Result        *string
 	Artifacts     *[]string
@@ -730,6 +735,12 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 			return nil, verr("max_attempts must be at least 1")
 		}
 		t.MaxAttempts = newMax
+	}
+	if patch.AttemptCount != nil {
+		if *patch.AttemptCount < 0 {
+			return nil, verr("attempt_count must not be negative")
+		}
+		t.AttemptCount = *patch.AttemptCount
 	}
 	if patch.Surface != nil {
 		if !IsValidSurface(*patch.Surface) {
