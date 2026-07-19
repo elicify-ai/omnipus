@@ -288,6 +288,9 @@ func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, not
 		logger.WarnCF("agent", "loop: failed to clear loop state",
 			map[string]any{"session_id": sessionID, "error": err.Error(), "note": note})
 	}
+	if pe := GetPlanEngine(al); pe != nil {
+		pe.Release("loop") // paired with the Admit("loop") call at set time
+	}
 	al.emitLoopStatusFrame(sessionID, "", 0, 0, nil, "stopped")
 }
 
