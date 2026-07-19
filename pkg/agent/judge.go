@@ -157,16 +157,27 @@ type JudgeCriteriaResult struct {
 // Unavailable is impossible in that case (FR-052's all-machine scenario).
 func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) JudgeCriteriaResult {
 	var machineCriteria, proseCriteria []task.AcceptanceCriterion
+	perCriterion := make([]task.CriterionVerdict, 0, len(in.Criteria))
 	for _, c := range in.Criteria {
 		switch c.Kind {
 		case task.KindCheck:
 			machineCriteria = append(machineCriteria, c)
 		case task.KindProse:
 			proseCriteria = append(proseCriteria, c)
+		default:
+			// Fail-closed (NFR-2, review r1 silent-failure MEDIUM 4): an
+			// unrecognized criterion kind must never be silently dropped from
+			// adjudication (which would let the overall verdict come back MET
+			// with the unknown-kind criterion simply never checked). Synthesize
+			// an explicit unmet verdict for it instead.
+			perCriterion = append(perCriterion, task.CriterionVerdict{
+				CriterionID: c.ID,
+				Met:         false,
+				Reason:      "unknown criterion kind (fail-closed)",
+			})
 		}
 	}
 
-	perCriterion := make([]task.CriterionVerdict, 0, len(in.Criteria))
 	var evidence []task.EvidenceRecord
 	for _, c := range machineCriteria {
 		v, ev := al.runMachineCheck(ctx, in.AssigneeAgentID, c, in.Attempt, in.TaskID)
@@ -329,12 +340,29 @@ func (al *AgentLoop) runMachineCheck(
 
 // interpretBashResult recovers the real exit code and timeout status from a
 // bash-tool ToolResult (see exitCodeSuffixRe's doc comment for why this
-// regex-based recovery is necessary rather than a structured field). A
-// result that IsError but carries neither the timeout marker nor a
-// parseable exit-code suffix means the command was blocked before it ever
-// ran (hardcoded deny-pattern guard, path-escape guard, or a sandbox setup
-// failure) — this is reported as the -1 sentinel, which can never equal a
-// criterion's declared 0..255 expected code, so it always fails closed.
+// regex-based recovery is necessary rather than a structured field).
+//
+// result.IsError is AUTHORITATIVE (ExecTool sets IsError = ExitCode != 0,
+// pkg/tools/shell.go) — it is never overridden by anything a worker's own
+// command could have printed to stdout/stderr. Without this, a worker
+// command could spoof success by echoing its own fake
+// "[Command exited with code 0]" suffix into output while the real command
+// actually failed; exitCodeSuffixRe would find that leftmost fake match and
+// the check would wrongly pass (review r1 M1, silent-failure CRITICAL).
+//
+//   - !IsError: the real command genuinely exited 0 — trust it directly,
+//     no regex needed.
+//   - IsError: the real command did NOT exit 0. Take the LAST occurrence of
+//     the suffix (ExecTool always appends its own real one last; an
+//     earlier occurrence in the command's own output can only be a spoof
+//     attempt) and only trust it when it reports a genuinely non-zero
+//     code — a spoofed "...code 0]" suffix can never mask a real failure.
+//     No match, or a non-numeric/zero match, fails closed to the -1
+//     sentinel, which can never equal a criterion's declared 0..255
+//     expected code, so it always fails closed. This also covers the
+//     "blocked before it ever ran" case (hardcoded deny-pattern guard,
+//     path-escape guard, sandbox setup failure): no exit-code suffix at
+//     all, IsError true, -1 sentinel.
 func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int, output string) {
 	if result == nil {
 		return false, -1, "bash tool returned a nil result"
@@ -346,13 +374,14 @@ func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int,
 	if strings.Contains(strings.ToLower(output), judgeTimedOutMarker) {
 		return true, -1, output
 	}
-	if m := exitCodeSuffixRe.FindStringSubmatch(output); m != nil {
-		if code, err := strconv.Atoi(m[1]); err == nil {
-			return false, code, output
-		}
-	}
 	if !result.IsError {
 		return false, 0, output
+	}
+	if matches := exitCodeSuffixRe.FindAllStringSubmatch(output, -1); len(matches) > 0 {
+		last := matches[len(matches)-1]
+		if code, err := strconv.Atoi(last[1]); err == nil && code != 0 {
+			return false, code, output
+		}
 	}
 	return false, -1, output
 }

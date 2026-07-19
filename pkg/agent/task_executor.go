@@ -269,20 +269,20 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 //     a real update_task(status:"failed") call (SD-B1): an accepted give-up —
 //     terminal immediately, exactly as before this feature. There is nothing
 //     to verify in a worker's own honest failure report.
-//   - An already-terminal `done` status from a real update_task(status:"done")
-//     call: trusted immediately, exactly as before this feature. NOTE (scope
-//     decision, documented in this wave's report): SD-B2 calls for THIS claim
-//     to also be judged, but TaskUpdateTool's own onComplete callback
-//     (pkg/tools/task.go) already fires the blocked-dependent DAG-advance
-//     SYNCHRONOUSLY at the tool-call boundary — before finishTaskRun ever
-//     runs — so gating it behind the judge here would be inconsistent
-//     (dependents already unblocked) without a pkg/tools change, which is out
-//     of this wave's file scope (task_executor.go/judge.go/
-//     task_completion_signal.go only).
-//   - A SUCCESS marker (no explicit terminal tool call): a CLAIM — routed to
-//     the evidence-ladder judge (judge.go) before it may become terminal
-//     `done` (US-5/US-6, the #1 self-certification failure mode this feature
-//     closes).
+//   - An explicit update_task(status:"done") call on a task WITH acceptance
+//     criteria (hard tier) is now ALSO a CLAIM, not a terminal decision
+//     (SD-B2, review r1 blocker C1 fix): pkg/tools/task.go's TaskUpdateTool
+//     stages it as Task.PendingJudgeClaim instead of writing a terminal
+//     `done` — no DAG-advance, no onComplete, at the tool-call boundary. The
+//     block below detects PendingJudgeClaim and routes it through
+//     adjudicateClaim exactly like a SUCCESS marker. A criteria-less
+//     (soft-tier) explicit done write is UNCHANGED — trusted immediately,
+//     current.Status is already terminal `done`, and the IsTerminal check
+//     just below handles it exactly as before this feature.
+//   - A SUCCESS marker (no explicit terminal tool call, or no
+//     PendingJudgeClaim staged): a CLAIM — routed to the evidence-ladder
+//     judge (judge.go) before it may become terminal `done` (US-5/US-6, the
+//     #1 self-certification failure mode this feature closes).
 //
 // Scratchpad tasks (FR-048/D5) are exempt from the goal loop entirely: every
 // branch below trusts the marker directly, exactly as today, for a
@@ -354,10 +354,11 @@ func (te *TaskExecutor) finishTaskRun(
 
 	if task.IsTerminal(current.Status) {
 		// An explicit update_task(done|failed) call already decided (and, for
-		// `done`, already fired DAG-advance at the tool-call boundary) — trust
-		// it directly, exactly as today. See this function's doc comment for
-		// why SD-B2's "also judge an explicit done claim" is a documented,
-		// out-of-scope gap rather than implemented here.
+		// a criteria-less `done`, already fired DAG-advance at the tool-call
+		// boundary) — trust it directly, exactly as today. A hard-tier done
+		// claim never reaches this branch: TaskUpdateTool deliberately leaves
+		// Status non-terminal for that case (see the PendingJudgeClaim check
+		// below).
 		if taskSessionID != "" && sessStore != nil {
 			statusCompleted := session.StatusArchived
 			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); setErr != nil {
@@ -367,6 +368,25 @@ func (te *TaskExecutor) finishTaskRun(
 		}
 		te.notifySourceChannel(current)
 		return ""
+	}
+
+	if current.PendingJudgeClaim != "" {
+		// SD-B2/review r1 C1: an explicit update_task(status:"done") call on a
+		// task WITH acceptance criteria was staged here by TaskUpdateTool
+		// instead of writing a terminal `done` directly. Clear the staging
+		// field up front (adjudication is about to consume it one way or
+		// another; leaving it set would leak into the next attempt/read) and
+		// route through the SAME evidence-ladder judge path a TASK_STATUS
+		// marker uses — this explicit claim takes priority over any marker
+		// text that might also be present in resp, so the marker is not
+		// parsed at all in this branch.
+		claimText := current.PendingJudgeClaim
+		cleared := ""
+		if _, cerr := te.store.Update(t.ID, task.Patch{PendingJudgeClaim: &cleared}); cerr != nil {
+			logger.WarnCF("task_executor", "Could not clear pending judge claim",
+				map[string]any{"task_id": t.ID, "error": cerr.Error()})
+		}
+		return te.adjudicateClaim(ctx, current, taskSessionID, claimText)
 	}
 
 	// Agent did not call task_update — no explicit signal, or an explicit
@@ -766,8 +786,10 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 // end its final message with a standardized TASK_STATUS/TASK_SUMMARY marker
 // — this is the fail-closed fallback finishTaskRun parses when there is no
 // explicit task_update call. Native agents ADDITIONALLY get the task_update
-// instruction (an explicit tool call remains the preferred signal and wins
-// outright — see finishTaskRun's task.IsTerminal check).
+// instruction: for a task WITH acceptance criteria, an explicit call and the
+// marker now converge on the SAME evidence-ladder judge path (review r1 C1
+// fix, SD-B2) — neither "wins outright" over the other — so this instruction
+// deliberately does NOT claim the tool call bypasses adjudication.
 //
 // Echo-safety (review B1/B2): with the marker grammar now tolerant of
 // trailing content (parseTaskCompletionSignal / taskStatusLineRe), a model
@@ -825,8 +847,9 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	// TaskUpdateTool.Name()) — this instruction was previously misnamed
 	// "task_update" (a name no registered tool answers to); fixed alongside the
 	// B1 rewrite since this block was already being touched.
-	sb.WriteString("Prefer calling `update_task` explicitly when you finish " +
-		"(it takes priority over the marker above):\n")
+	sb.WriteString("You may also call `update_task` explicitly when you finish " +
+		"(a task with acceptance criteria is adjudicated by the evidence-ladder judge either way — " +
+		"calling the tool does not skip that review):\n")
 	sb.WriteString(fmt.Sprintf("  task_id: %q\n", t.ID))
 	sb.WriteString("  status: \"done\" (or \"failed\" if unsuccessful)\n")
 	sb.WriteString("  result: a brief summary of what was accomplished\n")
