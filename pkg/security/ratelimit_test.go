@@ -117,8 +117,10 @@ func TestRateLimiter_GlobalCostCap(t *testing.T) {
 	})
 }
 
-// TestRateLimiter_PrivilegedAgentExempt validates that privileged agent types (core/system)
-// are exempt from all rate limits per FR-045 (privileges by type, not by hardcoded ID).
+// TestRateLimiter_PrivilegedAgentExempt validates that ONLY the core agent type
+// is exempt from rate limits per FR-045 (privileges by type, not by hardcoded ID).
+// ADR-049 D3 / CRIT-002 narrowed the exemption from core||system to core-only, so
+// a type:system agent (the Judge) is NO LONGER exempt.
 // Traces to: wave2-security-layer-spec.md line 800 (TestRateLimiter_SystemAgentExempt)
 // BDD: Scenario: Privileged agent exempt from rate limits (spec line 709)
 func TestRateLimiter_PrivilegedAgentExempt(t *testing.T) {
@@ -136,17 +138,19 @@ func TestRateLimiter_PrivilegedAgentExempt(t *testing.T) {
 			"core agent must bypass cost cap: always returns Allowed=true")
 	})
 
-	t.Run("system agent always passes CheckGlobalCostCap regardless of cap", func(t *testing.T) {
+	t.Run("system agent is NOT exempt from CheckGlobalCostCap (ADR-049 D3)", func(t *testing.T) {
 		registry := security.NewRateLimiterRegistry()
 		registry.SetDailyCostCap(50.0)
 
 		// Load $49.99 from a custom agent
 		registry.CheckGlobalCostCap(49.99, "custom")
 
-		// System-type agent still passes
+		// System-type agent is now subject to the cap: a $100 spend on top of
+		// $49.99 exceeds $50 and MUST be denied (SEC-26 applies to type:system).
 		result := registry.CheckGlobalCostCap(100.0, "system")
-		assert.True(t, result.Allowed,
-			"system-type agent is exempt from global cost cap")
+		assert.False(t, result.Allowed,
+			"type:system agent is NOT exempt from the global cost cap (ADR-049 D3 / CRIT-002)")
+		assert.Contains(t, result.PolicyRule, "cost cap")
 	})
 }
 

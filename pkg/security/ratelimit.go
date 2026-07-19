@@ -15,11 +15,20 @@ import (
 )
 
 // IsPrivilegedAgent reports whether agentType represents a privileged agent
-// (type "core" or "system") that is exempt from per-agent rate limits and
-// cost caps per SEC-26. Privileges flow from agent type, not from a hardcoded
-// agent ID (FR-045).
+// (type "core") that is exempt from per-agent rate limits and cost caps per
+// SEC-26. Privileges flow from agent type, not from a hardcoded agent ID
+// (FR-045).
+//
+// ADR-049 D3 / CRIT-002 (Planning & Goals epic): narrowed from
+// `core || system` to `core` only. System Agents (e.g. the seeded Judge) are
+// deliberately NON-privileged — the Judge makes out-of-turn internal-LLM
+// calls that MUST be metered, rate-limited, and cost-capped like any other
+// non-core agent so a runaway goal/plan loop cannot spend without bound. The
+// four SEC-26 gates (pkg/agent/loop.go LLM/hr, daily-cost-cap, tool/min, and
+// RecordSpend) already thread the resolved AgentType through this predicate,
+// so narrowing here is the single point that subjects type:system to SEC-26.
 func IsPrivilegedAgent(agentType string) bool {
-	return agentType == "core" || agentType == "system"
+	return agentType == "core"
 }
 
 // TodayUTCDate returns the current date in "YYYY-MM-DD" UTC format. Exported
@@ -186,7 +195,7 @@ func (r *RateLimiterRegistry) GetOrCreate(
 
 // CheckGlobalCostCap checks and records costUSD against the global daily cost cap.
 //
-// Privileged agents (core/system type) are always exempt.
+// Privileged agents (core type only — ADR-049 D3) are always exempt.
 // When no cap is configured (cap <= 0), all calls are allowed.
 // When the accumulated cost + costUSD would exceed the cap, the call is denied.
 func (r *RateLimiterRegistry) CheckGlobalCostCap(costUSD float64, agentType string) RateLimitResult {
@@ -264,8 +273,8 @@ func (r *RateLimiterRegistry) LoadDailyCost(costUSD float64, date string) {
 // recorder after a completed call causes the "never catches up" bug). Use
 // RecordSpend after calls that already happened.
 //
-// Privileged agents (core/system type) are exempt and their spend is not counted.
-// The accumulator resets automatically at UTC midnight.
+// Privileged agents (core type only — ADR-049 D3) are exempt and their spend is
+// not counted. The accumulator resets automatically at UTC midnight.
 func (r *RateLimiterRegistry) RecordSpend(costUSD float64, agentType string) {
 	if IsPrivilegedAgent(agentType) || costUSD <= 0 {
 		return

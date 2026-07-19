@@ -810,6 +810,14 @@ type AgentConfig struct {
 	// icon, prompt). Used by core agents to keep their identity stable.
 	// Users CAN still change model, remove tools, and set heartbeat.
 	Locked bool `json:"locked,omitempty"`
+	// Rubric is the System Agent's system prompt / judging rubric (ADR-049 D3).
+	// It is the persisted home of the "rubric" wire field: for a type:system
+	// agent (e.g. the seeded Judge) the rubric IS the agent's system prompt and
+	// is the ONE prompt-equivalent field a locked System Agent may edit (soul is
+	// rejected on locked agents). Empty for every non-system agent. The Judge
+	// engine (Wave 2) reads this field together with Model/Provider to make its
+	// no-tools structured judging call.
+	Rubric string `json:"rubric,omitempty"`
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
@@ -921,12 +929,26 @@ func (a AgentConfig) IsWorker() bool {
 	return a.Type == AgentTypeWorker
 }
 
+// IsSystem reports whether this agent is a System Agent (Type==system, ADR-049
+// D3) — a seeded, locked, non-privileged internal-LLM agent (e.g. the Judge)
+// that executes as a no-tools structured call. System Agents are NOT chat
+// targets and are excluded from default-fallback, routing bindings, delegation
+// pickers, and team rosters. Like IsWorker, this is an EXPLICIT classification
+// carried only via the Type field (System Agents are never inferred from an ID
+// list), so the check is safe to call without the isCoreAgent resolver.
+func (a AgentConfig) IsSystem() bool {
+	return a.Type == AgentTypeSystem
+}
+
 // IsChatTarget reports whether this agent may receive inbound channel messages
 // and be resolved as the default/routing agent. Every agent kind is a chat
-// target EXCEPT a worker. Routing (resolveDefaultAgentID, first-enabled
-// fallback) and the default-agent setter/repair use this to exclude workers.
+// target EXCEPT a worker and a System Agent. Routing (resolveDefaultAgentID,
+// first-enabled fallback) and the default-agent setter/repair use this to
+// exclude workers; System Agents are excluded for the same reason (ADR-049 D3):
+// the Judge is an out-of-turn internal-LLM agent, never a live persona a user
+// can address.
 func (a AgentConfig) IsChatTarget() bool {
-	return !a.IsWorker()
+	return !a.IsWorker() && !a.IsSystem()
 }
 
 // IsExternalCLIWorker reports whether this agent is a subagent_3p — a worker

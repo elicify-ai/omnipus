@@ -112,7 +112,10 @@ func TestIsPrivilegedAgent(t *testing.T) {
 		want      bool
 	}{
 		{"core", true},
-		{"system", true},
+		// ADR-049 D3 / CRIT-002: System Agents (the Judge) are NO LONGER
+		// privileged — IsPrivilegedAgent is core-only, so type:system is
+		// rate-limited + cost-capped like any non-core agent (SEC-26).
+		{"system", false},
 		{"custom", false},
 		{"", false},
 		{"CORE", false}, // must be case-sensitive

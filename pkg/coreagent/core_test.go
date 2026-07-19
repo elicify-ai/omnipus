@@ -354,8 +354,8 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 
 	assert.True(t, modified,
 		"SeedConfig must return true when agents are added to an empty config")
-	assert.Len(t, cfg.Agents.List, 8,
-		"SeedConfig must add 4 base + 1 worker + 3 specialists (M5/M6: Planner/Explorer/Researcher)")
+	assert.Len(t, cfg.Agents.List, 9,
+		"SeedConfig must add 4 base + 1 worker + 3 specialists (M5/M6: Planner/Explorer/Researcher) + 1 System Agent (Judge, ADR-049 D3)")
 
 	// Verify each core agent was seeded with Locked=true
 	seededIDs := make(map[string]config.AgentConfig)
@@ -391,17 +391,17 @@ func TestSeedConfigAddsAllCoreAgents(t *testing.T) {
 func TestSeedConfigIsIdempotent(t *testing.T) {
 	cfg := &config.Config{}
 
-	// First call: adds all 4 base agents + the worker + 3 specialists
+	// First call: adds all 4 base agents + the worker + 3 specialists + the Judge
 	modified1 := coreagent.SeedConfig(cfg)
 	assert.True(t, modified1, "first SeedConfig call must return true (agents added)")
-	assert.Len(t, cfg.Agents.List, 8)
+	assert.Len(t, cfg.Agents.List, 9)
 
 	// Second call: must be a no-op
 	modified2 := coreagent.SeedConfig(cfg)
 	assert.False(t, modified2,
 		"second SeedConfig call must return false — all agents already present")
-	assert.Len(t, cfg.Agents.List, 8,
-		"SeedConfig must not duplicate agents on repeated calls (4 base + 1 worker + 3 specialists)")
+	assert.Len(t, cfg.Agents.List, 9,
+		"SeedConfig must not duplicate agents on repeated calls (4 base + 1 worker + 3 specialists + 1 Judge System Agent)")
 }
 
 // TestSeedConfigPreservesExistingAgents verifies SeedConfig adds missing core agents
@@ -420,9 +420,9 @@ func TestSeedConfigPreservesExistingAgents(t *testing.T) {
 
 	modified := coreagent.SeedConfig(cfg)
 	assert.True(t, modified, "SeedConfig must add missing core agents")
-	// 4 base core agents + 1 worker + 3 specialists + 1 existing custom agent
-	assert.Len(t, cfg.Agents.List, 9,
-		"SeedConfig must preserve existing agents while adding the 4 base core agents + the worker + 3 specialists")
+	// 4 base core agents + 1 worker + 3 specialists + 1 Judge System Agent + 1 existing custom agent
+	assert.Len(t, cfg.Agents.List, 10,
+		"SeedConfig must preserve existing agents while adding the 4 base core agents + the worker + 3 specialists + the Judge System Agent")
 
 	// Verify custom agent is still present and unchanged
 	found := false

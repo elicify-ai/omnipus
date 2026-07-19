@@ -17,17 +17,21 @@ import (
 // --- Wave 5b: System Agent Rate Limit Tests ---
 //
 // These tests cover the rate limiting behavior required by the wave5b spec:
-//   - System agent is exempt from the global cost-cap (already in ratelimit.go)
+//   - Only the CORE agent type is exempt from the global cost-cap. ADR-049 D3 /
+//     CRIT-002 narrowed IsPrivilegedAgent to core-only, so a type:system agent
+//     (the Judge) is NO LONGER exempt — see TestSEC26_TypeSystemAgent_IsRateLimited
+//     in ratelimit_sec26_test.go for the type:system-is-metered assertion.
 //   - System tool categories have the correct per-category thresholds
 //
 // The SlidingWindow infrastructure is shared — the system tool handler will
 // create one SlidingWindow per category using the exact thresholds below.
 
-// TestSystemAgentExemptFromCostCapRateLimit verifies that privileged agents (core/system
-// type) are always allowed through the global cost cap regardless of accumulated spend.
+// TestSystemAgentExemptFromCostCapRateLimit verifies that the CORE agent type is
+// always allowed through the global cost cap regardless of accumulated spend
+// (FR-045: privileges by type, not ID). Post-ADR-049 D3 this is core-only; the
+// type:system counterpart is now metered (see ratelimit_sec26_test.go).
 //
 // Traces to: wave5b-system-agent-spec.md — System tool rate limiting (US-11)
-// BDD: "Privileged agent exempt from rate limits" (FR-045: privileges by type, not ID)
 func TestSystemAgentExemptFromCostCapRateLimit(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 196 (User Story 11)
 
