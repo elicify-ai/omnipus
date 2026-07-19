@@ -870,7 +870,51 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
 	}
-	jsonOK(w, messages)
+	// review r2 RV2: every entry passes through as the raw TranscriptEntry
+	// (unchanged shape) EXCEPT EntryTypeJudgeVerdict, whose Content is a raw
+	// json.Marshal(task.JudgeVerdict) string with no typed field to carry it
+	// on the wire. Before this fix, cold-load rendered an empty/broken verdict
+	// card because Message.verdict was never populated. Parse Content and
+	// attach it as "verdict" (same shape handleTaskVerdicts/toWireJudgeVerdict
+	// produces, rest_tasks.go) so cold-load and live/replay can never disagree.
+	out := make([]any, 0, len(messages))
+	for _, entry := range messages {
+		out = append(out, withWireJudgeVerdict(id, entry))
+	}
+	jsonOK(w, out)
+}
+
+// withWireJudgeVerdict returns entry unchanged for every entry type except
+// EntryTypeJudgeVerdict, for which it returns a JSON-object representation of
+// entry (all its own fields, unchanged) plus an added "verdict" field parsed
+// from entry.Content and converted via toWireJudgeVerdict — the wire
+// Message.verdict shape (review r2 RV2). On any parse/marshal failure it logs
+// and falls back to the raw entry (verdict simply absent) rather than
+// dropping the entry or failing the whole response.
+func withWireJudgeVerdict(sessionID string, entry session.TranscriptEntry) any {
+	if entry.Type != session.EntryTypeJudgeVerdict || entry.Content == "" {
+		return entry
+	}
+	var verdict task.JudgeVerdict
+	if uerr := json.Unmarshal([]byte(entry.Content), &verdict); uerr != nil {
+		slog.Warn("rest: could not parse judge_verdict transcript entry — cold-load will omit verdict",
+			"session_id", sessionID, "entry_id", entry.ID, "error", uerr)
+		return entry
+	}
+	raw, merr := json.Marshal(entry)
+	if merr != nil {
+		slog.Error("rest: could not marshal judge_verdict transcript entry",
+			"session_id", sessionID, "entry_id", entry.ID, "error", merr)
+		return entry
+	}
+	var m map[string]any
+	if uerr := json.Unmarshal(raw, &m); uerr != nil {
+		slog.Error("rest: could not decode judge_verdict transcript entry to map",
+			"session_id", sessionID, "entry_id", entry.ID, "error", uerr)
+		return entry
+	}
+	m["verdict"] = toWireJudgeVerdict(verdict)
+	return m
 }
 
 // renameSession handles PUT /api/v1/sessions/{id}.

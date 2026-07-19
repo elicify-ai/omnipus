@@ -22,6 +22,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // replayMaxResultBytes is the maximum JSON-encoded size of a tool_call_result
@@ -239,6 +240,32 @@ func streamReplay(
 				cancelFrame.TurnId = &turnIDCopy
 			}
 			if err2 := emitFrame(cancelFrame); err2 != nil {
+				return framesEmitted, err2
+			}
+			continue
+		}
+
+		// review r2 RV1: EntryTypeJudgeVerdict entries (ADR-049 D2/D4, written
+		// by TaskExecutor.writeJudgeVerdictTranscript / goal_loop.go's
+		// writeGoalVerdictTranscript) carry Role="system" and raw
+		// json.Marshal(task.JudgeVerdict) Content. Before this fix there was no
+		// dedicated case for this entry type, so it fell through to the generic
+		// entry.Content != "" branch below and rendered as a garbled raw-JSON
+		// system chat bubble on WS reconnect — defeating SD-C10 (a verdict is
+		// panel-only by default, never a raw thread bubble). Emit a typed
+		// generated.JudgeVerdictFrame instead — the SAME frame shape/type the
+		// SPA's WS frame switch already routes to useJudgeActivityStore (NOT
+		// the thread; src/store/chat.ts's `case 'judge_verdict'`), so replay
+		// parity with a live push is exact regardless of which code path a
+		// verdict frame arrived through.
+		if entry.Type == session.EntryTypeJudgeVerdict {
+			var verdict task.JudgeVerdict
+			if uerr := json.Unmarshal([]byte(entry.Content), &verdict); uerr != nil {
+				slog.Warn("replay: could not parse judge_verdict transcript entry — skipping",
+					"session_id", sessionID, "entry_id", entry.ID, "error", uerr)
+				continue
+			}
+			if err2 := emitFrame(toJudgeVerdictFrame(verdict)); err2 != nil {
 				return framesEmitted, err2
 			}
 			continue
@@ -1041,6 +1068,46 @@ func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) gene
 		}
 	}
 	return frame
+}
+
+// toJudgeVerdictFrame converts an internal task.JudgeVerdict into the
+// generated asyncapi wire frame (review r2 RV1). Mirrors
+// rest_tasks.go's toWireJudgeVerdict field-for-field — duplicated rather than
+// shared because the two callers target different generated types
+// (gen.JudgeVerdict, the openapi Message.verdict shape, vs.
+// generated.JudgeVerdictFrame, the asyncapi WS frame shape); both live in the
+// same pkg/api/generated package but are distinct generated structs.
+// JudgeVerdictFrame deliberately carries no session_id (see chat.ts's own
+// comment on the live frame) — it is correlated by task_id/plan_id, or by
+// the session the judge_verdict transcript entry itself lives in for the
+// scope=goal case.
+func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
+	f := generated.JudgeVerdictFrame{
+		Type:         string(generated.WsFrameTypeJudgeVerdict),
+		Id:           v.ID,
+		Scope:        v.Scope,
+		Round:        v.Round,
+		Met:          v.Met,
+		Model:        v.Model,
+		JudgedAt:     v.JudgedAt,
+		JudgeAgentId: v.JudgeAgentID,
+	}
+	if v.TaskID != "" {
+		taskIDCopy := v.TaskID
+		f.TaskId = &taskIDCopy
+	}
+	if v.PlanID != "" {
+		planIDCopy := v.PlanID
+		f.PlanId = &planIDCopy
+	}
+	for _, c := range v.PerCriterion {
+		f.PerCriterion = append(f.PerCriterion, struct {
+			CriterionId string `json:"criterion_id"`
+			Met         bool   `json:"met"`
+			Reason      string `json:"reason"`
+		}{CriterionId: c.CriterionID, Met: c.Met, Reason: c.Reason})
+	}
+	return f
 }
 
 // parseRetryAfterSeconds extracts a "(retry after Ns)" parenthetical from a

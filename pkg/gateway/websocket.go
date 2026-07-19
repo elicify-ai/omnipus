@@ -164,6 +164,15 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	ErrorKind    string         `json:"kind,omitempty"`
 	ErrorEntryID string         `json:"entry_id,omitempty"`
 	ErrorPayload map[string]any `json:"payload,omitempty"`
+	// review r2 RV1: JudgeVerdictFrame decoder fields (Model/Scope/ID above are
+	// shared with other frame types via the same JSON key).
+	Met          bool             `json:"met,omitempty"`
+	Round        int              `json:"round,omitempty"`
+	JudgeAgentID string           `json:"judge_agent_id,omitempty"`
+	JudgedAt     string           `json:"judged_at,omitempty"`
+	TaskID       string           `json:"task_id,omitempty"`
+	PlanID       string           `json:"plan_id,omitempty"`
+	PerCriterion []map[string]any `json:"per_criterion,omitempty"`
 }
 
 // WSHandler handles the /api/v1/chat/ws WebSocket endpoint for bi-directional
