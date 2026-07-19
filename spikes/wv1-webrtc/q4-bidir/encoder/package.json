@@ -1,0 +1,6 @@
+{
+  "name": "q3-e2e-encoder",
+  "private": true,
+  "type": "commonjs",
+  "description": "WV1 spike Q3: headless-Chrome tabCapture (video+audio) -> WebRTC ingest orchestrator (throwaway)"
+}

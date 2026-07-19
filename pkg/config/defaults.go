@@ -445,6 +445,22 @@ func DefaultConfig() *Config {
 				// entirely; TakeControlEnabled=false keeps it watch-only).
 				LiveViewEnabled:    true,
 				TakeControlEnabled: true,
+				// ADR-047: WebRTC media (audio+video) is on by default as a
+				// progressive enhancement over the always-on JPEG fallback;
+				// operators can disable it (WebRTCEnabled=false) to force
+				// every viewer onto the JPEG tier. Google's public STUN
+				// server is the default so ICE works out of the box; set
+				// WebRTCStunServer="" for host-candidates-only.
+				WebRTCEnabled:    true,
+				WebRTCStunServer: "stun:stun.l.google.com:19302",
+				// ADR-048 condition 1/Option A: default TRUE — WebRTC capture
+				// requires the agent's session to share Chrome's default
+				// browser context (see CaptureSharedContext's doc comment on
+				// BrowserToolConfig for the full isolation warning). Operators
+				// who need real cross-agent cookie isolation can set this
+				// false; the JPEG browser_screencast fallback keeps working
+				// either way.
+				CaptureSharedContext: true,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{

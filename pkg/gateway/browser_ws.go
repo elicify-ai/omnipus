@@ -155,6 +155,20 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// just because it landed inside the same 2s window. See handleInput's
 	// doc comment.
 	lastInputErrorMessage string
+
+	// webrtc tracks this connection's attached WebRTC viewer (ADR-047 D4,
+	// wave-plan W2-A) — separate from the JPEG screencast attachment above
+	// (sessionID/mgr), since both paths can be active simultaneously on the
+	// SAME connection per ADR-047 D3 (JPEG keeps running as the automatic
+	// fallback tier while WebRTC streams). A single nullable pointer rather
+	// than a (webrtcAgentID string, webrtcCapture *browser.CaptureSession)
+	// field pair (fix-wave simplification): the two were always set and
+	// cleared together, so the pair could represent an illegal
+	// half-set/half-nil state the type system did nothing to prevent.
+	// webrtc != nil iff a browser_webrtc_offer has succeeded and not yet
+	// been torn down (viewer detach, connection close, or a stream
+	// failure).
+	webrtc *webrtcAttachment
 }
 
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
@@ -176,6 +190,35 @@ type BrowserWSHandler struct {
 	// until all connections have fully torn down (test cleanup, mirroring
 	// WSHandler.Wait()).
 	activeConns sync.WaitGroup
+
+	// captures is the ADR-047 / wave-plan W2-A per-agent WebRTC capture
+	// session registry (browser_webrtc.go), shared with the capture-ingest
+	// WS handler so a browser_capture_hello can locate the CaptureSession
+	// its token belongs to.
+	captures *captureRegistry
+
+	// captureFenceMu serializes handleWebRTCOffer's ADR-048 condition-2
+	// fence-check + ensure/registry-set sequence (fix-wave HIGH, TOCTOU
+	// fix): without it, two DIFFERENT agents' very first viewer offers could
+	// both observe every OTHER agent's capture session as absent/viewerless
+	// (h.captures.otherSessions is a point-in-time snapshot) and both
+	// proceed to start a capture session, defeating the single-capture
+	// invariant the fence exists to enforce. Held ONLY across the cheap
+	// fence-check + ensureCaptureSession call (registers/reuses the
+	// CaptureSession object, no CDP round trip) — released BEFORE
+	// cs.Start(), whose encoder-page CDP round trip can take up to
+	// captureStartTimeout (20s), so concurrent offers for an agent that
+	// already has a registered session (the common multi-viewer case) are
+	// never serialized behind an unrelated agent's slow start.
+	captureFenceMu sync.Mutex
+
+	// viewerConns is the fix-wave per-viewer registry (browser_webrtc.go's
+	// webrtcViewerConn) letting the encoder-liveness watchdog and the
+	// data-channel input sink reach a WebRTC-attached viewer's main WS
+	// connection from a goroutine other than that connection's own
+	// readLoop. Keyed by viewerID; zero value (unstored sync.Map) is ready
+	// to use.
+	viewerConns sync.Map
 }
 
 // newBrowserWSHandler constructs a BrowserWSHandler. allowedOrigin is the
@@ -189,6 +232,7 @@ func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string) *Brow
 		upgrader: websocket.Upgrader{
 			CheckOrigin: wsCheckOrigin(allowedOrigin),
 		},
+		captures: newCaptureRegistry(),
 	}
 }
 
@@ -435,6 +479,9 @@ func (h *BrowserWSHandler) readLoop(
 		if state.mgr != nil && state.sessionID != "" {
 			h.detach(state.mgr, state.sessionID, viewerID, userID)
 		}
+		if state.webrtc != nil {
+			h.detachWebRTCViewer(&state, viewerID)
+		}
 	}()
 
 	for {
@@ -486,7 +533,7 @@ func (h *BrowserWSHandler) readLoop(
 
 		switch typ.Type {
 		case string(generated.WsFrameTypeBrowserAttach):
-			h.handleAttach(wc, &state, viewerID, userID, data)
+			h.handleAttach(wc, &state, viewerID, userID, data, cfg)
 		case string(generated.WsFrameTypeBrowserInput):
 			h.handleInput(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserControl):
@@ -495,6 +542,11 @@ func (h *BrowserWSHandler) readLoop(
 			h.handleTabAction(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
 			h.handleDetach(wc, &state, viewerID, userID)
+			if state.webrtc != nil {
+				h.detachWebRTCViewer(&state, viewerID)
+			}
+		case string(generated.WsFrameTypeBrowserWebrtcOffer):
+			h.handleWebRTCOffer(wc, &state, viewerID, userID, data, cfg)
 		default:
 			wc.sendCriticalGen(generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
@@ -527,6 +579,7 @@ func (h *BrowserWSHandler) handleAttach(
 	state *browserConnState,
 	viewerID, userID string,
 	data []byte,
+	cfg *config.Config,
 ) {
 	var frame generated.BrowserAttachFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
@@ -644,6 +697,22 @@ func (h *BrowserWSHandler) handleAttach(
 		SessionId:         &chatSessionID,
 		ControlledByOther: &cbo,
 	}, dropContext(chatSessionID, viewerID, "attach-ok"))
+
+	// ADR-047 fix-wave finding 3: this new JPEG viewer may be the one that
+	// forces the screencast to resume if WebRTC was paused covering only
+	// the PREVIOUS viewer set (the mixed-viewer case: a fresh browser_attach
+	// with no accompanying WebRTC offer yet, or one whose ICE never
+	// establishes, needs real JPEG frames). A no-op if this agent has no
+	// active WebRTC capture session at all.
+	if cs := mgr.CaptureSession(); cs != nil {
+		cs.ReconcileScreencast()
+	}
+
+	// ADR-047: announce WebRTC availability for this fresh attach — the SPA
+	// only sends its offer after an available:true state frame (see
+	// announceWebRTCAvailability's doc for why omitting this deadlocks the
+	// upgrade handshake and strands the panel on JPEG).
+	h.announceWebRTCAvailability(wc, mgr, chatSessionID, viewerID, cfg)
 }
 
 // handleInput dispatches a viewer input event, gated by the LiveView's
@@ -678,6 +747,46 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 		return
 	}
 
+	in := browserInputFrameToLiveInput(frame)
+
+	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
+		if browser.IsBenignLiveInputError(err) {
+			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
+			return
+		}
+		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
+		message := fmt.Sprintf("browser input failed: %s", err)
+		now := time.Now()
+		// B4 (7-reviewer finding): a navigate error is one-per-Enter and
+		// user-initiated, unlike the high-frequency mouse_move/etc kinds this
+		// cooldown exists to tame. The SPA clears its error banner
+		// optimistically on every navigate submit, so suppressing a
+		// byte-identical repeat here — the same URL rejected twice in a row
+		// — would leave the user looking at NO error after resubmitting,
+		// even though their submission was refused again. Navigate errors
+		// therefore always emit; every other kind keeps the content-aware
+		// cooldown.
+		throttled := !inputKindIsDiscrete(frame.Kind) &&
+			message == state.lastInputErrorMessage &&
+			now.Sub(state.lastInputErrorSentAt) < minInputErrorInterval
+		if !throttled {
+			state.lastInputErrorSentAt = now
+			state.lastInputErrorMessage = message
+			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, message),
+				dropContext(state.sessionID, viewerID, "input-error"))
+		}
+	}
+}
+
+// browserInputFrameToLiveInput converts a generated.BrowserInputFrame into
+// the engine-level browser.LiveInput dispatchInput expects. Extracted from
+// handleInput (ADR-047 / wave-plan W2-A item 4) so the WS input path
+// (handleInput, above) and the WebRTC data-channel input path
+// (browser_webrtc.go's webrtcInputSink) convert EXACTLY the same way and can
+// never drift — both funnel into the SAME
+// state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in) call this
+// function's result feeds.
+func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.LiveInput {
 	in := browser.LiveInput{Kind: frame.Kind}
 	if frame.X != nil {
 		in.X = *frame.X
@@ -718,34 +827,7 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	if frame.Modifiers != nil {
 		in.Modifiers = *frame.Modifiers
 	}
-
-	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
-		if browser.IsBenignLiveInputError(err) {
-			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
-			return
-		}
-		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)
-		message := fmt.Sprintf("browser input failed: %s", err)
-		now := time.Now()
-		// B4 (7-reviewer finding): a navigate error is one-per-Enter and
-		// user-initiated, unlike the high-frequency mouse_move/etc kinds this
-		// cooldown exists to tame. The SPA clears its error banner
-		// optimistically on every navigate submit, so suppressing a
-		// byte-identical repeat here — the same URL rejected twice in a row
-		// — would leave the user looking at NO error after resubmitting,
-		// even though their submission was refused again. Navigate errors
-		// therefore always emit; every other kind keeps the content-aware
-		// cooldown.
-		throttled := !inputKindIsDiscrete(frame.Kind) &&
-			message == state.lastInputErrorMessage &&
-			now.Sub(state.lastInputErrorSentAt) < minInputErrorInterval
-		if !throttled {
-			state.lastInputErrorSentAt = now
-			state.lastInputErrorMessage = message
-			wc.sendCriticalGen(sessionErrorStatus(state.sessionID, message),
-				dropContext(state.sessionID, viewerID, "input-error"))
-		}
-	}
+	return in
 }
 
 // inputKindIsDiscrete reports whether an input kind is a one-shot action
@@ -972,6 +1054,14 @@ func (h *BrowserWSHandler) detach(mgr *browser.BrowserManager, chatSessionID, vi
 	mgr.Live().Detach(browser.DefaultSessionID, viewerID)
 	if wasController {
 		h.auditRelease(userID, chatSessionID, viewerID)
+	}
+	// ADR-047 fix-wave finding 3: this departing JPEG viewer may have been
+	// the last JPEG-only one, allowing the screencast to pause now that
+	// WebRTC covers every remaining viewer. A no-op if this agent has no
+	// active WebRTC capture session. Covers both explicit browser_detach and
+	// readLoop's disconnect cleanup, since both funnel through here.
+	if cs := mgr.CaptureSession(); cs != nil {
+		cs.ReconcileScreencast()
 	}
 }
 

@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Q2 Tab Capture Spike",
+  "version": "1.0",
+  "permissions": ["tabCapture", "tabs", "scripting"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "sw.js" },
+  "action": { "default_title": "capture" },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Ctrl+Shift+Y" }
+    }
+  }
+}

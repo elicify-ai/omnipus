@@ -1662,6 +1662,33 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		t.Fatalf("LLM should be called exactly once after /foo passthrough, calls=%d", provider.calls)
 	}
 
+	// "/bar", not "/new": /new is a real builtin (pkg/commands/cmd_clear.go,
+	// "Start a new chat") available on SurfaceChannel — whatsapp here would
+	// hit its Handler and reply "Chat history cleared!" instead of passing
+	// through to the LLM. This assertion predates that command (it shipped
+	// in the original PicoClaw->Omnipus squash-merge, before /new existed as
+	// a slash command at all); /bar exercises the same "second unrecognized
+	// command still passes through" behavior /foo already covers above,
+	// without colliding with a real builtin name.
+	barResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+		Channel: baseMsg.Channel,
+		Sender: bus.SenderInfo{
+			CanonicalID: baseMsg.Sender.CanonicalID,
+		},
+		ChatID:  baseMsg.ChatID,
+		Content: "/bar",
+		Peer:    baseMsg.Peer,
+	})
+	if barResp != "LLM reply" {
+		t.Fatalf("unexpected /bar reply: %q", barResp)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("LLM should be called for passthrough /bar command, calls=%d", provider.calls)
+	}
+
+	// /new carries a real handler on the channel surface since the command
+	// harmonization (cmd_clear.go: canonical name "new", alias "clear") —
+	// channel users get the "Chat history cleared!" reply and no LLM turn.
 	newResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
@@ -1671,16 +1698,10 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		Content: "/new",
 		Peer:    baseMsg.Peer,
 	})
-	// /new carries a real handler on the channel surface since the command
-	// harmonization (cmd_clear.go: canonical name "new", alias "clear") —
-	// channel users get the "Chat history cleared!" reply and no LLM turn.
-	// This expectation was stale (pinned the pre-harmonization passthrough
-	// behavior) and failed on every branch of this lineage; CI never caught
-	// it because workflows only run on PRs.
 	if newResp != "Chat history cleared!" {
 		t.Fatalf("unexpected /new reply: %q", newResp)
 	}
-	if provider.calls != 1 {
+	if provider.calls != 2 {
 		t.Fatalf("LLM should NOT be called for the handled /new command, calls=%d", provider.calls)
 	}
 }

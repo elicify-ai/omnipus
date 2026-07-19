@@ -45,6 +45,8 @@ import {
   HandGrabbing,
   Plus,
   Robot,
+  SpeakerHigh,
+  SpeakerSlash,
   SpinnerGap,
   WarningCircle,
   X,
@@ -54,16 +56,20 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { BrowserLiveWsConnection } from '@/lib/browserLiveWs'
+import { BrowserWebRTCSession } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
   framePixelToDeviceCoords,
   isPrintableKey,
   mapClientToDevice,
+  mapClientToDeviceVideo,
   mapClientToFramePixels,
   mapMouseButton,
   scaleCropToImagePixels,
+  type DeviceCoords,
   type FrameCropRect,
+  type RectLike,
 } from '@/lib/browserLiveCoords'
 import { resolveOmniboxInput } from '@/lib/browserLiveUrl'
 import { submitAnnotation, AnnotationBusyError } from '@/lib/browserAnnotate'
@@ -71,7 +77,7 @@ import { useUiStore } from '@/store/ui'
 import { useChatStore } from '@/store/chat'
 import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
-import type { BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
+import type { BrowserInputFrame, BrowserScreencastFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
 
 export interface BrowserLiveViewProps {
   sessionId: string
@@ -97,6 +103,32 @@ export interface BrowserLiveViewProps {
    */
   canAnnotate?: boolean
   className?: string
+  /**
+   * WebRTC build (wave-plan W1-F) — a live WebRTC MediaStream for the
+   * agent's active tab, or `null`/`undefined` (the default) to keep today's
+   * JPEG-screencast `<img>` sink exactly as-is. Wave 1 ships ONLY this
+   * groundwork: no signaling exists yet, so no caller passes a non-null
+   * stream — a Wave-2 agent wires `browserLiveWs.ts`'s offer/answer
+   * exchange and threads the resulting track's MediaStream down through
+   * this prop (or a small dedicated context, if a future host needs it
+   * without prop-drilling — this component doesn't care which). When set,
+   * a `<video>` element replaces the `<img>` as the render sink, coordinate
+   * mapping switches to the video-dimension variant (`mapClientToDeviceVideo`
+   * — `browserLiveCoords.ts`), and the annotate-crop path draws from the
+   * video frame instead of the JPEG bitmap. JPEG screencast frames keep
+   * flowing underneath regardless (ADR: v1 keeps both paths active while a
+   * live view is attached — instant fallback) — `frame`/`frameRef` stays the
+   * "is a live session actually attached" signal for both sinks.
+   */
+  mediaStream?: MediaStream | null
+  /**
+   * Whether the stream carries an audio track — gates the mute/unmute
+   * toolbar button (only shown in video mode when true). Ignored while
+   * `mediaStream` is null. Defaults to `false` (no audio control shown)
+   * rather than inferring it from the stream itself, since a Wave-2 caller
+   * may know this before the track metadata is fully available.
+   */
+  hasAudio?: boolean
 }
 
 /** ADR-040 D2/D6 — the three (+ one) mutually-exclusive visual/control states. */
@@ -195,6 +227,18 @@ function friendlyBrowserStatusMessage(raw: string): string {
   return raw
 }
 
+// fix-wave B (HIGH) — the `BrowserWebRTCSession.onFallback` reason strings
+// that mean "WebRTC was never available here at all" (arrive via
+// `applyState` before any video sink ever mounted) rather than "a live/
+// negotiating session just failed." These are a mode choice, not a
+// degradation, so the fallback wiring below (the WS-lifecycle effect's
+// `machine.onFallback` callback) stays silent for them and only warns/toasts
+// for every other (runtime-failure) reason. Kept as the exact wire-contract
+// `reason` enum values (`BrowserWebRTCStateFrame.reason` minus 'error', which
+// IS surfaced — an explicit gateway-reported error is a runtime failure, not
+// a capability gate).
+const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite_build'])
+
 /**
  * ADR-041 D4 — a tab's display label: prefer `title`, fall back to the
  * hostname parsed from `url`, fall back to "New tab". The wire type carries
@@ -223,6 +267,58 @@ interface PendingAnnotation { // not-wire-format: local annotate-popover state, 
   point: { x: number; y: number }
 }
 
+/**
+ * Shared canvas-crop implementation for annotate-a-region (ADR-039 D-B1/B2),
+ * used by BOTH the JPEG `<img>` sink and the WebRTC build's `<video>` sink
+ * (W1-F) — draws `source` (already confirmed by the caller to have a live
+ * decoded frame available: `img.complete`/`naturalWidth` or a video's
+ * `readyState`/`videoWidth`) into an offscreen canvas and returns a cropped
+ * PNG File with the exact same output contract regardless of sink.
+ *
+ * Reuses `scaleCropToImagePixels` (browserLiveCoords.ts) for the
+ * frame-space→natural-pixel-space scale correction in BOTH cases rather than
+ * duplicating it: for the img sink this corrects for the screencast JPEG's
+ * fixed downscale cap (see cropFrameToFile's own doc comment); for the video
+ * sink there is no such cap, but the SAME correction still guards against a
+ * recapture-driven resolution change landing between when the crop rect was
+ * computed (drag-start `frameWidth`/`frameHeight`) and when this draw
+ * actually runs (the video's CURRENT `naturalWidth`/`naturalHeight`) — see
+ * browserLiveCoords.test.ts's "video-mode reuse" coverage. A no-drift call
+ * (the common case for both sinks) is a scale-1 no-op either way.
+ *
+ * Exceptions from drawImage/getContext (e.g. IndexSizeError on a degenerate
+ * zero-width/height rect, or a tainted canvas) are swallowed to null — this
+ * is awaited from finalizeSelection, itself invoked fire-and-forget (`void
+ * finalizeSelection(...)` from the pointerup handler), so an uncaught
+ * rejection here would surface as an unhandled promise rejection with no
+ * toast and a frozen selection box; returning null instead routes through
+ * finalizeSelection's existing `if (!file) return fail()` path.
+ */
+async function drawCropToPngFile(
+  source: CanvasImageSource,
+  naturalWidth: number,
+  naturalHeight: number,
+  rect: FrameCropRect,
+  frameWidth: number,
+  frameHeight: number,
+): Promise<File | null> {
+  const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, naturalWidth, naturalHeight)
+  const { x: sx, y: sy, width: sw, height: sh } = src
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(sw)
+    canvas.height = Math.round(sh)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) return null
+    return new File([blob], 'annotation.png', { type: 'image/png' })
+  } catch {
+    return null
+  }
+}
+
 export function BrowserLiveView({
   sessionId,
   agentId,
@@ -230,10 +326,37 @@ export function BrowserLiveView({
   onClose,
   canAnnotate = false,
   className,
+  // W2-B: these props remain a caller-facing override/test seam exactly as
+  // W1-F shipped them (see the prop's own doc comment above) — renamed at
+  // the destructuring site so the REST of this component keeps reading the
+  // plain `mediaStream`/`hasAudio` identifiers unchanged (dozens of existing
+  // call sites), now bound to the merged consts just below instead of the
+  // raw props. A caller passing a non-null `mediaStream` still wins outright
+  // (used by BrowserLiveView.webrtcSink.test.tsx to exercise the sink/coord/
+  // annotate-crop machinery without a real signaling round trip); the
+  // default (`null`/omitted) now falls through to THIS component's own
+  // internal WebRTC signaling result instead of forcing JPEG-forever.
+  mediaStream: mediaStreamProp = null,
+  hasAudio: hasAudioProp = false,
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
+  // WebRTC build (W2-B) — the viewer-side PC state machine (browserWebRTC.ts),
+  // one instance per WS-connection effect lifecycle (see that effect further
+  // down), mirroring wsRef's own per-mount lifetime.
+  const webrtcRef = useRef<BrowserWebRTCSession | null>(null)
+  // Mirrors whether the machine's "input" data channel is currently OPEN —
+  // read (never as a dependency) by the stable `dispatchInput` callback
+  // below to decide DC-vs-WS routing without needing to be in anyone's
+  // dependency array, same rationale as every other *Ref mirror in this
+  // file (frameRef, connectedRef, ...).
+  const inputChannelOpenRef = useRef(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
+  // WebRTC build (W1-F) — bound to the <video> sink's srcObject via the
+  // effect below whenever `mediaStream` is set. Null while the JPEG <img>
+  // sink is active (mediaStream null) since the <video> element itself isn't
+  // rendered then — see the sink-switch JSX further down.
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   // WCAG 2.1.2 fix — Escape-releases-the-wheel focus target: handleKeyDown's
   // Escape branch moves focus here once driving ends, so the user lands
   // somewhere useful instead of on a container that just stopped capturing
@@ -329,6 +452,21 @@ export function BrowserLiveView({
   const moveFlushScheduledRef = useRef(false)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
+  // WebRTC build (W2-B) — this component's OWN signaling result (populated
+  // by the machine's onStream/onFallback callbacks and the gateway's
+  // browser_webrtc_state frame — see the WS lifecycle effect further down).
+  // Reset to null/false on fallback AND on transport disconnect (a dropped
+  // WS means the PC's fate is unknown/stale either way — JPEG is always
+  // safe to fall back to, the machine is stopped and re-armed on reconnect).
+  const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null)
+  const [webrtcHasAudio, setWebrtcHasAudio] = useState(false)
+  // WebRTC build (W1-F) — starts MUTED (autoplay-safe: browsers block
+  // autoplaying audio without a prior user gesture; the video itself still
+  // autoplays fine muted). Flipped by the mute/unmute toolbar button, which
+  // only renders in video mode with hasAudio — that click IS the user
+  // gesture that makes unmuting reliable. Local component state only (no
+  // persistence yet — out of scope for this wave).
+  const [videoMuted, setVideoMuted] = useState(true)
   const [statusState, setStatusState] = useState<LiveStatus>('connecting')
   // The human-readable text carried on the latest browser_status frame (set
   // whenever state === 'error' — already-controlled, take-control-disabled,
@@ -396,6 +534,15 @@ export function BrowserLiveView({
   const [annotateComment, setAnnotateComment] = useState('')
   const [annotateSubmitting, setAnnotateSubmitting] = useState(false)
   const [annotateError, setAnnotateError] = useState<string | null>(null)
+
+  // WebRTC build (W2-B) — the merge point described at the destructuring
+  // site above: an explicit caller-supplied `mediaStreamProp` always wins
+  // (test/override seam); otherwise this component's own internally-driven
+  // signaling result is what every downstream consumer (`activeFrameDims`,
+  // `cropFrameToFile`, the sink JSX, the mute toggle, `dispatchInput`) reads
+  // as `mediaStream`/`hasAudio`, unchanged from their W1-F names.
+  const mediaStream = mediaStreamProp ?? webrtcStream
+  const hasAudio = mediaStreamProp !== null ? hasAudioProp : webrtcHasAudio
 
   const isControlling = statusState === 'controlling'
   // Unified error surface: a transport-level error always wins; otherwise
@@ -670,7 +817,68 @@ export function BrowserLiveView({
 
   // ── WS lifecycle — one connection per mount (host keys this component by
   // `${sessionId}:${agentId}` so a new target always gets a fresh mount). ──
+  // WebRTC build (W2-B): the PC state machine shares this SAME lifecycle —
+  // one `BrowserWebRTCSession` per mount, created/torn down alongside the WS
+  // connection so a fresh (sessionId, agentId) mount (or a WS-level
+  // reconnect within an existing mount, handled by onConnected/onDisconnected
+  // below) always starts from a clean signaling slate.
   useEffect(() => {
+    const machine = new BrowserWebRTCSession()
+    webrtcRef.current = machine
+    machine.onStream((stream) => setWebrtcStream(stream))
+    machine.onInputChannelOpen(() => {
+      inputChannelOpenRef.current = true
+    })
+    machine.onInputChannelClose(() => {
+      inputChannelOpenRef.current = false
+    })
+    // ADR-047 fallback contract: JPEG never stopped running underneath (it's
+    // a wholly separate WS path, untouched here) — this just drops the video
+    // sink back to null so the <img> sink takes over on the next render, and
+    // clears the DC-open flag so dispatchInput routes back to WS immediately
+    // rather than waiting for a stale readyState check to catch up.
+    machine.onFallback((reason) => {
+      setWebrtcStream(null)
+      setWebrtcHasAudio(false)
+      inputChannelOpenRef.current = false
+      // fix-wave B (HIGH): the reason used to be discarded entirely — a
+      // silent drop to JPEG with nothing telling the user (or a support
+      // engineer reading the console) WHY. Capability-gate reasons
+      // (disabled/not_capable/lite_build) arrive via `applyState` before any
+      // video ever started — those are simply "this mode isn't available
+      // here," not a failure, so they stay silent (JPEG is just the mode, not
+      // a degradation). Every other reason (ice-failed, answer-timeout,
+      // ice-disconnected-timeout, offer-send-failed, set-remote-description-
+      // failed, stream-stopped, pc-create-failed, offer-setup-failed,
+      // no-local-description, or a gateway 'error'/'unavailable') means a
+      // session that WAS live (or was actively being negotiated) just fell
+      // over — that's worth a console trace plus a transient, non-blocking
+      // heads-up so the user understands why the picture just changed.
+      if (!WEBRTC_CAPABILITY_GATE_REASONS.has(reason)) {
+        console.warn('[browser-live] WebRTC fell back to JPEG:', reason)
+        // fix-wave (MED): an 'answer-timeout' fallback while this machine has
+        // NEVER reached 'connected' in this panel session is very likely the
+        // legitimate cold-start latency (capture start ~20s + bringToFront
+        // ~5s + tracks wait, ~25s+ worst case) racing the machine's own
+        // extended-but-still-finite firstAnswerTimeoutMs, NOT a real
+        // degradation — a toast here is a false alarm that then connects
+        // fine on the machine's own automatic retry. `machine.hasConnectedOnce`
+        // is the lifetime "ever connected" flag (browserWebRTC.ts) —
+        // console.warn still fires unconditionally (so a support engineer
+        // reading the console still sees it), only the user-facing toast is
+        // suppressed. Every OTHER reason, and 'answer-timeout' once the
+        // stream HAD connected before, still toasts — that's a genuine
+        // degradation of a previously-working stream.
+        const coldStartAnswerTimeout = reason === 'answer-timeout' && !machine.hasConnectedOnce
+        if (!coldStartAnswerTimeout) {
+          useUiStore.getState().addToast({
+            message: 'Live video degraded to picture mode — audio unavailable.',
+            variant: 'warning',
+          })
+        }
+      }
+    })
+
     const conn = new BrowserLiveWsConnection(sessionId, agentId, {
       onScreencast: (f) => setFrame(f),
       // ADR-041 D4 — tab list + active index, broadcast on any
@@ -729,6 +937,31 @@ export function BrowserLiveView({
         // still-true "someone else is driving" back to false.
         if (f.controlled_by_other !== undefined) setControlledByOther(f.controlled_by_other)
       },
+      // ADR-047 (WebRTC build) — the gateway's non-trickle SDP answer to the
+      // offer this connection sent (via the machine's `start` callback
+      // below). Feeding a stale/unexpected answer is harmless — `applyAnswer`
+      // itself no-ops unless the machine is actually `offering`.
+      onWebRTCAnswer: (f) => machine.applyAnswer(f.sdp),
+      // ADR-047 — sent after attach and again on any availability change.
+      // `applyState` handles the "fell over mid-session" fallback path;
+      // starting the machine on an available:true signal is THIS
+      // component's call (wave-plan W2-B wiring note) — `start()` itself is
+      // idempotent while already offering/connected, so a repeated
+      // available:true (e.g. a periodic re-affirmation) is a safe no-op.
+      onWebRTCState: (f) => {
+        setWebrtcHasAudio(f.has_audio ?? false)
+        machine.applyState(f)
+        if (f.available) {
+          // fix-wave B (MED): `sendWebRTCOffer` returns false when the socket
+          // was closed mid-ICE-gathering (a genuinely-async gap between when
+          // gathering started and when it completes). Propagating that
+          // boolean lets the machine (`_beginOffer`, browserWebRTC.ts) fall
+          // back immediately with reason 'offer-send-failed' instead of
+          // burning the full 5s answer timeout waiting for an answer that was
+          // never going to arrive because the offer itself never left.
+          machine.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+        }
+      },
       onError: (message) => setConnError(message),
       onConnected: () => {
         setConnected(true)
@@ -736,6 +969,17 @@ export function BrowserLiveView({
       },
       onDisconnected: () => {
         setConnected(false)
+        // The WebRTC session's fate is unknown once the signaling transport
+        // that negotiated it drops — stop it outright (closes the PC/DC,
+        // cancels any pending retry) rather than let it linger against a
+        // gateway session that may already be gone. A fresh
+        // `browser_webrtc_state` frame after the WS reconnects (onConnected
+        // fires again, browser_attach re-sent) re-arms it via `start()`
+        // above, exactly like a first attach.
+        machine.stop()
+        setWebrtcStream(null)
+        setWebrtcHasAudio(false)
+        inputChannelOpenRef.current = false
         // The control-lock is server-side and per-connection — once the
         // transport drops, whatever control state we last knew is stale (the
         // human is no longer "driving" anything). Move to the local
@@ -768,9 +1012,73 @@ export function BrowserLiveView({
       conn.detach()
       conn.close()
       wsRef.current = null
+      machine.stop()
+      webrtcRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, agentId])
+
+  // ── WebRTC build (W1-F) — bind the <video> sink's srcObject imperatively.
+  // React has no `srcObject` JSX prop (it's a DOM property, not an
+  // attribute) — this is the standard pattern. Re-runs whenever `mediaStream`
+  // changes (a fresh stream after reconnect/recapture must rebind the SAME
+  // <video> element rather than relying on a remount) AND whenever the
+  // <video> element itself transitions between mounted/unmounted (`frame !==
+  // null` — the JSX below only renders the <video> at all once `frame` is
+  // truthy, mirroring the wheel-listener effect's own `frame !== null`
+  // dependency further down for the identical reason). Without the second
+  // dependency, a `mediaStream` that was ALREADY set on the render where
+  // `frame` first flips true would bind against a stale `videoRef.current ===
+  // null` (captured before the element existed) and never re-run, since
+  // `mediaStream`'s identity didn't change on that render — the first frame
+  // would leave the video sink with no stream bound at all. No-ops whenever
+  // the element isn't currently mounted (mediaStream null → the <img> sink
+  // renders instead, see the JSX below — videoRef.current is null then).
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    video.srcObject = mediaStream ?? null
+  }, [mediaStream, frame !== null])
+
+  // ── WebRTC build (W1-F) — the single "which sink's dimensions do
+  // coordinate-mapping and annotate-crop use right now" resolver. Video wins
+  // whenever a stream is attached AND the <video> element has actually
+  // reported its intrinsic size (`videoWidth`/`videoHeight` — 0 until the
+  // `loadedmetadata` event fires); otherwise falls back to the JPEG
+  // screencast frame exactly as before. `page_scale` is omitted (implicitly
+  // 1) for the video branch — see mapClientToDeviceVideo's doc comment
+  // (browserLiveCoords.ts) for why tabCapture has no analogous factor to
+  // divide out. Stable identity except when the `mediaStream` prop itself
+  // changes — safe to call from any handler/effect below.
+  const activeFrameDims = useCallback((): { width: number; height: number; pageScale?: number; video: boolean } | null => {
+    const video = videoRef.current
+    if (mediaStream && video && video.videoWidth > 0 && video.videoHeight > 0) {
+      return { width: video.videoWidth, height: video.videoHeight, video: true }
+    }
+    const f = frameRef.current
+    if (f) return { width: f.width, height: f.height, pageScale: f.page_scale, video: false }
+    return null
+  }, [mediaStream])
+
+  // ── WebRTC build (W1-F) — the ONE place a client-space pointer coordinate
+  // is turned into the device-space coordinate CDP dispatch/BrowserInputFrame
+  // expects, for EITHER sink. Replaces four previously-duplicated
+  // `mapClientToDevice(e.clientX, e.clientY, rect, frameRef.current.width,
+  // frameRef.current.height, frameRef.current.page_scale)` call sites (wheel/
+  // pointerMove/pointerDown/pointerUp below) with one routed call — so the
+  // video-vs-JPEG branch can never drift between handlers. Returns exactly
+  // what mapClientToDevice would have returned when `mediaStream` is null
+  // (activeFrameDims's fallback branch reads the identical frameRef fields),
+  // preserving byte-identical JPEG-mode behavior.
+  const mapPointerToDeviceCoords = useCallback(
+    (clientX: number, clientY: number, rect: RectLike): DeviceCoords | null => {
+      const dims = activeFrameDims()
+      if (!dims) return null
+      if (dims.video) return mapClientToDeviceVideo(clientX, clientY, rect, dims.width, dims.height)
+      return mapClientToDevice(clientX, clientY, rect, dims.width, dims.height, dims.pageScale)
+    },
+    [activeFrameDims],
+  )
 
   // ── ADR-040 D2 refactor — the single "can this event reach the remote tab"
   // gate. Every handler below (wheel/pointerMove/pointerUp/keyDown/keyUp)
@@ -788,6 +1096,45 @@ export function BrowserLiveView({
     return driveModeRef.current === 'you-driving' || implicitDriveActive
   }, [])
 
+  // ── WebRTC build (W2-B) — the ONE place a `browser_input` payload picks
+  // its transport. Rule (wave-plan W2-B): DC-first (the WebRTC machine's
+  // "input" data channel) when BOTH the video sink is active (`mediaStream`
+  // set — matches the sink-swap/activeFrameDims resolver above) AND that
+  // channel is actually open right now; otherwise the existing WS
+  // `browser_input` path (JPEG mode, or video mode before/between DC
+  // availability). Only pointer/key/wheel/text input kinds ever reach this
+  // function — `navigate`/`navigate_back`/`reload` (control-gated, like
+  // `browser_control`/`browser_tab_action`) stay on WS unconditionally at
+  // their own call sites, matching the gateway's input-frame parsing
+  // (recon-digest.md "Wire payloads..."). A DC send that reports success is
+  // trusted; a DC send that FAILS despite an open readyState (a same-tick
+  // close race) falls through to WS rather than silently dropping the
+  // event — mirrors every other `sendX` failure-recovery pattern in this
+  // file (see e.g. `takeWheelIfNeeded`'s `sendControl('take')` handling).
+  //
+  // `forceWs` (UAT 2026-07-18, reviewer finding): the ONE exception to
+  // DC-first. An implicit click-to-drive take sends `browser_control{take}`
+  // over the WS, but the DC is a wholly separate transport with NO ordering
+  // guarantee relative to it — a same-gesture `mouse_down` (or a `mouse_up`,
+  // which would leave the remote page with a stuck-held button) riding the
+  // DC can reach the server BEFORE the take is processed and be silently
+  // dropped as not-controlling. Every input belonging to the implicit-take
+  // gesture (down/moves/up — the callers pass their gesture's implicit-drive
+  // flag) therefore rides the SAME WS as the take frame, whose in-order
+  // delivery guarantees the server sees take → down → … → up. Subsequent
+  // gestures (ack landed, implicit window closed on pointerup) use the DC
+  // as usual.
+  const dispatchInput = useCallback(
+    (input: Omit<BrowserInputFrame, 'type'>, opts?: { forceWs?: boolean }): boolean => {
+      if (!opts?.forceWs && mediaStream && inputChannelOpenRef.current && webrtcRef.current) {
+        const sent = webrtcRef.current.sendInput(JSON.stringify({ type: 'browser_input', ...input }))
+        if (sent) return true
+      }
+      return wsRef.current?.sendInput(input) ?? false
+    },
+    [mediaStream],
+  )
+
   // ── Native (non-passive) wheel listener — React's synthetic onWheel is
   // passive by default, so preventDefault() inside a JSX handler would warn
   // and no-op. Attached once; reads live state via refs to avoid re-binding
@@ -804,16 +1151,9 @@ export function BrowserLiveView({
       if (!canDispatchInput(false) || !frameRef.current) return
       e.preventDefault()
       const rect = el!.getBoundingClientRect()
-      const device = mapClientToDevice(
-        e.clientX,
-        e.clientY,
-        rect,
-        frameRef.current.width,
-        frameRef.current.height,
-        frameRef.current.page_scale,
-      )
+      const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
       if (!device) return
-      wsRef.current?.sendInput({
+      dispatchInput({
         kind: 'wheel',
         x: device.x,
         y: device.y,
@@ -824,7 +1164,7 @@ export function BrowserLiveView({
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [frame !== null, canDispatchInput])
+  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
 
   // ── mouse_move RAF coalescing ────────────────────────────────────────────
   // Native pointermove fires far faster than the backend's input rate limiter
@@ -849,8 +1189,13 @@ export function BrowserLiveView({
     // while still driving could leak into the tab a frame later, after
     // watch-only has already taken over.
     if (!canDispatchInput(implicitDriveRef.current)) return
-    wsRef.current?.sendInput({ kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers })
-  }, [canDispatchInput])
+    // forceWs while the implicit-take gesture is still open — see
+    // dispatchInput's own doc comment (WS/DC ordering).
+    dispatchInput(
+      { kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers },
+      { forceWs: implicitDriveRef.current },
+    )
+  }, [canDispatchInput, dispatchInput])
 
   const scheduleMoveFlush = useCallback(() => {
     if (moveFlushScheduledRef.current) return
@@ -990,13 +1335,27 @@ export function BrowserLiveView({
     setAnnotateMode(true)
   }, [annotateMode, isControlling, handleCancelAnnotation, setPendingTake])
 
-  // Crops the CURRENTLY-RENDERED screencast frame's <img> to a PNG File
-  // (mirrors the canvas pattern in media-actions.ts's fetchImagePng). Reads
-  // the live <img> at call time (not a stale snapshot) so the crop always
-  // reflects exactly what the user was looking at when they finished the
-  // drag/click.
+  // Crops the CURRENTLY-RENDERED sink — the JPEG <img> (default) or, in
+  // WebRTC video mode (W1-F), the <video> element — to a PNG File (mirrors
+  // the canvas pattern in media-actions.ts's fetchImagePng). Reads the live
+  // element at call time (not a stale snapshot) so the crop always reflects
+  // exactly what the user was looking at when they finished the drag/click.
   const cropFrameToFile = useCallback(
     async (rect: FrameCropRect, frameWidth: number, frameHeight: number): Promise<File | null> => {
+      // WebRTC build (W1-F) — video-mode source. `readyState >= 2`
+      // (HAVE_CURRENT_DATA) mirrors the img path's `img.complete` check
+      // below: both mean "there is an actual decoded frame available to
+      // draw right now," not just "the element exists in the DOM." Draws
+      // from `videoWidth`/`videoHeight` — same output contract as the img
+      // path (a cropped PNG File), same scale-correction math
+      // (`drawCropToPngFile` below reuses `scaleCropToImagePixels` for
+      // both sinks rather than duplicating it — see that function's own
+      // doc comment for why a video-mode drift case still needs it).
+      if (mediaStream && videoRef.current) {
+        const video = videoRef.current
+        if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null
+        return drawCropToPngFile(video, video.videoWidth, video.videoHeight, rect, frameWidth, frameHeight)
+      }
       const img = imgRef.current
       if (!img || !img.complete || img.naturalWidth === 0) return null
       // UAT finding (blank crop): `rect` is in frame-METADATA space
@@ -1010,34 +1369,12 @@ export function BrowserLiveView({
       // height axis). Using `rect` directly as the drawImage SOURCE rect then
       // reads an out-of-bounds/misaligned region of the smaller bitmap →
       // drawImage draws nothing → a transparent (blank white/black) crop.
-      // Scale the source rect from frame space into the img's actual
-      // natural-pixel space; the destination canvas is sized to that native
-      // region so we capture at the JPEG's true resolution.
-      const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, img.naturalWidth, img.naturalHeight)
-      const { x: sx, y: sy, width: sw, height: sh } = src
-      // Reviewer finding: drawImage/getContext can throw synchronously (e.g.
-      // IndexSizeError on a degenerate zero-width/height rect, or a tainted
-      // canvas) — this function is awaited from finalizeSelection, which is
-      // itself invoked fire-and-forget (`void finalizeSelection(...)` from the
-      // pointerup handler), so an uncaught rejection here would surface as an
-      // unhandled promise rejection with no toast and a frozen selection box.
-      // Returning null on ANY failure routes through finalizeSelection's
-      // existing `if (!file) return fail()` path instead.
-      try {
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.round(sw)
-        canvas.height = Math.round(sh)
-        const ctx = canvas.getContext('2d')
-        if (!ctx) return null
-        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
-        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-        if (!blob) return null
-        return new File([blob], 'annotation.png', { type: 'image/png' })
-      } catch {
-        return null
-      }
+      // `drawCropToPngFile` scales the source rect from frame space into the
+      // img's actual natural-pixel space; the destination canvas is sized to
+      // that native region so we capture at the JPEG's true resolution.
+      return drawCropToPngFile(img, img.naturalWidth, img.naturalHeight, rect, frameWidth, frameHeight)
     },
-    [],
+    [mediaStream],
   )
 
   // Finalizes a drag/click selection into a pendingAnnotation (crop + open
@@ -1056,24 +1393,31 @@ export function BrowserLiveView({
         useUiStore.getState().addToast({ message: 'Could not capture that region — try again.', variant: 'error' })
         resetSelection()
       }
-      const frame = frameRef.current
-      if (!frame) return fail()
-      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, frame.width, frame.height)
-      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, frame.width, frame.height)
+      // WebRTC build (W1-F): activeFrameDims() resolves to the <video>'s
+      // videoWidth/videoHeight (page_scale 1) in video mode, or the JPEG
+      // frame's width/height/page_scale otherwise — the SAME resolver the
+      // pointer/wheel handlers use, so the crop rect computed here always
+      // matches the sink cropFrameToFile actually draws from. Reduces to
+      // exactly the old `frameRef.current` read/gate when mediaStream is
+      // null (byte-identical JPEG-mode behavior).
+      const dims = activeFrameDims()
+      if (!dims) return fail()
+      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, dims.width, dims.height)
+      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, dims.width, dims.height)
       if (!startPx || !endPx) return fail()
-      const cropRect = computeCropRect(startPx, endPx, frame.width, frame.height)
+      const cropRect = computeCropRect(startPx, endPx, dims.width, dims.height)
       if (!cropRect) return fail()
 
-      const file = await cropFrameToFile(cropRect, frame.width, frame.height)
+      const file = await cropFrameToFile(cropRect, dims.width, dims.height)
       if (!file) return fail()
       const center = framePixelToDeviceCoords(
         cropRect.x + cropRect.width / 2,
         cropRect.y + cropRect.height / 2,
-        frame.page_scale,
+        dims.pageScale,
       )
       setPendingAnnotation({ file, previewUrl: URL.createObjectURL(file), point: center })
     },
-    [cropFrameToFile, resetSelection],
+    [cropFrameToFile, resetSelection, activeFrameDims],
   )
 
   // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ───────────────────
@@ -1196,18 +1540,11 @@ export function BrowserLiveView({
     // Local cursor overlay updates immediately every event — only the
     // network send is throttled, so the synthetic cursor still tracks the
     // pointer at full native resolution.
-    const device = mapClientToDevice(
-      e.clientX,
-      e.clientY,
-      rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
-    )
+    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
     pendingMoveRef.current = { x: device.x, y: device.y, modifiers: computeModifiers(e) }
     scheduleMoveFlush()
-  }, [scheduleMoveFlush, annotateMode, canDispatchInput])
+  }, [scheduleMoveFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
 
   // Focuses the frame container (so keyboard input starts flowing) and
   // best-effort captures the pointer so a drag that leaves the container
@@ -1272,31 +1609,31 @@ export function BrowserLiveView({
       // acquiring the lock. Either way, dispatch this SAME input
       // immediately: same-connection WS message ordering guarantees the
       // server processes the `browser_control{take}` frame before this
-      // `browser_input{mouse_down}` frame, so there's no need to wait for
-      // the round-trip ack before dispatching.
+      // `browser_input{mouse_down}` frame — WHICH IS EXACTLY WHY the
+      // dispatch below rides the WS (forceWs), never the DC: the data
+      // channel is a separate transport with no ordering guarantee against
+      // the WS take frame (see dispatchInput's doc comment; UAT 2026-07-18
+      // reviewer finding — the DC-routed first click could reach the server
+      // pre-take and be dropped as not-controlling).
       takeWheelIfNeeded()
       implicitDriveRef.current = true
     }
     if (!frameRef.current || !containerRef.current) return
     focusAndCapturePointer(e)
     const rect = containerRef.current.getBoundingClientRect()
-    const device = mapClientToDevice(
-      e.clientX,
-      e.clientY,
-      rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
-    )
+    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    wsRef.current?.sendInput({
-      kind: 'mouse_down',
-      x: device.x,
-      y: device.y,
-      button: mapMouseButton(e.button),
-      modifiers: computeModifiers(e),
-    })
-  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded])
+    dispatchInput(
+      {
+        kind: 'mouse_down',
+        x: device.x,
+        y: device.y,
+        button: mapMouseButton(e.button),
+        modifiers: computeModifiers(e),
+      },
+      { forceWs: implicitDriveRef.current },
+    )
+  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded, mapPointerToDeviceCoords, dispatchInput])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -1321,23 +1658,23 @@ export function BrowserLiveView({
     implicitDriveRef.current = false
     if (!canDispatchInput(wasImplicitDrive) || !frameRef.current || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
-    const device = mapClientToDevice(
-      e.clientX,
-      e.clientY,
-      rect,
-      frameRef.current.width,
-      frameRef.current.height,
-      frameRef.current.page_scale,
-    )
+    const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    wsRef.current?.sendInput({
-      kind: 'mouse_up',
-      x: device.x,
-      y: device.y,
-      button: mapMouseButton(e.button),
-      modifiers: computeModifiers(e),
-    })
-  }, [annotateMode, finalizeSelection, canDispatchInput])
+    // forceWs when this gesture implicitly took the wheel — a DC-routed
+    // mouse_up racing ahead of the WS take frame would be dropped as
+    // not-controlling and leave the remote page holding a stuck button
+    // (see dispatchInput's doc comment).
+    dispatchInput(
+      {
+        kind: 'mouse_up',
+        x: device.x,
+        y: device.y,
+        button: mapMouseButton(e.button),
+        modifiers: computeModifiers(e),
+      },
+      { forceWs: wasImplicitDrive },
+    )
+  }, [annotateMode, finalizeSelection, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
 
   const handleSendAnnotation = useCallback(() => {
     const annotation = pendingAnnotation
@@ -1425,15 +1762,15 @@ export function BrowserLiveView({
     e.preventDefault()
     const modifiers = computeModifiers(e)
     if (isPrintableKey(e)) {
-      wsRef.current?.sendInput({ kind: 'text', text: e.key, modifiers })
+      dispatchInput({ kind: 'text', text: e.key, modifiers })
     } else {
       // key_code (DOM KeyboardEvent.keyCode) is REQUIRED for CDP to actually
       // perform editing/navigation keys (Backspace, Delete, Enter, Tab,
       // arrows) and modifier shortcuts (Ctrl+A/C/V) — key/code alone deliver
       // the event but don't delete/submit/move/select. See ADR-039.
-      wsRef.current?.sendInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers })
+      dispatchInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers })
     }
-  }, [canDispatchInput, releaseWheel])
+  }, [canDispatchInput, releaseWheel, dispatchInput])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!canDispatchInput(false)) return
@@ -1445,9 +1782,9 @@ export function BrowserLiveView({
     // 'text' input is a one-shot insert (no matching key_up — mirrors
     // Input.insertText on the backend, which has no down/up phase).
     if (!isPrintableKey(e)) {
-      wsRef.current?.sendInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
+      dispatchInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
     }
-  }, [canDispatchInput])
+  }, [canDispatchInput, dispatchInput])
 
   // ── ADR-040 D6 — header chip config (icon + text label + colour), derived
   // from `visualState`. Words + icon back up the colour for accessibility
@@ -1586,6 +1923,25 @@ export function BrowserLiveView({
           >
             <ChatCircleDots size={13} />
             {annotateMode ? 'Exit annotate' : 'Annotate'}
+          </button>
+        )}
+        {/* WebRTC build (W1-F) — mute/unmute toggle. Shown ONLY in video mode
+            (mediaStream set) with an audio track present (hasAudio) — mirrors
+            the Annotate button's opt-in gating pattern above. The <video>
+            sink itself always starts muted (autoplay-safe); this click IS
+            the user gesture that makes unmuting reliable. No signaling wave
+            wires a real stream yet, so this never renders until Wave 2. */}
+        {mediaStream && hasAudio && (
+          <button tabIndex={0}
+            type="button"
+            onClick={() => setVideoMuted((m) => !m)}
+            aria-label={videoMuted ? 'Unmute audio' : 'Mute audio'}
+            title={videoMuted ? 'Unmute audio' : 'Mute audio'}
+            aria-pressed={!videoMuted}
+            data-testid="browser-live-mute-toggle"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          >
+            {videoMuted ? <SpeakerSlash size={15} /> : <SpeakerHigh size={15} />}
           </button>
         )}
         {/* Pin toggle retired 2026-07-16 (operator direction, amends ADR-040
@@ -1821,13 +2177,39 @@ export function BrowserLiveView({
             onKeyUp={handleKeyUp}
             onDragStart={(e) => e.preventDefault()}
           >
-            <img
-              ref={imgRef}
-              src={`data:image/jpeg;base64,${frame.data}`}
-              alt="Live browser session"
-              draggable={false}
-              className="block h-auto max-h-full w-auto max-w-full select-none"
-            />
+            {/* WebRTC build (W1-F) — sink swap: a <video> bound to
+                `mediaStream` replaces the JPEG <img> IN PLACE whenever a
+                stream is attached; falls straight back to the <img> when
+                `mediaStream` is null (the default, and the only case any
+                caller exercises until Wave 2 wires signaling) — byte-
+                identical to the pre-W1-F render in that case. Sizing mirrors
+                the <img> (object-contain within the panel). Starts muted
+                (autoplay-safe) — see the mute toggle button in the header
+                above and the srcObject-binding effect earlier in this
+                component. No <track> captions: this is a live remote-control
+                surface (mirrors the agent's own screen), not authored video
+                content — same rationale the <img>'s plain alt text already
+                reflects. */}
+            {mediaStream ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted={videoMuted}
+                aria-label="Live browser session"
+                data-testid="browser-live-video"
+                className="block h-auto max-h-full w-auto max-w-full select-none object-contain"
+              />
+            ) : (
+              <img
+                ref={imgRef}
+                src={`data:image/jpeg;base64,${frame.data}`}
+                alt="Live browser session"
+                draggable={false}
+                className="block h-auto max-h-full w-auto max-w-full select-none"
+                data-testid="browser-live-img"
+              />
+            )}
             {/* Synthetic cursor removed — the native cursor is used directly
                 when driving (more accurate, no double-cursor). The agent's
                 pointer is visible in the screencast image itself. */}

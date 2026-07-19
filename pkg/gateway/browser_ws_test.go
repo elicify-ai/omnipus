@@ -1397,3 +1397,103 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 	)
 	assert.True(t, *broadcastToB2.ControlOnly)
 }
+
+// readBrowserWebRTCStateFrame mirrors readBrowserStatusFrame's skip-until-
+// found convention (see its doc comment) for a browser_webrtc_state frame:
+// browser_screencast/browser_tabs frames may legitimately interleave ahead
+// of it (repaint-driven, asynchronous to the attach response), so a single
+// bare ReadMessage call would flake exactly like a naive readBrowserFrame
+// call would for browser_status.
+func readBrowserWebRTCStateFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) webrtcStateFrameDecoder {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatal("no browser_webrtc_state frame received within timeout")
+		}
+		conn.SetReadDeadline(time.Now().Add(remaining)) //nolint:errcheck
+		_, raw, err := conn.ReadMessage()
+		require.NoError(t, err, "must read a frame")
+		var probe wsTypeOnly
+		require.NoError(t, json.Unmarshal(raw, &probe))
+		if probe.Type != string(generated.WsFrameTypeBrowserWebrtcState) {
+			continue
+		}
+		var f webrtcStateFrameDecoder
+		require.NoError(t, json.Unmarshal(raw, &f))
+		return f
+	}
+}
+
+// TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection is the QA
+// regression-wave item 1 guard: fix-wave A added
+// TestWebrtcUnavailableReason_GateLadder and
+// TestWebrtcUnavailableReason_AgreesAcrossBothCallers
+// (browser_webrtc_fixwave_test.go), which prove webrtcUnavailableReason's
+// classification logic in isolation — but neither ever calls handleAttach,
+// so no test proved the actual CALL SITE (handleAttach's own
+// "h.announceWebRTCAvailability(...)" line at the end of browser_ws.go's
+// handleAttach) fires at all. Without it, the SPA's WebRTC upgrade never
+// starts (see announceWebRTCAvailability's own doc comment: "the SPA's state
+// machine only sends its browser_webrtc_offer after receiving
+// available:true... without this announcement neither side ever moves").
+//
+// Mirrors TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection's
+// scaffolding (real headless Chromium, browserWSSkipIfNoBrowser-gated): a
+// single connection attaches for real, and this asserts a
+// browser_webrtc_state frame follows the browser_status{state:"attached"}
+// response on the SAME connection — with no browser_webrtc_offer EVER sent,
+// so any browser_webrtc_state frame observed here can only be handleAttach's
+// own unprompted announcement, never handleWebRTCOffer's offer-time
+// sendWebRTCState call (that path is already covered end-to-end by
+// TestWebRTCEndToEndInProcess, pkg/gateway/browser_webrtc_e2e_test.go).
+// WebRTCEnabled is deliberately left at its zero-value default (disabled) —
+// this test only cares that the announcement fires at all, not what its
+// available/reason fields say; that classification logic is
+// TestWebrtcUnavailableReason_GateLadder's job.
+// BDD: Given a connection attaches to a live agent session, When the attach
+// succeeds, Then a browser_webrtc_state frame follows on the SAME
+// connection without any browser_webrtc_offer ever being sent.
+func TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection(t *testing.T) {
+	browserWSSkipIfNoBrowser(t)
+
+	tmpDir := t.TempDir()
+	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+		cfg.Tools.Browser.Headless = true
+		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
+		cfg.Tools.Browser.PageTimeoutSec = 30
+		cfg.Tools.Browser.MaxTabs = 5
+	})
+	t.Cleanup(handler.Wait)
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
+	agentID := defaultAgent.ID
+	mgr, ok := al.BrowserManagerForAgent(agentID)
+	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	t.Cleanup(mgr.Shutdown)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialBrowserTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+	sendWSAuthFrameDevMode(t, conn)
+
+	attachFrame, err := json.Marshal(generated.BrowserAttachFrame{
+		Type: string(generated.WsFrameTypeBrowserAttach), AgentId: agentID, SessionId: "announce-session",
+	})
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, attachFrame))
+
+	attachResp := readBrowserStatusFrame(t, conn, 20*time.Second)
+	require.Equal(t, "attached", attachResp.State,
+		"attach must succeed against a real headless Chromium: %+v", attachResp)
+
+	stateFrame := readBrowserWebRTCStateFrame(t, conn, 20*time.Second)
+	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcState), stateFrame.Type)
+	require.Equal(t, "announce-session", stateFrame.SessionID,
+		"the announcement must carry THIS connection's session id")
+}

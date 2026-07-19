@@ -1,0 +1,28 @@
+title: BrowserWebRTCAnswerFrame
+description: >
+  Server → client. Pion SDP answer to a browser_webrtc_offer, sent once the
+  gateway's relay has created the viewer PeerConnection and gathered its own
+  ICE candidates (non-trickle — the answer is complete, no separate
+  candidate frames follow). See ADR-047 D1/D4.
+type: object
+required:
+  - type
+  - sdp
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_webrtc_answer
+  session_id:
+    type: string
+    maxLength: 128
+    description: >-
+      Echoes the session_id from the triggering browser_webrtc_offer, for
+      client-side correlation only.
+  sdp:
+    type: string
+    minLength: 1
+    maxLength: 131072
+    description: >-
+      Complete SDP answer (application/sdp body) from the gateway's Pion
+      viewer PeerConnection, ICE-gathering-complete (non-trickle).

@@ -80,6 +80,16 @@ var allowlistedRawFSFilesBrowser = map[string]string{
 		"argument). ResolvePath resolves a per-turn agent WorkDir; these are " +
 		"process-wide singleton coordination paths with no per-turn " +
 		"confinement decision to enforce.",
+	"coordinator_lock_unix.go": "CRIT-001's cross-process flock helpers " +
+		"(acquireLaunchLock/releaseLaunchLock) for the shared-Chrome " +
+		"single-launch lock — operate exclusively on coordinator.go's " +
+		"lockPath(), itself filepath.Join(cfg.ProfileDir, \"shared-chrome.lock\"): " +
+		"the same operator-configured, system-computed profile dir already " +
+		"allowlisted for coordinator.go, never a caller-supplied \"path\" " +
+		"tool argument.",
+	"coordinator_lock_other.go": "the non-Unix (O_EXCL-based) variant of the " +
+		"same CRIT-001 single-launch lock helpers as coordinator_lock_unix.go " +
+		"— same lockPath() (cfg.ProfileDir) origin, same justification.",
 }
 
 // bannedOSFuncs is the FR-034 banned-call list for the "os" package

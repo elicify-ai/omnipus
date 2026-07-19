@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>CONTROLLER</title></head>
+<body style="background:#211;color:#eee;font-family:monospace">
+<h1>Q2 controller</h1>
+<button id="start">start</button>
+<video id="v" autoplay muted playsinline style="width:320px;border:1px solid #666"></video>
+<script>
+'use strict';
+window.__result = { state: 'idle' };
+
+// Measure a MediaStream: video frame count via rVFC over ~3s, audio RMS via
+// AnalyserNode sampled every 100ms over ~3.2s. Everything lands in window.__result.
+async function measure(stream) {
+  const R = window.__result;
+  R.state = 'measuring';
+  const vts = stream.getVideoTracks(), ats = stream.getAudioTracks();
+  R.videoTracks = vts.map(t => ({ label: t.label, readyState: t.readyState, muted: t.muted, settings: t.getSettings() }));
+  R.audioTracks = ats.map(t => ({ label: t.label, readyState: t.readyState, muted: t.muted, settings: t.getSettings() }));
+
+  const jobs = [];
+
+  if (vts.length) {
+    jobs.push((async () => {
+      const v = document.getElementById('v');
+      v.srcObject = new MediaStream(vts);
+      try { await v.play(); } catch (e) { R.videoPlayErr = String(e); }
+      let frames = 0; let lastMeta = null;
+      const cb = (now, meta) => { frames++; lastMeta = { mediaTime: meta.mediaTime, w: meta.width, h: meta.height }; v.requestVideoFrameCallback(cb); };
+      v.requestVideoFrameCallback(cb);
+      const t0 = performance.now();
+      await new Promise(r => setTimeout(r, 3000));
+      R.video = { frames, seconds: (performance.now() - t0) / 1000, fps: frames / ((performance.now() - t0) / 1000), lastMeta };
+    })());
+  }
+
+  if (ats.length) {
+    jobs.push((async () => {
+      const ac = new AudioContext();
+      try { await ac.resume(); } catch (e) { R.acResumeErr = String(e); }
+      const src = ac.createMediaStreamSource(new MediaStream(ats));
+      const an = ac.createAnalyser(); an.fftSize = 2048;
+      src.connect(an);
+      const buf = new Float32Array(an.fftSize);
+      const rms = [];
+      for (let i = 0; i < 32; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        an.getFloatTimeDomainData(buf);
+        let s = 0; for (let j = 0; j < buf.length; j++) s += buf[j] * buf[j];
+        rms.push(Number(Math.sqrt(s / buf.length).toFixed(5)));
+      }
+      const nonzero = rms.filter(x => x > 0.001).length;
+      R.audio = {
+        rmsSamples: rms,
+        rmsMax: Math.max(...rms),
+        rmsMean: Number((rms.reduce((a, b) => a + b, 0) / rms.length).toFixed(5)),
+        nonzeroCount: nonzero,
+        acState: ac.state,
+        acSampleRate: ac.sampleRate,
+      };
+    })());
+  }
+
+  await Promise.all(jobs);
+  R.state = 'done';
+  return R;
+}
+
+// Path A: getDisplayMedia. opts.preferCurrentTab for self-capture variant.
+window.startGDM = async function (opts) {
+  opts = opts || {};
+  const R = window.__result = { state: 'starting', mode: 'getDisplayMedia', opts };
+  try {
+    const constraints = { video: true, audio: true };
+    if (opts.rawAudio) constraints.audio = { echoCancellation: false, autoGainControl: false, noiseSuppression: false };
+    if (opts.preferCurrentTab) constraints.preferCurrentTab = true;
+    if (opts.selfBrowserSurface) constraints.selfBrowserSurface = opts.selfBrowserSurface;
+    const stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+    R.gotStream = true;
+    await measure(stream);
+  } catch (e) {
+    R.state = 'error';
+    R.error = String(e) + (e && e.name ? ' [' + e.name + ']' : '');
+  }
+  return R;
+};
+
+// Path B: consume a tabCapture stream id handed over by the extension
+// (chrome.tabCapture.getMediaStreamId with consumerTabId = this tab).
+window.consumeStreamId = async function (id) {
+  const R = window.__result = { state: 'starting', mode: 'tabCapture-consume', streamId: !!id };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: id } },
+      video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: id } },
+    });
+    R.gotStream = true;
+    window.__stream = stream; // kept for nav-survival remeasure
+    await measure(stream);
+  } catch (e) {
+    R.state = 'error';
+    R.error = String(e) + (e && e.name ? ' [' + e.name + ']' : '');
+  }
+  return R;
+};
+window.__onStreamId = (id) => { window.consumeStreamId(id); };
+window.remeasure = () => { window.__result = { state: 'starting', mode: 'remeasure' }; return measure(window.__stream); };
+
+document.getElementById('start').addEventListener('click', () => window.startGDM({}));
+</script>
+</body>
+</html>

@@ -128,13 +128,55 @@ func cmdlineOf(pid int) string {
 	return strings.ReplaceAll(string(data), "\x00", " ")
 }
 
-// countTopLevelChromeProcesses counts chrome-headless-shell processes whose
-// parent is NOT itself a chrome-headless-shell process (G8). One coordinator
-// launch = exactly ONE such top-level process (its renderer/GPU/zygote children
-// are all descendants, so they don't count). Two leaked coordinators would make
-// this 2. Linux-only; returns 0 elsewhere.
-func countTopLevelChromeProcesses() int {
-	if runtime.GOOS != "linux" {
+// isExecPathInvocation reports whether cmd (a /proc/<pid>/cmdline, NUL bytes
+// already replaced with spaces by cmdlineOf) is an invocation of EXACTLY
+// execPath as argv[0] — i.e. execPath followed by an argument separator (a
+// space) or nothing (no args), never a mere prefix. A plain
+// strings.Contains/HasPrefix match is not good enough: chrome-for-testing
+// ships companion binaries in the SAME chrome-linux64/ directory whose names
+// also start with "chrome" — chrome_crashpad_handler (which deliberately
+// detaches to PID 1, by crash-reporter design, so it survives even if the
+// browser it's monitoring crashes) is a sibling of chrome-linux64/chrome and
+// would otherwise be miscounted as a second "top-level chrome" process,
+// exactly as chrome-wrapper would be. Requiring the boundary excludes both.
+func isExecPathInvocation(cmd, execPath string) bool {
+	if cmd == execPath {
+		return true
+	}
+	return strings.HasPrefix(cmd, execPath+" ")
+}
+
+// countTopLevelChromeProcesses counts THIS coordinator's own Chromium browser
+// processes — identified by execPath, the exact binary path this test's
+// BrowserConfig.ExecPath resolved to (whichever CfT build that turned out to
+// be; see installer.go's dual-download doc comment) — whose parent is NOT
+// itself one of them (G8). One coordinator launch = exactly ONE such
+// top-level process (its renderer/GPU/zygote children are all descendants,
+// so they don't count). Two leaked coordinators launched from the SAME
+// execPath would make this 2. Linux-only; returns 0 elsewhere.
+//
+// Matching must be scoped to the coordinator's OWN resolved execPath, not a
+// generic "looks like chrome" name/path heuristic: this devpod (and
+// potentially a shared CI host) runs entirely unrelated Chromium processes
+// from OTHER tools with their own CfT-style "chrome-linux64/chrome" install
+// layouts (observed here: the playwright MCP server's
+// ~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome and a
+// ~/.cache/puppeteer/chrome/*/chrome-linux64/chrome) — a bare
+// "chrome-linux64/chrome" or "chrome-headless-shell" substring match counts
+// THOSE too, wildly inflating the result independent of anything this test
+// launched. execPath (this codebase's OWN managed-install root,
+// ~/.omnipus/browser/chromium/...) is the one string guaranteed to identify
+// only processes THIS coordinator is responsible for, regardless of which of
+// the two installable builds it resolved to (WebRTC tabCapture requires the
+// full "chrome" build, which installer.go's findInstalledBinary PREFERS by
+// default on Linux, so a coordinator test resolving an already-installed
+// managed Chrome is, in practice, just as likely to be running the full
+// build as chrome-headless-shell). isExecPathInvocation (not a bare
+// substring match) additionally excludes the "chrome"-prefixed sibling
+// binaries chrome-for-testing ships in the SAME directory
+// (chrome_crashpad_handler, chrome-wrapper) — see its own doc comment.
+func countTopLevelChromeProcesses(execPath string) int {
+	if runtime.GOOS != "linux" || execPath == "" {
 		return 0
 	}
 	entries, err := os.ReadDir("/proc")
@@ -152,7 +194,7 @@ func countTopLevelChromeProcesses() int {
 			continue
 		}
 		cmd := cmdlineOf(pid)
-		isChrome := strings.Contains(cmd, "chrome-headless-shell") || strings.Contains(cmd, "headless_shell")
+		isChrome := isExecPathInvocation(cmd, execPath)
 		procs[pid] = procInfo{ppid: ppidOf(pid), isChrome: isChrome}
 	}
 	n := 0
@@ -271,12 +313,16 @@ func TestFiveAgents_ConcurrentStress(t *testing.T) {
 		t.Errorf("5-agent browsing RSS %d MB exceeds the 4 GB documented cap", rssMB)
 	}
 
-	// G8: assert exactly ONE top-level chrome-headless-shell process — the
-	// headline "one Chrome for N agents" acceptance. A second top-level
-	// process would mean a coordinator leak (two Chrome instances).
-	topLevel := countTopLevelChromeProcesses()
-	t.Logf("top-level chrome-headless-shell processes: %d", topLevel)
+	// G8: assert exactly ONE top-level Chromium browser process (either
+	// installable build — see countTopLevelChromeProcesses) — the headline
+	// "one Chrome for N agents" acceptance. A second top-level process would
+	// mean a coordinator leak (two Chrome instances).
+	topLevel := countTopLevelChromeProcesses(cfg.ExecPath)
+	t.Logf("top-level chrome/chrome-headless-shell processes: %d", topLevel)
 	if topLevel != 1 {
-		t.Errorf("expected exactly 1 top-level chrome-headless-shell process (one shared Chrome); got %d", topLevel)
+		t.Errorf(
+			"expected exactly 1 top-level chrome/chrome-headless-shell process (one shared Chrome); got %d",
+			topLevel,
+		)
 	}
 }

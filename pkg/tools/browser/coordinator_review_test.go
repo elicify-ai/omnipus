@@ -4,18 +4,28 @@ package browser
 // (G1/G3/G4/G5). They guard the four correctness fixes the reviewers
 // surfaced: CRIT-002/C1 reload re-adoption with cookie survival (G1), CRIT-001
 // crash recovery into fresh contexts (G3), the I-1/W3/C1 tab-budget reservation
-// (G4), and the M2 preflight foreign-port rejection (G5). G1/G3 launch a real
-// Chrome via the coordinator and skip on short/no-Chrome runs; G4 is a pure
-// unit test over the coordinator's in-memory budget; G5 occupies the fixed CDP
-// port (no Chrome launched).
+// (G4), and the M2 foreign-holder rejection (G5). G1/G3 launch a real Chrome
+// via the coordinator and skip on short/no-Chrome runs; G4 is a pure unit test
+// over the coordinator's in-memory budget.
+//
+// WebRTC build W1-A (CRIT-001) rewrote G5: the fixed CDP TCP debug port
+// (9223) that the old preflight guarded is gone — CDP now flows over
+// Chromium's --remote-debugging-pipe, so there is no shared port a foreign
+// process could squat anymore. The single-launch guard moved to an
+// O_EXCL/flock lockfile living INSIDE this coordinator's own profile dir
+// (coordinator.go's takeLaunchLock), which by construction only another
+// omnipus coordinator could ever hold — so the only failure mode worth
+// guarding is "a prior LIVE omnipus gateway still owns this lock", not
+// "some unrelated process is squatting a shared port". No Chrome launches in
+// the rewritten G5 either.
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -260,12 +270,13 @@ func TestCoordinator_TabBudgetDenial(t *testing.T) {
 	}
 }
 
-// G5 / M2: preflightPort rejects a FOREIGN holder on the fixed CDP debug port —
-// the coordinator must never silently drive an unrelated Chrome. Two sub-cases:
-// (a) port held by a plain net.Listen with NO marker → foreign reject;
-// (b) port held + a marker with a DEAD omnipus pid → still rejected (the dead
-// pid can't be holding the port, so the holder is foreign). No Chrome launches.
-func TestCoordinator_Preflight_ForeignReject(t *testing.T) {
+// G5 / M2 (rewritten for CRIT-001's lockfile model — see file doc): a second
+// coordinator must never silently drive Chrome while the single-launch
+// lockfile is held by a LIVE prior omnipus gateway. Simulates that by holding
+// the lock ourselves (standing in for "another process") and stamping the
+// ownership marker with OUR OWN live pid. ensureLaunched must fail without
+// launching anything.
+func TestCoordinator_LaunchLock_LiveOwnerRejected(t *testing.T) {
 	home := t.TempDir()
 	cfg := BrowserConfig{
 		Enabled:     true,
@@ -276,33 +287,27 @@ func TestCoordinator_Preflight_ForeignReject(t *testing.T) {
 	}
 	coord := NewBrowserCoordinator(home, cfg, 30)
 
-	// Sub-case (a): foreign holder, no marker.
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", DebugPort))
+	if err := os.MkdirAll(cfg.ProfileDir, 0o700); err != nil {
+		t.Fatalf("mkdir profile dir: %v", err)
+	}
+	lockFile, ok, err := acquireLaunchLock(coord.lockPath())
 	if err != nil {
-		t.Skipf("DebugPort %d not available on this host — cannot run preflight test: %v", DebugPort, err)
+		t.Fatalf("acquireLaunchLock (simulating a live prior gateway): %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
-
-	if err := coord.ensureLaunched(context.Background()); err == nil {
-		t.Fatal("(a) ensureLaunched should FAIL when DebugPort is held by a foreign process")
-	} else if !strings.Contains(err.Error(), "non-omnipus") && !strings.Contains(err.Error(), "already in use") {
-		t.Fatalf("(a) ensureLaunched error should mention non-omnipus/foreign; got %v", err)
+	if !ok {
+		t.Fatal("expected to acquire the launch lock ourselves (nothing else should hold it in a fresh t.TempDir())")
 	}
-	if coord.PID() != 0 {
-		t.Fatalf("(a) no Chrome should have launched on a foreign-held port; got pid %d", coord.PID())
-	}
-
-	// Sub-case (b): write a marker claiming a DEAD omnipus pid, port still held
-	// by the foreign listener. The dead pid can't hold the port → foreign.
-	if err := coord.writeOwnershipMarker(999999, "Chrome-for-Testing"); err != nil {
+	t.Cleanup(func() { releaseLaunchLock(lockFile) })
+	if err := coord.writeOwnershipMarker(os.Getpid(), "Chrome-for-Testing"); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
+
 	if err := coord.ensureLaunched(context.Background()); err == nil {
-		t.Fatal("(b) ensureLaunched should FAIL with a dead-pid marker + foreign-held port")
-	} else if !strings.Contains(err.Error(), "non-omnipus") && !strings.Contains(err.Error(), "already in use") {
-		t.Fatalf("(b) ensureLaunched error should mention non-omnipus/foreign; got %v", err)
+		t.Fatal("ensureLaunched should FAIL when the launch lock is held by a live omnipus process")
+	} else if !strings.Contains(err.Error(), "prior omnipus gateway") {
+		t.Fatalf("ensureLaunched error should mention a prior omnipus gateway; got %v", err)
 	}
 	if coord.PID() != 0 {
-		t.Fatalf("(b) no Chrome should have launched; got pid %d", coord.PID())
+		t.Fatalf("no Chrome should have launched while the lock is held by a live owner; got pid %d", coord.PID())
 	}
 }

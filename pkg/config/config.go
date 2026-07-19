@@ -3050,6 +3050,77 @@ type BrowserToolConfig struct {
 	// refused with browser_status(error) even though the screencast itself
 	// still streams.
 	TakeControlEnabled bool `json:"take_control_enabled" env:"OMNIPUS_TOOLS_BROWSER_TAKE_CONTROL_ENABLED"`
+	// WebRTCEnabled gates the ADR-047 WebRTC media path (audio+video via the
+	// gateway's Pion SFU relay) on top of LiveViewEnabled. Defaults to true.
+	// Post-auth gate, same posture as LiveViewEnabled: this does NOT affect
+	// whether /api/v1/browser/ws or /api/v1/browser/capture-ingest exist —
+	// both are always registered. Setting this false only changes what
+	// happens after a viewer attaches: the gateway reports
+	// browser_webrtc_state{available:false, reason:"disabled"} and never
+	// starts a capture session or answers a browser_webrtc_offer, so every
+	// viewer stays on the JPEG browser_screencast fallback tier (ADR-047
+	// D3). Lite builds (-tags lite) compile the Pion relay out entirely
+	// (ADR-047 D7) and behave as if this were false regardless of its
+	// configured value (reason:"lite_build").
+	WebRTCEnabled bool `json:"webrtc_enabled" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_ENABLED"`
+	// WebRTCStunServer is the STUN server URI (e.g.
+	// "stun:stun.l.google.com:19302") the gateway's Pion relay uses for ICE
+	// candidate gathering on both the viewer and capture-ingest legs.
+	// Defaults to "stun:stun.l.google.com:19302". An empty string disables
+	// STUN and restricts ICE to host candidates only (loopback-adjacent
+	// deployments, or operators who want zero external network dependency
+	// at the cost of NAT traversal). See ADR-047 D1.
+	WebRTCStunServer string `json:"webrtc_stun_server" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_STUN_SERVER"`
+	// CaptureSharedContext promotes the former OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
+	// experimental env flag to a first-class config knob (ADR-048 condition 1).
+	// When true, a browsing agent's own session is bootstrapped in Chrome's
+	// DEFAULT browser context — the same context the WebRTC capture
+	// extension's encoder page always lives in (capture_session.go's
+	// defaultEncoderStarter) — instead of its own isolated, coordinator-owned
+	// CDP browser context (ADR-043 D2). This is required for WebRTC capture to
+	// work AT ALL: chrome.tabCapture cannot capture a tab living in a
+	// CDP-created browser context ("Invalid tab specified."), and an
+	// enableInIncognito-loaded extension gains VISIBILITY of such tabs
+	// (chrome.tabs.query sees them) but never CAPTURABILITY (ADR-048,
+	// verified against real Chrome 150).
+	//
+	// SECURITY / ISOLATION WARNING: enabling this REVERSES ADR-043 D2's
+	// per-agent cookie/localStorage isolation for every agent whose session
+	// lands in the shared default context — all such agents share ONE
+	// cookie/storage partition, and ADR-043 D4's context-persistence-across-
+	// reload and D7's per-agent tab budget no longer apply per-agent. Default
+	// is TRUE (ADR-048 Option A: single-agent-dominant installs are the
+	// common case, and video/audio live-view is a value operators expect out
+	// of the box) — operators who need real cross-agent isolation and are
+	// willing to give up WebRTC capture (the JPEG browser_screencast fallback
+	// keeps working either way, ADR-047 D3) should set this false.
+	//
+	// ADR-048 condition 2 (the multi-agent capture-target gap): even with
+	// this enabled, the shared default context's encoder captures whichever
+	// tab is GLOBALLY active, not necessarily the attached agent's tab. When
+	// more than one agent currently holds a live browser session, WHICH
+	// agent's tab a viewer sees can be ambiguous — but a blanket "deny a new
+	// capture whenever ANY other agent has a live session" fence (the
+	// original ADR-048 shape) made the panel permanently video-less in the
+	// most ordinary single-user flow, so the gateway's capture-start path
+	// (pkg/gateway/browser_webrtc.go's handleWebRTCOffer) was re-scoped
+	// (2026-07-18 UAT fix-wave) to: bring the REQUESTING agent's tab to
+	// front before the encoder resolves its target (deterministically binds
+	// THIS agent's tab even with other agents' windows present — see
+	// capture_session.go's Start/bringAgentTabToFront), DENY starting a new
+	// capture only when another agent's capture session is still ACTIVELY
+	// VIEWED (ViewerCount() > 0 — a genuine, real-time focus conflict), and
+	// silently SUPERSEDE (Stop) any other agent's viewerless leftover
+	// session instead of denying against it. Single-agent-viewed-at-a-time
+	// is still the v1 invariant; only the ambient "another agent merely has
+	// a session" trigger was removed.
+	//
+	// OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT is kept as a non-empty-string
+	// override ("1"/"0") of this field, for tests and operators who need to
+	// force a value without touching config.json — the coordinator reads
+	// config, never a bare os.Getenv, for its own decision; the env var is
+	// consulted only as an explicit override layered on top.
+	CaptureSharedContext bool `json:"capture_shared_context" env:"OMNIPUS_TOOLS_BROWSER_CAPTURE_SHARED_CONTEXT"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled

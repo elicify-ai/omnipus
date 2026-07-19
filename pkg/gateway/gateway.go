@@ -2055,6 +2055,16 @@ func setupAndStartServices(
 	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin)
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
 
+	// Capture-ingest WS (ADR-047 D6, wave-plan W2-A) — the gateway-owned
+	// WebRTC capture extension's ingest leg. Loopback-only (RemoteAddr
+	// gate in captureIngestWSHandler.ServeHTTP, not an origin/auth check —
+	// the caller is a CDP-driven page inside the managed Chrome, not a
+	// browser client), authorized by a per-stream token (BindIngest/
+	// findByToken), sharing browserWSHandler's captureRegistry so a
+	// browser_webrtc_offer's session can be found by its ingest hello.
+	captureIngestHandler := newCaptureIngestWSHandler(agentLoop, browserWSHandler.captures)
+	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/capture-ingest", captureIngestHandler)
+
 	// Build the in-process tool-approval registry (FR-016, FR-070, M10).
 	// policy.ValidateSaturationCap enforces FR-016 semantics:
 	//   cap < 0 → fatal (emit HIGH audit + abort)

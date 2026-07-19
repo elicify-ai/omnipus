@@ -1,0 +1,25 @@
+title: BrowserCaptureOfferFrame
+description: >
+  Client (capture extension) → server (gateway). SDP offer from the
+  encoder page's self-consuming tabCapture PeerConnection (ADR-047 D2),
+  sent after a successful browser_capture_hello. Non-trickle: the encoder
+  page gathers all ICE candidates before sending, so `sdp` is the complete
+  offer. The gateway's Pion relay answers with browser_capture_answer and
+  publishes the resulting media/audio tracks to every attached viewer PC.
+  See ADR-047 D1/D2/D6.
+type: object
+required:
+  - type
+  - sdp
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_capture_offer
+  sdp:
+    type: string
+    minLength: 1
+    maxLength: 131072
+    description: >-
+      Complete SDP offer (application/sdp body) from the encoder page's
+      ingest PeerConnection, ICE-gathering-complete (non-trickle).

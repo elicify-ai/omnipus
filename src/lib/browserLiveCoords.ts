@@ -76,6 +76,35 @@ export function mapClientToDevice(
 }
 
 /**
+ * Video-mode variant of `mapClientToDevice` (WebRTC build, wave-plan "Key
+ * implementation decisions" item 8) — maps a client-space pointer coordinate
+ * against a `<video>` sink's `videoWidth`/`videoHeight` instead of a JPEG
+ * screencast frame's `width`/`height`.
+ *
+ * Unlike the JPEG path (`Page.startScreencast`, capped at
+ * screencastMaxWidth/Height and reporting a separate CDP `page_scale`
+ * factor), tabCapture delivers the tab's viewport at device-pixel resolution
+ * directly — there is no analogous downscale cap and no separate
+ * pageScaleFactor to divide out. `page_scale` is therefore fixed at 1.0 for
+ * every video-mode call (per the wave-plan decision — re-verify against real
+ * capture in e2e). This is a thin, pure wrapper around `mapClientToDevice`
+ * rather than a parallel implementation, so the clamp/offset/null-guard
+ * behavior can never drift between the two sinks — only the scale differs.
+ *
+ * The caller (BrowserLiveView) picks this variant over `mapClientToDevice`
+ * based on which sink (`<video>` vs `<img>`) is currently rendering.
+ */
+export function mapClientToDeviceVideo(
+  clientX: number,
+  clientY: number,
+  rect: RectLike,
+  videoWidth: number,
+  videoHeight: number,
+): DeviceCoords | null {
+  return mapClientToDevice(clientX, clientY, rect, videoWidth, videoHeight, 1)
+}
+
+/**
  * CDP-style keyboard/mouse modifier bitmask (matches Chrome DevTools
  * Protocol's Input.dispatchMouseEvent/dispatchKeyEvent `modifiers` field —
  * also the exact bound the generated BrowserInputFrame.modifiers schema
