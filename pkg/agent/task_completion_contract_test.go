@@ -227,16 +227,26 @@ func TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone(t *testi
 // no textual output" fallback, external_dispatch.go) — so this is the only
 // way to exercise the executor's own fail-closed handling of a truly empty
 // string, which the parser and finishTaskRun both explicitly guard for.
+// TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed proves the
+// empty-output edge case (item (c) of the feature spec) directly against
+// TaskExecutor.finishTaskRun: a genuinely empty resp is now an UNMET claim
+// (ADR-049 FR-045) — the run re-dispatches internally (via
+// ExecuteTask/mockProvider, which itself always returns non-marker content)
+// until the default attempt ceiling (3) is exhausted, landing terminal
+// Failed with a graceful wind-down handover — never the retired "Task
+// completed" auto-complete default, and never a false Done.
 func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing.T) {
 	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
 	tk := newCompletionContractTask(t, al, "native-agent", "empty output task")
 
-	al.taskExecutor.finishTaskRun(tk, "", "", nil, "")
-
-	final, err := al.taskStore.Get(tk.ID)
-	if err != nil {
-		t.Fatalf("get task: %v", err)
+	redispatchID := al.taskExecutor.finishTaskRun(context.Background(), tk, "", "", nil, "")
+	if redispatchID != "" {
+		if err := al.taskExecutor.ExecuteTask(context.Background(), redispatchID); err != nil {
+			t.Fatalf("ExecuteTask (goal-loop re-dispatch): %v", err)
+		}
 	}
+
+	final := waitForCompletionContractTerminal(t, al, tk.ID)
 	if final.Status != task.StatusFailed {
 		t.Fatalf("status = %q, want %q — empty output must fail closed, not auto-complete to done "+
 			"(result: %s)", final.Status, task.StatusFailed, final.Result)
@@ -244,8 +254,8 @@ func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing
 	if final.Result == "Task completed" || strings.Contains(final.Result, "Task completed") {
 		t.Errorf("result = %q, the retired 'Task completed' auto-complete default must be gone", final.Result)
 	}
-	if !strings.Contains(final.Result, "completion signal") {
-		t.Errorf("result = %q, want it to explain the missing completion signal", final.Result)
+	if final.AttemptCount == 0 {
+		t.Errorf("attempt_count = %d, want it to have been consumed by the goal loop", final.AttemptCount)
 	}
 }
 
@@ -295,6 +305,12 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 // external-CLI counterpart of the native no-marker test: a clean external-CLI
 // exit with prose output but no TASK_STATUS marker must fail closed — this is
 // precisely the false-success cascade ADR-042 §3 flagged and ADR-043 closes.
+// The fake driver's goroutine below injects its single scripted event
+// sequence exactly ONCE (it calls fr.Cancel() right after), so this test
+// pins max_attempts=1 on the task — under the ADR-049 goal loop, a no-signal
+// outcome now consumes an attempt and re-dispatches (FR-045) rather than
+// failing on the spot; with the ceiling at 1 it still exhausts (and thus
+// fails closed) after exactly the one dispatch this fake driver can serve.
 func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *testing.T) {
 	provider := &countingProvider{}
 	al, _ := newExternalCLITaskTestLoop(t, provider)
@@ -312,6 +328,11 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 	}()
 
 	tk := newCompletionContractTask(t, al, "ext-agent", "external no marker")
+	one := 1
+	onePtr := &one
+	if _, err := al.taskStore.Update(tk.ID, task.Patch{MaxAttempts: &onePtr}); err != nil {
+		t.Fatalf("pin max_attempts=1: %v", err)
+	}
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}

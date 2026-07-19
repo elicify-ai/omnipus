@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -161,13 +164,30 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 }
 
 // runTask executes the agent prompt and updates the task on completion.
+//
+// Goal-loop re-dispatch (SD-B3): when finishTaskRun decides the attempt is
+// unmet with attempts remaining, it flips the task back to `next` and
+// returns its ID so this goroutine's own trailing cleanup can re-enter
+// ExecuteTask — reusing the existing goroutine/dispatch-sema machinery, not
+// a new scheduler. The redispatch call is deliberately made from INSIDE the
+// single combined deferred closure below, AFTER release()/cancel() have
+// already run: calling ExecuteTask while this goroutine still held its own
+// dispatch-sema slot would need two slots at once for an instant and could
+// spuriously hit the concurrency cap.
 func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel context.CancelFunc, release func()) {
-	defer release()
-	defer cancel()
+	var redispatchTaskID string
 	defer func() {
+		release()
+		cancel()
 		te.mu.Lock()
 		delete(te.running, t.ID)
 		te.mu.Unlock()
+		if redispatchTaskID != "" {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil {
+				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
+					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
+			}
+		}
 	}()
 
 	logger.InfoCF("task_executor", "runTask started",
@@ -232,14 +252,46 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	te.finishTaskRun(t, taskSessionID, resp, err, "")
+	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, "")
 }
 
 // finishTaskRun handles the shared post-execution logic for both runTask and
 // runTaskFromInProgress. It appends the failure/success transcript entry,
 // updates the session meta, and — when the agent did not call task_update
 // itself — resolves completion from the standardized TASK_STATUS/TASK_SUMMARY
-// marker (ADR-043), failing the task closed when no marker is parseable.
+// marker (ADR-043). The marker (or an explicit update_task terminal write) is
+// now a CLAIM, never the terminal decision by itself (ADR-049 US-5/US-6):
+//
+//   - No parseable signal (FR-045): an UNMET claim — the attempt is consumed
+//     and the task re-dispatches (or wakes the owner on exhaustion) — NOT an
+//     immediate terminal failure.
+//   - An explicit FAILURE marker, or an already-terminal `failed` status from
+//     a real update_task(status:"failed") call (SD-B1): an accepted give-up —
+//     terminal immediately, exactly as before this feature. There is nothing
+//     to verify in a worker's own honest failure report.
+//   - An already-terminal `done` status from a real update_task(status:"done")
+//     call: trusted immediately, exactly as before this feature. NOTE (scope
+//     decision, documented in this wave's report): SD-B2 calls for THIS claim
+//     to also be judged, but TaskUpdateTool's own onComplete callback
+//     (pkg/tools/task.go) already fires the blocked-dependent DAG-advance
+//     SYNCHRONOUSLY at the tool-call boundary — before finishTaskRun ever
+//     runs — so gating it behind the judge here would be inconsistent
+//     (dependents already unblocked) without a pkg/tools change, which is out
+//     of this wave's file scope (task_executor.go/judge.go/
+//     task_completion_signal.go only).
+//   - A SUCCESS marker (no explicit terminal tool call): a CLAIM — routed to
+//     the evidence-ladder judge (judge.go) before it may become terminal
+//     `done` (US-5/US-6, the #1 self-certification failure mode this feature
+//     closes).
+//
+// Scratchpad tasks (FR-048/D5) are exempt from the goal loop entirely: every
+// branch below trusts the marker directly, exactly as today, for a
+// Scratchpad task.
+//
+// Returns a non-empty redispatchTaskID when the caller (runTask/
+// runTaskFromInProgress) should re-enter ExecuteTask for another attempt
+// (SD-B3) — see those callers' own doc comments for why the actual
+// ExecuteTask call happens AFTER this function returns, not from inside it.
 //
 // logSuffix is appended to the "Agent execution failed" log message so
 // callers can be identified in structured logs (e.g. " (StartTaskNow path)").
@@ -247,7 +299,9 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 // Do NOT merge the pre-execution session-setup blocks of runTask and
 // runTaskFromInProgress: runTask logs-and-continues on NewSession failure while
 // runTaskFromInProgress aborts; that divergence is intentional and load-bearing.
-func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, err error, logSuffix string) {
+func (te *TaskExecutor) finishTaskRun(
+	ctx context.Context, t *task.Task, taskSessionID, resp string, err error, logSuffix string,
+) (redispatchTaskID string) {
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 
 	if err != nil {
@@ -275,7 +329,7 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 		failedTask.Status = task.StatusFailed
 		failedTask.Result = fmt.Sprintf("execution error: %v", err)
 		te.notifySourceChannel(&failedTask)
-		return
+		return ""
 	}
 
 	if taskSessionID != "" && resp != "" && sessStore != nil {
@@ -290,14 +344,20 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 		}
 	}
 
-	// Check whether the agent already called task_update (status terminal).
+	// Re-read so we see any explicit update_task write the agent made mid-run.
 	current, lerr := te.store.Get(t.ID)
 	if lerr != nil {
 		logger.WarnCF("task_executor", "Could not re-read task after execution",
 			map[string]any{"task_id": t.ID, "error": lerr.Error()})
-		return
+		return ""
 	}
+
 	if task.IsTerminal(current.Status) {
+		// An explicit update_task(done|failed) call already decided (and, for
+		// `done`, already fired DAG-advance at the tool-call boundary) — trust
+		// it directly, exactly as today. See this function's doc comment for
+		// why SD-B2's "also judge an explicit done claim" is a documented,
+		// out-of-scope gap rather than implemented here.
 		if taskSessionID != "" && sessStore != nil {
 			statusCompleted := session.StatusArchived
 			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); setErr != nil {
@@ -306,24 +366,18 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 			}
 		}
 		te.notifySourceChannel(current)
-		return
+		return ""
 	}
 
-	// Agent did not call task_update — no explicit signal. ADR-043 (superseding
-	// the ADR-042 §3 auto-complete-to-done default this replaces): defaulting
-	// to success on no signal is forbidden. Parse the agent's final output for
-	// the standardized TASK_STATUS completion marker instead.
-	//
-	// This is uniform across native and external-CLI (subagent_3p) dispatch —
-	// an external-CLI worker ALWAYS lands here (it has no task_update tool to
-	// call at all; buildPrompt's dispatch-aware instruction reflects that), so
-	// the marker is its ONLY completion signal; a native agent reaches here
-	// only when it forgot to call task_update but still emitted output.
+	// Agent did not call task_update — no explicit signal, or an explicit
+	// non-terminal write. Parse the agent's final output for the standardized
+	// TASK_STATUS completion marker instead (ADR-043), uniform across native
+	// and external-CLI (subagent_3p) dispatch — see the marker parser's own
+	// doc comment for why an external-CLI worker ALWAYS lands here.
 	signal := parseTaskCompletionSignal(resp)
 	if !signal.Found() {
 		logger.WarnCF("task_executor",
-			"agent finished with no parseable TASK_STATUS completion signal — failing the task "+
-				"closed rather than defaulting to success (ADR-043)",
+			"agent finished with no parseable TASK_STATUS completion signal",
 			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
 		rawOutput := resp
 		if strings.TrimSpace(rawOutput) == "" {
@@ -336,11 +390,286 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 				"transcript and re-run; raw output follows:\n\n%s",
 			rawOutput,
 		)
-		te.completeTaskWithResult(t, taskSessionID, false, reason)
-		return
+		if current.Scratchpad {
+			// FR-048: Scratchpad (set_todos) tasks are exempt from the goal
+			// loop entirely — today's exact fail-closed-immediately behavior.
+			te.completeTaskWithResult(current, taskSessionID, false, reason)
+			return ""
+		}
+		// FR-045: for a real task, no signal is an UNMET claim (attempt
+		// consumed) — NOT an immediate terminal failure.
+		return te.consumeAttemptOrExhaust(ctx, current, taskSessionID, reason, nil)
 	}
 
-	te.completeTaskWithResult(t, taskSessionID, signal.Status() == task.StatusDone, signal.Result)
+	if current.Scratchpad || signal.Status() == task.StatusFailed {
+		// FR-048 (Scratchpad: exempt from the goal loop entirely, even for a
+		// success marker — trust it directly) OR SD-B1 (an explicit failure
+		// marker is an accepted give-up: terminal immediately, no judge).
+		te.completeTaskWithResult(current, taskSessionID, signal.Status() == task.StatusDone, signal.Result)
+		return ""
+	}
+
+	// signal.Status() == task.StatusDone, non-Scratchpad: a success CLAIM —
+	// route to the evidence-ladder judge (US-5/US-6).
+	return te.adjudicateClaim(ctx, current, taskSessionID, signal.Result)
+}
+
+// adjudicateClaim routes a worker's SUCCESS claim through the evidence-ladder
+// judge (US-5/US-6, judge.go). Empty Criteria falls back to the ADR-049 D5
+// soft tier (SoftTierCriterion: judge against Prompt, else title+description).
+// When the soft tier applies AND the Judge System Agent is not registered at
+// all (never true post-boot in production, since coreagent.SeedConfig always
+// seeds it — only reachable from a raw pkg/agent harness that never ran
+// SeedConfig), the claim is trusted directly rather than paused forever: a
+// missing Judge in that specific combination is a structural/environment
+// gap, not a transient D7 "unavailable" cause.
+func (te *TaskExecutor) adjudicateClaim(
+	ctx context.Context, t *task.Task, taskSessionID, claimSummary string,
+) (redispatchTaskID string) {
+	criteria := t.Criteria
+	usedSoftTier := false
+	if len(criteria) == 0 {
+		if soft := SoftTierCriterion(t.Title, t.Description, t.Prompt); soft != nil {
+			criteria = []task.AcceptanceCriterion{*soft}
+			usedSoftTier = true
+		}
+	}
+
+	if len(criteria) == 0 {
+		// Structurally empty task (no criteria, no prompt, no title/description
+		// text worth judging) — nothing to judge; trust the claim.
+		te.completeTaskWithResult(t, taskSessionID, true, claimSummary)
+		return ""
+	}
+
+	if usedSoftTier {
+		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
+			logger.WarnCF("task_executor",
+				"goal-loop: Judge System Agent not configured; trusting the worker's claim "+
+					"directly for this criteria-less task",
+				map[string]any{"task_id": t.ID})
+			te.completeTaskWithResult(t, taskSessionID, true, claimSummary)
+			return ""
+		}
+	}
+
+	result := te.agentLoop.JudgeCriteria(ctx, JudgeCriteriaInput{
+		Scope:           task.VerdictScopeTask,
+		TaskID:          t.ID,
+		AssigneeAgentID: t.AgentID,
+		Criteria:        criteria,
+		Attempt:         t.AttemptCount + 1,
+		ClaimText:       claimSummary,
+	})
+
+	if result.Unavailable {
+		// D7: the judge itself is unavailable and JudgeCriteria's own
+		// internal backoff loop gave up only because ctx was canceled — do
+		// NOT consume the attempt or record a verdict; abandon this run.
+		logger.WarnCF("task_executor",
+			"goal-loop: judge cycle abandoned (context canceled during backoff)",
+			map[string]any{"task_id": t.ID, "reason": result.Reason})
+		return ""
+	}
+
+	verdict := result.Verdict
+	te.writeJudgeVerdictTranscript(t, taskSessionID, verdict)
+
+	if verdict.Met {
+		te.completeTaskWithResult(t, taskSessionID, true, claimSummary)
+		return ""
+	}
+
+	return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, claimSummary, verdict)
+}
+
+// consumeAttemptOrExhaust increments+persists Task.AttemptCount (server-set,
+// FR-042/R4/C17), and either re-dispatches (attempts remain) with steering
+// fed forward into buildPrompt (FR-043), or — once the attempt reaches
+// EffectiveTaskMaxAttempts — marks the task terminal `failed`, writes a
+// graceful wind-down handover to BOTH the task record and the owning session
+// transcript (NFR-3/SD-B9), and wakes the owner via the async-notifier
+// (FR-044). verdict is nil for a no-signal unmet outcome (nothing to judge)
+// and non-nil for a judge-adjudicated unmet outcome.
+//
+// FR-047: the hard ceiling (2x the configured attempt bound) is enforced
+// independently of the normal maxAttempts gate — belt-and-suspenders so a
+// pending re-dispatch can never loop past it "regardless of pending
+// re-dispatch or interrupt state", even though under this function's own
+// invariants (it is the sole writer of AttemptCount) the two gates always
+// coincide.
+func (te *TaskExecutor) consumeAttemptOrExhaust(
+	ctx context.Context,
+	t *task.Task,
+	taskSessionID string,
+	claimSummary string,
+	verdict *task.JudgeVerdict,
+) (redispatchTaskID string) {
+	var planningCfg config.PlanningConfig
+	if cfg := te.agentLoop.GetConfig(); cfg != nil {
+		planningCfg = cfg.Planning
+	}
+	maxAttempts := planningCfg.EffectiveTaskMaxAttempts(t.MaxAttempts)
+	hardCeiling := 2 * maxAttempts
+
+	newAttempt := t.AttemptCount + 1
+	nextStatus := task.StatusNext
+	updated, uerr := te.store.Update(t.ID, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	if uerr != nil {
+		logger.ErrorCF("task_executor",
+			"goal-loop: could not persist attempt increment; failing the run closed",
+			map[string]any{"task_id": t.ID, "error": uerr.Error()})
+		te.failTask(t.ID, fmt.Sprintf("goal-loop: could not persist attempt increment: %v", uerr))
+		return ""
+	}
+
+	if newAttempt < maxAttempts && newAttempt <= hardCeiling {
+		te.writeSteeringPrompt(updated, taskSessionID, claimSummary, verdict)
+		return updated.ID
+	}
+
+	handover := buildHandover(updated, claimSummary, verdict, maxAttempts)
+	te.completeTaskWithResult(updated, taskSessionID, false, handover)
+	te.wakeOwnerAttemptsExhausted(updated, taskSessionID, handover)
+	return ""
+}
+
+// writeSteeringPrompt persists the judge's (or the no-signal reminder's)
+// steering text so the NEXT attempt's buildPrompt call carries it forward
+// (FR-043, evaluator-optimizer pattern). t.Result is repurposed as the
+// in-flight steering carrier between attempts — it is NOT yet the FINAL
+// result while the goal loop is still running; the terminal write
+// (completeTaskWithResult) always overwrites it with the real final result.
+func (te *TaskExecutor) writeSteeringPrompt(
+	t *task.Task, taskSessionID, claimSummary string, verdict *task.JudgeVerdict,
+) {
+	steering := buildSteeringText(claimSummary, verdict)
+	if _, uerr := te.store.Update(t.ID, task.Patch{Result: &steering}); uerr != nil {
+		logger.WarnCF("task_executor", "goal-loop: could not persist steering for re-dispatch",
+			map[string]any{"task_id": t.ID, "error": uerr.Error()})
+	}
+	if taskSessionID == "" {
+		return
+	}
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	if sessStore == nil {
+		return
+	}
+	if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+		ID:        fmt.Sprintf("%s-steering-%d", t.ID, t.AttemptCount+1),
+		Role:      "system",
+		Content:   steering,
+		Timestamp: time.Now().UTC(),
+	}); appendErr != nil {
+		logger.WarnCF("task_executor", "goal-loop: steering transcript write failed",
+			map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+	}
+}
+
+// buildSteeringText renders the feedback fed forward into the next attempt.
+func buildSteeringText(claimSummary string, verdict *task.JudgeVerdict) string {
+	if verdict == nil {
+		// No-signal case: the composed "no completion signal" reason IS the
+		// steering — there is no per-criterion breakdown to report.
+		return claimSummary
+	}
+	var sb strings.Builder
+	sb.WriteString("The judge reviewed your last attempt and found it UNMET:\n")
+	for _, c := range verdict.PerCriterion {
+		if !c.Met {
+			fmt.Fprintf(&sb, "- criterion %s: %s\n", c.CriterionID, c.Reason)
+		}
+	}
+	return sb.String()
+}
+
+// buildHandover renders the graceful wind-down summary written to the task
+// Result and the owning session transcript when the goal loop's attempts are
+// exhausted (FR-044/NFR-3/SD-B9).
+func buildHandover(t *task.Task, claimSummary string, verdict *task.JudgeVerdict, maxAttempts int) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb,
+		"Goal loop exhausted after %d attempt(s) (max %d) without a judge-confirmed success.\n\n",
+		t.AttemptCount, maxAttempts,
+	)
+	if verdict != nil {
+		sb.WriteString("Last judge verdict:\n")
+		for _, c := range verdict.PerCriterion {
+			status := "met"
+			if !c.Met {
+				status = "UNMET"
+			}
+			fmt.Fprintf(&sb, "- criterion %s: %s (%s)\n", c.CriterionID, status, c.Reason)
+		}
+	} else {
+		sb.WriteString("Last attempt outcome:\n")
+		sb.WriteString(claimSummary)
+		sb.WriteString("\n")
+	}
+	sb.WriteString(
+		"\nProgress/remaining/blockers: review the run transcript for details; the task has " +
+			"been marked failed and its owner notified.",
+	)
+	return sb.String()
+}
+
+// wakeOwnerAttemptsExhausted wakes the task's owning agent via the
+// async-notifier (FR-044/async_notifier.go) once the goal loop's attempts
+// are exhausted. Falls back to a "system"/"task:<id>" destination when the
+// task has no SourceChannel/SourceChatID (e.g. a board/REST-created task) —
+// AsyncNotifier.Notify rejects an empty destination outright (FR-N7).
+func (te *TaskExecutor) wakeOwnerAttemptsExhausted(t *task.Task, taskSessionID, handover string) {
+	channel, chatID := t.SourceChannel, t.SourceChatID
+	if channel == "" || chatID == "" {
+		channel, chatID = "system", "task:"+t.ID
+	}
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	content := fmt.Sprintf(
+		"Task %q (%s) exhausted its goal-loop attempts and needs your attention.\n\n%s",
+		t.Title, t.ID, handover,
+	)
+	if notifyErr := te.agentLoop.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
+		Channel:             channel,
+		ChatID:              chatID,
+		AgentID:             t.AgentID,
+		TranscriptSessionID: taskSessionID,
+		SourceKind:          "task_goal_loop",
+		Content:             content,
+	}); notifyErr != nil {
+		logger.WarnCF("task_executor", "goal-loop: could not wake owner on attempts-exhausted",
+			map[string]any{"task_id": t.ID, "error": notifyErr.Error()})
+	}
+}
+
+// writeJudgeVerdictTranscript writes verdict as a dedicated judge_verdict
+// transcript entry (FR-056, EntryTypeJudgeVerdict) alongside the worker's own
+// ADR-043 completion marker so the two can never silently disagree (ADR §6).
+func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID string, verdict *task.JudgeVerdict) {
+	if taskSessionID == "" || verdict == nil {
+		return
+	}
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	if sessStore == nil {
+		return
+	}
+	payload, merr := json.Marshal(verdict)
+	if merr != nil {
+		logger.WarnCF("task_executor", "goal-loop: could not marshal judge verdict for transcript",
+			map[string]any{"task_id": t.ID, "error": merr.Error()})
+		return
+	}
+	if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+		ID:        fmt.Sprintf("%s-judge-%d", t.ID, verdict.Round),
+		Type:      session.EntryTypeJudgeVerdict,
+		Role:      "system",
+		Content:   string(payload),
+		AgentID:   verdict.JudgeAgentID,
+		Timestamp: time.Now().UTC(),
+	}); appendErr != nil {
+		logger.WarnCF("task_executor", "goal-loop: judge verdict transcript write failed",
+			map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+	}
 }
 
 // completeTaskWithResult marks task t terminal — Done when success is true,
@@ -464,6 +793,19 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	sb.WriteString(fmt.Sprintf("# Task: %s\n\n", t.Title))
 	if t.Prompt != "" {
 		sb.WriteString(t.Prompt)
+		sb.WriteString("\n\n")
+	}
+	// FR-043: on a re-dispatch (attempt >= 2), carry the previous attempt's
+	// steering forward — the judge's per-criterion unmet reasons, or the
+	// no-signal reminder (evaluator-optimizer pattern, ADR D2). t.Result is
+	// repurposed as the in-flight steering carrier between attempts (see
+	// writeSteeringPrompt) — it is NOT yet the FINAL result while the goal
+	// loop is still running; completeTaskWithResult always overwrites it with
+	// the real final result at the end of the loop. Attempt 1 (AttemptCount
+	// == 0) never has steering, so first-attempt prompts are unaffected.
+	if t.AttemptCount > 0 && t.Result != "" {
+		sb.WriteString(fmt.Sprintf("## Feedback from attempt %d — address this before re-claiming success:\n", t.AttemptCount))
+		sb.WriteString(t.Result)
 		sb.WriteString("\n\n")
 	}
 	sb.WriteString(fmt.Sprintf("Priority: %d (1=highest, 5=lowest)\n", t.EffectivePriority()))
@@ -857,12 +1199,19 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	cancel context.CancelFunc,
 	release func(),
 ) {
-	defer release()
-	defer cancel()
+	var redispatchTaskID string
 	defer func() {
+		release()
+		cancel()
 		te.mu.Lock()
 		delete(te.running, t.ID)
 		te.mu.Unlock()
+		if redispatchTaskID != "" {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil {
+				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
+					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
+			}
+		}
 	}()
 
 	// Test seam: when goroutineCtxHook is set, invoke it and return without
@@ -890,7 +1239,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	te.finishTaskRun(t, taskSessionID, resp, err, " (StartTaskNow path)")
+	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, " (StartTaskNow path)")
 }
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
