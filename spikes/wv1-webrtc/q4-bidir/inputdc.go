@@ -35,9 +35,9 @@ type inputEvent struct {
 // difference is the pure CDP-dispatch duration, isolating it from network
 // RTT).
 type inputAck struct {
-	ID            int64  `json:"id"`
-	OK            bool   `json:"ok"`
-	Error         string `json:"error,omitempty"`
+	ID            int64   `json:"id"`
+	OK            bool    `json:"ok"`
+	Error         string  `json:"error,omitempty"`
 	TServerRecvMS float64 `json:"t_server_recv"`
 	TDispatchedMS float64 `json:"t_dispatched"`
 }
