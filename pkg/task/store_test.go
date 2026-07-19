@@ -611,11 +611,15 @@ func TestTriggerValidation(t *testing.T) {
 	every := int64(3600000)
 	tooFast := int64(500)
 	cron := "0 9 * * MON"
+	rruleBody := "FREQ=WEEKLY;BYDAY=MO;COUNT=5"
+	rruleDtstart := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC).UnixMilli()
+	rruleTz := "Europe/Berlin"
 	good := []*Trigger{
 		{Type: TriggerManual},
 		{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
 		{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &every}},
 		{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+		{Type: TriggerRecurring, Config: TriggerConfig{Rrule: &rruleBody, DtstartMs: &rruleDtstart, Tz: &rruleTz}},
 	}
 	for _, tr := range good {
 		if err := ValidateTrigger(tr); err != nil {
@@ -650,6 +654,50 @@ func TestTriggerPersisted(t *testing.T) {
 	}
 	if got.Trigger.Config.CronExpr == nil || *got.Trigger.Config.CronExpr != cron {
 		t.Fatalf("trigger config not persisted: %+v", got.Trigger.Config)
+	}
+}
+
+// TestTriggerPersisted_Rrule is TestTriggerPersisted's RRULE counterpart —
+// store_test.go's own Store.Create/Store.Get round trip only ever exercised
+// CronExpr; the rrule/dtstart_ms/tz trio (Calendar Recurrence Redesign) had
+// no isolated Store-level coverage independent of the gateway layer.
+func TestTriggerPersisted_Rrule(t *testing.T) {
+	s := newStore(t)
+	rruleBody := "FREQ=WEEKLY;BYDAY=MO;COUNT=5"
+	dtstartMs := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC).UnixMilli()
+	tz := "Europe/Berlin"
+
+	tk := mkTask("recurring-rrule", "ws")
+	tk.Trigger = &Trigger{
+		Type:   TriggerRecurring,
+		Config: TriggerConfig{Rrule: &rruleBody, DtstartMs: &dtstartMs, Tz: &tz},
+	}
+	if err := ValidateTrigger(tk.Trigger); err != nil {
+		t.Fatalf("test setup: rrule trigger should be valid: %v", err)
+	}
+	if err := s.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Trigger == nil || got.Trigger.Type != TriggerRecurring {
+		t.Fatalf("trigger not persisted: %+v", got.Trigger)
+	}
+	if got.Trigger.Config.Rrule == nil || *got.Trigger.Config.Rrule != rruleBody {
+		t.Fatalf("trigger config.rrule not persisted: %+v", got.Trigger.Config)
+	}
+	if got.Trigger.Config.DtstartMs == nil || *got.Trigger.Config.DtstartMs != dtstartMs {
+		t.Fatalf("trigger config.dtstart_ms not persisted: %+v", got.Trigger.Config)
+	}
+	if got.Trigger.Config.Tz == nil || *got.Trigger.Config.Tz != tz {
+		t.Fatalf("trigger config.tz not persisted: %+v", got.Trigger.Config)
+	}
+	// cron_expr must NOT have been silently populated alongside rrule.
+	if got.Trigger.Config.CronExpr != nil {
+		t.Fatalf("trigger config.cron_expr unexpectedly set: %+v", got.Trigger.Config)
 	}
 }
 

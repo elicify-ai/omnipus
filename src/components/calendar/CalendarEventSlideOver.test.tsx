@@ -248,6 +248,19 @@ describe('CalendarEventSlideOver — create: "Does not repeat" (US-1 AS-6)', () 
   })
 })
 
+describe('CalendarEventSlideOver — edit: Timezone Semantics §1 / FR-024 (grill-code FIX 2)', () => {
+  it('displays the SERIES stored tz, not the browser/CI zone, when opening an existing RRULE task', async () => {
+    const task = makeTask({ trigger: RRULE_TRIGGER }) // tz: 'Europe/Berlin'
+    renderSlideOver({ task })
+
+    await screen.findByLabelText(/title/i)
+    // Assert the specific stored zone regardless of what TZ the test runner
+    // itself is on (a UTC CI machine would silently pass a browser-zone-only
+    // assertion here, masking the bug).
+    expect(await screen.findByTestId('recurrence-time-label')).toHaveTextContent('Europe/Berlin')
+  })
+})
+
 describe('CalendarEventSlideOver — edit: FR-024 anchor invariance', () => {
   it('title-only edit sends the ORIGINAL trigger byte-identical (no re-anchor)', async () => {
     vi.mocked(updateTask).mockResolvedValueOnce(makeTask() as never)
@@ -296,6 +309,10 @@ describe('CalendarEventSlideOver — edit: FR-024 anchor invariance', () => {
     expect(data.trigger?.config?.rrule).toContain('FREQ=DAILY')
     // Re-anchored — NOT the original dtstart_ms.
     expect(data.trigger?.config?.dtstart_ms).not.toBe(RRULE_TRIGGER.config.dtstart_ms)
+    // grill-code FIX 2: re-anchoring dtstart must NOT silently re-zone the
+    // series to the (possibly different) browser/CI zone — it keeps its own
+    // stored tz.
+    expect(data.trigger?.config?.tz).toBe('Europe/Berlin')
   })
 })
 

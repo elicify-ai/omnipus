@@ -221,6 +221,17 @@ export function CalendarEventSlideOver({
 
   // ── Trigger construction (FR-024) ───────────────────────────────────────────
   function buildTriggerForSave(): TaskTrigger {
+    if (isLegacy && recurrence.kind === 'none') {
+      // FIX (grill-code, CRITICAL): the Repeat section ALWAYS starts fresh
+      // ({kind:'none'}) for a legacy trigger (US-5/D8), so "the operator
+      // never built a new rule" and "the operator explicitly chose 'Does not
+      // repeat'" are indistinguishable from `recurrence` alone. Treating
+      // this as create-mode's none→once conversion would silently destroy a
+      // working cron/every_ms schedule on ANY edit — even a title-only one.
+      // Only an actually-built RRULE (recurrence.kind==='rrule', US-5.3
+      // replace) may replace a legacy trigger; otherwise preserve it as-is.
+      return task!.trigger!
+    }
     if (isEditingExistingRrule && !scheduleTouched) {
       // Byte-identical: never re-serialize an untouched rule.
       return task!.trigger!
@@ -228,13 +239,16 @@ export function CalendarEventSlideOver({
     if (recurrence.kind === 'none') {
       return { type: 'once', config: { at_ms: (anchorDate ?? new Date()).getTime() } }
     }
-    // Fresh compile — always anchors in the browser zone (Timezone Semantics §1),
-    // whether this is a create, a legacy replace, or a re-anchor.
+    // Fresh compile — anchors in the browser zone for a create or a legacy
+    // replace (Timezone Semantics §1); an existing RRULE series being
+    // re-anchored keeps its OWN stored zone instead (FR-024) — re-anchoring
+    // dtstart must not silently change the series' timezone too.
     const anchor =
       isEditingExistingRrule && !anchorFieldTouched
         ? new Date() // recurrence-only touch on an existing series → re-anchor to now
         : (anchorDate ?? new Date())
-    return { type: 'recurring', config: { ...compileRecurrence(recurrence.state, anchor) } }
+    const tz = isEditingExistingRrule ? (task!.trigger!.config!.tz as string) : undefined
+    return { type: 'recurring', config: { ...compileRecurrence(recurrence.state, anchor, tz) } }
   }
 
   function invalidateCalendarQueries() {
@@ -421,6 +435,7 @@ export function CalendarEventSlideOver({
               value={recurrence}
               onChange={handleRecurrenceChange}
               anchor={anchorDate ?? new Date()}
+              tz={isRruleTrigger(task?.trigger) ? (task!.trigger!.config!.tz as string) : undefined}
               disabled={isPending}
               onValidityChange={setRecurrenceValid}
             />

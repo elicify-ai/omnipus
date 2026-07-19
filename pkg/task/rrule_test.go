@@ -167,6 +167,91 @@ func TestRruleExpansion_WallClockDST(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestRruleExpansion_RegularArithmeticDSTDedup
+// ---------------------------------------------------------------------------
+//
+// The dedup at regularOccurrencesInRange's "if ms != lastMs" check (the O(1)
+// arithmetic path used for STRUCTURALLY-REGULAR rules, no BY* modifiers) is
+// untouched by every DST case in TestRruleExpansion_WallClockDST above: those
+// all use either FREQ=DAILY (24h step, never collides with itself across a
+// 1h gap) or a BYHOUR-bearing rule (routed through generateIrregular's own,
+// separate dedup instead — BYHOUR/BYMINUTE force the isStructurallyRegular
+// check to false, see rrule.go). This test exercises the regular-arithmetic
+// path directly with a plain FREQ=HOURLY rule (no BY*) stepping straight
+// over the Berlin 2026-03-29 spring-forward gap.
+//
+// Berlin 2026-03-29 (verified against tzdata, see TestRruleExpansion_WallClockDST's
+// comment above): clocks jump 02:00 CET -> 03:00 CEST. advanceByPeriods
+// steps the wall-clock hour field 00,01,02,...,23; the nonexistent label
+// "02:00" is shifted forward by resolveWallClock to 03:00 CEST — the SAME
+// instant the following k's literal (already-existing) "03:00" candidate
+// produces. Those two candidates are ADJACENT in k, so "if ms != lastMs"
+// collapses them to a single fire: 24 raw hourly wall-clock labels collapse
+// to 23 unique instants.
+func TestRruleExpansion_RegularArithmeticDSTDedup(t *testing.T) {
+	berlin := mustLoc(t, "Europe/Berlin")
+
+	t.Run("plain FREQ=HOURLY over the spring-forward day yields 23 unique instants", func(t *testing.T) {
+		dtstart := time.Date(2026, 3, 29, 0, 0, 0, 0, berlin).UnixMilli()
+		from := dtstart
+		to := time.Date(2026, 3, 30, 0, 0, 0, 0, berlin).UnixMilli()
+
+		instants, truncated, err := ExpandRRULE("FREQ=HOURLY", dtstart, "Europe/Berlin", from, to, 100)
+		if err != nil {
+			t.Fatalf("ExpandRRULE: %v", err)
+		}
+		if truncated {
+			t.Fatalf("unexpected truncation")
+		}
+		if len(instants) != 23 {
+			t.Fatalf(
+				"expected exactly 23 unique hourly instants (24 wall-clock labels minus the "+
+					"spring-forward collision), got %d: %v",
+				len(instants), instants,
+			)
+		}
+
+		seen := make(map[int64]bool, len(instants))
+		for i, ms := range instants {
+			if seen[ms] {
+				t.Fatalf("occurrence[%d] = %d is a duplicate instant — dedup failed", i, ms)
+			}
+			seen[ms] = true
+			if i > 0 && ms <= instants[i-1] {
+				t.Fatalf("occurrence[%d] = %d is not strictly after occurrence[%d] = %d (not ascending)",
+					i, ms, i-1, instants[i-1])
+			}
+		}
+
+		// The collapsed pair: the nonexistent 02:00 (shifted forward) and the
+		// literal, already-existing 03:00 both resolve to the same instant,
+		// 2026-03-29 03:00 CEST — present exactly once.
+		want := time.Date(2026, 3, 29, 3, 0, 0, 0, berlin)
+		var collapsedCount int
+		for _, ms := range instants {
+			if time.UnixMilli(ms).Equal(want) {
+				collapsedCount++
+			}
+		}
+		if collapsedCount != 1 {
+			t.Fatalf("expected the collapsed 03:00 CEST instant (%v) exactly once, saw it %d times",
+				want, collapsedCount)
+		}
+
+		// No other hour label is skipped or duplicated: 00:00/01:00 CET
+		// (before the gap) and 03:00..23:00 CEST (the gap onward) are all
+		// present, in local-hour order.
+		wantHours := []int{0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
+		for i, ms := range instants {
+			lt := time.UnixMilli(ms).In(berlin)
+			if lt.Hour() != wantHours[i] || lt.Minute() != 0 {
+				t.Errorf("occurrence[%d] local time = %v, want hour %d minute 0", i, lt, wantHours[i])
+			}
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Test 5: TestRruleExpansion_Monthly31Clamp
 // ---------------------------------------------------------------------------
 

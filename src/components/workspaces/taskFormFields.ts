@@ -6,6 +6,7 @@
 // hand-rolled wire structs (Constraint #8).
 
 import type { TaskTrigger } from '@/lib/api'
+import { parseRruleString, summarizeRecurrence } from '@/lib/calendar/recurrence'
 
 export type TriggerKind = TaskTrigger['type'] // 'manual' | 'once' | 'every' | 'recurring'
 
@@ -110,6 +111,17 @@ export function recurringTriggerSummary(trigger: TaskTrigger): string {
       return `Repeats every ${minutes} minute${minutes === 1 ? '' : 's'}`
     }
     return 'Repeats on a fixed interval'
+  }
+  // FR-023: a real plain-English summary of the actual rule, not a generic
+  // placeholder — mirrors the calendar editor's own summarizeRecurrence, but
+  // never renders the raw rrule/cron string (D8/D9).
+  const rrule = trigger.config?.rrule
+  const dtstartMs = trigger.config?.dtstart_ms
+  if (typeof rrule === 'string' && typeof dtstartMs === 'number') {
+    const state = parseRruleString(rrule, dtstartMs)
+    if (state) {
+      return summarizeRecurrence({ kind: 'rrule', state }, new Date(dtstartMs))
+    }
   }
   return 'Repeats on a recurring schedule'
 }

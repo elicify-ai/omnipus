@@ -1005,6 +1005,21 @@ func FixtureTaskTrigger_Edge() TaskTrigger {
 	return tr
 }
 
+// FixtureTaskTrigger_Rrule — a recurring RFC 5545 RRULE trigger, exercising
+// the rrule/dtstart_ms/tz wire keys (Calendar Recurrence Redesign,
+// contracts/components/schemas/TaskTrigger.yaml's `recurring` variant with
+// `rrule` rather than the legacy `cron_expr`).
+func FixtureTaskTrigger_Rrule() TaskTrigger {
+	rrule := "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10"
+	dtstartMs := int64(1784624400000)
+	tz := "Europe/Berlin"
+	tr := TaskTrigger{Type: TaskTriggerType("recurring")}
+	tr.Config.Rrule = &rrule
+	tr.Config.DtstartMs = &dtstartMs
+	tr.Config.Tz = &tz
+	return tr
+}
+
 // FixtureTodo_Populated — a checklist item.
 func FixtureTodo_Populated() Todo {
 	return Todo{Text: "Draft the summary section", Status: TodoStatusPending}

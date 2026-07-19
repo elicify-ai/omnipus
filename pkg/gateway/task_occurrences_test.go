@@ -711,6 +711,115 @@ func TestOccurrences_WireArraysNeverNull(t *testing.T) {
 	})
 }
 
+// --- CountRegularInRange DST-transition-day ±1 bound -------------------------
+
+// TestCountRegularInRange_DSTTransitionDayBound pins task.CountRegularInRange's
+// documented caveat (pkg/task/rrule.go, CountRegularInRange doc comment):
+// "on the (at most 1-2 per year) specific calendar day(s) a DST transition
+// falls inside the query range, a sub-daily regular rule's count can be off
+// by at most 1 relative to a full enumeration ... bounded to the transition
+// day(s) only; all other days are exact." That claim was previously pinned
+// by nothing — every existing bucket test (row 8/9 above, row 16/18 in
+// TestOccurrences_BucketingAndCaps) uses either a DST-free January span or a
+// fixed UTC rule tz.
+//
+// This drives it through the REAL production path (buildOccurrenceSets ->
+// regularRruleDayFn -> task.CountRegularInRange, exactly what powers the
+// overview DayBucket.count wire field) with a plain FREQ=HOURLY rule (no
+// BY* — provably regular) over a 10-day Europe/Berlin range including the
+// verified 2026-03-29 spring-forward day (see pkg/task/rrule_test.go's own
+// comment on that date), asserting:
+//   - the transition day's bucket count is within ±1 of an independent
+//     brute-force reference (task.ExpandRRULE, which dedupes DST-collided
+//     instants) for that same day — and pins the currently-observed skew
+//     (count = brute-force + 1) so a silent change either direction is
+//     caught, not just a widening past the documented bound.
+//   - every OTHER day's bucket count matches the brute-force reference
+//     EXACTLY (diff = 0).
+func TestCountRegularInRange_DSTTransitionDayBound(t *testing.T) {
+	berlin := mustLoc(t, "Europe/Berlin")
+
+	dtstart := time.Date(2026, 3, 20, 0, 0, 0, 0, berlin)
+	rangeStart := time.Date(2026, 3, 24, 0, 0, 0, 0, berlin)
+	rangeEnd := time.Date(2026, 4, 3, 0, 0, 0, 0, berlin) // 10 days: overview mode (> 8*24h)
+
+	tasks := []task.Task{{
+		ID: "hourly-dst-task",
+		Trigger: &task.Trigger{
+			Type: task.TriggerRecurring,
+			Config: task.TriggerConfig{
+				Rrule:     ptr("FREQ=HOURLY"),
+				DtstartMs: ptr(dtstart.UnixMilli()),
+				Tz:        ptr("Europe/Berlin"),
+			},
+		},
+	}}
+	sets, err := buildOccurrenceSets(
+		tasks, rangeStart.UnixMilli(), rangeEnd.UnixMilli(), "Europe/Berlin", noEveryAnchor,
+	)
+	if err != nil {
+		t.Fatalf("buildOccurrenceSets: %v", err)
+	}
+	if len(sets) != 1 {
+		t.Fatalf("got %d occurrence sets, want 1", len(sets))
+	}
+	set := sets[0]
+	if set.Truncated {
+		t.Errorf("truncated = true, want false (provably regular, well under the iteration budget)")
+	}
+	if len(set.DayBuckets) != 10 {
+		t.Fatalf("got %d day buckets, want 10", len(set.DayBuckets))
+	}
+
+	transitionDayStart := time.Date(2026, 3, 29, 0, 0, 0, 0, berlin).UnixMilli()
+	var checkedTransitionDay bool
+	for _, b := range set.DayBuckets {
+		dayFrom := b.DayStartMs
+		dayTo := civilDayNext(dayFrom, berlin)
+
+		bruteForce, truncated, err := task.ExpandRRULE(
+			"FREQ=HOURLY", dtstart.UnixMilli(), "Europe/Berlin", dayFrom, dayTo, 100,
+		)
+		if err != nil {
+			t.Fatalf("ExpandRRULE brute-force reference for day %v: %v", time.UnixMilli(dayFrom).In(berlin), err)
+		}
+		if truncated {
+			t.Fatalf("unexpected truncation in brute-force reference for day %v", time.UnixMilli(dayFrom).In(berlin))
+		}
+		want := len(bruteForce)
+		got := int(b.Count)
+
+		if dayFrom == transitionDayStart {
+			checkedTransitionDay = true
+			diff := got - want
+			if diff < -1 || diff > 1 {
+				t.Errorf(
+					"transition day %v: count=%d, brute-force(deduped)=%d, diff=%d exceeds the documented ±1 bound",
+					time.UnixMilli(dayFrom).In(berlin), got, want, diff,
+				)
+			}
+			// Pin the currently-observed skew direction/magnitude (regression
+			// guard, not a spec requirement): CountRegularInRange's k-range
+			// arithmetic does not dedup the collapsed spring-forward pair the
+			// way the enumerated/brute-force path does, so it overcounts by
+			// exactly 1 on this specific transition.
+			if got != want+1 {
+				t.Errorf(
+					"transition day %v: got count=%d, want exactly brute-force+1=%d "+
+						"(pin of the documented, bounded overcount — if this changed, re-verify it's still within ±1)",
+					time.UnixMilli(dayFrom).In(berlin), got, want+1,
+				)
+			}
+		} else if got != want {
+			t.Errorf("non-transition day %v: count=%d, brute-force=%d — must be EXACT (diff=%d)",
+				time.UnixMilli(dayFrom).In(berlin), got, want, got-want)
+		}
+	}
+	if !checkedTransitionDay {
+		t.Fatalf("test setup error: the 2026-03-29 transition day bucket was not found in the range")
+	}
+}
+
 // --- Spec dataset row pins ---------------------------------------------------
 // docs/internal/specs/calendar-recurrence-redesign-spec.md, "Dataset:
 // Occurrence expansion (server)" — rows 1, 8, 9, pinned to their exact

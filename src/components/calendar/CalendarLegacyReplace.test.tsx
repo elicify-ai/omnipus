@@ -220,6 +220,28 @@ describe('CalendarEventSlideOver — legacy trigger (US-5, D8)', () => {
     expect(data.trigger?.config?.tz).toBe(tz)
   })
 
+  it('grill-code FIX 1 (CRITICAL): a title-only edit on a legacy task PRESERVES the original trigger, never converts to `once`', async () => {
+    renderSlideOver(cronTask)
+    await screen.findByTestId('legacy-trigger-note')
+
+    // Never touch the Repeat section (stays "Does not repeat") — only edit
+    // the title, exactly like the byte-identical RRULE-edit test above.
+    const titleInput = await screen.findByLabelText(/title/i)
+    fireEvent.change(titleInput, { target: { value: 'Monday standup reminder v2' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
+    const [calledId, data] = vi.mocked(updateTask).mock.calls[0]
+    expect(calledId).toBe('legacy-cron')
+    expect(data.title).toBe('Monday standup reminder v2')
+    // The working weekly cron schedule must survive untouched — NOT
+    // silently replaced with a one-shot `once` firing at panel-open.
+    expect(data.trigger).toEqual(cronTask.trigger)
+    expect(data.trigger?.type).toBe('recurring')
+    expect(data.trigger?.config?.cron_expr).toBe(CRON_STRING)
+  })
+
   it('an every_ms legacy trigger also gets the fresh-picker + no-raw-value treatment', async () => {
     const everyTask = makeTask({
       id: 'legacy-every',
@@ -274,5 +296,33 @@ describe('TaskDetailPanel — defensive guard for a force-fed recurring task (FR
     )
     expect(await screen.findByText(/repeats/i)).toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Trigger' })).not.toBeInTheDocument()
+  })
+
+  it('grill-code FIX 3: renders the SPECIFIC rule summary for an RRULE trigger, not the generic placeholder', async () => {
+    // FREQ=WEEKLY;BYDAY=MO, no COUNT/UNTIL → summarizeRecurrence produces the
+    // exact "Repeats every week on Monday" text (recurrence.ts coreClause +
+    // endConditionClause('never') === '').
+    const rruleTask = makeTask({
+      id: 'rrule-1',
+      trigger: {
+        type: 'recurring',
+        config: {
+          rrule: 'FREQ=WEEKLY;BYDAY=MO',
+          dtstart_ms: new Date(2026, 6, 20, 9, 0, 0).getTime(), // 2026-07-20 = Monday
+          tz: 'UTC',
+        },
+      },
+    })
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <TaskDetailPanel task={rruleTask} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('Repeats every week on Monday')).toBeInTheDocument()
+    // Never the generic FR-023 placeholder once a real rule can be parsed.
+    expect(screen.queryByText('Repeats on a recurring schedule')).not.toBeInTheDocument()
+    // Still no raw rrule string anywhere (D8/D9).
+    expect(document.body.textContent).not.toContain('FREQ=WEEKLY')
   })
 })

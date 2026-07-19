@@ -2205,6 +2205,13 @@ func TestContract_TaskTrigger_Edge(t *testing.T) {
 	mustPassComponent(t, "TaskTrigger", FixtureTaskTrigger_Edge())
 }
 
+// TestContract_TaskTrigger_Rrule pins the rrule/dtstart_ms/tz wire keys
+// (Calendar Recurrence Redesign) against TaskTrigger.yaml — previously
+// untested by any FixtureTaskTrigger_* (only cron_expr was exercised).
+func TestContract_TaskTrigger_Rrule(t *testing.T) {
+	mustPassComponent(t, "TaskTrigger", FixtureTaskTrigger_Rrule())
+}
+
 // ── ActivityEventsResponse ────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ActivityEventsResponse.yaml
 // Note: ActivityEventsResponse is not a named Go type (it's inlined). We test
@@ -3154,16 +3161,22 @@ func TestContract_TaskEntity_LegacyStatusValuesRejected(t *testing.T) {
 func TestContract_TaskTrigger_AllKinds_Validate(t *testing.T) {
 	// Tier-2 trigger kinds with their required config.
 	cases := []struct {
+		name   string
 		kind   string
 		config map[string]any
 	}{
-		{"manual", map[string]any{}},
-		{"once", map[string]any{"at_ms": int64(1781000000000)}},
-		{"every", map[string]any{"every_ms": int64(3600000)}},
-		{"recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
+		{"manual", "manual", map[string]any{}},
+		{"once", "once", map[string]any{"at_ms": int64(1781000000000)}},
+		{"every", "every", map[string]any{"every_ms": int64(3600000)}},
+		{"recurring_cron_expr", "recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
+		{"recurring_rrule", "recurring", map[string]any{
+			"rrule":      "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10",
+			"dtstart_ms": int64(1784624400000),
+			"tz":         "Europe/Berlin",
+		}},
 	}
 	for _, c := range cases {
-		t.Run(c.kind, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			raw, err := json.Marshal(map[string]any{"type": c.kind, "config": c.config})
 			require.NoError(t, err)
 			validationErr := validateAgainstComponentSchemaRawJSON(t, "TaskTrigger", raw)
