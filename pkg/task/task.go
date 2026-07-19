@@ -114,8 +114,19 @@ type TriggerConfig struct {
 	AtMs *int64 `json:"at_ms,omitempty"`
 	// EveryMs is the interval in milliseconds for an `every` fire (min 1000).
 	EveryMs *int64 `json:"every_ms,omitempty"`
-	// CronExpr is the 5/6-field cron expression for a `recurring` fire.
+	// CronExpr is the 5/6-field cron expression for a `recurring` fire (legacy
+	// path). Exactly one of CronExpr/Rrule is set on a `recurring` trigger.
 	CronExpr *string `json:"cron_expr,omitempty"`
+	// Rrule is the RFC 5545 RRULE body for a `recurring` fire (Calendar
+	// Recurrence Redesign). Requires DtstartMs and Tz. Exactly one of
+	// CronExpr/Rrule is set on a `recurring` trigger.
+	Rrule *string `json:"rrule,omitempty"`
+	// DtstartMs is the anchor instant (Unix epoch milliseconds) for Rrule —
+	// the first occurrence's wall-clock moment. Required sibling of Rrule.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+	// Tz is the IANA timezone name Rrule's wall-clock times are interpreted
+	// in. Required sibling of Rrule.
+	Tz *string `json:"tz,omitempty"`
 }
 
 // Trigger is when (and how) a task fires (remediation Detail #3). Modeled as

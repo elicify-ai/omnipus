@@ -1846,6 +1846,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/occurrences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Expand recurring task occurrences in a date range
+         * @description Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not `surface: heartbeat`, the same predicate `OnTaskUpserted` applies before registering a job — covering `rrule` (rrule-go, normalized per the Timezone Semantics DST policy), legacy `cron_expr` (gronx, expanded in the server's local zone, display-only per D8), and `every_ms` (a forward-only projection off the live job's next-run instant, FR-008a). `tz` is the viewer's IANA zone and is the day-boundary authority for bucketing — the >3-occurrences-per-day threshold and `day_start_ms` are evaluated on days in this zone for every trigger flavor, regardless of each rule's own `tz`. Range is half-open `[from_ms, to_ms)`. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans > 8×24h return one `DayBucket` per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); `truncated` signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is `[]`, never null. Read-only; no state change. Rate-limited by a dedicated `taskReadLimiter` (240 requests/min), distinct from `configLimiter` and from the unthrottled task CRUD routes.
+         */
+        get: operations["listTaskOccurrences"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/{id}": {
         parameters: {
             query?: never;
@@ -6635,8 +6655,12 @@ export interface components {
          *       - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
          *                       interval in milliseconds (required, min 1000). Each fire spawns
          *                       a FRESH run (fresh session + run history + pause).
-         *       - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-         *                       expression (required). Each fire spawns a FRESH run.
+         *       - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+         *                       `cron_expr` (legacy, 5/6-field cron expression, still accepted
+         *                       and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+         *                       `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+         *                       siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+         *                       Each fire spawns a FRESH run.
          *
          *     `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
          *     ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
@@ -6648,7 +6672,7 @@ export interface components {
              * @enum {string}
              */
             type: "manual" | "once" | "every" | "recurring";
-            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape. */
+            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape. */
             config: {
                 /**
                  * Format: int64
@@ -6663,13 +6687,85 @@ export interface components {
                  */
                 every_ms?: number;
                 /**
-                 * @description Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+                 * @description Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
                  * @example 0 9 * * MON
                  */
                 cron_expr?: string;
+                /**
+                 * @description RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+                 * @example FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10
+                 */
+                rrule?: string;
+                /**
+                 * Format: int64
+                 * @description Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+                 * @example 1784624400000
+                 */
+                dtstart_ms?: number;
+                /**
+                 * @description IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+                 * @example Europe/Berlin
+                 */
+                tz?: string;
             } & {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * TaskOccurrenceSet
+         * @description The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
+         */
+        TaskOccurrenceSet: {
+            /**
+             * @description The task this occurrence set belongs to.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            task_id: string;
+            /**
+             * @description Individual occurrence instants (Unix epoch milliseconds) not folded into a day bucket — every day in range when the query span is ≤ 8×24h (Week/Day views), or days with ≤ 3 occurrences when the span is > 8×24h (overview ranges, e.g. Month). Capped at 500 per task per request.
+             * @example [
+             *       1784620800000,
+             *       1785225600000
+             *     ]
+             */
+            occurrences_ms: number[];
+            /** @description Aggregated days — only populated for overview-range queries (span > 8×24h) on query-tz days with more than 3 occurrences (D6). */
+            day_buckets: components["schemas"]["DayBucket"][];
+            /**
+             * @description True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
+             * @example false
+             */
+            truncated: boolean;
+        };
+        /**
+         * DayBucket
+         * @description One aggregated day of a recurring task's occurrences, returned by `GET /api/v1/tasks/occurrences` when a query-tz day has more than 3 occurrences in an overview-range (span > 8×24h) request (D6). Occurrence counting and `day_start_ms` are both evaluated in the query's `tz` (the viewer's zone) regardless of the rule's own `tz` — the day-boundary authority for bucketing is always the caller's zone.
+         */
+        DayBucket: {
+            /**
+             * Format: int64
+             * @description Midnight of this day in the QUERY `tz` (the viewer's zone), Unix epoch milliseconds.
+             * @example 1784592000000
+             */
+            day_start_ms: number;
+            /**
+             * Format: int32
+             * @description Number of occurrences of the task on this day.
+             * @example 48
+             */
+            count: number;
+            /**
+             * Format: int64
+             * @description The first occurrence instant on this day, Unix epoch milliseconds. Consumed by the aggregated-chip tooltip ("first at 09:00").
+             * @example 1784620800000
+             */
+            first_ms: number;
+            /**
+             * Format: int64
+             * @description Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
+             * @example 1800000
+             */
+            interval_ms: number | null;
         };
         /**
          * ProviderUpdateRequest
@@ -11618,6 +11714,47 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    listTaskOccurrences: {
+        parameters: {
+            query: {
+                /** @description Workspace to expand occurrences for. Tasks are workspace-scoped. */
+                workspace_id: string;
+                /**
+                 * @description Start of the query range, Unix epoch milliseconds, inclusive (half-open range start).
+                 * @example 1784592000000
+                 */
+                from_ms: number;
+                /**
+                 * @description End of the query range, Unix epoch milliseconds, exclusive (half-open range end). Must be strictly greater than `from_ms`; `from_ms >= to_ms` is rejected with 400. A span greater than 400 days is also rejected with 400.
+                 * @example 1787270400000
+                 */
+                to_ms: number;
+                /**
+                 * @description IANA timezone name of the viewer (e.g. the browser's resolved zone) — the day-boundary authority for occurrence bucketing. Unloadable `tz` is rejected with 400.
+                 * @example Europe/Berlin
+                 */
+                tz: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One TaskOccurrenceSet per task with at least one occurrence in range. Tasks with zero occurrences in range are omitted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskOccurrenceSet"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     getTask: {
         parameters: {
             query?: never;
@@ -12939,6 +13076,8 @@ export type TaskCreateRequest = components["schemas"]["TaskCreateRequest"];
 export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
 export type Todo = components["schemas"]["Todo"];
 export type TaskTrigger = components["schemas"]["TaskTrigger"];
+export type TaskOccurrenceSet = components["schemas"]["TaskOccurrenceSet"];
+export type DayBucket = components["schemas"]["DayBucket"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];

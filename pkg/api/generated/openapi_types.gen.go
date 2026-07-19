@@ -4687,6 +4687,21 @@ type CredentialSetRequest struct {
 	Value string `json:"value"`
 }
 
+// DayBucket One aggregated day of a recurring task's occurrences, returned by `GET /api/v1/tasks/occurrences` when a query-tz day has more than 3 occurrences in an overview-range (span > 8×24h) request (D6). Occurrence counting and `day_start_ms` are both evaluated in the query's `tz` (the viewer's zone) regardless of the rule's own `tz` — the day-boundary authority for bucketing is always the caller's zone.
+type DayBucket struct {
+	// Count Number of occurrences of the task on this day.
+	Count int32 `json:"count"`
+
+	// DayStartMs Midnight of this day in the QUERY `tz` (the viewer's zone), Unix epoch milliseconds.
+	DayStartMs int64 `json:"day_start_ms"`
+
+	// FirstMs The first occurrence instant on this day, Unix epoch milliseconds. Consumed by the aggregated-chip tooltip ("first at 09:00").
+	FirstMs int64 `json:"first_ms"`
+
+	// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
+	IntervalMs *int64 `json:"interval_ms"`
+}
+
 // DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
 type DevicePaired struct {
 	// DeviceId Unique device identifier.
@@ -7357,13 +7372,17 @@ type Task struct {
 	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 	//                   interval in milliseconds (required, min 1000). Each fire spawns
 	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-	//                   expression (required). Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
+	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 		Config Task_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -7392,16 +7411,25 @@ type TaskSurface string
 // TaskTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskTodosStatus string
 
-// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type Task_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -7470,13 +7498,17 @@ type TaskCreateRequest struct {
 	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 	//                   interval in milliseconds (required, min 1000). Each fire spawns
 	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-	//                   expression (required). Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
+	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 		Config TaskCreateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -7496,21 +7528,57 @@ type TaskCreateRequestSurface string
 // TaskCreateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskCreateRequestTodosStatus string
 
-// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskCreateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskCreateRequestTriggerType string
+
+// TaskOccurrenceSet The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
+type TaskOccurrenceSet struct {
+	// DayBuckets Aggregated days — only populated for overview-range queries (span > 8×24h) on query-tz days with more than 3 occurrences (D6).
+	DayBuckets []struct {
+		// Count Number of occurrences of the task on this day.
+		Count int32 `json:"count"`
+
+		// DayStartMs Midnight of this day in the QUERY `tz` (the viewer's zone), Unix epoch milliseconds.
+		DayStartMs int64 `json:"day_start_ms"`
+
+		// FirstMs The first occurrence instant on this day, Unix epoch milliseconds. Consumed by the aggregated-chip tooltip ("first at 09:00").
+		FirstMs int64 `json:"first_ms"`
+
+		// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
+		IntervalMs *int64 `json:"interval_ms"`
+	} `json:"day_buckets"`
+
+	// OccurrencesMs Individual occurrence instants (Unix epoch milliseconds) not folded into a day bucket — every day in range when the query span is ≤ 8×24h (Week/Day views), or days with ≤ 3 occurrences when the span is > 8×24h (overview ranges, e.g. Month). Capped at 500 per task per request.
+	OccurrencesMs []int64 `json:"occurrences_ms"`
+
+	// TaskId The task this occurrence set belongs to.
+	TaskId string `json:"task_id"`
+
+	// Truncated True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
+	Truncated bool `json:"truncated"`
+}
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 // ## Tier 2 (now) `type` is one of:
@@ -7522,29 +7590,42 @@ type TaskCreateRequestTriggerType string
 //   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 //     interval in milliseconds (required, min 1000). Each fire spawns
 //     a FRESH run (fresh session + run history + pause).
-//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-//     expression (required). Each fire spawns a FRESH run.
+//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+//     `cron_expr` (legacy, 5/6-field cron expression, still accepted
+//     and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+//     `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+//     siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+//     Each fire spawns a FRESH run.
 //
 // `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 // ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 type TaskTrigger struct {
-	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 	Config TaskTrigger_Config `json:"config"`
 
 	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 	Type TaskTriggerType `json:"type"`
 }
 
-// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskTrigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -7615,13 +7696,17 @@ type TaskUpdateRequest struct {
 	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
 	//                   interval in milliseconds (required, min 1000). Each fire spawns
 	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-	//                   expression (required). Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
+	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
 	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 		Config TaskUpdateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -7638,16 +7723,25 @@ type TaskUpdateRequestSurface string
 // TaskUpdateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskUpdateRequestTodosStatus string
 
-// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → `cron_expr`. Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
 type TaskUpdateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields). Required when `type = recurring`; ignored otherwise.
+	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
 	CronExpr *string `json:"cron_expr,omitempty"`
 
+	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
+	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
+
 	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs              *int64                 `json:"every_ms,omitempty"`
+	EveryMs *int64 `json:"every_ms,omitempty"`
+
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	Rrule *string `json:"rrule,omitempty"`
+
+	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
+	Tz                   *string                `json:"tz,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -8199,6 +8293,21 @@ type ListTasksParamsStatus string
 
 // ListTasksParamsSurface defines parameters for ListTasks.
 type ListTasksParamsSurface string
+
+// ListTaskOccurrencesParams defines parameters for ListTaskOccurrences.
+type ListTaskOccurrencesParams struct {
+	// WorkspaceId Workspace to expand occurrences for. Tasks are workspace-scoped.
+	WorkspaceId string `form:"workspace_id" json:"workspace_id"`
+
+	// FromMs Start of the query range, Unix epoch milliseconds, inclusive (half-open range start).
+	FromMs int64 `form:"from_ms" json:"from_ms"`
+
+	// ToMs End of the query range, Unix epoch milliseconds, exclusive (half-open range end). Must be strictly greater than `from_ms`; `from_ms >= to_ms` is rejected with 400. A span greater than 400 days is also rejected with 400.
+	ToMs int64 `form:"to_ms" json:"to_ms"`
+
+	// Tz IANA timezone name of the viewer (e.g. the browser's resolved zone) — the day-boundary authority for occurrence bucketing. Unloadable `tz` is rejected with 400.
+	Tz string `form:"tz" json:"tz"`
+}
 
 // SetTaskDependenciesJSONBody defines parameters for SetTaskDependencies.
 type SetTaskDependenciesJSONBody = []string
@@ -8818,12 +8927,36 @@ func (a *Task_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -8859,10 +8992,31 @@ func (a Task_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 
@@ -8916,12 +9070,36 @@ func (a *TaskCreateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -8957,10 +9135,31 @@ func (a TaskCreateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 
@@ -9014,12 +9213,36 @@ func (a *TaskTrigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -9055,10 +9278,31 @@ func (a TaskTrigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 
@@ -9112,12 +9356,36 @@ func (a *TaskUpdateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "cron_expr")
 	}
 
+	if raw, found := object["dtstart_ms"]; found {
+		err = json.Unmarshal(raw, &a.DtstartMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
+		}
+		delete(object, "dtstart_ms")
+	}
+
 	if raw, found := object["every_ms"]; found {
 		err = json.Unmarshal(raw, &a.EveryMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'every_ms': %w", err)
 		}
 		delete(object, "every_ms")
+	}
+
+	if raw, found := object["rrule"]; found {
+		err = json.Unmarshal(raw, &a.Rrule)
+		if err != nil {
+			return fmt.Errorf("error reading 'rrule': %w", err)
+		}
+		delete(object, "rrule")
+	}
+
+	if raw, found := object["tz"]; found {
+		err = json.Unmarshal(raw, &a.Tz)
+		if err != nil {
+			return fmt.Errorf("error reading 'tz': %w", err)
+		}
+		delete(object, "tz")
 	}
 
 	if len(object) != 0 {
@@ -9153,10 +9421,31 @@ func (a TaskUpdateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.DtstartMs != nil {
+		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
+		}
+	}
+
 	if a.EveryMs != nil {
 		object["every_ms"], err = json.Marshal(a.EveryMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
+		}
+	}
+
+	if a.Rrule != nil {
+		object["rrule"], err = json.Marshal(a.Rrule)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rrule': %w", err)
+		}
+	}
+
+	if a.Tz != nil {
+		object["tz"], err = json.Marshal(a.Tz)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tz': %w", err)
 		}
 	}
 

@@ -1,0 +1,45 @@
+title: DayBucket
+description: >
+  One aggregated day of a recurring task's occurrences, returned by
+  `GET /api/v1/tasks/occurrences` when a query-tz day has more than 3
+  occurrences in an overview-range (span > 8×24h) request (D6). Occurrence
+  counting and `day_start_ms` are both evaluated in the query's `tz` (the
+  viewer's zone) regardless of the rule's own `tz` — the day-boundary
+  authority for bucketing is always the caller's zone.
+type: object
+required:
+  - day_start_ms
+  - count
+  - first_ms
+  - interval_ms
+additionalProperties: false
+properties:
+  day_start_ms:
+    type: integer
+    format: int64
+    description: >
+      Midnight of this day in the QUERY `tz` (the viewer's zone), Unix epoch
+      milliseconds.
+    example: 1784592000000
+  count:
+    type: integer
+    format: int32
+    description: Number of occurrences of the task on this day.
+    example: 48
+  first_ms:
+    type: integer
+    format: int64
+    description: >
+      The first occurrence instant on this day, Unix epoch milliseconds.
+      Consumed by the aggregated-chip tooltip ("first at 09:00").
+    example: 1784620800000
+  interval_ms:
+    type: integer
+    format: int64
+    nullable: true
+    description: >
+      Fixed spacing between this day's occurrences in milliseconds, when the
+      rule is regular (used to derive the client label "· every 30 min").
+      null when the rule is irregular (BY*-modified) and spacing varies — the
+      client falls back to a "· {count}×/day" label.
+    example: 1800000

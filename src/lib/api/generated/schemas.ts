@@ -452,6 +452,9 @@ type TaskTrigger = {
       at_ms: number;
       every_ms: number;
       cron_expr: string;
+      rrule: string;
+      dtstart_ms: number;
+      tz: string;
     } & {
       [key: string]: any;
     }
@@ -596,6 +599,18 @@ type TaskUpdateRequest = Partial<{
   started_at: string;
   completed_at: string;
 }>;
+type TaskOccurrenceSet = {
+  task_id: string;
+  occurrences_ms: Array<number>;
+  day_buckets: Array<DayBucket>;
+  truncated: boolean;
+};
+type DayBucket = {
+  day_start_ms: number;
+  count: number;
+  first_ms: number;
+  interval_ms: number | null;
+};
 type ChannelConfigureRequest = Partial<
   {
     instance_id: string;
@@ -1980,6 +1995,9 @@ export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
       at_ms: z.number().int(),
       every_ms: z.number().int().gte(1000),
       cron_expr: z.string(),
+      rrule: z.string().max(512),
+      dtstart_ms: z.number().int(),
+      tz: z.string(),
     })
     .partial()
     .passthrough(),
@@ -2058,6 +2076,18 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   surface: z.enum(["user", "heartbeat"]).optional().default("user"),
   source_channel: z.string().optional(),
   source_chat_id: z.string().optional(),
+});
+export const DayBucket: z.ZodType<DayBucket> = z.object({
+  day_start_ms: z.number().int(),
+  count: z.number().int(),
+  first_ms: z.number().int(),
+  interval_ms: z.number().int().nullable(),
+});
+export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
+  task_id: z.string(),
+  occurrences_ms: z.array(z.number().int()),
+  day_buckets: z.array(DayBucket),
+  truncated: z.boolean(),
 });
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
   .object({
@@ -6210,6 +6240,54 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks/occurrences",
+    alias: "listTaskOccurrences",
+    description: `Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not &#x60;surface: heartbeat&#x60;, the same predicate &#x60;OnTaskUpserted&#x60; applies before registering a job — covering &#x60;rrule&#x60; (rrule-go, normalized per the Timezone Semantics DST policy), legacy &#x60;cron_expr&#x60; (gronx, expanded in the server&#x27;s local zone, display-only per D8), and &#x60;every_ms&#x60; (a forward-only projection off the live job&#x27;s next-run instant, FR-008a). &#x60;tz&#x60; is the viewer&#x27;s IANA zone and is the day-boundary authority for bucketing — the &gt;3-occurrences-per-day threshold and &#x60;day_start_ms&#x60; are evaluated on days in this zone for every trigger flavor, regardless of each rule&#x27;s own &#x60;tz&#x60;. Range is half-open &#x60;[from_ms, to_ms)&#x60;. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans &gt; 8×24h return one &#x60;DayBucket&#x60; per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); &#x60;truncated&#x60; signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is &#x60;[]&#x60;, never null. Read-only; no state change. Rate-limited by a dedicated &#x60;taskReadLimiter&#x60; (240 requests/min), distinct from &#x60;configLimiter&#x60; and from the unthrottled task CRUD routes.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "from_ms",
+        type: "Query",
+        schema: z.number().int(),
+      },
+      {
+        name: "to_ms",
+        type: "Query",
+        schema: z.number().int(),
+      },
+      {
+        name: "tz",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(TaskOccurrenceSet),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],

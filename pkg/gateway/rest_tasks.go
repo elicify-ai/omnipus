@@ -247,6 +247,18 @@ func toWireTrigger(tr *task.Trigger) *struct {
 		v := *tr.Config.CronExpr
 		cfg.CronExpr = &v
 	}
+	if tr.Config.Rrule != nil {
+		v := *tr.Config.Rrule
+		cfg.Rrule = &v
+	}
+	if tr.Config.DtstartMs != nil {
+		v := *tr.Config.DtstartMs
+		cfg.DtstartMs = &v
+	}
+	if tr.Config.Tz != nil {
+		v := *tr.Config.Tz
+		cfg.Tz = &v
+	}
 	return &struct {
 		Config gen.Task_Trigger_Config `json:"config"`
 		Type   gen.TaskTriggerType     `json:"type"`
@@ -257,7 +269,13 @@ func toWireTrigger(tr *task.Trigger) *struct {
 // three generated request structs (Task/TaskCreateRequest/TaskUpdateRequest) each
 // have their own anonymous trigger type with an identically-shaped config, so
 // the callers decompose them and pass the primitives here.
-func buildTrigger(kind string, atMs, everyMs *int64, cronExpr *string) *task.Trigger {
+func buildTrigger(
+	kind string,
+	atMs, everyMs *int64,
+	cronExpr, rrule *string,
+	dtstartMs *int64,
+	tz *string,
+) *task.Trigger {
 	tr := &task.Trigger{Type: task.TriggerType(kind)}
 	if atMs != nil {
 		v := *atMs
@@ -270,6 +288,18 @@ func buildTrigger(kind string, atMs, everyMs *int64, cronExpr *string) *task.Tri
 	if cronExpr != nil {
 		v := *cronExpr
 		tr.Config.CronExpr = &v
+	}
+	if rrule != nil {
+		v := *rrule
+		tr.Config.Rrule = &v
+	}
+	if dtstartMs != nil {
+		v := *dtstartMs
+		tr.Config.DtstartMs = &v
+	}
+	if tz != nil {
+		v := *tz
+		tr.Config.Tz = &v
 	}
 	return tr
 }
@@ -612,6 +642,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			req.Trigger.Config.AtMs,
 			req.Trigger.Config.EveryMs,
 			req.Trigger.Config.CronExpr,
+			req.Trigger.Config.Rrule,
+			req.Trigger.Config.DtstartMs,
+			req.Trigger.Config.Tz,
 		)
 	}
 
@@ -740,6 +773,9 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			req.Trigger.Config.AtMs,
 			req.Trigger.Config.EveryMs,
 			req.Trigger.Config.CronExpr,
+			req.Trigger.Config.Rrule,
+			req.Trigger.Config.DtstartMs,
+			req.Trigger.Config.Tz,
 		)
 		patch.Trigger = &tr
 	}
