@@ -20,7 +20,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { BoardView, canDropTransition, buildBoardAnnouncements } from './BoardView'
-import type { Task, Milestone } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
 import { STATUS_ORDER } from '@/lib/statusColors'
 import type {
   Active,
@@ -58,15 +58,16 @@ const baseTask = (overrides: Partial<Task> = {}): Task => ({
   ...overrides,
 })
 
-const milestones: Milestone[] = []
+const plans: Plan[] = []
 
 function renderBoard(props: Partial<React.ComponentProps<typeof BoardView>> = {}) {
   return render(
     <BoardView
       tasks={[baseTask()]}
-      milestones={milestones}
+      plans={plans}
       agents={[]}
-      activeMilestoneId={null}
+      activePlanId={null}
+      activeTagFilter={null}
       altitude="top-level"
       onAltitudeChange={vi.fn()}
       onTaskClick={vi.fn()}

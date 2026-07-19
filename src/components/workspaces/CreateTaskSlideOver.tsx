@@ -28,18 +28,19 @@ import {
   updateTask,
   fetchAgents,
   buildTaskAssigneeItems,
-  fetchMilestones,
   fetchTasks,
   tasksQueryKeys,
   workspacesQueryKeys,
-  milestonesQueryKeys,
   isApiError,
 } from '@/lib/api'
-import type { Milestone, Task, TaskTrigger, TaskCreateRequest, Todo } from '@/lib/api'
+import type { Task, TaskTrigger, TaskCreateRequest, Todo, AcceptanceCriterion } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useAuthStore } from '@/store/auth'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
+import { TagInput } from './TagInput'
+import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
 import {
   type TriggerKind,
   buildTrigger,
@@ -54,8 +55,8 @@ interface CreateTaskSlideOverProps {
   onOpenChange: (open: boolean) => void
   /** Pre-fill the workspace selector */
   workspaceId: string
-  /** Pre-fill the milestone selector (from active filter pill) */
-  milestoneId?: string | null
+  /** Pre-fill the plan grouping (ADR-049 — from the active Board plan filter) */
+  planId?: string | null
   /** Pre-fill the due date field when the slide-over opens (datetime-local value, e.g. "2026-06-22T00:00") */
   initialDue?: string
 }
@@ -64,7 +65,6 @@ interface FormState {
   title: string
   prompt: string
   priority: number
-  milestoneId: string
   agentId: string
   // Trigger
   triggerKind: TriggerKind
@@ -77,13 +77,16 @@ interface FormState {
   due: string // datetime-local value
   // Todos
   todos: string[]
+  // Tags (ADR-049 — replaces milestone grouping)
+  tags: string[]
+  // Acceptance criteria (ADR-049 — Definition of Done)
+  criteria: AcceptanceCriterion[]
 }
 
 const INITIAL_FORM: FormState = {
   title: '',
   prompt: '',
   priority: 3,
-  milestoneId: '__none__',
   agentId: '__none__',
   triggerKind: 'manual',
   triggerAt: '',
@@ -92,43 +95,35 @@ const INITIAL_FORM: FormState = {
   blockedBy: [],
   due: '',
   todos: [],
+  tags: [],
+  criteria: [],
 }
 
 export function CreateTaskSlideOver({
   open,
   onOpenChange,
   workspaceId,
-  milestoneId,
+  planId,
   initialDue,
 }: CreateTaskSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
+  const username = useAuthStore((s) => s.username)
 
-  const [form, setForm] = useState<FormState>({
-    ...INITIAL_FORM,
-    milestoneId: milestoneId ?? '__none__',
-  })
+  const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [titleError, setTitleError] = useState('')
   const [triggerError, setTriggerError] = useState('')
   const [newTodo, setNewTodo] = useState('')
 
-  // Sync milestone and due pre-fill when the slide-over opens or the caller's props change
+  // Sync due pre-fill when the slide-over opens or the caller's prop changes
   useEffect(() => {
     if (open) {
       setForm((f) => ({
         ...f,
-        milestoneId: milestoneId ?? '__none__',
         due: initialDue ?? f.due,
       }))
     }
-  }, [open, milestoneId, initialDue])
-
-  const { data: milestones = [] } = useQuery({
-    queryKey: milestonesQueryKeys.list(workspaceId),
-    queryFn: () => fetchMilestones(workspaceId),
-    staleTime: 30_000,
-    enabled: !!workspaceId,
-  })
+  }, [open, initialDue])
 
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],
@@ -162,7 +157,7 @@ export function CreateTaskSlideOver({
       priority: form.priority,
       workspace_id: workspaceId,
       surface: 'user',
-      milestone_id: form.milestoneId === '__none__' ? undefined : form.milestoneId || undefined,
+      plan_id: planId ?? undefined,
       agent_id: form.agentId === '__none__' ? undefined : form.agentId || undefined,
     }
 
@@ -185,6 +180,14 @@ export function CreateTaskSlideOver({
     const todos = currentTodos()
     if (todos.length > 0) {
       body.todos = todos
+    }
+
+    if (form.tags.length > 0) {
+      body.tags = form.tags
+    }
+
+    if (form.criteria.length > 0) {
+      body.criteria = form.criteria
     }
 
     return body
@@ -283,7 +286,7 @@ export function CreateTaskSlideOver({
   }
 
   function resetAndClose() {
-    setForm({ ...INITIAL_FORM, milestoneId: milestoneId ?? '__none__' })
+    setForm(INITIAL_FORM)
     setTitleError('')
     setTriggerError('')
     setNewTodo('')
@@ -389,33 +392,28 @@ export function CreateTaskSlideOver({
             </Select>
           </div>
 
-          {/* Milestone */}
+          {/* Tags (ADR-049 — replaces the milestone selector) */}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-milestone" className="text-[var(--color-secondary)]">
-              Milestone
+            <Label htmlFor="ct-tags" className="text-[var(--color-secondary)]">
+              Tags
             </Label>
-            {milestones.length === 0 ? (
-              <p className="text-xs text-[var(--color-muted)]">
-                No milestones — create one first
-              </p>
-            ) : (
-              <Select
-                value={form.milestoneId}
-                onValueChange={(v) => setForm((s) => ({ ...s, milestoneId: v }))}
-              >
-                <SelectTrigger id="ct-milestone" className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]">
-                  <SelectValue placeholder="No milestone" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No milestone</SelectItem>
-                  {milestones.map((m: Milestone) => (
-                    <SelectItem key={m.id} value={m.id} className="text-xs">
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+            <TagInput
+              id="ct-tags"
+              ariaLabel="Add tag"
+              tags={form.tags}
+              onChange={(tags) => setForm((s) => ({ ...s, tags }))}
+            />
+          </div>
+
+          {/* Acceptance criteria (ADR-049 — Definition of Done, SD-C13) */}
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-[var(--color-secondary)]">Acceptance criteria</Label>
+            <AcceptanceCriteriaEditor
+              criteria={form.criteria}
+              onChange={(criteria) => setForm((s) => ({ ...s, criteria }))}
+              currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+              emptyHint="No criteria added — this task will be judged against its title and description (D5)."
+            />
           </div>
 
           {/* Agent */}

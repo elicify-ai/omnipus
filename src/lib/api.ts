@@ -138,8 +138,10 @@ import {
   WorkspaceInstructionsResponse as WorkspaceInstructionsResponseSchema,
   Task as TaskSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
-  // Milestones (contract-first #8):
-  Milestone as MilestoneSchema,
+  // Planning & Goals (ADR-049, contract-first #8):
+  Plan as PlanSchema,
+  EvidenceRecord as EvidenceRecordSchema,
+  JudgeVerdict as JudgeVerdictSchema,
   // Spec-3 max-parallel + orchestrator (contract-first #8):
   PerformanceSettings as PerformanceSettingsSchema,
   // Spec-6 U5 — re-auth + Integrations + transcribe (contract-first #8):
@@ -370,11 +372,16 @@ import type {
   ScheduleRunResult,
   // #264 Notifications (contract-first #8):
   NotificationList,
-  // Milestones:
-  Milestone,
-  MilestoneCreateRequest,
-  MilestoneUpdateRequest,
-  MilestoneListResponse,
+  // Planning & Goals (ADR-049, contract-first #8) — Plan container, task
+  // acceptance criteria, evidence, and judge verdicts (replaces Milestones):
+  Plan,
+  PlanCreateRequest,
+  PlanUpdateRequest,
+  PlanListResponse,
+  AcceptanceCriterion,
+  EvidenceRecord,
+  JudgeVerdict,
+  CriterionVerdict,
   // Spec-3 max-parallel + orchestrator (contract-first #8):
   PerformanceSettings,
   PerformanceSettingsUpdate,
@@ -522,10 +529,16 @@ export type {
   TaskUpdateRequest,
   Todo,
   TaskTrigger,
-  Milestone,
-  MilestoneCreateRequest,
-  MilestoneUpdateRequest,
-  MilestoneListResponse,
+  // Planning & Goals (ADR-049) — Plan container, task acceptance criteria,
+  // evidence, and judge verdicts (replaces Milestones):
+  Plan,
+  PlanCreateRequest,
+  PlanUpdateRequest,
+  PlanListResponse,
+  AcceptanceCriterion,
+  EvidenceRecord,
+  JudgeVerdict,
+  CriterionVerdict,
   // Spec-6 U5:
   ReAuthResponse,
   IntegrationProvider,
@@ -1923,7 +1936,7 @@ export function rotateGatewayToken(): Promise<{ token: string }> {
 // PATCH to start a task (drag or Run button).
 
 export const tasksQueryKeys = {
-  list: (params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string; surface?: string }) => {
+  list: (params?: { workspace_id?: string; status?: string; agent_id?: string; plan_id?: string; surface?: string }) => {
     const cleaned = params
       ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
       : {}
@@ -1937,19 +1950,19 @@ export const tasksQueryKeys = {
 // during the transition — it redirects to the same unified key space.
 export const boardTasksQueryKeys = tasksQueryKeys
 
-export function fetchTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string; surface?: string }): Promise<Task[]> {
+export function fetchTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; plan_id?: string; surface?: string }): Promise<Task[]> {
   const search = new URLSearchParams()
   if (params?.workspace_id) search.set('workspace_id', params.workspace_id)
   if (params?.status) search.set('status', params.status)
   if (params?.agent_id) search.set('agent_id', params.agent_id)
-  if (params?.milestone_id) search.set('milestone_id', params.milestone_id)
+  if (params?.plan_id) search.set('plan_id', params.plan_id)
   if (params?.surface) search.set('surface', params.surface)
   const qs = search.toString() ? '?' + search.toString() : ''
   return request<Task[]>(`/tasks${qs}`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
 }
 
 // Keep fetchBoardTasks as an alias so existing call-sites compile during transition.
-export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; milestone_id?: string }): Promise<Task[]> {
+export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; agent_id?: string; plan_id?: string }): Promise<Task[]> {
   return fetchTasks(params)
 }
 
@@ -1979,6 +1992,47 @@ export function setTaskDependencies(taskId: string, blockedBy: string[]): Promis
 
 export function deleteTask(id: string): Promise<void> {
   return request<void>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/**
+ * Stop/Clear (D8) a task's own goal loop (ADR-049 — "clear affordances at
+ * every level", distinct from `stopPlan`, which stops a Plan's loop). NOT a
+ * generated contract endpoint yet — Wave 2 backend work; mirrors the `Plan`
+ * stop shape (`POST .../stop` -> the updated `Task`) so the SPA can call it
+ * optimistically per the existing TanStack Query patterns.
+ */
+export function stopTaskGoalLoop(id: string): Promise<Task> {
+  return request<Task>(`/tasks/${encodeURIComponent(id)}/stop`, { method: 'POST' }, TaskSchema as ZodType<Task>)
+}
+
+// ── Task evidence & judge verdicts (ADR-049 D2, Planning & Goals) ───────────
+//
+// Read-only surfaces backing the acceptance-criteria editor's evidence viewer
+// and per-attempt verdict list. See contracts/components/schemas/EvidenceRecord.yaml
+// / JudgeVerdict.yaml (contract rows C10/C11).
+
+export const taskEvidenceQueryKeys = {
+  list: (taskId: string) => ['tasks', taskId, 'evidence'] as const,
+}
+
+export const taskVerdictsQueryKeys = {
+  list: (taskId: string) => ['tasks', taskId, 'verdicts'] as const,
+}
+
+export function fetchTaskEvidence(taskId: string): Promise<EvidenceRecord[]> {
+  return request<EvidenceRecord[]>(
+    `/tasks/${encodeURIComponent(taskId)}/evidence`,
+    undefined,
+    z.array(EvidenceRecordSchema) as ZodType<EvidenceRecord[]>,
+  )
+}
+
+export function fetchTaskVerdicts(taskId: string): Promise<JudgeVerdict[]> {
+  return request<JudgeVerdict[]>(
+    `/tasks/${encodeURIComponent(taskId)}/verdicts`,
+    undefined,
+    z.array(JudgeVerdictSchema) as ZodType<JudgeVerdict[]>,
+  )
 }
 
 // ── #264 Schedules ──────────────────────────────────────────────────────────────
@@ -3298,54 +3352,111 @@ export function updateWorkspaceInstructions(
   )
 }
 
-// ── Milestones ────────────────────────────────────────────────────────────────
+// ── Plans (ADR-049 D1/FR-1 — replaces Milestones) ────────────────────────────
 //
-// Milestones are scoped to a workspace. All types are re-exported from generated
-// openapi-types (contract-first #8). See contracts/components/schemas/Milestone*.yaml.
+// A Plan is a first-class entity that groups an executable task DAG under a
+// goal, Definition of Done, owner agent, and 5-value state machine
+// (draft/approved/running/done/failed). Tasks join a plan via `Task.plan_id`
+// (same-workspace FK). Membership + `progress` are computed read-time by the
+// backend — never stored on the Plan record (mirrors the removed Milestone's
+// computeMilestoneCounts). See contracts/components/schemas/Plan*.yaml.
 //
-// `progress` (0–1 completion fraction) is a generated, read-only field on Milestone:
-// computed server-side at read time (done/total over the milestone's GTD board tasks).
-// It is optional in the schema and absent on create/update echoes when no tasks exist.
+// Endpoints (Wave 2 — backend lands these; the SPA calls them optimistically
+// per the generated contract shape, guarded by the existing TanStack Query
+// error/loading patterns):
+//   GET    /workspaces/{id}/plans → PlanListResponse
+//   POST   /plans                → Plan   (top-level create, NOT nested under
+//                                           a workspace path — workspace_id is
+//                                           a body field)
+//   PUT    /plans/{id}           → Plan   (partial update incl. `state`
+//                                           transitions — Approve is
+//                                           `state: 'approved'`)
+//   POST   /plans/{id}/stop      → Plan   (Stop/Clear a running plan, D8)
+//   DELETE /plans/{id}           → void   (rejected 400 while running)
 
-export const milestonesQueryKeys = {
-  list: (workspaceId: string) => ['milestones', workspaceId] as const,
-  detail: (workspaceId: string, milestoneId: string) => ['milestones', workspaceId, milestoneId] as const,
+export const plansQueryKeys = {
+  list: (workspaceId: string) => ['plans', workspaceId] as const,
+  detail: (workspaceId: string, planId: string) => ['plans', workspaceId, planId] as const,
 }
 
-const MilestoneListResponseSchema = z.object({
-  milestones: z.array(MilestoneSchema),
+const PlanListResponseSchema = z.object({
+  plans: z.array(PlanSchema),
   total: z.number().int(),
 })
 
-export function fetchMilestones(workspaceId: string): Promise<Milestone[]> {
-  return request<{ milestones: Milestone[]; total: number }>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
+export function fetchPlans(workspaceId: string): Promise<Plan[]> {
+  return request<PlanListResponse>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/plans`,
     undefined,
-    MilestoneListResponseSchema,
-  ).then((res) => res.milestones)
+    PlanListResponseSchema as ZodType<PlanListResponse>,
+  ).then((res) => res.plans)
 }
 
-export function createMilestone(workspaceId: string, body: MilestoneCreateRequest): Promise<Milestone> {
-  return request<Milestone>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
-    { method: 'POST', body: JSON.stringify(body) },
-    MilestoneSchema,
-  )
+export function fetchPlan(id: string): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}`, undefined, PlanSchema as ZodType<Plan>)
 }
 
-export function updateMilestone(workspaceId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<Milestone> {
-  return request<Milestone>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
-    { method: 'PUT', body: JSON.stringify(body) },
-    MilestoneSchema,
-  )
+export function createPlan(body: PlanCreateRequest): Promise<Plan> {
+  return request<Plan>('/plans', { method: 'POST', body: JSON.stringify(body) }, PlanSchema as ZodType<Plan>)
 }
 
-export function deleteMilestone(workspaceId: string, milestoneId: string): Promise<void> {
-  return request<void>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
-    { method: 'DELETE' },
-  )
+export function updatePlan(id: string, body: PlanUpdateRequest): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }, PlanSchema as ZodType<Plan>)
+}
+
+/** Approve is a plain state transition (`draft` -> `approved`) — SD-C4: confirm-on-success, no optimistic flip. */
+export function approvePlan(id: string): Promise<Plan> {
+  return updatePlan(id, { state: 'approved' })
+}
+
+/** Stop/Clear (D8) — stops a running plan's loop. May be optimistic (SD-C5): it cannot validation-fail like Approve. */
+export function stopPlan(id: string): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}/stop`, { method: 'POST' }, PlanSchema as ZodType<Plan>)
+}
+
+export function deletePlan(id: string): Promise<void> {
+  return request<void>(`/plans/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/**
+ * PlanApproveTaskError — the per-task validation error shape Approve's `400`
+ * response is expected to carry (FR-084: "list the per-task criteria-missing
+ * validation errors inline"). NOT a generated contract type — the Wave 2
+ * backend endpoint that produces this body doesn't exist yet, so this is a
+ * defensive, best-effort parse of `ApiError.body` rather than a Constraint #8
+ * wire type. Once Wave 2 lands the real endpoint + error schema, this should
+ * be replaced by a generated type per the 5-step contract process.
+ */
+export interface PlanApproveTaskError { // not-wire-format: defensive parse of a not-yet-contracted error body
+  task_id: string
+  title?: string
+  reason: string
+}
+
+/** Best-effort parse of an Approve `400` body into a per-task error list. Returns null when the body isn't the expected shape (falls back to `err.userMessage`). */
+export function parsePlanApproveTaskErrors(body: string | undefined): PlanApproveTaskError[] | null {
+  if (!body) return null
+  try {
+    const parsed = JSON.parse(body) as { task_errors?: unknown; errors?: unknown }
+    const raw = Array.isArray(parsed.task_errors)
+      ? parsed.task_errors
+      : Array.isArray(parsed.errors)
+        ? parsed.errors
+        : null
+    if (!raw) return null
+    const out: PlanApproveTaskError[] = []
+    for (const entry of raw) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const e = entry as Record<string, unknown>
+      const reason = typeof e.reason === 'string' ? e.reason : typeof e.message === 'string' ? e.message : null
+      const taskId = typeof e.task_id === 'string' ? e.task_id : typeof e.id === 'string' ? e.id : null
+      if (reason == null || taskId == null) continue
+      out.push({ task_id: taskId, title: typeof e.title === 'string' ? e.title : undefined, reason })
+    }
+    return out.length > 0 ? out : null
+  } catch {
+    return null
+  }
 }
 
 // ── Token Usage Stats ─────────────────────────────────────────────────────────

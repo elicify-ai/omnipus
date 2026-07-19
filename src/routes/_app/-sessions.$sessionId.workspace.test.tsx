@@ -131,7 +131,7 @@ function resetStores() {
   })
   useWorkspacesStore.setState({
     activeWorkspaceId: null,
-    activeMilestoneId: null,
+    activePlanId: null,
     boardAltitude: 'top-level',
   })
   mockNavigate.mockClear()

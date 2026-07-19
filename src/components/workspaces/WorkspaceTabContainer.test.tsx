@@ -85,21 +85,21 @@ vi.mock('@/store/session', () => ({
 
 // WorkspacesStore — the component calls it with NO selector, getting back the full state
 const mockSetActiveWorkspaceId = vi.fn()
-const mockSetActiveMilestoneId = vi.fn()
+const mockSetActivePlanId = vi.fn()
 vi.mock('@/store/workspacesStore', () => ({
   useWorkspacesStore: (selector?: ((s: {
     activeWorkspaceId: string | null
     setActiveWorkspaceId: (id: string | null) => void
-    activeMilestoneId: string | null
-    setActiveMilestoneId: (id: string | null) => void
+    activePlanId: string | null
+    setActivePlanId: (id: string | null) => void
     boardAltitude: string
     setBoardAltitude: (a: string) => void
   }) => unknown)) => {
     const state = {
       activeWorkspaceId: null,
       setActiveWorkspaceId: mockSetActiveWorkspaceId,
-      activeMilestoneId: null,
-      setActiveMilestoneId: mockSetActiveMilestoneId,
+      activePlanId: null,
+      setActivePlanId: mockSetActivePlanId,
       boardAltitude: 'top-level',
       setBoardAltitude: vi.fn(),
     }

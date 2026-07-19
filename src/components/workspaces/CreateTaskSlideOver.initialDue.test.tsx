@@ -17,7 +17,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
     // Fix B: the assignee picker's workspace-team scoping (useWorkspaceTeamIds)
     // — this test file doesn't exercise the Agent field, so the rejection
@@ -31,7 +30,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
       list: () => ['workspaces'],
       delegation: (id: string) => ['workspaces', id, 'delegation'],
     },
-    milestonesQueryKeys: { list: (id: string) => ['milestones', id] },
     isApiError: vi.fn().mockReturnValue(false),
   }
 })
@@ -57,12 +55,12 @@ interface RenderProps {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   workspaceId?: string
-  milestoneId?: string | null
+  planId?: string | null
   initialDue?: string
 }
 
 function renderSlideOver(props: RenderProps = {}) {
-  const defaults: Required<Omit<RenderProps, 'initialDue' | 'milestoneId'>> = {
+  const defaults: Required<Omit<RenderProps, 'initialDue' | 'planId'>> = {
     open: true,
     onOpenChange: vi.fn(),
     workspaceId: 'proj-test',
@@ -74,7 +72,7 @@ function renderSlideOver(props: RenderProps = {}) {
         open={merged.open}
         onOpenChange={merged.onOpenChange}
         workspaceId={merged.workspaceId}
-        milestoneId={merged.milestoneId}
+        planId={merged.planId}
         initialDue={merged.initialDue}
       />
     </QueryClientProvider>,

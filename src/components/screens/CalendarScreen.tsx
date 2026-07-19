@@ -4,7 +4,7 @@
 // Replaces the former month-grouped list. The grid ALWAYS renders (the empty-state
 // bug is gone); supports Month/Week/Day/Agenda, drag-to-reschedule + a keyboard
 // path, and click/slot-select to create. This file is the integration hub: it maps
-// tasks/milestones → events (pure fn), hosts the wrapper + toolbar, and owns the
+// tasks → events (pure fn), hosts the wrapper + toolbar, and owns the
 // handlers/mutations (optimistic move handled by FullCalendar; revert + undo + toast
 // here). It also owns the optimistic query-cache patch + per-item rollback layer that
 // keeps the TanStack Query cache in sync with FullCalendar's DOM move — cancelling
@@ -18,23 +18,17 @@ import type { EventClickArg, EventDropArg, DateSelectArg } from '@fullcalendar/c
 import type { DateClickArg } from '@fullcalendar/interaction'
 import {
   fetchTasks,
-  fetchMilestones,
   updateTask,
-  updateMilestone,
   tasksQueryKeys,
-  milestonesQueryKeys,
   type Task,
-  type Milestone,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { mapToCalendarEvents, formatLocalDate } from '@/lib/calendar/eventMapping'
 import { FullCalendarView } from '@/components/calendar/FullCalendarView'
 import { CalendarToolbar } from '@/components/calendar/CalendarToolbar'
-import { MilestoneDatePopover } from '@/components/calendar/MilestoneDatePopover'
 import type {
   CalendarViewName,
   CalendarEventExtProps,
-  MilestoneTarget,
 } from '@/components/calendar/types'
 import { CreateTaskSlideOver } from '@/components/workspaces/CreateTaskSlideOver'
 import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
@@ -77,28 +71,14 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     enabled: !!workspaceId,
   })
 
-  const {
-    data: milestones = [],
-    isLoading: milestonesLoading,
-    isError: milestonesError,
-  } = useQuery({
-    queryKey: milestonesQueryKeys.list(workspaceId),
-    queryFn: () => fetchMilestones(workspaceId),
-    staleTime: 30_000,
-    enabled: !!workspaceId,
-  })
-
-  const events = useMemo(() => mapToCalendarEvents(tasks, milestones), [tasks, milestones])
-  const isLoading = tasksLoading || milestonesLoading
+  const events = useMemo(() => mapToCalendarEvents(tasks), [tasks])
+  const isLoading = tasksLoading
   const isEmpty = !isLoading && events.length === 0
 
   // Degrade on query failure (FR-016, I-2) — non-blocking toast, grid still renders.
   useEffect(() => {
     if (tasksError) addToast({ message: "Couldn't load tasks", variant: 'error' })
   }, [tasksError, addToast])
-  useEffect(() => {
-    if (milestonesError) addToast({ message: "Couldn't load milestones", variant: 'error' })
-  }, [milestonesError, addToast])
 
   // ── Toolbar state (driven by FullCalendar's datesSet) ─────────────────────────
   const [currentView, setCurrentView] = useState<CalendarViewName>('dayGridMonth')
@@ -115,13 +95,11 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const [createOpen, setCreateOpen] = useState(false)
   const [initialDue, setInitialDue] = useState<string | undefined>(undefined)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
-  const [milestoneTarget, setMilestoneTarget] = useState<MilestoneTarget | null>(null)
 
   const invalidate = useCallback(() => {
     void queryClient.invalidateQueries({
       queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
     })
-    void queryClient.invalidateQueries({ queryKey: milestonesQueryKeys.list(workspaceId) })
   }, [queryClient, workspaceId])
 
   // Restore focus to the chip/cell that opened a dialog (C-4 / FR-013).
@@ -134,16 +112,10 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
 
   // ── Reschedule persistence (whole-trigger + date-format rules — F-05/F-06/F-08) ─
   // `ext` is the discriminated CalendarEventExtProps union, so the switch narrows
-  // taskId/milestoneId with no defensive checks and is exhaustive over `kind`.
+  // taskId with no defensive checks and is exhaustive over `kind`.
   const persistReschedule = useCallback(
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
       switch (ext.kind) {
-        case 'milestone':
-          // Milestone due_date is a plain ISO date string → local YYYY-MM-DD.
-          await updateMilestone(workspaceId, ext.milestoneId, {
-            due_date: formatLocalDate(start),
-          })
-          return
         case 'task-due':
           // Task `due` is RFC3339 date-time (contract: format date-time), so a
           // date-only string is rejected 400. Write the dropped day's local-midnight
@@ -172,25 +144,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // only the single changed row, so concurrent updates to other rows are never lost.
   const patchCacheDate = useCallback(
     (ext: CalendarEventExtProps, start: Date): (() => void) => {
-      if (ext.kind === 'milestone') {
-        const key = milestonesQueryKeys.list(workspaceId)
-        // Capture only the single prior item for a targeted rollback.
-        const prevItem = queryClient
-          .getQueryData<Milestone[]>(key)
-          ?.find((m) => m.id === ext.milestoneId)
-        queryClient.setQueryData<Milestone[]>(key, (current) =>
-          current?.map((m) =>
-            m.id === ext.milestoneId ? { ...m, due_date: formatLocalDate(start) } : m,
-          ),
-        )
-        return () => {
-          if (prevItem) {
-            queryClient.setQueryData<Milestone[]>(key, (current) =>
-              current?.map((m) => (m.id === ext.milestoneId ? prevItem : m)),
-            )
-          }
-        }
-      }
       const key = tasksQueryKeys.list({ workspace_id: workspaceId })
       // Capture only the single prior task for a targeted rollback.
       const prevItem = queryClient
@@ -228,15 +181,9 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
       // Cancel any in-flight query for the relevant key so a concurrent refetch
       // cannot overwrite the optimistic write we are about to make.
-      if (ext.kind === 'milestone') {
-        await queryClient.cancelQueries({
-          queryKey: milestonesQueryKeys.list(workspaceId),
-        })
-      } else {
-        await queryClient.cancelQueries({
-          queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
-        })
-      }
+      await queryClient.cancelQueries({
+        queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
+      })
       const rollback = patchCacheDate(ext, start)
       try {
         await persistReschedule(ext, start)
@@ -293,18 +240,12 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
       triggerElRef.current =
         (raw?.closest('[tabindex]') as HTMLElement | null) ?? raw ?? null
       const ext = arg.event.extendedProps as CalendarEventExtProps
-      if (ext.kind === 'milestone') {
-        const m = milestones.find((x) => x.id === ext.milestoneId)
-        if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
-        else console.warn('[calendar] milestone event has no backing milestone', ext)
-        return
-      }
       // task-due | task-fire → taskId is guaranteed by the discriminated union.
       const t = tasks.find((x) => x.id === ext.taskId)
       if (t) setSelectedTask(t)
       else console.warn('[calendar] task event has no backing task', ext)
     },
-    [tasks, milestones],
+    [tasks],
   )
 
   // Open the create slide-over prefilled with a date (all-day → midnight; timed → slot).
@@ -384,16 +325,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           setSelectedTask(null)
           restoreFocus()
         }}
-      />
-
-      <MilestoneDatePopover
-        workspaceId={workspaceId}
-        milestone={milestoneTarget}
-        onClose={() => {
-          setMilestoneTarget(null)
-          restoreFocus()
-        }}
-        onRescheduled={invalidate}
       />
     </div>
   )

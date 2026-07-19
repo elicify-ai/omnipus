@@ -8,12 +8,11 @@
  */
 
 import type { EventInput } from '@fullcalendar/core'
-import type { Task, Milestone } from '@/lib/api'
+import type { Task } from '@/lib/api'
 import {
   CHIP_TEXT_COLOR,
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
-  MILESTONE_STYLE,
   type CalendarEventExtProps,
 } from '@/components/calendar/types'
 
@@ -47,9 +46,9 @@ export function parseLocalDate(s: string | null | undefined): Date | null {
 
 /**
  * Format a Date to `YYYY-MM-DD` using LOCAL date components.
- * Used to write milestone `due_date` on drag and to seed the create-form date
- * prefill (FR-015, F-06). Task `due` is RFC3339 date-time and is written via
- * `toISOString()`, NOT this helper. Never uses UTC methods — no off-by-one.
+ * Used to seed the create-form date prefill (FR-015, F-06). Task `due` is
+ * RFC3339 date-time and is written via `toISOString()`, NOT this helper.
+ * Never uses UTC methods — no off-by-one.
  */
 export function formatLocalDate(d: Date): string {
   const y = d.getFullYear()
@@ -101,22 +100,18 @@ function makeEvent(
 // ─── Main mapping function ────────────────────────────────────────────────────
 
 /**
- * Map workspace tasks and milestones into FullCalendar EventInput objects.
+ * Map workspace tasks into FullCalendar EventInput objects.
  *
- * Rules (§6, FR-002/003/004/005, F-01/F-06/F-10/F-19):
+ * Rules (§6, FR-002/003/005, F-01/F-06/F-10/F-19):
  *  - Tasks with `surface !== 'user'` (e.g. 'heartbeat') → excluded (FR-003, F-01).
  *  - Task with parseable `due` → all-day `:due` event coloured by status.
  *  - Task with `once` trigger and `config.at_ms` → timed `:fire` event, Clock icon.
  *  - Tasks with `every` or `recurring` triggers → no event in v1 (F-10).
  *  - A task may yield BOTH a `:due` and a `:fire` event (F-19).
- *  - Milestone with parseable `due_date` → all-day `:milestone` event, gold + Flag.
  *  - Unparseable dates → silently skipped, never throw (FR-003).
  *  - All produced events are `editable: true` (drag enabled).
  */
-export function mapToCalendarEvents(
-  tasks: Task[],
-  milestones: Milestone[],
-): EventInput[] {
+export function mapToCalendarEvents(tasks: Task[]): EventInput[] {
   const events: EventInput[] = []
 
   for (const task of tasks) {
@@ -156,21 +151,6 @@ export function mapToCalendarEvents(
         )
       }
     }
-  }
-
-  // ── Milestone all-day events (FR-004) ────────────────────────────────────
-  for (const m of milestones) {
-    if (!m.due_date) continue
-    const dueDate = parseLocalDate(m.due_date)
-    if (dueDate === null) continue
-
-    events.push(
-      makeEvent(`milestone:${m.id}`, dueDate, m.name, MILESTONE_STYLE.bg, true, {
-        kind: 'milestone',
-        icon: 'Flag',
-        milestoneId: m.id,
-      }),
-    )
   }
 
   return events

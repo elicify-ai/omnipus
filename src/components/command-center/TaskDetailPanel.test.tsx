@@ -87,9 +87,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchSubtasks: vi.fn().mockResolvedValue([]),
-    fetchMilestones: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    fetchTaskEvidence: vi.fn().mockResolvedValue([]),
+    fetchTaskVerdicts: vi.fn().mockResolvedValue([]),
     // Fix B: the assignee picker's workspace-team scoping — see the
     // "assignee picker is workspace-team-scoped" describe block below.
     fetchWorkspaceDelegation: vi.fn(),
@@ -97,9 +98,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteTask: vi.fn().mockResolvedValue(undefined),
     setTaskTodos: vi.fn().mockResolvedValue({}),
     setTaskDependencies: vi.fn().mockResolvedValue({}),
+    stopTaskGoalLoop: vi.fn().mockResolvedValue({}),
     isApiError: vi.fn().mockReturnValue(false),
     tasksQueryKeys: actual.tasksQueryKeys,
-    milestonesQueryKeys: actual.milestonesQueryKeys,
+    taskEvidenceQueryKeys: actual.taskEvidenceQueryKeys,
+    taskVerdictsQueryKeys: actual.taskVerdictsQueryKeys,
     workspacesQueryKeys: actual.workspacesQueryKeys,
   }
 })

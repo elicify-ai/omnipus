@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoardView } from './BoardView'
-import type { Task, Agent, Milestone } from '@/lib/api'
+import type { Task, Agent, Plan } from '@/lib/api'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ const agentRay: Agent = {
   max_tool_iterations: 50,
 }
 
-const milestones: Milestone[] = []
+const plans: Plan[] = []
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -104,9 +104,10 @@ function renderBoard(
     <QueryClientProvider client={client}>
       <BoardView
         tasks={tasks}
-        milestones={milestones}
+        plans={plans}
+        activeTagFilter={null}
         agents={agents}
-        activeMilestoneId={null}
+        activePlanId={null}
         altitude={altitude}
         onAltitudeChange={onAltitudeChange}
         onTaskClick={vi.fn()}
@@ -188,9 +189,10 @@ describe('BoardView delegation roll-up', () => {
       <QueryClientProvider client={makeClient()}>
         <BoardView
           tasks={[parent]}
-          milestones={milestones}
+          plans={plans}
+        activeTagFilter={null}
           agents={[]}
-          activeMilestoneId={null}
+          activePlanId={null}
           altitude="top-level"
           onAltitudeChange={onAltitudeChange}
           onTaskClick={vi.fn()}
@@ -209,9 +211,10 @@ describe('BoardView delegation roll-up', () => {
       <QueryClientProvider client={makeClient()}>
         <BoardView
           tasks={[parent]}
-          milestones={milestones}
+          plans={plans}
+        activeTagFilter={null}
           agents={[]}
-          activeMilestoneId={null}
+          activePlanId={null}
           altitude="show-all"
           onAltitudeChange={onAltitudeChange}
           onTaskClick={vi.fn()}

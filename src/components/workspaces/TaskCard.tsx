@@ -1,11 +1,35 @@
 import { useId } from 'react'
 import { cn } from '@/lib/utils'
-import type { Task, Agent, Milestone } from '@/lib/api'
+import type { Task, Agent, Plan } from '@/lib/api'
 import { CheckSquare } from '@phosphor-icons/react'
 import { RollupBadge } from './RollupBadge'
 import { TaskChildren } from './TaskChildren'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
+
+// ── Goal-loop status affordance (ADR-049 FR-090, SD-C12) ────────────────────
+//
+// "attempt N/M" is sourced from the real, server-set `Task.attempt_count`
+// wire field (contract C17) against `Task.max_attempts` (or the inherited
+// PlanningConfig.task_max_attempts default of 3) — never fabricated. The
+// "paused" suffix is likewise grounded in real data: a task's owning Plan
+// (looked up via `Task.plan_id` in the `plans` prop) reporting
+// `state === 'running' && paused_reason` — NOT a fake/always-false flag.
+// Standalone (non-plan) task-loop judge-unavailable pauses are only knowable
+// live via the `task_status_changed`/`goal_status` WS frames (out of this
+// wave's scope — frame consumption lands with US-12); this card renders the
+// plan-derived pause honestly and simply omits the "paused" suffix when no
+// such data is available, rather than inventing a state.
+export const DEFAULT_TASK_MAX_ATTEMPTS = 3
+
+export function goalLoopStatusLabel(
+  task: Pick<Task, 'attempt_count' | 'max_attempts'>,
+  paused: boolean,
+): string | null {
+  if (task.attempt_count == null || task.attempt_count <= 0) return null
+  const max = task.max_attempts ?? DEFAULT_TASK_MAX_ATTEMPTS
+  return `attempt ${task.attempt_count}/${max}${paused ? ' · paused' : ''}`
+}
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
 export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
@@ -41,7 +65,12 @@ export interface TaskCardDrag {
 
 interface TaskCardProps {
   task: Task
-  milestones?: Milestone[]
+  /**
+   * Plans in this workspace (ADR-049) — used only to look up the owning
+   * Plan's `paused_reason` for the goal-loop "paused" chip via `task.plan_id`.
+   * When absent, the paused suffix simply never renders (no fake state).
+   */
+  plans?: Plan[]
   /**
    * Agents cache — required for delegation roll-up avatar rendering.
    * When absent, roll-up avatars fall back to Robot icon + status colour.
@@ -66,7 +95,7 @@ interface TaskCardProps {
 
 export function TaskCard({
   task,
-  milestones = [],
+  plans = [],
   agents = [],
   altitude = 'top-level',
   onClick,
@@ -75,7 +104,12 @@ export function TaskCard({
 }: TaskCardProps) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
-  const milestone = task.milestone_id ? milestones.find((m) => m.id === task.milestone_id) : null
+  const tags = task.tags ?? []
+  const visibleTags = tags.slice(0, 3)
+  const overflowTagCount = tags.length - visibleTags.length
+  const owningPlan = task.plan_id ? plans.find((p) => p.id === task.plan_id) : undefined
+  const planPaused = owningPlan?.state === 'running' && !!owningPlan.paused_reason
+  const goalLoopLabel = goalLoopStatusLabel(task, planPaused)
   const todos = task.todos ?? []
   const doneTodos = todos.filter((t) => t.status === 'completed').length
   const rollup = task.rollup ?? []
@@ -180,19 +214,48 @@ export function TaskCard({
         <RollupBadge rollup={rollup} agents={agents} />
       )}
 
-      {/* Bottom row: agent badge + milestone tag */}
-      {(task.agent_name || task.agent_id || milestone) && (
+      {/* Bottom row: agent badge */}
+      {(task.agent_name || task.agent_id) && (
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-          {(task.agent_name || task.agent_id) && (
-            <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]">
-              {task.agent_name ?? task.agent_id}
+          <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]">
+            {task.agent_name ?? task.agent_id}
+          </span>
+        </div>
+      )}
+
+      {/* Tag chips (ADR-049 — replaces the milestone chip, SD-C14). Migrated
+          `milestone:<name>` tags render as ordinary chips, verbatim. */}
+      {tags.length > 0 && (
+        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+          {visibleTags.map((tag) => (
+            <span
+              key={tag}
+              title={tag}
+              className="max-w-[100px] truncate rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 px-2 py-0.5 text-[10px] text-[var(--color-accent)]"
+            >
+              {tag}
             </span>
+          ))}
+          {overflowTagCount > 0 && (
+            <span className="text-[10px] text-[var(--color-muted)]">+{overflowTagCount}</span>
           )}
-          {milestone && (
-            <span className="rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 px-2 py-0.5 text-[10px] text-[var(--color-accent)]">
-              {milestone.name}
-            </span>
-          )}
+        </div>
+      )}
+
+      {/* Goal-loop status affordance (FR-090) — "attempt N/M" (+"· paused"
+          when the owning plan reports paused_reason while running). */}
+      {goalLoopLabel && (
+        <div className="mt-2 flex items-center gap-1.5">
+          <span
+            className={cn(
+              'rounded-full px-2 py-0.5 text-[10px] font-medium',
+              planPaused
+                ? 'bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
+                : 'bg-[var(--color-surface-2)] text-[var(--color-muted)]',
+            )}
+          >
+            {goalLoopLabel}
+          </span>
         </div>
       )}
 

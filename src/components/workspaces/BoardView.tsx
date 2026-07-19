@@ -18,9 +18,9 @@ import { Plus } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { AltitudeToggle } from './AltitudeToggle'
 import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
-import type { Task, Agent, Milestone } from '@/lib/api'
+import type { Task, Agent, Plan } from '@/lib/api'
 import type { BoardAltitude } from '@/store/workspacesStore'
-import { MILESTONE_FILTER_UNSCHEDULED } from './MilestoneFilterPills'
+import { filterByPlanAndTag } from '@/lib/planFilter'
 import { cn } from '@/lib/utils'
 
 type TaskStatus = Task['status']
@@ -105,9 +105,13 @@ export function buildBoardAnnouncements(rootTasks: Task[]): Announcements {
 
 interface BoardViewProps {
   tasks: Task[]
-  milestones: Milestone[]
+  /** Plans in this workspace (ADR-049) — used for the Plan filter and TaskCard's goal-loop pause lookup. */
+  plans: Plan[]
   agents?: Agent[]
-  activeMilestoneId: string | null
+  /** The active Plan filter (`null` = All) — replaces the removed `activeMilestoneId`. */
+  activePlanId: string | null
+  /** The active tag filter (`null` = none; composes AND with `activePlanId`). */
+  activeTagFilter: string | null
   altitude: BoardAltitude
   onAltitudeChange: (next: BoardAltitude) => void
   onTaskClick: (task: Task) => void
@@ -120,9 +124,10 @@ interface BoardViewProps {
 
 export function BoardView({
   tasks,
-  milestones,
+  plans,
   agents = [],
-  activeMilestoneId,
+  activePlanId,
+  activeTagFilter,
   altitude,
   onAltitudeChange,
   onTaskClick,
@@ -132,8 +137,8 @@ export function BoardView({
 }: BoardViewProps) {
   // Filter out non-user-surface tasks (e.g. heartbeat tasks are hidden from general views)
   const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
-  // Apply milestone filter
-  const filteredTasks = filterByMilestone(userTasks, activeMilestoneId)
+  // Apply plan + tag filters (ADR-049 — replaces the removed milestone filter; composes AND)
+  const filteredTasks = filterByPlanAndTag(userTasks, activePlanId, activeTagFilter)
   // Board shows only top-level tasks — subtasks (parent_task_id present) are
   // NEVER rendered as standalone cards. They nest under their parent.
   const rootTasks = filteredTasks.filter((t) => !t.parent_task_id)
@@ -204,7 +209,7 @@ export function BoardView({
               key={col.status}
               config={col}
               tasks={rootTasks.filter((t) => t.status === col.status)}
-              milestones={milestones}
+              plans={plans}
               agents={agents}
               altitude={altitude}
               activeTask={activeTask}
@@ -225,7 +230,7 @@ export function BoardView({
             <div aria-hidden="true" className="opacity-90 rotate-2 cursor-grabbing">
               <TaskCard
                 task={activeTask}
-                milestones={milestones}
+                plans={plans}
                 agents={agents}
                 altitude="top-level"
                 onClick={() => {}}
@@ -238,18 +243,10 @@ export function BoardView({
   )
 }
 
-function filterByMilestone(tasks: Task[], activeMilestoneId: string | null): Task[] {
-  if (activeMilestoneId === null) return tasks
-  if (activeMilestoneId === MILESTONE_FILTER_UNSCHEDULED) {
-    return tasks.filter((t) => !t.milestone_id)
-  }
-  return tasks.filter((t) => t.milestone_id === activeMilestoneId)
-}
-
 interface BoardColumnProps {
   config: ColumnConfig
   tasks: Task[]
-  milestones: Milestone[]
+  plans: Plan[]
   agents: Agent[]
   altitude: BoardAltitude
   activeTask: Task | null
@@ -260,7 +257,7 @@ interface BoardColumnProps {
 function BoardColumn({
   config,
   tasks,
-  milestones,
+  plans,
   agents,
   altitude,
   activeTask,
@@ -321,7 +318,7 @@ function BoardColumn({
             <DraggableTaskCard
               key={task.id}
               task={task}
-              milestones={milestones}
+              plans={plans}
               agents={agents}
               altitude={altitude}
               onClick={() => onTaskClick(task)}
@@ -336,7 +333,7 @@ function BoardColumn({
 
 interface DraggableTaskCardProps {
   task: Task
-  milestones: Milestone[]
+  plans: Plan[]
   agents: Agent[]
   altitude: BoardAltitude
   onClick: () => void
@@ -345,7 +342,7 @@ interface DraggableTaskCardProps {
 
 function DraggableTaskCard({
   task,
-  milestones,
+  plans,
   agents,
   altitude,
   onClick,
@@ -371,7 +368,7 @@ function DraggableTaskCard({
     >
       <TaskCard
         task={task}
-        milestones={milestones}
+        plans={plans}
         agents={agents}
         altitude={altitude}
         onClick={onClick}
