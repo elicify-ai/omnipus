@@ -308,11 +308,13 @@ func (s *TaskTriggerScheduler) WaitForLane() {
 	s.cs.WaitForLane()
 }
 
-// Reconcile scans the task store and ensures every triggered, non-terminal,
-// non-heartbeat task has a registered cron job, and removes stale jobs for tasks
-// that no longer need one. Call once at boot, after Start. For RRULE tasks this
-// is also the documented crash-recovery path for the boot window (Scheduler
-// rule 6): OnTaskUpserted re-arms the next future occurrence for each one.
+// Reconcile scans the task store and ensures every triggered, non-heartbeat
+// task that OnTaskUpserted would arm — non-terminal, OR terminal with a
+// repeating (recurring/every) trigger whose series has not exhausted — has a
+// registered cron job, and removes stale jobs for tasks that no longer need
+// one. Call once at boot, after Start. For RRULE tasks this is also the
+// documented crash-recovery path for the boot window (Scheduler rule 6):
+// OnTaskUpserted re-arms the next future occurrence for each one.
 func (s *TaskTriggerScheduler) Reconcile() error {
 	tasks, unreadableIDs, err := s.store.ListWithUnreadable(task.Filter{})
 	if err != nil {
@@ -368,32 +370,63 @@ func (s *TaskTriggerScheduler) Reconcile() error {
 // outcome of the single RUN that just finished, not that the series itself
 // has ended. Bug fixed here: dispatch is asynchronous (SpawnTriggeredRun /
 // ExecuteTask launch `go te.runTask(...)` and return immediately), so
-// RunScheduled's own exit-path re-arm (rearmRrule) always runs and arms the
-// next occurrence BEFORE that async run finishes. When it later finishes and
-// its terminal status lands — via a task_update tool call or a REST PATCH,
-// both of which call NotifyTaskUpserted → this method — the previous,
-// unconditional "terminal ⇒ remove" rule deleted the job rearmRrule had just
-// armed, silently ending the series after exactly one fire. A terminal
-// repeating task now falls through to the normal (re)registration path
-// below instead, exactly as a non-terminal upsert would. The series' only
-// TRUE end conditions remain trigger removal/change-to-manual (noTrigger
-// above) and RRULE exhaustion (handled below via errRruleExhausted).
+// RunScheduled's own exit-path re-arm (rearmRrule for RRULE; the cron
+// engine's own computeNextRun self-perpetuation for `every`) always runs and
+// arms the next occurrence BEFORE that async run finishes. When it later
+// finishes and its terminal status lands — via a task_update tool call or a
+// REST PATCH, both of which call NotifyTaskUpserted → this method — the
+// previous, unconditional "terminal ⇒ remove" rule deleted the job that
+// re-arm had just armed, silently ending the series after exactly one fire.
+// A terminal repeating task now falls through to the normal (re)registration
+// path below instead, exactly as a non-terminal upsert would. The series'
+// only TRUE end conditions remain trigger removal/change-to-manual
+// (noTrigger above) and RRULE exhaustion (handled below via
+// errRruleExhausted).
 //
-// Race note: because both this path and rearmRrule (task_trigger.go) route
-// through replaceJobLocked under mu, and triggerToCronSchedule/
-// NextOccurrenceAfter is a pure function of (rule, now), a fire's own
-// rearmRrule call and this OnTaskUpserted call (fired later, once the async
-// run's terminal status lands) can legitimately both attempt to register a
-// job for the same task around the same time. In the ordinary case neither
-// call observes an occurrence boundary crossing between them, so they
-// compute the IDENTICAL next-occurrence time — whichever runs second just
-// atomically replaces an equivalent job with a new job ID under mu; there is
-// no torn or double-registered state, and no wrong occurrence is ever armed.
+// Idempotency guard (fixes a second bug in the terminal-repeating fix
+// itself): "falls through to the normal (re)registration path" used to mean
+// an UNCONDITIONAL replaceJobLocked — remove whatever job is tracked, then
+// register a fresh one computed from triggerToCronSchedule(t.Trigger,
+// s.now()). That is wrong whenever a live, correctly-armed job already
+// exists for this exact trigger content:
+//   - `every`: the cron engine's own computeNextRun anchors the next fire at
+//     FIRE time (scheduleNextRunUnsafe runs immediately after RunScheduled
+//     returns, which for a fire-and-forget dispatch is effectively
+//     immediately after the fire). Replacing that job at COMPLETION time
+//     (which can be much later than the fire, since the async run is still
+//     in flight) re-anchors NextRunAtMS to completion+everyMs instead —
+//     every cycle drifts later by however long that run took.
+//   - `recurring` (rrule): rearmRrule already re-armed the correct next
+//     occurrence at the fire's exit path, under its own generation guard.
+//     Unconditionally replacing it here on the LATER completion
+//     notification risks clobbering that armed occurrence with one computed
+//     from a later "now" — silently skipping an occurrence if the wall
+//     clock happened to cross a boundary between the fire and this call.
 //
-// The remove-old→register-new→map-write sequence is one atomic critical
-// section under mu (Scheduler rule 4), closing the check-then-register window
-// a concurrent RRULE re-arm (rearmRrule) or recovery-sweep re-arm could
-// otherwise race.
+// So: if a job is already tracked for this task, its generation matches
+// triggerGeneration(t.Trigger) EXACTLY (the trigger content is unchanged —
+// this call is a completion notification or an unrelated field edit, not a
+// genuine trigger edit), and it is currently armed (isArmedLocked) — this is
+// a no-op; the already-installed job (whoever armed it: the fire's own
+// exit-path re-arm, or the engine's every-schedule self-perpetuation) is
+// left untouched. Replacement only happens when there is no live armed job
+// for this task (first registration — create, or boot Reconcile of a
+// terminal-repeating task with no job) or the generation changed (a genuine
+// trigger edit, which must re-anchor).
+//
+// Race note: this guard is what makes the fire's own re-arm (rearmRrule, or
+// the engine's every-perpetuation) and this method's LATER call for the same
+// fire's completion agree without a clobber: whichever one runs first installs
+// the armed job; the second one, observing the SAME generation still armed,
+// no-ops instead of redundantly replacing it. A genuine concurrent trigger
+// EDIT is a different generation, so it still replaces (Scheduler rule 4) —
+// see rearmRrule's own generation-mismatch guard for the symmetric case on
+// its side.
+//
+// The remove-old→register-new→map-write sequence (when replacement DOES
+// happen) is one atomic critical section under mu (Scheduler rule 4),
+// closing the check-then-register window a concurrent RRULE re-arm
+// (rearmRrule) or recovery-sweep re-arm could otherwise race.
 func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	// Heartbeat-surface tasks: the per-agent heartbeat service (pkg/heartbeat)
 	// owns their periodic execution. Registering a cron job here would cause
@@ -404,15 +437,13 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	}
 
 	noTrigger := t.Trigger == nil || t.Trigger.Type == task.TriggerManual
-	terminal := task.IsTerminal(t.Status)
 	// isRepeating: a recurring (rrule or legacy cron_expr) or every trigger's
 	// series survives a per-run terminal status — see the doc comment above.
 	// `once` is deliberately excluded: its single occurrence IS its whole
 	// series, so a terminal `once` task is still removed exactly as before.
-	isRepeating := t.Trigger != nil &&
-		(t.Trigger.Type == task.TriggerRecurring || t.Trigger.Type == task.TriggerEvery)
+	isRepeating := t.Trigger.IsRepeating()
 
-	if noTrigger || (terminal && !isRepeating) {
+	if noTrigger || (task.IsTerminal(t.Status) && !isRepeating) {
 		// Remove any existing job for this task (trigger was cleared, the
 		// task ended with a non-repeating trigger, or there is nothing to
 		// track).
@@ -436,6 +467,21 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	generation := triggerGeneration(t.Trigger)
 
 	s.mu.Lock()
+	current, tracked := s.taskToJob[t.ID]
+	alreadyArmedUnchanged := tracked && current.generation == generation && s.isArmedLocked(t.ID, nowMs)
+	if alreadyArmedUnchanged {
+		// Idempotency guard (see doc comment above): a live job already exists
+		// for this EXACT trigger content, armed and healthy — installed either
+		// by this fire's own exit-path re-arm (rearmRrule) or, for `every`,
+		// the cron engine's own fire-time self-perpetuation. Replacing it here
+		// would re-anchor an `every` job to completion time (drift) or risk
+		// clobbering an RRULE occurrence with one computed from a later "now"
+		// (occurrence skip). No-op.
+		s.mu.Unlock()
+		slog.Debug("task_trigger: upsert is a no-op, trigger unchanged and job already armed",
+			"task_id", t.ID)
+		return
+	}
 	job, err := s.replaceJobLocked(t.ID, s.jobSpecFor(t, sched), generation)
 	s.mu.Unlock()
 	if err != nil {

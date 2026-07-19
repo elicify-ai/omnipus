@@ -110,11 +110,13 @@ type wireDayBucket = struct {
 // eligible task's trigger within [fromMs, toMs) and returns one
 // gen.TaskOccurrenceSet per task with at least one occurrence, bucketed per
 // the query tz. tasks is assumed already filtered by the caller to the
-// scheduler-arming selection predicate (non-terminal, non-heartbeat — see
-// HandleTaskOccurrences) and to the requested workspace; this function only
-// additionally filters by trigger FLAVOR (recurring-capable: `recurring`
-// with rrule/cron_expr, or `every`) since manual/once triggers render via
-// the existing due/fire-chip path, not this endpoint.
+// scheduler-arming selection predicate (non-heartbeat, and either
+// non-terminal OR terminal-but-repeating with a non-exhausted series — see
+// HandleTaskOccurrences / task.Task.SeriesRetired) and to the requested
+// workspace; this function only additionally filters by trigger FLAVOR
+// (recurring-capable: `recurring` with rrule/cron_expr, or `every`) since
+// manual/once triggers render via the existing due/fire-chip path, not this
+// endpoint.
 //
 // everyAnchor resolves an `every`-triggered task's live armed NextRunAtMS
 // (FR-008a's projection anchor); returning ok=false omits that task (no

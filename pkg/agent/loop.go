@@ -1665,8 +1665,11 @@ func registerSharedTools(
 				if al.taskExecutor != nil {
 					al.taskExecutor.onTaskComplete(t)
 				}
-				// A terminal update removes the task's trigger job (OnTaskUpserted
-				// drops jobs for terminal tasks); a non-terminal update re-syncs it.
+				// A terminal update removes the task's trigger job UNLESS the
+				// trigger repeats (recurring/every), whose series survives past a
+				// per-run terminal status (OnTaskUpserted, pkg/agent/task_trigger.go);
+				// a non-terminal update re-syncs it (a no-op if it is already
+				// correctly armed for the current trigger content).
 				al.NotifyTaskUpserted(t)
 			})
 			// ADR-037: legacy SetDelegateChecker retired here too — see the

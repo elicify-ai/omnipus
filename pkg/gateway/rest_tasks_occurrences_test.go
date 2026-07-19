@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,11 +36,33 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 )
+
+// newTestRestAPIWithTaskTrigger extends newTestRestAPIAlignedStores with a
+// live agent.TaskTriggerScheduler wired into the agent loop
+// (agentLoop.SetTaskTriggerScheduler), mirroring gateway.go's production boot
+// wiring (NewTaskTriggerScheduler -> Start -> SetTaskTriggerScheduler). REST
+// create/PATCH calls flow through AgentLoop.NotifyTaskUpserted, so with this
+// wired a real cron job is armed/no-op'd exactly as in production — required
+// for the occurrences endpoint's `every` anchor (NextRunAtMSForTask,
+// rest_tasks.go's everyAnchor closure) to resolve to anything other than
+// ok=false. Returns the scheduler too, so a test can also drive it directly
+// (RunDueJobs/WaitForLane) or read its armed state.
+func newTestRestAPIWithTaskTrigger(t *testing.T) (*restAPI, *agent.TaskTriggerScheduler) {
+	t.Helper()
+	api := newTestRestAPIAlignedStores(t)
+	storePath := filepath.Join(t.TempDir(), "triggers", "jobs.json")
+	sched := agent.NewTaskTriggerScheduler(storePath, api.taskStore, api.taskExecutor)
+	require.NoError(t, sched.Start())
+	t.Cleanup(sched.Stop)
+	api.agentLoop.SetTaskTriggerScheduler(sched)
+	return api, sched
+}
 
 // createRecurringTaskViaAPI POSTs a task with a `recurring` RRULE trigger and
 // returns the wire struct. surface, when non-empty, is passed through
@@ -92,10 +115,41 @@ func createRecurringTaskViaAPI(
 
 // advanceTaskToDone walks id through the legal inbox->next->in_progress->done
 // transition path (matches createTaskWithStatusViaAPI's sequence).
+//
+// When the in_progress transition has an assigned agent, handleTaskPatch
+// synchronously calls StartTaskNow, which creates a session (its id comes
+// back in THIS patch's own response) and launches the actual LLM turn in a
+// detached goroutine (see task_trigger.go's "dispatch is asynchronous"
+// precedent) — that goroutine keeps writing session/memory files under the
+// test's t.TempDir() after this function would otherwise return. Forcing
+// status=done immediately and only THEN polling for a terminal status would
+// self-satisfy on the very first poll (we just wrote "done" ourselves) and
+// wait zero real time — so this waits BEFORE the force-done patch, using the
+// in_progress response's session_id as the "a background run was launched"
+// signal, so the terminal-status poll genuinely observes the goroutine's own
+// completion. Closes a TempDir-cleanup race ("TempDir RemoveAll cleanup: ...
+// directory not empty") that pre-dates this helper's callers in this file —
+// reproducible on unmodified pkg/gateway HEAD, not introduced by this fix's
+// own new callers, but shared by all of them (see the 7-reviewer gate report
+// for the recurring-task scheduler fix, C1a/C1b/FIX-2's proof tests, for the
+// analysis; fixed once here in the shared helper rather than per test).
 func advanceTaskToDone(t *testing.T, api *restAPI, id string) {
 	t.Helper()
 	require.Equal(t, http.StatusOK, patchTask(t, api, id, `{"status":"next","description":"x"}`).Code)
-	require.Equal(t, http.StatusOK, patchTask(t, api, id, `{"status":"in_progress"}`).Code)
+
+	wIP := patchTask(t, api, id, `{"status":"in_progress"}`)
+	require.Equal(t, http.StatusOK, wIP.Code)
+	var inProgress gen.Task
+	require.NoError(t, json.Unmarshal(wIP.Body.Bytes(), &inProgress))
+	if inProgress.SessionId != nil && *inProgress.SessionId != "" {
+		require.Eventually(t, func() bool {
+			s := getTaskStatus(t, api, id)
+			return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
+		}, 10*time.Second, 20*time.Millisecond,
+			"background run launched by the in_progress transition must reach a terminal state "+
+				"before advanceTaskToDone forces status=done")
+	}
+
 	require.Equal(t, http.StatusOK, patchTask(t, api, id, `{"status":"done"}`).Code)
 }
 
@@ -406,6 +460,64 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		assert.Empty(t, sets,
 			"an exhausted (COUNT reached) recurring series has no future occurrences even though it "+
 				"is now selection-eligible as a repeating trigger — buildOccurrenceSets omits it naturally")
+	})
+
+	t.Run("done every task still returns future occurrences (live NextRunAtMSForTask anchor)", func(t *testing.T) {
+		// Companion to "done recurring task ... still returns future
+		// occurrences" above, for the `every` flavor: unlike `recurring`,
+		// `every`'s occurrence projection is STATE-DEPENDENT (FR-008a) — it
+		// reads the live armed job's NextRunAtMS via
+		// agent.TaskTriggerScheduler.NextRunAtMSForTask, which needs a real
+		// scheduler wired (newTestRestAPIWithTaskTrigger, not
+		// newTestRestAPIAlignedStores). This also doubles as an end-to-end
+		// proof of FIX 1's idempotency guard: every PATCH along
+		// next->in_progress->done calls NotifyTaskUpserted, and each one must
+		// be a no-op (job stays armed, unchanged) rather than re-anchoring the
+		// `every` job's NextRunAtMS to that PATCH's own wall-clock time.
+		api, sched := newTestRestAPIWithTaskTrigger(t)
+		wsID := ensureTestWorkspace(t, api)
+		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+
+		body := fmt.Sprintf(
+			`{"title":"EveryDoneStillFires","action":"llm","workspace_id":%q,"agent_id":"main",`+
+				`"trigger":{"type":"every","config":{"every_ms":60000}}}`,
+			wsID,
+		)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/tasks"
+		api.HandleTasks(w, r)
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+		var tsk gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+
+		armedBefore, ok := sched.NextRunAtMSForTask(tsk.Id)
+		require.True(t, ok, "an every task must be armed immediately after creation")
+
+		advanceTaskToDone(t, api, tsk.Id)
+
+		armedAfter, ok := sched.NextRunAtMSForTask(tsk.Id)
+		require.True(t, ok, "an every task must remain armed after reaching done (repeating series survives)")
+		assert.Equal(t, armedBefore, armedAfter,
+			"OnTaskUpserted must not re-anchor an already-armed every job on unrelated status PATCHes (FIX 1)")
+
+		from := time.UnixMilli(armedAfter).Add(-time.Minute)
+		to := time.UnixMilli(armedAfter).Add(5 * time.Minute)
+		params := url.Values{
+			"workspace_id": {wsID},
+			"from_ms":      {strconv.FormatInt(from.UnixMilli(), 10)},
+			"to_ms":        {strconv.FormatInt(to.UnixMilli(), 10)},
+			"tz":           {"UTC"},
+		}
+		wOcc := getOccurrences(t, api, params)
+		require.Equal(t, http.StatusOK, wOcc.Code, "body=%s", wOcc.Body.String())
+		var sets []gen.TaskOccurrenceSet
+		require.NoError(t, json.Unmarshal(wOcc.Body.Bytes(), &sets))
+		require.Len(t, sets, 1,
+			"a done every task with a live armed job must still render its future occurrences")
+		assert.Equal(t, tsk.Id, sets[0].TaskId)
+		assert.NotEmpty(t, sets[0].OccurrencesMs)
 	})
 
 	t.Run("done once task still omitted (non-repeating trigger)", func(t *testing.T) {

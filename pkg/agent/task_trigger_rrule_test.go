@@ -1032,3 +1032,213 @@ func TestTriggerScheduler_RecurringMultiFireAcrossCompletions(t *testing.T) {
 			"completion, got %d", len(jobs))
 	}
 }
+
+// -----------------------------------------------------------------------------
+// FIX 1 proof (7-reviewer gate on 1b3d4b3d, C1b): RRULE occurrence preserved
+// across a slow completion, not silently replaced.
+// -----------------------------------------------------------------------------
+
+// TestTriggerScheduler_RruleNoClobberOnSlowCompletion is C1b's regression
+// test: OnTaskUpserted's terminal-repeating path used to call
+// replaceJobLocked UNCONDITIONALLY — with no generation/staleness guard
+// (unlike rearmRrule's own check) — so a completion notification landing
+// well after the fire (this test advances the clock in between, simulating a
+// slow async run) would blindly recompute "next occurrence after now" and
+// replace the job rearmRrule had already armed, even though that armed
+// occurrence was still perfectly valid and still in the future. FIX 1's
+// idempotency guard (same generation, still armed) makes this a no-op
+// instead, preserving both the occurrence's fire time AND the job identity
+// rearmRrule installed.
+//
+// Before FIX 1: this test FAILS on the job-ID assertion (the completion
+// replaces the job with a new one, even though the AtMS happens to compute
+// out the same because the clock advance here does not cross the next
+// occurrence's own boundary — proving the replacement was gratuitous, not
+// merely harmless). After FIX 1: PASSES — same job, same AtMS.
+func TestTriggerScheduler_RruleNoClobberOnSlowCompletion(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-no-clobber", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+
+	if n := len(rec.calls()); n != 1 {
+		t.Fatalf("expected 1 dispatch, got %d", n)
+	}
+
+	armedAfterFire := jobsForTask(sched, tsk.ID)
+	if len(armedAfterFire) != 1 {
+		t.Fatalf("expected exactly 1 armed job right after the fire, got %d", len(armedAfterFire))
+	}
+	wantNext := dtstart + oneDayMs
+	if armedAfterFire[0].Schedule.AtMS == nil || *armedAfterFire[0].Schedule.AtMS != wantNext {
+		t.Fatalf("armed job AtMS = %v, want %d", derefI64(armedAfterFire[0].Schedule.AtMS), wantNext)
+	}
+
+	// Simulate a slow async run: the clock advances several hours between the
+	// fire (which already re-armed via rearmRrule) and the completion
+	// notification landing — well short of the next occurrence's own
+	// boundary (24h away), so the armed occurrence is still valid and still
+	// in the future when the completion notification arrives.
+	clk.Advance(6 * time.Hour)
+
+	doneStatus := task.StatusDone
+	completed, err := store.Update(tsk.ID, task.Patch{Status: &doneStatus})
+	if err != nil {
+		t.Fatalf("store.Update to done: %v", err)
+	}
+	sched.OnTaskUpserted(completed)
+
+	armedAfterCompletion := jobsForTask(sched, tsk.ID)
+	if len(armedAfterCompletion) != 1 {
+		t.Fatalf("expected exactly 1 armed job after completion, got %d", len(armedAfterCompletion))
+	}
+	if armedAfterCompletion[0].ID != armedAfterFire[0].ID {
+		t.Fatalf("REGRESSION (C1b): the slow completion's OnTaskUpserted call replaced the job (%q -> %q) "+
+			"instead of leaving the already-armed occurrence alone (a genuine no-op)",
+			armedAfterFire[0].ID, armedAfterCompletion[0].ID)
+	}
+	if armedAfterCompletion[0].Schedule.AtMS == nil || *armedAfterCompletion[0].Schedule.AtMS != wantNext {
+		t.Fatalf("armed occurrence after completion = %v, want %d (unchanged, not clobbered)",
+			derefI64(armedAfterCompletion[0].Schedule.AtMS), wantNext)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// FIX 1 proof: `failed` survives exactly like `done` (RecurringSurvivesRunCompletion
+// shape, StatusFailed).
+// -----------------------------------------------------------------------------
+
+// TestTriggerScheduler_RecurringSurvivesFailedCompletion is
+// TestTriggerScheduler_RecurringSurvivesRunCompletion's sibling for
+// StatusFailed: a repeating trigger's series must survive a per-run FAILED
+// status exactly as it survives DONE (task.IsTerminal treats both as
+// terminal; Trigger.IsRepeating does not distinguish which terminal status
+// caused the completion notification).
+func TestTriggerScheduler_RecurringSurvivesFailedCompletion(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-survives-failure", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+
+	if n := len(rec.calls()); n != 1 {
+		t.Fatalf("expected 1 dispatch, got %d", n)
+	}
+
+	armedAfterFire := jobsForTask(sched, tsk.ID)
+	if len(armedAfterFire) != 1 {
+		t.Fatalf("expected exactly 1 armed job right after the fire, got %d", len(armedAfterFire))
+	}
+	wantNext := dtstart + oneDayMs
+
+	failedStatus := task.StatusFailed
+	completed, err := store.Update(tsk.ID, task.Patch{Status: &failedStatus})
+	if err != nil {
+		t.Fatalf("store.Update to failed: %v", err)
+	}
+	sched.OnTaskUpserted(completed)
+
+	armedAfterCompletion := jobsForTask(sched, tsk.ID)
+	if len(armedAfterCompletion) != 1 {
+		t.Fatalf("a FAILED repeating task's job must survive exactly like a DONE one — got %d jobs, want 1",
+			len(armedAfterCompletion))
+	}
+	if armedAfterCompletion[0].Schedule.AtMS == nil || *armedAfterCompletion[0].Schedule.AtMS != wantNext {
+		t.Fatalf("job surviving a failed completion has AtMS = %v, want %d (unchanged next occurrence)",
+			derefI64(armedAfterCompletion[0].Schedule.AtMS), wantNext)
+	}
+	if armedAfterCompletion[0].ID != armedAfterFire[0].ID {
+		t.Errorf("job ID changed after a failed completion (%q -> %q); the idempotency guard "+
+			"must treat failed exactly like done", armedAfterFire[0].ID, armedAfterCompletion[0].ID)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// RunRecoverySweep: terminal-but-repeating + lost job, and exhausted-not-resurrected.
+// -----------------------------------------------------------------------------
+
+// TestTriggerScheduler_SweepReArmsTerminalRepeatingLostJob drives a recurring
+// task to `done`, then deletes its tracked cron job out from under the
+// scheduler (simulating a crash/restart-adjacent loss of the in-memory
+// taskToJob entry's underlying engine job — e.g. the jobs.json store file
+// getting corrupted or truncated between the job's registration and the next
+// read), and asserts RunRecoverySweep re-arms it: terminal-but-repeating is a
+// CANDIDATE for the sweep, not a skip (see RunRecoverySweep's doc comment).
+// A separate exhausted (COUNT reached) terminal series must NOT be
+// resurrected by the same sweep — exhaustion is retirement, not orphaning.
+func TestTriggerScheduler_SweepReArmsTerminalRepeatingLostJob(t *testing.T) {
+	sched, store, clk, _ := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+
+	// Task 1: a non-exhausted recurring series, driven to `done`, then its
+	// job is removed out from under the scheduler (simulating a lost job).
+	liveTsk := makeRruleTask(t, store, "agent-sweep-live", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(liveTsk)
+	if jobs := jobsForTask(sched, liveTsk.ID); len(jobs) != 1 {
+		t.Fatalf("expected 1 job registered for the live task, got %d", len(jobs))
+	}
+	doneStatus := task.StatusDone
+	liveDone, err := store.Update(liveTsk.ID, task.Patch{Status: &doneStatus})
+	if err != nil {
+		t.Fatalf("store.Update live task to done: %v", err)
+	}
+	sched.OnTaskUpserted(liveDone) // no-op post-FIX-1: job stays armed, same ID
+
+	liveJobsBefore := jobsForTask(sched, liveTsk.ID)
+	if len(liveJobsBefore) != 1 {
+		t.Fatalf("expected the done-but-repeating task to still have 1 armed job before the loss, got %d",
+			len(liveJobsBefore))
+	}
+	// Remove the job directly from the underlying cron engine WITHOUT going
+	// through OnTaskDeleted, so the scheduler's own taskToJob map still
+	// "thinks" it is tracking a job that no longer resolves — the exact
+	// shape RunRecoverySweep's orphan detection (shouldReArmLocked) targets.
+	sched.cs.RemoveJob(liveJobsBefore[0].ID)
+
+	// Task 2: an exhausted (COUNT=1) series, also driven to `done`. Its job
+	// was already retired (no job) by OnTaskUpserted's own errRruleExhausted
+	// handling — the sweep must NOT resurrect it.
+	exhaustedTsk := makeRruleTask(t, store, "agent-sweep-exhausted", "FREQ=DAILY;COUNT=1", dtstart, "UTC")
+	sched.OnTaskUpserted(exhaustedTsk)
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+	if jobs := jobsForTask(sched, exhaustedTsk.ID); len(jobs) != 0 {
+		t.Fatalf("expected the COUNT=1 series to have retired (no job) after its one fire, got %d", len(jobs))
+	}
+	exhaustedDone, err := store.Update(exhaustedTsk.ID, task.Patch{Status: &doneStatus})
+	if err != nil {
+		t.Fatalf("store.Update exhausted task to done: %v", err)
+	}
+	sched.OnTaskUpserted(exhaustedDone)
+	if jobs := jobsForTask(sched, exhaustedTsk.ID); len(jobs) != 0 {
+		t.Fatalf("exhausted task must still have no job after its done completion, got %d", len(jobs))
+	}
+
+	// Run the recovery sweep.
+	sched.RunRecoverySweep()
+
+	liveJobsAfterSweep := jobsForTask(sched, liveTsk.ID)
+	if len(liveJobsAfterSweep) != 1 {
+		t.Fatalf("RunRecoverySweep must re-arm the done-but-repeating task whose job was lost, got %d jobs",
+			len(liveJobsAfterSweep))
+	}
+	wantNext := dtstart + oneDayMs
+	if liveJobsAfterSweep[0].Schedule.AtMS == nil || *liveJobsAfterSweep[0].Schedule.AtMS != wantNext {
+		t.Errorf("re-armed job AtMS = %v, want %d", derefI64(liveJobsAfterSweep[0].Schedule.AtMS), wantNext)
+	}
+
+	if jobs := jobsForTask(sched, exhaustedTsk.ID); len(jobs) != 0 {
+		t.Errorf("RunRecoverySweep must NOT resurrect an exhausted (COUNT reached) series, got %d jobs", len(jobs))
+	}
+}

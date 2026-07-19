@@ -206,17 +206,15 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 	// A truly exhausted RRULE series (COUNT/UNTIL) naturally yields zero
 	// occurrences from buildOccurrenceSets below and is omitted that way, not
 	// by this predicate. A terminal `once`/manual task is still omitted here
-	// (isRepeating is false for them) — its single occurrence IS its whole
-	// series — and would be omitted a second time regardless by
+	// (task.Trigger.IsRepeating is false for them) — its single occurrence IS
+	// its whole series — and would be omitted a second time regardless by
 	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring/every only).
 	eligible := make([]task.Task, 0, len(tasks))
 	for _, t := range tasks {
 		if t.EffectiveSurface() == task.SurfaceHeartbeat {
 			continue
 		}
-		isRepeating := t.Trigger != nil &&
-			(t.Trigger.Type == task.TriggerRecurring || t.Trigger.Type == task.TriggerEvery)
-		if task.IsTerminal(t.Status) && !isRepeating {
+		if t.SeriesRetired() {
 			continue
 		}
 		eligible = append(eligible, t)

@@ -664,8 +664,18 @@ type Patch struct {
 //
 //   - `done` is terminal and FROZEN: no transition out of `done` is permitted
 //     (rejects the reviewer's example, done→inbox). A successful task is final;
-//     re-running is done via a fresh trigger fire (SpawnReset), not a status
-//     edit. (`failed` is NOT frozen — a failed task may be re-queued for retry.)
+//     re-running is normally done via a fresh trigger fire (SpawnReset), not a
+//     status edit. (`failed` is NOT frozen — a failed task may be re-queued
+//     for retry.) Narrow carve-out: when repeating is true (the task's
+//     trigger is recurring/every — see Trigger.IsRepeating), `done`→
+//     `in_progress` IS permitted. A repeating task's series survives a
+//     per-run `done` status (task_trigger.go's OnTaskUpserted keeps its next
+//     occurrence armed), so the task is not really "final" the way a
+//     manual/`once` task is — the manual "Run now" action (PATCH
+//     status=in_progress → StartTaskNow) must be able to do the same thing an
+//     autonomous re-fire can already do. The carve-out is intentionally
+//     narrow: only the exact done→in_progress edge, only for a repeating
+//     trigger; every other done→* transition stays frozen.
 //   - `blocked` is a derived side-state: it is entered/left only through the
 //     internal allowBlockedSet hatch (the dependency-recompute paths). A direct
 //     wire move TO `blocked` is rejected upstream (ErrBlockedNotSettable);
@@ -674,15 +684,19 @@ type Patch struct {
 // A no-op (from == to) is always allowed. When internal is true any transition
 // into or out of `blocked` is permitted. Returns ErrIllegalTransition (wrapping
 // ErrValidation) on rejection.
-func validateTransition(from, to Status, internal bool) error {
+func validateTransition(from, to Status, internal, repeating bool) error {
 	if from == to {
 		return nil
 	}
 	if internal && (to == StatusBlocked || from == StatusBlocked) {
 		return nil
 	}
-	// `done` is frozen — a completed task is final.
+	// `done` is frozen — a completed task is final — except the narrow
+	// repeating-trigger carve-out documented above.
 	if from == StatusDone {
+		if repeating && to == StatusInProgress {
+			return nil
+		}
 		return fmt.Errorf("%w: %q → %q is not permitted (done is terminal)", ErrIllegalTransition, from, to)
 	}
 	// Leaving `blocked` is only legal via the internal recompute hatch.
@@ -790,8 +804,10 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		}
 		// Reject illegal lifecycle transitions (N1). A no-op (same status) and any
 		// transition out of the derived `blocked` state via the internal hatch are
-		// always allowed.
-		if err := validateTransition(t.Status, *patch.Status, patch.allowBlockedSet); err != nil {
+		// always allowed; done→in_progress is additionally allowed when t's
+		// trigger repeats (see validateTransition's doc comment).
+		repeatingTrigger := t.Trigger.IsRepeating()
+		if err := validateTransition(t.Status, *patch.Status, patch.allowBlockedSet, repeatingTrigger); err != nil {
 			return nil, err
 		}
 		// A genuine transition INTO in_progress (not a same-status no-op) stamps

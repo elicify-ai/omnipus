@@ -451,3 +451,86 @@ func TestTriggerTerminalTask_JobRemoved(t *testing.T) {
 		t.Errorf("expected 0 jobs after task reached terminal status, got %d", len(sched.cs.ListJobs(true)))
 	}
 }
+
+// TestTriggerEvery_NoDriftOnSlowCompletion is the regression test for C1a (the
+// 7-reviewer gate finding on commit 1b3d4b3d): an `every` task's next fire
+// must stay anchored to the CRON ENGINE's own fire-time computation
+// (pkg/cron/service.go's scheduleNextRunUnsafe, which runs immediately after
+// RunScheduled returns — i.e. essentially at fire time, since dispatch is
+// fire-and-forget) and must NOT be re-anchored to the async run's LATER
+// completion time.
+//
+// Before FIX 1: OnTaskUpserted's terminal-repeating path called
+// replaceJobLocked unconditionally on every completion notification —
+// including for `every`, whose triggerToCronSchedule mapping carries no
+// anchor (Kind:"every", EveryMS only) — so AddJobFull computed a brand new
+// NextRunAtMS as (registration time)+everyMs, i.e. (completion time)+everyMs,
+// silently clobbering the engine's own fire-time-anchored value. A task whose
+// run takes T seconds would drift its next fire T seconds later EVERY cycle,
+// compounding indefinitely.
+//
+// This test simulates exactly that: fire the trigger, let the engine
+// self-perpetuate the job, advance the clock 30s (simulating a slow run),
+// then simulate that run's completion notification landing via
+// OnTaskUpserted(done). Before FIX 1 this test FAILS (NextRunAtMS drifts by
+// 30s and the job ID changes); after FIX 1 it PASSES (both are unchanged —
+// the completion notification is a true no-op).
+func TestTriggerEvery_NoDriftOnSlowCompletion(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	const intervalMs = int64(60_000) // 1 minute
+	tsk := makeTask(t, store, "agent-drift", &task.Trigger{
+		Type:   task.TriggerEvery,
+		Config: task.TriggerConfig{EveryMs: int64P(intervalMs)},
+	})
+	sched.OnTaskUpserted(tsk)
+
+	// Fire the trigger. The clock does not move again until after WaitForLane
+	// returns, so the engine's own scheduleNextRunUnsafe (called synchronously
+	// inside executeJobByID, right after the fire-and-forget dispatch returns)
+	// anchors NextRunAtMS at fireTime + intervalMs.
+	clk.Advance(2 * time.Minute)
+	fireTime := clk.Now()
+	sched.RunDueJobs(fireTime)
+	sched.WaitForLane()
+
+	if n := len(rec.calls()); n != 1 {
+		t.Fatalf("expected 1 dispatch, got %d", n)
+	}
+
+	jobsAfterFire := jobsForTask(sched, tsk.ID)
+	if len(jobsAfterFire) != 1 || jobsAfterFire[0].State.NextRunAtMS == nil {
+		t.Fatalf("expected exactly 1 armed job with a NextRunAtMS after the fire, got %+v", jobsAfterFire)
+	}
+	wantNext := fireTime.UnixMilli() + intervalMs
+	if got := *jobsAfterFire[0].State.NextRunAtMS; got != wantNext {
+		t.Fatalf("engine-anchored NextRunAtMS after fire = %d, want %d (fireTime + intervalMs)", got, wantNext)
+	}
+
+	// Simulate a SLOW run: 30s of wall-clock time pass (well under the 60s
+	// interval, so the engine's own next-run has not yet been superseded by
+	// another fire) before the async run's completion notification lands.
+	clk.Advance(30 * time.Second)
+
+	doneStatus := task.StatusDone
+	completed, err := store.Update(tsk.ID, task.Patch{Status: &doneStatus})
+	if err != nil {
+		t.Fatalf("store.Update to done: %v", err)
+	}
+	sched.OnTaskUpserted(completed)
+
+	jobsAfterCompletion := jobsForTask(sched, tsk.ID)
+	if len(jobsAfterCompletion) != 1 || jobsAfterCompletion[0].State.NextRunAtMS == nil {
+		t.Fatalf("expected exactly 1 armed job with a NextRunAtMS after completion, got %+v", jobsAfterCompletion)
+	}
+	if got := *jobsAfterCompletion[0].State.NextRunAtMS; got != wantNext {
+		t.Fatalf("REGRESSION (C1a, every-drift): NextRunAtMS after completion = %d, want %d "+
+			"(unchanged from the engine's fire-time anchor) — the slow run injected a %dms drift",
+			got, wantNext, got-wantNext)
+	}
+	if jobsAfterCompletion[0].ID != jobsAfterFire[0].ID {
+		t.Errorf("job ID changed after completion (%q -> %q); the completion notification must be a "+
+			"true no-op, not a replace that happened to compute the same value",
+			jobsAfterFire[0].ID, jobsAfterCompletion[0].ID)
+	}
+}

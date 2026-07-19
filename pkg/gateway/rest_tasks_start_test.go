@@ -14,6 +14,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -317,6 +318,90 @@ func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 			return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
 		}, 10*time.Second, 20*time.Millisecond,
 			"task goroutine must reach a terminal state before test teardown")
+	})
+}
+
+// TestTransition_DoneRepeatingTaskRunNow is FIX 2's regression test (the
+// second of the two 7-reviewer-gate findings on commit 1b3d4b3d): a
+// done-but-still-armed recurring/every task's manual "Run now" action (PATCH
+// status=in_progress) must succeed — mirroring the fact that the scheduler
+// itself keeps a repeating trigger's series armed past a done status
+// (pkg/agent/task_trigger.go's OnTaskUpserted). The narrow validateTransition
+// carve-out (pkg/task/store.go) must NOT unfreeze `done` for a task whose
+// trigger does not repeat (manual/once) — that must stay a 400 exactly as
+// before.
+func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
+	t.Run("done every task: PATCH status=in_progress succeeds (200)", func(t *testing.T) {
+		api := newTestRestAPIAlignedStores(t)
+		wsID := ensureTestWorkspace(t, api)
+		setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+
+		body := fmt.Sprintf(
+			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"main","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+			wsID,
+		)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/tasks"
+		api.HandleTasks(w, r)
+		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+		var tsk gen.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
+
+		advanceTaskToDone(t, api, tsk.Id)
+		doneTask := getTaskStatus(t, api, tsk.Id)
+		require.Equal(t, gen.TaskStatusDone, doneTask, "precondition: task must be done")
+		sessionBefore := getTaskSessionID(t, api, tsk.Id)
+
+		wRerun := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+		require.Equal(t, http.StatusOK, wRerun.Code,
+			"a done EVERY (repeating) task's Run now (done->in_progress) must succeed; body=%s", wRerun.Body.String())
+		var rerun gen.Task
+		require.NoError(t, json.Unmarshal(wRerun.Body.Bytes(), &rerun))
+		assert.Equal(t, gen.TaskStatusInProgress, rerun.Status)
+
+		// Teardown race guard, same precedent as TestHandleTaskPatch_InProgress_WithKnownAgent —
+		// but ONLY if this PATCH actually launched a NEW background run. It may
+		// not: handleTaskPatch's StartTaskNow launch guard also requires
+		// updated.SessionID == "", and advanceTaskToDone's own in_progress leg
+		// already populated session_id on the FIRST run, which this second
+		// transition does not clear — so, as the launch guard is written today,
+		// a "Run now" retry on an already-once-run task can inherit the stale
+		// session_id and skip re-launching entirely. FIX 2 (the validateTransition
+		// carve-out under test here) only concerns whether the done->in_progress
+		// TRANSITION itself is permitted (it is: 200, not 400) — whether the
+		// launch guard should also fire on a status-only retry with a stale
+		// session_id is a separate, un-scoped question this test deliberately
+		// does not assert either way; it only waits for a goroutine if one was
+		// actually launched (session_id changed), so it never hangs regardless
+		// of which behavior handleTaskPatch has.
+		taskID := tsk.Id
+		if changed := getTaskSessionID(t, api, taskID); changed != sessionBefore && changed != "" {
+			t.Cleanup(func() {
+				require.Eventually(t, func() bool {
+					s := getTaskStatus(t, api, taskID)
+					return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
+				}, 10*time.Second, 20*time.Millisecond,
+					"task goroutine must reach a terminal state before test teardown")
+			})
+		}
+	})
+
+	t.Run("done manual (no trigger) task: PATCH status=in_progress still 400s", func(t *testing.T) {
+		api := newTestRestAPIAlignedStores(t)
+		wsID := ensureTestWorkspace(t, api)
+
+		tsk := createTaskViaAPI(t, api, "OneShotDone", wsID)
+		advanceTaskToDone(t, api, tsk.Id)
+		require.Equal(t, gen.TaskStatusDone, getTaskStatus(t, api, tsk.Id), "precondition: task must be done")
+
+		wRerun := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
+		assert.Equal(t, http.StatusBadRequest, wRerun.Code,
+			"a done task with a NON-repeating trigger must stay frozen; body=%s", wRerun.Body.String())
+		var errResp gen.ErrorResponse
+		require.NoError(t, json.Unmarshal(wRerun.Body.Bytes(), &errResp))
+		assert.NotEmpty(t, errResp.Error)
 	})
 }
 
