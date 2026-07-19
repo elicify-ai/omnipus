@@ -241,3 +241,19 @@ export function shouldRenderToolCallInPanel(
 ): boolean {
   return verboseChatEnabled || tool !== 'load_tool'
 }
+
+/**
+ * Decide whether a `Message.type === 'judge_verdict'` transcript entry
+ * renders as a standalone card in the chat THREAD (ADR-049 SD-C10). Mirrors
+ * `shouldRenderSubagentSpan` exactly: judge calls are out-of-turn internal
+ * LLM actions with no standalone meaning to a reader — same class as
+ * `delegate`/background-`bash` — so they follow the same hide-by-default,
+ * verbose-only rule rather than a bespoke policy. The verdict is still fully
+ * persisted (transcript entry) and fully transparent via the ActivityPanel
+ * (panel visibility is NOT gated by this function at all — see
+ * `useRunningActivity`/`ActivityPanel`, which always render a judge row
+ * regardless of verbose chat).
+ */
+export function shouldRenderJudgeVerdictInThread(verboseChatEnabled: boolean): boolean {
+  return verboseChatEnabled
+}

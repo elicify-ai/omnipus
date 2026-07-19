@@ -472,12 +472,21 @@ function WorkspaceTeamGraphInner({
     }
   }, [edges, selectedEdgeId])
 
+  // SD-C17 defense-in-depth: resolve a candidate target's Agent `type`
+  // straight off the rendered node set so `validateConnection` can reject a
+  // System-agent target even though a System agent cannot become a team
+  // member through the supported flow (AddAgentPicker already excludes it).
+  const isSystemNodeId = useCallback(
+    (id: string | null | undefined) => nodes.some((n) => n.id === id && n.type === 'system'),
+    [nodes],
+  )
+
   const isValidConnection: IsValidConnection<DelegationFlowEdge> = useCallback(
     (conn) => {
       if (!conn.source || !conn.target) return false
-      return validateConnection(conn.source, conn.target, editState, workerIds) === null
+      return validateConnection(conn.source, conn.target, editState, workerIds, isSystemNodeId(conn.target)) === null
     },
-    [editState, workerIds],
+    [editState, workerIds, isSystemNodeId],
   )
 
   const handleConnect = useCallback(
@@ -485,14 +494,14 @@ function WorkspaceTeamGraphInner({
       // `conn.source` is the node the drag STARTED on (the delegator),
       // `conn.target` is where it was DROPPED (the delegate). source → target.
       if (!conn.source || !conn.target) return
-      const reason = validateConnection(conn.source, conn.target, editState, workerIds)
+      const reason = validateConnection(conn.source, conn.target, editState, workerIds, isSystemNodeId(conn.target))
       if (reason !== null) {
         onRejectConnection(REJECTION_MESSAGE[reason] ?? 'Connection not allowed.')
         return
       }
       onConnect(conn.source, conn.target)
     },
-    [editState, workerIds, onConnect, onRejectConnection],
+    [editState, workerIds, isSystemNodeId, onConnect, onRejectConnection],
   )
 
   // Bug fix (live-UAT): React Flow only calls `onConnect` when
@@ -511,10 +520,11 @@ function WorkspaceTeamGraphInner({
         connectionState.isValid,
         editState,
         workerIds,
+        isSystemNodeId(connectionState.toNode?.id),
       )
       if (message) onRejectConnection(message)
     },
-    [editState, workerIds, onRejectConnection],
+    [editState, workerIds, isSystemNodeId, onRejectConnection],
   )
 
   // Keyboard "Delegate…" picker (WCAG 2.1.1) → the SAME validated mutation

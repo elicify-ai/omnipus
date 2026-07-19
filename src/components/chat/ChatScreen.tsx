@@ -36,6 +36,8 @@ import { GenericToolCall } from './tools/GenericToolCall'
 import { WebServeBlock } from './tools/WebServeUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
+import { GoalIndicator } from './GoalIndicator'
+import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { AgentPicker } from './composer/AgentPicker'
 import { ModelPicker } from './composer/ModelPicker'
@@ -61,7 +63,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderSubagentSpan, shouldRenderToolCall } from '@/lib/toolVisibility'
+import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
@@ -997,6 +999,9 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
 function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
   const { skills, commandLabels } = useSkillChipData()
+  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
+  // verbose-only inline) — same store read as every other verbose-gated row.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   return (
     <div
       data-testid="virtualized-message-list"
@@ -1004,6 +1009,15 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
     >
       <div className="max-w-4xl mx-auto w-full">
         {messages.map((msg) => {
+          // ADR-049 D2/SD-C10: a persisted `Message.type: judge_verdict`
+          // entry never renders via the normal role-based rows — it is
+          // panel-only by default (ActivityPanel's judge row, fed live by
+          // the judge_verdict WS frame — see chat.ts), inline in the thread
+          // ONLY under verbose chat.
+          if (msg.type === 'judge_verdict') {
+            if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
+            return <JudgeVerdictThreadCard key={msg.id} verdict={msg.verdict} />
+          }
           if (msg.role === 'user')
             return (
               <VirtualUserMessageRow
@@ -1107,6 +1121,8 @@ function VirtualizedMessageListInner({
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const { skills, commandLabels } = useSkillChipData()
+  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
@@ -1123,6 +1139,11 @@ function VirtualizedMessageListInner({
   const virtualItems = virtualizer.getVirtualItems()
 
   const rowForMessage = (msg: ChatMessage) => {
+    // ADR-049 D2/SD-C10: see PlainMessageList's identical branch above.
+    if (msg.type === 'judge_verdict') {
+      if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
+      return <JudgeVerdictThreadCard verdict={msg.verdict} />
+    }
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
@@ -2081,8 +2102,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                       longest current label; truncate guards outliers. */}
                   <span className="w-[9.5rem] shrink-0 truncate font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
                   <span className="text-[11px] flex-1 min-w-0 truncate">{item.description}</span>
-                  {/* FR-014/R3: show argument_hint as muted help text for skills */}
-                  {item.section === 'skills' && item.argumentHint && (
+                  {/* FR-014/R3: show argument_hint as muted help text for skills;
+                      SD-C7 extends this to `delivery: agent` commands (e.g. /goal, /loop). */}
+                  {(item.section === 'skills' || item.section === 'commands') && item.argumentHint && (
                     <span className="ml-auto text-[10px] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
                       {item.argumentHint}
                     </span>
@@ -2604,6 +2626,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
+  // ADR-049 D6/US-12/SD-C9: goal/loop indicator state, same session-scoped
+  // foreground fields as rateLimitEvent above.
+  const goalStatus = useChatStore((s) => s.goalStatus ?? null)
+  const loopStatus = useChatStore((s) => s.loopStatus ?? null)
   const setMessages = useChatStore((s) => s.setMessages)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
@@ -2758,6 +2784,16 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 tool={rateLimitEvent.tool}
                 onDismiss={clearRateLimitEvent}
               />
+            </div>
+          )}
+
+          {/* Goal/loop indicator — ADR-049 D6/US-12/SD-C9: same non-scrolling
+              slot as RateLimitIndicator above, persistent (no dismiss) while
+              a goal/loop is active. GoalIndicator itself renders nothing
+              when both are absent/cleared. */}
+          {(goalStatus || loopStatus) && (
+            <div className="px-4 space-y-2 pb-2">
+              <GoalIndicator goalStatus={goalStatus} loopStatus={loopStatus} />
             </div>
           )}
 

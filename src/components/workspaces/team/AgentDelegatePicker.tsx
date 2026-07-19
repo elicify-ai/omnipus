@@ -51,7 +51,11 @@ export function AgentDelegatePicker({
       nodes.filter(
         (n) =>
           n.id !== source.id &&
-          validateConnection(source.id, n.id, editState, workerIds) === null,
+          // SD-C17 defense-in-depth: a System agent is never a valid
+          // delegation target, even though it cannot appear as a team
+          // member (and therefore as a node here) through the supported
+          // flow — see teamGraphModel.ts's validateConnection doc comment.
+          validateConnection(source.id, n.id, editState, workerIds, n.type === 'system') === null,
       ),
     [nodes, source.id, editState, workerIds],
   )

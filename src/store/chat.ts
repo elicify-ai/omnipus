@@ -7,7 +7,16 @@ import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay }
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
+import type {
+  ToolResultRef,
+  TruncatedResult,
+  WhatsAppPairingFrame,
+  NotificationFrame,
+  GoalStatusFrame,
+  LoopStatusFrame,
+  JudgeVerdictFrame,
+} from '@/lib/api/generated/asyncapi-types'
+import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -310,6 +319,25 @@ export interface SessionChatState {
    * `{}` / `false` and every write site initializes it first.
    */
   mergedReplayMessageIds?: Record<string, true>
+  /**
+   * ADR-049 D6/US-12: latest `goal_status` frame for this session, or
+   * null/undefined when no goal is active/it was cleared. Session-scoped —
+   * the frame always carries `session_id` (`goal_status` is in
+   * `SESSION_SCOPED_FRAME_TYPES`). Drives `GoalIndicator` (SD-C9): the
+   * component itself decides not to render when `state === 'cleared'`, so
+   * the reducer here just stores whatever frame arrives verbatim (mirrors
+   * `rateLimitEvent`'s "store the raw event, let the renderer decide"
+   * pattern) rather than nulling it out on a 'cleared' state.
+   *
+   * Optional for the same reason as `toolCallOwnerMessageId`/
+   * `mergedReplayMessageIds` above: several existing test fixtures construct
+   * a SessionChatState-shaped bucket by hand, pre-dating this field. Every
+   * read site defensively falls back to `null` and every write site
+   * (`emptySessionState`, the store's initial state) sets it explicitly.
+   */
+  goalStatus?: GoalStatusFrame | null
+  /** ADR-049 D6/US-12: latest `loop_status` frame for this session. Same session-scoped/store-verbatim/optional-for-fixture-compat pattern as `goalStatus`. */
+  loopStatus?: LoopStatusFrame | null
 }
 
 function emptySessionState(): SessionChatState {
@@ -332,6 +360,8 @@ function emptySessionState(): SessionChatState {
     lastReceivedEventTime: null,
     spanByParentCallId: {},
     mergedReplayMessageIds: {},
+    goalStatus: null,
+    loopStatus: null,
   }
 }
 
@@ -722,6 +752,10 @@ interface ChatStore {
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
+  /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
+  goalStatus?: GoalStatusFrame | null
+  /** ADR-049 D6/US-12: active session's latest `loop_status` frame, or null/undefined. */
+  loopStatus?: LoopStatusFrame | null
   lastUserMessageAt: number | null
   /** B3: cancel progress stage for the active session, or null when idle. */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
@@ -1037,6 +1071,13 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   'agent_switched', 'task_status_changed',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
+  // ADR-049 R3: goal_status/loop_status always carry `session_id` (schema
+  // `min(1)`, required) — session-scoped like rate_limit. plan_status and
+  // judge_verdict deliberately do NOT carry session_id (correlated by
+  // plan_id/task_id instead, not any specific chat thread) and so are
+  // handled as GLOBAL frames below (like notification/whatsapp_pairing) —
+  // do not add them here.
+  'goal_status', 'loop_status',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
@@ -1244,6 +1285,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
     sessionTokens: 0,
     sessionCost: 0,
     rateLimitEvent: null,
+    goalStatus: null,
+    loopStatus: null,
     lastUserMessageAt: null,
     cancelStage: null,
     lastReceivedEventTime: null,
@@ -4150,6 +4193,52 @@ export const useChatStore = create<ChatStore>((set, get) => {
           armRateLimitClear(sid, event)
           break
         }
+
+        case 'goal_status': {
+          // ADR-049 D6/US-12: session-scoped (in SESSION_SCOPED_FRAME_TYPES
+          // above) — targetSid is already resolved/dropped per the routing
+          // rules at the top of handleFrame. Store the frame verbatim;
+          // GoalIndicator (SD-C9) decides whether/how to render each state,
+          // including 'cleared' (indicator removed) — no special-casing here.
+          if (!targetSid) break
+          const goalFrame = frame as GoalStatusFrame
+          withBucket(targetSid, () => ({ goalStatus: goalFrame }))
+          break
+        }
+
+        case 'loop_status': {
+          // ADR-049 D6/US-12: session-scoped, same store-verbatim pattern as goal_status.
+          if (!targetSid) break
+          const loopFrame = frame as LoopStatusFrame
+          withBucket(targetSid, () => ({ loopStatus: loopFrame }))
+          break
+        }
+
+        case 'plan_status': {
+          // ADR-049 R3/FR-099: GLOBAL frame — PlanStatusFrame carries no
+          // session_id (correlated by plan_id, not any chat thread), so it
+          // is NOT routed through targetSid/withBucket at all. Invalidate
+          // the plan/task query caches so PlanCard/BoardView (which read
+          // Plan.state/plan_phase/paused_reason directly off the REST
+          // response, not off this frame) refetch and re-render with the
+          // new state — including the "paused — owner disabled" surfacing
+          // (US-10 AS-7), which is driven entirely by the refetched Plan
+          // object's own fields, not by anything stored from this frame.
+          queryClient.invalidateQueries({ queryKey: ['plans'] })
+          queryClient.invalidateQueries({ queryKey: ['tasks'] })
+          break
+        }
+
+        case 'judge_verdict': {
+          // ADR-049 D2/D4/US-13: GLOBAL frame (no session_id — correlated by
+          // task_id/plan_id) — feeds the ActivityPanel's judge row via a
+          // dedicated global store (mirrors the #283/#264
+          // whatsapp_pairing/notification pattern: accessed via getState()
+          // at frame time, never routed through a session bucket).
+          useJudgeActivityStore.getState().apply(frame as JudgeVerdictFrame)
+          break
+        }
+
         case 'whatsapp_pairing': {
           // #283: global (not session-tied) — record QR/status for the Channels
           // config panel. Accessed via getState() at frame time (not a hook
