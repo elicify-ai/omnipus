@@ -793,33 +793,23 @@ describe('TaskDetailPanel — renders subtask section when subtasks exist', () =
 // ── Full task UX edits (trigger / depends-on / due / todos) ────────────────────
 
 describe('TaskDetailPanel — editable trigger', () => {
-  it('selecting "Recurring" PATCHes a recurring trigger with a default cron', async () => {
-    const { updateTask } = await import('@/lib/api')
+  // FR-011/D3/FR-005: recurring-trigger editing is removed from the generic
+  // detail panel entirely — it exists only in the calendar editor. The two
+  // tests that used to select "Recurring" and edit a cron expression from
+  // this panel are replaced by the trim + FR-023 defensive-guard tests below.
+  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" for a manual/once task', async () => {
     Element.prototype.scrollIntoView = vi.fn()
     renderPanel(makeTask({ id: 'task-trig', status: 'next' }))
 
-    // The Trigger field SmartSelect — open it and choose Recurring
-    const recurringOption = await openSmartSelectAndFind(/trigger/i, /recurring \(cron\)/i)
-    fireEvent.click(recurringOption)
-
-    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
-    const arg = lastUpdateArg(updateTask)
-    expect(arg.trigger?.type).toBe('recurring')
-    expect(arg.trigger?.config.cron_expr).toBeTruthy()
+    await openSmartSelectAndFind(/^trigger$/i, /once \(at a time\)/i)
+    // Query by role="option" — the closed trigger's own selected-value
+    // display ALSO reads "None (manual)" (the default), so a plain
+    // getByText would ambiguously match both it and the open option.
+    expect(screen.getByRole('option', { name: /none \(manual\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /once \(at a time\)/i })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /every \(interval\)/i })).toBeNull()
+    expect(screen.queryByRole('option', { name: /recurring \(cron\)/i })).toBeNull()
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
-  })
-
-  it('editing the cron expression PATCHes the new cron on blur', async () => {
-    const { updateTask } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-cron', status: 'next', trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } } }))
-
-    const cron = await screen.findByLabelText(/cron expression/i)
-    fireEvent.change(cron, { target: { value: '15 6 * * *' } })
-    fireEvent.blur(cron)
-
-    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
-    const arg = lastUpdateArg(updateTask)
-    expect(arg.trigger?.config.cron_expr).toBe('15 6 * * *')
   })
 
   it('picking a date + time for the "Once" trigger PATCHes trigger.config.at_ms', async () => {
@@ -846,6 +836,63 @@ describe('TaskDetailPanel — editable trigger', () => {
       expect(arg.trigger?.type).toBe('once')
       expect(arg.trigger?.config.at_ms).toBe(expectedAtMs)
     }, { timeout: 3000 })
+  })
+})
+
+// ── FR-023 defensive guard ────────────────────────────────────────────────────
+// Board/List already exclude every/recurring tasks (BoardView/ListView's
+// isRecurringTrigger filter) — this panel should never receive one in
+// practice. These tests force-feed one directly as the `task` prop (the
+// documented "stale cache or a race" path, Acceptance Scenario 5) and assert
+// the defensive read-only rendering: a plain-English summary, an "Edit in
+// workspace calendar" link, no SmartSelect trigger picker, and — critically —
+// no raw cron/rule string anywhere in the rendered output.
+
+describe('TaskDetailPanel — FR-023 defensive guard for a force-fed recurring task', () => {
+  it('renders a read-only summary and an "Edit in workspace calendar" link for a recurring (cron) task — never the raw cron string', async () => {
+    renderPanel(makeTask({
+      id: 'task-recurring-forced',
+      status: 'next',
+      workspace_id: 'ws-test',
+      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+    }))
+
+    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
+    // No cron string is ever displayed (D8/D9/FR-023).
+    expect(screen.queryByText(/0 9 \* \* MON/)).toBeNull()
+    expect(screen.queryByLabelText(/cron expression/i)).toBeNull()
+    // No editable trigger picker for a recurring task.
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
+  })
+
+  it('renders a read-only summary for an every-interval task, derived from every_ms, with no interval input', async () => {
+    renderPanel(makeTask({
+      id: 'task-every-forced',
+      status: 'next',
+      workspace_id: 'ws-test',
+      trigger: { type: 'every', config: { every_ms: 45 * 60_000 } },
+    }))
+
+    expect(await screen.findByText(/repeats every 45 minutes/i)).toBeInTheDocument()
+    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
+  })
+
+  it('omits the calendar link when the force-fed task has no workspace_id, but still shows the read-only summary', async () => {
+    renderPanel(makeTask({
+      id: 'task-recurring-no-ws',
+      status: 'next',
+      workspace_id: '',
+      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+    }))
+
+    expect(await screen.findByText(/repeats on a recurring schedule/i)).toBeInTheDocument()
+    expect(screen.queryByText(/edit in workspace calendar/i)).toBeNull()
   })
 })
 

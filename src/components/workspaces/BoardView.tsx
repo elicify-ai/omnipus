@@ -21,6 +21,7 @@ import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import type { Task, Agent, Milestone } from '@/lib/api'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import { MILESTONE_FILTER_UNSCHEDULED } from './MilestoneFilterPills'
+import { isRecurringTrigger } from './taskFormFields'
 import { cn } from '@/lib/utils'
 
 type TaskStatus = Task['status']
@@ -131,7 +132,11 @@ export function BoardView({
   onMoveRejected,
 }: BoardViewProps) {
   // Filter out non-user-surface tasks (e.g. heartbeat tasks are hidden from general views)
-  const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
+  // AND recurring tasks (trigger.type ∈ {every, recurring}) — those are
+  // calendar-only (D3/FR-011); presentation-only, the store is untouched.
+  const userTasks = tasks.filter(
+    (t) => (t.surface === 'user' || t.surface === undefined) && !isRecurringTrigger(t.trigger),
+  )
   // Apply milestone filter
   const filteredTasks = filterByMilestone(userTasks, activeMilestoneId)
   // Board shows only top-level tasks — subtasks (parent_task_id present) are

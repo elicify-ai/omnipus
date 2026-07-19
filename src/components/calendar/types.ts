@@ -65,11 +65,31 @@ export type StatusIconKey =
  * `taskId`, or a task without one) are unrepresentable — the consumer's
  * switch on `kind` then narrows `taskId`/`milestoneId`/`status` with no
  * defensive runtime checks, and `persistReschedule`'s switch can be exhaustive.
+ *
+ * Calendar Recurrence Redesign (docs/internal/specs/calendar-recurrence-redesign-spec.md,
+ * Integration Boundaries → FullCalendar v6, FR-009/FR-012) adds three occurrence
+ * kinds, server-expanded via `GET /api/v1/tasks/occurrences` and joined into
+ * events by `eventMapping.mapToCalendarEvents`'s new `occurrenceSets` param:
+ *   - `task-occurrence`     — one raw instant (Week/Day views, or ≤3/day in Month).
+ *   - `task-occurrence-agg` — one aggregated day (>3 occurrences/day in overview
+ *     ranges, D6); `tooltip` carries the pre-formatted "first at HH:MM" string.
+ *   - `task-occurrence-more` — a truncation marker on the last covered day when
+ *     the server's response for that task was capped (`truncated: true`).
+ * All three reuse `icon: 'Clock'` (no new StatusIconKey member) and are always
+ * `editable: false` on the produced EventInput (FR-012 — not draggable); the
+ * marker is additionally intended to be non-interactive at the render layer.
+ * `status`/`icon` are kept on every member (not just the due/fire ones) so
+ * FullCalendarView.tsx's existing unconditional `ext.icon` / `ext.status`
+ * reads (EventChip) keep type-checking without that file needing to change
+ * just to accommodate this union growing.
  */
 export type CalendarEventExtProps =
   | { kind: 'task-due'; taskId: string; status: TaskStatus; icon: StatusIconKey }
   | { kind: 'task-fire'; taskId: string; status: TaskStatus; icon: 'Clock' }
   | { kind: 'milestone'; milestoneId: string; icon: 'Flag' }
+  | { kind: 'task-occurrence'; taskId: string; status: TaskStatus; icon: 'Clock' }
+  | { kind: 'task-occurrence-agg'; taskId: string; status: TaskStatus; icon: 'Clock'; tooltip: string }
+  | { kind: 'task-occurrence-more'; taskId: string; status: TaskStatus; icon: 'Clock'; tooltip: string }
 
 /** Near-black chip text — clears WCAG AAA (>=7:1) on every chip background (SC-006b). */
 export const CHIP_TEXT_COLOR = '#0A0A0B'
@@ -135,6 +155,20 @@ export interface CalendarToolbarProps {
    * period instead of real-world "today". Omitted/undefined → no prefill.
    */
   onNewTask: (date?: Date) => void
+
+  // ── Agent filter (FR-015 / US-4) ──────────────────────────────────────────
+  // All four are optional and travel together: the toolbar renders the Agent
+  // dropdown only when `onAgentFilterChange` is supplied. This keeps every
+  // pre-existing caller/test (which predates this feature) compiling
+  // unchanged; CalendarScreen — the only real caller — always supplies all
+  // four, so the live toolbar always shows the filter.
+  /** Currently selected filter value: `AGENT_FILTER_ALL` / `AGENT_FILTER_UNASSIGNED` (see `./calendarAgentFilter`) or an agent id. */
+  agentFilter?: string
+  onAgentFilterChange?: (value: string) => void
+  /** Workspace-roster entries beyond the built-in "All agents"/"Unassigned" sentinels — `{value,label}` shape matches ListView's FilterSelect pattern (and `buildTaskAssigneeItems`'s output). */
+  agentOptions?: { value: string; label: string }[]
+  /** True when the workspace team roster failed to load — shows the same degrade notice used by CreateTaskSlideOver/TaskDetailPanel ("Team list unavailable — showing all agents"). */
+  agentRosterError?: boolean
 }
 
 /** The milestone a MilestoneDatePopover edits (null = closed). */

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, Link } from '@tanstack/react-router'
 import {
   fetchAgents,
   buildTaskAssigneeItems,
@@ -17,7 +17,7 @@ import {
   workspacesQueryKeys,
   tasksQueryKeys,
 } from '@/lib/api'
-import type { Task, TaskUpdateRequest, Todo, TaskTrigger } from '@/lib/api'
+import type { Task, TaskUpdateRequest, Todo } from '@/lib/api'
 import {
   Sheet,
   SheetContent,
@@ -62,6 +62,7 @@ import {
   Trash,
   Plus,
   CaretDown,
+  CalendarBlank,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import {
@@ -71,6 +72,8 @@ import {
   datetimeLocalToIso,
   datetimeLocalToDate,
   dateToDatetimeLocal,
+  isRecurringTrigger,
+  recurringTriggerSummary,
 } from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
@@ -386,21 +389,19 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     doSetDeps(next)
   }
 
+  // FR-011/D3/FR-005: the generic detail panel edits manual/once triggers
+  // only — recurring-trigger editing exists exclusively in the calendar
+  // editor. (This handler is unreachable for every/recurring tasks: the
+  // Trigger field renders the FR-023 defensive read-only guard for those,
+  // never this SmartSelect.)
   function handleTriggerKindChange(kind: TriggerKind) {
     if (!task) return
-    // Preserve existing config where it still applies, otherwise sensible defaults.
-    const cfg = task.trigger?.config ?? {}
-    let trigger: TaskTrigger
     if (kind === 'once') {
-      trigger = buildTrigger('once', { at_ms: typeof cfg.at_ms === 'number' ? cfg.at_ms : Date.now() + 3_600_000 })
-    } else if (kind === 'every') {
-      trigger = buildTrigger('every', { every_ms: typeof cfg.every_ms === 'number' ? cfg.every_ms : 3_600_000 })
-    } else if (kind === 'recurring') {
-      trigger = buildTrigger('recurring', { cron_expr: typeof cfg.cron_expr === 'string' && cfg.cron_expr ? cfg.cron_expr : '0 9 * * MON' })
+      const cfg = task.trigger?.config ?? {}
+      doUpdate({ trigger: buildTrigger('once', { at_ms: typeof cfg.at_ms === 'number' ? cfg.at_ms : Date.now() + 3_600_000 }) })
     } else {
-      trigger = buildTrigger('manual', {})
+      doUpdate({ trigger: buildTrigger('manual', {}) })
     }
-    doUpdate({ trigger })
   }
 
   function handleTriggerAtChange(value: string) {
@@ -411,24 +412,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     }
     setTriggerError('')
     doUpdate({ trigger: buildTrigger('once', { at_ms: at }) })
-  }
-
-  function handleTriggerEveryChange(minutes: number) {
-    if (!Number.isFinite(minutes) || minutes < 1) {
-      setTriggerError('Interval must be at least 1 minute.')
-      return
-    }
-    setTriggerError('')
-    doUpdate({ trigger: buildTrigger('every', { every_ms: minutes * 60_000 }) })
-  }
-
-  function handleTriggerCronChange(cron: string) {
-    if (!cron.trim()) {
-      setTriggerError('Enter a cron expression for the recurring trigger.')
-      return
-    }
-    setTriggerError('')
-    doUpdate({ trigger: buildTrigger('recurring', { cron_expr: cron.trim() }) })
   }
 
   function handleDueChange(value: string) {
@@ -513,7 +496,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const doneTodos = todos.filter((t: Todo) => t.status === 'completed').length
   const blockedBy = task.blocked_by ?? []
   const triggerKind: TriggerKind = task.trigger?.type ?? 'manual'
-  const triggerCfg = task.trigger?.config ?? {}
 
   return (
     <div className="space-y-5">
@@ -687,55 +669,60 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         ) : null}
       </Field>
 
-      {/* Trigger (editable) */}
+      {/* Trigger — FR-023 defensive guard: Board/List already exclude
+          every/recurring tasks (BoardView/ListView's isRecurringTrigger
+          filter), so this panel should never receive one in practice. If it
+          somehow does (stale cache / race), render a READ-ONLY plain-English
+          summary + a link to the workspace calendar instead of the editable
+          picker — never a raw cron/rule string, never trigger editing here.
+          Recurring-trigger editing exists only in the calendar editor
+          (FR-005). Otherwise (manual/once, the normal case), the picker
+          below offers only those two kinds — the same trim as the generic
+          create form (FR-011/D3). */}
       <Field label="Trigger">
-        <SmartSelect
-          value={triggerKind}
-          onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
-          triggerClassName="h-8 text-xs"
-          ariaLabel="Trigger"
-          items={[
-            { value: 'manual', label: 'None (manual)', className: 'text-xs' },
-            { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
-            { value: 'every', label: 'Every (interval)', className: 'text-xs' },
-            { value: 'recurring', label: 'Recurring (cron)', className: 'text-xs' },
-          ]}
-        />
-        {triggerKind === 'once' && (
-          <DateTimePicker
-            aria-label="Trigger date and time"
-            value={triggerAtDraft}
-            onChange={(d) => {
-              setTriggerAtDraft(d)
-              scheduleDateCommit('triggerAt', () => handleTriggerAtChange(dateToDatetimeLocal(d)))
-            }}
-            className="mt-1.5"
-          />
-        )}
-        {triggerKind === 'every' && (
-          <div className="mt-1.5 flex items-center gap-2">
-            <Input
-              aria-label="Interval in minutes"
-              type="number"
-              min={1}
-              defaultValue={typeof triggerCfg.every_ms === 'number' ? String(Math.round(triggerCfg.every_ms / 60_000)) : '60'}
-              onBlur={(e) => handleTriggerEveryChange(parseInt(e.target.value, 10))}
-              className="text-xs w-28"
-            />
-            <span className="text-xs text-[var(--color-muted)]">minutes</span>
+        {isRecurringTrigger(task.trigger) ? (
+          <div className="space-y-1.5">
+            <p className="text-xs text-[var(--color-secondary)]">
+              {recurringTriggerSummary(task.trigger)}
+            </p>
+            {task.workspace_id && (
+              <Link
+                to="/workspaces/$workspaceId/calendar"
+                params={{ workspaceId: task.workspace_id }}
+                className="inline-flex items-center gap-1 text-xs text-[color:var(--color-accent)] hover:underline"
+              >
+                <CalendarBlank size={12} />
+                Edit in workspace calendar
+              </Link>
+            )}
           </div>
-        )}
-        {triggerKind === 'recurring' && (
-          <Input
-            aria-label="Cron expression"
-            defaultValue={typeof triggerCfg.cron_expr === 'string' ? triggerCfg.cron_expr : '0 9 * * MON'}
-            onBlur={(e) => handleTriggerCronChange(e.target.value)}
-            placeholder="0 9 * * MON"
-            className="mt-1.5 text-xs font-mono"
-          />
-        )}
-        {triggerError && (
-          <p className="text-xs text-[var(--color-error)] mt-1.5">{triggerError}</p>
+        ) : (
+          <>
+            <SmartSelect
+              value={triggerKind}
+              onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
+              triggerClassName="h-8 text-xs"
+              ariaLabel="Trigger"
+              items={[
+                { value: 'manual', label: 'None (manual)', className: 'text-xs' },
+                { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
+              ]}
+            />
+            {triggerKind === 'once' && (
+              <DateTimePicker
+                aria-label="Trigger date and time"
+                value={triggerAtDraft}
+                onChange={(d) => {
+                  setTriggerAtDraft(d)
+                  scheduleDateCommit('triggerAt', () => handleTriggerAtChange(dateToDatetimeLocal(d)))
+                }}
+                className="mt-1.5"
+              />
+            )}
+            {triggerError && (
+              <p className="text-xs text-[var(--color-error)] mt-1.5">{triggerError}</p>
+            )}
+          </>
         )}
       </Field>
 

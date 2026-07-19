@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { STATUS_LABELS, statusColor, statusLabel } from '@/lib/statusColors'
 import type { Task } from '@/lib/api'
 import type { Milestone } from '@/lib/api'
+import { isRecurringTrigger } from './taskFormFields'
 
 type SortDir = 'desc' | 'asc'
 
@@ -29,8 +30,12 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
   const [filterAgent, setFilterAgent] = useState<string>('__all__')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
-  // Filter out heartbeat/non-user surface tasks from general list view
-  const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
+  // Filter out heartbeat/non-user surface tasks from general list view AND
+  // recurring tasks (trigger.type ∈ {every, recurring}) — those are
+  // calendar-only (D3/FR-011); presentation-only, the store is untouched.
+  const userTasks = tasks.filter(
+    (t) => (t.surface === 'user' || t.surface === undefined) && !isRecurringTrigger(t.trigger),
+  )
 
   const filtered = userTasks
     .filter((t) => filterStatus === '__all__' || t.status === filterStatus)

@@ -19,6 +19,8 @@ import type { DateClickArg } from '@fullcalendar/interaction'
 import {
   fetchTasks,
   fetchMilestones,
+  fetchAgents,
+  buildTaskAssigneeItems,
   updateTask,
   updateMilestone,
   tasksQueryKeys,
@@ -27,10 +29,12 @@ import {
   type Milestone,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { mapToCalendarEvents, formatLocalDate } from '@/lib/calendar/eventMapping'
 import { FullCalendarView } from '@/components/calendar/FullCalendarView'
 import { CalendarToolbar } from '@/components/calendar/CalendarToolbar'
 import { MilestoneDatePopover } from '@/components/calendar/MilestoneDatePopover'
+import { AGENT_FILTER_ALL, filterEventsByAgent } from '@/components/calendar/calendarAgentFilter'
 import type {
   CalendarViewName,
   CalendarEventExtProps,
@@ -89,8 +93,42 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   })
 
   const events = useMemo(() => mapToCalendarEvents(tasks, milestones), [tasks, milestones])
+
+  // ── Agent filter (FR-015 / US-4) ─────────────────────────────────────────
+  // Client-side only — SC-004 requires ZERO additional network requests for
+  // the filter itself, so `filterEventsByAgent` is a pure in-memory pass over
+  // `events` + the already-fetched `tasks` (no new query). The roster reuses
+  // the identical workspace-team-scoping + degrade convention as the task
+  // assignee picker (CreateTaskSlideOver/TaskDetailPanel): on a failed
+  // team-set fetch, `useWorkspaceTeamIds` returns `teamIds: undefined`,
+  // `buildTaskAssigneeItems` falls back to the FULL unscoped agent list (never
+  // an empty/broken dropdown), and `teamError` drives the toolbar's "Team
+  // list unavailable — showing all agents" notice (Edge Cases).
+  const [agentFilter, setAgentFilter] = useState<string>(AGENT_FILTER_ALL)
+  const { data: allAgents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
+  const { teamIds, isError: teamError } = useWorkspaceTeamIds(workspaceId)
+  const agentOptions = useMemo(
+    () =>
+      buildTaskAssigneeItems(allAgents, {
+        teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
+      }),
+    [allAgents, teamIds],
+  )
+  // Keys off each event's underlying TASK `agent_id` (via `tasks`, already
+  // fetched above) rather than per-chip data — see calendarAgentFilter.ts for
+  // why this transparently covers Wave-2's recurring occurrence/aggregated
+  // chips too, with milestones exempt (US-4.3).
+  const filteredEvents = useMemo(
+    () => filterEventsByAgent(events, tasks, agentFilter),
+    [events, tasks, agentFilter],
+  )
+
   const isLoading = tasksLoading || milestonesLoading
-  const isEmpty = !isLoading && events.length === 0
+  const isEmpty = !isLoading && filteredEvents.length === 0
 
   // Degrade on query failure (FR-016, I-2) — non-blocking toast, grid still renders.
   useEffect(() => {
@@ -348,12 +386,16 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           title={title}
           onViewChange={handleViewChange}
           onNewTask={handleNewTask}
+          agentFilter={agentFilter}
+          onAgentFilterChange={setAgentFilter}
+          agentOptions={agentOptions}
+          agentRosterError={teamError}
         />
       </div>
 
       <div className="flex-1 min-h-0 min-w-0 p-3" data-testid="calendar-grid">
         <FullCalendarView
-          events={events}
+          events={filteredEvents}
           calendarRef={calendarRef}
           isLoading={isLoading}
           isEmpty={isEmpty}

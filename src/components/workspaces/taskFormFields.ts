@@ -81,6 +81,39 @@ export function dateToDatetimeLocal(date: Date | null): string {
   return date ? toDatetimeLocalValue(date.getTime()) : ''
 }
 
+/**
+ * Whether a trigger is a calendar-only recurring trigger (`every`/`recurring`,
+ * FR-011/D3). Board and List exclude tasks whose trigger matches this
+ * predicate — recurring tasks live exclusively on the workspace calendar.
+ * Accepts `trigger` directly (not the whole `Task`) so BoardView/ListView can
+ * call it inline as `isRecurringTrigger(t.trigger)`.
+ */
+export function isRecurringTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
+  return trigger?.type === 'every' || trigger?.type === 'recurring'
+}
+
+/**
+ * Defensive, read-only plain-English summary for a recurring trigger (FR-023).
+ * Used ONLY by the generic TaskDetailPanel's defensive guard — normally
+ * unreachable since Board/List exclude recurring tasks (isRecurringTrigger
+ * above), reachable only via stale cache or a race. Deliberately never
+ * includes `cron_expr` or `rrule` — no raw cron/rule string is ever displayed
+ * outside the calendar editor (D8/D9). NOT the same as `triggerSummary` below,
+ * which is a general-purpose label that DOES surface the raw cron string and
+ * must not be reused for this guard.
+ */
+export function recurringTriggerSummary(trigger: TaskTrigger): string {
+  if (trigger.type === 'every') {
+    const ms = trigger.config?.every_ms
+    if (typeof ms === 'number' && ms > 0) {
+      const minutes = Math.round(ms / 60_000)
+      return `Repeats every ${minutes} minute${minutes === 1 ? '' : 's'}`
+    }
+    return 'Repeats on a fixed interval'
+  }
+  return 'Repeats on a recurring schedule'
+}
+
 /** Human label for a trigger summary line. */
 export function triggerSummary(trigger?: TaskTrigger | null): string {
   if (!trigger || trigger.type === 'manual') return 'Manual (drag to run)'
