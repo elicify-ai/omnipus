@@ -74,6 +74,20 @@ type ToolResult struct {
 	// (SubagentEndFrame.status, which does support "interrupted"), it does
 	// not change the outer badge.
 	Interrupted bool `json:"interrupted,omitempty"`
+
+	// ExitCode is the real process exit code for a shell/bash foreground
+	// execution (pkg/tools/shell.go's foregroundResultFromSandbox /
+	// runUnconstrained), or nil when no real exit code is available (a
+	// timeout, a command blocked before it ever ran, or a non-shell tool).
+	// review r2 HIGH-1: this is the AUTHORITATIVE source for a machine-check
+	// criterion's verdict (pkg/agent/judge.go's interpretBashResult reads it
+	// directly) — unlike ForLLM's human-readable "[Command exited with code
+	// N]" text suffix, it is set directly from the real exit code and is
+	// never subject to output truncation or a worker's own command echoing a
+	// fake suffix into stdout/stderr. A pointer (not a bare int) because 0 is
+	// a valid, meaningful exit code that must be distinguishable from "not
+	// set".
+	ExitCode *int `json:"exit_code,omitempty"`
 }
 
 // ContentForLLM returns the normalized textual content to append to the
