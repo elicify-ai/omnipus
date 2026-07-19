@@ -15,7 +15,7 @@
 export const TAG_MAX_LENGTH = 64
 export const TAG_MAX_COUNT = 16
 
-export interface TagValidationResult {
+export interface TagValidationResult { // not-wire-format: local UI tag-input validation result, computed client-side and never serialised over REST/WS
   /** True when the tag may be committed (added to the task's tag set). */
   ok: boolean
   /** The normalised (lowercased + trimmed) value — present even when rejected, for echoing back to the input. */
