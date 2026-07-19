@@ -1,6 +1,6 @@
 # ADR-049: Planning & Goals — Plan entity, evidence-ladder judge, goal loops, System Agents
 
-- **Status:** Proposed (ratification of operator interview 2026-07-19; **amended 2026-07-19 post grill-review r1**; pending `/grill-spec` re-run)
+- **Status:** Proposed (ratification of operator interview 2026-07-19; amended post grill-reviews **r1 (BLOCK) → r2 (REVISE) → r3 (PASS)**, all 2026-07-19; grill gate cleared — next: `/plan-spec`)
 - **Date:** 2026-07-19
 - **Deciders:** Operator (Daniel Piatkowski); structured/ratified by Albert
 - **Evidence level (highest used):** 1 user-input (operator interview), grounded by 2–3 (documented patterns / shipped prior art) and codebase `[FACT]`s
@@ -9,10 +9,12 @@
 
 > **Ratification mode.** The architecture direction was decided in an operator interview
 > on 2026-07-19 after four grounding research passes (task subsystem map, goal/loop
-> infrastructure inventory, command-surface map, external prior art). Amendment r1
-> incorporates the grill-review findings (CRIT-001..003, MAJ-001..009, MIN-001..004,
-> OBS-001..003) and two follow-up operator decisions (D3 scope; release placement).
-> This ADR records decisions, rejected alternatives, and per-decision confidence.
+> infrastructure inventory, command-surface map, external prior art). Amendments r1–r3
+> incorporate three grill-review rounds (r1 BLOCK: CRIT-001..003, MAJ-001..009,
+> MIN-001..004, OBS-001..003; r2 REVISE: R2-MAJ-001, R2-MIN-001..005; r3 PASS:
+> R3-MIN-001 + observations) and two follow-up operator decisions (D3 scope; release
+> placement). Reviews: `ADR-049-...-review{,-r2,-r3}.md` alongside this file. This
+> ADR records decisions, rejected alternatives, and per-decision confidence.
 
 ## 1. Problem Understanding
 
@@ -132,9 +134,11 @@ Dimension tables for the three highest-blast-radius decisions.
 
 **Ratified migration requirements (r1, MAJ-002; r2 refined):** idempotent; runs at
 task-store load; logged; tag names are **normalized first** (lowercase, trim), then
-truncated to the 64-char cap (including the `milestone:` prefix), then collisions
-disambiguated (`milestone:<name>`, `milestone:<name>-2`, … keyed by milestone ID
-order) — so post-normalization/truncation collisions ("Q3"/"q3") are caught (r2);
+truncated with **suffix headroom reserved** so that the final tag — including the
+`milestone:` prefix and any `-N` disambiguation suffix — never exceeds the 64-char
+cap, then collisions disambiguated (`milestone:<name>`, `milestone:<name>-2`, …
+keyed by milestone ID order) with uniqueness **re-checked after suffixing** (r3) —
+so post-normalization/truncation collisions ("Q3"/"q3") are caught (r2);
 milestone `due_date` is **not discarded** — it is copied into each member task's
 `Due` field when that field is empty (tasks with their own `Due` keep it);
 milestones with **no member tasks** are preserved as migration-log entries (name +
@@ -240,7 +244,10 @@ binding targets (400 on write); excluded from delegation-target enumeration,
 only in the Agents screen "System" section. **Lifecycle (r2, R2-MIN-004):** type
 `system` is not creatable via REST or agent tools (400, mirroring the ADR-035/037
 raw-body-sniff precedent) and seeded System Agents are not deletable — seeding is
-the only creation path. Constraint #6 coverage:
+the only creation path. The Judge is also **not disable-able** (r3): disabling it
+would stall every goal loop via the D7 unavailability rule; the operator's escape
+hatch is stopping loops (D8), not switching off the judge. Only model/provider and
+rubric prompt are editable. Constraint #6 coverage:
 seeded with explicit all-deny tool policies (they execute as no-tools structured
 calls), keeping the boot-time agent×tool matrix total (`ValidateToolPolicyCoverage`
 iterates `Agents.List` uniformly `[FACT — validate.go:491]`).
@@ -390,8 +397,8 @@ Residual uncertainty lives in the eight plan-spec gaps (§3), none direction-cha
 
 ## 9. Validation / Next Steps
 
-1. Re-run the red team: `/grill-spec docs/internal/architecture/ADR-049-planning-goals-system-agents.md` — verify CRIT-001..003 and MAJ-001..009 are closed; stress the remaining §3 gaps.
-2. On PASS, spec the architecture: `/plan-spec docs/internal/architecture/ADR-049-planning-goals-system-agents.md` — resolves §3 gaps as spec decisions with BDD/TDD coverage, starting from the §6 contract-surface table.
+1. ~~Grill gate~~ **cleared**: r1 BLOCK → r2 REVISE → r3 **PASS** (2026-07-19; operator closed the grill rounds at r3).
+2. Spec the architecture: `/plan-spec docs/internal/architecture/ADR-049-planning-goals-system-agents.md` — resolves §3 gaps as spec decisions with BDD/TDD coverage, starting from the §6 contract-surface table.
 3. Wave implementation with the 7-reviewer gate (per CLAUDE.md). **No `/taskify`** (operator direction).
-4. Tests the review demands (carry into plan-spec): security tests for check execution (in-sandbox assertion; `bash: deny` ⇒ fail-closed; ask→deny; timeout); Constraint #6 boot test with a seeded System Agent; SEC-26 test for type-`system` non-privilege; plan-engine crash-recovery/reconciliation test; milestone-migration idempotency test; ADR-043 parser **extension** (not fork) tests.
-5. CLAUDE.md correction (OBS-001: stale `forceCompression` Storage paragraph) lands with this amendment's change set.
+4. Tests the reviews demand (carry into plan-spec): security tests for check execution (in-sandbox assertion; `bash: deny` ⇒ fail-closed; ask→deny; timeout); Constraint #6 boot test with a seeded System Agent; SEC-26 test for type-`system` non-privilege; **judge-unavailable pause consumes no attempt** (r2); **normalized-tag collision migration** (r2); **type-`system` REST create → 400 and seeded-agent delete/disable rejection** (r2/r3); plan-engine crash-recovery/reconciliation test; milestone-migration idempotency test; ADR-043 parser **extension** (not fork) tests.
+5. CLAUDE.md correction (OBS-001: stale `forceCompression` Storage paragraph) landed in commit `01cc8741`.
