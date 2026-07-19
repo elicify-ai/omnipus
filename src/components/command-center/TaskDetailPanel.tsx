@@ -7,6 +7,7 @@ import {
   fetchSubtasks,
   fetchWorkspaces,
   fetchTasks,
+  fetchPlans,
   fetchTaskEvidence,
   fetchTaskVerdicts,
   updateTask,
@@ -17,6 +18,7 @@ import {
   isApiError,
   workspacesQueryKeys,
   tasksQueryKeys,
+  plansQueryKeys,
   taskEvidenceQueryKeys,
   taskVerdictsQueryKeys,
 } from '@/lib/api'
@@ -198,6 +200,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
+  })
+
+  // Plans in this task's workspace (Plan Swimlane redesign) — the "Move to
+  // plan…" picker below is the explicit cross-plan reassignment path (no
+  // vertical DnD between swimlane bands in v1).
+  const { data: plans = [] } = useQuery({
+    queryKey: plansQueryKeys.list(task?.workspace_id ?? ''),
+    queryFn: () => fetchPlans(task!.workspace_id),
+    enabled: task != null && !!task.workspace_id,
+    staleTime: 10_000,
   })
 
   // Acceptance-criteria evidence + judge verdicts (ADR-049 FR-088/089) — only
@@ -667,6 +679,29 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             ? (workspaces.find((p) => p.id === task.workspace_id)?.name ?? task.workspace_id)
             : '—'}
         </p>
+      </Field>
+
+      {/* Plan (Plan Swimlane redesign) — "Move to plan…", the explicit
+          cross-plan reassignment path since the Board no longer supports
+          dragging a card between plan lanes. */}
+      <Field label="Plan">
+        <SmartSelect
+          value={task.plan_id ?? '__none__'}
+          onValueChange={(val) => doUpdate({ plan_id: val === '__none__' ? '' : val })}
+          placeholder={noWorkspaceForAssignment ? 'Unavailable' : 'No plan'}
+          disabled={noWorkspaceForAssignment}
+          triggerClassName="h-8 text-xs"
+          ariaLabel="Plan"
+          items={[
+            { value: '__none__', label: 'No plan (Loose tasks)', className: 'text-xs' },
+            ...plans.map((p) => ({ value: p.id, label: p.title, className: 'text-xs' })),
+          ]}
+        />
+        {noWorkspaceForAssignment && (
+          <p className="text-xs text-[var(--color-muted)] mt-1.5">
+            Task has no workspace — plan assignment unavailable
+          </p>
+        )}
       </Field>
 
       {/* Tags (ADR-049 — replaces the milestone dropdown). Migrated

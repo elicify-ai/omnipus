@@ -89,6 +89,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSubtasks: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // Plan Swimlane redesign — the "Move to plan…" picker's plans query.
+    fetchPlans: vi.fn().mockResolvedValue([]),
     fetchTaskEvidence: vi.fn().mockResolvedValue([]),
     fetchTaskVerdicts: vi.fn().mockResolvedValue([]),
     // Fix B: the assignee picker's workspace-team scoping — see the
@@ -104,6 +106,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     taskEvidenceQueryKeys: actual.taskEvidenceQueryKeys,
     taskVerdictsQueryKeys: actual.taskVerdictsQueryKeys,
     workspacesQueryKeys: actual.workspacesQueryKeys,
+    plansQueryKeys: actual.plansQueryKeys,
   }
 })
 
@@ -181,6 +184,7 @@ beforeEach(async () => {
   vi.mocked(api.setTaskDependencies).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(api.fetchSubtasks).mockReset().mockResolvedValue([])
+  vi.mocked(api.fetchPlans).mockReset().mockResolvedValue([])
   // Default: the workspace-team query fails (unmocked in most tests, which
   // don't care about team-scoping) — this is the DEGRADED fallback path
   // (buildTaskAssigneeItems / useWorkspaceTeamIds), which offers the full

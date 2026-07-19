@@ -14,13 +14,15 @@ import {
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { Plus } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, LinkBreak } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { AltitudeToggle } from './AltitudeToggle'
+import { PlanLaneHeader } from './PlanLaneHeader'
 import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import type { Task, Agent, Plan } from '@/lib/api'
 import type { BoardAltitude } from '@/store/workspacesStore'
-import { filterByPlanAndTag } from '@/lib/planFilter'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { filterByTag } from '@/lib/planFilter'
 import { cn } from '@/lib/utils'
 
 type TaskStatus = Task['status']
@@ -39,6 +41,11 @@ const COLUMNS: ColumnConfig[] = STATUS_ORDER.map((status) => ({
   label: STATUS_LABELS[status],
   headerColor: STATUS_COLORS[status],
 }))
+
+/** Sentinel lane id for the "no plan" band (never a real Plan.id — those are ULIDs). */
+export const LOOSE_LANE_ID = '__loose__'
+
+const LOOSE_LANE_LABEL = 'Loose tasks (no plan)'
 
 // Screen-reader-only instructions dnd-kit surfaces via aria-describedby on
 // every draggable card, announced once when a card first receives focus.
@@ -75,7 +82,10 @@ export function canDropTransition(from: TaskStatus, to: TaskStatus): { ok: boole
  * Builds the dnd-kit `Announcements` (screen-reader live-region text) for a
  * drag lifecycle over the given root tasks. Pure and exported so the message
  * text is unit-testable without mounting `DndContext` (dnd-kit's pointer DnD
- * cannot be driven faithfully in jsdom — see BoardViewDnd.test.tsx).
+ * cannot be driven faithfully in jsdom — see BoardViewDnd.test.tsx). Called
+ * once per swimlane band, scoped to that band's own visible tasks — a drag
+ * only ever involves tasks rendered in the SAME band (DnD is scoped per lane,
+ * see LaneStatusRow).
  */
 export function buildBoardAnnouncements(rootTasks: Task[]): Announcements {
   const taskTitle = (id: string | number) => rootTasks.find((t) => t.id === id)?.title ?? 'the task'
@@ -103,14 +113,34 @@ export function buildBoardAnnouncements(rootTasks: Task[]): Announcements {
   }
 }
 
+/** Swimlane sort tier — running(0) → approved(1) → draft(2) → done/failed(3); stable within a tier (Array.sort is spec-stable). */
+function planTier(state: Plan['state']): number {
+  switch (state) {
+    case 'running':
+      return 0
+    case 'approved':
+      return 1
+    case 'draft':
+      return 2
+    case 'done':
+    case 'failed':
+    default:
+      return 3
+  }
+}
+
+function isTerminalPlanState(state: Plan['state']): boolean {
+  return state === 'done' || state === 'failed'
+}
+
 interface BoardViewProps {
   tasks: Task[]
-  /** Plans in this workspace (ADR-049) — used for the Plan filter and TaskCard's goal-loop pause lookup. */
+  /** Plans in this workspace (ADR-049) — one swimlane band per plan. */
   plans: Plan[]
   agents?: Agent[]
-  /** The active Plan filter (`null` = All) — replaces the removed `activeMilestoneId`. */
-  activePlanId: string | null
-  /** The active tag filter (`null` = none; composes AND with `activePlanId`). */
+  /** Owning workspace — a lane header's ⑂ "view graph" button routes here. */
+  workspaceId: string
+  /** The active tag filter (`null` = none). */
   activeTagFilter: string | null
   altitude: BoardAltitude
   onAltitudeChange: (next: BoardAltitude) => void
@@ -120,13 +150,31 @@ interface BoardViewProps {
   onTaskMove?: (task: Task, newStatus: TaskStatus) => void
   /** Surface a rejected drop (e.g. dropping into `blocked`). */
   onMoveRejected?: (reason: string) => void
+  /** Plan-lane header actions (⋯ menu / Approve draft-only / Stop running-or-approved / Edit / Clear). */
+  onApprovePlan?: (plan: Plan) => void
+  onStopPlan?: (plan: Plan) => void
+  onEditPlan?: (plan: Plan) => void
+  onClearPlan?: (plan: Plan) => void
+  approvingPlanId?: string | null
+  stoppingPlanId?: string | null
+  clearingPlanId?: string | null
 }
 
+/**
+ * Plan Swimlane board (v0.3 UX rework, psychology-grounded redesign): a
+ * single sticky `STATUS_ORDER` header row + horizontal swimlane bands
+ * grouped by plan, each with a collapsible `PlanLaneHeader` on its left.
+ * Tasks with no `plan_id` render in a final "Loose tasks (no plan)" band.
+ * Horizontal status DnD (dnd-kit) is preserved WITHIN each band — moving a
+ * task between plans is a separate, explicit action ("Move to plan…" on the
+ * task detail panel), not drag-and-drop, so a card can never silently change
+ * `plan_id` from a mis-aimed drop.
+ */
 export function BoardView({
   tasks,
   plans,
   agents = [],
-  activePlanId,
+  workspaceId,
   activeTagFilter,
   altitude,
   onAltitudeChange,
@@ -134,15 +182,187 @@ export function BoardView({
   onNewTask,
   onTaskMove,
   onMoveRejected,
+  onApprovePlan,
+  onStopPlan,
+  onEditPlan,
+  onClearPlan,
+  approvingPlanId = null,
+  stoppingPlanId = null,
+  clearingPlanId = null,
 }: BoardViewProps) {
   // Filter out non-user-surface tasks (e.g. heartbeat tasks are hidden from general views)
   const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
-  // Apply plan + tag filters (ADR-049 — replaces the removed milestone filter; composes AND)
-  const filteredTasks = filterByPlanAndTag(userTasks, activePlanId, activeTagFilter)
   // Board shows only top-level tasks — subtasks (parent_task_id present) are
   // NEVER rendered as standalone cards. They nest under their parent.
-  const rootTasks = filteredTasks.filter((t) => !t.parent_task_id)
+  // Membership/progress figures are computed off this UNFILTERED set (a
+  // plan's real progress shouldn't wobble with the tag filter); only which
+  // CARDS render is affected by the tag filter (rootTasksVisible below).
+  const rootTasksAll = userTasks.filter((t) => !t.parent_task_id)
+  const rootTasksVisible = filterByTag(rootTasksAll, activeTagFilter)
 
+  const collapsedLanes = useWorkspacesStore((s) => s.collapsedLanes)
+  const setLaneCollapsed = useWorkspacesStore((s) => s.setLaneCollapsed)
+
+  const orderedPlans = useMemo(() => [...plans].sort((a, b) => planTier(a.state) - planTier(b.state)), [plans])
+
+  function effectiveCollapsed(laneId: string, defaultCollapsed: boolean): boolean {
+    return collapsedLanes[laneId] ?? defaultCollapsed
+  }
+
+  const looseTasksVisible = rootTasksVisible.filter((t) => !t.plan_id)
+  const looseTasksAllCount = rootTasksAll.filter((t) => !t.plan_id).length
+  const looseCollapsed = effectiveCollapsed(LOOSE_LANE_ID, false)
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* Board toolbar: altitude toggle */}
+      <div className="flex items-center justify-end px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
+        <AltitudeToggle value={altitude} onChange={onAltitudeChange} />
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-auto">
+        {/* Sticky status-column header row — spans every swimlane band below it. */}
+        <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
+          <div className="w-[300px] shrink-0" aria-hidden="true" />
+          {COLUMNS.map((col) => {
+            const count = rootTasksVisible.filter((t) => t.status === col.status).length
+            return (
+              <div
+                key={col.status}
+                className="flex-1 min-w-[180px] flex items-center justify-between gap-2 px-3 py-2.5"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold" style={{ color: col.headerColor }}>
+                    {col.label}
+                  </span>
+                  <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-muted)]">
+                    {count}
+                  </span>
+                </div>
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => onNewTask(col.status)}
+                  aria-label={`New ${col.label} task`}
+                  className="inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                >
+                  <Plus size={12} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Plan swimlane bands — running → approved → draft → done/failed (planTier order). */}
+        {orderedPlans.map((plan) => {
+          const memberTotal = rootTasksAll.filter((t) => t.plan_id === plan.id).length
+          const memberDone = rootTasksAll.filter((t) => t.plan_id === plan.id && t.status === 'done').length
+          const laneTasks = rootTasksVisible.filter((t) => t.plan_id === plan.id)
+          const collapsed = effectiveCollapsed(plan.id, isTerminalPlanState(plan.state))
+          return (
+            <div key={plan.id} className="flex border-b border-[var(--color-border)]" data-testid={`swimlane-band-${plan.id}`}>
+              <div className="w-[300px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
+                <PlanLaneHeader
+                  plan={plan}
+                  workspaceId={workspaceId}
+                  agents={agents}
+                  memberTotal={memberTotal}
+                  memberDone={memberDone}
+                  collapsed={collapsed}
+                  onToggleCollapse={() => setLaneCollapsed(plan.id, !collapsed)}
+                  onEdit={() => onEditPlan?.(plan)}
+                  onApprove={() => onApprovePlan?.(plan)}
+                  onStop={() => onStopPlan?.(plan)}
+                  onClear={() => onClearPlan?.(plan)}
+                  isApproving={approvingPlanId === plan.id}
+                  isStopping={stoppingPlanId === plan.id}
+                  isClearing={clearingPlanId === plan.id}
+                />
+              </div>
+              {!collapsed && (
+                <LaneStatusRow
+                  laneLabel={plan.title}
+                  tasks={laneTasks}
+                  plans={plans}
+                  agents={agents}
+                  altitude={altitude}
+                  onTaskClick={onTaskClick}
+                  onTaskMove={onTaskMove}
+                  onMoveRejected={onMoveRejected}
+                />
+              )}
+            </div>
+          )
+        })}
+
+        {/* Loose tasks (no plan) — always last, always rendered (never hidden even
+            when empty), so a plan-less workspace behaves exactly like the
+            pre-swimlane flat board. */}
+        <div className="flex" data-testid="swimlane-band-loose">
+          <div className="w-[300px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
+            <div className="flex items-center gap-1.5 px-2.5 py-2 w-full min-w-0" data-testid="plan-lane-header-loose">
+              <button tabIndex={0}
+                type="button"
+                onClick={() => setLaneCollapsed(LOOSE_LANE_ID, !looseCollapsed)}
+                aria-expanded={!looseCollapsed}
+                aria-label={looseCollapsed ? `Expand ${LOOSE_LANE_LABEL} lane` : `Collapse ${LOOSE_LANE_LABEL} lane`}
+                className="flex items-center gap-1 min-w-0 flex-1 text-left text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              >
+                {looseCollapsed ? <CaretRight size={12} className="shrink-0" /> : <CaretDown size={12} className="shrink-0" />}
+                <LinkBreak size={13} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
+                <span className="text-xs font-semibold text-[var(--color-secondary)] truncate">{LOOSE_LANE_LABEL}</span>
+              </button>
+              <span className="flex-shrink-0 rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-muted)]">
+                {looseTasksAllCount}
+              </span>
+            </div>
+          </div>
+          {!looseCollapsed && (
+            <LaneStatusRow
+              laneLabel={LOOSE_LANE_LABEL}
+              tasks={looseTasksVisible}
+              plans={plans}
+              agents={agents}
+              altitude={altitude}
+              onTaskClick={onTaskClick}
+              onTaskMove={onTaskMove}
+              onMoveRejected={onMoveRejected}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface LaneStatusRowProps {
+  /** Human label used to disambiguate this lane's per-status droppable aria-labels from every other lane's. */
+  laneLabel: string
+  /** This lane's visible (tag-filtered) top-level tasks — the ONLY tasks a drag in this lane's DndContext can ever reference. */
+  tasks: Task[]
+  plans: Plan[]
+  agents: Agent[]
+  altitude: BoardAltitude
+  onTaskClick: (task: Task) => void
+  onTaskMove?: (task: Task, newStatus: TaskStatus) => void
+  onMoveRejected?: (reason: string) => void
+}
+
+/**
+ * One swimlane band's row of 7 status cells, each independently droppable —
+ * horizontal status DnD, scoped to THIS band only via its own `DndContext`
+ * (a card can never be dropped into another band's cell because each band's
+ * drag lifecycle is a wholly separate dnd-kit instance).
+ */
+function LaneStatusRow({
+  laneLabel,
+  tasks,
+  plans,
+  agents,
+  altitude,
+  onTaskClick,
+  onTaskMove,
+  onMoveRejected,
+}: LaneStatusRowProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
 
   const sensors = useSensors(
@@ -150,9 +370,7 @@ export function BoardView({
     // (the card's onClick) without being swallowed by the drag.
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     // Restrict the lift/drop key to Space only (dnd-kit's default is Space
-    // AND Enter) so Enter stays free for TaskCard's "open task" action —
-    // otherwise a focused card's Enter key would be ambiguous between
-    // opening the task and starting a keyboard drag.
+    // AND Enter) so Enter stays free for TaskCard's "open task" action.
     useSensor(KeyboardSensor, {
       keyboardCodes: {
         start: [KeyboardCode.Space],
@@ -162,13 +380,11 @@ export function BoardView({
     }),
   )
 
-  // Live-region announcements for the drag lifecycle, read by screen readers
-  // as a card is picked up, moved over a column, dropped, or cancelled.
-  const announcements = useMemo<Announcements>(() => buildBoardAnnouncements(rootTasks), [rootTasks])
+  const announcements = useMemo<Announcements>(() => buildBoardAnnouncements(tasks), [tasks])
 
   function handleDragStart(event: DragStartEvent) {
     const id = String(event.active.id)
-    setActiveTask(rootTasks.find((t) => t.id === id) ?? null)
+    setActiveTask(tasks.find((t) => t.id === id) ?? null)
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -186,64 +402,53 @@ export function BoardView({
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      {/* Board toolbar: altitude toggle */}
-      <div className="flex items-center justify-end px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
-        <AltitudeToggle value={altitude} onChange={onAltitudeChange} />
+    <DndContext
+      sensors={sensors}
+      accessibility={{
+        screenReaderInstructions: BOARD_SCREEN_READER_INSTRUCTIONS,
+        announcements,
+      }}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setActiveTask(null)}
+    >
+      <div className="flex flex-1">
+        {COLUMNS.map((col) => (
+          <LaneStatusCell
+            key={col.status}
+            laneLabel={laneLabel}
+            config={col}
+            tasks={tasks.filter((t) => t.status === col.status)}
+            plans={plans}
+            agents={agents}
+            altitude={altitude}
+            activeTask={activeTask}
+            onTaskClick={onTaskClick}
+          />
+        ))}
       </div>
-
-      {/* Columns */}
-      <DndContext
-        sensors={sensors}
-        accessibility={{
-          screenReaderInstructions: BOARD_SCREEN_READER_INSTRUCTIONS,
-          announcements,
-        }}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragCancel={() => setActiveTask(null)}
-      >
-        <div className="flex gap-2 p-4 overflow-x-auto min-h-0 flex-1">
-          {COLUMNS.map((col) => (
-            <BoardColumn
-              key={col.status}
-              config={col}
-              tasks={rootTasks.filter((t) => t.status === col.status)}
+      <DragOverlay dropAnimation={null}>
+        {activeTask ? (
+          // A purely VISUAL clone that follows the cursor while dragging —
+          // the "real" draggable card stays in place underneath (dimmed via
+          // opacity-40 in DraggableTaskCard).
+          <div aria-hidden="true" className="opacity-90 rotate-2 cursor-grabbing">
+            <TaskCard
+              task={activeTask}
               plans={plans}
               agents={agents}
-              altitude={altitude}
-              activeTask={activeTask}
-              onTaskClick={onTaskClick}
-              onNewTask={() => onNewTask(col.status)}
+              altitude="top-level"
+              onClick={() => {}}
             />
-          ))}
-        </div>
-        <DragOverlay dropAnimation={null}>
-          {activeTask ? (
-            // A purely VISUAL clone that follows the cursor while dragging —
-            // the "real" draggable card stays in place underneath (dimmed via
-            // opacity-40 in DraggableTaskCard). TaskCard always renders its
-            // own role="button" tabIndex={0} root, so without aria-hidden this
-            // clone was a second, phantom focusable "button" for the same
-            // task, reachable by Tab and announced to AT with no real
-            // purpose (its onClick is a no-op below).
-            <div aria-hidden="true" className="opacity-90 rotate-2 cursor-grabbing">
-              <TaskCard
-                task={activeTask}
-                plans={plans}
-                agents={agents}
-                altitude="top-level"
-                onClick={() => {}}
-              />
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
-    </div>
+          </div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
   )
 }
 
-interface BoardColumnProps {
+interface LaneStatusCellProps {
+  laneLabel: string
   config: ColumnConfig
   tasks: Task[]
   plans: Plan[]
@@ -251,10 +456,10 @@ interface BoardColumnProps {
   altitude: BoardAltitude
   activeTask: Task | null
   onTaskClick: (task: Task) => void
-  onNewTask: () => void
 }
 
-function BoardColumn({
+function LaneStatusCell({
+  laneLabel,
   config,
   tasks,
   plans,
@@ -262,71 +467,34 @@ function BoardColumn({
   altitude,
   activeTask,
   onTaskClick,
-  onNewTask,
-}: BoardColumnProps) {
+}: LaneStatusCellProps) {
   const { setNodeRef, isOver } = useDroppable({ id: config.status })
 
-  // Visual feedback: highlight a column the dragged card can legally land in.
-  const canAccept = activeTask
-    ? canDropTransition(activeTask.status, config.status).ok
-    : true
+  // Visual feedback: highlight a cell the dragged card can legally land in.
+  const canAccept = activeTask ? canDropTransition(activeTask.status, config.status).ok : true
 
   return (
     <div
       ref={setNodeRef}
       role="group"
+      aria-label={`${laneLabel} ${config.label} column`}
       className={cn(
-        'flex flex-col min-w-[180px] flex-1 bg-[var(--color-surface-1)] rounded-xl border border-[var(--color-border)] max-h-full transition-colors',
-        isOver && canAccept && 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]/40',
-        isOver && !canAccept && 'border-[var(--color-error)]/50',
+        'flex flex-col flex-1 min-w-[180px] min-h-[56px] gap-2 p-2 border-r border-[var(--color-border)] last:border-r-0 transition-colors',
+        isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
+        isOver && !canAccept && 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40',
       )}
-      aria-label={`${config.label} column`}
     >
-      {/* Column header */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: config.headerColor }}>
-            {config.label}
-          </span>
-          <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-muted)]">
-            {tasks.length}
-          </span>
-        </div>
-        <button tabIndex={0}
-          type="button"
-          onClick={onNewTask}
-          aria-label={`New ${config.label} task`}
-          className="inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-        >
-          <Plus size={12} />
-        </button>
-      </div>
-
-      {/* Task cards */}
-      <div className="flex flex-col gap-2 p-2 flex-1 overflow-y-auto">
-        {tasks.length === 0 ? (
-          <button tabIndex={0}
-            type="button"
-            onClick={onNewTask}
-            className="mx-auto mt-3 flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
-          >
-            <Plus size={11} />
-            Add your first task
-          </button>
-        ) : (
-          tasks.map((task) => (
-            <DraggableTaskCard
-              key={task.id}
-              task={task}
-              plans={plans}
-              agents={agents}
-              altitude={altitude}
-              onClick={() => onTaskClick(task)}
-              onChildClick={onTaskClick}
-            />
-          ))
-        )}
-      </div>
+      {tasks.map((task) => (
+        <DraggableTaskCard
+          key={task.id}
+          task={task}
+          plans={plans}
+          agents={agents}
+          altitude={altitude}
+          onClick={() => onTaskClick(task)}
+          onChildClick={onTaskClick}
+        />
+      ))}
     </div>
   )
 }

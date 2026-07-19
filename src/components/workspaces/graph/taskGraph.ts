@@ -101,22 +101,87 @@ export interface AgentLike {
 }
 
 /**
+ * DAG-relevance test for orphan-collapsing (whole-workspace "All" mode of the
+ * Graph tab — Plan Swimlane board redesign, psychology-grounded: Attention —
+ * a disconnected single node is noise; Gestalt — a connected component is
+ * meaning). A task is "DAG-relevant" — worth its own node on the canvas —
+ * when it participates in some structure: it depends on something
+ * (`blocked_by`), something depends on IT, or it is a member of a Plan (plan
+ * membership is itself a grouping structure, even before any `blocked_by`
+ * edge exists among the plan's members). Everything else is a one-time,
+ * unlinked task that belongs in the "N unlinked tasks" tray, never rendered
+ * as a lone dot.
+ *
+ * `candidates` should be the same population `buildTaskGraph` would render as
+ * nodes (already surface/parent-filtered) — a dependent hiding outside that
+ * population (a subtask, a heartbeat task) does not count as a visible
+ * dependency relationship.
+ */
+export function isDagRelevant(task: Task, candidates: Task[]): boolean {
+  if (task.plan_id) return true
+  if ((task.blocked_by?.length ?? 0) > 0) return true
+  return candidates.some(
+    (other) => other.id !== task.id && (other.blocked_by ?? []).includes(task.id),
+  )
+}
+
+export interface BuildTaskGraphOptions {
+  /**
+   * Scope the graph to a single Plan's member tasks (`task.plan_id ===
+   * planId`) + the `blocked_by` edges between them (Plan Swimlane board
+   * redesign — plan-scoped graph). `null`/`undefined` = no plan scoping, the
+   * whole-workspace view, where `collapseOrphans` decides whether unlinked
+   * tasks still render. Plan scope is never orphan-collapsed — the plan
+   * boundary IS the scope, so every member renders even with zero edges.
+   */
+  planId?: string | null
+  /**
+   * Whole-workspace "All" mode only (ignored whenever `planId` is set): when
+   * true, tasks that fail `isDagRelevant` are excluded from `nodes` and
+   * returned via `unlinked` instead, so the canvas never shows a field of
+   * disconnected one-time-task dots. Defaults to false, preserving the
+   * historical "every visible task is a node" behaviour for existing
+   * callers/tests.
+   */
+  collapseOrphans?: boolean
+}
+
+/**
  * Build a left→right dependency DAG from the workspace's tasks.
  *
  * Nodes are top-level user-surface tasks; edges go blocker → blocked (an edge
  * for every `blocked_by` entry whose blocker is also visible). Dagre lays the
  * graph out with rank direction LR. Returns positioned React Flow nodes +
- * styled edges. Pure: same input → same output, no DOM access.
+ * styled edges, plus `unlinked` — the tasks collapsed out of the canvas by
+ * `collapseOrphans` (always empty otherwise, and always empty in plan scope).
+ * Pure: same input → same output, no DOM access.
  */
 export function buildTaskGraph(
   tasks: Task[],
   agents: AgentLike[] = [],
-): { nodes: TaskGraphNode[]; edges: Edge[] } {
-  // Match the Board: only top-level, user-surface tasks are graphed.
-  const visible = tasks.filter(
+  options: BuildTaskGraphOptions = {},
+): { nodes: TaskGraphNode[]; edges: Edge[]; unlinked: Task[] } {
+  const { planId = null, collapseOrphans = false } = options
+
+  // Match the Board: only top-level, user-surface tasks are graphable at all.
+  const graphable = tasks.filter(
     (t) =>
       (t.surface === 'user' || t.surface === undefined) && t.parent_task_id == null,
   )
+
+  let visible: Task[]
+  let unlinked: Task[]
+  if (planId != null) {
+    visible = graphable.filter((t) => t.plan_id === planId)
+    unlinked = []
+  } else if (collapseOrphans) {
+    visible = graphable.filter((t) => isDagRelevant(t, graphable))
+    unlinked = graphable.filter((t) => !isDagRelevant(t, graphable))
+  } else {
+    visible = graphable
+    unlinked = []
+  }
+
   const visibleIds = new Set(visible.map((t) => t.id))
   const agentById = new Map(agents.map((a) => [a.id, a]))
 
@@ -207,5 +272,5 @@ export function buildTaskGraph(
     }
   })
 
-  return { nodes, edges }
+  return { nodes, edges, unlinked }
 }

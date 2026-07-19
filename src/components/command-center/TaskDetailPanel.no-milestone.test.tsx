@@ -26,6 +26,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSubtasks: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // Plan Swimlane redesign — the "Move to plan…" picker's plans query.
+    fetchPlans: vi.fn().mockResolvedValue([]),
     fetchTaskEvidence: vi.fn().mockResolvedValue([]),
     fetchTaskVerdicts: vi.fn().mockResolvedValue([]),
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),

@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Info, Plus, CaretDown, CaretRight } from '@phosphor-icons/react'
-import { PlanFilterBar } from './PlanFilterBar'
-import { PlanCard } from './PlanCard'
+import { Info, Plus, Strategy } from '@phosphor-icons/react'
+import { TagFilterBar } from './TagFilterBar'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { BoardView } from './BoardView'
 import { ListView } from './ListView'
@@ -13,7 +12,9 @@ import {
   fetchPlans,
   fetchAgents,
   updateTask,
+  approvePlan,
   stopPlan,
+  deletePlan,
   isApiError,
   tasksQueryKeys,
   plansQueryKeys,
@@ -23,28 +24,28 @@ import type { Plan, Task } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { BoardAltitude } from '@/store/workspacesStore'
-import { PLAN_FILTER_ALL, PLAN_FILTER_UNTAGGED } from '@/lib/planFilter'
 
 interface WorkspaceTasksTabProps {
   workspaceId: string
-  /** 'board' = kanban by 7-state lifecycle; 'list' = flat filterable table. */
+  /** 'board' = kanban by 7-state lifecycle, grouped into plan swimlanes; 'list' = flat filterable table. */
   mode: 'board' | 'list'
 }
 
 /**
- * Shared task-tab body for the Board and List views. Owns the Plan filter +
- * Plans panel (ADR-049 SD-C1 — a collapsible section within this tab, not a
- * new route) alongside the create task/plan slide-overs; only the inner
- * Board/List view differs.
+ * Shared task-tab body for the Board and List views. Board mode groups tasks
+ * into per-plan swimlane bands (Plan Swimlane redesign — `BoardView.tsx`'s
+ * `PlanLaneHeader` rows replace the old collapsible Plans panel AND the plan
+ * half of `PlanFilterBar`; only the tag filter survives as a toolbar
+ * control, via `TagFilterBar`). Owns the create task/plan slide-overs;
+ * only the inner Board/List view differs.
  */
 export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps) {
-  const { activePlanId, setActivePlanId, activeTagFilter, setActiveTagFilter, boardAltitude, setBoardAltitude } = useWorkspacesStore()
+  const { activeTagFilter, setActiveTagFilter, boardAltitude, setBoardAltitude } = useWorkspacesStore()
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [planSlideOver, setPlanSlideOver] = useState<{ open: boolean; plan: Plan | null }>({ open: false, plan: null })
-  const [plansExpanded, setPlansExpanded] = useState(true)
 
   // Kanban drag-to-column status change.
   const moveMutation = useMutation({
@@ -60,6 +61,21 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
     },
   })
 
+  // Plan-lane header actions (⋯ menu): Approve (draft-only), Stop
+  // (running/approved cap-waiting), Clear (delete). Edit reuses the same
+  // CreatePlanSlideOver as "New plan", opened with `plan` set.
+  const approvePlanMutation = useMutation({
+    mutationFn: (planId: string) => approvePlan(planId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: plansQueryKeys.list(workspaceId) })
+      addToast({ message: 'Plan approved', variant: 'success' })
+    },
+    onError: (err) => {
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to approve plan'
+      addToast({ message: msg, variant: 'error' })
+    },
+  })
+
   const stopPlanMutation = useMutation({
     mutationFn: (planId: string) => stopPlan(planId),
     onSuccess: () => {
@@ -68,6 +84,22 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
     },
     onError: (err) => {
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to stop plan'
+      addToast({ message: msg, variant: 'error' })
+    },
+  })
+
+  const clearPlanMutation = useMutation({
+    mutationFn: (planId: string) => deletePlan(planId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: plansQueryKeys.list(workspaceId) })
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      addToast({ message: 'Plan cleared', variant: 'success' })
+    },
+    onError: (err) => {
+      // The backend rejects deleting a `running` plan (400) — surface that
+      // real reason rather than a generic message (PlanLaneHeader already
+      // disables Clear while running, but the state can flip mid-flight).
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to clear plan'
       addToast({ message: msg, variant: 'error' })
     },
   })
@@ -105,26 +137,28 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
-      {/* Toolbar: plan/tag filter + new task */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
-        <PlanFilterBar
-          plans={plans}
-          tasks={tasks}
-          activePlanId={activePlanId}
-          activeTagFilter={activeTagFilter}
-          onSelectPlan={setActivePlanId}
-          onSelectTag={setActiveTagFilter}
-          onNewPlan={() => setPlanSlideOver({ open: true, plan: null })}
-        />
+      {/* Toolbar: tag filter + new plan/task */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0 flex-wrap">
+        <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
 
-        <button tabIndex={0}
-          type="button"
-          onClick={() => setCreateTaskOpen(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90 transition-colors flex-shrink-0"
-        >
-          <Plus size={13} />
-          New task
-        </button>
+        <div className="flex items-center gap-2 ml-auto flex-shrink-0">
+          <button tabIndex={0}
+            type="button"
+            onClick={() => setPlanSlideOver({ open: true, plan: null })}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors flex-shrink-0"
+          >
+            <Strategy size={13} />
+            New plan
+          </button>
+          <button tabIndex={0}
+            type="button"
+            onClick={() => setCreateTaskOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90 transition-colors flex-shrink-0"
+          >
+            <Plus size={13} />
+            New task
+          </button>
+        </div>
       </div>
 
       {agentsError && (
@@ -136,38 +170,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
       {plansError && (
         <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
-          Plans failed to load — the Plan filter may be incomplete.
-        </div>
-      )}
-
-      {/* Plans panel (SD-C1) — collapsible section within this tab. */}
-      {plans.length > 0 && (
-        <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
-          <button tabIndex={0}
-            type="button"
-            onClick={() => setPlansExpanded((v) => !v)}
-            aria-expanded={plansExpanded}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-          >
-            {plansExpanded ? <CaretDown size={11} /> : <CaretRight size={11} />}
-            Plans ({plans.length})
-          </button>
-          {plansExpanded && (
-            <div className="flex gap-2 px-4 pb-3 overflow-x-auto">
-              {plans.map((plan) => (
-                <div key={plan.id} className="min-w-[240px] max-w-[280px]">
-                  <PlanCard
-                    plan={plan}
-                    agents={agents}
-                    onEdit={() => setPlanSlideOver({ open: true, plan })}
-                    onApprove={() => setPlanSlideOver({ open: true, plan })}
-                    onStop={() => stopPlanMutation.mutate(plan.id)}
-                    isStopping={stopPlanMutation.isPending && stopPlanMutation.variables === plan.id}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
+          Plans failed to load — swimlanes may be incomplete.
         </div>
       )}
 
@@ -183,7 +186,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           tasks={tasks}
           plans={plans}
           agents={agents}
-          activePlanId={activePlanId}
+          workspaceId={workspaceId}
           activeTagFilter={activeTagFilter}
           altitude={boardAltitude}
           onAltitudeChange={(next: BoardAltitude) => setBoardAltitude(next)}
@@ -191,6 +194,13 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           onNewTask={() => setCreateTaskOpen(true)}
           onTaskMove={(task, status) => moveMutation.mutate({ task, status })}
           onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })}
+          onApprovePlan={(plan) => approvePlanMutation.mutate(plan.id)}
+          onStopPlan={(plan) => stopPlanMutation.mutate(plan.id)}
+          onEditPlan={(plan) => setPlanSlideOver({ open: true, plan })}
+          onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)}
+          approvingPlanId={approvePlanMutation.isPending ? (approvePlanMutation.variables ?? null) : null}
+          stoppingPlanId={stopPlanMutation.isPending ? (stopPlanMutation.variables ?? null) : null}
+          clearingPlanId={clearPlanMutation.isPending ? (clearPlanMutation.variables ?? null) : null}
         />
       ) : (
         <ListView
@@ -207,11 +217,10 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
         open={createTaskOpen}
         onOpenChange={setCreateTaskOpen}
         workspaceId={workspaceId}
-        planId={
-          activePlanId !== PLAN_FILTER_ALL && activePlanId !== PLAN_FILTER_UNTAGGED
-            ? activePlanId
-            : null
-        }
+        // Swimlane redesign: new tasks always land unplanned (the "Loose
+        // tasks" band) — "Move to plan…" on the task detail panel is the
+        // explicit, single reassignment path (no lane-scoped quick-create).
+        planId={null}
       />
 
       <CreatePlanSlideOver
