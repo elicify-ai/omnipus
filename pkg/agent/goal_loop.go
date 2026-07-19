@@ -158,6 +158,9 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 	if !hadGoal {
 		return "No active goal to clear."
 	}
+	if pe := GetPlanEngine(al); pe != nil {
+		pe.Release("goal") // paired with the Admit("goal") call at set time
+	}
 	al.emitGoalStatusFrame(sessionID, "", 0, 0, "", "cleared")
 	return "Goal cleared (" + note + ")."
 }
