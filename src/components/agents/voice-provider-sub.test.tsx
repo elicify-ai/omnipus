@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import * as React from 'react'
 
 import {
@@ -64,21 +63,10 @@ describe('VoiceProviderSub', () => {
     expect(field).toHaveAttribute('title', 'Locked by spec')
   })
 
-  // Radix Select does not open in jsdom (data-state stays "closed"); assert the
-  // trigger/reason instead of driving the dropdown. Dropdown interaction
-  // covered by create-agent.spec.ts Main case voice dropdown step.
-  it.skip('renders a dropdown when the provider exposes voices', async () => {
-    vi.mocked(detectVoiceProvider).mockResolvedValue({
-      mode: 'enum',
-      voices: ['alloy', 'echo', 'fable'],
-      fetchedAt: new Date().toISOString(),
-    })
-    renderWidget({ value: 'alloy' })
-    const trigger = await waitFor(() => screen.getByTestId('voice-field'))
-    await userEvent.click(trigger)
-    await waitFor(() => expect(screen.getByRole('option', { name: 'echo' })).toBeInTheDocument())
-    expect(screen.getByRole('option', { name: 'fable' })).toBeInTheDocument()
-  })
+  // NOTE: dropdown-open/option-pick interactions are deliberately NOT tested
+  // here — Radix Select cannot open in jsdom (data-state stays "closed").
+  // That behavior is covered in a real browser by tests/e2e/create-agent.spec.ts
+  // (Main case, voice dropdown step). Do not re-add jsdom dropdown tests.
 
   it('falls back to a free-text input when the enum list is empty', async () => {
     vi.mocked(detectVoiceProvider).mockResolvedValue({
@@ -101,22 +89,6 @@ describe('VoiceProviderSub', () => {
     const field = await waitFor(() => screen.getByTestId('voice-field'))
     fireEvent.change(field, { target: { value: 'nova' } })
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('nova'))
-  })
-
-  // Radix Select does not open in jsdom; dropdown interaction covered by
-  // create-agent.spec.ts Main case voice dropdown step.
-  it.skip('fires onChange when a dropdown voice is picked', async () => {
-    vi.mocked(detectVoiceProvider).mockResolvedValue({
-      mode: 'enum',
-      voices: ['alloy', 'echo'],
-      fetchedAt: new Date().toISOString(),
-    })
-    const { onChange } = renderWidget({ value: 'alloy' })
-    const trigger = await waitFor(() => screen.getByTestId('voice-field'))
-    await userEvent.click(trigger)
-    const option = await screen.findByRole('option', { name: 'echo' })
-    await userEvent.click(option)
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith('echo'))
   })
 
   it('re-fetches and re-renders when voice-provider-change is fired', async () => {
