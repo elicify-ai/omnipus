@@ -217,7 +217,27 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	ParentTaskID string `json:"parent_task_id,omitempty"`
 	// WorkspaceID is required-scoped — every task belongs to a workspace.
 	WorkspaceID string `json:"workspace_id"`
-	MilestoneID string `json:"milestone_id,omitempty"`
+	// Tags are workspace-scoped, normalized (lowercase+trim, deduped) free-form
+	// labels (ADR-049 D1, ≤16 tags, each ≤64 runes). Replaces the removed
+	// MilestoneID grouping; the milestone migration seeds a `milestone:<name>`
+	// tag onto member tasks (migrate_milestones.go).
+	Tags []string `json:"tags,omitempty"`
+	// PlanID is the optional Plan (pkg/plan) this task belongs to (ADR-049
+	// D1/D4). Same-workspace FK — validated at the tool/gateway layer, not the
+	// store (the store accepts and persists whatever value it is given).
+	PlanID string `json:"plan_id,omitempty"`
+	// Criteria are the task's acceptance criteria / Definition of Done
+	// (ADR-049 D2/D5, FR-3). Agent-created tasks require at least one (enforced
+	// at the tool layer); human/UI creation may leave this empty (SD-A7).
+	Criteria []AcceptanceCriterion `json:"criteria,omitempty"`
+	// AttemptCount is the current run's attempt index within its goal loop
+	// (ADR-049 D7/R4/C17). Read-only, server-set by the runtime engine — never
+	// a client-writable field (no Patch.AttemptCount).
+	AttemptCount int `json:"attempt_count,omitempty"`
+	// MaxAttempts is a per-task override of the attempt ceiling before the goal
+	// loop wakes the owner (ADR-049 D7/R4/C18). nil inherits the global
+	// PlanningConfig.TaskMaxAttempts default.
+	MaxAttempts *int `json:"max_attempts,omitempty"`
 	// Trigger is the task's time trigger (nil = manual).
 	Trigger *Trigger `json:"trigger,omitempty"`
 	// Due is an optional RFC 3339 UTC deadline (separate from Trigger).

@@ -26,7 +26,7 @@
 //   - cascadeDeleteEdges: multi-dep where remaining deps are all done → reports
 //     unblocked; remaining dep NOT done → not reported
 //   - AdvanceBlockedDependents: dep-deleted (gone from graph) path
-//   - Filter: AgentID, MilestoneID, CreatedBy, BlockedByID, ParentTaskIDSet
+//   - Filter: AgentID, PlanID, CreatedBy, BlockedByID, ParentTaskIDSet
 //   - priority sort order and List differentiation
 //   - normalize length limits (title 200, description 2000, prompt 10000,
 //     result 50000)
@@ -34,7 +34,7 @@
 //     rejected; manual trigger with no config accepted
 //   - validateTransition internal hatch: internal=true permits blocked↔*
 //   - updateLocked partial update fields: Trigger clear, Artifacts, SessionID,
-//     StartedAt, CompletedAt, SourceChannel, SourceChatID, MilestoneID, Due
+//     StartedAt, CompletedAt, SourceChannel, SourceChatID, PlanID, Due
 
 package task
 
@@ -886,19 +886,35 @@ func TestListFilterByAgentID(t *testing.T) {
 	assert.NotEqual(t, got[0].AgentID, got2[0].AgentID)
 }
 
-func TestListFilterByMilestoneID(t *testing.T) {
-	// Traces to: store.go line 150 — Filter.MilestoneID match
+func TestListFilterByPlanID(t *testing.T) {
+	// Traces to: store.go — Filter.PlanID match (ADR-049 D1, replaces the
+	// removed Filter.MilestoneID)
 	s := newStore(t)
 	ms := mkTask("t", "ws")
-	ms.MilestoneID = "milestone-1"
+	ms.PlanID = "plan-1"
 	mustCreate(t, s, ms)
 
 	other := mkTask("other", "ws")
 	mustCreate(t, s, other)
 
-	got, _ := s.List(Filter{MilestoneID: "milestone-1"})
+	got, _ := s.List(Filter{PlanID: "plan-1"})
 	require.Len(t, got, 1)
-	assert.Equal(t, "milestone-1", got[0].MilestoneID)
+	assert.Equal(t, "plan-1", got[0].PlanID)
+}
+
+func TestListFilterByTag(t *testing.T) {
+	// Traces to: store.go — Filter.Tag match (ADR-049 D1)
+	s := newStore(t)
+	tagged := mkTask("t", "ws")
+	tagged.Tags = []string{"release-42"}
+	mustCreate(t, s, tagged)
+
+	other := mkTask("other", "ws")
+	mustCreate(t, s, other)
+
+	got, _ := s.List(Filter{Tag: "release-42"})
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Tags, "release-42")
 }
 
 func TestListFilterByCreatedBy(t *testing.T) {
@@ -1090,7 +1106,7 @@ func TestUpdatePatchAllScalarFields(t *testing.T) {
 		AgentID:       ptr("agent-1"),
 		Priority:      ptr(2),
 		Due:           ptr("2026-12-31"),
-		MilestoneID:   ptr("ms-1"),
+		PlanID:        ptr("plan-1"),
 		Surface:       ptr(SurfaceHeartbeat),
 		SessionID:     ptr("sess-1"),
 		StartedAt:     ptr("2026-01-01T00:00:00Z"),
@@ -1109,7 +1125,7 @@ func TestUpdatePatchAllScalarFields(t *testing.T) {
 	assert.Equal(t, "agent-1", got.AgentID)
 	assert.Equal(t, 2, got.Priority)
 	assert.Equal(t, "2026-12-31", got.Due)
-	assert.Equal(t, "ms-1", got.MilestoneID)
+	assert.Equal(t, "plan-1", got.PlanID)
 	assert.Equal(t, SurfaceHeartbeat, got.Surface)
 	assert.Equal(t, "sess-1", got.SessionID)
 	assert.Equal(t, "2026-01-01T00:00:00Z", got.StartedAt)
@@ -1376,7 +1392,7 @@ func TestCreatePersistsAllFields(t *testing.T) {
 		Description:   "desc alpha",
 		Prompt:        "prompt alpha",
 		Surface:       SurfaceHeartbeat,
-		MilestoneID:   "ms-1",
+		PlanID:        "plan-1",
 		Due:           "2026-12-01",
 		SourceChannel: "telegram",
 		SourceChatID:  "chat-1",
@@ -1406,7 +1422,7 @@ func TestCreatePersistsAllFields(t *testing.T) {
 	assert.Equal(t, 1, r1.Priority)
 	assert.Equal(t, "agent-a", r1.AgentID)
 	assert.Equal(t, SurfaceHeartbeat, r1.Surface)
-	assert.Equal(t, "ms-1", r1.MilestoneID)
+	assert.Equal(t, "plan-1", r1.PlanID)
 	assert.Len(t, r1.Todos, 1)
 	require.NotNil(t, r1.Trigger)
 	assert.Equal(t, TriggerRecurring, r1.Trigger.Type)

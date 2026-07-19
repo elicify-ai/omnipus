@@ -38,6 +38,11 @@ const (
 	// EntryTypeTurnCancelled marks the JSONL entry written when a turn is canceled
 	// mid-stream. Written once per fired cancel to transcript.jsonl (FR-15).
 	EntryTypeTurnCancelled EntryType = "turn_canceled"
+	// EntryTypeJudgeVerdict marks a transcript entry carrying a task.JudgeVerdict
+	// (ADR-049, spec Part A §C/FR-025). Written alongside the worker's ADR-043
+	// completion marker so the two cannot silently disagree — the Judge System
+	// Agent's verdict is never inferred from absence (NFR-2).
+	EntryTypeJudgeVerdict EntryType = "judge_verdict"
 )
 
 // SessionStatus classifies the lifecycle state of a session.

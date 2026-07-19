@@ -21,7 +21,12 @@ func removeFileRaw(s *Store, id string) error {
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	return New(t.TempDir())
+	// "<home>/tasks" mirrors the universal convention every other call site in
+	// the codebase uses (task.New(filepath.Join(home, "tasks"))) — New derives
+	// home from this to run the milestone migration (migrate_milestones.go);
+	// keeping the convention here means the migration's sentinel/scratch
+	// writes land inside t.TempDir()'s own auto-cleaned tree.
+	return New(filepath.Join(t.TempDir(), "tasks"))
 }
 
 // mkTask returns a minimally-valid task in the given workspace.
