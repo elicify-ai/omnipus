@@ -17,6 +17,63 @@ const (
 	BearerAuthScopes bearerAuthContextKey = "BearerAuth.Scopes"
 )
 
+// Defines values for AcceptanceCriterionAuthorKind.
+const (
+	AcceptanceCriterionAuthorKindAgent AcceptanceCriterionAuthorKind = "agent"
+	AcceptanceCriterionAuthorKindUser  AcceptanceCriterionAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionAuthorKind enum.
+func (e AcceptanceCriterionAuthorKind) Valid() bool {
+	switch e {
+	case AcceptanceCriterionAuthorKindAgent:
+		return true
+	case AcceptanceCriterionAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionKind.
+const (
+	AcceptanceCriterionKindCheck AcceptanceCriterionKind = "check"
+	AcceptanceCriterionKindProse AcceptanceCriterionKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionKind enum.
+func (e AcceptanceCriterionKind) Valid() bool {
+	switch e {
+	case AcceptanceCriterionKindCheck:
+		return true
+	case AcceptanceCriterionKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionStatus.
+const (
+	AcceptanceCriterionStatusMet     AcceptanceCriterionStatus = "met"
+	AcceptanceCriterionStatusPending AcceptanceCriterionStatus = "pending"
+	AcceptanceCriterionStatusUnmet   AcceptanceCriterionStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionStatus enum.
+func (e AcceptanceCriterionStatus) Valid() bool {
+	switch e {
+	case AcceptanceCriterionStatusMet:
+		return true
+	case AcceptanceCriterionStatusPending:
+		return true
+	case AcceptanceCriterionStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ActivityEventType.
 const (
 	ActivityEventTypeSessionStart ActivityEventType = "session_start"
@@ -1031,6 +1088,24 @@ func (e IntegrationProviderUpdateRequestKind) Valid() bool {
 	}
 }
 
+// Defines values for JudgeVerdictScope.
+const (
+	JudgeVerdictScopePlan JudgeVerdictScope = "plan"
+	JudgeVerdictScopeTask JudgeVerdictScope = "task"
+)
+
+// Valid indicates whether the value is a known member of the JudgeVerdictScope enum.
+func (e JudgeVerdictScope) Valid() bool {
+	switch e {
+	case JudgeVerdictScopePlan:
+		return true
+	case JudgeVerdictScopeTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for McpServerStatus.
 const (
 	McpServerStatusConnected    McpServerStatus = "connected"
@@ -1214,6 +1289,7 @@ func (e MessageToolCallsStatus) Valid() bool {
 // Defines values for MessageType.
 const (
 	MessageTypeCompaction   MessageType = "compaction"
+	MessageTypeJudgeVerdict MessageType = "judge_verdict"
 	MessageTypeMessage      MessageType = "message"
 	MessageTypeSystem       MessageType = "system"
 	MessageTypeToolCall     MessageType = "tool_call"
@@ -1225,6 +1301,8 @@ func (e MessageType) Valid() bool {
 	switch e {
 	case MessageTypeCompaction:
 		return true
+	case MessageTypeJudgeVerdict:
+		return true
 	case MessageTypeMessage:
 		return true
 	case MessageTypeSystem:
@@ -1232,6 +1310,24 @@ func (e MessageType) Valid() bool {
 	case MessageTypeToolCall:
 		return true
 	case MessageTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageVerdictScope.
+const (
+	MessageVerdictScopePlan MessageVerdictScope = "plan"
+	MessageVerdictScopeTask MessageVerdictScope = "task"
+)
+
+// Valid indicates whether the value is a known member of the MessageVerdictScope enum.
+func (e MessageVerdictScope) Valid() bool {
+	switch e {
+	case MessageVerdictScopePlan:
+		return true
+	case MessageVerdictScopeTask:
 		return true
 	default:
 		return false
@@ -1331,6 +1427,405 @@ func (e OperationResultValidationOutcome) Valid() bool {
 	case OperationResultValidationOutcomeUnreachable:
 		return true
 	case OperationResultValidationOutcomeValid:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanDodAuthorKind.
+const (
+	PlanDodAuthorKindAgent PlanDodAuthorKind = "agent"
+	PlanDodAuthorKindUser  PlanDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the PlanDodAuthorKind enum.
+func (e PlanDodAuthorKind) Valid() bool {
+	switch e {
+	case PlanDodAuthorKindAgent:
+		return true
+	case PlanDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanDodKind.
+const (
+	PlanDodKindCheck PlanDodKind = "check"
+	PlanDodKindProse PlanDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the PlanDodKind enum.
+func (e PlanDodKind) Valid() bool {
+	switch e {
+	case PlanDodKindCheck:
+		return true
+	case PlanDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanDodStatus.
+const (
+	PlanDodStatusMet     PlanDodStatus = "met"
+	PlanDodStatusPending PlanDodStatus = "pending"
+	PlanDodStatusUnmet   PlanDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the PlanDodStatus enum.
+func (e PlanDodStatus) Valid() bool {
+	switch e {
+	case PlanDodStatusMet:
+		return true
+	case PlanDodStatusPending:
+		return true
+	case PlanDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanFailedReason.
+const (
+	PlanFailedReasonIdleExpired          PlanFailedReason = "idle_expired"
+	PlanFailedReasonJudgeRoundsExhausted PlanFailedReason = "judge_rounds_exhausted"
+	PlanFailedReasonStoppedByUser        PlanFailedReason = "stopped_by_user"
+)
+
+// Valid indicates whether the value is a known member of the PlanFailedReason enum.
+func (e PlanFailedReason) Valid() bool {
+	switch e {
+	case PlanFailedReasonIdleExpired:
+		return true
+	case PlanFailedReasonJudgeRoundsExhausted:
+		return true
+	case PlanFailedReasonStoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanPlanPhase.
+const (
+	PlanPlanPhaseDispatching  PlanPlanPhase = "dispatching"
+	PlanPlanPhaseIdle         PlanPlanPhase = "idle"
+	PlanPlanPhaseJudging      PlanPlanPhase = "judging"
+	PlanPlanPhaseSynthesizing PlanPlanPhase = "synthesizing"
+)
+
+// Valid indicates whether the value is a known member of the PlanPlanPhase enum.
+func (e PlanPlanPhase) Valid() bool {
+	switch e {
+	case PlanPlanPhaseDispatching:
+		return true
+	case PlanPlanPhaseIdle:
+		return true
+	case PlanPlanPhaseJudging:
+		return true
+	case PlanPlanPhaseSynthesizing:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanState.
+const (
+	PlanStateApproved PlanState = "approved"
+	PlanStateDone     PlanState = "done"
+	PlanStateDraft    PlanState = "draft"
+	PlanStateFailed   PlanState = "failed"
+	PlanStateRunning  PlanState = "running"
+)
+
+// Valid indicates whether the value is a known member of the PlanState enum.
+func (e PlanState) Valid() bool {
+	switch e {
+	case PlanStateApproved:
+		return true
+	case PlanStateDone:
+		return true
+	case PlanStateDraft:
+		return true
+	case PlanStateFailed:
+		return true
+	case PlanStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanCreateRequestDodAuthorKind.
+const (
+	PlanCreateRequestDodAuthorKindAgent PlanCreateRequestDodAuthorKind = "agent"
+	PlanCreateRequestDodAuthorKindUser  PlanCreateRequestDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the PlanCreateRequestDodAuthorKind enum.
+func (e PlanCreateRequestDodAuthorKind) Valid() bool {
+	switch e {
+	case PlanCreateRequestDodAuthorKindAgent:
+		return true
+	case PlanCreateRequestDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanCreateRequestDodKind.
+const (
+	PlanCreateRequestDodKindCheck PlanCreateRequestDodKind = "check"
+	PlanCreateRequestDodKindProse PlanCreateRequestDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the PlanCreateRequestDodKind enum.
+func (e PlanCreateRequestDodKind) Valid() bool {
+	switch e {
+	case PlanCreateRequestDodKindCheck:
+		return true
+	case PlanCreateRequestDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanCreateRequestDodStatus.
+const (
+	PlanCreateRequestDodStatusMet     PlanCreateRequestDodStatus = "met"
+	PlanCreateRequestDodStatusPending PlanCreateRequestDodStatus = "pending"
+	PlanCreateRequestDodStatusUnmet   PlanCreateRequestDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the PlanCreateRequestDodStatus enum.
+func (e PlanCreateRequestDodStatus) Valid() bool {
+	switch e {
+	case PlanCreateRequestDodStatusMet:
+		return true
+	case PlanCreateRequestDodStatusPending:
+		return true
+	case PlanCreateRequestDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanListResponsePlansDodAuthorKind.
+const (
+	PlanListResponsePlansDodAuthorKindAgent PlanListResponsePlansDodAuthorKind = "agent"
+	PlanListResponsePlansDodAuthorKindUser  PlanListResponsePlansDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansDodAuthorKind enum.
+func (e PlanListResponsePlansDodAuthorKind) Valid() bool {
+	switch e {
+	case PlanListResponsePlansDodAuthorKindAgent:
+		return true
+	case PlanListResponsePlansDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanListResponsePlansDodKind.
+const (
+	PlanListResponsePlansDodKindCheck PlanListResponsePlansDodKind = "check"
+	PlanListResponsePlansDodKindProse PlanListResponsePlansDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansDodKind enum.
+func (e PlanListResponsePlansDodKind) Valid() bool {
+	switch e {
+	case PlanListResponsePlansDodKindCheck:
+		return true
+	case PlanListResponsePlansDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanListResponsePlansDodStatus.
+const (
+	PlanListResponsePlansDodStatusMet     PlanListResponsePlansDodStatus = "met"
+	PlanListResponsePlansDodStatusPending PlanListResponsePlansDodStatus = "pending"
+	PlanListResponsePlansDodStatusUnmet   PlanListResponsePlansDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansDodStatus enum.
+func (e PlanListResponsePlansDodStatus) Valid() bool {
+	switch e {
+	case PlanListResponsePlansDodStatusMet:
+		return true
+	case PlanListResponsePlansDodStatusPending:
+		return true
+	case PlanListResponsePlansDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanListResponsePlansFailedReason.
+const (
+	PlanListResponsePlansFailedReasonIdleExpired          PlanListResponsePlansFailedReason = "idle_expired"
+	PlanListResponsePlansFailedReasonJudgeRoundsExhausted PlanListResponsePlansFailedReason = "judge_rounds_exhausted"
+	PlanListResponsePlansFailedReasonStoppedByUser        PlanListResponsePlansFailedReason = "stopped_by_user"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansFailedReason enum.
+func (e PlanListResponsePlansFailedReason) Valid() bool {
+	switch e {
+	case PlanListResponsePlansFailedReasonIdleExpired:
+		return true
+	case PlanListResponsePlansFailedReasonJudgeRoundsExhausted:
+		return true
+	case PlanListResponsePlansFailedReasonStoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanListResponsePlansPlanPhase.
+const (
+	PlanListResponsePlansPlanPhaseDispatching  PlanListResponsePlansPlanPhase = "dispatching"
+	PlanListResponsePlansPlanPhaseIdle         PlanListResponsePlansPlanPhase = "idle"
+	PlanListResponsePlansPlanPhaseJudging      PlanListResponsePlansPlanPhase = "judging"
+	PlanListResponsePlansPlanPhaseSynthesizing PlanListResponsePlansPlanPhase = "synthesizing"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansPlanPhase enum.
+func (e PlanListResponsePlansPlanPhase) Valid() bool {
+	switch e {
+	case PlanListResponsePlansPlanPhaseDispatching:
+		return true
+	case PlanListResponsePlansPlanPhaseIdle:
+		return true
+	case PlanListResponsePlansPlanPhaseJudging:
+		return true
+	case PlanListResponsePlansPlanPhaseSynthesizing:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanListResponsePlansState.
+const (
+	PlanListResponsePlansStateApproved PlanListResponsePlansState = "approved"
+	PlanListResponsePlansStateDone     PlanListResponsePlansState = "done"
+	PlanListResponsePlansStateDraft    PlanListResponsePlansState = "draft"
+	PlanListResponsePlansStateFailed   PlanListResponsePlansState = "failed"
+	PlanListResponsePlansStateRunning  PlanListResponsePlansState = "running"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansState enum.
+func (e PlanListResponsePlansState) Valid() bool {
+	switch e {
+	case PlanListResponsePlansStateApproved:
+		return true
+	case PlanListResponsePlansStateDone:
+		return true
+	case PlanListResponsePlansStateDraft:
+		return true
+	case PlanListResponsePlansStateFailed:
+		return true
+	case PlanListResponsePlansStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanUpdateRequestDodAuthorKind.
+const (
+	PlanUpdateRequestDodAuthorKindAgent PlanUpdateRequestDodAuthorKind = "agent"
+	PlanUpdateRequestDodAuthorKindUser  PlanUpdateRequestDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the PlanUpdateRequestDodAuthorKind enum.
+func (e PlanUpdateRequestDodAuthorKind) Valid() bool {
+	switch e {
+	case PlanUpdateRequestDodAuthorKindAgent:
+		return true
+	case PlanUpdateRequestDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanUpdateRequestDodKind.
+const (
+	PlanUpdateRequestDodKindCheck PlanUpdateRequestDodKind = "check"
+	PlanUpdateRequestDodKindProse PlanUpdateRequestDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the PlanUpdateRequestDodKind enum.
+func (e PlanUpdateRequestDodKind) Valid() bool {
+	switch e {
+	case PlanUpdateRequestDodKindCheck:
+		return true
+	case PlanUpdateRequestDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanUpdateRequestDodStatus.
+const (
+	PlanUpdateRequestDodStatusMet     PlanUpdateRequestDodStatus = "met"
+	PlanUpdateRequestDodStatusPending PlanUpdateRequestDodStatus = "pending"
+	PlanUpdateRequestDodStatusUnmet   PlanUpdateRequestDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the PlanUpdateRequestDodStatus enum.
+func (e PlanUpdateRequestDodStatus) Valid() bool {
+	switch e {
+	case PlanUpdateRequestDodStatusMet:
+		return true
+	case PlanUpdateRequestDodStatusPending:
+		return true
+	case PlanUpdateRequestDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanUpdateRequestState.
+const (
+	PlanUpdateRequestStateApproved PlanUpdateRequestState = "approved"
+	PlanUpdateRequestStateDone     PlanUpdateRequestState = "done"
+	PlanUpdateRequestStateDraft    PlanUpdateRequestState = "draft"
+	PlanUpdateRequestStateFailed   PlanUpdateRequestState = "failed"
+	PlanUpdateRequestStateRunning  PlanUpdateRequestState = "running"
+)
+
+// Valid indicates whether the value is a known member of the PlanUpdateRequestState enum.
+func (e PlanUpdateRequestState) Valid() bool {
+	switch e {
+	case PlanUpdateRequestStateApproved:
+		return true
+	case PlanUpdateRequestStateDone:
+		return true
+	case PlanUpdateRequestStateDraft:
+		return true
+	case PlanUpdateRequestStateFailed:
+		return true
+	case PlanUpdateRequestStateRunning:
 		return true
 	default:
 		return false
@@ -2243,6 +2738,7 @@ func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
 // Defines values for SessionDetailMessagesType.
 const (
 	SessionDetailMessagesTypeCompaction   SessionDetailMessagesType = "compaction"
+	SessionDetailMessagesTypeJudgeVerdict SessionDetailMessagesType = "judge_verdict"
 	SessionDetailMessagesTypeMessage      SessionDetailMessagesType = "message"
 	SessionDetailMessagesTypeSystem       SessionDetailMessagesType = "system"
 	SessionDetailMessagesTypeToolCall     SessionDetailMessagesType = "tool_call"
@@ -2254,6 +2750,8 @@ func (e SessionDetailMessagesType) Valid() bool {
 	switch e {
 	case SessionDetailMessagesTypeCompaction:
 		return true
+	case SessionDetailMessagesTypeJudgeVerdict:
+		return true
 	case SessionDetailMessagesTypeMessage:
 		return true
 	case SessionDetailMessagesTypeSystem:
@@ -2261,6 +2759,24 @@ func (e SessionDetailMessagesType) Valid() bool {
 	case SessionDetailMessagesTypeToolCall:
 		return true
 	case SessionDetailMessagesTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesVerdictScope.
+const (
+	SessionDetailMessagesVerdictScopePlan SessionDetailMessagesVerdictScope = "plan"
+	SessionDetailMessagesVerdictScopeTask SessionDetailMessagesVerdictScope = "task"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictScope enum.
+func (e SessionDetailMessagesVerdictScope) Valid() bool {
+	switch e {
+	case SessionDetailMessagesVerdictScopePlan:
+		return true
+	case SessionDetailMessagesVerdictScopeTask:
 		return true
 	default:
 		return false
@@ -2504,6 +3020,63 @@ func (e TaskAction) Valid() bool {
 	}
 }
 
+// Defines values for TaskCriteriaAuthorKind.
+const (
+	TaskCriteriaAuthorKindAgent TaskCriteriaAuthorKind = "agent"
+	TaskCriteriaAuthorKindUser  TaskCriteriaAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskCriteriaAuthorKind enum.
+func (e TaskCriteriaAuthorKind) Valid() bool {
+	switch e {
+	case TaskCriteriaAuthorKindAgent:
+		return true
+	case TaskCriteriaAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCriteriaKind.
+const (
+	TaskCriteriaKindCheck TaskCriteriaKind = "check"
+	TaskCriteriaKindProse TaskCriteriaKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the TaskCriteriaKind enum.
+func (e TaskCriteriaKind) Valid() bool {
+	switch e {
+	case TaskCriteriaKindCheck:
+		return true
+	case TaskCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCriteriaStatus.
+const (
+	TaskCriteriaStatusMet     TaskCriteriaStatus = "met"
+	TaskCriteriaStatusPending TaskCriteriaStatus = "pending"
+	TaskCriteriaStatusUnmet   TaskCriteriaStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the TaskCriteriaStatus enum.
+func (e TaskCriteriaStatus) Valid() bool {
+	switch e {
+	case TaskCriteriaStatusMet:
+		return true
+	case TaskCriteriaStatusPending:
+		return true
+	case TaskCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskRollupStatus.
 const (
 	TaskRollupStatusBlocked    TaskRollupStatus = "blocked"
@@ -2648,6 +3221,63 @@ func (e TaskCreateRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for TaskCreateRequestCriteriaAuthorKind.
+const (
+	TaskCreateRequestCriteriaAuthorKindAgent TaskCreateRequestCriteriaAuthorKind = "agent"
+	TaskCreateRequestCriteriaAuthorKindUser  TaskCreateRequestCriteriaAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestCriteriaAuthorKind enum.
+func (e TaskCreateRequestCriteriaAuthorKind) Valid() bool {
+	switch e {
+	case TaskCreateRequestCriteriaAuthorKindAgent:
+		return true
+	case TaskCreateRequestCriteriaAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestCriteriaKind.
+const (
+	TaskCreateRequestCriteriaKindCheck TaskCreateRequestCriteriaKind = "check"
+	TaskCreateRequestCriteriaKindProse TaskCreateRequestCriteriaKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestCriteriaKind enum.
+func (e TaskCreateRequestCriteriaKind) Valid() bool {
+	switch e {
+	case TaskCreateRequestCriteriaKindCheck:
+		return true
+	case TaskCreateRequestCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestCriteriaStatus.
+const (
+	TaskCreateRequestCriteriaStatusMet     TaskCreateRequestCriteriaStatus = "met"
+	TaskCreateRequestCriteriaStatusPending TaskCreateRequestCriteriaStatus = "pending"
+	TaskCreateRequestCriteriaStatusUnmet   TaskCreateRequestCriteriaStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestCriteriaStatus enum.
+func (e TaskCreateRequestCriteriaStatus) Valid() bool {
+	switch e {
+	case TaskCreateRequestCriteriaStatusMet:
+		return true
+	case TaskCreateRequestCriteriaStatusPending:
+		return true
+	case TaskCreateRequestCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCreateRequestSurface.
 const (
 	TaskCreateRequestSurfaceHeartbeat TaskCreateRequestSurface = "heartbeat"
@@ -2705,6 +3335,63 @@ func (e TaskCreateRequestTriggerType) Valid() bool {
 	case TaskCreateRequestTriggerTypeOnce:
 		return true
 	case TaskCreateRequestTriggerTypeRecurring:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestCriteriaAuthorKind.
+const (
+	TaskUpdateRequestCriteriaAuthorKindAgent TaskUpdateRequestCriteriaAuthorKind = "agent"
+	TaskUpdateRequestCriteriaAuthorKindUser  TaskUpdateRequestCriteriaAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestCriteriaAuthorKind enum.
+func (e TaskUpdateRequestCriteriaAuthorKind) Valid() bool {
+	switch e {
+	case TaskUpdateRequestCriteriaAuthorKindAgent:
+		return true
+	case TaskUpdateRequestCriteriaAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestCriteriaKind.
+const (
+	TaskUpdateRequestCriteriaKindCheck TaskUpdateRequestCriteriaKind = "check"
+	TaskUpdateRequestCriteriaKindProse TaskUpdateRequestCriteriaKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestCriteriaKind enum.
+func (e TaskUpdateRequestCriteriaKind) Valid() bool {
+	switch e {
+	case TaskUpdateRequestCriteriaKindCheck:
+		return true
+	case TaskUpdateRequestCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestCriteriaStatus.
+const (
+	TaskUpdateRequestCriteriaStatusMet     TaskUpdateRequestCriteriaStatus = "met"
+	TaskUpdateRequestCriteriaStatusPending TaskUpdateRequestCriteriaStatus = "pending"
+	TaskUpdateRequestCriteriaStatusUnmet   TaskUpdateRequestCriteriaStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestCriteriaStatus enum.
+func (e TaskUpdateRequestCriteriaStatus) Valid() bool {
+	switch e {
+	case TaskUpdateRequestCriteriaStatusMet:
+		return true
+	case TaskUpdateRequestCriteriaStatusPending:
+		return true
+	case TaskUpdateRequestCriteriaStatusUnmet:
 		return true
 	default:
 		return false
@@ -3187,31 +3874,31 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
-	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
-	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
-	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
-	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
-	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
-	ListTasksParamsStatusPlanning   ListTasksParamsStatus = "planning"
+	Blocked    ListTasksParamsStatus = "blocked"
+	Done       ListTasksParamsStatus = "done"
+	Failed     ListTasksParamsStatus = "failed"
+	InProgress ListTasksParamsStatus = "in_progress"
+	Inbox      ListTasksParamsStatus = "inbox"
+	Next       ListTasksParamsStatus = "next"
+	Planning   ListTasksParamsStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case ListTasksParamsStatusBlocked:
+	case Blocked:
 		return true
-	case ListTasksParamsStatusDone:
+	case Done:
 		return true
-	case ListTasksParamsStatusFailed:
+	case Failed:
 		return true
-	case ListTasksParamsStatusInProgress:
+	case InProgress:
 		return true
-	case ListTasksParamsStatusInbox:
+	case Inbox:
 		return true
-	case ListTasksParamsStatusNext:
+	case Next:
 		return true
-	case ListTasksParamsStatusPlanning:
+	case Planning:
 		return true
 	default:
 		return false
@@ -3220,16 +3907,16 @@ func (e ListTasksParamsStatus) Valid() bool {
 
 // Defines values for ListTasksParamsSurface.
 const (
-	Heartbeat ListTasksParamsSurface = "heartbeat"
-	User      ListTasksParamsSurface = "user"
+	ListTasksParamsSurfaceHeartbeat ListTasksParamsSurface = "heartbeat"
+	ListTasksParamsSurfaceUser      ListTasksParamsSurface = "user"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsSurface enum.
 func (e ListTasksParamsSurface) Valid() bool {
 	switch e {
-	case Heartbeat:
+	case ListTasksParamsSurfaceHeartbeat:
 		return true
-	case User:
+	case ListTasksParamsSurfaceUser:
 		return true
 	default:
 		return false
@@ -3292,6 +3979,48 @@ type AboutResponse struct {
 	// WarmupTimeoutSeconds Dev-server warmup timeout from config.
 	WarmupTimeoutSeconds int `json:"warmup_timeout_seconds"`
 }
+
+// AcceptanceCriterion A single Definition-of-Done criterion on a Task (`task.criteria[]`) or Plan (`plan.dod[]`) — ADR-049 D2/D5/FR-3. `kind: check` criteria are machine-checkable: a command dispatched through the assignee agent's own `bash` tool machinery (never a parallel judge-owned exec path) whose exit code produces unfakeable `EvidenceRecord` evidence. `kind: prose` criteria are free-text statements judged by the Judge System Agent's LLM call against evidence-first input. Every criterion records its author identity (agent or user); absence of evidence/verdict never defaults to `met` (NFR-2, fail-closed).
+type AcceptanceCriterion struct {
+	// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+	Author struct {
+		// Id Agent ID or username of the author.
+		Id string `json:"id"`
+
+		// Kind Whether this criterion was authored by an agent or a human user.
+		Kind AcceptanceCriterionAuthorKind `json:"kind"`
+	} `json:"author"`
+
+	// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+	Check *struct {
+		// Command Shell command run through the assignee's `bash` tool.
+		Command string `json:"command"`
+
+		// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+		ExpectedExitCode int `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+
+	// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+	Id *string `json:"id,omitempty"`
+
+	// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+	Kind AcceptanceCriterionKind `json:"kind"`
+
+	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+	Status AcceptanceCriterionStatus `json:"status"`
+
+	// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+	Text string `json:"text"`
+}
+
+// AcceptanceCriterionAuthorKind Whether this criterion was authored by an agent or a human user.
+type AcceptanceCriterionAuthorKind string
+
+// AcceptanceCriterionKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type AcceptanceCriterionKind string
+
+// AcceptanceCriterionStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type AcceptanceCriterionStatus string
 
 // ActivityEvent A single activity event as returned by GET /activity. Events represent notable runtime occurrences (session starts, task lifecycle changes) from the last 24 hours, returned in reverse-chronological order (max 50 entries).
 type ActivityEvent struct {
@@ -3434,6 +4163,9 @@ type Agent struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
+	// Rubric System Agent rubric prompt (ADR-049 D3) — the System Agent's system prompt / judging rubric, stored as the agent's soul/prompt-override field (the rubric IS the judge's system prompt). Editable only for `type: system` agents (e.g. the Judge); the only prompt-equivalent field a locked System Agent accepts. Empty for non-system agents.
+	Rubric *string `json:"rubric,omitempty"`
+
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
@@ -3491,7 +4223,7 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `rubric` are editable (the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
 	Type AgentType `json:"type"`
 
 	// UpdatedAt ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
@@ -3513,7 +4245,7 @@ type AgentStatus string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `rubric` are editable (the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
@@ -4129,6 +4861,9 @@ type AgentUpdateRequest struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
+	// Rubric New System Agent rubric prompt (ADR-049 D3). Only accepted for `type: system` agents (e.g. the Judge) — rejected 400 on all other agent types. This is the only prompt-equivalent field a locked System Agent accepts (`soul` is rejected on locked agents).
+	Rubric *string `json:"rubric,omitempty"`
+
 	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Must each be valid Go regexp patterns (400 on invalid regexp).
@@ -4687,6 +5422,18 @@ type CredentialSetRequest struct {
 	Value string `json:"value"`
 }
 
+// CriterionVerdict Per-criterion judge outcome within a JudgeVerdict (ADR-049 D2). The `reason` feeds forward as steering context into the next attempt/round when unmet (evaluator-optimizer pattern).
+type CriterionVerdict struct {
+	// CriterionId ID of the AcceptanceCriterion this verdict judges.
+	CriterionId string `json:"criterion_id"`
+
+	// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+	Met bool `json:"met"`
+
+	// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+	Reason string `json:"reason"`
+}
+
 // DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
 type DevicePaired struct {
 	// DeviceId Unique device identifier.
@@ -4853,6 +5600,42 @@ type ErrorResponse struct {
 
 	// Error Human-readable error message.
 	Error string `json:"error"`
+}
+
+// EvidenceRecord Persisted evidence from a single machine-check execution (ADR-049 D2), one per `(criterion_id, attempt)` pair. Stored under `$OMNIPUS_HOME/tasks_evidence/<task_id>/<criterion_id>-<attempt>.json` (mode 0600, dir 0700). `command` and `output` pass through the registered sensitive-value redaction (ADR-004 `RegisterSensitiveValues` flow) BEFORE the record is marshalled/written — never write raw then scrub. Retention follows the 90-day session default and the record is deleted with its task. Read-only surface — never accepted on create/update.
+type EvidenceRecord struct {
+	// Attempt Attempt index (within the task's goal loop) this record belongs to.
+	Attempt int `json:"attempt"`
+
+	// Command The redacted command that was run (via the assignee's `bash` tool machinery).
+	Command string `json:"command"`
+
+	// CriterionId AcceptanceCriterion this evidence was recorded for.
+	CriterionId string `json:"criterion_id"`
+
+	// ExitCode Actual process exit code. Set to the sentinel `-1` when `timed_out` or `policy_denied` is true — consumers MUST check those booleans before interpreting this field.
+	ExitCode int `json:"exit_code"`
+
+	// Id Server-set evidence record identifier (UUID).
+	Id string `json:"id"`
+
+	// Output Redacted, size-capped captured output (default cap e.g. 64 KiB). See `truncated`.
+	Output string `json:"output"`
+
+	// PolicyDenied True when the assignee's effective `bash` policy for this command was `deny`, or `ask` (which resolves to deny unattended) — criterion is scored `unmet` (fail-closed, ADR D2 rule 2).
+	PolicyDenied bool `json:"policy_denied"`
+
+	// RecordedAt RFC 3339 UTC timestamp when this evidence was recorded.
+	RecordedAt time.Time `json:"recorded_at"`
+
+	// TaskId Task this evidence belongs to.
+	TaskId string `json:"task_id"`
+
+	// TimedOut True when the check exceeded its per-check timeout (default 60s, configurable) — criterion is scored `unmet` (fail-closed). A hung check cannot hold the loop's idle-expiry clock.
+	TimedOut bool `json:"timed_out"`
+
+	// Truncated True when `output` was cut to the size cap; a `"...[truncated N bytes]"` marker is appended in that case.
+	Truncated bool `json:"truncated"`
 }
 
 // ExecAllowlist Exec binary allowlist configuration for GET/PUT /api/v1/security/exec-allowlist (SEC-05).
@@ -5151,6 +5934,51 @@ type IntegrationProvidersResponse struct {
 	// Voice Configurable voice-input transcription providers.
 	Voice []IntegrationProvider `json:"voice"`
 }
+
+// JudgeVerdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+type JudgeVerdict struct {
+	// Id Server-set verdict identifier (UUID).
+	Id string `json:"id"`
+
+	// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+	JudgeAgentId string `json:"judge_agent_id"`
+
+	// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
+	JudgedAt time.Time `json:"judged_at"`
+
+	// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+	Met bool `json:"met"`
+
+	// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
+	Model string `json:"model"`
+
+	// PerCriterion Per-criterion outcomes making up the overall verdict.
+	PerCriterion []struct {
+		// CriterionId ID of the AcceptanceCriterion this verdict judges.
+		CriterionId string `json:"criterion_id"`
+
+		// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+		Met bool `json:"met"`
+
+		// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+		Reason string `json:"reason"`
+	} `json:"per_criterion"`
+
+	// PlanId Plan being judged. Present when `scope == plan`.
+	PlanId *string `json:"plan_id,omitempty"`
+
+	// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+	Round int `json:"round"`
+
+	// Scope Whether this verdict judges a task attempt or a plan round.
+	Scope JudgeVerdictScope `json:"scope"`
+
+	// TaskId Task being judged. Present when `scope == task`.
+	TaskId *string `json:"task_id,omitempty"`
+}
+
+// JudgeVerdictScope Whether this verdict judges a task attempt or a plan round.
+type JudgeVerdictScope string
 
 // LoginRequest Credentials for authenticating an existing user.
 type LoginRequest struct {
@@ -5545,8 +6373,50 @@ type Message struct {
 	// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
 	TurnId *string `json:"turn_id,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 	Type *MessageType `json:"type,omitempty"`
+
+	// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+	Verdict *struct {
+		// Id Server-set verdict identifier (UUID).
+		Id string `json:"id"`
+
+		// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+		JudgeAgentId string `json:"judge_agent_id"`
+
+		// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
+		JudgedAt time.Time `json:"judged_at"`
+
+		// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+		Met bool `json:"met"`
+
+		// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
+		Model string `json:"model"`
+
+		// PerCriterion Per-criterion outcomes making up the overall verdict.
+		PerCriterion []struct {
+			// CriterionId ID of the AcceptanceCriterion this verdict judges.
+			CriterionId string `json:"criterion_id"`
+
+			// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+			Met bool `json:"met"`
+
+			// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+			Reason string `json:"reason"`
+		} `json:"per_criterion"`
+
+		// PlanId Plan being judged. Present when `scope == plan`.
+		PlanId *string `json:"plan_id,omitempty"`
+
+		// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+		Round int `json:"round"`
+
+		// Scope Whether this verdict judges a task attempt or a plan round.
+		Scope MessageVerdictScope `json:"scope"`
+
+		// TaskId Task being judged. Present when `scope == task`.
+		TaskId *string `json:"task_id,omitempty"`
+	} `json:"verdict,omitempty"`
 }
 
 // MessageAttachmentsType Attachment category. Aligned with MediaPart.type enum.
@@ -5564,70 +6434,11 @@ type MessageStatus string
 // MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type MessageToolCallsStatus string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
 
-// Milestone defines model for Milestone.
-type Milestone struct {
-	// CreatedAt RFC3339 UTC creation timestamp.
-	CreatedAt time.Time `json:"created_at"`
-
-	// Description Optional free-text description.
-	Description *string `json:"description,omitempty"`
-
-	// DueDate Optional due date (ISO 8601 date string or null).
-	DueDate *string `json:"due_date,omitempty"`
-
-	// Id UUID milestone identifier
-	Id string `json:"id"`
-
-	// Name Human-readable milestone name.
-	Name string `json:"name"`
-
-	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
-	Owner *string `json:"owner,omitempty"`
-
-	// Progress Completion fraction (0–1) computed server-side at read time as done/total over the milestone's GTD board tasks. 0 when no tasks are associated. Read-only; never accepted on create/update.
-	Progress *float32 `json:"progress,omitempty"`
-
-	// UpdatedAt RFC3339 UTC last-update timestamp.
-	UpdatedAt time.Time `json:"updated_at"`
-
-	// WorkspaceId Workspace this milestone belongs to.
-	WorkspaceId string `json:"workspace_id"`
-}
-
-// MilestoneCreateRequest defines model for MilestoneCreateRequest.
-type MilestoneCreateRequest struct {
-	// Description Optional free-text description.
-	Description *string `json:"description,omitempty"`
-
-	// DueDate Optional due date (ISO 8601 date string or null).
-	DueDate *string `json:"due_date,omitempty"`
-
-	// Name Milestone name. Required.
-	Name string `json:"name"`
-}
-
-// MilestoneListResponse List response for GET /workspaces/{id}/milestones
-type MilestoneListResponse struct {
-	Milestones []Milestone `json:"milestones"`
-
-	// Total Total number of milestones for this workspace.
-	Total int `json:"total"`
-}
-
-// MilestoneUpdateRequest defines model for MilestoneUpdateRequest.
-type MilestoneUpdateRequest struct {
-	// Description Optional free-text description.
-	Description *string `json:"description,omitempty"`
-
-	// DueDate Optional due date (ISO 8601 date string or null).
-	DueDate *string `json:"due_date,omitempty"`
-
-	// Name Milestone name.
-	Name *string `json:"name,omitempty"`
-}
+// MessageVerdictScope Whether this verdict judges a task attempt or a plan round.
+type MessageVerdictScope string
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
@@ -5819,6 +6630,400 @@ type PerformanceSettingsUpdate struct {
 	// ToolsOnDemand New tool-loading mode. true = load tools on demand (fewer tokens per message); false = all allowed tools sent every message (no loading step). Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
 }
+
+// Plan A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task DAG under a goal, Definition of Done, owner agent, and state machine. Tasks join a plan via `Task.plan_id` (same-workspace FK, validated); membership and `progress` are computed read-time by scanning member tasks — never stored on the Plan record (mirrors the removed Milestone's `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json` (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones (see the Milestone removal diffs) as the container for grouped, judged, goal-driven work.
+// Returned by GET /workspaces/{id}/plans, GET /plans/{id}, POST /plans, and PUT /plans/{id}.
+type Plan struct {
+	// ActiveLoop True while this plan counts toward the global active-loop cap — iff `state == running` (Round-1 Grill Reconciliation R5).
+	ActiveLoop *bool `json:"active_loop,omitempty"`
+
+	// ApprovedAt RFC 3339 timestamp when the plan transitioned `draft -> approved`. Absent until then.
+	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+
+	// Bounds Per-plan overrides of the global `PlanningConfig` bounds (FR-9). Absent fields inherit the global default.
+	Bounds *struct {
+		// IdleExpiryDays Override of the global idle-expiry calendar brake (global default 7 days).
+		IdleExpiryDays *int `json:"idle_expiry_days,omitempty"`
+
+		// PlanJudgeMaxRounds Override of the global plan-judge round ceiling (global default 20, symmetric with `/goal`).
+		PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+	} `json:"bounds,omitempty"`
+
+	// CompletedAt RFC 3339 timestamp when the plan reached `done` or `failed`. Absent until then.
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+	// CreatedAt RFC 3339 UTC timestamp when the plan was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy Username (or agent ID) that created the plan. Set server-side at creation; read-only.
+	CreatedBy *string `json:"created_by,omitempty"`
+
+	// Description Optional free-form description.
+	Description *string `json:"description,omitempty"`
+
+	// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+	Dod *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind PlanDodAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		Kind PlanDodKind `json:"kind"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status PlanDodStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"dod,omitempty"`
+
+	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+	FailedReason *PlanFailedReason `json:"failed_reason,omitempty"`
+
+	// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+	Goal *string `json:"goal,omitempty"`
+
+	// Id Unique plan identifier (ULID).
+	Id string `json:"id"`
+
+	// JudgeRounds Plan-judge rounds consumed so far (ADR D4 MAJ-004, durable boot-reconciled counter).
+	JudgeRounds *int `json:"judge_rounds,omitempty"`
+
+	// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+
+	// Owner Username of the user who created this plan. Set server-side at creation; read-only.
+	Owner *string `json:"owner,omitempty"`
+
+	// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
+	OwnerAgentId string `json:"owner_agent_id"`
+
+	// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
+	PausedReason *string `json:"paused_reason,omitempty"`
+
+	// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+	PlanPhase *PlanPlanPhase `json:"plan_phase,omitempty"`
+
+	// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
+	Progress *float32 `json:"progress,omitempty"`
+
+	// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+
+	// State Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
+	State PlanState `json:"state"`
+
+	// Title Human-readable plan title.
+	Title string `json:"title"`
+
+	// UpdatedAt RFC 3339 UTC timestamp of the last update.
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// WorkspaceId Workspace this plan belongs to. Required-scoped — a plan may only reference same-workspace tasks (validated FK on `Task.plan_id`).
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// PlanDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type PlanDodAuthorKind string
+
+// PlanDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type PlanDodKind string
+
+// PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type PlanDodStatus string
+
+// PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+type PlanFailedReason string
+
+// PlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+type PlanPlanPhase string
+
+// PlanState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
+type PlanState string
+
+// PlanCreateRequest Request body for POST /plans (ADR-049 D1/FR-1). Creates a plan in `draft` state. `workspace_id` is required (a Plan is not nested under a workspace path — creation is a top-level `POST /plans` call, unlike the removed Milestone's `POST /workspaces/{id}/milestones`); member tasks are linked afterward via `Task.plan_id`, which is validated same-workspace.
+type PlanCreateRequest struct {
+	// Bounds Per-plan overrides of the global `PlanningConfig` bounds (FR-9).
+	Bounds *struct {
+		IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
+		PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+	} `json:"bounds,omitempty"`
+
+	// Description Optional free-form description.
+	Description *string `json:"description,omitempty"`
+
+	// Dod Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`).
+	Dod *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind PlanCreateRequestDodAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		Kind PlanCreateRequestDodKind `json:"kind"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status PlanCreateRequestDodStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"dod,omitempty"`
+
+	// Goal Plain-prose objective (used by the plan judge when `dod` is empty).
+	Goal *string `json:"goal,omitempty"`
+
+	// OwnerAgentId Agent responsible for this plan.
+	OwnerAgentId string `json:"owner_agent_id"`
+
+	// Title Plan title.
+	Title string `json:"title"`
+
+	// WorkspaceId Workspace this plan belongs to. Required — every plan is workspace-scoped.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// PlanCreateRequestDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type PlanCreateRequestDodAuthorKind string
+
+// PlanCreateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type PlanCreateRequestDodKind string
+
+// PlanCreateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type PlanCreateRequestDodStatus string
+
+// PlanListResponse List response for GET /workspaces/{id}/plans (mirrors the removed MilestoneListResponse).
+type PlanListResponse struct {
+	// Plans Plans for this workspace.
+	Plans []struct {
+		// ActiveLoop True while this plan counts toward the global active-loop cap — iff `state == running` (Round-1 Grill Reconciliation R5).
+		ActiveLoop *bool `json:"active_loop,omitempty"`
+
+		// ApprovedAt RFC 3339 timestamp when the plan transitioned `draft -> approved`. Absent until then.
+		ApprovedAt *time.Time `json:"approved_at,omitempty"`
+
+		// Bounds Per-plan overrides of the global `PlanningConfig` bounds (FR-9). Absent fields inherit the global default.
+		Bounds *struct {
+			// IdleExpiryDays Override of the global idle-expiry calendar brake (global default 7 days).
+			IdleExpiryDays *int `json:"idle_expiry_days,omitempty"`
+
+			// PlanJudgeMaxRounds Override of the global plan-judge round ceiling (global default 20, symmetric with `/goal`).
+			PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+		} `json:"bounds,omitempty"`
+
+		// CompletedAt RFC 3339 timestamp when the plan reached `done` or `failed`. Absent until then.
+		CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+		// CreatedAt RFC 3339 UTC timestamp when the plan was created.
+		CreatedAt time.Time `json:"created_at"`
+
+		// CreatedBy Username (or agent ID) that created the plan. Set server-side at creation; read-only.
+		CreatedBy *string `json:"created_by,omitempty"`
+
+		// Description Optional free-form description.
+		Description *string `json:"description,omitempty"`
+
+		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+		Dod *[]struct {
+			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+			Author struct {
+				// Id Agent ID or username of the author.
+				Id string `json:"id"`
+
+				// Kind Whether this criterion was authored by an agent or a human user.
+				Kind PlanListResponsePlansDodAuthorKind `json:"kind"`
+			} `json:"author"`
+
+			// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+			Check *struct {
+				// Command Shell command run through the assignee's `bash` tool.
+				Command string `json:"command"`
+
+				// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+				ExpectedExitCode int `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+
+			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+			Id *string `json:"id,omitempty"`
+
+			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+			Kind PlanListResponsePlansDodKind `json:"kind"`
+
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+			Status PlanListResponsePlansDodStatus `json:"status"`
+
+			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+			Text string `json:"text"`
+		} `json:"dod,omitempty"`
+
+		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+		FailedReason *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
+
+		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+		Goal *string `json:"goal,omitempty"`
+
+		// Id Unique plan identifier (ULID).
+		Id string `json:"id"`
+
+		// JudgeRounds Plan-judge rounds consumed so far (ADR D4 MAJ-004, durable boot-reconciled counter).
+		JudgeRounds *int `json:"judge_rounds,omitempty"`
+
+		// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
+		LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+
+		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
+		Owner *string `json:"owner,omitempty"`
+
+		// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
+		OwnerAgentId string `json:"owner_agent_id"`
+
+		// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
+		PausedReason *string `json:"paused_reason,omitempty"`
+
+		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+		PlanPhase *PlanListResponsePlansPlanPhase `json:"plan_phase,omitempty"`
+
+		// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
+		Progress *float32 `json:"progress,omitempty"`
+
+		// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
+		StartedAt *time.Time `json:"started_at,omitempty"`
+
+		// State Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
+		State PlanListResponsePlansState `json:"state"`
+
+		// Title Human-readable plan title.
+		Title string `json:"title"`
+
+		// UpdatedAt RFC 3339 UTC timestamp of the last update.
+		UpdatedAt time.Time `json:"updated_at"`
+
+		// WorkspaceId Workspace this plan belongs to. Required-scoped — a plan may only reference same-workspace tasks (validated FK on `Task.plan_id`).
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"plans"`
+
+	// Total Total number of plans for this workspace.
+	Total int `json:"total"`
+}
+
+// PlanListResponsePlansDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type PlanListResponsePlansDodAuthorKind string
+
+// PlanListResponsePlansDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type PlanListResponsePlansDodKind string
+
+// PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type PlanListResponsePlansDodStatus string
+
+// PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+type PlanListResponsePlansFailedReason string
+
+// PlanListResponsePlansPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+type PlanListResponsePlansPlanPhase string
+
+// PlanListResponsePlansState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
+type PlanListResponsePlansState string
+
+// PlanUpdateRequest Request body for PUT /plans/{id} (ADR-049 D1). All fields are optional; only provided fields are updated. `state` drives the canonical 5-value plan state machine (draft/approved/running/done/failed) — illegal transitions are rejected 400 (`ErrIllegalPlanTransition`); approving with no `dod` and no member-task criteria is rejected per the tiered DoD rule (ADR D5, Round-1 Grill Reconciliation R1).
+type PlanUpdateRequest struct {
+	// Bounds Replacement per-plan bounds overrides.
+	Bounds *struct {
+		IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
+		PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+	} `json:"bounds,omitempty"`
+
+	// Description New free-form description.
+	Description *string `json:"description,omitempty"`
+
+	// Dod Replacement Definition of Done set (replaces the current `dod` atomically).
+	Dod *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind PlanUpdateRequestDodAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		Kind PlanUpdateRequestDodKind `json:"kind"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status PlanUpdateRequestDodStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"dod,omitempty"`
+
+	// Goal New plain-prose objective.
+	Goal *string `json:"goal,omitempty"`
+
+	// OwnerAgentId Reassign plan ownership to this agent.
+	OwnerAgentId *string `json:"owner_agent_id,omitempty"`
+
+	// State Requested state transition. Validated against the canonical plan state machine (Plan.yaml `state` description); illegal transitions are rejected 400.
+	State *PlanUpdateRequestState `json:"state,omitempty"`
+
+	// Title New plan title.
+	Title *string `json:"title,omitempty"`
+}
+
+// PlanUpdateRequestDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type PlanUpdateRequestDodAuthorKind string
+
+// PlanUpdateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type PlanUpdateRequestDodKind string
+
+// PlanUpdateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type PlanUpdateRequestDodStatus string
+
+// PlanUpdateRequestState Requested state transition. Validated against the canonical plan state machine (Plan.yaml `state` description); illegal transitions are rejected 400.
+type PlanUpdateRequestState string
 
 // ProbeProviderRequest Body for POST /onboarding/probe-provider. Tests an API key against a provider and returns available models. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete.
 type ProbeProviderRequest struct {
@@ -6862,8 +8067,50 @@ type SessionDetail struct {
 		// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
 		TurnId *string `json:"turn_id,omitempty"`
 
-		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 		Type *SessionDetailMessagesType `json:"type,omitempty"`
+
+		// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+		Verdict *struct {
+			// Id Server-set verdict identifier (UUID).
+			Id string `json:"id"`
+
+			// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+			JudgeAgentId string `json:"judge_agent_id"`
+
+			// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
+			JudgedAt time.Time `json:"judged_at"`
+
+			// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+			Met bool `json:"met"`
+
+			// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
+			Model string `json:"model"`
+
+			// PerCriterion Per-criterion outcomes making up the overall verdict.
+			PerCriterion []struct {
+				// CriterionId ID of the AcceptanceCriterion this verdict judges.
+				CriterionId string `json:"criterion_id"`
+
+				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+				Met bool `json:"met"`
+
+				// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+				Reason string `json:"reason"`
+			} `json:"per_criterion"`
+
+			// PlanId Plan being judged. Present when `scope == plan`.
+			PlanId *string `json:"plan_id,omitempty"`
+
+			// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+			Round int `json:"round"`
+
+			// Scope Whether this verdict judges a task attempt or a plan round.
+			Scope SessionDetailMessagesVerdictScope `json:"scope"`
+
+			// TaskId Task being judged. Present when `scope == task`.
+			TaskId *string `json:"task_id,omitempty"`
+		} `json:"verdict,omitempty"`
 	} `json:"messages"`
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
@@ -6984,8 +8231,11 @@ type SessionDetailMessagesStatus string
 // SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type SessionDetailMessagesToolCallsStatus string
 
-// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type SessionDetailMessagesType string
+
+// SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt or a plan round.
+type SessionDetailMessagesVerdictScope string
 
 // SessionDetailSessionStatus Current lifecycle status of the session.
 type SessionDetailSessionStatus string
@@ -7205,6 +8455,9 @@ type SlashCommand struct {
 	// Aliases Hidden back-compat alias names (without slash). Informational only — aliases are not shown as separate palette entries.
 	Aliases *[]string `json:"aliases,omitempty"`
 
+	// ArgumentHint Optional ghost-text hint for the command's argument (ADR-049 D6/SD-C7, e.g. `/goal` hints `<condition>`, `/loop` hints `[interval] [prompt]`). Rendered as placeholder text in the composer immediately after the command is inserted. Absent when the command takes no arguments.
+	ArgumentHint *string `json:"argument_hint,omitempty"`
+
 	// AvailableWhileStreaming Whether the command can be invoked mid-turn (e.g. /cancel).
 	AvailableWhileStreaming *bool `json:"available_while_streaming,omitempty"`
 
@@ -7266,6 +8519,9 @@ type Task struct {
 	// Artifacts Paths to output files / artifact references produced by the task.
 	Artifacts *[]string `json:"artifacts,omitempty"`
 
+	// AttemptCount Current run's attempt index within its goal loop (ADR-049 D7). Read-only, server-set; the UI renders "attempt N/M" against `max_attempts` (or the inherited `PlanningConfig.task_max_attempts` default).
+	AttemptCount *int `json:"attempt_count,omitempty"`
+
 	// BlockedBy Ordered list of task IDs that must reach `done` before this task is eligible to advance (DAG ordering only — an AND-join, no conditional semantics in Tier 2). A write-time cycle validator (carried over from the legacy boardtask store) rejects self-edges, 2-node, and N-node cycles; orphan edges (target deleted) are dropped on load; max depth 50. Empty when the task has no dependencies.
 	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
@@ -7278,6 +8534,39 @@ type Task struct {
 	// CreatedBy Username (or agent ID) that created the task. Set server-side at creation; read-only.
 	CreatedBy string `json:"created_by"`
 
+	// Criteria Acceptance criteria (Definition of Done) for this task (ADR-049 D2/D5/FR-3). Agent-created tasks require at least one; UI/human creation is soft (falls back to judging title+description when empty). Immutable once a recurring Trigger run has started (per-run snapshot).
+	Criteria *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind TaskCriteriaAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		Kind TaskCriteriaKind `json:"kind"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status TaskCriteriaStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"criteria,omitempty"`
+
 	// Description Optional free-form task description (human-facing notes).
 	Description *string `json:"description,omitempty"`
 
@@ -7287,14 +8576,17 @@ type Task struct {
 	// Id Unique task identifier (UUID).
 	Id string `json:"id"`
 
-	// MilestoneId Optional milestone this task is grouped under.
-	MilestoneId *string `json:"milestone_id,omitempty"`
+	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+	MaxAttempts *int `json:"max_attempts,omitempty"`
 
 	// Owner Username of the user who owns this task. Set server-side at creation; read-only.
 	Owner string `json:"owner"`
 
 	// ParentTaskId ID of the parent task. Present on subtasks (delegation / decomposition children); absent on top-level tasks. Board/List/Graph/Calendar render top-level tasks; subtasks nest under their parent.
 	ParentTaskId *string `json:"parent_task_id,omitempty"`
+
+	// PlanId Optional Plan this task belongs to (ADR-049 D1/D4). Same-workspace FK — referencing a plan in a different workspace is rejected 400. Absent for tasks not grouped under a plan.
+	PlanId *string `json:"plan_id,omitempty"`
 
 	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
 	Priority *int `json:"priority,omitempty"`
@@ -7334,6 +8626,9 @@ type Task struct {
 
 	// Surface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
 	Surface *TaskSurface `json:"surface,omitempty"`
+
+	// Tags Workspace-scoped, free-form tags (ADR-049 D1) — lowercase, trimmed, deduplicated after normalization, at most 16 per task, each at most 64 characters. Replaces the removed `milestone_id` grouping; the milestone migration seeds a `milestone:<name>` tag onto member tasks. `prefix:value` (e.g. `milestone:`, `release:`) is convention only, not schema. There is no global tag registry — identical tag strings in different workspaces are unrelated.
+	Tags *[]string `json:"tags,omitempty"`
 
 	// Title Human-readable task title (the name field).
 	Title string `json:"title"`
@@ -7380,6 +8675,15 @@ type Task struct {
 // TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
 type TaskAction string
 
+// TaskCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
+type TaskCriteriaAuthorKind string
+
+// TaskCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type TaskCriteriaKind string
+
+// TaskCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type TaskCriteriaStatus string
+
 // TaskRollupStatus Current status of the child run.
 type TaskRollupStatus string
 
@@ -7421,17 +8725,53 @@ type TaskCreateRequest struct {
 	// BlockedBy Task IDs this task depends on (depends-on / blocked_by). Each must exist and must not create a cycle (validated at creation).
 	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
+	// Criteria Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier).
+	Criteria *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind TaskCreateRequestCriteriaAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		Kind TaskCreateRequestCriteriaKind `json:"kind"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status TaskCreateRequestCriteriaStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"criteria,omitempty"`
+
 	// Description Optional free-form description.
 	Description *string `json:"description,omitempty"`
 
 	// Due Optional deadline (RFC 3339 UTC).
 	Due *time.Time `json:"due,omitempty"`
 
-	// MilestoneId Optional milestone to group the task under.
-	MilestoneId *string `json:"milestone_id,omitempty"`
+	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+	MaxAttempts *int `json:"max_attempts,omitempty"`
 
 	// ParentTaskId Optional parent task ID — set when creating a subtask (delegation / decomposition child).
 	ParentTaskId *string `json:"parent_task_id,omitempty"`
+
+	// PlanId Optional Plan to group this task under (ADR-049 D1/D4). Same-workspace FK — rejected 400 if the plan is in a different workspace.
+	PlanId *string `json:"plan_id,omitempty"`
 
 	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
 	Priority *int `json:"priority,omitempty"`
@@ -7447,6 +8787,9 @@ type TaskCreateRequest struct {
 
 	// Surface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
 	Surface *TaskCreateRequestSurface `json:"surface,omitempty"`
+
+	// Tags Workspace-scoped, free-form tags (ADR-049 D1) — lowercase, trimmed, deduplicated after normalization, at most 16 per task, each at most 64 characters.
+	Tags *[]string `json:"tags,omitempty"`
 
 	// Title Task title.
 	Title string `json:"title"`
@@ -7489,6 +8832,15 @@ type TaskCreateRequest struct {
 
 // TaskCreateRequestAction Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
 type TaskCreateRequestAction string
+
+// TaskCreateRequestCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
+type TaskCreateRequestCriteriaAuthorKind string
+
+// TaskCreateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type TaskCreateRequestCriteriaKind string
+
+// TaskCreateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type TaskCreateRequestCriteriaStatus string
 
 // TaskCreateRequestSurface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
 type TaskCreateRequestSurface string
@@ -7566,14 +8918,50 @@ type TaskUpdateRequest struct {
 	// CompletedAt When the task completed or failed.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
+	// Criteria Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1.
+	Criteria *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind TaskUpdateRequestCriteriaAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		Kind TaskUpdateRequestCriteriaKind `json:"kind"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status TaskUpdateRequestCriteriaStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"criteria,omitempty"`
+
 	// Description New free-form description.
 	Description *string `json:"description,omitempty"`
 
 	// Due New deadline (RFC 3339 UTC).
 	Due *time.Time `json:"due,omitempty"`
 
-	// MilestoneId New milestone grouping.
-	MilestoneId *string `json:"milestone_id,omitempty"`
+	// MaxAttempts New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit the global default).
+	MaxAttempts *int `json:"max_attempts,omitempty"`
+
+	// PlanId New Plan grouping (ADR-049 D1/D4). Same-workspace FK — rejected 400 if the plan is in a different workspace.
+	PlanId *string `json:"plan_id,omitempty"`
 
 	// Priority New task priority (1 highest .. 5 lowest).
 	Priority *int `json:"priority,omitempty"`
@@ -7592,6 +8980,9 @@ type TaskUpdateRequest struct {
 
 	// Surface New UI surface ownership (Detail
 	Surface *TaskUpdateRequestSurface `json:"surface,omitempty"`
+
+	// Tags Replacement tag set (ADR-049 D1) — replaces the current `tags` atomically. Lowercase, trimmed, deduplicated after normalization, at most 16 per task, each at most 64 characters.
+	Tags *[]string `json:"tags,omitempty"`
 
 	// Title New task title.
 	Title *string `json:"title,omitempty"`
@@ -7628,6 +9019,15 @@ type TaskUpdateRequest struct {
 		Type TaskUpdateRequestTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
 }
+
+// TaskUpdateRequestCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
+type TaskUpdateRequestCriteriaAuthorKind string
+
+// TaskUpdateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+type TaskUpdateRequestCriteriaKind string
+
+// TaskUpdateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type TaskUpdateRequestCriteriaStatus string
 
 // TaskUpdateRequestStatus New task status (7-state lifecycle, Detail
 type TaskUpdateRequestStatus string
@@ -8178,9 +9578,6 @@ type ListTasksParams struct {
 	// AgentId Filter by assigned agent ID.
 	AgentId *string `form:"agent_id,omitempty" json:"agent_id,omitempty"`
 
-	// MilestoneId Filter by milestone ID.
-	MilestoneId *string `form:"milestone_id,omitempty" json:"milestone_id,omitempty"`
-
 	// Surface Filter by UI surface (Detail #5). Defaults to `user` when omitted — dedicated-UI tasks (e.g. heartbeat) are excluded from general listings.
 	Surface *ListTasksParamsSurface `form:"surface,omitempty" json:"surface,omitempty"`
 
@@ -8400,12 +9797,6 @@ type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
 
 // PutWorkspaceInstructionsJSONRequestBody defines body for PutWorkspaceInstructions for application/json ContentType.
 type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
-
-// CreateWorkspaceMilestoneJSONRequestBody defines body for CreateWorkspaceMilestone for application/json ContentType.
-type CreateWorkspaceMilestoneJSONRequestBody = MilestoneCreateRequest
-
-// UpdateWorkspaceMilestoneJSONRequestBody defines body for UpdateWorkspaceMilestone for application/json ContentType.
-type UpdateWorkspaceMilestoneJSONRequestBody = MilestoneUpdateRequest
 
 // Getter for additional properties for ChannelConfigureRequest. Returns the specified
 // element and whether it was found

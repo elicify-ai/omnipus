@@ -37,8 +37,17 @@ properties:
     description: >
       Agent lifecycle classification.
       "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray).
-      "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives
-      in the API contract for backwards compatibility but SeedConfig does NOT create these).
+      "system" = the System Agents category (ADR-049 D3) — seeded, locked,
+      non-privileged internal-LLM agents that execute as no-tools structured
+      calls (e.g. the Judge). Seeding is the only creation path: not
+      creatable via POST /agents or the create_agent tool (400), not
+      deletable, and excluded from chat-target/default-fallback/routing-
+      binding/delegation-target/team-roster enumeration — visible only in
+      the Agents screen "System" section. Only `model`/`provider` and
+      `rubric` are editable (the Judge additionally cannot be disabled).
+      Despite historically being described as privileged, `system` agents
+      are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and
+      remain subject to per-agent LLM rate limits and cost caps (SEC-26).
       "Main" = user-defined chat colleague (the typical Main agent).
       "Subagent" = user-defined delegation-only worker on the Omnipus engine.
       "subagent_3p" = user-defined delegation-only worker on an external CLI
@@ -187,3 +196,12 @@ properties:
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
+  rubric:
+    type: string
+    description: >
+      System Agent rubric prompt (ADR-049 D3) — the System Agent's system
+      prompt / judging rubric, stored as the agent's soul/prompt-override
+      field (the rubric IS the judge's system prompt). Editable only for
+      `type: system` agents (e.g. the Judge); the only prompt-equivalent
+      field a locked System Agent accepts. Empty for non-system agents.
+    example: "You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone..."

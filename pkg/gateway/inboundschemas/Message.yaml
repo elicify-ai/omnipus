@@ -21,11 +21,16 @@ properties:
       - system
       - tool_call
       - turn_canceled
+      - judge_verdict
     description: >
       Entry classification. Absent or empty means "message" (backwards compatible).
       "compaction" entries summarize pruned context; "system" entries are internal
       markers; "tool_call" entries record tool invocations; "turn_canceled" entries
-      mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType
+      mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries
+      (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt
+      or plan round — written alongside the worker's ADR-043 completion marker
+      so the two cannot silently disagree, and mirrored live by the
+      `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType
       constant set is the source of truth (`pkg/session/daypartition.go`).
     example: "message"
   role:
@@ -138,3 +143,5 @@ properties:
       not display any model info in the UI (no placeholder). Empty string
       is treated the same as absent for UI display.
     example: "z-ai/glm-5.2"
+  verdict:
+    $ref: './JudgeVerdict.yaml'

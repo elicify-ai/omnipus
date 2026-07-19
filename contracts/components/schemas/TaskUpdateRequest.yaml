@@ -81,10 +81,41 @@ properties:
       field updates (an empty `due` string is not a valid date-time and would be
       rejected).
     example: true
-  milestone_id:
+  tags:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+      maxLength: 64
+    description: >
+      Replacement tag set (ADR-049 D1) — replaces the current `tags`
+      atomically. Lowercase, trimmed, deduplicated after normalization, at
+      most 16 per task, each at most 64 characters.
+    example:
+      - "milestone:v1.0-launch"
+  plan_id:
     type: string
-    description: New milestone grouping.
-    example: "m-5678"
+    description: >
+      New Plan grouping (ADR-049 D1/D4). Same-workspace FK — rejected 400 if
+      the plan is in a different workspace.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  criteria:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces
+      the current `criteria` atomically. Agent tool paths reject an update
+      that reduces the count below 1.
+  max_attempts:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: >
+      New per-task override of the attempt ceiling before the goal loop
+      wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit
+      the global default).
+    example: 5
   surface:
     type: string
     enum:

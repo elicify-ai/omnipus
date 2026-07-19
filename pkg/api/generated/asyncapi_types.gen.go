@@ -264,6 +264,51 @@ type ErrorFrame struct {
 	Type      string  `json:"type"`
 }
 
+// GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+type GoalStatusFrame struct {
+	ActiveLoops  int    `json:"active_loops"`
+	Cap          int    `json:"cap"`
+	Condition    string `json:"condition"`
+	LatestReason string `json:"latest_reason"`
+	MaxRounds    int    `json:"max_rounds"`
+	Round        int    `json:"round"`
+	SessionId    string `json:"session_id"`
+	State        string `json:"state"`
+	Type         string `json:"type"`
+}
+
+// JudgeVerdictFrame — Server → client. Live push of a judge adjudication (ADR-049 D2/D4/NFR-5) — the WS carrier of a judge verdict. The other carrier is the persisted session-transcript entry (Message.type=judge_verdict / Message.verdict, contract C12); both carry the same shape so they cannot silently disagree.
+type JudgeVerdictFrame struct {
+	Id           string `json:"id"`
+	JudgeAgentId string `json:"judge_agent_id"`
+	JudgedAt     string `json:"judged_at"`
+	Met          bool   `json:"met"`
+	Model        string `json:"model"`
+	PerCriterion []struct {
+		CriterionId string `json:"criterion_id"`
+		Met         bool   `json:"met"`
+		Reason      string `json:"reason"`
+	} `json:"per_criterion"`
+	PlanId *string `json:"plan_id,omitempty"`
+	Round  int     `json:"round"`
+	Scope  string  `json:"scope"`
+	TaskId *string `json:"task_id,omitempty"`
+	Type   string  `json:"type"`
+}
+
+// LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+type LoopStatusFrame struct {
+	MaxRuns int    `json:"max_runs"`
+	Mode    string `json:"mode"`
+	// Milliseconds until the next scheduled run. Present for `interval` mode and once a `self_paced` run has scheduled its next one-shot fire.
+	NextDelay *int   `json:"next_delay,omitempty"`
+	Run       int    `json:"run"`
+	SessionId string `json:"session_id"`
+	// Current state of this loop. Runtime vocabulary owned by the loop engine (ADR-049 Part B); kept a plain string in this contract wave rather than a closed enum (unlike GoalStatusFrame.state) so naming it does not require a breaking change once Part B's implementation lands.
+	State string `json:"state"`
+	Type  string `json:"type"`
+}
+
 // MarshalErrorResult — Sentinel for tool results that failed json.Marshal.
 type MarshalErrorResult struct {
 	MarshalError string `json:"_marshal_error"`
@@ -315,6 +360,16 @@ type NotificationFrame struct {
 // PingFrame — Client → server heartbeat.
 type PingFrame struct {
 	Type string `json:"type"`
+}
+
+// PlanStatusFrame — Server → client. Status push for a Plan (ADR-049 D4/D7/US-7). Emitted on phase change, state transition, progress change, and pause/resume. Not session-scoped — a Plan is a standalone workspace-scoped entity, not tied to one chat session.
+type PlanStatusFrame struct {
+	PausedReason *string `json:"paused_reason,omitempty"`
+	PlanId       string  `json:"plan_id"`
+	PlanPhase    string  `json:"plan_phase"`
+	Progress     float64 `json:"progress"`
+	State        string  `json:"state"`
+	Type         string  `json:"type"`
 }
 
 // PongFrame — Server → client heartbeat acknowledgement. Emitted in response to every client PingFrame so the SPA's "any frame received recently" liveness check observes a server frame during idle and does not force-close after 60 s of silence.
@@ -591,4 +646,8 @@ const (
 	WsFrameTypeBrowserCaptureOffer      WsFrameType = "browser_capture_offer"
 	WsFrameTypeBrowserCaptureAnswer     WsFrameType = "browser_capture_answer"
 	WsFrameTypeBrowserCaptureControl    WsFrameType = "browser_capture_control"
+	WsFrameTypeGoalStatus               WsFrameType = "goal_status"
+	WsFrameTypeLoopStatus               WsFrameType = "loop_status"
+	WsFrameTypePlanStatus               WsFrameType = "plan_status"
+	WsFrameTypeJudgeVerdict             WsFrameType = "judge_verdict"
 )

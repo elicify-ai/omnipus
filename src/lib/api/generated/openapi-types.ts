@@ -1831,7 +1831,7 @@ export interface paths {
         };
         /**
          * List tasks
-         * @description Returns tasks in a workspace, filterable by status, agent, milestone, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and `surface: user` tasks are returned; use the filters to widen. Workspace-scoped.
+         * @description Returns tasks in a workspace, filterable by status, agent, and surface. This is the unified task surface (Sprint 2) — it subsumes the former GTD /board/tasks listing. By default only top-level tasks (parent_task_id absent) and `surface: user` tasks are returned; use the filters to widen. Workspace-scoped.
          */
         get: operations["listTasks"];
         put?: never;
@@ -2316,43 +2316,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/workspaces/{id}/milestones": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List milestones for a workspace */
-        get: operations["listWorkspaceMilestones"];
-        put?: never;
-        /** Create a milestone for a workspace */
-        post: operations["createWorkspaceMilestone"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/workspaces/{id}/milestones/{milestoneId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get a milestone by ID */
-        get: operations["getWorkspaceMilestone"];
-        /** Update a milestone (partial update) */
-        put: operations["updateWorkspaceMilestone"];
-        post?: never;
-        /** Delete a milestone */
-        delete: operations["deleteWorkspaceMilestone"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/stats/tokens": {
         parameters: {
             query?: never;
@@ -2776,11 +2739,11 @@ export interface components {
              */
             id: string;
             /**
-             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
              * @example message
              * @enum {string}
              */
-            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled";
+            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict";
             /**
              * @description Author role. Absent on compaction entries.
              * @example assistant
@@ -2872,6 +2835,7 @@ export interface components {
              * @example z-ai/glm-5.2
              */
             model?: string;
+            verdict?: components["schemas"]["JudgeVerdict"];
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -2954,7 +2918,7 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = reserved; legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `rubric` are editable (the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
              * @example core
              * @enum {string}
              */
@@ -3055,6 +3019,11 @@ export interface components {
              */
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
+            /**
+             * @description System Agent rubric prompt (ADR-049 D3) — the System Agent's system prompt / judging rubric, stored as the agent's soul/prompt-override field (the rubric IS the judge's system prompt). Editable only for `type: system` agents (e.g. the Judge); the only prompt-equivalent field a locked System Agent accepts. Empty for non-system agents.
+             * @example You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone...
+             */
+            rubric?: string;
         };
         /**
          * AgentModelParams
@@ -3698,6 +3667,11 @@ export interface components {
              */
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
+            /**
+             * @description New System Agent rubric prompt (ADR-049 D3). Only accepted for `type: system` agents (e.g. the Judge) — rejected 400 on all other agent types. This is the only prompt-equivalent field a locked System Agent accepts (`soul` is rejected on locked agents).
+             * @example You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone...
+             */
+            rubric?: string;
         };
         /**
          * @description One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
@@ -4944,6 +4918,11 @@ export interface components {
              * @example /model [name]
              */
             usage?: string;
+            /**
+             * @description Optional ghost-text hint for the command's argument (ADR-049 D6/SD-C7, e.g. `/goal` hints `<condition>`, `/loop` hints `[interval] [prompt]`). Rendered as placeholder text in the composer immediately after the command is inserted. Absent when the command takes no arguments.
+             * @example <condition>
+             */
+            argument_hint?: string;
             /** @description Hidden back-compat alias names (without slash). Informational only — aliases are not shown as separate palette entries. */
             aliases?: string[];
             /**
@@ -5211,10 +5190,29 @@ export interface components {
              */
             workspace_id: string;
             /**
-             * @description Optional milestone this task is grouped under.
-             * @example m-1234
+             * @description Workspace-scoped, free-form tags (ADR-049 D1) — lowercase, trimmed, deduplicated after normalization, at most 16 per task, each at most 64 characters. Replaces the removed `milestone_id` grouping; the milestone migration seeds a `milestone:<name>` tag onto member tasks. `prefix:value` (e.g. `milestone:`, `release:`) is convention only, not schema. There is no global tag registry — identical tag strings in different workspaces are unrelated.
+             * @example [
+             *       "milestone:v1.0-launch"
+             *     ]
              */
-            milestone_id?: string;
+            tags?: string[];
+            /**
+             * @description Optional Plan this task belongs to (ADR-049 D1/D4). Same-workspace FK — referencing a plan in a different workspace is rejected 400. Absent for tasks not grouped under a plan.
+             * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
+             */
+            plan_id?: string;
+            /** @description Acceptance criteria (Definition of Done) for this task (ADR-049 D2/D5/FR-3). Agent-created tasks require at least one; UI/human creation is soft (falls back to judging title+description when empty). Immutable once a recurring Trigger run has started (per-run snapshot). */
+            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /**
+             * @description Current run's attempt index within its goal loop (ADR-049 D7). Read-only, server-set; the UI renders "attempt N/M" against `max_attempts` (or the inherited `PlanningConfig.task_max_attempts` default).
+             * @example 1
+             */
+            readonly attempt_count?: number;
+            /**
+             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+             * @example 5
+             */
+            max_attempts?: number | null;
             trigger?: components["schemas"]["TaskTrigger"];
             /**
              * Format: date-time
@@ -6486,10 +6484,24 @@ export interface components {
              */
             workspace_id: string;
             /**
-             * @description Optional milestone to group the task under.
-             * @example m-1234
+             * @description Workspace-scoped, free-form tags (ADR-049 D1) — lowercase, trimmed, deduplicated after normalization, at most 16 per task, each at most 64 characters.
+             * @example [
+             *       "milestone:v1.0-launch"
+             *     ]
              */
-            milestone_id?: string;
+            tags?: string[];
+            /**
+             * @description Optional Plan to group this task under (ADR-049 D1/D4). Same-workspace FK — rejected 400 if the plan is in a different workspace.
+             * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
+             */
+            plan_id?: string;
+            /** @description Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). */
+            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /**
+             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+             * @example 5
+             */
+            max_attempts?: number | null;
             /**
              * Format: date-time
              * @description Optional deadline (RFC 3339 UTC).
@@ -6571,10 +6583,24 @@ export interface components {
              */
             clear_due?: boolean;
             /**
-             * @description New milestone grouping.
-             * @example m-5678
+             * @description Replacement tag set (ADR-049 D1) — replaces the current `tags` atomically. Lowercase, trimmed, deduplicated after normalization, at most 16 per task, each at most 64 characters.
+             * @example [
+             *       "milestone:v1.0-launch"
+             *     ]
              */
-            milestone_id?: string;
+            tags?: string[];
+            /**
+             * @description New Plan grouping (ADR-049 D1/D4). Same-workspace FK — rejected 400 if the plan is in a different workspace.
+             * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
+             */
+            plan_id?: string;
+            /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. */
+            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /**
+             * @description New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit the global default).
+             * @example 5
+             */
+            max_attempts?: number | null;
             /**
              * @description New UI surface ownership (Detail
              * @example user
@@ -7529,73 +7555,426 @@ export interface components {
             /** @description The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time. */
             edges: components["schemas"]["WorkspaceDelegationEdge"][];
         };
-        Milestone: {
+        /**
+         * Plan
+         * @description A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task DAG under a goal, Definition of Done, owner agent, and state machine. Tasks join a plan via `Task.plan_id` (same-workspace FK, validated); membership and `progress` are computed read-time by scanning member tasks — never stored on the Plan record (mirrors the removed Milestone's `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json` (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones (see the Milestone removal diffs) as the container for grouped, judged, goal-driven work.
+         *     Returned by GET /workspaces/{id}/plans, GET /plans/{id}, POST /plans, and PUT /plans/{id}.
+         */
+        Plan: {
             /**
-             * @description UUID milestone identifier
-             * @example c3d4e5f6-a7b8-9012-cdef-123456789012
+             * @description Unique plan identifier (ULID).
+             * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             id: string;
             /**
-             * @description Workspace this milestone belongs to.
+             * @description Workspace this plan belongs to. Required-scoped — a plan may only reference same-workspace tasks (validated FK on `Task.plan_id`).
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
              */
             workspace_id: string;
             /**
-             * @description Human-readable milestone name.
+             * @description Human-readable plan title.
              * @example v1.0 Launch
              */
-            name: string;
-            /** @description Optional free-text description. */
+            title: string;
+            /**
+             * @description Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+             * @example Ship the v1.0 release with all P0 issues closed and CI green.
+             */
+            goal?: string;
+            /**
+             * @description Optional free-form description.
+             * @example Coordinates the v1.0 release train across backend and SPA.
+             */
             description?: string;
             /**
-             * @description Optional due date (ISO 8601 date string or null).
-             * @example 2026-12-31
+             * @description Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
+             * @example draft
+             * @enum {string}
              */
-            due_date?: string | null;
+            state: "draft" | "approved" | "running" | "done" | "failed";
+            /**
+             * @description Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+             * @default idle
+             * @example idle
+             * @enum {string}
+             */
+            plan_phase: "dispatching" | "judging" | "synthesizing" | "idle";
+            /**
+             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+             * @example judge_rounds_exhausted
+             * @enum {string}
+             */
+            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired";
+            /**
+             * @description Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
+             * @example jim
+             */
+            owner_agent_id: string;
+            /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5). */
+            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Per-plan overrides of the global `PlanningConfig` bounds (FR-9). Absent fields inherit the global default. */
+            bounds?: {
+                /**
+                 * @description Override of the global plan-judge round ceiling (global default 20, symmetric with `/goal`).
+                 * @example 20
+                 */
+                plan_judge_max_rounds?: number;
+                /**
+                 * @description Override of the global idle-expiry calendar brake (global default 7 days).
+                 * @example 7
+                 */
+                idle_expiry_days?: number;
+            };
+            /**
+             * @description Plan-judge rounds consumed so far (ADR D4 MAJ-004, durable boot-reconciled counter).
+             * @example 2
+             */
+            readonly judge_rounds?: number;
+            /**
+             * @description True while this plan counts toward the global active-loop cap — iff `state == running` (Round-1 Grill Reconciliation R5).
+             * @example true
+             */
+            readonly active_loop?: boolean;
+            /**
+             * @description Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
+             * @example owner agent disabled
+             */
+            readonly paused_reason?: string;
             /**
              * Format: date-time
-             * @description RFC3339 UTC creation timestamp.
-             * @example 2026-06-08T14:22:00Z
+             * @description Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
+             * @example 2026-07-19T12:00:00Z
+             */
+            readonly last_activity_at?: string;
+            /**
+             * @description Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
+             * @example 0.5
+             */
+            readonly progress?: number;
+            /**
+             * @description Username of the user who created this plan. Set server-side at creation; read-only.
+             * @example alice
+             */
+            readonly owner: string;
+            /**
+             * @description Username (or agent ID) that created the plan. Set server-side at creation; read-only.
+             * @example alice
+             */
+            readonly created_by: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 UTC timestamp when the plan was created.
+             * @example 2026-07-19T10:00:00Z
              */
             created_at: string;
             /**
              * Format: date-time
-             * @description RFC3339 UTC last-update timestamp.
-             * @example 2026-06-08T15:00:00Z
+             * @description RFC 3339 UTC timestamp of the last update.
+             * @example 2026-07-19T10:05:00Z
              */
             updated_at: string;
             /**
-             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
-             * @example alice
+             * Format: date-time
+             * @description RFC 3339 timestamp when the plan transitioned `draft -> approved`. Absent until then.
+             * @example 2026-07-19T10:10:00Z
              */
-            owner?: string;
+            approved_at?: string;
             /**
-             * @description Completion fraction (0–1) computed server-side at read time as done/total over the milestone's GTD board tasks. 0 when no tasks are associated. Read-only; never accepted on create/update.
-             * @example 0.5
+             * Format: date-time
+             * @description RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
+             * @example 2026-07-19T10:15:00Z
              */
-            readonly progress?: number;
+            started_at?: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp when the plan reached `done` or `failed`. Absent until then.
+             * @example 2026-07-19T12:30:00Z
+             */
+            completed_at?: string;
         };
-        MilestoneCreateRequest: {
-            /** @description Milestone name. Required. */
-            name: string;
-            /** @description Optional free-text description. */
+        /**
+         * PlanCreateRequest
+         * @description Request body for POST /plans (ADR-049 D1/FR-1). Creates a plan in `draft` state. `workspace_id` is required (a Plan is not nested under a workspace path — creation is a top-level `POST /plans` call, unlike the removed Milestone's `POST /workspaces/{id}/milestones`); member tasks are linked afterward via `Task.plan_id`, which is validated same-workspace.
+         */
+        PlanCreateRequest: {
+            /**
+             * @description Workspace this plan belongs to. Required — every plan is workspace-scoped.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            workspace_id: string;
+            /**
+             * @description Plan title.
+             * @example v1.0 Launch
+             */
+            title: string;
+            /**
+             * @description Plain-prose objective (used by the plan judge when `dod` is empty).
+             * @example Ship the v1.0 release with all P0 issues closed and CI green.
+             */
+            goal?: string;
+            /**
+             * @description Optional free-form description.
+             * @example Coordinates the v1.0 release train across backend and SPA.
+             */
             description?: string;
-            /** @description Optional due date (ISO 8601 date string or null). */
-            due_date?: string | null;
+            /**
+             * @description Agent responsible for this plan.
+             * @example jim
+             */
+            owner_agent_id: string;
+            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). */
+            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Per-plan overrides of the global `PlanningConfig` bounds (FR-9). */
+            bounds?: {
+                /** @example 20 */
+                plan_judge_max_rounds?: number;
+                /** @example 7 */
+                idle_expiry_days?: number;
+            };
         };
-        MilestoneUpdateRequest: {
-            /** @description Milestone name. */
-            name?: string;
-            /** @description Optional free-text description. */
+        /**
+         * PlanUpdateRequest
+         * @description Request body for PUT /plans/{id} (ADR-049 D1). All fields are optional; only provided fields are updated. `state` drives the canonical 5-value plan state machine (draft/approved/running/done/failed) — illegal transitions are rejected 400 (`ErrIllegalPlanTransition`); approving with no `dod` and no member-task criteria is rejected per the tiered DoD rule (ADR D5, Round-1 Grill Reconciliation R1).
+         */
+        PlanUpdateRequest: {
+            /**
+             * @description New plan title.
+             * @example v1.0 Launch (delayed)
+             */
+            title?: string;
+            /**
+             * @description New plain-prose objective.
+             * @example Ship the v1.0 release with all P0 issues closed and CI green.
+             */
+            goal?: string;
+            /**
+             * @description New free-form description.
+             * @example Coordinates the v1.0 release train across backend and SPA.
+             */
             description?: string;
-            /** @description Optional due date (ISO 8601 date string or null). */
-            due_date?: string | null;
+            /**
+             * @description Requested state transition. Validated against the canonical plan state machine (Plan.yaml `state` description); illegal transitions are rejected 400.
+             * @example approved
+             * @enum {string}
+             */
+            state?: "draft" | "approved" | "running" | "done" | "failed";
+            /**
+             * @description Reassign plan ownership to this agent.
+             * @example jim
+             */
+            owner_agent_id?: string;
+            /** @description Replacement Definition of Done set (replaces the current `dod` atomically). */
+            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Replacement per-plan bounds overrides. */
+            bounds?: {
+                /** @example 20 */
+                plan_judge_max_rounds?: number;
+                /** @example 7 */
+                idle_expiry_days?: number;
+            };
         };
-        /** @description List response for GET /workspaces/{id}/milestones */
-        MilestoneListResponse: {
-            milestones: components["schemas"]["Milestone"][];
-            /** @description Total number of milestones for this workspace. */
+        /**
+         * PlanListResponse
+         * @description List response for GET /workspaces/{id}/plans (mirrors the removed MilestoneListResponse).
+         */
+        PlanListResponse: {
+            /** @description Plans for this workspace. */
+            plans: components["schemas"]["Plan"][];
+            /** @description Total number of plans for this workspace. */
             total: number;
+        };
+        /**
+         * AcceptanceCriterion
+         * @description A single Definition-of-Done criterion on a Task (`task.criteria[]`) or Plan (`plan.dod[]`) — ADR-049 D2/D5/FR-3. `kind: check` criteria are machine-checkable: a command dispatched through the assignee agent's own `bash` tool machinery (never a parallel judge-owned exec path) whose exit code produces unfakeable `EvidenceRecord` evidence. `kind: prose` criteria are free-text statements judged by the Judge System Agent's LLM call against evidence-first input. Every criterion records its author identity (agent or user); absence of evidence/verdict never defaults to `met` (NFR-2, fail-closed).
+         */
+        AcceptanceCriterion: {
+            /**
+             * @description Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+             * @example 550e8400-e29b-41d4-a716-446655440010
+             */
+            id?: string;
+            /**
+             * @description `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+             * @example check
+             * @enum {string}
+             */
+            kind: "check" | "prose";
+            /**
+             * @description The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+             * @example All new pkg/plan tests pass
+             */
+            text: string;
+            /** @description Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed. */
+            check?: {
+                /**
+                 * @description Shell command run through the assignee's `bash` tool.
+                 * @example go test ./pkg/plan/... -run TestPlanStore_CreatePersists
+                 */
+                command: string;
+                /**
+                 * @description Exit code that counts as PASS (`met`) for this check.
+                 * @example 0
+                 */
+                expected_exit_code: number;
+            };
+            /** @description Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting. */
+            author: {
+                /**
+                 * @description Whether this criterion was authored by an agent or a human user.
+                 * @example agent
+                 * @enum {string}
+                 */
+                kind: "agent" | "user";
+                /**
+                 * @description Agent ID or username of the author.
+                 * @example jim
+                 */
+                id: string;
+            };
+            /**
+             * @description Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+             * @example pending
+             * @enum {string}
+             */
+            status: "pending" | "met" | "unmet";
+        };
+        /**
+         * EvidenceRecord
+         * @description Persisted evidence from a single machine-check execution (ADR-049 D2), one per `(criterion_id, attempt)` pair. Stored under `$OMNIPUS_HOME/tasks_evidence/<task_id>/<criterion_id>-<attempt>.json` (mode 0600, dir 0700). `command` and `output` pass through the registered sensitive-value redaction (ADR-004 `RegisterSensitiveValues` flow) BEFORE the record is marshalled/written — never write raw then scrub. Retention follows the 90-day session default and the record is deleted with its task. Read-only surface — never accepted on create/update.
+         */
+        EvidenceRecord: {
+            /**
+             * @description Server-set evidence record identifier (UUID).
+             * @example 550e8400-e29b-41d4-a716-446655440030
+             */
+            id: string;
+            /**
+             * @description Task this evidence belongs to.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            task_id: string;
+            /**
+             * @description AcceptanceCriterion this evidence was recorded for.
+             * @example 550e8400-e29b-41d4-a716-446655440010
+             */
+            criterion_id: string;
+            /**
+             * @description Attempt index (within the task's goal loop) this record belongs to.
+             * @example 1
+             */
+            attempt: number;
+            /**
+             * @description The redacted command that was run (via the assignee's `bash` tool machinery).
+             * @example go test ./pkg/plan/... [REDACTED]
+             */
+            command: string;
+            /**
+             * @description Actual process exit code. Set to the sentinel `-1` when `timed_out` or `policy_denied` is true — consumers MUST check those booleans before interpreting this field.
+             * @example 0
+             */
+            exit_code: number;
+            /**
+             * @description Redacted, size-capped captured output (default cap e.g. 64 KiB). See `truncated`.
+             * @example ok  	pkg/plan	0.412s
+             */
+            output: string;
+            /**
+             * @description True when `output` was cut to the size cap; a `"...[truncated N bytes]"` marker is appended in that case.
+             * @example false
+             */
+            truncated: boolean;
+            /**
+             * @description True when the check exceeded its per-check timeout (default 60s, configurable) — criterion is scored `unmet` (fail-closed). A hung check cannot hold the loop's idle-expiry clock.
+             * @example false
+             */
+            timed_out: boolean;
+            /**
+             * @description True when the assignee's effective `bash` policy for this command was `deny`, or `ask` (which resolves to deny unattended) — criterion is scored `unmet` (fail-closed, ADR D2 rule 2).
+             * @example false
+             */
+            policy_denied: boolean;
+            /**
+             * Format: date-time
+             * @description RFC 3339 UTC timestamp when this evidence was recorded.
+             * @example 2026-07-19T12:00:00Z
+             */
+            recorded_at: string;
+        };
+        /**
+         * JudgeVerdict
+         * @description A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+         */
+        JudgeVerdict: {
+            /**
+             * @description Server-set verdict identifier (UUID).
+             * @example 550e8400-e29b-41d4-a716-446655440020
+             */
+            id: string;
+            /**
+             * @description Whether this verdict judges a task attempt or a plan round.
+             * @example task
+             * @enum {string}
+             */
+            scope: "task" | "plan";
+            /**
+             * @description Task being judged. Present when `scope == task`.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            task_id?: string;
+            /**
+             * @description Plan being judged. Present when `scope == plan`.
+             * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
+             */
+            plan_id?: string;
+            /**
+             * @description Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+             * @example 1
+             */
+            round: number;
+            /**
+             * @description Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+             * @example false
+             */
+            met: boolean;
+            /** @description Per-criterion outcomes making up the overall verdict. */
+            per_criterion: components["schemas"]["CriterionVerdict"][];
+            /**
+             * @description Judge model used to produce this verdict (transparency / NFR-5 metering).
+             * @example z-ai/glm-5-turbo
+             */
+            model: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 UTC timestamp when the verdict was produced.
+             * @example 2026-07-19T12:05:00Z
+             */
+            judged_at: string;
+            /**
+             * @description ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+             * @example judge
+             */
+            judge_agent_id: string;
+        };
+        /**
+         * CriterionVerdict
+         * @description Per-criterion judge outcome within a JudgeVerdict (ADR-049 D2). The `reason` feeds forward as steering context into the next attempt/round when unmet (evaluator-optimizer pattern).
+         */
+        CriterionVerdict: {
+            /**
+             * @description ID of the AcceptanceCriterion this verdict judges.
+             * @example 550e8400-e29b-41d4-a716-446655440010
+             */
+            criterion_id: string;
+            /**
+             * @description Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+             * @example true
+             */
+            met: boolean;
+            /**
+             * @description The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+             * @example go test output shows 3 failing tests; criterion requires all passing.
+             */
+            reason: string;
         };
         /** @description Per-agent token usage entry within a TokenUsageSummary. */
         AgentTokenEntry: {
@@ -11562,8 +11941,6 @@ export interface operations {
                 status?: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
                 /** @description Filter by assigned agent ID. */
                 agent_id?: string;
-                /** @description Filter by milestone ID. */
-                milestone_id?: string;
                 /** @description Filter by UI surface (Detail #5). Defaults to `user` when omitted — dedicated-UI tasks (e.g. heartbeat) are excluded from general listings. */
                 surface?: "user" | "heartbeat";
                 /** @description When set, returns the subtasks of this parent (equivalent to GET /tasks/{id}/subtasks). When omitted, only top-level tasks are returned. */
@@ -12584,145 +12961,6 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
-    listWorkspaceMilestones: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace ID. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Milestone list with total count */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MilestoneListResponse"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
-    createWorkspaceMilestone: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace ID. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MilestoneCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Created milestone */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Milestone"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
-    getWorkspaceMilestone: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace ID. */
-                id: string;
-                /** @description Milestone ID. */
-                milestoneId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Milestone */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Milestone"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
-    updateWorkspaceMilestone: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace ID. */
-                id: string;
-                /** @description Milestone ID. */
-                milestoneId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MilestoneUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Updated milestone */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Milestone"];
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
-    deleteWorkspaceMilestone: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace ID. */
-                id: string;
-                /** @description Milestone ID. */
-                milestoneId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Deleted */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-        };
-    };
     getTokenStats: {
         parameters: {
             query?: {
@@ -12979,10 +13217,14 @@ export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateReque
 export type WorkspaceDelegationEdge = components["schemas"]["WorkspaceDelegationEdge"];
 export type WorkspaceDelegation = components["schemas"]["WorkspaceDelegation"];
 export type WorkspaceDelegationUpdateRequest = components["schemas"]["WorkspaceDelegationUpdateRequest"];
-export type Milestone = components["schemas"]["Milestone"];
-export type MilestoneCreateRequest = components["schemas"]["MilestoneCreateRequest"];
-export type MilestoneUpdateRequest = components["schemas"]["MilestoneUpdateRequest"];
-export type MilestoneListResponse = components["schemas"]["MilestoneListResponse"];
+export type Plan = components["schemas"]["Plan"];
+export type PlanCreateRequest = components["schemas"]["PlanCreateRequest"];
+export type PlanUpdateRequest = components["schemas"]["PlanUpdateRequest"];
+export type PlanListResponse = components["schemas"]["PlanListResponse"];
+export type AcceptanceCriterion = components["schemas"]["AcceptanceCriterion"];
+export type EvidenceRecord = components["schemas"]["EvidenceRecord"];
+export type JudgeVerdict = components["schemas"]["JudgeVerdict"];
+export type CriterionVerdict = components["schemas"]["CriterionVerdict"];
 export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];
 export type ModelTokens = components["schemas"]["ModelTokens"];

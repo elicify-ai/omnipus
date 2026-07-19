@@ -1,0 +1,29 @@
+title: CriterionVerdict
+description: >
+  Per-criterion judge outcome within a JudgeVerdict (ADR-049 D2). The `reason`
+  feeds forward as steering context into the next attempt/round when unmet
+  (evaluator-optimizer pattern).
+type: object
+required:
+  - criterion_id
+  - met
+  - reason
+additionalProperties: false
+properties:
+  criterion_id:
+    type: string
+    minLength: 1
+    description: ID of the AcceptanceCriterion this verdict judges.
+    example: "550e8400-e29b-41d4-a716-446655440010"
+  met:
+    type: boolean
+    description: >
+      Whether this criterion was satisfied. Fail-closed default `false` —
+      absence of evidence never defaults to `true` (NFR-2).
+    example: true
+  reason:
+    type: string
+    description: >
+      The judge's rationale for this criterion, fed forward as steering
+      context on the next attempt when `met` is false.
+    example: "go test output shows 3 failing tests; criterion requires all passing."

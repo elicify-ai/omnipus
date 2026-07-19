@@ -82,10 +82,41 @@ properties:
     description: >
       Workspace this task belongs to. Required — every task is workspace-scoped.
     example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-  milestone_id:
+  tags:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+      maxLength: 64
+    description: >
+      Workspace-scoped, free-form tags (ADR-049 D1) — lowercase, trimmed,
+      deduplicated after normalization, at most 16 per task, each at most 64
+      characters.
+    example:
+      - "milestone:v1.0-launch"
+  plan_id:
     type: string
-    description: Optional milestone to group the task under.
-    example: "m-1234"
+    description: >
+      Optional Plan to group this task under (ADR-049 D1/D4). Same-workspace
+      FK — rejected 400 if the plan is in a different workspace.
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  criteria:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Optional initial acceptance criteria (Definition of Done, ADR-049
+      D2/D5/FR-3). Agent tool paths reject a create with zero criteria;
+      human/UI creation may leave this empty (soft tier).
+  max_attempts:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: >
+      Per-task override of the attempt ceiling before the goal loop wakes
+      the owner (ADR-049 D7/FR-9). Null/absent inherits the global
+      `PlanningConfig.task_max_attempts` default (3).
+    example: 5
   due:
     type: string
     format: date-time

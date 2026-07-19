@@ -1,0 +1,63 @@
+title: PlanCreateRequest
+description: >
+  Request body for POST /plans (ADR-049 D1/FR-1). Creates a plan in `draft`
+  state. `workspace_id` is required (a Plan is not nested under a workspace
+  path — creation is a top-level `POST /plans` call, unlike the removed
+  Milestone's `POST /workspaces/{id}/milestones`); member tasks are linked
+  afterward via `Task.plan_id`, which is validated same-workspace.
+type: object
+required:
+  - workspace_id
+  - title
+  - owner_agent_id
+additionalProperties: false
+properties:
+  workspace_id:
+    type: string
+    description: >
+      Workspace this plan belongs to. Required — every plan is
+      workspace-scoped.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  title:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Plan title.
+    example: "v1.0 Launch"
+  goal:
+    type: string
+    maxLength: 2000
+    description: Plain-prose objective (used by the plan judge when `dod` is empty).
+    example: "Ship the v1.0 release with all P0 issues closed and CI green."
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional free-form description.
+    example: "Coordinates the v1.0 release train across backend and SPA."
+  owner_agent_id:
+    type: string
+    minLength: 1
+    description: Agent responsible for this plan.
+    example: "jim"
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Plan-level Definition of Done. Agent-created plans require at least
+      one criterion before approval (strict tier, ADR D5); human/UI creation
+      may leave this empty (soft tier — the plan judge then evaluates
+      against `title` + `goal`).
+  bounds:
+    type: object
+    additionalProperties: false
+    description: Per-plan overrides of the global `PlanningConfig` bounds (FR-9).
+    properties:
+      plan_judge_max_rounds:
+        type: integer
+        minimum: 1
+        example: 20
+      idle_expiry_days:
+        type: integer
+        minimum: 1
+        example: 7

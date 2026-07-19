@@ -1,0 +1,227 @@
+title: Plan
+description: >
+  A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task
+  DAG under a goal, Definition of Done, owner agent, and state machine. Tasks
+  join a plan via `Task.plan_id` (same-workspace FK, validated); membership
+  and `progress` are computed read-time by scanning member tasks — never
+  stored on the Plan record (mirrors the removed Milestone's
+  `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json`
+  (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones
+  (see the Milestone removal diffs) as the container for grouped, judged,
+  goal-driven work.
+
+  Returned by GET /workspaces/{id}/plans, GET /plans/{id}, POST /plans, and
+  PUT /plans/{id}.
+type: object
+required:
+  - id
+  - workspace_id
+  - title
+  - state
+  - owner_agent_id
+  - owner
+  - created_by
+  - created_at
+  - updated_at
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Unique plan identifier (ULID).
+    example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  workspace_id:
+    type: string
+    description: >
+      Workspace this plan belongs to. Required-scoped — a plan may only
+      reference same-workspace tasks (validated FK on `Task.plan_id`).
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  title:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Human-readable plan title.
+    example: "v1.0 Launch"
+  goal:
+    type: string
+    maxLength: 2000
+    description: >
+      Plain-prose objective the plan-level judge evaluates against when
+      `dod` is empty (soft tier, ADR D5).
+    example: "Ship the v1.0 release with all P0 issues closed and CI green."
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional free-form description.
+    example: "Coordinates the v1.0 release train across backend and SPA."
+  state:
+    type: string
+    enum:
+      - draft
+      - approved
+      - running
+      - done
+      - failed
+    description: >
+      Canonical 5-value plan state machine (ADR D1; Round-1 Grill
+      Reconciliation R1 is the single source of truth for this wire enum).
+      `draft` being authored, not yet runnable. `approved` DoD/owner locked
+      in; the single plan-engine instance auto-advances to `running` on its
+      next tick — or stays `approved` in a legitimate cap-waiting state when
+      the global active-loop cap is full (see `paused_reason`). `running`
+      the engine is dispatching member tasks under the plan judge; see
+      `plan_phase` for the current sub-phase and `paused_reason` for a
+      transient pause. `done` terminal success (plan judge PASS), frozen.
+      `failed` terminal failure — see `failed_reason` for why; frozen, never
+      retried (author a new plan). An unrecognized future value should
+      render as `draft` (forward-compat fallback).
+    example: "draft"
+  plan_phase:
+    type: string
+    enum:
+      - dispatching
+      - judging
+      - synthesizing
+      - idle
+    default: idle
+    description: >
+      Runtime-only sub-phase while `state == running` (R1) — NOT itself a
+      `state` value. `dispatching` the engine is dispatching ready tasks off
+      the `blocked_by` DAG. `judging` the plan-level judge is evaluating the
+      DoD. `synthesizing` writing the completion/handover summary. `idle`
+      no active phase (default; also the value while `state != running`).
+    example: "idle"
+  failed_reason:
+    type: string
+    enum:
+      - judge_rounds_exhausted
+      - stopped_by_user
+      - idle_expired
+    description: >
+      Set only when `state == failed` (R1) — distinguishes
+      judge-rounds-exhausted vs user-stopped vs idle-expired so the three
+      don't collapse to one generic "Failed" badge.
+    example: "judge_rounds_exhausted"
+  owner_agent_id:
+    type: string
+    description: >
+      Agent responsible for this plan — woken at decision points (attempts
+      exhausted, plan judge failed, plan complete) via the async-notifier
+      seam (ADR D4).
+    example: "jim"
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      Plan-level Definition of Done, evaluated by the plan judge each round.
+      Required (non-empty) before `draft -> approved` for agent-authored
+      plans (strict tier); may be empty for human/UI-authored plans (soft
+      tier — the judge then evaluates against `title` + `goal`, ADR D5).
+  bounds:
+    type: object
+    additionalProperties: false
+    description: >
+      Per-plan overrides of the global `PlanningConfig` bounds (FR-9).
+      Absent fields inherit the global default.
+    properties:
+      plan_judge_max_rounds:
+        type: integer
+        minimum: 1
+        description: >
+          Override of the global plan-judge round ceiling (global default
+          20, symmetric with `/goal`).
+        example: 20
+      idle_expiry_days:
+        type: integer
+        minimum: 1
+        description: >
+          Override of the global idle-expiry calendar brake (global default
+          7 days).
+        example: 7
+  judge_rounds:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Plan-judge rounds consumed so far (ADR D4 MAJ-004, durable
+      boot-reconciled counter).
+    example: 2
+  active_loop:
+    type: boolean
+    readOnly: true
+    description: >
+      True while this plan counts toward the global active-loop cap — iff
+      `state == running` (Round-1 Grill Reconciliation R5).
+    example: true
+  paused_reason:
+    type: string
+    readOnly: true
+    description: >
+      Non-empty when a `running` plan is paused (owner agent disabled
+      mid-loop, judge temporarily unavailable) or when `state == approved`
+      is waiting for a free slot under the global active-loop cap.
+      Empty/absent when not paused.
+    example: "owner agent disabled"
+  last_activity_at:
+    type: string
+    format: date-time
+    readOnly: true
+    description: >
+      Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last
+      attempt, state transition, or user interaction on this plan.
+    example: "2026-07-19T12:00:00Z"
+  progress:
+    type: number
+    minimum: 0
+    maximum: 1
+    readOnly: true
+    description: >
+      Completion fraction (0-1), server-computed read-time as done/total
+      over member tasks (`Task.plan_id == this.id`). 0 when there are no
+      member tasks. Never accepted on create/update.
+    example: 0.5
+  owner:
+    type: string
+    readOnly: true
+    description: >
+      Username of the user who created this plan. Set server-side at
+      creation; read-only.
+    example: "alice"
+  created_by:
+    type: string
+    readOnly: true
+    description: >
+      Username (or agent ID) that created the plan. Set server-side at
+      creation; read-only.
+    example: "alice"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC 3339 UTC timestamp when the plan was created.
+    example: "2026-07-19T10:00:00Z"
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC 3339 UTC timestamp of the last update.
+    example: "2026-07-19T10:05:00Z"
+  approved_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the plan transitioned `draft -> approved`.
+      Absent until then.
+    example: "2026-07-19T10:10:00Z"
+  started_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the plan transitioned into `running`. Absent
+      until then.
+    example: "2026-07-19T10:15:00Z"
+  completed_at:
+    type: string
+    format: date-time
+    description: >
+      RFC 3339 timestamp when the plan reached `done` or `failed`. Absent
+      until then.
+    example: "2026-07-19T12:30:00Z"

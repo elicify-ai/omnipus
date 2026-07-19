@@ -119,6 +119,14 @@ channels:
         $ref: '#/components/messages/WhatsAppPairingFrame'
       NotificationFrame:
         $ref: '#/components/messages/NotificationFrame'
+      GoalStatusFrame:
+        $ref: '#/components/messages/GoalStatusFrame'
+      LoopStatusFrame:
+        $ref: '#/components/messages/LoopStatusFrame'
+      PlanStatusFrame:
+        $ref: '#/components/messages/PlanStatusFrame'
+      JudgeVerdictFrame:
+        $ref: '#/components/messages/JudgeVerdictFrame'
 
   browser:
     address: /api/v1/browser/ws
@@ -521,6 +529,50 @@ operations:
       the unread badge. Delivered only to the recipient user's connections (#264).
     messages:
       - $ref: '#/channels/chat/messages/NotificationFrame'
+
+  receiveGoalStatus:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Status push for the session's active /goal loop (ADR-049 D6/D7).
+      Emitted on round completion, state change, and clear/stop. Session-
+      scoped.
+    messages:
+      - $ref: '#/channels/chat/messages/GoalStatusFrame'
+
+  receiveLoopStatus:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Status push for the session's active /loop (ADR-049 D6/D7). Emitted on
+      run completion, state change, and stop. Session-scoped.
+    messages:
+      - $ref: '#/channels/chat/messages/LoopStatusFrame'
+
+  receivePlanStatus:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Status push for a Plan (ADR-049 D4/D7). Emitted on phase change, state
+      transition, progress change, and pause/resume. Not session-scoped — a
+      Plan is a standalone workspace-scoped entity.
+    messages:
+      - $ref: '#/channels/chat/messages/PlanStatusFrame'
+
+  receiveJudgeVerdict:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Live push of a judge adjudication (ADR-049 D2/D4/NFR-5) — the WS
+      carrier of a judge verdict. The other carrier is the persisted
+      session-transcript entry (Message.type=judge_verdict); both carry the
+      same shape so they cannot silently disagree.
+    messages:
+      - $ref: '#/channels/chat/messages/JudgeVerdictFrame'
 
   # ── Browser live channel (ADR-038) ──────────────────────────────────────────
 
@@ -972,6 +1024,38 @@ components:
       payload:
         $ref: '#/components/schemas/NotificationFrame'
 
+    GoalStatusFrame:
+      name: GoalStatusFrame
+      title: goal_status
+      summary: /goal loop status update (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/GoalStatusFrame'
+
+    LoopStatusFrame:
+      name: LoopStatusFrame
+      title: loop_status
+      summary: /loop status update (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/LoopStatusFrame'
+
+    PlanStatusFrame:
+      name: PlanStatusFrame
+      title: plan_status
+      summary: Plan status update (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PlanStatusFrame'
+
+    JudgeVerdictFrame:
+      name: JudgeVerdictFrame
+      title: judge_verdict
+      summary: Live judge verdict push (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/JudgeVerdictFrame'
+
     # ── Browser live channel (ADR-038) ─────────────────────────────────────────
 
     BrowserAttachFrame:
@@ -1149,6 +1233,10 @@ components:
         - browser_capture_offer
         - browser_capture_answer
         - browser_capture_control
+        - goal_status
+        - loop_status
+        - plan_status
+        - judge_verdict
 
     AuthFrame:
       title: AuthFrame
@@ -2943,3 +3031,212 @@ components:
           type: string
           maxLength: 512
           description: Optional human-readable context for the action (e.g. shutdown cause).
+
+    # ── Planning & Goals (ADR-049) ──────────────────────────────────────────────
+
+    GoalStatusFrame:
+      title: GoalStatusFrame
+      description: >
+        Server → client. Status push for a session's active /goal loop
+        (ADR-049 D6/D7/US-8). Emitted on round completion, state change,
+        and clear/stop. Session-scoped (registered in
+        SESSION_SCOPED_FRAME_TYPES).
+      type: object
+      required:
+        - type
+        - session_id
+        - condition
+        - round
+        - max_rounds
+        - latest_reason
+        - active_loops
+        - cap
+        - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: goal_status
+        session_id:
+          type: string
+          minLength: 1
+        condition:
+          type: string
+        round:
+          type: integer
+          minimum: 0
+        max_rounds:
+          type: integer
+          minimum: 1
+        latest_reason:
+          type: string
+        active_loops:
+          type: integer
+          minimum: 0
+        cap:
+          type: integer
+          minimum: 1
+        state:
+          type: string
+          enum:
+            - active
+            - paused_judge_unavailable
+            - brake_fired
+            - cleared
+
+    LoopStatusFrame:
+      title: LoopStatusFrame
+      description: >
+        Server → client. Status push for a session's active /loop (ADR-049
+        D6/D7/US-9). Emitted on run completion, state change, and stop.
+        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+      type: object
+      required:
+        - type
+        - session_id
+        - mode
+        - run
+        - max_runs
+        - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: loop_status
+        session_id:
+          type: string
+          minLength: 1
+        mode:
+          type: string
+          enum:
+            - interval
+            - self_paced
+        run:
+          type: integer
+          minimum: 0
+        max_runs:
+          type: integer
+          minimum: 1
+        next_delay:
+          type: integer
+          format: int64
+          description: >
+            Milliseconds until the next scheduled run. Present for
+            `interval` mode and once a `self_paced` run has scheduled its
+            next one-shot fire.
+        state:
+          type: string
+          description: >
+            Current state of this loop. Runtime vocabulary owned by the
+            loop engine (ADR-049 Part B); kept a plain string in this
+            contract wave rather than a closed enum (unlike
+            GoalStatusFrame.state) so naming it does not require a
+            breaking change once Part B's implementation lands.
+
+    PlanStatusFrame:
+      title: PlanStatusFrame
+      description: >
+        Server → client. Status push for a Plan (ADR-049 D4/D7/US-7).
+        Emitted on phase change, state transition, progress change, and
+        pause/resume. Not session-scoped — a Plan is a standalone
+        workspace-scoped entity, not tied to one chat session.
+      type: object
+      required:
+        - type
+        - plan_id
+        - state
+        - plan_phase
+        - progress
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: plan_status
+        plan_id:
+          type: string
+        state:
+          type: string
+          enum:
+            - draft
+            - approved
+            - running
+            - done
+            - failed
+        plan_phase:
+          type: string
+          enum:
+            - dispatching
+            - judging
+            - synthesizing
+            - idle
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+        paused_reason:
+          type: string
+
+    JudgeVerdictFrame:
+      title: JudgeVerdictFrame
+      description: >
+        Server → client. Live push of a judge adjudication (ADR-049
+        D2/D4/NFR-5) — the WS carrier of a judge verdict. The other carrier
+        is the persisted session-transcript entry
+        (Message.type=judge_verdict / Message.verdict, contract C12); both
+        carry the same shape so they cannot silently disagree.
+      type: object
+      required:
+        - type
+        - id
+        - scope
+        - round
+        - met
+        - per_criterion
+        - model
+        - judged_at
+        - judge_agent_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: judge_verdict
+        id:
+          type: string
+        scope:
+          type: string
+          enum:
+            - task
+            - plan
+        task_id:
+          type: string
+        plan_id:
+          type: string
+        round:
+          type: integer
+          minimum: 1
+        met:
+          type: boolean
+        per_criterion:
+          type: array
+          items:
+            type: object
+            required:
+              - criterion_id
+              - met
+              - reason
+            additionalProperties: false
+            properties:
+              criterion_id:
+                type: string
+                minLength: 1
+              met:
+                type: boolean
+              reason:
+                type: string
+        model:
+          type: string
+        judged_at:
+          type: string
+          format: date-time
+        judge_agent_id:
+          type: string

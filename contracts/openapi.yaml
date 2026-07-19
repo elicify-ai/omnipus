@@ -56,8 +56,10 @@ tags:
     The unified workspace task surface (Sprint 2) — one entity covering capture,
     triage, dependencies, todos, triggers, and delegation. Replaces the former
     split between workflow /tasks and GTD /board/tasks.
-- name: Milestones
-  description: Workspace milestones — group tasks under named milestones with optional due dates.
+- name: Plans
+  description: >
+    Plan entities (ADR-049) — group an executable task DAG under a goal,
+    Definition of Done, owner agent, and state machine. Replaces Milestones.
 - name: Stats
   description: Usage statistics and aggregations.
 - name: system
@@ -530,26 +532,22 @@ components:
       $ref: ./components/schemas/WorkspaceDelegation.yaml
     WorkspaceDelegationUpdateRequest:
       $ref: ./components/schemas/WorkspaceDelegationUpdateRequest.yaml
-    Milestone:
-      $ref: ./components/schemas/Milestone.yaml
-    MilestoneCreateRequest:
-      $ref: ./components/schemas/MilestoneCreateRequest.yaml
-    MilestoneUpdateRequest:
-      $ref: ./components/schemas/MilestoneUpdateRequest.yaml
-    MilestoneListResponse:
-      type: object
-      description: List response for GET /workspaces/{id}/milestones
-      required:
-        - milestones
-        - total
-      properties:
-        milestones:
-          type: array
-          items:
-            $ref: '#/components/schemas/Milestone'
-        total:
-          type: integer
-          description: Total number of milestones for this workspace.
+    Plan:
+      $ref: ./components/schemas/Plan.yaml
+    PlanCreateRequest:
+      $ref: ./components/schemas/PlanCreateRequest.yaml
+    PlanUpdateRequest:
+      $ref: ./components/schemas/PlanUpdateRequest.yaml
+    PlanListResponse:
+      $ref: ./components/schemas/PlanListResponse.yaml
+    AcceptanceCriterion:
+      $ref: ./components/schemas/AcceptanceCriterion.yaml
+    EvidenceRecord:
+      $ref: ./components/schemas/EvidenceRecord.yaml
+    JudgeVerdict:
+      $ref: ./components/schemas/JudgeVerdict.yaml
+    CriterionVerdict:
+      $ref: ./components/schemas/CriterionVerdict.yaml
     AgentTokenEntry:
       $ref: ./components/schemas/AgentTokenEntry.yaml
     TokenUsageSummary:
@@ -4268,7 +4266,7 @@ paths:
       operationId: listTasks
       summary: List tasks
       description: >
-        Returns tasks in a workspace, filterable by status, agent, milestone, and
+        Returns tasks in a workspace, filterable by status, agent, and
         surface. This is the unified task surface (Sprint 2) — it subsumes the
         former GTD /board/tasks listing. By default only top-level tasks
         (parent_task_id absent) and `surface: user` tasks are returned; use the
@@ -4306,12 +4304,6 @@ paths:
         schema:
           type: string
         description: Filter by assigned agent ID.
-      - name: milestone_id
-        in: query
-        required: false
-        schema:
-          type: string
-        description: Filter by milestone ID.
       - name: surface
         in: query
         required: false
@@ -5420,165 +5412,6 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/500InternalServerError'
-
-  /workspaces/{id}/milestones:
-    get:
-      operationId: listWorkspaceMilestones
-      summary: List milestones for a workspace
-      tags:
-      - Milestones
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Workspace ID.
-      responses:
-        '200':
-          description: Milestone list with total count
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MilestoneListResponse'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-    post:
-      operationId: createWorkspaceMilestone
-      summary: Create a milestone for a workspace
-      tags:
-      - Milestones
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Workspace ID.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MilestoneCreateRequest'
-      responses:
-        '201':
-          description: Created milestone
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Milestone'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-
-  /workspaces/{id}/milestones/{milestoneId}:
-    get:
-      operationId: getWorkspaceMilestone
-      summary: Get a milestone by ID
-      tags:
-      - Milestones
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Workspace ID.
-      - name: milestoneId
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Milestone ID.
-      responses:
-        '200':
-          description: Milestone
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Milestone'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-    put:
-      operationId: updateWorkspaceMilestone
-      summary: Update a milestone (partial update)
-      tags:
-      - Milestones
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Workspace ID.
-      - name: milestoneId
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Milestone ID.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MilestoneUpdateRequest'
-      responses:
-        '200':
-          description: Updated milestone
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Milestone'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-    delete:
-      operationId: deleteWorkspaceMilestone
-      summary: Delete a milestone
-      tags:
-      - Milestones
-      security:
-      - BearerAuth: []
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Workspace ID.
-      - name: milestoneId
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Milestone ID.
-      responses:
-        '204':
-          description: Deleted
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          $ref: '#/components/responses/404NotFound'
 
   /stats/tokens:
     get:

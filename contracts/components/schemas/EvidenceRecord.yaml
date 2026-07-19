@@ -1,0 +1,86 @@
+title: EvidenceRecord
+description: >
+  Persisted evidence from a single machine-check execution (ADR-049 D2), one
+  per `(criterion_id, attempt)` pair. Stored under
+  `$OMNIPUS_HOME/tasks_evidence/<task_id>/<criterion_id>-<attempt>.json`
+  (mode 0600, dir 0700). `command` and `output` pass through the registered
+  sensitive-value redaction (ADR-004 `RegisterSensitiveValues` flow) BEFORE
+  the record is marshalled/written — never write raw then scrub. Retention
+  follows the 90-day session default and the record is deleted with its
+  task. Read-only surface — never accepted on create/update.
+type: object
+required:
+  - id
+  - task_id
+  - criterion_id
+  - attempt
+  - command
+  - exit_code
+  - output
+  - truncated
+  - timed_out
+  - policy_denied
+  - recorded_at
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Server-set evidence record identifier (UUID).
+    example: "550e8400-e29b-41d4-a716-446655440030"
+  task_id:
+    type: string
+    description: Task this evidence belongs to.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  criterion_id:
+    type: string
+    description: AcceptanceCriterion this evidence was recorded for.
+    example: "550e8400-e29b-41d4-a716-446655440010"
+  attempt:
+    type: integer
+    minimum: 1
+    description: Attempt index (within the task's goal loop) this record belongs to.
+    example: 1
+  command:
+    type: string
+    description: >
+      The redacted command that was run (via the assignee's `bash` tool
+      machinery).
+    example: "go test ./pkg/plan/... [REDACTED]"
+  exit_code:
+    type: integer
+    description: >
+      Actual process exit code. Set to the sentinel `-1` when `timed_out` or
+      `policy_denied` is true — consumers MUST check those booleans before
+      interpreting this field.
+    example: 0
+  output:
+    type: string
+    description: >
+      Redacted, size-capped captured output (default cap e.g. 64 KiB). See
+      `truncated`.
+    example: "ok  	pkg/plan	0.412s"
+  truncated:
+    type: boolean
+    description: >
+      True when `output` was cut to the size cap; a `"...[truncated N
+      bytes]"` marker is appended in that case.
+    example: false
+  timed_out:
+    type: boolean
+    description: >
+      True when the check exceeded its per-check timeout (default 60s,
+      configurable) — criterion is scored `unmet` (fail-closed). A hung check
+      cannot hold the loop's idle-expiry clock.
+    example: false
+  policy_denied:
+    type: boolean
+    description: >
+      True when the assignee's effective `bash` policy for this command was
+      `deny`, or `ask` (which resolves to deny unattended) — criterion is
+      scored `unmet` (fail-closed, ADR D2 rule 2).
+    example: false
+  recorded_at:
+    type: string
+    format: date-time
+    description: RFC 3339 UTC timestamp when this evidence was recorded.
+    example: "2026-07-19T12:00:00Z"
