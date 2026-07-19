@@ -32,9 +32,9 @@ import (
 
 // TestRegression_SysagentTaskUpdate_PreservesAllFields guards against the bug
 // where system.task.update used a minimal struct that silently dropped prompt,
-// priority, milestone_id, session_id, result, and owner on every write.
+// priority, tags, session_id, result, and owner on every write.
 //
-// BDD: Given a task on disk with prompt, priority, milestone_id,
+// BDD: Given a task on disk with prompt, priority, tags,
 //
 //	session_id, result, owner, and agent_id populated,
 //
@@ -58,7 +58,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	const taskID = "01JXPRESERVE_TASK_0000001"
 	const wantPrompt = "Run the full regression suite with coverage"
 	const wantAgentID = "01JXPRESERVE_AGENT000001"
-	const wantMilestoneID = "01JXPRESERVE_MILE0000001"
+	wantTags := []string{"release-42"}
 	const wantSessionID = "preserve-session-42"
 	const wantOwner = "alice"
 	const wantResult = "42 tests passed, 0 failed"
@@ -72,7 +72,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 		Description: "Original description",
 		Prompt:      wantPrompt,
 		Priority:    wantPriority,
-		MilestoneID: wantMilestoneID,
+		Tags:        wantTags,
 		SessionID:   wantSessionID,
 		Result:      wantResult,
 		Status:      task.StatusInbox,
@@ -112,8 +112,8 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	assert.Equal(t, wantPriority, got.Priority,
 		"priority must survive a partial system.task.update #404")
 
-	assert.Equal(t, wantMilestoneID, got.MilestoneID,
-		"milestone_id must survive a partial system.task.update #404")
+	assert.Equal(t, wantTags, got.Tags,
+		"tags must survive a partial system.task.update #404")
 
 	assert.Equal(t, wantSessionID, got.SessionID,
 		"session_id must survive a partial system.task.update #404")

@@ -60,8 +60,19 @@ type Store struct {
 	lock *StripedLock
 }
 
-// New creates a Store rooted at dir using the process-wide TaskFileLock.
+// New creates a Store rooted at dir using the process-wide TaskFileLock. dir
+// is, by universal convention across every call site in this codebase,
+// "<home>/tasks" — New derives home from it to run the one-way Milestone→Tag
+// migration (ADR-049 D1, migrate_milestones.go) exactly once, guarded by its
+// own completion sentinel, before the store is used. New's signature cannot
+// itself return an error without a breaking change rippling across ~30 call
+// sites in other packages, so a migration failure is logged at Error and does
+// NOT prevent the Store from being constructed — the migration is safe to
+// retry on the next call/boot (idempotent, crash-safe).
 func New(dir string) *Store {
+	if err := MigrateMilestonesToTags(filepath.Dir(dir)); err != nil {
+		slog.Error("task: milestone migration failed", "error", err)
+	}
 	return &Store{dir: dir, lock: TaskFileLock}
 }
 
@@ -135,7 +146,7 @@ type Filter struct {
 	Status       Status
 	AgentID      string
 	CreatedBy    string
-	MilestoneID  string
+	PlanID       string
 	Surface      Surface
 	ParentTaskID string
 	// ParentTaskIDSet, when true, applies the ParentTaskID filter even when
@@ -144,6 +155,9 @@ type Filter struct {
 	// BlockedByID, when non-empty, returns only tasks whose BlockedBy contains
 	// the given ID.
 	BlockedByID string
+	// Tag, when non-empty, returns only tasks whose (normalized) Tags contain
+	// this exact tag.
+	Tag string
 }
 
 // matches reports whether t passes every active filter field.
@@ -160,7 +174,10 @@ func (f Filter) matches(t *Task) bool {
 	if f.CreatedBy != "" && t.CreatedBy != f.CreatedBy {
 		return false
 	}
-	if f.MilestoneID != "" && t.MilestoneID != f.MilestoneID {
+	if f.PlanID != "" && t.PlanID != f.PlanID {
+		return false
+	}
+	if f.Tag != "" && !containsString(t.Tags, f.Tag) {
 		return false
 	}
 	if f.Surface != "" && t.EffectiveSurface() != f.Surface {
@@ -293,7 +310,68 @@ func (t *Task) normalize() error {
 			return err
 		}
 	}
+	normalizedTags, err := normalizeTags(t.Tags)
+	if err != nil {
+		return err
+	}
+	t.Tags = normalizedTags
+	if t.Criteria != nil {
+		normalizedCriteria, err := normalizeCriteria(t.Criteria)
+		if err != nil {
+			return err
+		}
+		t.Criteria = normalizedCriteria
+	}
+	if t.MaxAttempts != nil && *t.MaxAttempts < 1 {
+		return verr("max_attempts must be at least 1")
+	}
 	return nil
+}
+
+// maxTagRunes and maxTagsPerTask bound Task.Tags (spec Part A §B). Also used
+// by the milestone migration (migrate_milestones.go) when sizing the
+// generated "milestone:<name>" tag.
+const (
+	maxTagRunes    = 64
+	maxTagsPerTask = 16
+)
+
+// normalizeTags normalizes (lowercase+trim), validates, and dedups tags, per
+// the exact ordering documented in spec Part A §B: (1) normalize, (2) reject
+// empty-after-trim, (3) reject >64 runes, (4) reject >16 tags — checked
+// against the normalized-but-NOT-YET-deduped count (so 17 raw entries that
+// would dedup down to fewer than 16 distinct tags are still rejected; this
+// matches the spec's literal numbered order, which places the count check
+// before dedup), (5) dedup case-fold collisions preserving first-seen order.
+// A nil/empty input returns (nil, nil) — tags are optional.
+func normalizeTags(tags []string) ([]string, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, len(tags))
+	for i, raw := range tags {
+		tag := strings.ToLower(strings.TrimSpace(raw))
+		if tag == "" {
+			return nil, verr("tags[%d]: tag must not be empty", i)
+		}
+		if n := len([]rune(tag)); n > maxTagRunes {
+			return nil, verr("tags[%d]: tag must be %d characters or fewer", i, maxTagRunes)
+		}
+		normalized[i] = tag
+	}
+	if len(normalized) > maxTagsPerTask {
+		return nil, verr("tags: at most %d tags per task", maxTagsPerTask)
+	}
+	seen := make(map[string]bool, len(normalized))
+	out := make([]string, 0, len(normalized))
+	for _, tag := range normalized {
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	return out, nil
 }
 
 // validateTodos checks each todo's text length (1..500) and that status is a
@@ -427,17 +505,23 @@ func (s *Store) Create(t *Task) error {
 
 // Patch is a partial update applied by Update. Only non-nil fields are written.
 type Patch struct {
-	Title         *string
-	Description   *string
-	Prompt        *string
-	Status        *Status
-	AgentID       *string
-	Priority      *int
-	BlockedBy     *[]string
-	Todos         *[]Todo
-	Trigger       **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
-	Due           *string
-	MilestoneID   *string
+	Title       *string
+	Description *string
+	Prompt      *string
+	Status      *Status
+	AgentID     *string
+	Priority    *int
+	BlockedBy   *[]string
+	Todos       *[]Todo
+	Trigger     **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
+	Due         *string
+	PlanID      *string
+	Tags        *[]string
+	Criteria    *[]AcceptanceCriterion
+	// MaxAttempts is a double pointer (mirrors Trigger): outer nil = unchanged,
+	// *outer nil = clear the override (inherit the global PlanningConfig
+	// default), *outer non-nil = set to that value.
+	MaxAttempts   **int
 	Surface       *Surface
 	Result        *string
 	Artifacts     *[]string
@@ -620,8 +704,32 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	if patch.Due != nil {
 		t.Due = *patch.Due
 	}
-	if patch.MilestoneID != nil {
-		t.MilestoneID = *patch.MilestoneID
+	if patch.PlanID != nil {
+		t.PlanID = *patch.PlanID
+	}
+	if patch.Tags != nil {
+		normalizedTags, err := normalizeTags(*patch.Tags)
+		if err != nil {
+			return nil, err
+		}
+		t.Tags = normalizedTags
+	}
+	if patch.Criteria != nil {
+		normalizedCriteria, err := normalizeCriteria(*patch.Criteria)
+		if err != nil {
+			return nil, err
+		}
+		t.Criteria = normalizedCriteria
+		if len(t.Criteria) == 0 {
+			t.Criteria = nil
+		}
+	}
+	if patch.MaxAttempts != nil {
+		newMax := *patch.MaxAttempts
+		if newMax != nil && *newMax < 1 {
+			return nil, verr("max_attempts must be at least 1")
+		}
+		t.MaxAttempts = newMax
 	}
 	if patch.Surface != nil {
 		if !IsValidSurface(*patch.Surface) {
@@ -680,6 +788,14 @@ func (s *Store) Delete(id string) (unblockedIDs []string, err error) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("task: delete %q: %w", id, rmErr)
+	}
+	// Cascade: remove the task's evidence directory (FR-023, SD-A10). The
+	// task's own file is already gone at this point; a failure here is
+	// best-effort/logged, not fatal to the delete (mirrors the cascade-edge
+	// cleanup failure handling below).
+	evidenceDir := filepath.Join(evidenceDirForTaskStoreDir(s.dir), id)
+	if rmEvErr := os.RemoveAll(evidenceDir); rmEvErr != nil {
+		slog.Warn("task: delete: could not remove evidence dir", "id", id, "dir", evidenceDir, "error", rmEvErr)
 	}
 	return s.cascadeDeleteEdges(id)
 }

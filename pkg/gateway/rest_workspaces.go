@@ -496,12 +496,6 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/workspaces")
 
-	// /api/v1/workspaces/{id}/milestones[/{milestoneId}] — delegate to HandleMilestones.
-	if strings.Contains(rest, "/milestones") {
-		a.HandleMilestones(w, r)
-		return
-	}
-
 	// /api/v1/workspaces/{id}/delegation — the per-workspace delegation graph (M5).
 	if strings.HasSuffix(rest, "/delegation") {
 		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/delegation")
@@ -1133,7 +1127,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// stale copy after this delete removes the file. It is released
 	// IMMEDIATELY after the workspace file is gone via explicit unlock() calls
 	// at every exit from this section (no defer) — the remaining BEST-EFFORT
-	// cascade (cron jobs, heartbeat sessions, milestones, mailboxes, the
+	// cascade (cron jobs, heartbeat sessions, mailboxes, the
 	// workspace directory RemoveAll) never touches workspaces/{id}.json, so it
 	// does not need to serialize against it; running it after unlock avoids
 	// holding the lock across a potentially multi-second directory RemoveAll
@@ -1195,8 +1189,10 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	unlock()
 
 	// Best-effort cascade (order preserved from before this restructure):
-	// (1) heartbeat cron jobs → (2) heartbeat sessions → (3) milestones →
-	// (4) mailboxes → (5) workspace directory.
+	// (1) heartbeat cron jobs → (2) heartbeat sessions →
+	// (3) mailboxes → (4) workspace directory. Milestones (formerly step 3)
+	// were removed (ADR-049 D1) — tasks now carry workspace-scoped tags
+	// instead, which need no per-workspace cascade cleanup.
 	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace.
 	// Best-effort (logged on failure).
 	if cs := a.cronService.Load(); cs != nil {
@@ -1210,8 +1206,6 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// member_configs needed to find which sessions to release. Best-effort
 	// per-session.
 	releaseHeartbeatSessionsForWorkspace(a.agentLoop, ws)
-
-	deleteMilestonesForWorkspace(a.homePath, id)
 
 	// M11: remove every mailbox (config.mailboxes entry + stored credential)
 	// bound to this workspace. Best-effort (logged on failure, never aborts
@@ -1247,30 +1241,6 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// deleteMilestonesForWorkspace removes all milestone files for the given workspace and
-// clears milestone_id on tasks that referenced them (cascade delete).
-// Best-effort: individual file errors are logged and skipped.
-func deleteMilestonesForWorkspace(home, workspaceID string) {
-	all, err := listMilestoneFiles(home)
-	if err != nil {
-		slog.Warn("rest: workspace cascade: could not list milestones for workspace",
-			"workspace_id", workspaceID, "error", err)
-		return
-	}
-	for _, m := range all {
-		if m.WorkspaceID != workspaceID {
-			continue
-		}
-		// Clear milestone_id on tasks referencing this milestone before deleting.
-		clearMilestoneOnTasks(home, m.ID)
-		path := filepath.Join(home, "milestones", m.ID+".json")
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("rest: workspace cascade: failed to delete milestone",
-				"milestone_id", m.ID, "workspace_id", workspaceID, "error", err)
-		}
-	}
 }
 
 // releaseHeartbeatSessionsForWorkspace deletes the standing heartbeat session for

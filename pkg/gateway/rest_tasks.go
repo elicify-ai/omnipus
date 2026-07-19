@@ -30,20 +30,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// validateMilestoneFK validates that a milestone exists and (when workspaceID is
-// non-empty) belongs to the given workspace. Returns a user-facing error on
-// failure, nil on success. Folded in from the deleted rest_board.go.
-func validateMilestoneFK(homePath, milestoneID, workspaceID string) error {
-	m, err := readMilestoneFile(homePath, milestoneID)
-	if err != nil {
-		return errors.New("milestone not found")
-	}
-	if workspaceID != "" && m.WorkspaceID != workspaceID {
-		return errors.New("milestone does not belong to this workspace")
-	}
-	return nil
-}
-
 // decodeTaskJSONBody decodes a JSON request body into dst, writing a 400 and
 // returning false on a malformed body.
 func decodeTaskJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
@@ -56,7 +42,7 @@ func decodeTaskJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 // HandleTasks dispatches every request under /api/v1/tasks and /api/v1/tasks/.
 //
-//	GET    /tasks                     list (workspace_id/status/agent_id/milestone_id/surface/parent_task_id/limit/offset)
+//	GET    /tasks                     list (workspace_id/status/agent_id/surface/parent_task_id/limit/offset)
 //	POST   /tasks                     create (201, lands in inbox)
 //	GET    /tasks/{id}                get one
 //	PATCH  /tasks/{id}                partial update
@@ -181,8 +167,21 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	if t.ParentTaskID != "" {
 		out.ParentTaskId = ptr(t.ParentTaskID)
 	}
-	if t.MilestoneID != "" {
-		out.MilestoneId = ptr(t.MilestoneID)
+	if t.PlanID != "" {
+		out.PlanId = ptr(t.PlanID)
+	}
+	if len(t.Tags) > 0 {
+		tags := append([]string{}, t.Tags...)
+		out.Tags = &tags
+	}
+	if len(t.Criteria) > 0 {
+		out.Criteria = toWireCriteria(t.Criteria)
+	}
+	if t.AttemptCount > 0 {
+		out.AttemptCount = ptr(t.AttemptCount)
+	}
+	if t.MaxAttempts != nil {
+		out.MaxAttempts = ptr(*t.MaxAttempts)
 	}
 	if t.Trigger != nil {
 		out.Trigger = toWireTrigger(t.Trigger)
@@ -272,6 +271,141 @@ func buildTrigger(kind string, atMs, everyMs *int64, cronExpr *string) *task.Tri
 		tr.Config.CronExpr = &v
 	}
 	return tr
+}
+
+// toWireCriteria converts internal acceptance criteria to the gen.Task.Criteria
+// inline wire shape (read path — GET/POST/PATCH responses).
+func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
+	Author struct {
+		Id   string                     `json:"id"`
+		Kind gen.TaskCriteriaAuthorKind `json:"kind"`
+	} `json:"author"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	Id     *string                `json:"id,omitempty"`
+	Kind   gen.TaskCriteriaKind   `json:"kind"`
+	Status gen.TaskCriteriaStatus `json:"status"`
+	Text   string                 `json:"text"`
+} {
+	out := make([]struct {
+		Author struct {
+			Id   string                     `json:"id"`
+			Kind gen.TaskCriteriaAuthorKind `json:"kind"`
+		} `json:"author"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id     *string                `json:"id,omitempty"`
+		Kind   gen.TaskCriteriaKind   `json:"kind"`
+		Status gen.TaskCriteriaStatus `json:"status"`
+		Text   string                 `json:"text"`
+	}, 0, len(cs))
+	for _, c := range cs {
+		item := struct {
+			Author struct {
+				Id   string                     `json:"id"`
+				Kind gen.TaskCriteriaAuthorKind `json:"kind"`
+			} `json:"author"`
+			Check *struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+			Id     *string                `json:"id,omitempty"`
+			Kind   gen.TaskCriteriaKind   `json:"kind"`
+			Status gen.TaskCriteriaStatus `json:"status"`
+			Text   string                 `json:"text"`
+		}{
+			Kind:   gen.TaskCriteriaKind(c.Kind),
+			Status: gen.TaskCriteriaStatus(c.Status),
+			Text:   c.Text,
+		}
+		item.Author.Id = c.Author.ID
+		item.Author.Kind = gen.TaskCriteriaAuthorKind(c.Author.Kind)
+		if c.ID != "" {
+			item.Id = ptr(c.ID)
+		}
+		if c.Check != nil {
+			item.Check = &struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			}{Command: c.Check.Command, ExpectedExitCode: c.Check.ExpectedExitCode}
+		}
+		out = append(out, item)
+	}
+	return &out
+}
+
+// criteriaFromCreateWire converts the gen.TaskCreateRequest.Criteria inline
+// wire shape to internal acceptance criteria (create path).
+func criteriaFromCreateWire(items []struct {
+	Author struct {
+		Id   string                                  `json:"id"`
+		Kind gen.TaskCreateRequestCriteriaAuthorKind `json:"kind"`
+	} `json:"author"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	Id     *string                             `json:"id,omitempty"`
+	Kind   gen.TaskCreateRequestCriteriaKind   `json:"kind"`
+	Status gen.TaskCreateRequestCriteriaStatus `json:"status"`
+	Text   string                              `json:"text"`
+}) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(items))
+	for _, it := range items {
+		c := task.AcceptanceCriterion{
+			Kind:   task.CriterionKind(it.Kind),
+			Text:   it.Text,
+			Status: task.CriterionStatus(it.Status),
+			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
+		if it.Id != nil {
+			c.ID = *it.Id
+		}
+		if it.Check != nil {
+			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// criteriaFromUpdateWire converts the gen.TaskUpdateRequest.Criteria inline
+// wire shape to internal acceptance criteria (PATCH path).
+func criteriaFromUpdateWire(items []struct {
+	Author struct {
+		Id   string                                  `json:"id"`
+		Kind gen.TaskUpdateRequestCriteriaAuthorKind `json:"kind"`
+	} `json:"author"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	Id     *string                             `json:"id,omitempty"`
+	Kind   gen.TaskUpdateRequestCriteriaKind   `json:"kind"`
+	Status gen.TaskUpdateRequestCriteriaStatus `json:"status"`
+	Text   string                              `json:"text"`
+}) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(items))
+	for _, it := range items {
+		c := task.AcceptanceCriterion{
+			Kind:   task.CriterionKind(it.Kind),
+			Text:   it.Text,
+			Status: task.CriterionStatus(it.Status),
+			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
+		if it.Id != nil {
+			c.ID = *it.Id
+		}
+		if it.Check != nil {
+			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // computeRollup returns the read-time roll-up of live child sub-agent runs for
@@ -424,7 +558,6 @@ func (a *restAPI) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: q.Get("workspace_id"),
 		Status:      task.Status(q.Get("status")),
 		AgentID:     q.Get("agent_id"),
-		MilestoneID: q.Get("milestone_id"),
 		Surface:     task.Surface(q.Get("surface")),
 	}
 	if filter.Status != "" && !task.IsValidStatus(filter.Status) {
@@ -582,12 +715,24 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if req.ParentTaskId != nil {
 		t.ParentTaskID = *req.ParentTaskId
 	}
-	if req.MilestoneId != nil && *req.MilestoneId != "" {
-		if err := validateMilestoneFK(a.homePath, *req.MilestoneId, req.WorkspaceId); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		t.MilestoneID = *req.MilestoneId
+	if req.PlanId != nil && *req.PlanId != "" {
+		// Same-workspace FK validation (ADR-049 D1/D4, mirrors the removed
+		// validateMilestoneFK) is a pkg/plan-store lookup; pkg/plan is not
+		// wired into the gateway in this change — the store layer accepts and
+		// persists plan_id regardless (task.Store.normalize), so the field
+		// round-trips correctly today. Wiring the FK check here is tracked as
+		// a follow-up once the gateway holds a pkg/plan.Store reference.
+		t.PlanID = *req.PlanId
+	}
+	if req.Tags != nil {
+		t.Tags = *req.Tags
+	}
+	if req.Criteria != nil {
+		t.Criteria = criteriaFromCreateWire(*req.Criteria)
+	}
+	if req.MaxAttempts != nil {
+		v := *req.MaxAttempts
+		t.MaxAttempts = &v
 	}
 	if req.Surface != nil {
 		t.Surface = task.Surface(*req.Surface)
@@ -753,8 +898,22 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		empty := ""
 		patch.Due = &empty
 	}
-	if req.MilestoneId != nil {
-		patch.MilestoneID = req.MilestoneId
+	if req.PlanId != nil {
+		// Same-workspace FK validation note: see handleTaskCreate's identical
+		// comment above — pkg/plan is not yet wired into the gateway.
+		patch.PlanID = req.PlanId
+	}
+	if req.Tags != nil {
+		patch.Tags = req.Tags
+	}
+	if req.Criteria != nil {
+		criteria := criteriaFromUpdateWire(*req.Criteria)
+		patch.Criteria = &criteria
+	}
+	if req.MaxAttempts != nil {
+		v := *req.MaxAttempts
+		vp := &v
+		patch.MaxAttempts = &vp
 	}
 	if req.Surface != nil {
 		sf := task.Surface(*req.Surface)
