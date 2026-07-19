@@ -68,7 +68,7 @@ import {
   tasksQueryKeys,
   getErrorMessage,
 } from '@/lib/api'
-import type { Task, TaskTrigger, TaskCreateRequest, TaskUpdateRequest } from '@/lib/api'
+import type { Task, TaskTrigger, TaskCreateRequest, TaskUpdateRequest, Todo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import {
@@ -162,6 +162,10 @@ export function CalendarEventSlideOver({
   const [recurrenceFieldTouched, setRecurrenceFieldTouched] = useState(false)
   const [titleError, setTitleError] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
+  // Buffered checklist for CREATE mode (no task exists yet, so items can't be
+  // persisted per-edit like the EDIT slide-over does). Folded into the create
+  // request on Save. Unused in EDIT mode, where TaskChecklistField is task-bound.
+  const [draftTodos, setDraftTodos] = useState<Todo[]>([])
 
   const scheduleTouched = anchorFieldTouched || recurrenceFieldTouched
 
@@ -197,6 +201,8 @@ export function CalendarEventSlideOver({
       setAnchorDate(initialDate ?? new Date())
       setRecurrence({ kind: 'none' })
     }
+    // Draft checklist only applies to CREATE mode; always start empty on (re)open.
+    setDraftTodos([])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, task?.id, initialDate])
 
@@ -365,6 +371,9 @@ export function CalendarEventSlideOver({
         agent_id: agentId,
         prompt: trimmedPrompt,
         trigger,
+        // Fold the buffered create-mode checklist into the new task; omit when
+        // empty to keep the request minimal.
+        ...(draftTodos.length > 0 ? { todos: draftTodos } : {}),
       })
     }
   }
@@ -520,19 +529,25 @@ export function CalendarEventSlideOver({
             </div>
           )}
 
-          {/* Task-lifecycle sections — EDIT mode only. Recurring tasks are
-              excluded from Board/List (US-3), so this slide-over is a
-              recurring task's ONLY surface — without these, its checklist,
-              run status, result, and chat link would be reachable nowhere.
-              Reused verbatim from TaskDetailPanel (single source of truth);
-              they run their OWN mutations, independent of the Save button
-              above, which governs only title/agent/instruction/recurrence. */}
-          {isEdit && task && (
+          {/* Task-lifecycle sections. Recurring tasks are excluded from
+              Board/List (US-3), so this slide-over is a recurring task's ONLY
+              surface — without these, its checklist, run status, result, and
+              chat link would be reachable nowhere. Reused verbatim from
+              TaskDetailPanel (single source of truth); in EDIT they run their
+              OWN mutations, independent of the Save button (which governs only
+              title/agent/instruction/recurrence). Run status / result / chat
+              link require an executed task, so they are EDIT-only; the
+              checklist is offered in CREATE too (buffered, persisted on Save). */}
+          {isEdit && task ? (
             <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">
               <TaskRunStatusField task={task} />
               <TaskChecklistField task={task} />
               <TaskResultField task={task} />
               <OpenInChatButton task={task} onNavigate={() => onOpenChange(false)} />
+            </div>
+          ) : (
+            <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">
+              <TaskChecklistField value={draftTodos} onChange={setDraftTodos} />
             </div>
           )}
         </div>

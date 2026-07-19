@@ -18,24 +18,42 @@ import { CheckSquare, Square, CircleHalf, Trash, Plus } from '@phosphor-icons/re
 import { cn } from '@/lib/utils'
 
 export interface TaskChecklistFieldProps {
-  task: Task
+  /**
+   * Task-bound mode: every edit is persisted immediately via
+   * PUT /tasks/{id}/todos. Used by TaskDetailPanel and the calendar EDIT
+   * slide-over, where the task already exists.
+   */
+  task?: Task
+  /**
+   * Controlled/buffered mode (calendar CREATE flow): the parent owns the
+   * array and no task exists yet, so edits are buffered locally and the parent
+   * folds `value` into its create request. Providing `onChange` selects this
+   * mode; `task` is then ignored for reads.
+   */
+  value?: Todo[]
+  onChange?: (todos: Todo[]) => void
   /** Disables add/toggle/remove interactions (read-only checklist). */
   disabled?: boolean
 }
 
-export function TaskChecklistField({ task, disabled = false }: TaskChecklistFieldProps) {
+export function TaskChecklistField({ task, value, onChange, disabled = false }: TaskChecklistFieldProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const [newTodo, setNewTodo] = useState('')
 
+  // Controlled/buffered mode when the parent supplies an onChange (create flow);
+  // otherwise task-bound (persist each edit immediately).
+  const controlled = onChange != null
+
   // Reset the in-progress "new item" draft when a different task is shown.
   useEffect(() => {
     setNewTodo('')
-  }, [task.id])
+  }, [task?.id])
 
-  // Todos checklist — replace atomically via PUT /tasks/{id}/todos
+  // Todos checklist — replace atomically via PUT /tasks/{id}/todos (task-bound
+  // mode only; never invoked while controlled, so task is guaranteed present).
   const { mutate: doSetTodos } = useMutation({
-    mutationFn: (todos: Todo[]) => setTaskTodos(task.id, todos),
+    mutationFn: (todos: Todo[]) => setTaskTodos(task!.id, todos),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
     },
@@ -46,31 +64,37 @@ export function TaskChecklistField({ task, disabled = false }: TaskChecklistFiel
       }),
   })
 
+  // Single write path: buffer to the parent when controlled, else persist.
+  function commit(todos: Todo[]) {
+    if (controlled) onChange!(todos)
+    else doSetTodos(todos)
+  }
+
+  const todos = controlled ? (value ?? []) : (task?.todos ?? [])
+
   function handleToggleTodo(index: number) {
-    const todos = (task.todos ?? []).map((t, i) => {
-      if (i !== index) return t
-      // Cycle: completed → pending; anything else → completed.
-      // in_progress is shown distinctly but clicking it marks it completed.
-      const next = t.status === 'completed' ? 'pending' : 'completed'
-      return { ...t, status: next } as Todo
-    })
-    doSetTodos(todos)
+    commit(
+      todos.map((t, i) => {
+        if (i !== index) return t
+        // Cycle: completed → pending; anything else → completed.
+        // in_progress is shown distinctly but clicking it marks it completed.
+        const next = t.status === 'completed' ? 'pending' : 'completed'
+        return { ...t, status: next } as Todo
+      }),
+    )
   }
 
   function handleAddTodo() {
     const text = newTodo.trim()
     if (!text) return
-    const todos = [...(task.todos ?? []), { text, status: 'pending' as const }]
-    doSetTodos(todos)
+    commit([...todos, { text, status: 'pending' as const }])
     setNewTodo('')
   }
 
   function handleRemoveTodo(index: number) {
-    const todos = (task.todos ?? []).filter((_, i) => i !== index)
-    doSetTodos(todos)
+    commit(todos.filter((_, i) => i !== index))
   }
 
-  const todos = task.todos ?? []
   const doneTodos = todos.filter((t: Todo) => t.status === 'completed').length
 
   return (

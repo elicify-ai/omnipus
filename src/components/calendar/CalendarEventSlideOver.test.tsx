@@ -619,25 +619,58 @@ describe('CalendarEventSlideOver — real Custom flow via RecurrenceEditor widge
   })
 })
 
-// ── Task-lifecycle sections (edit mode only) ───────────────────────────────
+// ── Task-lifecycle sections ────────────────────────────────────────────────
 //
 // Recurring tasks are excluded from Board/List (US-3), so this slide-over is
 // their ONLY surface — these sections reuse TaskDetailPanel's own shared
 // components (TaskRunStatusField / TaskChecklistField / TaskResultField /
-// OpenInChatButton) verbatim. Create mode must show none of them; edit mode
-// always shows the run-status badge, with Checklist/Result/Open-in-Chat
-// self-gating exactly as they do inside TaskDetailPanel.
+// OpenInChatButton) verbatim. Run status / result / chat link require an
+// executed task, so they are EDIT-only; the CHECKLIST is also offered in
+// CREATE (buffered, persisted on Save). Edit mode always shows the run-status
+// badge, with Checklist/Result/Open-in-Chat self-gating exactly as they do
+// inside TaskDetailPanel.
 
-describe('CalendarEventSlideOver — task-lifecycle sections (edit mode only)', () => {
-  it('create mode shows none of the four task-lifecycle sections', async () => {
+describe('CalendarEventSlideOver — task-lifecycle sections', () => {
+  it('create mode shows the checklist but not run-status/result/open-in-chat', async () => {
     renderSlideOver({ task: null })
     await screen.findByLabelText(/title/i)
 
+    // Checklist IS available at create (buffered → folded into the create request).
+    expect(screen.getByLabelText(/new checklist item/i)).toBeInTheDocument()
+    // The three execution-dependent sections are not.
     expect(screen.queryByTestId('task-run-status-badge')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(/new checklist item/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /run now/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /open in chat/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/^result$/i)).not.toBeInTheDocument()
+  })
+
+  it('create mode folds buffered checklist items into the create request', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeTask() as never)
+    renderSlideOver({ task: null, initialDate: ANCHOR })
+
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Prep release notes' } })
+    await selectAgent()
+    fillPrompt('Draft the notes.')
+
+    // Add two checklist items via the buffered field.
+    const checklistInput = screen.getByLabelText(/new checklist item/i)
+    fireEvent.change(checklistInput, { target: { value: 'Collect merged PRs' } })
+    fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
+    fireEvent.change(checklistInput, { target: { value: 'Summarize highlights' } })
+    fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
+
+    // The items render immediately (buffered), and no per-edit persist fires.
+    expect(screen.getByText('Collect merged PRs')).toBeInTheDocument()
+    expect(screen.getByText('Summarize highlights')).toBeInTheDocument()
+    expect(vi.mocked(setTaskTodos)).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.todos).toEqual([
+      { text: 'Collect merged PRs', status: 'pending' },
+      { text: 'Summarize highlights', status: 'pending' },
+    ])
   })
 
   it('edit mode always renders the run-status badge, and shows "Run now" for a startable task', async () => {

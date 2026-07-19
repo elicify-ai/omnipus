@@ -144,3 +144,60 @@ describe('TaskChecklistField', () => {
     ))
   })
 })
+
+// Controlled/buffered mode — the calendar CREATE flow, where no task exists yet.
+// Edits buffer to the parent via onChange instead of persisting per-edit.
+describe('TaskChecklistField — controlled/buffered mode (create flow)', () => {
+  function renderControlled(value: Task['todos'] = [], onChange = vi.fn()) {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <TaskChecklistField value={value ?? []} onChange={onChange} />
+      </QueryClientProvider>,
+    )
+    return onChange
+  }
+
+  it('renders items from `value` (not a task) with the count header', async () => {
+    renderControlled([
+      { text: 'Buffered one', status: 'pending' },
+      { text: 'Buffered two', status: 'completed' },
+    ])
+    expect(await screen.findByText(/checklist \(1\/2\)/i)).toBeInTheDocument()
+    expect(screen.getByText('Buffered one')).toBeInTheDocument()
+  })
+
+  it('adding an item calls onChange with the appended array and never hits the server', async () => {
+    const { setTaskTodos } = await import('@/lib/api')
+    const onChange = renderControlled([{ text: 'Existing', status: 'pending' }])
+
+    const input = await screen.findByLabelText(/new checklist item/i)
+    fireEvent.change(input, { target: { value: 'Fresh' } })
+    fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
+
+    expect(onChange).toHaveBeenCalledWith([
+      { text: 'Existing', status: 'pending' },
+      { text: 'Fresh', status: 'pending' },
+    ])
+    expect(vi.mocked(setTaskTodos)).not.toHaveBeenCalled()
+    await waitFor(() => expect(input).toHaveValue(''))
+  })
+
+  it('toggling and removing route through onChange, not setTaskTodos', async () => {
+    const { setTaskTodos } = await import('@/lib/api')
+    const onChange = renderControlled([
+      { text: 'Alpha', status: 'pending' },
+      { text: 'Beta', status: 'pending' },
+    ])
+
+    fireEvent.click(await screen.findByLabelText(/toggle alpha/i))
+    expect(onChange).toHaveBeenLastCalledWith([
+      { text: 'Alpha', status: 'completed' },
+      { text: 'Beta', status: 'pending' },
+    ])
+
+    fireEvent.click(screen.getByLabelText(/remove checklist item beta/i))
+    expect(onChange).toHaveBeenLastCalledWith([{ text: 'Alpha', status: 'pending' }])
+
+    expect(vi.mocked(setTaskTodos)).not.toHaveBeenCalled()
+  })
+})
