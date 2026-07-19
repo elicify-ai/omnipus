@@ -50,9 +50,24 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         setError('Command is required')
         return
       }
-      const code = parseInt(exitCode, 10)
-      if (!Number.isFinite(code)) {
+      // Round-1 fix (test-driven, planning-goals-spec.md "Dataset: Criteria
+      // editor validation" #2): `parseInt` silently truncates a fractional
+      // string ("3.5" -> 3) instead of rejecting it, so a non-integer typed
+      // by the user was previously accepted with no feedback. `Number(...)`
+      // + `Number.isInteger` rejects both non-numeric ("abc") and
+      // non-integer ("3.5") input; the empty string coerces to `0` under
+      // `Number('')`, so it needs its own explicit check.
+      const trimmedExit = exitCode.trim()
+      const code = Number(trimmedExit)
+      if (trimmedExit === '' || !Number.isInteger(code)) {
         setError('Exit code must be an integer')
+        return
+      }
+      // FR-015: "A check criterion MUST require ... expected_exit_code ∈
+      // [0,255]" — enforced client-side too so an out-of-range value is
+      // caught inline instead of round-tripping to a 400 from the backend.
+      if (code < 0 || code > 255) {
+        setError('Exit code must be between 0 and 255')
         return
       }
       onChange([
