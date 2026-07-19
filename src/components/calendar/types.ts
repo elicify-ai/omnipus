@@ -136,8 +136,16 @@ export interface FullCalendarViewProps {
   onEventClick: (arg: EventClickArg) => void
   onDateClick: (arg: DateClickArg) => void
   onDateSelect: (arg: DateSelectArg) => void
-  /** Fired on FullCalendar datesSet so the toolbar can show the title + active view. */
-  onDatesSet?: (title: string, view: CalendarViewName) => void
+  /**
+   * Fired on FullCalendar datesSet so the toolbar can show the title + active
+   * view. `activeStart`/`activeEnd` are FullCalendar's own visible-range Dates
+   * (half-open, `activeEnd` exclusive) — added by the Calendar Recurrence
+   * Redesign (docs/internal/specs/calendar-recurrence-redesign-spec.md,
+   * "Occurrence expansion endpoint") so the host can key its
+   * `useOccurrences` query to the visible range without re-deriving it from
+   * the FullCalendar ref elsewhere.
+   */
+  onDatesSet?: (title: string, view: CalendarViewName, activeStart: Date, activeEnd: Date) => void
 }
 
 /** Props for the responsive Sovereign-Deep toolbar (CalendarToolbar.tsx). */

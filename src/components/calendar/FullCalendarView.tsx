@@ -230,7 +230,7 @@ export function FullCalendarView({
   onDatesSet,
 }: FullCalendarViewProps) {
   const handleDatesSet = (arg: DatesSetArg) => {
-    onDatesSet?.(arg.view.title, arg.view.type as CalendarViewName)
+    onDatesSet?.(arg.view.title, arg.view.type as CalendarViewName, arg.view.activeStart, arg.view.activeEnd)
   }
 
   return (

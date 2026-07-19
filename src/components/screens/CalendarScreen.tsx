@@ -31,6 +31,7 @@ import {
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { mapToCalendarEvents, formatLocalDate } from '@/lib/calendar/eventMapping'
+import { useOccurrences } from '@/lib/calendar/useOccurrences'
 import { FullCalendarView } from '@/components/calendar/FullCalendarView'
 import { CalendarToolbar } from '@/components/calendar/CalendarToolbar'
 import { MilestoneDatePopover } from '@/components/calendar/MilestoneDatePopover'
@@ -40,25 +41,24 @@ import type {
   CalendarEventExtProps,
   MilestoneTarget,
 } from '@/components/calendar/types'
-import { CreateTaskSlideOver } from '@/components/workspaces/CreateTaskSlideOver'
+import { CalendarEventSlideOver } from '@/components/calendar/CalendarEventSlideOver'
 import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
 
 interface CalendarScreenProps {
   workspaceId: string
 }
 
-/** Format a Date as a `datetime-local` value ("YYYY-MM-DDTHH:mm") in LOCAL time. */
-function toDatetimeLocal(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
-  )
-}
-
 /** Short human label for a reschedule toast ("Jun 23"). */
 function formatShort(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+/** Same calendar day as `d`, with the time-of-day set to `hour`:00 local. Used
+ *  to give an all-day day-cell click a sensible default event time (US-1). */
+function withDefaultHour(d: Date, hour: number): Date {
+  const nd = new Date(d)
+  nd.setHours(hour, 0, 0, 0)
+  return nd
 }
 
 export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
@@ -92,7 +92,35 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     enabled: !!workspaceId,
   })
 
-  const events = useMemo(() => mapToCalendarEvents(tasks, milestones), [tasks, milestones])
+  // ── Recurring-task occurrences (Calendar Recurrence Redesign, US-2, FR-008) ─
+  // Keyed to FullCalendar's own visible range, reported via onDatesSet below.
+  // `activeRange` starts null (no range known yet — before FullCalendar's
+  // first datesSet fires) so the query stays disabled until a real range
+  // exists; the placeholder Dates below are inert (enabled:false skips them).
+  const [activeRange, setActiveRange] = useState<{ start: Date; end: Date } | null>(null)
+  const {
+    data: occurrenceSets = [],
+    isError: occurrencesError,
+  } = useOccurrences({
+    workspaceId,
+    activeStart: activeRange?.start ?? new Date(0),
+    activeEnd: activeRange?.end ?? new Date(1),
+    enabled: !!activeRange && !!workspaceId,
+  })
+
+  // Degrade on occurrences failure (FR-017/Behavioral Contract "Error flows")
+  // — non-blocking toast, due/fire chips still render (occurrenceSets simply
+  // stays whatever it last successfully was, or [] on first-load failure).
+  useEffect(() => {
+    if (occurrencesError) {
+      addToast({ message: "Couldn't load recurring occurrences", variant: 'error' })
+    }
+  }, [occurrencesError, addToast])
+
+  const events = useMemo(
+    () => mapToCalendarEvents(tasks, milestones, occurrenceSets),
+    [tasks, milestones, occurrenceSets],
+  )
 
   // ── Agent filter (FR-015 / US-4) ─────────────────────────────────────────
   // Client-side only — SC-004 requires ZERO additional network requests for
@@ -142,16 +170,26 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const [currentView, setCurrentView] = useState<CalendarViewName>('dayGridMonth')
   const [title, setTitle] = useState('')
 
-  const handleDatesSet = useCallback((nextTitle: string, view: CalendarViewName) => {
-    setTitle(nextTitle)
-    setCurrentView(view)
-  }, [])
+  const handleDatesSet = useCallback(
+    (nextTitle: string, view: CalendarViewName, activeStart: Date, activeEnd: Date) => {
+      setTitle(nextTitle)
+      setCurrentView(view)
+      setActiveRange({ start: activeStart, end: activeEnd })
+    },
+    [],
+  )
 
   const handleViewChange = useCallback((view: CalendarViewName) => setCurrentView(view), [])
 
   // ── Slide-over / popover state ───────────────────────────────────────────────
-  const [createOpen, setCreateOpen] = useState(false)
-  const [initialDue, setInitialDue] = useState<string | undefined>(undefined)
+  // CalendarEventSlideOver is a single component covering BOTH create (US-1)
+  // and recurring/legacy series edit (US-2/US-5) — `eventSlideOverTask` null
+  // means create mode, non-null means edit mode. It fully replaces the
+  // generic CreateTaskSlideOver on this screen: per the Behavioral Contract,
+  // a day/slot click now always opens the calendar-specific event panel.
+  const [eventSlideOverOpen, setEventSlideOverOpen] = useState(false)
+  const [eventSlideOverTask, setEventSlideOverTask] = useState<Task | null>(null)
+  const [eventSlideOverInitialDate, setEventSlideOverInitialDate] = useState<Date | undefined>(undefined)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [milestoneTarget, setMilestoneTarget] = useState<MilestoneTarget | null>(null)
 
@@ -160,6 +198,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
       queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
     })
     void queryClient.invalidateQueries({ queryKey: milestonesQueryKeys.list(workspaceId) })
+    void queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
   }, [queryClient, workspaceId])
 
   // Restore focus to the chip/cell that opened a dialog (C-4 / FR-013).
@@ -325,34 +364,62 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     [runReschedule, addToast],
   )
 
+  // Chip-click routing (Calendar Recurrence Redesign, FR-001/FR-012, US-2
+  // Acceptance Scenarios 5–6): occurrence/aggregated chips (recurring series,
+  // legacy chips included — they render as 'task-occurrence'/'-agg' too, see
+  // eventMapping) open the calendar event slide-over in edit mode; due/fire
+  // chips keep opening TODAY'S existing task detail panel, unchanged. The
+  // truncation marker chip is non-interactive (no click action).
   const handleEventClick = useCallback(
     (arg: EventClickArg) => {
       const raw = arg.jsEvent?.target as HTMLElement | null
       triggerElRef.current =
         (raw?.closest('[tabindex]') as HTMLElement | null) ?? raw ?? null
       const ext = arg.event.extendedProps as CalendarEventExtProps
-      if (ext.kind === 'milestone') {
-        const m = milestones.find((x) => x.id === ext.milestoneId)
-        if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
-        else console.warn('[calendar] milestone event has no backing milestone', ext)
-        return
+      switch (ext.kind) {
+        case 'milestone': {
+          const m = milestones.find((x) => x.id === ext.milestoneId)
+          if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
+          else console.warn('[calendar] milestone event has no backing milestone', ext)
+          return
+        }
+        case 'task-occurrence':
+        case 'task-occurrence-agg': {
+          const t = tasks.find((x) => x.id === ext.taskId)
+          if (t) {
+            setEventSlideOverTask(t)
+            setEventSlideOverOpen(true)
+          } else {
+            console.warn('[calendar] occurrence event has no backing task', ext)
+          }
+          return
+        }
+        case 'task-occurrence-more':
+          // Non-interactive truncation marker — no click action.
+          return
+        case 'task-due':
+        case 'task-fire': {
+          const t = tasks.find((x) => x.id === ext.taskId)
+          if (t) setSelectedTask(t)
+          else console.warn('[calendar] task event has no backing task', ext)
+          return
+        }
       }
-      // task-due | task-fire → taskId is guaranteed by the discriminated union.
-      const t = tasks.find((x) => x.id === ext.taskId)
-      if (t) setSelectedTask(t)
-      else console.warn('[calendar] task event has no backing task', ext)
     },
     [tasks, milestones],
   )
 
-  // Open the create slide-over prefilled with a date (all-day → midnight; timed → slot).
-  // Store the nearest focusable ancestor of the trigger so restoreFocus() can actually
-  // focus it (WCAG 2.4.3 — raw chip divs have no tabindex, their FC harness does).
+  // Open the calendar event slide-over in create mode, prefilled with a date
+  // (all-day day-cell click → 9am default; timed slot click → the exact
+  // slot). Store the nearest focusable ancestor of the trigger so
+  // restoreFocus() can actually focus it (WCAG 2.4.3 — raw chip divs have no
+  // tabindex, their FC harness does).
   const openCreateAt = useCallback((target: HTMLElement | null, date: Date, allDay: boolean) => {
     triggerElRef.current =
       (target?.closest('[tabindex]') as HTMLElement | null) ?? target ?? null
-    setInitialDue(allDay ? `${formatLocalDate(date)}T00:00` : toDatetimeLocal(date))
-    setCreateOpen(true)
+    setEventSlideOverTask(null)
+    setEventSlideOverInitialDate(allDay ? withDefaultHour(date, 9) : date)
+    setEventSlideOverOpen(true)
   }, [])
 
   const handleDateClick = useCallback(
@@ -373,8 +440,9 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // the all-day format `openCreateAt` uses for a dateClick on an all-day cell.
   const handleNewTask = useCallback((date?: Date) => {
     triggerElRef.current = null
-    setInitialDue(date ? `${formatLocalDate(date)}T00:00` : undefined)
-    setCreateOpen(true)
+    setEventSlideOverTask(null)
+    setEventSlideOverInitialDate(date ? withDefaultHour(date, 9) : undefined)
+    setEventSlideOverOpen(true)
   }, [])
 
   return (
@@ -407,17 +475,19 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         />
       </div>
 
-      <CreateTaskSlideOver
-        open={createOpen}
+      <CalendarEventSlideOver
+        open={eventSlideOverOpen}
         onOpenChange={(open) => {
-          setCreateOpen(open)
+          setEventSlideOverOpen(open)
           if (!open) {
+            setEventSlideOverTask(null)
             invalidate()
             restoreFocus()
           }
         }}
         workspaceId={workspaceId}
-        initialDue={initialDue}
+        task={eventSlideOverTask}
+        initialDate={eventSlideOverInitialDate}
       />
 
       <TaskDetailSlideOver
