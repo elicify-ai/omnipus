@@ -234,6 +234,14 @@ var goalJudgeRoundTimeout = planJudgeRoundTimeout //nolint:gochecknoglobals
 // loop right after its checkGoalLoopAfterTurn call) carrying the judge's
 // reason as steering — that loop then re-enters the turn machinery for the
 // next round.
+// goalLoopFollowUpSenderID is the sentinel Sender.CanonicalID stamped on the
+// goal loop's own re-injected follow-up turn (below). checkGoalLoopAfterTurn
+// reads it back via opts.SenderID (processMessage threads msg.Sender.CanonicalID
+// onto SenderID for every turn, including a republished follow-up) to
+// recognize its own continuation without relying on UserInitiated, which is
+// correctly false for a system-originated follow-up.
+const goalLoopFollowUpSenderID = "system:goal_loop"
+
 func (al *AgentLoop) checkGoalLoopAfterTurn(
 	ctx context.Context,
 	agentInst *AgentInstance,
@@ -241,6 +249,18 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	result *turnResult,
 ) {
 	if result == nil || opts.IsTaskRun || opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
+		return
+	}
+	// review r2 RV3: origin-gate the hook itself, not just IsTaskRun. /goal and
+	// /loop can coexist on one session; a /loop/cron/heartbeat/async turn
+	// (ProcessScheduled, loop.go, IsTaskRun=false) has UserInitiated=false and
+	// SenderID="" (ProcessScheduled builds its processOptions literal directly,
+	// never through the msg-based path that sets these — see UserInitiated's
+	// own doc comment) and must NOT advance or touch the goal. Only a genuine
+	// user turn (UserInitiated) or the goal loop's own re-injected follow-up
+	// (SenderID == goalLoopFollowUpSenderID, stamped below) may proceed —
+	// mirrors applyGoalCommandPrompt's own origin gate.
+	if !opts.UserInitiated && opts.SenderID != goalLoopFollowUpSenderID {
 		return
 	}
 	if agentInst == nil {
@@ -341,7 +361,7 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	result.followUps = append(result.followUps, bus.InboundMessage{
 		Channel:    opts.Channel,
 		ChatID:     opts.ChatID,
-		Sender:     bus.SenderInfo{CanonicalID: "system:goal_loop"},
+		Sender:     bus.SenderInfo{CanonicalID: goalLoopFollowUpSenderID},
 		Content:    goalSteeringPrompt(meta.GoalCondition, reasonText),
 		SessionID:  sessionID,
 		SessionKey: opts.SessionKey,
