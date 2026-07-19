@@ -1541,12 +1541,36 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 
 	m.mu.Lock()
 	delete(m.pendingAdopt, targetID)
+	// Finalize the entry (result/err + close(entry.done)) BEFORE unlocking in
+	// EVERY branch below — this closes a TOCTOU gap that could let a
+	// concurrent caller for the SAME target see an inconsistent outcome
+	// under scheduler contention. Before this fix, the delete above and the
+	// outcome publication straddled an unlock: a caller making its OWN
+	// first-time check could acquire m.mu in the window after the entry was
+	// deleted from m.pendingAdopt but before entry.result/entry.err were set
+	// and entry.done closed. That caller would find neither "still pending"
+	// (map entry gone) nor "already ours" (se.tabs not updated yet for the
+	// success path) and treat the target as unclaimed — starting its own
+	// redundant createTab call and, on losing that race too, returning a
+	// blind zero-value no-op to itself instead of the winner's real outcome
+	// (exactly the silent-no-op bug pendingAdoptEntry exists to prevent).
+	// Provable by inspection: the window is real regardless of scheduling
+	// luck, since delete/unlock/finalize are three separate statements with
+	// no ordering guarantee relative to another goroutine's lock attempt in
+	// between. Keeping the map delete, any se.tabs mutation, and the entry
+	// finalization inside ONE unbroken critical section closes the gap: any
+	// goroutine that acquires m.mu after this section either sees the
+	// target already adopted (se.indexOfTarget hit at the top of this
+	// function) or a clean slate to legitimately retry — never a state in
+	// between. Side effects that don't need m.mu (newTab.cancel(),
+	// notifyTabsChanged — which itself takes m.mu, so calling it here would
+	// deadlock) stay after Unlock(), using only locally snapshotted values.
 	if err != nil {
-		m.mu.Unlock()
 		result := tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
 		wrapped := fmt.Errorf("browser: failed to adopt new tab target %s: %w", targetID, err)
 		entry.result, entry.err = result, wrapped
 		close(entry.done)
+		m.mu.Unlock()
 		return result, wrapped
 	}
 	se, ok = m.sessions[sessionID]
@@ -1557,30 +1581,30 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		// Neither is worth reporting as Unadopted: the browsing context
 		// vanishing is a bigger problem surfaced elsewhere, and a racer's
 		// own adoptTarget call already reports ITS successful adoption.
+		close(entry.done) // result/err stay zero-value: a true no-op for any waiter too
 		m.mu.Unlock()
 		newTab.cancel()
-		close(entry.done) // result/err stay zero-value: a true no-op for any waiter too
 		return tabAdoptResult{}, nil
 	}
 	if m.totalTabCountLocked() >= m.cfg.MaxTabs {
-		m.mu.Unlock()
-		newTab.cancel()
 		result := tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonMaxTabs}
 		entry.result = result
 		close(entry.done)
+		m.mu.Unlock()
+		newTab.cancel()
 		return result, nil
 	}
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1 // ADR-041 D2: adopted tabs become active by default
 	tabs := snapshotTabsLocked(se)
 	activeIdx := se.activeIdx
-	m.mu.Unlock()
-
-	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	active := tabs[activeIdx]
 	result := tabAdoptResult{Adopted: &active}
 	entry.result = result
 	close(entry.done)
+	m.mu.Unlock()
+
+	m.notifyTabsChanged(sessionID, tabs, activeIdx)
 	return result, nil
 }
 

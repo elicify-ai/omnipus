@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -642,6 +643,25 @@ func TestAdoptTarget_NoBrowsingContext_IsNoop(t *testing.T) {
 // The one invariant that must still hold unconditionally: exactly ONE
 // physical tab gets created for the target, never a duplicate, no matter how
 // many concurrent callers ask about it.
+//
+// The n-1 "losing" callers are deliberately synchronized to land WHILE the
+// winner's adoption is in flight — not left to an unsynchronized `go`
+// burst against createTabFn's near-instant fake, which flaked under CI's
+// contended (-p 4, shared 8-core) full-suite runs: heavy external
+// scheduling pressure could let some of the n-1 goroutines receive no CPU
+// time at all until AFTER the fake createTab (a few instructions, no real
+// I/O) had already returned and the winner had fully finished, appending
+// the tab to se.tabs and unlocking. Those late arrivals then hit
+// adoptTarget's OWN top-of-function "already ours" fast path — a true,
+// deliberate no-op (see TestAdoptTarget_AlreadyTracked_IsNoop) for a
+// caller that finds a target already tracked, indistinguishable from a
+// legitimate sequential re-adoption of a target this same test cannot
+// (and must not) also report as freshly Adopted. That is a test
+// synchronization gap, not a pendingAdoptEntry bug: the fix here is to
+// block the winner inside createTab (via createTabFn) until every losing
+// caller is confirmed in flight, so all n-1 deterministically observe the
+// registered pendingAdoptEntry and take the WAIT branch this test exists
+// to exercise, regardless of scheduler fairness.
 func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_AllCallersSeeTheSameOutcome(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 10)
 	_, err := m.Session(DefaultSessionID)
@@ -649,16 +669,67 @@ func TestAdoptTarget_ConcurrentAdoptionOfSameTarget_AllCallersSeeTheSameOutcome(
 
 	tid := target.ID("raced-target")
 	const n = 8
+
+	baseFn := m.createTabFn
+	registered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	// adoptTarget's pendingAdopt gate (manager.go) guarantees only ONE
+	// caller ever reaches createTabFn for a given targetID — every other
+	// concurrent caller either becomes a waiter on the registered entry or
+	// (the case under test) must be given the chance to become one. So
+	// gating on targetID == tid here only ever fires for the winner.
+	m.createTabFn = func(allocCtx context.Context, targetID target.ID) (*tabEntry, error) {
+		if targetID == tid {
+			once.Do(func() { close(registered) })
+			<-release
+		}
+		return baseFn(allocCtx, targetID)
+	}
+
 	var wg sync.WaitGroup
 	results := make([]tabAdoptResult, n)
 	errs := make([]error, n)
-	for i := range n {
+
+	// Launch the winner alone first so it deterministically registers the
+	// pendingAdoptEntry (manager.go) and then blocks inside createTabFn —
+	// removing any reliance on scheduler luck to land the other n-1 calls
+	// while the (otherwise near-instant) fake adoption is still in flight.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		results[0], errs[0] = m.adoptTarget(DefaultSessionID, tid)
+	}()
+	select {
+	case <-registered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("winner never reached createTabFn / registered the pendingAdoptEntry")
+	}
+
+	// The winner is now confirmedly blocked mid-adoption with its entry
+	// still registered in m.pendingAdopt. Launch the other n-1 callers —
+	// no matter how long the scheduler takes to actually run each one, the
+	// entry stays put (the winner cannot proceed until release is closed
+	// below), so every one of them is guaranteed to find it once it does
+	// run and take the WAIT branch.
+	for i := 1; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			results[i], errs[i] = m.adoptTarget(DefaultSessionID, tid)
 		}(i)
 	}
+	// A generous, fixed safety margin (orders of magnitude larger than a
+	// handful of uncontended mutex acquisitions ever need, even under heavy
+	// external CPU pressure) for the n-1 goroutines above to actually run
+	// far enough to observe the still-registered entry before the winner is
+	// released. There is no signal to wait on instead: reaching the
+	// internal "already pending, wait on entry.done" select is exactly the
+	// unexported implementation detail this black-box test must not reach
+	// into to observe directly.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
 	wg.Wait()
 
 	adoptedCount := 0
