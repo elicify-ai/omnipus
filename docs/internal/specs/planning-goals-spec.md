@@ -230,6 +230,9 @@ type Plan struct {
     ActiveLoop    bool   `json:"active_loop,omitempty"`    // counts toward global_active_loop_cap while running
     PausedReason  string `json:"paused_reason,omitempty"` // non-empty ⇒ paused (owner disabled / judge unavailable)
     LastActivityAt string `json:"last_activity_at,omitempty"` // idle-expiry clock (7d)
+    PlanPhase    string `json:"plan_phase,omitempty"`    // R1/C19: dispatching|judging|synthesizing|idle — runtime-only, NOT a PlanState
+    FailedReason string `json:"failed_reason,omitempty"` // R1/C19: judge_rounds_exhausted|stopped_by_user|idle_expired — set only when State==failed
+    Progress     float64 `json:"progress,omitempty"`     // R4/C19/M7: done/total over members, server-computed read-time (0..1)
     // --- attribution + lifecycle timestamps (RFC 3339 UTC) ---
     Owner       string `json:"owner,omitempty"`       // creating username; read-only
     CreatedBy   string `json:"created_by,omitempty"`  // read-only
@@ -259,7 +262,7 @@ type PlanBounds struct {
 | **approved** | ✓(revoke) | ✓ | ✓ | ✗ | ✗ |
 | **running** | ✗ | ✗ | ✓ | ✓ | ✓ |
 | **done** | ✗ | ✗ | ✗ | ✓ | ✗ | (frozen — terminal, mirrors task `done` `pkg/task/store.go:483`) |
-| **failed** | ✗ | ✓(retry) | ✓(retry) | ✗ | ✓ | (not frozen, mirrors task `failed`) |
+| **failed** | ✗ | ✗ | ✗ | ✗ | ✓(no-op) | (terminal/frozen — F1 r2: a failed plan is NOT retried; author a new plan. Reconciles Part B `stopped`/`expired`/`judge_rounds_exhausted` = terminal) |
 
 `draft` requires ≥1 DoD criterion before `approved` (SD-A7 tier: agent path strict, human/UI soft — plan judged against title+goal when DoD empty). Transition INTO `running` stamps `StartedAt`+`LastActivityAt`+`ActiveLoop=true`; INTO `done`/`failed` stamps `CompletedAt`+`ActiveLoop=false`.
 
@@ -270,6 +273,8 @@ Add to `task.Task` (`pkg/task/task.go`):
 Tags []string `json:"tags,omitempty"` // workspace-scoped, normalized, <=16, each <=64
 PlanID string `json:"plan_id,omitempty"` // FK → plan; same-workspace validated
 Criteria []AcceptanceCriterion `json:"criteria,omitempty"` // ADR D2/D5
+AttemptCount int  `json:"attempt_count,omitempty"` // R4/C17: current run's attempt index; read-only, server-set; renders "attempt N/M"
+MaxAttempts  *int `json:"max_attempts,omitempty"`  // R4/C18: per-task attempts override; nil ⇒ inherit PlanningConfig.TaskMaxAttempts
 ```
 **Tag validation** (in `task.normalize`, `pkg/task/store.go:248`, and in `Patch` apply), applied to each tag in order:
 1. **Normalize**: `strings.ToLower(strings.TrimSpace(tag))`.
@@ -581,8 +586,8 @@ Boundary conditions:
 | running | failed | accepted |
 | running | draft | rejected 400 |
 | done | inbox/draft/approved/running/failed | rejected 400 (frozen) |
-| failed | approved | accepted (retry) |
-| failed | running | accepted (retry) |
+| failed | approved | rejected 400 (terminal/frozen — F1 r2) |
+| failed | running | rejected 400 (terminal/frozen — F1 r2) |
 
 #### Scenario: Deleting a running plan is rejected
 **Traces to**: User Story 1, Acceptance Scenario 5
@@ -1627,6 +1632,8 @@ Write BEFORE implementation. Unit → Integration → E2E; within a level, by de
 | 32 | `TestLoop_Stop_RemovesCronJob` | Unit | /loop stop | cron job removed |
 | 33 | `TestOriginGating_GoalLoop` (user/system/cron/async/delegated/task) | Unit | Origin gating outline | discriminate on origin, not surface |
 | 34 | `TestGlobalCap_ActiveLoopBoundary` (15/16/17) | Unit | Global cap outline | reject 17th; status `16/16` |
+| 35 | `TestRoleGating_SessionOwnership` | Unit | (role gating, FR-074) | session ownership/auth gates who may start /goal /loop (Gap #5) |
+| 36 | `TestTaskExecutor_ScratchpadExemptFromGoalLoop` | Unit | Scratchpad exemption (R8/FR-048) | set_todos task never enters an attempt loop, never judged |
 | 35 | `TestSEC26_TypeSystemAgent_IsRateLimited` | Unit | Type-system rate-limited | **extend `runturn_rate_limit_test.go` / `wave5b_sysagent_ratelimit_test.go`** |
 | 36 | `TestSEC26_IsPrivilegedAgent_CoreOnly` | Unit | (D3/CRIT-002) | **extend `pkg/security/ratelimit_test.go`**: `system`→false, `core`→true |
 | 37 | `TestSystemAgent_ExcludedFromEnumeration` (surfaces table) | Integration | Enumeration exclusions | fallback/binding/delegation/team/create/delete |
@@ -1802,7 +1809,7 @@ Reuse the deterministic cron harness in `pkg/cron/autonomy_test.go`: `fakeClock`
 - **FR-058**: A server-side plan coordinator MUST dispatch ready plan tasks as the `blocked_by` DAG clears, extending `AdvanceBlockedDependents` (`blocked_by.go:181`) + `advanceBlockedTasks` (`task_executor.go:642`), WITHOUT waking the owner (D4 hybrid).
 - **FR-059**: The coordinator MUST wake the owner agent (via async-notifier) only at decision points: attempts exhausted, plan judge failed, or plan complete → synthesis.
 - **FR-060**: The plan-level judge MUST be the SAME Judge System Agent invoked with a plan rubric, bounded at **20 rounds** (symmetric with `/goal`, D7).
-- **FR-061**: All plan/loop/goal counters and timestamps MUST be persisted fields (Plan entity + `UnifiedMeta` extension, `TaskID` precedent `unified.go:62`).
+- **FR-061**: All plan/loop/goal counters and timestamps MUST be persisted fields — plan counters on the Plan entity; `/goal`/`/loop` session state on the `UnifiedMeta` extension (`TaskID` precedent `unified.go:62`); the **per-task attempt counter on `Task.attempt_count`** (wire field C17, R4), NOT `UnifiedMeta` (F5 r2).
 - **FR-062**: On boot the engine MUST reconcile from the task store — task statuses authoritative, events an optimization — restoring counters from persisted fields and never blindly re-dispatching an already-`in_progress` task (D4/MAJ-004). The idempotent create/update/remove reconcile shape mirrors `ReconcileHeartbeatSchedules` (`pkg/gateway/heartbeat_schedule.go:154`) and the boot orphan-edge sweep `DropOrphanEdges` (`pkg/task/blocked_by.go:389`).
 - **FR-063**: Exactly ONE plan engine instance MUST run, guarded by a cron-style overlap guard (hot-reload safe; mirrors `CronJobState.Running` `service.go:140`).
 - **FR-064**: A 7-day idle-expiry sweeper MUST run on the existing cron service and wind down (handover + expired state) any plan/goal/loop idle for ≥7 days; "idle" = no attempt, state transition, or user interaction on the unit.
@@ -1887,7 +1894,8 @@ Reuse the deterministic cron harness in `pkg/cron/autonomy_test.go`: `fakeClock`
 | FR-071 | US-9 | Interval-mode loop | 28 |
 | FR-072 | US-9 | Self-paced at-jobs; run-count boundary | 29, 30 |
 | FR-073 | US-9 | /loop stop | 32 |
-| FR-074 | US-9 | (role gating) | 33 |
+| FR-074 | US-9 | (role gating) | 35 (`TestRoleGating_SessionOwnership`) |
+| FR-048 | US-5 | Scratchpad set_todos task never dispatched into a goal loop | 36 (`TestTaskExecutor_ScratchpadExemptFromGoalLoop`) |
 | FR-075 | US-cross | Origin gating outline | 33 |
 | FR-076 | US-cross | Global active-loop cap boundary | 34 |
 | FR-077 | US-cross | Type-system rate-limited | 35, 36 |
@@ -1902,7 +1910,7 @@ Reuse the deterministic cron harness in `pkg/cron/autonomy_test.go`: `fakeClock`
 - **SD-B2 — Self-certification is judged.** The `task.IsTerminal(current.Status)` precedence at `task_executor.go:300` is preserved (explicit tool call wins over the marker for WHICH claim was made), but the resulting `done` claim is routed to the judge rather than accepted as terminal. This is the only ADR-compliant reading of "every task execution runs as a goal loop with a judge" (FR-4).
 - **SD-B3 — Attempt-loop lives in TaskExecutor, wrapping finishTaskRun.** The attempt loop is implemented at the `finishTaskRun` (`:250`) seam: it intercepts the claim, invokes the judge, and either completes (`completeTaskWithResult`) or re-dispatches (`ExecuteTask`) with a persisted attempt increment. Re-dispatch reuses the existing goroutine/dispatch-sema machinery, not a new scheduler. *(Reuse criterion, §4.)*
 - **SD-B4 — "Active loop" definition for the global cap.** A unit counts toward the 16-cap iff it is a `/goal`, a `/loop`, or a plan in a non-terminal running/judging state. A task attempt-loop that is a MEMBER of a running plan is bounded by that plan and NOT counted separately; a standalone task attempt-loop (not under a plan) counts as… **it does not** — per D7 only /goal+/loop+running plans are counted; standalone task attempt loops are bounded by their own 3-attempt brake and the dispatch semaphore, consistent with "task attempt loops inside a running plan are bounded by the plan, not counted individually." *(Within D7/MAJ-009.)*
-- **SD-B5 — Plan states.** Legal set: `draft → active → judging → {synthesizing → done | active(judge unmet, rounds remain)} `; plus `active/judging → paused` (owner disabled or judge-unavailable) `→ active`; and terminals `done | failed | stopped | expired`. Terminals are one-way; no backward edges (draft is entry-only). The wire `PlanState` enum is owned by agent A; this SD fixes the runtime-enforced transition table.
+- **SD-B5 — Plan states (canonicalized by R1, F1 r2).** The runtime literals below map onto the **five** canonical `PlanState` values via the R1 table — `active`/`judging`/`synthesizing` ⇒ `running` + `plan_phase`; `paused` ⇒ `running` + `paused_reason`; `stopped`/`expired`/`judge-exhausted` ⇒ `failed` + `failed_reason`. Runtime legal flow: `draft → approved → running(dispatching → judging → {synthesizing → done | dispatching(judge unmet, rounds remain)})`; plus `running → paused` (owner disabled / judge-unavailable) `→ running`. **All `failed` terminals are one-way/frozen** (F1 r2 — a failed plan is not retried), matching Part A's canonical table; `done` is likewise frozen; `draft` is entry-only. The wire `PlanState` enum (5 values) is owned by Part A (C2); this SD enumerates the runtime-enforced transitions in canonical terms. `TestPlan_State_IllegalTransitions` (Test 20) and `TestPlan_StateTransitions` (R7) assert the SAME table (no `failed→running`/`stopped→judging` retry edge on either side).
 - **SD-B6 — Origin discrimination point (net-new signal recommended).** Origin gating is enforced in `handleCommand` (`loop.go:9582`). `bus.InboundMessage` (`pkg/bus/types.go:38`) carries NO first-class origin discriminator — origin is only indirectly inferable today (async ⇒ `Channel:"system"` + `Sender.CanonicalID="async:<kind>"` `async_notifier.go:261` + `AsyncOriginAgentID` set `types.go:87`; gateway-user ⇒ `GatewayUserID` set `types.go:75`; cron/scheduled ⇒ never reaches the inbound bus at all, it calls `exec.ProcessScheduled` directly `schedules.go:233`). Relying on that fragile inference across four entry paths is brittle; the resolved approach is a single explicit turn-scoped `UserInitiated` boolean set true ONLY on the genuine gateway/channel user-inbound path and left false on the async-notifier, scheduled (`ProcessScheduled`), task (`processTaskDirect`), and sub-turn (`spawnSubTurn`) paths. `/goal` and `/loop` command definitions action only when `UserInitiated` is true; otherwise they pass through inert as ordinary text. This is a small additive field, consistent with the ADR's "discriminate on origin, not surface" and with the fact that these paths are already structurally distinct producers. *(Within Gap #8/r2; confirms the plan-spec enforcement point the ADR requested.)*
 - **SD-B7 — Cross-agent machine-check confirmation.** Default: a machine check whose `author` (recorded per FR-3) differs from the task assignee requires an explicit assignee-owner confirmation before its first execution; a workspace-level setting (`waive_cross_agent_check_confirmation`) waives it. Confirmation state persists on the criterion so it is a one-time gate, not per-attempt. *(Gap #2.)*
 - **SD-B8 — Judge as plan-judge reuse.** The plan-level judge is the same seeded Judge System Agent invoked with a distinct plan rubric prompt (no second seeded agent), matching the ADR §6 decision (review Q5). Round semantics and the 20-round bound are symmetric with `/goal`.
@@ -1976,7 +1984,7 @@ Reuse the deterministic cron harness in `pkg/cron/autonomy_test.go`: `fakeClock`
 | `CreateTaskSlideOver` (`CreateTaskSlideOver.tsx:97`) | Milestone `Select` L392-419 | Milestone select → tags input + criteria editor |
 | `useSlashMenu` (`useSlashMenu.ts:226`) | Palette; `argumentHint` skills-only | Renders `/goal`,`/loop` from `GET /commands`; ghost via SD-C7 |
 | `useRunningActivity` (`useRunningActivity.ts:349`) | `ActivityItem` aggregation | New `JudgeActivityItem` member (§G) |
-| `chat.ts` frame `switch` (`chat.ts:2637`) | WS consumption | New `plan_status_changed`/`goal_status`/`loop_status`/`judge_verdict` cases (§H) |
+| `chat.ts` frame `switch` (`chat.ts:2637`) | WS consumption | New `plan_status`/`goal_status`/`loop_status`/`judge_verdict` cases (§H) |
 | `AgentsLibraryView` grouping (`AgentListScreen.tsx:161-163`) | `mainAgents`/`workerAgents`/`builtInAgents` type-branch | Add `systemAgents` filter + fourth locked section; exclude `system` from `mainAgents` |
 | `useChatAgents` (`useChatAgents.ts:78-84`) | Chat-target scoping (`!isWorker` + status + team) | Add `a.type !== 'system'` at L81 — the single chat-exclusion point (AgentPicker + `@`-mention inherit) |
 | `isWorker` (`api.ts:860-862`) | `Subagent`/`subagent_3p`/`worker` predicate | System is NOT a worker — needs its own `isSystem` guard (SD-C16); note: no `isChatTarget`/`isCore`/`isSystem` helper exists today |
@@ -2087,7 +2095,7 @@ Primary flows:
 - When a plan pill is selected, `BoardView` filters `rootTasks` to that plan's chain (replacing `filterByMilestone`, `BoardView.tsx:241-247`) and the altitude/DnD behaviour is unchanged.
 - When a criterion or evidence record is present on a task, the detail panel renders the editor + evidence viewer with redaction + truncation markers.
 - When `GET /commands` includes `/goal`/`/loop`, the palette lists them automatically (no client-side hardcoding — `ChatScreen.no-hardcoded-commands.test.ts` guard holds).
-- When a `goal_status` frame arrives, the `GoalIndicator` renders/updates; when `plan_status_changed`/`task_status_changed` arrive, the tasks/plans queries invalidate.
+- When a `goal_status` frame arrives, the `GoalIndicator` renders/updates; when `plan_status`/`task_status_changed` arrive, the tasks/plans queries invalidate.
 - When `fetchAgents()` returns a `type: system` agent, it renders only in the Agents-screen System section and is excluded from every agent-enumerating picker.
 
 Error flows:
@@ -2144,7 +2152,7 @@ Boundary conditions:
 
 ### WebSocket — status frames (AsyncAPI)
 
-- **Data in**: `plan_status_changed`, `goal_status`, `loop_status`, `judge_verdict`, extended `task_status_changed` (Agent A AsyncAPI).
+- **Data in**: `plan_status`, `goal_status`, `loop_status`, `judge_verdict`, extended `task_status_changed` (Agent A AsyncAPI).
 - **Data out**: none (server→client).
 - **Contract**: `WsFrameSchema` discriminated union (`ws.ts:13,254`); each new frame is a generated zod variant + a `SESSION_SCOPED_FRAME_TYPES` member (`chat.ts:1034`).
 - **On failure**: schema-invalid → dropped + `_droppedFrameCount++` + dev toast (`ws.ts:179-190,233`); unknown type → `_unknownFrameTypeCount++` (`ws.ts:285`); missing `session_id` on a session-scoped frame → dropped-in-prod (`chat.ts:2603`).
@@ -2215,7 +2223,7 @@ Boundary conditions:
 **Traces to**: US-10, AS-7
 **Category**: Error Path
 - **Given** a `running` plan whose owner agent is then disabled
-- **When** the board re-renders on the next `plan_status_changed` frame
+- **When** the board re-renders on the next `plan_status` frame
 - **Then** the plan card and its board tasks show a "paused — owner disabled" state
 - **And** re-enabling the owner clears it
 
@@ -2403,7 +2411,7 @@ Write BEFORE implementation; unit → component → E2E; within a level, by depe
 | 1 | `planStateColors.test.ts` | Unit | Plan state badge matrix | Every `PlanState` maps to a hex+label; unknown→draft fallback (mirrors `statusColors` test convention) |
 | 2 | `tagValidation.test.ts` | Unit | Tag input validation | lowercase/trim/64/16 rules per SD-C8 boundary table |
 | 3 | `planFilter.test.ts` | Unit | Selecting a plan filters | `filterByPlan` + `filterByTag` compose; All/Untagged sentinels |
-| 4 | `chat.plan-status-frame.test.ts` | Unit | Owner disabled surfaces paused | `plan_status_changed` reducer invalidates `['plans']`/`['tasks']`, updates paused state (pattern: `chat.notification-frame.test.ts`) |
+| 4 | `chat.plan-status-frame.test.ts` | Unit | Owner disabled surfaces paused | `plan_status` reducer invalidates `['plans']`/`['tasks']`, updates paused state (pattern: `chat.notification-frame.test.ts`) |
 | 5 | `chat.goal-status-frame.test.ts` | Unit | Goal indicator states | `goal_status` reducer stores per-session goal state incl. paused/brake/cleared |
 | 6 | `chat.judge-verdict-frame.test.ts` | Unit | Judge verdict span | `judge_verdict` frame appends a `JudgeActivityItem`; zod-validated at edge |
 | 7 | `ws.new-frames-validation.test.ts` | Unit | Frame edge validation | New frames: valid→parsed, missing field→drop+counter, missing session_id→drop (pattern: existing `ws` drop tests) |
@@ -2415,6 +2423,7 @@ Write BEFORE implementation; unit → component → E2E; within a level, by depe
 | 13 | `EvidenceViewer.test.tsx` | Component | Redaction + truncation | truncation marker; redaction marker; never renders raw secret |
 | 14 | `TagInput.test.tsx` | Component | Tag validation feedback | boundary table; chips; remove; keyboard add (Enter) parity with todo input |
 | 15 | `TaskCard.tags.test.tsx` | Component | Board tag chip + migrated tag | tag chips replace milestone chip (`TaskCard.tsx:191-195`); `milestone:` chip renders |
+| 15a | `TaskCard.goalLoopStatus.test.tsx` | Component | Goal-loop status on card (FR-090) | "attempt N/M" + paused chip render |
 | 16 | `TaskDetailPanel.no-milestone.test.tsx` | Component | Milestone dropdown gone | asserts absence of Milestone `SmartSelect`; presence of tags + criteria + Clear/Stop |
 | 17 | `GoalIndicator.test.tsx` | Component | Goal indicator states | active/paused/brake/cleared rendering; 4000-char truncation |
 | 18 | `ChatScreen.goal-loop-palette.test.tsx` | Component | Palette offers /goal /loop | commands from `GET /commands`; no hardcoding; argument-hint ghost (SD-C7) |
@@ -2582,7 +2591,7 @@ Write BEFORE implementation; unit → component → E2E; within a level, by depe
 - **FR-096**: `type: system` agents MUST be excluded from: (a) chat-target enumeration — add `a.type !== 'system'` to `useChatAgents` (`useChatAgents.ts:81`), which both `AgentPicker` and the `@`-mention menu inherit; (b) the Team-add picker — already enforced (`AddAgentPicker.tsx:36`), keep; (c) delegation-edge targets — defensively gated in `validateConnection` (`teamGraphModel.ts:343-352`) even though (b) already prevents a System agent from joining a team; (d) default-agent fallback — excluded by (a) since `isChatTarget = !isWorker` must also drop `system` (Agent B narrows `IsChatTarget`; SPA mirrors via the `useChatAgents` guard).
 - **FR-097**: The ActivityPanel MUST render judge calls as a new `ActivityItem` variant showing a per-criterion verdict summary + spend (attributed to the Judge `agent_id`), obeying `RECENTLY_FINISHED_CAP=8` and the retained-failure reachability rule.
 - **FR-098**: Judge verdicts MUST be panel-only in the thread by default and render inline only under verbose chat (mirroring `shouldRenderSubagentSpan`).
-- **FR-099**: The SPA MUST consume the new WS frames (`plan_status_changed`, `goal_status`, `loop_status`, `judge_verdict`, extended `task_status_changed`) by (a) zod-validating each at the edge (`ws.ts`), dropping + counting invalid frames; (b) registering session-scoped frames in `SESSION_SCOPED_FRAME_TYPES`; (c) invalidating `['tasks']`/`['plans']` queries and updating goal/loop/judge store state; (d) applying optimistic updates for operator-driven plan-state transitions.
+- **FR-099**: The SPA MUST consume the new WS frames (`plan_status`, `goal_status`, `loop_status`, `judge_verdict`, extended `task_status_changed`) by (a) zod-validating each at the edge (`ws.ts`), dropping + counting invalid frames; (b) registering session-scoped frames in `SESSION_SCOPED_FRAME_TYPES`; (c) invalidating `['tasks']`/`['plans']` queries and updating goal/loop/judge store state; (d) applying optimistic updates for operator-driven plan-state transitions.
 
 ---
 
@@ -2615,7 +2624,7 @@ Write BEFORE implementation; unit → component → E2E; within a level, by depe
 | FR-087 | US-11 | Add machine-check; zero-criteria hint | `AcceptanceCriteriaEditor.test.tsx` |
 | FR-088 | US-11 | Per-attempt verdicts + counter | `CriteriaVerdictList.test.tsx` |
 | FR-089 | US-11 | Evidence redaction + truncation | `EvidenceViewer.test.tsx` |
-| FR-090 | US-11 | (goal-loop status on card) | `TaskCard.tags.test.tsx` |
+| FR-090 | US-11 | (goal-loop status on card) | `TaskCard.goalLoopStatus.test.tsx` |
 | FR-091 | US-11 | Tag input validation | `tagValidation.test.ts`, `TagInput.test.tsx` |
 | FR-092 | US-11 | Migrated milestone→tag; dropdown gone; board tag filter | `TaskDetailPanel.no-milestone.test.tsx`, `TaskCard.tags.test.tsx`, `ListView.filters.test.tsx` |
 | FR-093 | US-12 | Palette offers /goal /loop | `ChatScreen.goal-loop-palette.test.tsx` |
@@ -2643,7 +2652,7 @@ Write BEFORE implementation; unit → component → E2E; within a level, by depe
 - **SD-C9 — Goal indicator lives in the RateLimitIndicator slot**: `GoalIndicator` renders above the composer in the same non-scrolling slot as `RateLimitIndicator` (`ChatScreen.tsx:2748-2762`), session-scoped, driven by `goal_status` store state. It is persistent (not dismissable) while a goal is active; it collapses when cleared (like `ActivityBar`'s `empty:hidden`). `aria-live="polite"` announces state transitions.
 - **SD-C10 — Judge verdict thread visibility = panel-only by default**: consistent with `shouldRenderSubagentSpan` (`toolVisibility.ts:218-223`, verbose-only) and NFR-5's "auditable/visible via named mechanisms" (transcript entry type + ActivityPanel span). The judge verdict IS persisted as a transcript entry type (Agent A), but rendering it as a standalone thread card by default would be exactly the noisy internal-LLM-call surface the tool-visibility rules suppress. Decision: **panel-only by default; inline in the thread only under verbose chat**. Justification vs verbose-chat precedent: judge calls are out-of-turn internal LLM actions with no standalone chat meaning to a reader (same class as `delegate`/background-`bash`), so they follow the established hide-by-default-with-verbose-override rule rather than inventing a new always-visible surface. The `ChatSection` verbose help copy (`ChatSection.tsx:38-43`) is updated to name judge verdicts alongside delegation cards.
 - **SD-C11 — Judge span shape in `useRunningActivity`**: add a `JudgeActivityItem` member to the `ActivityItem` union (`useRunningActivity.ts:86`) carrying `criterionVerdicts: {text, met, reason}[]`, `spend: {tokens, costUsd}`, and correlation ids (plan/task/goal), rendered by a judge-specific `ActivityRow` branch (`ActivityPanel.tsx:37`). It shares `RECENTLY_FINISHED_CAP=8` and the failed-retain reachability rule (`ActivityBar.tsx:49-61`) with agent/bash items. Populated from `judge_verdict` frames (Agent A), keyed by verdict id.
-- **SD-C12 — Attempt counter display**: "attempt N/M" where M is the effective per-task bound (default 3, D7), sourced from the task's persisted loop counters (`UnifiedMeta` extension, Agent A); shown on the card as a compact affordance and in the detail as a labelled row. Paused (judge-unavailable) shows "attempt N/M · paused" without incrementing N.
+- **SD-C12 — Attempt counter display**: "attempt N/M" where M is the effective per-task bound (default 3, D7), sourced from the task's **`attempt_count` wire field (contract C17, Part A)** — NOT `UnifiedMeta`, which carries only `/goal`/`/loop` session state (F5 r2); shown on the card as a compact affordance and in the detail as a labelled row. Paused (judge-unavailable) shows "attempt N/M · paused" without incrementing N.
 - **SD-C13 — Criteria editor placement**: the criteria editor appears in BOTH Create Task (`CreateTaskSlideOver`) and Task detail (`TaskDetailPanel`), reusing the removable-row + add-button grammar of the existing todos/dependencies editors (`CreateTaskSlideOver.tsx:593-643`, `TaskDetailPanel.tsx:829-900`). `check` criteria reveal command + integer exit-code fields; `prose` reveals one text field; author identity is a read-only label per saved criterion.
 - **SD-C14 — Tag chip replaces milestone chip on cards**: `TaskCard.tsx:191-195` milestone chip is replaced by a wrapping row of tag chips (Forge-Gold-tinted, same chip styling), capped visually with a "+N" overflow when tags exceed the card width; full list in the detail.
 - **SD-C15 — `/goal status` / `/loop status` render as thread system messages**: their output is agent/command-delivered text rendered as normal thread content (not a bespoke card); the persistent live state is the `GoalIndicator`. `/goal clear` + `/loop stop` render a confirmation system message and clear the indicator.
@@ -2734,8 +2743,8 @@ The wire `PlanState` enum has **exactly five values**, defined once in `Plan.yam
 | `expired` | `PlanState=failed`, `failed_reason=idle_expired` |
 
 - New non-badged fields on `Plan` (Part A owns; add to `Plan.yaml`/struct): `plan_phase` (enum `dispatching|judging|synthesizing|idle`, default `idle`, runtime-only, **not** a `PlanState`) and `failed_reason` (enum `judge_rounds_exhausted|stopped_by_user|idle_expired`, set only when `PlanState=failed`). `paused_reason` and `active_loop` already exist in Part A's struct — reuse them; Part B does not introduce a parallel state field.
-- **Part C** badges only the five `PlanState` values (SD-C6 matrix is correct and complete); when `PlanState=running` it MAY show a secondary phase/paused chip from `plan_phase`/`paused_reason`, but never treats those as states. The SD-C6 "unknown → draft" fallback is removed (the enum is now closed and total).
-- **Approve gating (M9):** the `draft→approved` transition runs the approval check (DoD present AND every member task carries ≥1 criterion; 400 listing offenders otherwise — FR-084). The engine begins dispatch on `approved→running`. Part B's transition table is amended to include `approved` between `draft` and `running`; the transition matrix in Part A §"State machine" is canonical.
+- **Part C** badges only the five `PlanState` values (SD-C6 matrix is correct and complete); when `PlanState=running` it MAY show a secondary phase/paused chip from `plan_phase`/`paused_reason`, and when `PlanState=failed` it renders a secondary chip from `failed_reason` (O1 r2: distinguishes user-stopped vs judge-exhausted vs idle-expired — otherwise all three collapse to "Failed"), but never treats any of these secondary fields as states. The SD-C6 "unknown → draft" fallback is removed (the enum is now closed and total).
+- **Approve gating (M9, F2 r2):** the `draft→approved` transition runs the approval check with a **tiered DoD rule matching ADR D5**: for **agent-authored plans (SD-A7 strict tier)** a non-empty DoD is required; for **human/UI-authored plans** the DoD MAY be empty (soft tier — the plan judge then evaluates against title+goal, SD-A7). In **all** cases, every member task MUST carry ≥1 criterion or approval is rejected 400 listing the offenders (FR-084; this member-task gate is unconditional). **Approval is the only explicit act (O2 r2):** approving transitions `draft→approved`, and the single plan-engine instance then auto-transitions `approved→running` on its next tick and begins dispatch — there is no separate "Start" action; `approved` is a brief transitional state. Part B's transition table is amended to include `approved` between `draft` and `running`; the transition matrix in Part A §"State machine" is canonical, with **`failed` terminal/frozen** (F1 r2).
 - The global-active-loop count (R5) treats a plan as active iff `PlanState=running` (equivalently `active_loop=true`), independent of `plan_phase`.
 
 ## R2 — Migration reads legacy `milestone_id` from raw JSON (resolves C2, m1, m2)
@@ -2753,7 +2762,7 @@ Four new AsyncAPI frames, each a one-file schema referenced from `asyncapi.yaml`
 | `PlanStatusFrame` | `plan_status` | `receivePlanStatus` | plan_id, state, plan_phase, progress, paused_reason? |
 | `JudgeVerdictFrame` | `judge_verdict` | `receiveJudgeVerdict` | the `JudgeVerdict` payload (per-criterion met/reason) |
 
-- **Part C correction:** every `plan_status_changed` reference (FR-099, SD-C11, `chat.plan-status-frame.test.ts`) uses `plan_status`. Frame `type`s are `goal_status`/`loop_status`/`plan_status`/`judge_verdict` — no `_changed` suffix (that suffix belongs only to the pre-existing `task_status_changed`).
+- **Part C correction:** every `plan_status` reference (FR-099, SD-C11, `chat.plan-status-frame.test.ts`) uses `plan_status`. Frame `type`s are `goal_status`/`loop_status`/`plan_status`/`judge_verdict` — no `_changed` suffix (that suffix belongs only to the pre-existing `task_status_changed`).
 - **`judge_verdict` has two carriers (M1):** the live **`JudgeVerdictFrame`** WS push (this table) AND the persisted transcript **`Message.type: judge_verdict`** (contract C12). Both carry the same `JudgeVerdict` shape (contract C11). ActivityPanel + optional thread rendering consume the frame live; session replay reads the transcript entry. Add `JudgeVerdictFrame` as **contract row C-new-1** to the C14 frame set.
 
 ## R4 — Contract-surface additions (resolves M2, M5, M7; completes Constraint #8)
@@ -2772,7 +2781,7 @@ The standalone-task attempt counter lives on `Task` (C17), NOT in `UnifiedMeta` 
 
 ## R5 — Global active-loop cap authority (resolves M8, m5)
 
-The cap authority **co-locates with the single plan-engine instance** (the singleton with the cron-style overlap guard, ADR D4). There is no separately-mutated counter (avoids drift): at each loop-admission decision the engine computes the active count from persisted state — plans with `PlanState=running`, sessions with an active `/goal`, and enabled `/loop` cron jobs — reconciled at boot. A **standalone task attempt-loop counts as one active loop** (m5: SD-B4's garbled clause is superseded — a standalone task loop DOES count; task attempt-loops **inside** a running plan do NOT count individually, the plan counts as one). Admission is serialized by the engine's single-writer overlap guard, so the 15th/16th/17th-start race resolves deterministically (17th → rejected `active loops: 16/16`).
+The cap authority **co-locates with the single plan-engine instance** (the singleton with the cron-style overlap guard, ADR D4). There is no separately-mutated counter (avoids drift): at each loop-admission decision the engine computes the active count from persisted state — plans with `PlanState=running`, sessions with an active `/goal`, and enabled `/loop` cron jobs — reconciled at boot. The counted set is **exactly those three sources** (F3 r2: `PlanState=running` plans + active `/goal` sessions + enabled `/loop` jobs). A **standalone task attempt-loop does NOT count** (m5/F3: SD-B4's garbled clause is superseded) — it is bounded by its own attempt ceiling (default 3) and self-terminates; task attempt-loops **inside** a running plan likewise do not count individually (the running plan counts as one). This is consistent with FR-076, US-cross AS-3, SC-033, and the cap datasets — none of which are changed. Admission is serialized by the engine's single-writer overlap guard, so the 15th/16th/17th-start race resolves deterministically (17th → rejected `active loops: 16/16`).
 
 ## R6 — Origin gating positive predicate for channels (resolves M3, m7)
 
