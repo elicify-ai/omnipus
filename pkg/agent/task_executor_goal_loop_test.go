@@ -13,8 +13,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // alwaysUnmetJudgeProvider scripts the Judge System Agent to always return a
@@ -198,5 +200,120 @@ func TestTaskExecutor_JudgeMetVerdict_CompletesTaskDone(t *testing.T) {
 	if final.AttemptCount != 0 {
 		t.Errorf("attempt_count = %d, want 0 — a met verdict on the first attempt must never increment it",
 			final.AttemptCount)
+	}
+}
+
+// TestGoalLoop_ExplicitUpdateTaskDone_StillJudged is review r1 blocker C1
+// (SD-B2/FR-041): a worker calling the REAL update_task tool with
+// status:"done" on a task that HAS acceptance criteria must NOT bypass the
+// evidence-ladder judge. Before this fix, TaskUpdateTool wrote a terminal
+// `done` and fired AdvanceBlockedDependents/onComplete synchronously at the
+// tool-call boundary — finishTaskRun's task.IsTerminal check then just
+// trusted it, and the Judge LLM was never even called. With the fix,
+// TaskUpdateTool stages Task.PendingJudgeClaim instead, and finishTaskRun
+// routes it through the SAME adjudicateClaim path a TASK_STATUS marker uses.
+//
+// With an always-unmet judge and max_attempts=1 (deterministic — the task
+// goes straight to attempt-exhaustion after the one judged attempt, so the
+// scripted worker provider never needs a second response queued), the task
+// must land Failed (never Done), AttemptCount must be 1 (consumed, not
+// skipped), the Judge LLM must have been called exactly once (proving it was
+// NOT bypassed), and a task blocked on this one must stay Blocked (proving
+// AdvanceBlockedDependents did not fire synchronously at the tool-call
+// boundary either).
+func TestGoalLoop_ExplicitUpdateTaskDone_StillJudged(t *testing.T) {
+	worker := newScriptedProvider() // responses patched in below once tk.ID is known
+	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
+	judgeInst.Provider = alwaysUnmetJudgeProvider()
+
+	workerInst, ok := al.GetRegistry().GetAgent("native-agent")
+	if !ok {
+		t.Fatal("native-agent not found in registry")
+	}
+	// No-default-policy model (CLAUDE.md hard constraint 6): update_task needs
+	// an explicit agent-level grant or it fails closed to "deny" before the
+	// tool call under test ever executes.
+	workerInst.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]config.ToolPolicy{"update_task": config.ToolPolicyAllow},
+	})
+
+	maxAttempts := 1
+	tk := &task.Task{
+		Title: "explicit done claim, hard tier", Prompt: "do it", Action: task.ActionLLM,
+		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
+		MaxAttempts: &maxAttempts,
+		Criteria:    []task.AcceptanceCriterion{proseCriterion("c1", "the work is really done")},
+	}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	dependent := &task.Task{
+		Title: "dependent on the explicit-done task", Prompt: "do the dependent work", Action: task.ActionLLM,
+		AgentID: "native-agent", Priority: 3, WorkspaceID: "default",
+		Status: task.StatusBlocked, BlockedBy: []string{tk.ID},
+	}
+	if err := al.taskStore.Create(dependent); err != nil {
+		t.Fatalf("create dependent task: %v", err)
+	}
+
+	worker.responses = []*providers.LLMResponse{
+		{
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call-update-task-done",
+				Type: "function",
+				Name: "update_task",
+				Arguments: map[string]any{
+					"task_id": tk.ID,
+					"status":  "done",
+					"result":  "Finished everything, trust me.",
+				},
+			}},
+		},
+		{
+			// Marker-less final response — the explicit tool call above is the
+			// only signal; must NOT itself resolve to a bypass either.
+			Content: "Wrapping up now, nothing further to report.",
+		},
+	}
+
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+		t.Fatalf("ExecuteTask: %v", err)
+	}
+
+	final := waitForCompletionContractTerminal(t, al, tk.ID)
+	if final.Status == task.StatusDone {
+		t.Fatalf("status = %q — an explicit update_task(done) claim on a task WITH acceptance criteria "+
+			"must be judged, not trusted outright (this is the C1 bypass review r1 closes)", final.Status)
+	}
+	if final.Status != task.StatusFailed {
+		t.Fatalf("status = %q, want %q (attempt exhaustion after one unmet-judged attempt)",
+			final.Status, task.StatusFailed)
+	}
+	if final.AttemptCount != 1 {
+		t.Errorf("attempt_count = %d, want 1 — the judged claim must consume an attempt, not be skipped",
+			final.AttemptCount)
+	}
+	if final.PendingJudgeClaim != "" {
+		t.Errorf("pending_judge_claim = %q, want cleared once adjudicated", final.PendingJudgeClaim)
+	}
+
+	judgeFake, ok := judgeInst.Provider.(*fakeJudgeProvider)
+	if !ok {
+		t.Fatal("judge provider is not a *fakeJudgeProvider (test setup bug)")
+	}
+	if judgeFake.callCount() != 1 {
+		t.Errorf("judge LLM called %d times, want exactly 1 — the explicit update_task(done) call must "+
+			"NOT bypass the judge", judgeFake.callCount())
+	}
+
+	finalDependent, err := al.taskStore.Get(dependent.ID)
+	if err != nil {
+		t.Fatalf("get dependent task: %v", err)
+	}
+	if finalDependent.Status != task.StatusBlocked {
+		t.Errorf("dependent status = %q, want %q — AdvanceBlockedDependents must not fire "+
+			"synchronously at the update_task(done) tool-call boundary for a judged (unmet) claim",
+			finalDependent.Status, task.StatusBlocked)
 	}
 }

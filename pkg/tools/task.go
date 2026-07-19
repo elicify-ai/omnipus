@@ -414,6 +414,28 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 	t.delegationDeny = fn
 }
 
+// deferDoneClaimToJudge reports whether an explicit update_task(status:"done")
+// call on t must be staged as a pending judge claim rather than written as a
+// terminal `done` immediately (ADR-049 C1/SD-B2, review r1 blocker). This is
+// the FR-041 evidence-ladder judge closing the #1 self-certification bypass:
+// a worker could previously call update_task(done) directly and skip the
+// judge entirely, even though the SAME claim arriving via the TASK_STATUS
+// completion marker (task_executor.go finishTaskRun/adjudicateClaim) was
+// always judged.
+//
+//   - A task with explicit acceptance criteria (hard tier, len(Criteria)>0)
+//     is ALWAYS judged — this returns true.
+//   - A criteria-less task (soft tier — ADR-049 D5 synthesizes an implicit
+//     prose criterion from Prompt/title/description at judge time) keeps
+//     today's exact behavior: an explicit done write is trusted immediately,
+//     unchanged by this fix (explicitly accepted scope per review r1 C1).
+//   - A Scratchpad task (FR-048, set_todos-created checklist tracking) is
+//     exempt from the goal loop entirely, mirroring finishTaskRun's own
+//     Scratchpad exemption — trusted immediately regardless of criteria.
+func deferDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
+	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
+}
+
 func (t *TaskUpdateTool) Name() string           { return "update_task" }
 func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
@@ -506,15 +528,37 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		if !task.IsValidStatus(st) {
 			return ErrorResult(fmt.Sprintf("invalid status %q", statusStr))
 		}
-		patch.Status = &st
 		newStatus = st
 		updatedFields = append(updatedFields, "status")
+		if !deferDoneClaimToJudge(existing, st) {
+			patch.Status = &st
+		}
+		// else: a hard-tier done claim — Status is deliberately left
+		// unpatched below (see deferDoneClaimToJudge's doc comment); the
+		// PendingJudgeClaim block after the result/artifacts fields stages
+		// the claim instead.
 	}
 
 	// Result / artifacts — accepted with or without a status.
+	deferToJudge := deferDoneClaimToJudge(existing, newStatus)
+	var claimText string
 	if result, ok := args["result"].(string); ok && result != "" {
-		patch.Result = &result
-		updatedFields = append(updatedFields, "result")
+		claimText = result
+		if deferToJudge {
+			// Captured below as the judge's claim text (adjudicateClaim),
+			// NOT written to Task.Result directly — Task.Result stays the
+			// goal loop's own in-flight steering carrier between attempts
+			// (task_executor.go writeSteeringPrompt's doc comment) until the
+			// judge decides; completeTaskWithResult overwrites it with the
+			// real final result once terminal.
+		} else {
+			patch.Result = &result
+			updatedFields = append(updatedFields, "result")
+		}
+	}
+	if deferToJudge {
+		patch.PendingJudgeClaim = &claimText
+		updatedFields = append(updatedFields, "pending_judge_claim")
 	}
 	if rawArtifacts, ok := args["artifacts"].([]any); ok {
 		artifacts := make([]string, 0, len(rawArtifacts))
@@ -606,13 +650,19 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		)
 	}
 
-	// Timestamps keyed off status (unchanged behavior for the status path).
+	// Timestamps keyed off status (unchanged behavior for the status path). A
+	// deferred done-claim is NOT actually terminal yet (review r1 C1) — the
+	// judge decides — so CompletedAt is not stamped until adjudication lands
+	// (task_executor.go completeTaskWithResult stamps it then, via the normal
+	// Update path).
 	now := time.Now().UTC().Format(time.RFC3339)
 	switch newStatus {
 	case task.StatusInProgress:
 		patch.StartedAt = &now
 	case task.StatusDone, task.StatusFailed:
-		patch.CompletedAt = &now
+		if !deferToJudge {
+			patch.CompletedAt = &now
+		}
 	}
 
 	updated, err := t.store.Update(taskID, patch)
@@ -625,8 +675,15 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// persisted, so this is best-effort: a storage fault here is surfaced to the
 	// caller as an advance_warning rather than turning a successful update into a
 	// failure (which would orphan dependents with no signal either way).
+	//
+	// A deferred done-claim (review r1 C1/SD-B2) must NOT advance dependents
+	// or fire onComplete here — the task has not actually reached `done`
+	// (patch.Status was deliberately left unset above), so newStatus=="done"
+	// alone is no longer sufficient to gate these; the judge
+	// (task_executor.go adjudicateClaim -> completeTaskWithResult) is the
+	// only path that may do so, once it actually adjudicates the claim MET.
 	var advanceWarning string
-	if newStatus == task.StatusDone {
+	if newStatus == task.StatusDone && !deferToJudge {
 		advanced, advErr := t.store.AdvanceBlockedDependents(taskID)
 		if advErr != nil {
 			// Storage fault advancing dependents — the update itself succeeded,
@@ -640,7 +697,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 	}
 
-	if task.IsTerminal(newStatus) && t.onComplete != nil {
+	if task.IsTerminal(newStatus) && !deferToJudge && t.onComplete != nil {
 		t.onComplete(updated)
 	}
 
@@ -649,7 +706,19 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	updatedFieldsJSON, _ := json.Marshal(updatedFields)
 	result := fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s}`,
 		updated.ID, updated.Status, string(updatedFieldsJSON))
-	if advanceWarning != "" {
+	if deferToJudge {
+		// FR-041/SD-B2 (review r1 C1): tell the calling agent its done claim
+		// was received but is NOT yet final — this task has explicit
+		// acceptance criteria, so the evidence-ladder judge must adjudicate
+		// the claim (task_executor.go adjudicateClaim) before the task can
+		// actually reach `done`. Built with json.Marshal for safe escaping.
+		const pendingNote = "completion claim recorded — this task has acceptance criteria, so it is " +
+			"NOT yet done; the evidence-ladder judge will adjudicate your claim against the criteria " +
+			"before the task can reach a terminal status"
+		noteJSON, _ := json.Marshal(pendingNote)
+		result = fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s,"pending_judge_note":%s}`,
+			updated.ID, updated.Status, string(updatedFieldsJSON), string(noteJSON))
+	} else if advanceWarning != "" {
 		// Append the warning as an escaped string field so the LLM/user can see
 		// the dependents were not advanced. Built with json.Marshal so the error
 		// message is properly escaped into a JSON string literal.

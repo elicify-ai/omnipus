@@ -535,6 +535,10 @@ type Patch struct {
 	CompletedAt   *string
 	SourceChannel *string
 	SourceChatID  *string
+	// PendingJudgeClaim is the runtime/tool-layer write path for
+	// Task.PendingJudgeClaim (ADR-049 C1/SD-B2, review r1). A non-nil pointer
+	// to "" clears it (adjudication finished, either outcome).
+	PendingJudgeClaim *string
 
 	// allowBlockedSet is the internal escape hatch that permits a Status patch to
 	// set or clear the derived `blocked` side-state. It is NEVER set from the wire
@@ -774,6 +778,9 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	}
 	if patch.SourceChatID != nil {
 		t.SourceChatID = *patch.SourceChatID
+	}
+	if patch.PendingJudgeClaim != nil {
+		t.PendingJudgeClaim = *patch.PendingJudgeClaim
 	}
 
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
