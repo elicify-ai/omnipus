@@ -689,6 +689,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               <Link
                 to="/workspaces/$workspaceId/calendar"
                 params={{ workspaceId: task.workspace_id }}
+                tabIndex={0}
                 className="inline-flex items-center gap-1 text-xs text-[color:var(--color-accent)] hover:underline"
               >
                 <CalendarBlank size={12} />
