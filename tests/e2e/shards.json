@@ -51,6 +51,7 @@
         "tests/e2e/ws-reconnect.spec.ts",
         "tests/e2e/xss.spec.ts",
         "tests/e2e/calendar.spec.ts",
+        "tests/e2e/calendar-recurrence.spec.ts",
         "tests/e2e/create-agent.spec.ts"
       ]
     },
