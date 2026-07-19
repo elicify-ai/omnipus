@@ -340,6 +340,7 @@ func (pe *PlanEngine) Tick(ctx context.Context) {
 		}
 	}
 	pe.idleExpirySweep()
+	pe.goalAndLoopIdleExpirySweep()
 }
 
 func (pe *PlanEngine) claimTick() bool {
@@ -793,6 +794,25 @@ func (pe *PlanEngine) idleExpireOneLocked(planID string, cfg config.PlanningConf
 		p.Title, maxDays, last.Format(time.RFC3339),
 	)
 	pe.failPlanLocked(p.ID, plan.FailedReasonIdleExpired, handover)
+}
+
+// goalAndLoopIdleExpirySweep drives the /goal and /loop idle-expiry calendar
+// brakes (FR-064/D7, review r1 blocker) on the SAME tick cadence as the plan
+// sweep above — one periodic driver for all three loop-shaped entity kinds
+// rather than a second ticker. No-op when agentLoop is nil (a bare-struct-
+// literal test PlanEngine that only exercises the plan-level sweep, or boot
+// ordering before the engine is wired to a real AgentLoop) — mirrors this
+// file's existing `if pe.agentLoop != nil` guard convention (see Start).
+func (pe *PlanEngine) goalAndLoopIdleExpirySweep() {
+	if pe.agentLoop == nil {
+		return
+	}
+	cfg := pe.planningConfig()
+	now := pe.clock.Now()
+	pe.agentLoop.goalIdleExpirySweep(cfg, now)
+	if ls := pe.agentLoop.loopScheduler(); ls != nil {
+		ls.IdleExpirySweep(cfg, now)
+	}
 }
 
 func effectiveLastActivity(p *plan.Plan) time.Time {

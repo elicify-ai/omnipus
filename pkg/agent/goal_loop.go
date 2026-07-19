@@ -93,11 +93,12 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	zero := 0
 	emptyReason := ""
 	if err := store.SetMeta(sessionID, session.MetaPatch{
-		GoalCondition:    &condition,
-		GoalRoundsUsed:   &zero,
-		GoalMaxRounds:    &maxRounds,
-		GoalLatestReason: &emptyReason,
-		GoalStartedAt:    &nowStr,
+		GoalCondition:      &condition,
+		GoalRoundsUsed:     &zero,
+		GoalMaxRounds:      &maxRounds,
+		GoalLatestReason:   &emptyReason,
+		GoalStartedAt:      &nowStr,
+		GoalLastActivityAt: &nowStr,
 	}); err != nil {
 		logger.WarnCF("agent", "goal: failed to persist goal set",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
@@ -146,11 +147,12 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 	empty := ""
 	zero := 0
 	if serr := store.SetMeta(sessionID, session.MetaPatch{
-		GoalCondition:    &empty,
-		GoalRoundsUsed:   &zero,
-		GoalMaxRounds:    &zero,
-		GoalLatestReason: &empty,
-		GoalStartedAt:    &empty,
+		GoalCondition:      &empty,
+		GoalRoundsUsed:     &zero,
+		GoalMaxRounds:      &zero,
+		GoalLatestReason:   &empty,
+		GoalStartedAt:      &empty,
+		GoalLastActivityAt: &empty,
 	}); serr != nil {
 		logger.WarnCF("agent", "goal: failed to clear goal state",
 			map[string]any{"session_id": sessionID, "error": serr.Error()})
@@ -262,6 +264,18 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		return
 	}
 
+	// FR-064/D7 idle-expiry (review r1): a real judge round just ran (not
+	// Unavailable) — this IS genuine activity, so bump the calendar-brake
+	// clock. Best-effort: a write failure here only delays idle-expiry,
+	// never blocks the round itself (mirrors plan_engine.go's touchActivity).
+	activityNow := time.Now().UTC().Format(time.RFC3339)
+	if perr := store.SetMeta(sessionID, session.MetaPatch{
+		GoalLastActivityAt: &activityNow,
+	}); perr != nil {
+		logger.WarnCF("agent", "goal loop: could not bump idle-expiry activity clock",
+			map[string]any{"session_id": sessionID, "error": perr.Error()})
+	}
+
 	verdict := jr.Verdict
 	al.writeGoalVerdictTranscript(store, sessionID, verdict)
 
@@ -369,6 +383,68 @@ func (al *AgentLoop) writeGoalVerdictTranscript(store *session.UnifiedStore, ses
 		logger.WarnCF("agent", "goal loop: judge verdict transcript write failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 	}
+}
+
+// --- Idle-expiry sweep (FR-064/D7, review r1) -----------------------------
+
+// goalIdleExpirySweep expires any session with an active `/goal` loop idle
+// for longer than its effective IdleExpiryDays bound — the `/goal`
+// counterpart to plan_engine.go's PlanEngine.idleExpirySweep, driven from the
+// SAME periodic tick (PlanEngine.goalAndLoopIdleExpirySweep) rather than a
+// second ticker. "idle" mirrors the plan engine's own definition: no genuine
+// round activity — GoalLastActivityAt is bumped on goal-set and on every
+// judge round that actually ran (checkGoalLoopAfterTurn), but deliberately
+// NOT on a judge-unavailability pause (R9/m4), so a permanently-unavailable
+// judge still ends the loop via this calendar brake rather than looping
+// forever. now is caller-supplied (PlanEngine's own injectable clock) so
+// tests can pin exact idle-boundary math without a real sleep.
+func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Time) {
+	store := al.GetSessionStore()
+	if store == nil {
+		return
+	}
+	sessions, err := store.ListSessions()
+	if err != nil {
+		logger.WarnCF("agent", "goal idle sweep: list sessions failed", map[string]any{"error": err.Error()})
+		return
+	}
+	maxDays := cfg.EffectiveIdleExpiryDays(nil)
+	for _, s := range sessions {
+		if s == nil || s.GoalCondition == "" {
+			continue
+		}
+		last := effectiveGoalActivity(s)
+		if last.IsZero() {
+			continue // nothing to compare against; skip rather than guess
+		}
+		if now.Sub(last) < time.Duration(maxDays)*24*time.Hour {
+			continue
+		}
+		sessionID := s.ID
+		handover := fmt.Sprintf(
+			"Goal %q idle-expired after %d day(s) with no activity (last activity: %s).",
+			s.GoalCondition, maxDays, last.Format(time.RFC3339),
+		)
+		al.writeGoalSystemTranscript(store, sessionID, s.ActiveAgentID, handover)
+		// clearGoal Releases the "goal" R5 admission-cap slot (paired with the
+		// Admit("goal") call at set time) as part of its shared body.
+		al.clearGoal(sessionID, store, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
+	}
+}
+
+// effectiveGoalActivity returns the best available "last real activity"
+// timestamp for a goal session: GoalLastActivityAt when present, falling
+// back to GoalStartedAt (mirrors plan_engine.go's effectiveLastActivity).
+func effectiveGoalActivity(m *session.UnifiedMeta) time.Time {
+	for _, s := range []string{m.GoalLastActivityAt, m.GoalStartedAt} {
+		if s == "" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // writeGoalSystemTranscript writes a plain system-entry note (used for the

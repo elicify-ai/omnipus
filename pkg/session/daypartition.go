@@ -115,6 +115,15 @@ type SessionMeta struct {
 	// GoalStartedAt is an RFC 3339 UTC timestamp, used for `/goal status`'s
 	// elapsed wall-clock (FR-069).
 	GoalStartedAt string `json:"goal_started_at,omitempty"`
+	// GoalLastActivityAt is the FR-064/D7 idle-expiry calendar-brake clock for
+	// `/goal` (review r1, mirrors plan_engine.go's Plan.LastActivityAt
+	// semantics exactly): an RFC 3339 UTC timestamp bumped on genuine goal
+	// activity (goal set, or a judge round that actually ran) but
+	// deliberately NOT on a judge-unavailability pause (R9/m4) — a
+	// permanently-unavailable judge must still end the loop via this
+	// calendar brake, never via a fabricated verdict or a clock that never
+	// expires.
+	GoalLastActivityAt string `json:"goal_last_activity_at,omitempty"`
 
 	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
 	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)
@@ -137,6 +146,10 @@ type SessionMeta struct {
 	// LoopStartedAt is an RFC 3339 UTC timestamp, used for `/loop status`'s
 	// elapsed wall-clock.
 	LoopStartedAt string `json:"loop_started_at,omitempty"`
+	// LoopLastActivityAt is the FR-064/D7 idle-expiry calendar-brake clock for
+	// `/loop` (review r1): an RFC 3339 UTC timestamp bumped on genuine loop
+	// activity (loop set, or a scheduled run that actually fired).
+	LoopLastActivityAt string `json:"loop_last_activity_at,omitempty"`
 }
 
 // PostLoad backfills v2 multi-agent fields from the legacy AgentID field.

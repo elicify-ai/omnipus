@@ -619,3 +619,144 @@ func TestLoopScheduler_SelfPaced_ReschedulesFromLoopNextMarker(t *testing.T) {
 		t.Fatalf("run_count = %d, want 2 once the self-paced delay elapses", final.LoopRunCount)
 	}
 }
+
+// --- Idle-expiry (FR-064/D7, review r1 blocker) --------------------------
+
+// TestGoal_IdleExpiry_7d proves goalIdleExpirySweep's 7-day calendar brake
+// (the /goal counterpart to plan_engine.go's own idle-expiry sweep, review
+// r1 gap 4): a goal idle for 6d23h must survive a sweep, and one idle for
+// exactly 7d must be expired (cleared, R5 cap released). Fake-clock: both
+// GoalLastActivityAt values and the sweep's own "now" are explicit
+// caller-supplied timestamps — zero real sleeps.
+func TestGoal_IdleExpiry_7d(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("shared session store not available")
+	}
+
+	now := time.Now().UTC()
+	stillActiveAt := now.Add(-(6*24 + 23) * time.Hour).Format(time.RFC3339) // 6d23h idle
+	expiredAt := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)          // exactly 7d idle
+
+	newGoalSession := func(condition, lastActivity string) string {
+		meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentInst.ID)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		if err := store.SetMeta(meta.ID, session.MetaPatch{
+			GoalCondition:      &condition,
+			GoalMaxRounds:      intPtr(config.DefaultGoalMaxRounds),
+			GoalStartedAt:      &lastActivity,
+			GoalLastActivityAt: &lastActivity,
+		}); err != nil {
+			t.Fatalf("SetMeta: %v", err)
+		}
+		return meta.ID
+	}
+
+	stillActiveSID := newGoalSession("still active goal", stillActiveAt)
+	expiredSID := newGoalSession("expired goal", expiredAt)
+
+	al.goalIdleExpirySweep(config.PlanningConfig{}, now)
+
+	stillActive, err := store.GetMeta(stillActiveSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillActive.GoalCondition == "" {
+		t.Fatal("a goal idle for 6d23h must NOT be expired (under the 7-day bound)")
+	}
+
+	expired, err := store.GetMeta(expiredSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.GoalCondition != "" {
+		t.Fatal("a goal idle for exactly 7d must be idle-expired (cleared)")
+	}
+}
+
+// TestLoop_IdleExpiry_7d proves LoopScheduler.IdleExpirySweep's 7-day
+// calendar brake (the /loop counterpart, review r1 gap 4): a loop idle for
+// 6d23h must survive a sweep (job still enabled), and one idle for exactly
+// 7d must be stopped and its cron job removed. Fake-clock: both
+// LoopLastActivityAt values and the sweep's own "now" are explicit
+// caller-supplied timestamps — zero real sleeps.
+func TestLoop_IdleExpiry_7d(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("shared session store not available")
+	}
+	// The fake clock only matters for the scheduler's OWN due-job firing
+	// (RunDueJobs/AddOneShot's "at" math) — this test drives IdleExpirySweep
+	// directly with its own explicit `now`, never through the cron firing
+	// path, so the scheduler's clock is left at its default and unused here.
+	ls, _ := newLoopSchedulerForTest(t, al)
+	al.SetLoopScheduler(ls)
+
+	now := time.Now().UTC()
+	stillActiveAt := now.Add(-(6*24 + 23) * time.Hour).Format(time.RFC3339) // 6d23h idle
+	expiredAt := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)          // exactly 7d idle
+
+	newLoopSession := func(lastActivity string) (sessionID string) {
+		meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentInst.ID)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		sessionID = meta.ID
+		jobID, err := ls.AddInterval(agentInst.ID, sessionID, 5*60*1000)
+		if err != nil {
+			t.Fatalf("AddInterval: %v", err)
+		}
+		mode := loopModeInterval
+		everyMS := int64(5 * 60 * 1000)
+		if err := store.SetMeta(sessionID, session.MetaPatch{
+			LoopMode:           &mode,
+			LoopPrompt:         strPtrForTest("ping"),
+			LoopMaxRuns:        intPtr(config.DefaultLoopMaxRuns),
+			LoopIntervalMS:     &everyMS,
+			LoopJobID:          &jobID,
+			LoopStartedAt:      &lastActivity,
+			LoopLastActivityAt: &lastActivity,
+		}); err != nil {
+			t.Fatalf("SetMeta: %v", err)
+		}
+		return sessionID
+	}
+
+	stillActiveSID := newLoopSession(stillActiveAt)
+	expiredSID := newLoopSession(expiredAt)
+
+	if len(ls.ListEnabledJobs()) != 2 {
+		t.Fatalf("enabled jobs = %d, want 2 before the sweep", len(ls.ListEnabledJobs()))
+	}
+
+	ls.IdleExpirySweep(config.PlanningConfig{}, now)
+
+	stillActive, err := store.GetMeta(stillActiveSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillActive.LoopMode == "" {
+		t.Fatal("a loop idle for 6d23h must NOT be expired (under the 7-day bound)")
+	}
+
+	expired, err := store.GetMeta(expiredSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.LoopMode != "" {
+		t.Fatal("a loop idle for exactly 7d must be idle-expired (stopped)")
+	}
+
+	if len(ls.ListEnabledJobs()) != 1 {
+		t.Fatalf("enabled jobs = %d, want 1 after the sweep (the expired job's cron entry must be removed)",
+			len(ls.ListEnabledJobs()))
+	}
+}
+
+func strPtrForTest(s string) *string { return &s }
