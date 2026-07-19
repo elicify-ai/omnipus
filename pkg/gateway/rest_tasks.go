@@ -953,6 +953,21 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		// to distinguish "was already in_progress" from "just moved to in_progress".
 		if existing, gErr := a.taskStore.Get(id); gErr == nil {
 			preUpdateStatus = existing.Status
+			// "Run now" on a done/failed REPEATING task is a FRESH run, not a
+			// resume: clear the stale session_id + result from the prior run so
+			// (a) the in_progress launch guard below (which requires
+			// updated.SessionID == "") fires and StartTaskNow mints a new
+			// session, and (b) the panel doesn't carry the old run's result into
+			// the new one. Mirrors SpawnReset's fresh-run reset on a scheduled
+			// fire. Scoped to repeating triggers so a one-shot/manual resume is
+			// unaffected.
+			if patch.Status != nil && *patch.Status == task.StatusInProgress &&
+				task.IsTerminal(existing.Status) &&
+				existing.Trigger.IsRepeating() {
+				empty := ""
+				patch.SessionID = &empty
+				patch.Result = &empty
+			}
 		}
 	}
 

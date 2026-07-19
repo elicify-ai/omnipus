@@ -361,31 +361,23 @@ func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
 		require.NoError(t, json.Unmarshal(wRerun.Body.Bytes(), &rerun))
 		assert.Equal(t, gen.TaskStatusInProgress, rerun.Status)
 
-		// Teardown race guard, same precedent as TestHandleTaskPatch_InProgress_WithKnownAgent —
-		// but ONLY if this PATCH actually launched a NEW background run. It may
-		// not: handleTaskPatch's StartTaskNow launch guard also requires
-		// updated.SessionID == "", and advanceTaskToDone's own in_progress leg
-		// already populated session_id on the FIRST run, which this second
-		// transition does not clear — so, as the launch guard is written today,
-		// a "Run now" retry on an already-once-run task can inherit the stale
-		// session_id and skip re-launching entirely. FIX 2 (the validateTransition
-		// carve-out under test here) only concerns whether the done->in_progress
-		// TRANSITION itself is permitted (it is: 200, not 400) — whether the
-		// launch guard should also fire on a status-only retry with a stale
-		// session_id is a separate, un-scoped question this test deliberately
-		// does not assert either way; it only waits for a goroutine if one was
-		// actually launched (session_id changed), so it never hangs regardless
-		// of which behavior handleTaskPatch has.
+		// "Run now" on a done REPEATING task is a FRESH run: handleTaskPatch
+		// clears the stale session_id from the prior run so the in_progress
+		// launch guard fires and StartTaskNow mints a NEW session. Assert the
+		// relaunch actually happened — not just that the transition was allowed.
 		taskID := tsk.Id
-		if changed := getTaskSessionID(t, api, taskID); changed != sessionBefore && changed != "" {
-			t.Cleanup(func() {
-				require.Eventually(t, func() bool {
-					s := getTaskStatus(t, api, taskID)
-					return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
-				}, 10*time.Second, 20*time.Millisecond,
-					"task goroutine must reach a terminal state before test teardown")
-			})
-		}
+		sessionAfter := getTaskSessionID(t, api, taskID)
+		require.NotEmpty(t, sessionAfter,
+			"Run now on a done repeating task must mint a new session (a fresh run was launched)")
+		require.NotEqual(t, sessionBefore, sessionAfter,
+			"Run now must start a NEW run (new session_id), not inherit the completed run's stale one")
+		t.Cleanup(func() {
+			require.Eventually(t, func() bool {
+				s := getTaskStatus(t, api, taskID)
+				return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
+			}, 10*time.Second, 20*time.Millisecond,
+				"task goroutine must reach a terminal state before test teardown")
+		})
 	})
 
 	t.Run("done manual (no trigger) task: PATCH status=in_progress still 400s", func(t *testing.T) {
