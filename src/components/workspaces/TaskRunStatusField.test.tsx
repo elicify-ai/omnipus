@@ -105,10 +105,35 @@ describe('TaskRunStatusField — "Run now"', () => {
     expect(screen.queryByRole('button', { name: /run now/i })).toBeNull()
   })
 
-  it('hides "Run now" for a done (terminal) task', async () => {
+  it('hides "Run now" for a done one-shot task (no repeating trigger)', async () => {
     renderField(makeTask({ status: 'done' }))
     await screen.findByTestId('task-run-status-badge')
     expect(screen.queryByRole('button', { name: /run now/i })).toBeNull()
+  })
+
+  it('hides "Run now" for a done once-trigger task', async () => {
+    renderField(makeTask({ status: 'done', trigger: { type: 'once', config: { at_ms: 1_800_000_000_000 } } }))
+    await screen.findByTestId('task-run-status-badge')
+    expect(screen.queryByRole('button', { name: /run now/i })).toBeNull()
+  })
+
+  // Regression: a done RECURRING series re-arms and must stay re-runnable — the
+  // client guard mirrors the server validateTransition carve-out (done→in_progress
+  // allowed for repeating tasks). Before the fix canDropTransition('done',…) hid
+  // Run now on exactly the recurring tasks the calendar edit slide-over manages.
+  it('shows "Run now" for a done RECURRING (rrule) task', async () => {
+    renderField(
+      makeTask({
+        status: 'done',
+        trigger: { type: 'recurring', config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: 1_800_000_000_000 } },
+      }),
+    )
+    expect(await screen.findByRole('button', { name: /run now/i })).toBeInTheDocument()
+  })
+
+  it('shows "Run now" for a done EVERY task', async () => {
+    renderField(makeTask({ status: 'done', trigger: { type: 'every', config: { every_ms: 3_600_000 } } }))
+    expect(await screen.findByRole('button', { name: /run now/i })).toBeInTheDocument()
   })
 
   it('hides "Run now" for a blocked task', async () => {
