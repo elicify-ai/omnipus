@@ -441,6 +441,13 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	// series survives a per-run terminal status — see the doc comment above.
 	// `once` is deliberately excluded: its single occurrence IS its whole
 	// series, so a terminal `once` task is still removed exactly as before.
+	//
+	// NOTE (operator decision, 2026-07-19): a `failed` run re-arms exactly like a
+	// `done` one — there is intentionally NO consecutive-failure circuit breaker.
+	// A repeating series whose agent run always fails (bad credential/tool) will
+	// re-fire every interval indefinitely; the only stops are delete or a
+	// trigger edit/clear. This is an accepted cost trade-off, not an oversight —
+	// do not "fix" it into a backoff/auto-pause without an explicit decision.
 	isRepeating := t.Trigger.IsRepeating()
 
 	if noTrigger || (task.IsTerminal(t.Status) && !isRepeating) {

@@ -646,6 +646,7 @@ type Patch struct {
 	SessionID     *string
 	StartedAt     *string
 	CompletedAt   *string
+	FollowedUp    *bool
 	SourceChannel *string
 	SourceChatID  *string
 
@@ -906,6 +907,9 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	}
 	if patch.CompletedAt != nil {
 		t.CompletedAt = *patch.CompletedAt
+	}
+	if patch.FollowedUp != nil {
+		t.FollowedUp = *patch.FollowedUp
 	}
 	if patch.SourceChannel != nil {
 		t.SourceChannel = *patch.SourceChannel

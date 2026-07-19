@@ -947,6 +947,18 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 
 	// Capture the pre-update status to detect the in_progress transition below.
 	var preUpdateStatus task.Status
+	// freshRunReset, when true, records that this PATCH performed the
+	// fresh-run reset below (a "Run now" on a done/failed REPEATING task) and
+	// origSessionID/origResult/origArtifacts/origCompletedAt/origFollowedUp
+	// hold the PRE-reset values. The launch-failure revert branches further
+	// down restore these when freshRunReset is set, so a FAILED "Run now"
+	// leaves the task exactly as it was before the click rather than
+	// permanently discarding the prior (completed) run's session link,
+	// result text, artifacts, and completion timestamp.
+	var freshRunReset bool
+	var origSessionID, origResult, origCompletedAt string
+	var origArtifacts []string
+	var origFollowedUp bool
 	if req.Status != nil {
 		// Read the current status before applying the patch so we can detect
 		// transitions rather than just the new state. We need the original status
@@ -954,19 +966,36 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		if existing, gErr := a.taskStore.Get(id); gErr == nil {
 			preUpdateStatus = existing.Status
 			// "Run now" on a done/failed REPEATING task is a FRESH run, not a
-			// resume: clear the stale session_id + result from the prior run so
-			// (a) the in_progress launch guard below (which requires
-			// updated.SessionID == "") fires and StartTaskNow mints a new
-			// session, and (b) the panel doesn't carry the old run's result into
-			// the new one. Mirrors SpawnReset's fresh-run reset on a scheduled
-			// fire. Scoped to repeating triggers so a one-shot/manual resume is
-			// unaffected.
+			// resume: clear the stale session_id + result + artifacts +
+			// completed_at + followed_up from the prior run so (a) the
+			// in_progress launch guard below (which requires updated.SessionID
+			// == "") fires and StartTaskNow mints a new session, and (b) the
+			// panel doesn't carry the old run's result/artifacts into the new
+			// one. Mirrors SpawnReset's fresh-run reset on a scheduled fire
+			// field-for-field (SpawnReset clears session_id, result,
+			// artifacts, started_at, completed_at, followed_up). StartedAt is
+			// deliberately NOT cleared here — the in_progress transition below
+			// (updateLocked's own auto-stamp) re-stamps it to this new run's
+			// start, which is exactly the value SpawnReset's own StartedAt
+			// clear is making room for. Scoped to repeating triggers so a
+			// one-shot/manual resume is unaffected.
 			if patch.Status != nil && *patch.Status == task.StatusInProgress &&
 				task.IsTerminal(existing.Status) &&
 				existing.Trigger.IsRepeating() {
+				freshRunReset = true
+				origSessionID = existing.SessionID
+				origResult = existing.Result
+				origArtifacts = existing.Artifacts
+				origCompletedAt = existing.CompletedAt
+				origFollowedUp = existing.FollowedUp
 				empty := ""
+				emptyArtifacts := []string{}
+				falseVal := false
 				patch.SessionID = &empty
 				patch.Result = &empty
+				patch.Artifacts = &emptyArtifacts
+				patch.CompletedAt = &empty
+				patch.FollowedUp = &falseVal
 			}
 		}
 	}
@@ -1012,6 +1041,16 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// from an attempt that never actually ran, until the next real in_progress
 	// transition happens to overwrite it.
 	//
+	// When freshRunReset fired above (a "Run now" fresh-run reset on a
+	// done/failed REPEATING task), the revert ALSO restores the pre-reset
+	// session_id/result/artifacts/completed_at/followed_up: those were wiped
+	// pre-emptively so the launch guard below and StartTaskNow could mint a
+	// fresh run, but if the launch itself never succeeds, the task must land
+	// back exactly where it was before the click — not lose the completed
+	// prior run's result and chat link. Without this, a retryable 409
+	// (dispatch cap) or a 503 (nil executor) would silently and permanently
+	// discard that data.
+	//
 	// Guard: only fire when the client explicitly set status=in_progress in this
 	// PATCH (req.Status != nil). A PATCH with no status field must never enter
 	// the launch path even if the task happens to already be in_progress —
@@ -1023,14 +1062,27 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		preUpdateStatus != task.StatusInProgress &&
 		updated.AgentID != "" &&
 		updated.SessionID == "" {
-		if a.taskExecutor == nil {
-			// Revert the task to its prior status so it is not left stranded.
+		// buildLaunchRevertPatch assembles the revert-to-prior-state patch shared
+		// by both failure branches below (nil executor, StartTaskNow error).
+		buildLaunchRevertPatch := func() task.Patch {
 			revertStatus := preUpdateStatus
 			revertStartedAt := ""
-			revertPatch := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+			p := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+			if freshRunReset {
+				p.SessionID = &origSessionID
+				p.Result = &origResult
+				p.Artifacts = &origArtifacts
+				p.CompletedAt = &origCompletedAt
+				p.FollowedUp = &origFollowedUp
+			}
+			return p
+		}
+		if a.taskExecutor == nil {
+			// Revert the task to its prior status so it is not left stranded.
+			revertPatch := buildLaunchRevertPatch()
 			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after nil-executor failure",
-					"id", id, "revert_to", revertStatus, "error", rErr)
+					"id", id, "revert_to", preUpdateStatus, "error", rErr)
 			}
 			slog.Warn("rest: taskExecutor is nil; rejecting in_progress transition",
 				"id", id, "agent_id", updated.AgentID)
@@ -1040,12 +1092,10 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		sessID, startErr := a.taskExecutor.StartTaskNow(r.Context(), id)
 		if startErr != nil {
 			// Revert the task to its prior status so it is not left stranded.
-			revertStatus := preUpdateStatus
-			revertStartedAt := ""
-			revertPatch := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+			revertPatch := buildLaunchRevertPatch()
 			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after StartTaskNow failure",
-					"id", id, "revert_to", revertStatus, "error", rErr)
+					"id", id, "revert_to", preUpdateStatus, "error", rErr)
 			}
 			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
 				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
