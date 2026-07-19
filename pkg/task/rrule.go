@@ -159,7 +159,16 @@ func parseOption(rruleBody string, dtstartMs int64, loc *time.Location) (*rrule.
 	if err != nil {
 		return nil, fmt.Errorf("rrule: parse %q: %w", rruleBody, err)
 	}
-	opt.Dtstart = time.UnixMilli(dtstartMs).In(loc)
+	// Truncate the anchor to whole seconds: RFC 5545 has no sub-second grammar,
+	// and rrule-go emits occurrences at second precision. Without this, a
+	// sub-second dtstart_ms (e.g. an anchor of `new Date()` in the editor) makes
+	// the liveness probe (HasOccurrenceWithinYears, whose inclusive lower bound
+	// is opt.Dtstart-1ns) miss a rule's only occurrence — which lands at the
+	// truncated second, before that bound — while NextOccurrenceAfter (whose
+	// arithmetic zeros nanos) finds it, so the validator and scheduler disagree.
+	// Truncating here, the single anchor choke point, keeps every function
+	// (expand, next, validation, liveness) consistent and RFC-correct.
+	opt.Dtstart = time.UnixMilli(dtstartMs).Truncate(time.Second).In(loc)
 	return opt, nil
 }
 
