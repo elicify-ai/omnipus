@@ -1677,6 +1677,18 @@ func registerSharedTools(
 			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
 			// seeding); this hard ceiling closes that gap.
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+			// D2 rule 5 (FR-017/052, review r1 major M5): reject an all-check
+			// criteria create outright when the assignee's effective bash
+			// policy is deny or ask — structurally unsatisfiable, mirrors
+			// judge.go's runMachineCheck policy resolution exactly (same
+			// registry, same EffectiveToolPolicy call, ScopeCore).
+			taskCreate.SetBashPolicyChecker(func(assigneeAgentID string) (policy string, ok bool) {
+				agentInst, found := al.GetRegistry().GetAgent(assigneeAgentID)
+				if !found || agentInst == nil {
+					return "", false
+				}
+				return tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash"), true
+			})
 			// subagent_3p (external-CLI) worker task assignment is no longer
 			// guarded here: processTaskDirect (this file) now branches on
 			// runner.ResolveDispatch and routes an external-CLI worker's task
@@ -2730,6 +2742,23 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 		// no-op task reassignment, not delegation (also short-circuited above).
 		gate := buildDelegationDenyCheckerForTaskReassignment(callerAgentID, defaults, config.DelegationModeTask)
 		return gate(ctx, targetAgentID)
+	}
+}
+
+// NewSysagentBashPolicyResolver builds the systools.Deps.ResolveBashPolicy
+// closure (ADR-049 D2 rule 5, FR-017/052, review r1 major M5): resolves an
+// assignee agent's effective "bash" tool policy from the SAME live registry
+// judge.go's runMachineCheck and the plain create_task tool's own
+// bashPolicyChecker use (tools.EffectiveToolPolicy, ScopeCore) — parity
+// between the same-workspace and cross-workspace (create_task_in_workspace)
+// task-creation surfaces.
+func (al *AgentLoop) NewSysagentBashPolicyResolver() func(assigneeAgentID string) (policy string, ok bool) {
+	return func(assigneeAgentID string) (policy string, ok bool) {
+		agentInst, found := al.GetRegistry().GetAgent(assigneeAgentID)
+		if !found || agentInst == nil {
+			return "", false
+		}
+		return tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash"), true
 	}
 }
 

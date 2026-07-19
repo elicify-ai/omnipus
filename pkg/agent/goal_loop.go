@@ -210,6 +210,21 @@ func (al *AgentLoop) emitGoalStatusFrame(sessionID, condition string, round, max
 	})
 }
 
+// goalJudgeRoundTimeout bounds one /goal round's judge call (review r1 major
+// M2). Mirrors plan_engine.go's planJudgeRoundTimeout exactly (same 10-minute
+// bound) but for a DIFFERENT reason: the plan judge decouples into its own
+// goroutine so a slow call never blocks the tick cycle, whereas a goal round
+// runs SYNCHRONOUSLY inside the interactive turn (its outcome — met / unmet+
+// round-advance / rounds-exhausted — must be known before the turn can decide
+// whether to re-inject a follow-up round, checkGoalLoopAfterTurn's own doc
+// comment below). Without an upper bound of its own, JudgeCriteria's D7
+// contract of retrying FOREVER on judge-unavailability (respecting only ctx
+// cancellation, judge.go's doc comment) would hang the user's live chat turn
+// indefinitely whenever the judge is throttled/erroring and the turn's own
+// ctx carries no deadline. A var (not const) so tests can substitute a short
+// bound without a real multi-minute wait.
+var goalJudgeRoundTimeout = planJudgeRoundTimeout //nolint:gochecknoglobals
+
 // checkGoalLoopAfterTurn is US-8's judge-gated round-advance hook (ADR-049
 // D6/D7, FR-067..070). Called once, synchronously, from runAgentLoop right
 // after every natural (non-aborted) turn stop — a fast no-op unless the
@@ -247,7 +262,13 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	}
 	attempt := meta.GoalRoundsUsed + 1
 
-	jr := al.JudgeCriteria(ctx, JudgeCriteriaInput{
+	// review r1 major M2: bound the judge call to its OWN timeout, derived
+	// from (so an already-aborted turn still cancels promptly) but never
+	// longer than goalJudgeRoundTimeout — see that var's doc comment.
+	judgeCtx, cancel := context.WithTimeout(ctx, goalJudgeRoundTimeout)
+	defer cancel()
+
+	jr := al.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
 		Scope:           task.VerdictScopeGoal,
 		AssigneeAgentID: agentInst.ID,
 		Criteria:        []task.AcceptanceCriterion{criterion},

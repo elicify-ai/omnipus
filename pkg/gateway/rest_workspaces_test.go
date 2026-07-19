@@ -1063,11 +1063,14 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Step 1: Create the workspace via POST to get a valid ULID id and timestamps.
+	// No core_team here (review r1 M4/Gap #6 now validates membership against
+	// registered agents, which newTestRestAPIWithHome's bare harness doesn't
+	// seed) — irrelevant to this step anyway, since Step 2 immediately
+	// overwrites the on-disk file wholesale, including core_team.
 	body := `{
 		"name": "Original Name",
 		"description": "original description",
-		"repository": "https://github.com/example/full-field",
-		"core_team": ["mia","jim","ava","ray"]
+		"repository": "https://github.com/example/full-field"
 	}`
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
@@ -1330,6 +1333,89 @@ func TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending(t *
 	stored, err := readWorkspaceFile(api.homePath, ws.Id)
 	require.NoError(t, err)
 	assert.False(t, stored.SetupPending, "on-disk setup_pending must be false for an explicit-team workspace")
+}
+
+// TestHandleWorkspacePost_CoreTeam_RejectsSystemAgentAndUnregisteredID is
+// review r1 major M4/Gap #6: neither handleWorkspacePost nor
+// handleWorkspacePut validated core_team membership at all before this fix —
+// a caller could add a System Agent (never a chat target, excluded from team
+// rosters by design, AgentConfig.IsSystem's doc comment) or a
+// typo'd/nonexistent agent id with no rejection whatsoever.
+func TestHandleWorkspacePost_CoreTeam_RejectsSystemAgentAndUnregisteredID(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List,
+		config.AgentConfig{ID: "judge", Name: "Judge", Type: config.AgentTypeSystem})
+
+	cases := []struct {
+		name      string
+		coreTeam  string
+		wantWords string
+	}{
+		{"system_agent_rejected", `["mia","judge"]`, "System Agent"},
+		{"unregistered_id_rejected", `["mia","nonexistent-agent"]`, "not a registered agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+				strings.NewReader(`{"name":"`+tc.name+`","core_team":`+tc.coreTeam+`}`))
+			r.Header.Set("Content-Type", "application/json")
+			r.URL.Path = "/api/v1/workspaces"
+			api.HandleWorkspaces(w, r)
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.wantWords)
+		})
+	}
+}
+
+// TestHandleWorkspacePut_CoreTeam_RejectsSystemAgentAndUnregisteredID mirrors
+// the POST test above for the PUT path (review r1 major M4/Gap #6).
+func TestHandleWorkspacePut_CoreTeam_RejectsSystemAgentAndUnregisteredID(t *testing.T) {
+	api := newTestRestAPIWithAvaRoster(t)
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List,
+		config.AgentConfig{ID: "judge", Name: "Judge", Type: config.AgentTypeSystem})
+
+	// Create a valid workspace first.
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"PutRejectTest","core_team":["mia"]}`))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code, "body=%s", wPost.Body.String())
+	var created gen.Workspace
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
+
+	cases := []struct {
+		name      string
+		coreTeam  string
+		wantWords string
+	}{
+		{"system_agent_rejected", `["mia","judge"]`, "System Agent"},
+		{"unregistered_id_rejected", `["mia","nonexistent-agent"]`, "not a registered agent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
+				strings.NewReader(`{"core_team":`+tc.coreTeam+`}`))
+			r.Header.Set("Content-Type", "application/json")
+			r.URL.Path = "/api/v1/workspaces/" + created.Id
+			api.HandleWorkspaces(w, r)
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.wantWords)
+
+			// The workspace's on-disk core_team must be untouched by a rejected PUT.
+			stored, err := readWorkspaceFile(api.homePath, created.Id)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"mia"}, stored.CoreTeam,
+				"a rejected core_team update must not be persisted")
+		})
+	}
 }
 
 // TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending is a

@@ -201,11 +201,15 @@ func TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools(t *testing.T
 		t.Fatal("create_task tool not registered on agent (task tools require a task store)")
 	}
 
-	// Self-assignment: must SUCCEED (not delegation).
-	res := tool.Execute(context.Background(), map[string]any{
+	// Self-assignment: must SUCCEED (not delegation). WithAgentID mirrors real
+	// dispatch (the tool registry always injects the calling agent's own ID
+	// before Execute) — needed here because criteria authorship (FR-6/D5,
+	// review r1 M5) is server-set from ToolAgentID(ctx), never left blank.
+	res := tool.Execute(tools.WithAgentID(context.Background(), agentID), map[string]any{
 		"title":    "self task",
 		"prompt":   "do the thing myself",
 		"agent_id": agentID, // SELF
+		"criteria": []any{map[string]any{"kind": "prose", "text": "the thing is done"}},
 	})
 	if res == nil {
 		t.Fatal("nil result from create_task")

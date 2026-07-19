@@ -30,6 +30,17 @@ func seedTask(t *testing.T, store *task.Store, agentID, createdBy, wsID string) 
 	return tk
 }
 
+// validCriteriaArg returns a minimal well-formed "criteria" tool-call
+// argument (one prose criterion) — the shape create_task's Execute now
+// requires at least one of (FR-6/D5 strict criteria enforcement, review r1
+// major M5). Tests whose concern is something other than criteria
+// enforcement itself use this to stay unaffected by that requirement.
+func validCriteriaArg() []any {
+	return []any{
+		map[string]any{"kind": "prose", "text": "the work is done"},
+	}
+}
+
 // seedWorkspaceDefault writes a minimal workspace JSON with is_default:true under
 // <home>/workspaces/<id>.json so workspace.ResolveDefaultID finds it.
 func seedWorkspaceDefault(t *testing.T, home, id string) {
@@ -220,6 +231,7 @@ func TestTaskCreateTool_WorkspaceFromCtx(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -277,6 +289,7 @@ func TestTaskCreateTool_StaleCtxWorkspace_LandsOnDefault(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -317,6 +330,7 @@ func TestTaskCreateTool_WorkspaceFromHome(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -345,6 +359,7 @@ func TestTaskCreateTool_NoWorkspaceError(t *testing.T) {
 		"title":    "test",
 		"prompt":   "do it",
 		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
 	})
 	if !result.IsError {
 		t.Fatal("expected error when no workspace can be resolved")
@@ -369,7 +384,7 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 	// Root context (no delegation depth) → child stamped generation 1.
 	ctx := WithAgentID(context.Background(), "caller")
 	ctx = WithWorkspaceID(ctx, "ws")
-	res := tool.Execute(ctx, map[string]any{"title": "t1", "prompt": "p", "agent_id": "b"})
+	res := tool.Execute(ctx, map[string]any{"title": "t1", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
 	if res.IsError {
 		t.Fatalf("root create failed: %s", res.ForLLM)
 	}
@@ -380,7 +395,7 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 
 	// Context at generation 4 → child stamped generation 5.
 	ctx5 := WithDelegationDepth(ctx, 4)
-	res = tool.Execute(ctx5, map[string]any{"title": "t2", "prompt": "p", "agent_id": "b"})
+	res = tool.Execute(ctx5, map[string]any{"title": "t2", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
 	if res.IsError {
 		t.Fatalf("nested create failed: %s", res.ForLLM)
 	}
@@ -414,13 +429,13 @@ func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
 
 	// At generation 9, a create yields generation 10 == ceiling → allowed.
 	ctxAt9 := WithDelegationDepth(ctx, 9)
-	if res := tool.Execute(ctxAt9, map[string]any{"title": "ok", "prompt": "p", "agent_id": "b"}); res.IsError {
+	if res := tool.Execute(ctxAt9, map[string]any{"title": "ok", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()}); res.IsError {
 		t.Fatalf("create at the ceiling boundary must be allowed, got: %s", res.ForLLM)
 	}
 
 	// At generation 10, a create would yield generation 11 > ceiling → rejected.
 	ctxAt10 := WithDelegationDepth(ctx, 10)
-	res := tool.Execute(ctxAt10, map[string]any{"title": "blocked", "prompt": "p", "agent_id": "b"})
+	res := tool.Execute(ctxAt10, map[string]any{"title": "blocked", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
 	if !res.IsError {
 		t.Fatal("expected task_create past the depth ceiling to be rejected")
 	}
@@ -434,6 +449,134 @@ func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
 		if tk.Title == "blocked" {
 			t.Fatal("a rejected over-depth task must not be persisted")
 		}
+	}
+}
+
+// TestTaskTool_CreateWithoutCriteria_Rejected is review r1 major M5 (FR-6/D5
+// strict criteria enforcement, ADR-049 SD-A7): an agent-created task with
+// zero acceptance criteria must be rejected outright — neither an absent
+// "criteria" arg nor an explicitly empty array may slip through.
+func TestTaskTool_CreateWithoutCriteria_Rejected(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws")
+
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"absent", map[string]any{"title": "no criteria field", "prompt": "p", "agent_id": "b"}},
+		{"empty_array", map[string]any{"title": "empty criteria", "prompt": "p", "agent_id": "b", "criteria": []any{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := tool.Execute(ctx, tc.args)
+			if !res.IsError {
+				t.Fatal("expected an agent-created task with zero criteria to be rejected")
+			}
+			if !strings.Contains(res.ForLLM, "criteria is required") {
+				t.Errorf("unexpected error message: %s", res.ForLLM)
+			}
+		})
+	}
+
+	// Nothing must have been persisted for either rejected case.
+	all, _ := store.List(task.Filter{WorkspaceID: "ws"})
+	if len(all) != 0 {
+		t.Fatalf("expected zero tasks persisted, got %d: %+v", len(all), all)
+	}
+}
+
+// TestJudge_AllMachineCriteria_UnsatisfiableBashPolicy_RejectedAtWrite is
+// review r1 major M5 / ADR-049 D2 rule 5 (FR-017/052): create_task must
+// reject a criteria set that is ALL kind=check when the assignee's effective
+// bash policy is deny or ask — a machine check that can never even run can
+// never be adjudicated MET, so the write is rejected at create time instead
+// of letting the goal loop retry forever against an unsatisfiable DoD.
+func TestJudge_AllMachineCriteria_UnsatisfiableBashPolicy_RejectedAtWrite(t *testing.T) {
+	checkCriterion := []any{
+		map[string]any{
+			"kind": "check",
+			"text": "tests pass",
+			"check": map[string]any{
+				"command":            "go test ./...",
+				"expected_exit_code": float64(0),
+			},
+		},
+	}
+
+	cases := []struct {
+		name       string
+		policy     string
+		policyOK   bool
+		wantReject bool
+	}{
+		{"deny_rejected", "deny", true, true},
+		{"ask_rejected", "ask", true, true},
+		{"allow_accepted", "allow", true, false},
+		{"unresolvable_assignee_rejected", "", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tool := NewTaskCreateTool(store)
+			tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+			tool.SetBashPolicyChecker(func(assigneeAgentID string) (string, bool) {
+				return tc.policy, tc.policyOK
+			})
+			ctx := WithAgentID(context.Background(), "caller")
+			ctx = WithWorkspaceID(ctx, "ws")
+
+			res := tool.Execute(ctx, map[string]any{
+				"title":    "all-machine criteria",
+				"prompt":   "p",
+				"agent_id": "assignee",
+				"criteria": checkCriterion,
+			})
+			if tc.wantReject {
+				if !res.IsError {
+					t.Fatalf("expected rejection for bash policy %q (ok=%v), got success", tc.policy, tc.policyOK)
+				}
+				if !strings.Contains(res.ForLLM, "D2 rule 5") {
+					t.Errorf("expected the D2 rule 5 message, got: %s", res.ForLLM)
+				}
+			} else if res.IsError {
+				t.Fatalf("expected success for bash policy %q, got error: %s", tc.policy, res.ForLLM)
+			}
+		})
+	}
+}
+
+// TestTaskTool_CreateWithoutBashPolicyChecker_AllCheckCriteria_FailsClosed
+// proves the D2 rule 5 checker itself fails CLOSED (denies) when unwired —
+// mirroring the delegation-deny gate's own unwired-fails-closed discipline
+// (CLAUDE.md hard constraint 6: no default policy fallback).
+func TestTaskTool_CreateWithoutBashPolicyChecker_AllCheckCriteria_FailsClosed(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+	// tool.SetBashPolicyChecker deliberately left unset.
+	ctx := WithAgentID(context.Background(), "caller")
+	ctx = WithWorkspaceID(ctx, "ws")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":    "all-machine, no checker wired",
+		"prompt":   "p",
+		"agent_id": "assignee",
+		"criteria": []any{
+			map[string]any{
+				"kind": "check", "text": "tests pass",
+				"check": map[string]any{"command": "go test ./...", "expected_exit_code": float64(0)},
+			},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("expected an unwired D2 rule 5 checker to fail CLOSED (deny) for an all-check criteria set")
 	}
 }
 
@@ -872,6 +1015,7 @@ func TestTaskCreate_WithBlockedBy(t *testing.T) {
 		"prompt":     "do it",
 		"agent_id":   "agent-b",
 		"blocked_by": []any{blocker.ID},
+		"criteria":   validCriteriaArg(),
 	})
 	if res.IsError {
 		t.Fatalf("task_create with blocked_by: %s", res.ForLLM)
@@ -923,6 +1067,7 @@ func TestTaskCreate_BlockedByRejectsNonExistentBlocker(t *testing.T) {
 		"prompt":     "p",
 		"agent_id":   "agent-b",
 		"blocked_by": []any{"nonexistent-blocker-id"},
+		"criteria":   validCriteriaArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected error creating task blocked_by a non-existent blocker")
@@ -959,6 +1104,7 @@ func TestTaskCreate_BlockedByRejectsCrossWorkspace(t *testing.T) {
 		"prompt":     "p",
 		"agent_id":   "agent-b",
 		"blocked_by": []any{blocker.ID},
+		"criteria":   validCriteriaArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected cross-workspace rejection at task_create")
@@ -1483,6 +1629,7 @@ func TestTaskCreate_AllowsSubagent3pWorker_WhenDelegationAllows(t *testing.T) {
 		"title":    "dispatched to external CLI",
 		"prompt":   "do it",
 		"agent_id": "external-worker",
+		"criteria": validCriteriaArg(),
 	})
 
 	if res == nil || res.IsError {

@@ -136,6 +136,24 @@ type Deps struct {
 	// constructed.
 	DelegationDeny func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial
 
+	// ResolveBashPolicy resolves an assignee agent's effective "bash" tool
+	// policy (ADR-049 D2 rule 5, FR-017/052, review r1 major M5) — the SAME
+	// gate the plain create_task tool enforces (pkg/tools/task.go), needed so
+	// create_task_in_workspace can reject a create whose criteria are ALL
+	// kind=check when that policy is deny or ask (structurally unsatisfiable:
+	// the machine check could never even run). Returns ok=false when the
+	// assignee agent cannot be resolved at all.
+	//
+	// FAIL CLOSED, not open, when nil (tests / standalone): an unwired
+	// checker is a configuration error, never a permission grant — mirrors
+	// the plain create_task tool's own bashPolicyChecker discipline
+	// (pkg/tools/task.go SetBashPolicyChecker), NOT DelegationDeny's
+	// documented fail-open-when-unwired convention above (a separate,
+	// pre-existing policy axis this fix does not touch). The production
+	// gateway MUST wire this; see gateway.go where sysAgentDeps is
+	// constructed.
+	ResolveBashPolicy func(assigneeAgentID string) (policy string, ok bool)
+
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;
 	// the slice may be partial on error. Nil when not wired — the get_usage tool

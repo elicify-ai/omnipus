@@ -409,6 +409,70 @@ func TestGoalLoop_JudgeUnavailable_DoesNotConsumeRound(t *testing.T) {
 	}
 }
 
+// TestGoalLoop_JudgeThrottled_BoundedByOwnTimeout_NotCallerCtx is review r1
+// major M2: checkGoalLoopAfterTurn must NOT hang the interactive turn
+// forever when (a) the judge keeps failing/throttling AND (b) the caller's
+// own ctx carries NO deadline at all (context.Background(), the realistic
+// shape of an interactive chat turn's ctx) — exactly the combination
+// JudgeCriteria's own D7 "retry forever, respecting only ctx cancellation"
+// contract would otherwise hang on indefinitely. goalJudgeRoundTimeout is
+// substituted with a tiny bound so the test itself completes in
+// milliseconds, not the real 10-minute production value.
+func TestGoalLoop_JudgeThrottled_BoundedByOwnTimeout_NotCallerCtx(t *testing.T) {
+	origTimeout := goalJudgeRoundTimeout
+	t.Cleanup(func() { goalJudgeRoundTimeout = origTimeout })
+	goalJudgeRoundTimeout = 5 * time.Millisecond
+
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+
+	// The judge keeps erroring — with the ORIGINAL (pre-fix) code, calling
+	// JudgeCriteria on a ctx with no deadline would retry the real
+	// 60/120/300s D7 backoff schedule forever (production's judgeSleepFn is
+	// the real sleepWithContext, not a test fake here — the fix must bound
+	// the ctx itself, not rely on a test-only sleep substitution).
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return nil, context.DeadlineExceeded
+	}}
+
+	// Deliberately NO deadline/timeout on the caller's ctx — the realistic
+	// shape of an interactive turn's ctx that isn't itself about to expire.
+	ctx := context.Background()
+
+	result := &turnResult{finalContent: "still working on it"}
+	done := make(chan struct{})
+	go func() {
+		al.checkGoalLoopAfterTurn(ctx, agentInst, opts, result)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Returned — bounded by goalJudgeRoundTimeout, not hung forever.
+	case <-time.After(2 * time.Second):
+		t.Fatal("checkGoalLoopAfterTurn did not return within a generous margin over its own " +
+			"bounded timeout — it is hanging on the caller's (deadline-less) ctx instead of its own")
+	}
+
+	after, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GoalRoundsUsed != 0 {
+		t.Fatalf("rounds_used = %d, want 0 (judge unavailability must not consume a round, D7)", after.GoalRoundsUsed)
+	}
+	if len(result.followUps) != 0 {
+		t.Fatal("judge unavailability must not schedule a follow-up round")
+	}
+}
+
 // --- /loop: interval mode, run cap, stop, self-paced reschedule ---------
 
 func TestLoopCommand_IntervalMode_FiresAndIncrementsRunCount(t *testing.T) {
