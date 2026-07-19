@@ -172,6 +172,10 @@ type services struct {
 	// construction failed at boot (a fatal error today — see
 	// setupAndStartServices).
 	PlanEngine *agent.PlanEngine
+	// LoopScheduler is the dedicated `/loop` time-driven scheduler (ADR-049
+	// D6/D7, Wave 2-C2), mirroring TaskTrigger's own dedicated-CronService
+	// pattern above. Constructed and Start()'d alongside TaskTrigger.
+	LoopScheduler *agent.LoopScheduler
 	// notifStore backs schedule-failure notifications and the header
 	// notification center (#264). Created once at boot, reused across reloads.
 	notifStore *notifications.Store
@@ -1556,6 +1560,7 @@ type servicesSnapshot struct {
 	ChannelManager *channels.Manager
 	CronService    *cron.CronService
 	TaskTrigger    *agent.TaskTriggerScheduler
+	LoopScheduler  *agent.LoopScheduler
 	MediaStore     media.MediaStore
 	DeviceService  *devices.Service
 }
@@ -1566,6 +1571,7 @@ func snapshotServices(svc *services) servicesSnapshot {
 		ChannelManager: svc.ChannelManager,
 		CronService:    svc.CronService,
 		TaskTrigger:    svc.TaskTrigger,
+		LoopScheduler:  svc.LoopScheduler,
 		MediaStore:     svc.MediaStore,
 		DeviceService:  svc.DeviceService,
 	}
@@ -1576,6 +1582,7 @@ func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.ChannelManager = snap.ChannelManager
 	svc.CronService = snap.CronService
 	svc.TaskTrigger = snap.TaskTrigger
+	svc.LoopScheduler = snap.LoopScheduler
 	svc.MediaStore = snap.MediaStore
 	svc.DeviceService = snap.DeviceService
 }
@@ -1863,6 +1870,22 @@ func setupAndStartServices(
 		fmt.Println("✓ Task trigger scheduler started")
 	}
 
+	// /loop time-driven scheduler (ADR-049 D6/D7, Wave 2-C2): a SECOND
+	// dedicated CronService instance, mirroring TaskTrigger's own pattern
+	// immediately above — orthogonal to the gateway's user-schedules
+	// service. No boot reconcile needed: unlike task triggers (derived from
+	// the task store), /loop jobs already persist their own cron store and
+	// their session-side UnifiedMeta state independently; a job whose
+	// session lost its loop state self-removes on next fire
+	// (LoopScheduler.RunScheduled).
+	loopSchedStorePath := filepath.Join(homePath, "loops", "jobs.json")
+	runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, agentLoop)
+	if startErr := runningServices.LoopScheduler.Start(); startErr != nil {
+		return nil, fmt.Errorf("error starting loop scheduler: %w", startErr)
+	}
+	agentLoop.SetLoopScheduler(runningServices.LoopScheduler)
+	fmt.Println("✓ Loop scheduler started")
+
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
@@ -2145,9 +2168,38 @@ func setupAndStartServices(
 		// Wave 2-C2 supplies the real /goal and /loop active-loop counters via
 		// these exact call sites; until then they contribute 0 to the R5
 		// global active-loop cap (documented boot-ordering requirement on
-		// PlanEngine.RegisterActiveCounter's doc comment).
-		planEngine.RegisterActiveCounter("goal", func() (int, error) { return 0, nil })
-		planEngine.RegisterActiveCounter("loop", func() (int, error) { return 0, nil })
+		// PlanEngine.RegisterActiveCounter's doc comment). Wave 2-C2 (ADR-049
+		// D6/D7, R5): "goal" counts sessions carrying an active
+		// UnifiedMeta.GoalCondition in the shared session store (the only
+		// store /goal can ever write to — it requires a live
+		// TranscriptStore/TranscriptSessionID, which for every webchat/
+		// channel turn resolves to GetSessionStore()'s shared store, see
+		// resolveOrCreateChannelSession / the WS message handler's session
+		// minting); "loop" counts currently-enabled cron jobs owned by the
+		// dedicated LoopScheduler (constructed above, before this block).
+		planEngine.RegisterActiveCounter("goal", func() (int, error) {
+			store := agentLoop.GetSessionStore()
+			if store == nil {
+				return 0, nil
+			}
+			sessions, err := store.ListSessions()
+			if err != nil {
+				return 0, fmt.Errorf("active-goal counter: list sessions: %w", err)
+			}
+			count := 0
+			for _, s := range sessions {
+				if s != nil && s.GoalCondition != "" {
+					count++
+				}
+			}
+			return count, nil
+		})
+		planEngine.RegisterActiveCounter("loop", func() (int, error) {
+			if runningServices.LoopScheduler == nil {
+				return 0, nil
+			}
+			return len(runningServices.LoopScheduler.ListEnabledJobs()), nil
+		})
 		if startErr := planEngine.Start(context.Background()); startErr != nil {
 			return nil, fmt.Errorf("error starting plan engine: %w", startErr)
 		}
@@ -2508,6 +2560,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.TaskTrigger != nil {
 		runningServices.TaskTrigger.Stop()
 	}
+	if runningServices.LoopScheduler != nil {
+		runningServices.LoopScheduler.Stop()
+	}
 	if runningServices.MediaStore != nil {
 		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 			fms.Stop()
@@ -2697,6 +2752,20 @@ func restartServices(
 			slog.Error("gateway: task trigger reconcile failed on reload", "error", recErr)
 		}
 		fmt.Println("  ✓ Task trigger scheduler restarted")
+	}
+
+	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
+	// D6/D7). The previous instance was already Stop()'d in
+	// stopAndCleanupServices(isReload) — mirrors the task trigger restart
+	// immediately above.
+	{
+		loopSchedStorePath := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "loops", "jobs.json")
+		runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, al)
+		if startErr := runningServices.LoopScheduler.Start(); startErr != nil {
+			return fmt.Errorf("error restarting loop scheduler: %w", startErr)
+		}
+		al.SetLoopScheduler(runningServices.LoopScheduler)
+		fmt.Println("  ✓ Loop scheduler restarted")
 	}
 
 	// Queued-task draining is owned by the dedicated TaskDrainService, never the

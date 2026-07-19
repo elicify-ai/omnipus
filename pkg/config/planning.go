@@ -91,3 +91,29 @@ func (c PlanningConfig) EffectiveIdleExpiryDays(override *int) int {
 	}
 	return DefaultIdleExpiryDays
 }
+
+// EffectiveGoalMaxRounds resolves the /goal round ceiling (FR-9, FR-067):
+// this config's GoalMaxRounds when >=1, else DefaultGoalMaxRounds. No
+// per-entity override source exists for /goal (a session-scoped chat
+// command, not a stored entity with its own Bounds) — the resolved value is
+// snapshotted onto the session's UnifiedMeta.GoalMaxRounds at `/goal` set
+// time so a later config change never retroactively changes an
+// already-running goal's bound.
+func (c PlanningConfig) EffectiveGoalMaxRounds() int {
+	if c.GoalMaxRounds >= 1 {
+		return c.GoalMaxRounds
+	}
+	return DefaultGoalMaxRounds
+}
+
+// EffectiveLoopMaxRuns resolves the /loop run ceiling (FR-9, FR-072): this
+// config's LoopMaxRuns when >=1, else DefaultLoopMaxRuns. Same
+// no-per-entity-override rationale as EffectiveGoalMaxRounds above — the
+// resolved value is snapshotted onto UnifiedMeta.LoopMaxRuns at `/loop` set
+// time.
+func (c PlanningConfig) EffectiveLoopMaxRuns() int {
+	if c.LoopMaxRuns >= 1 {
+		return c.LoopMaxRuns
+	}
+	return DefaultLoopMaxRuns
+}

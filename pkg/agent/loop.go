@@ -140,6 +140,12 @@ type AgentLoop struct {
 	// (SetPlanEngine); nil in tests / before wiring. Wave 2-C2's /goal and
 	// /loop command admission reaches it via GetPlanEngine(al).Admit(kind).
 	planEngine *PlanEngine
+	// loopSched is the dedicated /loop time-driven scheduler (ADR-049 D6/D7,
+	// loop_scheduler.go). Set once at boot by the gateway
+	// (SetLoopScheduler); nil in tests / before wiring — applyLoopCommandPrompt
+	// nil-checks via the loopScheduler() accessor and reports "/loop
+	// unavailable" rather than panicking.
+	loopSched *LoopScheduler
 
 	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
@@ -460,6 +466,19 @@ type processOptions struct {
 	// eviction-survives-everything delivery mechanism rather than adding a
 	// second, parallel injection path.
 	IsTaskRun bool
+
+	// UserInitiated threads bus.InboundMessage.UserInitiated into the turn
+	// (ADR-049 Gap #8/r2, spec Part B FR-075/SD-B6/R6) — see that field's doc
+	// comment for the fail-closed origin contract. handleCommand reads this
+	// (never msg.UserInitiated directly, for the same "read the dedicated
+	// processOptions carrier, not the raw inbound field" discipline
+	// UserID/gatewayPrincipal already establishes) to decide whether /goal
+	// and /loop action or pass through inert as ordinary text. Every
+	// processOptions literal NOT built from userInitiated(msg) — ProcessScheduled,
+	// processTaskDirect, processTaskDirectExternalCLI, processSystemMessage,
+	// spawnSubTurn — leaves this at its zero value (false), which is the
+	// correct fail-closed answer for every one of those non-user origins.
+	UserInitiated bool
 }
 
 // gatewayPrincipal returns the WS-authenticated gateway principal that an
@@ -475,6 +494,19 @@ type processOptions struct {
 // empty structurally rather than by a runtime channel-name guard.
 func gatewayPrincipal(msg bus.InboundMessage) string {
 	return msg.GatewayUserID
+}
+
+// userInitiated returns msg's fail-closed origin signal (ADR-049 Gap #8/r2,
+// R6) for threading onto processOptions.UserInitiated. It reads ONLY
+// bus.InboundMessage.UserInitiated — set true exclusively by the gateway
+// webchat WS `message` handler and by channel adapters' HandleMessage (a
+// real platform sender). Every other producer of an InboundMessage
+// (async-notifier, followUps re-publish, ProcessDirect/ProcessDirectWithChannel)
+// leaves the field at its zero value, so this returns false for them by
+// construction — mirroring gatewayPrincipal's "read the one dedicated
+// carrier, never infer" discipline above.
+func userInitiated(msg bus.InboundMessage) bool {
+	return msg.UserInitiated
 }
 
 // ScheduledJobInfo carries the schedule/job identity that ProcessScheduled
@@ -3475,6 +3507,20 @@ func (al *AgentLoop) EmitPlanStatusChanged(p PlanStatusChangedPayload) {
 	al.emitEvent(EventKindPlanStatusChanged, EventMeta{Source: "plan_engine"}, p)
 }
 
+// EmitGoalStatusChanged publishes a `/goal` loop status transition onto the
+// event bus so every connected SPA WebSocket client receives a goal_status
+// frame (ADR-049 D6/D7, spec Part B US-8). Safe to call from any goroutine.
+func (al *AgentLoop) EmitGoalStatusChanged(p GoalStatusChangedPayload) {
+	al.emitEvent(EventKindGoalStatusChanged, EventMeta{Source: "goal_loop"}, p)
+}
+
+// EmitLoopStatusChanged publishes a `/loop` status transition onto the event
+// bus so every connected SPA WebSocket client receives a loop_status frame
+// (ADR-049 D6/D7, spec Part B US-9). Safe to call from any goroutine.
+func (al *AgentLoop) EmitLoopStatusChanged(p LoopStatusChangedPayload) {
+	al.emitEvent(EventKindLoopStatusChanged, EventMeta{Source: "goal_loop"}, p)
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
@@ -5295,6 +5341,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		// it with the platform handle (e.g. "@alice"), which is not a gateway
 		// principal and must never be stamped as audit User.
 		UserID:              gatewayPrincipal(msg),
+		UserInitiated:       userInitiated(msg),
 		UserMessage:         msg.Content,
 		Media:               msg.Media,
 		DefaultResponse:     defaultResponse,
@@ -5828,6 +5875,12 @@ func (al *AgentLoop) runAgentLoop(
 		// abortTurn's doc comment for the full case split.
 		return "", nil
 	}
+
+	// ADR-049 D6/D7 (US-8): judge-gated /goal round advance. Fast no-op
+	// unless opts.TranscriptSessionID's session carries an active goal; may
+	// append a steering follow-up to result.followUps, published by the loop
+	// immediately below exactly like any other follow-up.
+	al.checkGoalLoopAfterTurn(ctx, agent, opts, &result)
 
 	for _, followUp := range result.followUps {
 		if pubErr := al.bus.PublishInbound(ctx, followUp); pubErr != nil {
@@ -9649,6 +9702,18 @@ func (al *AgentLoop) handleCommand(
 	// rewrites their turn. See applyMemoryCommandPrompt's doc comment for why
 	// a rewrite hook is used instead of a Handler.
 	if matched, handled, reply := al.applyMemoryCommandPrompt(msg.Content, opts); matched {
+		return reply, handled
+	}
+
+	// /goal and /loop (ADR-049 D6, Gap #8/r2 origin gating) — checked before
+	// registered-command dispatch so a matched verb can answer synchronously
+	// (status/clear/stop) or rewrite the turn (goal set) exactly like the
+	// hooks above. A non-user-initiated turn's "/goal"/"/loop" text is NOT
+	// matched by either hook and falls through to normal dispatch/passthrough.
+	if matched, handled, reply := al.applyGoalCommandPrompt(ctx, msg, agent, opts); matched {
+		return reply, handled
+	}
+	if matched, handled, reply := al.applyLoopCommandPrompt(ctx, msg, agent, opts); matched {
 		return reply, handled
 	}
 

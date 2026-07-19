@@ -102,6 +102,41 @@ type SessionMeta struct {
 	AgentIDs            []string          `json:"agent_ids,omitempty"`
 	ActiveAgentID       string            `json:"active_agent_id,omitempty"`
 	CompactionSummaries map[string]string `json:"compaction_summaries,omitempty"` // per-agent compaction
+
+	// Goal loop state (ADR-049 D6/D7, spec Part B US-8, `/goal <condition>`),
+	// following the TaskID precedent above: session-scoped, not a wire type
+	// (the `goal_status` WS frame and `/goal status` reply are the wire/UX
+	// surfaces). GoalCondition == "" means no active goal — replace-on-set
+	// (FR-068) simply overwrites all five fields together.
+	GoalCondition    string `json:"goal_condition,omitempty"`
+	GoalRoundsUsed   int    `json:"goal_rounds_used,omitempty"`
+	GoalMaxRounds    int    `json:"goal_max_rounds,omitempty"`
+	GoalLatestReason string `json:"goal_latest_reason,omitempty"`
+	// GoalStartedAt is an RFC 3339 UTC timestamp, used for `/goal status`'s
+	// elapsed wall-clock (FR-069).
+	GoalStartedAt string `json:"goal_started_at,omitempty"`
+
+	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
+	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)
+	// or "self_paced" (agent-chosen one-shot `at` jobs, FR-072).
+	LoopMode     string `json:"loop_mode,omitempty"`
+	LoopPrompt   string `json:"loop_prompt,omitempty"`
+	LoopRunCount int    `json:"loop_run_count,omitempty"`
+	LoopMaxRuns  int    `json:"loop_max_runs,omitempty"`
+	// LoopIntervalMS is set for interval mode (the fixed cadence); 0 for
+	// self_paced mode (which instead carries LoopNextDelayMS per run).
+	LoopIntervalMS int64 `json:"loop_interval_ms,omitempty"`
+	// LoopNextDelayMS is the self-paced mode's most recently agent-chosen
+	// next-run delay (FR-072), surfaced by `/loop status`. 0 until the first
+	// self-paced run completes.
+	LoopNextDelayMS int64 `json:"loop_next_delay_ms,omitempty"`
+	// LoopJobID is the owning cron.CronJob.ID (pkg/agent's dedicated
+	// LoopScheduler store) so /loop stop and the run-fired callback can find
+	// and remove/reschedule the job.
+	LoopJobID string `json:"loop_job_id,omitempty"`
+	// LoopStartedAt is an RFC 3339 UTC timestamp, used for `/loop status`'s
+	// elapsed wall-clock.
+	LoopStartedAt string `json:"loop_started_at,omitempty"`
 }
 
 // PostLoad backfills v2 multi-agent fields from the legacy AgentID field.

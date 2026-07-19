@@ -316,6 +316,19 @@ func (cs *CronService) now() time.Time {
 	return c.Now()
 }
 
+// Now returns the service's current time per its injected Clock (real time
+// by default; a fake clock under SetClock). Exported so callers that build
+// CronSchedule values externally (e.g. pkg/agent's LoopScheduler computing a
+// one-shot `at` timestamp) can stay consistent with the SAME clock this
+// service uses internally for due-job comparisons — computing "now" from a
+// different source (e.g. the real wall clock while a fake clock is
+// injected) would make a freshly-added "at" job appear already in the past
+// (or arbitrarily far in the future) relative to this service's own
+// due-check, silently never firing or firing immediately.
+func (cs *CronService) Now() time.Time {
+	return cs.now()
+}
+
 // clockNowUnsafeMS returns the injected clock's time in ms. Caller must hold the
 // lock (it reads cs.clock without re-locking, for use inside locked sections).
 func (cs *CronService) clockNowUnsafeMS() int64 {

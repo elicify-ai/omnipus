@@ -1684,6 +1684,10 @@ func (h *WSHandler) handleChatMessage(
 		Content:       turnContent,
 		SessionID:     sessionID,
 		Media:         acceptedMedia,
+		// UserInitiated (ADR-049 Gap #8/r2, R6): the webchat WS `message`
+		// handler is the "Web WS message handler (authenticated gateway
+		// user)" origination point — always a genuine live user action.
+		UserInitiated: true,
 	}
 	if agentID != "" {
 		// Format already validated up front, before the kickoff consume step
@@ -3431,6 +3435,47 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				planF.PausedReason = &pr
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypePlanStatus), planF)
+		case agent.EventKindGoalStatusChanged:
+			// ADR-049 D6/D7: a session's `/goal` loop status changed (set,
+			// round advance, met, bound reached, cleared). Broadcast to every
+			// connection, mirroring EventKindPlanStatusChanged — the SPA
+			// matches session_id client-side to the currently open session.
+			p, ok := evt.Payload.(agent.GoalStatusChangedPayload)
+			if !ok {
+				continue
+			}
+			goalF := generated.GoalStatusFrame{
+				Type:         string(generated.WsFrameTypeGoalStatus),
+				SessionId:    p.SessionID,
+				Condition:    p.Condition,
+				Round:        p.Round,
+				MaxRounds:    p.MaxRounds,
+				LatestReason: p.LatestReason,
+				ActiveLoops:  p.ActiveLoops,
+				Cap:          p.Cap,
+				State:        p.State,
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
+		case agent.EventKindLoopStatusChanged:
+			// ADR-049 D6/D7: a session's `/loop` status changed (set, run
+			// fired, run-cap reached, stop). Broadcast to every connection,
+			// mirroring EventKindGoalStatusChanged above.
+			p, ok := evt.Payload.(agent.LoopStatusChangedPayload)
+			if !ok {
+				continue
+			}
+			loopF := generated.LoopStatusFrame{
+				Type:      string(generated.WsFrameTypeLoopStatus),
+				SessionId: p.SessionID,
+				Mode:      p.Mode,
+				Run:       p.Run,
+				MaxRuns:   p.MaxRuns,
+				State:     p.State,
+			}
+			if p.NextDelay != nil {
+				loopF.NextDelay = p.NextDelay
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeLoopStatus), loopF)
 		}
 	}
 }
