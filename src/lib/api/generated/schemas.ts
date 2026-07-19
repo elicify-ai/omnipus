@@ -2241,6 +2241,19 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     completed_at: z.string().datetime({ offset: true }),
   })
   .partial();
+export const EvidenceRecord = z.object({
+  id: z.string(),
+  task_id: z.string(),
+  criterion_id: z.string(),
+  attempt: z.number().int().gte(1),
+  command: z.string(),
+  exit_code: z.number().int(),
+  output: z.string(),
+  truncated: z.boolean(),
+  timed_out: z.boolean(),
+  policy_denied: z.boolean(),
+  recorded_at: z.string().datetime({ offset: true }),
+});
 export const McpServer = z
   .object({
     id: z.string(),
@@ -2470,6 +2483,85 @@ export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
 export const WorkspaceInstructionsRequest = z.object({
   content: z.string().max(262144),
 });
+export const Plan: z.ZodType<Plan> = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string().min(1).max(200),
+  goal: z.string().max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  state: z.enum(["draft", "approved", "running", "done", "failed"]),
+  plan_phase: z
+    .enum(["dispatching", "judging", "synthesizing", "idle"])
+    .optional()
+    .default("idle"),
+  failed_reason: z
+    .enum(["judge_rounds_exhausted", "stopped_by_user", "idle_expired"])
+    .optional(),
+  owner_agent_id: z.string(),
+  dod: z.array(AcceptanceCriterion).optional(),
+  bounds: z
+    .object({
+      plan_judge_max_rounds: z.number().int().gte(1),
+      idle_expiry_days: z.number().int().gte(1),
+    })
+    .partial()
+    .optional(),
+  judge_rounds: z.number().int().gte(0).optional(),
+  active_loop: z.boolean().optional(),
+  paused_reason: z.string().optional(),
+  last_activity_at: z.string().datetime({ offset: true }).optional(),
+  progress: z.number().gte(0).lte(1).optional(),
+  owner: z.string(),
+  created_by: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+  updated_at: z.string().datetime({ offset: true }),
+  approved_at: z.string().datetime({ offset: true }).optional(),
+  started_at: z.string().datetime({ offset: true }).optional(),
+  completed_at: z.string().datetime({ offset: true }).optional(),
+});
+export const PlanListResponse: z.ZodType<PlanListResponse> = z.object({
+  plans: z.array(Plan),
+  total: z.number().int(),
+});
+export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
+  workspace_id: z.string(),
+  title: z.string().min(1).max(200),
+  goal: z.string().max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  owner_agent_id: z.string().min(1),
+  dod: z.array(AcceptanceCriterion).optional(),
+  bounds: z
+    .object({
+      plan_judge_max_rounds: z.number().int().gte(1),
+      idle_expiry_days: z.number().int().gte(1),
+    })
+    .partial()
+    .optional(),
+});
+export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
+  .object({
+    title: z.string().min(1).max(200),
+    goal: z.string().max(2000),
+    description: z.string().max(2000),
+    state: z.enum(["draft", "approved", "running", "done", "failed"]),
+    owner_agent_id: z.string().min(1),
+    dod: z.array(AcceptanceCriterion),
+    bounds: z
+      .object({
+        plan_judge_max_rounds: z.number().int().gte(1),
+        idle_expiry_days: z.number().int().gte(1),
+      })
+      .partial(),
+  })
+  .partial();
+export const PlanApproveError = z
+  .object({
+    error: z.string(),
+    task_errors: z.array(
+      z.object({ task_id: z.string(), title: z.string(), reason: z.string() })
+    ),
+  })
+  .partial();
 export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
   .object({
     agent_id: z.string(),
@@ -2587,90 +2679,6 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
 export const RetentionUpdateRequest = z
   .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
   .partial();
-export const Plan: z.ZodType<Plan> = z.object({
-  id: z.string(),
-  workspace_id: z.string(),
-  title: z.string().min(1).max(200),
-  goal: z.string().max(2000).optional(),
-  description: z.string().max(2000).optional(),
-  state: z.enum(["draft", "approved", "running", "done", "failed"]),
-  plan_phase: z
-    .enum(["dispatching", "judging", "synthesizing", "idle"])
-    .optional()
-    .default("idle"),
-  failed_reason: z
-    .enum(["judge_rounds_exhausted", "stopped_by_user", "idle_expired"])
-    .optional(),
-  owner_agent_id: z.string(),
-  dod: z.array(AcceptanceCriterion).optional(),
-  bounds: z
-    .object({
-      plan_judge_max_rounds: z.number().int().gte(1),
-      idle_expiry_days: z.number().int().gte(1),
-    })
-    .partial()
-    .optional(),
-  judge_rounds: z.number().int().gte(0).optional(),
-  active_loop: z.boolean().optional(),
-  paused_reason: z.string().optional(),
-  last_activity_at: z.string().datetime({ offset: true }).optional(),
-  progress: z.number().gte(0).lte(1).optional(),
-  owner: z.string(),
-  created_by: z.string(),
-  created_at: z.string().datetime({ offset: true }),
-  updated_at: z.string().datetime({ offset: true }),
-  approved_at: z.string().datetime({ offset: true }).optional(),
-  started_at: z.string().datetime({ offset: true }).optional(),
-  completed_at: z.string().datetime({ offset: true }).optional(),
-});
-export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
-  workspace_id: z.string(),
-  title: z.string().min(1).max(200),
-  goal: z.string().max(2000).optional(),
-  description: z.string().max(2000).optional(),
-  owner_agent_id: z.string().min(1),
-  dod: z.array(AcceptanceCriterion).optional(),
-  bounds: z
-    .object({
-      plan_judge_max_rounds: z.number().int().gte(1),
-      idle_expiry_days: z.number().int().gte(1),
-    })
-    .partial()
-    .optional(),
-});
-export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
-  .object({
-    title: z.string().min(1).max(200),
-    goal: z.string().max(2000),
-    description: z.string().max(2000),
-    state: z.enum(["draft", "approved", "running", "done", "failed"]),
-    owner_agent_id: z.string().min(1),
-    dod: z.array(AcceptanceCriterion),
-    bounds: z
-      .object({
-        plan_judge_max_rounds: z.number().int().gte(1),
-        idle_expiry_days: z.number().int().gte(1),
-      })
-      .partial(),
-  })
-  .partial();
-export const PlanListResponse: z.ZodType<PlanListResponse> = z.object({
-  plans: z.array(Plan),
-  total: z.number().int(),
-});
-export const EvidenceRecord = z.object({
-  id: z.string(),
-  task_id: z.string(),
-  criterion_id: z.string(),
-  attempt: z.number().int().gte(1),
-  command: z.string(),
-  exit_code: z.number().int(),
-  output: z.string(),
-  truncated: z.boolean(),
-  timed_out: z.boolean(),
-  policy_denied: z.boolean(),
-  recorded_at: z.string().datetime({ offset: true }),
-});
 
 const endpoints = makeApi([
   {
@@ -4623,6 +4631,172 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "get",
+    path: "/plans/:id",
+    alias: "getPlan",
+    description: `Returns a single plan with &#x60;progress&#x60;/&#x60;plan_phase&#x60;/&#x60;failed_reason&#x60; server-computed read-time (ADR-049 D1).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/plans/:id",
+    alias: "updatePlan",
+    description: `Partially updates plan fields (PATCH semantics — only provided fields change). &#x60;state&#x60; drives the canonical 5-value state machine; illegal transitions are rejected 400. Use POST /plans/{id}/approve for the tiered-DoD-checked draft-&gt;approved transition rather than setting &#x60;state&#x60; directly here (this endpoint applies &#x60;plan.ValidateStateTransition&#x60; with no DoD/criteria gating).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PlanUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/plans/:id",
+    alias: "deletePlan",
+    description: `Deletes a plan by ID. A &#x60;running&#x60; plan cannot be deleted (409) — stop it first via POST /plans/{id}/stop. Deleting a non-running plan clears &#x60;plan_id&#x60; on its member tasks (best-effort, SD-A5).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/plans/:id/approve",
+    alias: "approvePlan",
+    description: `Transitions a &#x60;draft&#x60; plan to &#x60;approved&#x60; (ADR-049 D1/D5, Round-1 Grill Reconciliation R1). Runs the tiered Definition-of-Done check (strict for agent-authored plans, soft for human/UI-authored plans) and the UNCONDITIONAL member-task-criteria gate (FR-084 — every member task must carry &gt;&#x3D;1 criterion in every tier). On success the single plan-engine instance auto-advances &#x60;approved&#x60; -&gt; &#x60;running&#x60; on its next tick and begins dispatch — there is no separate &quot;start&quot; action.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Approval rejected — either a plan-level gate (not in draft state, or a strict-tier plan with an empty Definition of Done) or the unconditional per-task criteria gate.
+`,
+        schema: PlanApproveError,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/plans/:id/stop",
+    alias: "stopPlan",
+    description: `Transitions a &#x60;running&#x60; plan to &#x60;failed&#x60; with &#x60;failed_reason: stopped_by_user&#x60; (ADR-049 D4, SD-C5 — Stop/Clear may be optimistic client-side, as this cannot validation-fail). Rejected 400 when the plan is not currently &#x60;running&#x60;.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/preview/:agent_id/:token/:path",
     alias: "getPreview",
     description: `Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required — the path token IS the credential (FR-023). Served on the MAIN gateway listener at the /preview/ path prefix (ADR-044) — there is no separate preview listener/port/origin. Gated by the live gateway.preview_enabled flag: when disabled the endpoint returns 404 with no restart required. Unknown or expired tokens return 404. All HTTP methods are proxied (previewed apps may POST). Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection; the proxy strips inbound Cookie/Authorization and neutralizes reserved Set-Cookie so a previewed app cannot read or plant the gateway session/CSRF cookies.
@@ -6352,6 +6526,72 @@ Polled by the SPA StatusBar every 15 seconds.
   },
   {
     method: "get",
+    path: "/tasks/:id/evidence",
+    alias: "listTaskEvidence",
+    description: `Returns every persisted EvidenceRecord for this task (ADR-049 D2, spec Part A §C) — one record per (criterion_id, attempt) machine-check execution, redacted and size-capped at write time. Read-only surface; evidence is written only by the evidence-ladder judge, never via this endpoint. Returns an empty array for a task with no machine checks.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(EvidenceRecord),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/stop",
+    alias: "stopTask",
+    description: `Cancels the task&#x27;s in-flight worker turn (if any, via the same cancellation path as a chat /cancel) and transitions the task to &#x60;failed&#x60; with a &#x60;stopped by user&#x60; result (SD-C5 — Stop/Clear may be optimistic client-side, as this cannot validation-fail). Rejected 400 when the task is already terminal (&#x60;done&#x60;/&#x60;failed&#x60;) or &#x60;blocked&#x60; (nothing running to stop).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/tasks/:id/subtasks",
     alias: "listSubtasks",
     description: `Returns all subtasks (children with this parent_task_id).`,
@@ -6397,6 +6637,39 @@ Polled by the SPA StatusBar every 15 seconds.
       },
     ],
     response: Task,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks/:id/verdicts",
+    alias: "listTaskVerdicts",
+    description: `Returns every judge_verdict transcript entry recorded for this task&#x27;s goal-loop attempts (ADR-049 D2, spec Part A §C / Round-1 Reconciliation R3), oldest first. Read from the task&#x27;s session transcript (the durable carrier — the live JudgeVerdictFrame WS push is the other, ephemeral carrier of the same shape). Returns an empty array for a task that has not yet been judged (e.g. no criteria, or no attempt has completed).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(JudgeVerdict),
     errors: [
       {
         status: 400,
@@ -7136,6 +7409,77 @@ Returns HTTP 201 on success.
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/plans",
+    alias: "listWorkspacePlans",
+    description: `Returns every Plan whose workspace_id matches, newest-first by created_at, with &#x60;progress&#x60;/&#x60;plan_phase&#x60;/&#x60;failed_reason&#x60; server-computed (ADR-049 D1, mirrors the removed MilestoneListResponse).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: PlanListResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/plans",
+    alias: "createWorkspacePlan",
+    description: `Creates a new Plan in &#x60;draft&#x60; state (ADR-049 D1). Member tasks are linked afterward via &#x60;Task.plan_id&#x60; (same-workspace FK, validated).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PlanCreateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],

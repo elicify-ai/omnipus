@@ -3409,6 +3409,28 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				taskF.AgentId = &aid
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskStatusChanged), taskF)
+		case agent.EventKindPlanStatusChanged:
+			// ADR-049 D4/D7: a Plan's state/phase/progress/paused_reason changed.
+			// Not tied to a specific chatID (a Plan is workspace-scoped, not
+			// session-scoped) — broadcast to every connection, mirroring
+			// EventKindTaskStatusChanged above. The SPA invalidates its plans
+			// query cache / updates the plan card on receipt.
+			p, ok := evt.Payload.(agent.PlanStatusChangedPayload)
+			if !ok {
+				continue
+			}
+			planF := generated.PlanStatusFrame{
+				Type:      string(generated.WsFrameTypePlanStatus),
+				PlanId:    p.PlanID,
+				State:     p.State,
+				PlanPhase: p.PlanPhase,
+				Progress:  p.Progress,
+			}
+			if p.PausedReason != "" {
+				pr := p.PausedReason
+				planF.PausedReason = &pr
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypePlanStatus), planF)
 		}
 	}
 }

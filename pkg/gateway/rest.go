@@ -53,6 +53,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -97,8 +98,16 @@ type restAPI struct {
 	configMu      sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
 	taskStore     *task.Store         // unified task persistence
 	taskExecutor  *agent.TaskExecutor // task execution engine
-	credStore     *credentials.Store  // shared unlocked credential store (injected at boot)
-	mediaStore    media.MediaStore    // shared media store for serving media files
+	// planStore is the Plan entity persistence (ADR-049 D1, pkg/plan), shared
+	// with the pkg/agent PlanEngine (both hold the SAME *plan.Store instance,
+	// constructed once at boot — setupAndStartServices). Nil in test setups
+	// that do not exercise the Plans REST surface; handlers in rest_plans.go
+	// and the plan_id FK check in rest_tasks.go fail closed (503/400) rather
+	// than silently skipping validation when nil (mirrors
+	// errTaskAgentLoopUnavailable's fail-closed convention).
+	planStore  *plan.Store
+	credStore  *credentials.Store // shared unlocked credential store (injected at boot)
+	mediaStore media.MediaStore   // shared media store for serving media files
 	// ssrfChecker enforces SEC-24 SSRF protection on outbound HTTP requests made
 	// by REST handlers (skills installer). Nil when SSRF protection is disabled
 	// in config (sandbox.ssrf.enabled = false). Shared with the agent loop's
@@ -2617,6 +2626,25 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 		})
 		return
 	}
+	// ADR-049 D4/FR-065: an agent owning >=1 active (State=running) Plan
+	// cannot be deleted outright — the plan engine has no owner left to wake
+	// at its next decision point, which would silently stall the loop. The
+	// operator must stop/reassign the plan(s) first (or disable the agent,
+	// which pauses them instead — see the workspace member-heartbeat
+	// enable/disable path in rest_workspaces.go, this codebase's only
+	// per-agent enable/disable toggle). Checked before the destructive config
+	// write below. Nil-safe: a pre-boot/degraded engine (not yet wired) is
+	// not treated as "no active plans" — HasActivePlansOwnedBy itself already
+	// fails safe (returns false only on a genuine empty-store read), and a
+	// nil engine here simply means Wave 2-C1's plan feature is unavailable in
+	// this process, which is a legitimate skip, not a fail-open on real data.
+	if pe := agent.GetPlanEngine(a.agentLoop); pe != nil && pe.HasActivePlansOwnedBy(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "agent owns active plans; stop or reassign them before deleting this agent",
+			"code":  "agent_owns_active_plans",
+		})
+		return
+	}
 	// Snapshot the audit fields BEFORE we mutate config.json — `found` still
 	// points into the in-memory config and the safeUpdateConfigJSON callback
 	// runs before the reload returns.
@@ -2855,7 +2883,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	//     delegation_policy raw-body-sniff precedent above) and reject a disable
 	//     attempt with a loud 400 rather than a silent drop.
 	if foundAgent.ID == string(coreagent.IDJudge) {
-		var statePeek struct {
+		var statePeek struct { // not-wire-format: decode-only local peek at raw body fields to reject a disable attempt, never serialized to any response
 			Enabled  *bool `json:"enabled"`
 			Disabled *bool `json:"disabled"`
 		}
@@ -4770,6 +4798,11 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
+	// Plans REST surface (ADR-049 D1, Wave 2-C1). GET/POST /workspaces/{id}/plans
+	// is dispatched from HandleWorkspaces (rest_workspaces.go); individual plan
+	// GET/PUT/DELETE and /approve /stop live here.
+	cm.RegisterHTTPHandler("/api/v1/plans", a.withAuth(a.HandlePlans))
+	cm.RegisterHTTPHandler("/api/v1/plans/", a.withAuth(a.HandlePlans))
 	cm.RegisterHTTPHandler("/api/v1/workspaces", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
 	cm.RegisterHTTPHandler("/api/v1/workspaces/", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))

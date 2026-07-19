@@ -135,6 +135,11 @@ type AgentLoop struct {
 	// trigger CronService. Set at boot by the gateway (SetTaskTriggerScheduler);
 	// nil in tests / before wiring. All notify paths are nil-safe.
 	taskTrigger *TaskTriggerScheduler
+	// planEngine is the single hybrid plan-coordinator instance (ADR-049 D4,
+	// Wave 2-B's PlanEngine). Set once at boot by the gateway
+	// (SetPlanEngine); nil in tests / before wiring. Wave 2-C2's /goal and
+	// /loop command admission reaches it via GetPlanEngine(al).Admit(kind).
+	planEngine *PlanEngine
 
 	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
@@ -3458,6 +3463,18 @@ func (al *AgentLoop) EmitTaskStatusChanged(p TaskStatusChangedPayload) {
 	al.emitEvent(EventKindTaskStatusChanged, EventMeta{AgentID: p.AgentID, Source: "task_executor"}, p)
 }
 
+// EmitPlanStatusChanged publishes a Plan state/phase/progress transition onto
+// the event bus so every connected SPA WebSocket client receives a
+// plan_status frame (ADR-049 D4/D7, spec Part B R3). Safe to call from any
+// goroutine — the bus drops to a full subscriber rather than blocking. The
+// production emission path is pkg/plan.Store.OnChange, wired at gateway boot
+// (setupAndStartServices) to call this after every successful plan
+// Create/Update — see that wiring for why this is the single choke point for
+// both the plan engine's and the gateway REST layer's mutations.
+func (al *AgentLoop) EmitPlanStatusChanged(p PlanStatusChangedPayload) {
+	al.emitEvent(EventKindPlanStatusChanged, EventMeta{Source: "plan_engine"}, p)
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
@@ -4040,6 +4057,28 @@ func (al *AgentLoop) SetTaskTriggerScheduler(s *TaskTriggerScheduler) {
 	al.mu.Lock()
 	al.taskTrigger = s
 	al.mu.Unlock()
+}
+
+// SetPlanEngine installs the single hybrid plan-coordinator instance
+// (ADR-049 D4) so command handlers and REST handlers can reach its Admit/
+// Release admission authority and PausePlansOwnedBy/ResumePlansOwnedBy/
+// HasActivePlansOwnedBy owner-lifecycle hooks. Called once at boot by the
+// gateway (setupAndStartServices), before any /goal or /loop admission can
+// occur. Idempotent.
+func (al *AgentLoop) SetPlanEngine(pe *PlanEngine) {
+	al.mu.Lock()
+	al.planEngine = pe
+	al.mu.Unlock()
+}
+
+// GetPlanEngine returns the installed PlanEngine (may be nil in tests or
+// before boot wiring completes — Wave 2-C2's /goal and /loop admission paths
+// MUST nil-check before calling Admit). Mirrors GetTaskStore/GetTaskExecutor's
+// free-function-with-al-parameter convention.
+func GetPlanEngine(al *AgentLoop) *PlanEngine {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.planEngine
 }
 
 // taskTriggerScheduler returns the installed scheduler under the loop lock.

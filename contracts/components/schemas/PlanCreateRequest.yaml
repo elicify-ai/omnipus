@@ -1,10 +1,11 @@
 title: PlanCreateRequest
 description: >
-  Request body for POST /plans (ADR-049 D1/FR-1). Creates a plan in `draft`
-  state. `workspace_id` is required (a Plan is not nested under a workspace
-  path — creation is a top-level `POST /plans` call, unlike the removed
-  Milestone's `POST /workspaces/{id}/milestones`); member tasks are linked
-  afterward via `Task.plan_id`, which is validated same-workspace.
+  Request body for POST /workspaces/{id}/plans (ADR-049 D1/FR-1, Wave 2-C1 —
+  the workspace-nested shape chosen for the deferred REST paths, mirroring the
+  removed Milestone's `POST /workspaces/{id}/milestones`). Creates a plan in
+  `draft` state. `workspace_id` is also required in the body (validated to
+  match the path); member tasks are linked afterward via `Task.plan_id`,
+  which is validated same-workspace.
 type: object
 required:
   - workspace_id

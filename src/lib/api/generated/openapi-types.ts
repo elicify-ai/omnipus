@@ -1934,6 +1934,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/{id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a task's judge-check evidence
+         * @description Returns every persisted EvidenceRecord for this task (ADR-049 D2, spec Part A §C) — one record per (criterion_id, attempt) machine-check execution, redacted and size-capped at write time. Read-only surface; evidence is written only by the evidence-ladder judge, never via this endpoint. Returns an empty array for a task with no machine checks.
+         */
+        get: operations["listTaskEvidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{id}/verdicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a task's judge verdicts
+         * @description Returns every judge_verdict transcript entry recorded for this task's goal-loop attempts (ADR-049 D2, spec Part A §C / Round-1 Reconciliation R3), oldest first. Read from the task's session transcript (the durable carrier — the live JudgeVerdictFrame WS push is the other, ephemeral carrier of the same shape). Returns an empty array for a task that has not yet been judged (e.g. no criteria, or no attempt has completed).
+         */
+        get: operations["listTaskVerdicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a task's running goal-loop
+         * @description Cancels the task's in-flight worker turn (if any, via the same cancellation path as a chat /cancel) and transitions the task to `failed` with a `stopped by user` result (SD-C5 — Stop/Clear may be optimistic client-side, as this cannot validation-fail). Rejected 400 when the task is already terminal (`done`/`failed`) or `blocked` (nothing running to stop).
+         */
+        post: operations["stopTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp-servers": {
         parameters: {
             query?: never;
@@ -2310,6 +2370,98 @@ export interface paths {
          */
         put: operations["putWorkspaceInstructions"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List plans in a workspace
+         * @description Returns every Plan whose workspace_id matches, newest-first by created_at, with `progress`/`plan_phase`/`failed_reason` server-computed (ADR-049 D1, mirrors the removed MilestoneListResponse).
+         */
+        get: operations["listWorkspacePlans"];
+        put?: never;
+        /**
+         * Create a plan in a workspace
+         * @description Creates a new Plan in `draft` state (ADR-049 D1). Member tasks are linked afterward via `Task.plan_id` (same-workspace FK, validated).
+         */
+        post: operations["createWorkspacePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a plan by ID
+         * @description Returns a single plan with `progress`/`plan_phase`/`failed_reason` server-computed read-time (ADR-049 D1).
+         */
+        get: operations["getPlan"];
+        /**
+         * Update a plan
+         * @description Partially updates plan fields (PATCH semantics — only provided fields change). `state` drives the canonical 5-value state machine; illegal transitions are rejected 400. Use POST /plans/{id}/approve for the tiered-DoD-checked draft->approved transition rather than setting `state` directly here (this endpoint applies `plan.ValidateStateTransition` with no DoD/criteria gating).
+         */
+        put: operations["updatePlan"];
+        post?: never;
+        /**
+         * Delete a plan
+         * @description Deletes a plan by ID. A `running` plan cannot be deleted (409) — stop it first via POST /plans/{id}/stop. Deleting a non-running plan clears `plan_id` on its member tasks (best-effort, SD-A5).
+         */
+        delete: operations["deletePlan"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plans/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a draft plan
+         * @description Transitions a `draft` plan to `approved` (ADR-049 D1/D5, Round-1 Grill Reconciliation R1). Runs the tiered Definition-of-Done check (strict for agent-authored plans, soft for human/UI-authored plans) and the UNCONDITIONAL member-task-criteria gate (FR-084 — every member task must carry >=1 criterion in every tier). On success the single plan-engine instance auto-advances `approved` -> `running` on its next tick and begins dispatch — there is no separate "start" action.
+         */
+        post: operations["approvePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plans/{id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a running plan
+         * @description Transitions a `running` plan to `failed` with `failed_reason: stopped_by_user` (ADR-049 D4, SD-C5 — Stop/Clear may be optimistic client-side, as this cannot validation-fail). Rejected 400 when the plan is not currently `running`.
+         */
+        post: operations["stopPlan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7558,7 +7710,7 @@ export interface components {
         /**
          * Plan
          * @description A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task DAG under a goal, Definition of Done, owner agent, and state machine. Tasks join a plan via `Task.plan_id` (same-workspace FK, validated); membership and `progress` are computed read-time by scanning member tasks — never stored on the Plan record (mirrors the removed Milestone's `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json` (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones (see the Milestone removal diffs) as the container for grouped, judged, goal-driven work.
-         *     Returned by GET /workspaces/{id}/plans, GET /plans/{id}, POST /plans, and PUT /plans/{id}.
+         *     Returned by GET /workspaces/{id}/plans, POST /workspaces/{id}/plans, GET /plans/{id}, PUT /plans/{id}, POST /plans/{id}/approve, and POST /plans/{id}/stop (Wave 2-C1 — the deferred REST paths from Constraint #8's contract-surface table).
          */
         Plan: {
             /**
@@ -7694,7 +7846,7 @@ export interface components {
         };
         /**
          * PlanCreateRequest
-         * @description Request body for POST /plans (ADR-049 D1/FR-1). Creates a plan in `draft` state. `workspace_id` is required (a Plan is not nested under a workspace path — creation is a top-level `POST /plans` call, unlike the removed Milestone's `POST /workspaces/{id}/milestones`); member tasks are linked afterward via `Task.plan_id`, which is validated same-workspace.
+         * @description Request body for POST /workspaces/{id}/plans (ADR-049 D1/FR-1, Wave 2-C1 — the workspace-nested shape chosen for the deferred REST paths, mirroring the removed Milestone's `POST /workspaces/{id}/milestones`). Creates a plan in `draft` state. `workspace_id` is also required in the body (validated to match the path); member tasks are linked afterward via `Task.plan_id`, which is validated same-workspace.
          */
         PlanCreateRequest: {
             /**
@@ -7975,6 +8127,35 @@ export interface components {
              * @example go test output shows 3 failing tests; criterion requires all passing.
              */
             reason: string;
+        };
+        /**
+         * PlanApproveError
+         * @description 400 error body for POST /plans/{id}/approve (ADR-049 D1/D5, Round-1 Grill Reconciliation R1 "Approve gating"). `error` carries a plan-level rejection reason (the plan is not in `draft` state, or an agent-authored plan's Definition of Done is empty — strict tier, SD-A7). `task_errors` carries the per-offending-task list when the unconditional member-task-criteria gate (FR-084 — every member task MUST carry >=1 criterion, in ALL tiers) rejects the approval. Exactly one of the two is populated per rejection cause; the SPA renders `task_errors` inline against the offending task cards (SD-C4) and `error` as a toast/banner.
+         */
+        PlanApproveError: {
+            /**
+             * @description Plan-level rejection reason (state or DoD gate).
+             * @example plan requires a Definition of Done before approval (agent-authored plan)
+             */
+            error?: string;
+            /** @description Per-offending-member-task errors from the unconditional criteria gate (FR-084). Present only when at least one member task has zero acceptance criteria. */
+            task_errors?: {
+                /**
+                 * @description ID of the offending member task.
+                 * @example 550e8400-e29b-41d4-a716-446655440000
+                 */
+                task_id: string;
+                /**
+                 * @description Title of the offending member task (for inline display).
+                 * @example Wire the login button
+                 */
+                title: string;
+                /**
+                 * @description Why this task blocks approval.
+                 * @example task has no acceptance criteria
+                 */
+                reason: string;
+            }[];
         };
         /** @description Per-agent token usage entry within a TokenUsageSummary. */
         AgentTokenEntry: {
@@ -12160,6 +12341,84 @@ export interface operations {
             409: components["responses"]["409Conflict"];
         };
     };
+    listTaskEvidence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Evidence records for this task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRecord"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listTaskVerdicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Judge verdicts for this task, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeVerdict"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    stopTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopped task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
     listMcpServers: {
         parameters: {
             query?: never;
@@ -12961,6 +13220,201 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    listWorkspacePlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plans for this workspace. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanListResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    createWorkspacePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created plan. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plan"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    getPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plan"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updatePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plan"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deletePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plan deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    approvePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approved plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plan"];
+                };
+            };
+            /** @description Approval rejected — either a plan-level gate (not in draft state, or a strict-tier plan with an empty Definition of Done) or the unconditional per-task criteria gate. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanApproveError"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    stopPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopped plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plan"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
     getTokenStats: {
         parameters: {
             query?: {
@@ -13225,6 +13679,7 @@ export type AcceptanceCriterion = components["schemas"]["AcceptanceCriterion"];
 export type EvidenceRecord = components["schemas"]["EvidenceRecord"];
 export type JudgeVerdict = components["schemas"]["JudgeVerdict"];
 export type CriterionVerdict = components["schemas"]["CriterionVerdict"];
+export type PlanApproveError = components["schemas"]["PlanApproveError"];
 export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];
 export type ModelTokens = components["schemas"]["ModelTokens"];
