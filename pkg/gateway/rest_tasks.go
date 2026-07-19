@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -50,6 +51,9 @@ func decodeTaskJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 //	GET    /tasks/{id}/subtasks       list children
 //	PUT    /tasks/{id}/todos          replace the embedded checklist
 //	PUT    /tasks/{id}/dependencies   replace the blocked_by set
+//	GET    /tasks/{id}/evidence       list judge-check evidence (ADR-049 D2)
+//	GET    /tasks/{id}/verdicts       list judge verdicts (ADR-049 D2)
+//	POST   /tasks/{id}/stop           stop the task's running goal-loop (ADR-049)
 func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/tasks")
@@ -90,6 +94,24 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.handleTaskDependencies(w, r, id)
+		case "evidence":
+			if r.Method != http.MethodGet {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskEvidence(w, id)
+		case "verdicts":
+			if r.Method != http.MethodGet {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskVerdicts(w, id)
+		case "stop":
+			if r.Method != http.MethodPost {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskStop(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -304,7 +326,7 @@ func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 		Text   string                 `json:"text"`
 	}, 0, len(cs))
 	for _, c := range cs {
-		item := struct {
+		item := struct { // not-wire-format: intermediate value built to match gen.Task.Criteria's oapi-codegen anonymous element type, not a parallel wire type
 			Author struct {
 				Id   string                     `json:"id"`
 				Kind gen.TaskCriteriaAuthorKind `json:"kind"`
@@ -517,6 +539,30 @@ func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	return nil
 }
 
+// validateTaskPlanID enforces the same-workspace FK on Task.PlanID (ADR-049
+// D1, mirrors the removed validateMilestoneFK): a task may only reference a
+// plan that lives in its own workspace. Returns nil when planID is empty
+// (nothing to validate). Fails CLOSED (400) when a.planStore is nil — an
+// uninitialized dependency is never treated as "no FK to check", mirroring
+// validateTaskAgentID's errTaskAgentLoopUnavailable convention immediately
+// above.
+func (a *restAPI) validateTaskPlanID(planID, workspaceID string) error {
+	if planID == "" {
+		return nil
+	}
+	if a.planStore == nil {
+		return errTaskPlanStoreUnavailable
+	}
+	if err := validateEntityID(planID); err != nil {
+		return fmt.Errorf("invalid plan_id: %w", err)
+	}
+	return a.planStore.ValidatePlanWorkspace(planID, workspaceID)
+}
+
+// errTaskPlanStoreUnavailable is returned by validateTaskPlanID when
+// a.planStore is nil — see its doc comment for the fail-closed rationale.
+var errTaskPlanStoreUnavailable = errors.New("task: plan store not initialized; cannot validate plan_id")
+
 // resolveAgentName returns the display name for an agent ID from the registry,
 // or "" when unknown.
 func (a *restAPI) resolveAgentName(agentID string) string {
@@ -716,12 +762,10 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		t.ParentTaskID = *req.ParentTaskId
 	}
 	if req.PlanId != nil && *req.PlanId != "" {
-		// Same-workspace FK validation (ADR-049 D1/D4, mirrors the removed
-		// validateMilestoneFK) is a pkg/plan-store lookup; pkg/plan is not
-		// wired into the gateway in this change — the store layer accepts and
-		// persists plan_id regardless (task.Store.normalize), so the field
-		// round-trips correctly today. Wiring the FK check here is tracked as
-		// a follow-up once the gateway holds a pkg/plan.Store reference.
+		if err := a.validateTaskPlanID(*req.PlanId, req.WorkspaceId); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		t.PlanID = *req.PlanId
 	}
 	if req.Tags != nil {
@@ -899,8 +943,25 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		patch.Due = &empty
 	}
 	if req.PlanId != nil {
-		// Same-workspace FK validation note: see handleTaskCreate's identical
-		// comment above — pkg/plan is not yet wired into the gateway.
+		if *req.PlanId != "" {
+			// A task's workspace_id is immutable via PATCH (not a
+			// TaskUpdateRequest field) — read the existing task to learn it,
+			// mirroring the AgentId team-membership check's identical
+			// dedicated read above.
+			existingForPlanCheck, gErr := a.taskStore.Get(id)
+			if gErr != nil {
+				if errors.Is(gErr, task.ErrNotFound) {
+					jsonErr(w, http.StatusNotFound, "task not found")
+					return
+				}
+				jsonErr(w, http.StatusInternalServerError, "could not read task")
+				return
+			}
+			if err := a.validateTaskPlanID(*req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		patch.PlanID = req.PlanId
 	}
 	if req.Tags != nil {
@@ -1158,6 +1219,210 @@ func (a *restAPI) applyTaskFieldUpdate(w http.ResponseWriter, id string, patch t
 		return
 	}
 	a.auditTask("task.update", id)
+	jsonOK(w, a.toWireTask(*updated))
+}
+
+// --- evidence / verdicts / stop (ADR-049 D2, Wave 2-C1 deferred REST paths) --
+
+// toWireEvidenceRecord converts an internal task.EvidenceRecord to the
+// generated wire type.
+func toWireEvidenceRecord(r task.EvidenceRecord) gen.EvidenceRecord {
+	return gen.EvidenceRecord{
+		Id:           r.ID,
+		TaskId:       r.TaskID,
+		CriterionId:  r.CriterionID,
+		Attempt:      r.Attempt,
+		Command:      r.Command,
+		ExitCode:     r.ExitCode,
+		Output:       r.Output,
+		Truncated:    r.Truncated,
+		TimedOut:     r.TimedOut,
+		PolicyDenied: r.PolicyDenied,
+		RecordedAt:   parseTimeOrNow(r.RecordedAt),
+	}
+}
+
+// toWireJudgeVerdict converts an internal task.JudgeVerdict to the generated
+// wire type.
+func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
+	out := gen.JudgeVerdict{
+		Id:           v.ID,
+		Scope:        gen.JudgeVerdictScope(v.Scope),
+		Round:        v.Round,
+		Met:          v.Met,
+		Model:        v.Model,
+		JudgedAt:     parseTimeOrNow(v.JudgedAt),
+		JudgeAgentId: v.JudgeAgentID,
+	}
+	if v.TaskID != "" {
+		out.TaskId = ptr(v.TaskID)
+	}
+	if v.PlanID != "" {
+		out.PlanId = ptr(v.PlanID)
+	}
+	for _, c := range v.PerCriterion {
+		out.PerCriterion = append(out.PerCriterion, struct {
+			CriterionId string `json:"criterion_id"`
+			Met         bool   `json:"met"`
+			Reason      string `json:"reason"`
+		}{CriterionId: c.CriterionID, Met: c.Met, Reason: c.Reason})
+	}
+	return out
+}
+
+// handleTaskEvidence handles GET /api/v1/tasks/{id}/evidence. Read-only —
+// evidence is written only by the evidence-ladder judge (pkg/agent's
+// JudgeCriteria via task.EvidenceStore.Record), never via this endpoint. A
+// fresh, redaction-less EvidenceStore is constructed on demand for the read
+// path (List never touches Redact — only Record does, at write time; the
+// persisted records are already redacted), mirroring AgentLoop.evidenceStore's
+// on-demand construction in pkg/agent/judge.go.
+func (a *restAPI) handleTaskEvidence(w http.ResponseWriter, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	if _, err := a.taskStore.Get(id); err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task evidence: get task failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	es := task.NewEvidenceStore(a.homePath, nil)
+	records, err := es.List(id)
+	if err != nil {
+		slog.Error("rest: task evidence list failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not list evidence")
+		return
+	}
+	sort.SliceStable(records, func(i, j int) bool { return records[i].RecordedAt < records[j].RecordedAt })
+	out := make([]gen.EvidenceRecord, 0, len(records))
+	for _, rec := range records {
+		out = append(out, toWireEvidenceRecord(rec))
+	}
+	jsonOK(w, out)
+}
+
+// handleTaskVerdicts handles GET /api/v1/tasks/{id}/verdicts. Reads judge
+// verdicts from the task's session transcript (EntryTypeJudgeVerdict entries
+// written by TaskExecutor.writeJudgeVerdictTranscript, task_executor.go) — the
+// durable carrier; the live JudgeVerdictFrame WS push is the other, ephemeral
+// carrier of the same shape (Round-1 Grill Reconciliation R3). A task with no
+// session, no agent, or no judged attempt yet returns an empty array, not an
+// error.
+func (a *restAPI) handleTaskVerdicts(w http.ResponseWriter, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	t, err := a.taskStore.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task verdicts: get task failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	out := make([]gen.JudgeVerdict, 0)
+	if t.SessionID == "" || t.AgentID == "" || a.agentLoop == nil {
+		jsonOK(w, out)
+		return
+	}
+	sessStore := a.agentLoop.GetAgentStore(t.AgentID)
+	if sessStore == nil {
+		jsonOK(w, out)
+		return
+	}
+	entries, rerr := sessStore.ReadTranscript(t.SessionID)
+	if rerr != nil {
+		slog.Error("rest: task verdicts: read transcript failed",
+			"id", id, "session_id", t.SessionID, "error", rerr)
+		jsonErr(w, http.StatusInternalServerError, "could not read task verdicts")
+		return
+	}
+	for _, e := range entries {
+		if e.Type != session.EntryTypeJudgeVerdict {
+			continue
+		}
+		var v task.JudgeVerdict
+		if uerr := json.Unmarshal([]byte(e.Content), &v); uerr != nil {
+			slog.Warn("rest: task verdicts: could not parse verdict transcript entry",
+				"id", id, "entry_id", e.ID, "error", uerr)
+			continue
+		}
+		out = append(out, toWireJudgeVerdict(v))
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Round < out[j].Round })
+	jsonOK(w, out)
+}
+
+// handleTaskStop handles POST /api/v1/tasks/{id}/stop. Cancels the task's
+// in-flight worker turn (if any, via the same RequestCancelForSession
+// primitive Tier A /cancel uses — a safe no-op when no turn is active) and
+// transitions the task to failed with a "stopped by user" result. Rejected
+// 400 when the task is already terminal or blocked (nothing running to
+// stop — blocked is also a derived side-state task.Store rejects a direct
+// external write into/out of, so attempting the transition would 400 anyway;
+// this checks up front for a clearer error message).
+func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	t, err := a.taskStore.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task stop: get failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	if task.IsTerminal(t.Status) {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("task is already %q; nothing to stop", t.Status))
+		return
+	}
+	if t.Status == task.StatusBlocked {
+		jsonErr(w, http.StatusBadRequest, "task is blocked; nothing running to stop")
+		return
+	}
+
+	if t.SessionID != "" && a.agentLoop != nil {
+		c := a.callerIdentity(r)
+		if _, cerr := a.agentLoop.RequestCancelForSession(r.Context(), t.SessionID, c.Username, "system"); cerr != nil {
+			slog.Warn("rest: task stop: cancel in-flight turn failed",
+				"id", id, "session_id", t.SessionID, "error", cerr)
+		}
+	}
+
+	failed := task.StatusFailed
+	result := "stopped by user request"
+	now := time.Now().UTC().Format(time.RFC3339)
+	updated, uerr := a.taskStore.Update(id, task.Patch{
+		Status:      &failed,
+		Result:      &result,
+		CompletedAt: &now,
+	})
+	if uerr != nil {
+		if isTaskValidationErr(uerr) {
+			jsonErr(w, http.StatusBadRequest, uerr.Error())
+			return
+		}
+		slog.Error("rest: task stop: update failed", "id", id, "error", uerr)
+		jsonErr(w, http.StatusInternalServerError, "could not stop task")
+		return
+	}
+	a.auditTask("task.stop", id)
+	a.emitTaskStatus(updated)
+	if a.agentLoop != nil {
+		a.agentLoop.NotifyTaskUpserted(updated)
+	}
 	jsonOK(w, a.toWireTask(*updated))
 }
 

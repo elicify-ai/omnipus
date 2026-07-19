@@ -1,0 +1,44 @@
+title: PlanApproveError
+description: >
+  400 error body for POST /plans/{id}/approve (ADR-049 D1/D5, Round-1 Grill
+  Reconciliation R1 "Approve gating"). `error` carries a plan-level rejection
+  reason (the plan is not in `draft` state, or an agent-authored plan's
+  Definition of Done is empty — strict tier, SD-A7). `task_errors` carries the
+  per-offending-task list when the unconditional member-task-criteria gate
+  (FR-084 — every member task MUST carry >=1 criterion, in ALL tiers) rejects
+  the approval. Exactly one of the two is populated per rejection cause; the
+  SPA renders `task_errors` inline against the offending task cards (SD-C4)
+  and `error` as a toast/banner.
+type: object
+additionalProperties: false
+properties:
+  error:
+    type: string
+    description: Plan-level rejection reason (state or DoD gate).
+    example: "plan requires a Definition of Done before approval (agent-authored plan)"
+  task_errors:
+    type: array
+    description: >
+      Per-offending-member-task errors from the unconditional criteria gate
+      (FR-084). Present only when at least one member task has zero
+      acceptance criteria.
+    items:
+      type: object
+      required:
+        - task_id
+        - title
+        - reason
+      additionalProperties: false
+      properties:
+        task_id:
+          type: string
+          description: ID of the offending member task.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        title:
+          type: string
+          description: Title of the offending member task (for inline display).
+          example: "Wire the login button"
+        reason:
+          type: string
+          description: Why this task blocks approval.
+          example: "task has no acceptance criteria"

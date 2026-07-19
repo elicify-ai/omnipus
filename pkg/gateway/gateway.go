@@ -68,6 +68,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -163,6 +164,14 @@ type services struct {
 	// configured (the scanner is a no-op).
 	MailboxDrain *heartbeat.MailboxDrainService
 	MediaStore   media.MediaStore
+	// PlanEngine is the single hybrid plan-coordinator instance (ADR-049 D4,
+	// Wave 2-B). Constructed once at boot alongside planStore (both are
+	// process-lifetime singletons — a hot reload Stop()s/Start()s the SAME
+	// instance rather than reconstructing it, mirroring how taskStore/
+	// taskExecutor are stable across reload). Nil only if plan-engine
+	// construction failed at boot (a fatal error today — see
+	// setupAndStartServices).
+	PlanEngine *agent.PlanEngine
 	// notifStore backs schedule-failure notifications and the header
 	// notification center (#264). Created once at boot, reused across reloads.
 	notifStore *notifications.Store
@@ -2101,6 +2110,54 @@ func setupAndStartServices(
 	tStore := agent.GetTaskStore(agentLoop)
 	tExecutor := agent.GetTaskExecutor(agentLoop)
 
+	// ADR-049 D1/D4 (Wave 2-C1): construct the Plan store + the single hybrid
+	// plan-engine instance. planStore is shared with restAPI (Plans REST
+	// surface, rest_plans.go) AND with the engine itself — both write through
+	// the SAME *plan.Store, so planStore.OnChange (wired here) is the single
+	// choke point that emits a plan_status WS frame for every plan mutation,
+	// regardless of whether the engine or a REST handler made it.
+	planStore := plan.New(filepath.Join(homePath, "plans"))
+	planStore.OnChange = func(p *plan.Plan) {
+		progress := p.Progress
+		if tStore != nil {
+			if _, _, computed, cerr := plan.ComputeProgress(p.ID, tStore); cerr == nil {
+				progress = computed
+			} else {
+				slog.Warn("gateway: plan_status: compute progress failed", "plan_id", p.ID, "error", cerr)
+			}
+		}
+		payload := agent.PlanStatusChangedPayload{
+			PlanID:    p.ID,
+			State:     string(p.State),
+			PlanPhase: string(p.EffectivePlanPhase()),
+			Progress:  progress,
+		}
+		if p.PausedReason != "" {
+			payload.PausedReason = p.PausedReason
+		}
+		agentLoop.EmitPlanStatusChanged(payload)
+	}
+	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
+	// convention immediately below/above for a missing task store/executor
+	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
+	if tStore != nil && tExecutor != nil {
+		planEngine := agent.NewPlanEngine(agentLoop, planStore, tStore, tExecutor)
+		// Wave 2-C2 supplies the real /goal and /loop active-loop counters via
+		// these exact call sites; until then they contribute 0 to the R5
+		// global active-loop cap (documented boot-ordering requirement on
+		// PlanEngine.RegisterActiveCounter's doc comment).
+		planEngine.RegisterActiveCounter("goal", func() (int, error) { return 0, nil })
+		planEngine.RegisterActiveCounter("loop", func() (int, error) { return 0, nil })
+		if startErr := planEngine.Start(context.Background()); startErr != nil {
+			return nil, fmt.Errorf("error starting plan engine: %w", startErr)
+		}
+		agentLoop.SetPlanEngine(planEngine)
+		runningServices.PlanEngine = planEngine
+		fmt.Println("✓ Plan engine started")
+	} else {
+		fmt.Println("⚠ Plan engine disabled: task store/executor unavailable")
+	}
+
 	// Wire god-mode opt-in into the agent loop for runtime coercion.
 	agentLoop.SetAllowGodMode(allowGodMode)
 
@@ -2144,6 +2201,7 @@ func setupAndStartServices(
 		homePath:        homePath,
 		taskStore:       tStore,
 		taskExecutor:    tExecutor,
+		planStore:       planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
 		credStore:       credStore,
 		mediaStore:      runningServices.MediaStore,
 		ssrfChecker:     agent.GetSSRFChecker(agentLoop), // SEC-24: nil when SSRF disabled
@@ -2444,6 +2502,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
+	if runningServices.PlanEngine != nil {
+		runningServices.PlanEngine.Stop()
+	}
 	if runningServices.TaskTrigger != nil {
 		runningServices.TaskTrigger.Stop()
 	}
@@ -2606,6 +2667,20 @@ func restartServices(
 		runningServices.restAPIRef.cronService.Store(runningServices.CronService)
 	}
 	fmt.Println("  ✓ Cron service restarted")
+
+	// Restart the SAME plan-engine instance (ADR-049 D4) — unlike CronService,
+	// the engine is not reconstructed on reload: it was Stop()'d in
+	// stopAndCleanupServices(isReload=true) above, and Start() on an
+	// already-constructed *PlanEngine is safe to call again (fresh stopCh,
+	// re-subscribes to the event bus, re-runs boot reconciliation). taskStore/
+	// taskExecutor are themselves stable across a reload (owned by the SAME
+	// al, never recreated), so there is nothing to re-wire.
+	if runningServices.PlanEngine != nil {
+		if startErr := runningServices.PlanEngine.Start(context.Background()); startErr != nil {
+			return fmt.Errorf("error restarting plan engine: %w", startErr)
+		}
+		fmt.Println("  ✓ Plan engine restarted")
+	}
 
 	// Restart the task time-trigger scheduler on its dedicated CronService. The
 	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).

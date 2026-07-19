@@ -28,6 +28,24 @@ import (
 type Store struct {
 	dir  string
 	lock *StripedLock
+
+	// OnChange, when non-nil, is invoked after every successful Create or
+	// Update write with the just-persisted plan (Wave 2-C1, spec Part B
+	// R3/Part A C19-adjacent "plan_status" WS emission). This is the single
+	// choke point BOTH the plan engine (pkg/agent's PlanEngine, which holds
+	// this same *Store) and the gateway's REST handlers (approve/stop/edit)
+	// write through, so wiring emission here — rather than duplicating a
+	// broadcast call at every mutating call site in both packages — makes
+	// every plan state/phase/progress-relevant change observable without
+	// pkg/plan importing pkg/agent or pkg/gateway (the callback type is a
+	// plain func(*Plan); the closure itself is supplied by gateway boot code
+	// and may compute live progress via ComputeProgress before emitting).
+	// Best-effort by contract: OnChange must not be given a slow or
+	// panicking implementation — it runs synchronously on the writer's
+	// goroutine (Create/Update caller), which may be the plan engine's
+	// planDecisionMu-held critical section. Nil is a valid no-op (default;
+	// tests and any Store constructed via New() before boot wiring).
+	OnChange func(*Plan)
 }
 
 // New creates a Store rooted at dir using the process-wide PlanFileLock.
@@ -201,7 +219,13 @@ func (s *Store) Create(p *Plan) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	p.CreatedAt = now
 	p.UpdatedAt = now
-	return s.write(p)
+	if err := s.write(p); err != nil {
+		return err
+	}
+	if s.OnChange != nil {
+		s.OnChange(p)
+	}
+	return nil
 }
 
 // Patch is a partial update applied by Update. Only non-nil fields are written.
@@ -370,6 +394,9 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 	p.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(p); err != nil {
 		return nil, err
+	}
+	if s.OnChange != nil {
+		s.OnChange(p)
 	}
 	return p, nil
 }

@@ -548,6 +548,8 @@ components:
       $ref: ./components/schemas/JudgeVerdict.yaml
     CriterionVerdict:
       $ref: ./components/schemas/CriterionVerdict.yaml
+    PlanApproveError:
+      $ref: ./components/schemas/PlanApproveError.yaml
     AgentTokenEntry:
       $ref: ./components/schemas/AgentTokenEntry.yaml
     TokenUsageSummary:
@@ -4578,6 +4580,115 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+  /tasks/{id}/evidence:
+    get:
+      operationId: listTaskEvidence
+      summary: List a task's judge-check evidence
+      description: >
+        Returns every persisted EvidenceRecord for this task (ADR-049 D2,
+        spec Part A §C) — one record per (criterion_id, attempt) machine-check
+        execution, redacted and size-capped at write time. Read-only surface;
+        evidence is written only by the evidence-ladder judge, never via this
+        endpoint. Returns an empty array for a task with no machine checks.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Evidence records for this task.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EvidenceRecord'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/verdicts:
+    get:
+      operationId: listTaskVerdicts
+      summary: List a task's judge verdicts
+      description: >
+        Returns every judge_verdict transcript entry recorded for this task's
+        goal-loop attempts (ADR-049 D2, spec Part A §C / Round-1
+        Reconciliation R3), oldest first. Read from the task's session
+        transcript (the durable carrier — the live JudgeVerdictFrame WS push
+        is the other, ephemeral carrier of the same shape). Returns an empty
+        array for a task that has not yet been judged (e.g. no criteria, or
+        no attempt has completed).
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Judge verdicts for this task, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/JudgeVerdict'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/stop:
+    post:
+      operationId: stopTask
+      summary: Stop a task's running goal-loop
+      description: >
+        Cancels the task's in-flight worker turn (if any, via the same
+        cancellation path as a chat /cancel) and transitions the task to
+        `failed` with a `stopped by user` result (SD-C5 — Stop/Clear may be
+        optimistic client-side, as this cannot validation-fail). Rejected 400
+        when the task is already terminal (`done`/`failed`) or `blocked`
+        (nothing running to stop).
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Stopped task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
   /mcp-servers:
     get:
       operationId: listMcpServers
@@ -5412,6 +5523,250 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/plans:
+    get:
+      operationId: listWorkspacePlans
+      summary: List plans in a workspace
+      description: >
+        Returns every Plan whose workspace_id matches, newest-first by
+        created_at, with `progress`/`plan_phase`/`failed_reason` server-computed
+        (ADR-049 D1, mirrors the removed MilestoneListResponse).
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      responses:
+        '200':
+          description: Plans for this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanListResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    post:
+      operationId: createWorkspacePlan
+      summary: Create a plan in a workspace
+      description: >
+        Creates a new Plan in `draft` state (ADR-049 D1). Member tasks are
+        linked afterward via `Task.plan_id` (same-workspace FK, validated).
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanCreateRequest'
+      responses:
+        '201':
+          description: Created plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plans/{id}:
+    get:
+      operationId: getPlan
+      summary: Get a plan by ID
+      description: >
+        Returns a single plan with `progress`/`plan_phase`/`failed_reason`
+        server-computed read-time (ADR-049 D1).
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '200':
+          description: Plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updatePlan
+      summary: Update a plan
+      description: >
+        Partially updates plan fields (PATCH semantics — only provided fields
+        change). `state` drives the canonical 5-value state machine; illegal
+        transitions are rejected 400. Use POST /plans/{id}/approve for the
+        tiered-DoD-checked draft->approved transition rather than setting
+        `state` directly here (this endpoint applies
+        `plan.ValidateStateTransition` with no DoD/criteria gating).
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanUpdateRequest'
+      responses:
+        '200':
+          description: Updated plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deletePlan
+      summary: Delete a plan
+      description: >
+        Deletes a plan by ID. A `running` plan cannot be deleted (409) — stop
+        it first via POST /plans/{id}/stop. Deleting a non-running plan clears
+        `plan_id` on its member tasks (best-effort, SD-A5).
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '204':
+          description: Plan deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /plans/{id}/approve:
+    post:
+      operationId: approvePlan
+      summary: Approve a draft plan
+      description: >
+        Transitions a `draft` plan to `approved` (ADR-049 D1/D5, Round-1 Grill
+        Reconciliation R1). Runs the tiered Definition-of-Done check (strict
+        for agent-authored plans, soft for human/UI-authored plans) and the
+        UNCONDITIONAL member-task-criteria gate (FR-084 — every member task
+        must carry >=1 criterion in every tier). On success the single
+        plan-engine instance auto-advances `approved` -> `running` on its next
+        tick and begins dispatch — there is no separate "start" action.
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '200':
+          description: Approved plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          description: >
+            Approval rejected — either a plan-level gate (not in draft state,
+            or a strict-tier plan with an empty Definition of Done) or the
+            unconditional per-task criteria gate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanApproveError'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plans/{id}/stop:
+    post:
+      operationId: stopPlan
+      summary: Stop a running plan
+      description: >
+        Transitions a `running` plan to `failed` with
+        `failed_reason: stopped_by_user` (ADR-049 D4, SD-C5 — Stop/Clear may
+        be optimistic client-side, as this cannot validation-fail). Rejected
+        400 when the plan is not currently `running`.
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '200':
+          description: Stopped plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
 
   /stats/tokens:
     get:

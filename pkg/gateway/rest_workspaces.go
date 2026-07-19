@@ -23,6 +23,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -517,6 +518,24 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/workspaces/{id}/plans — Plan entities scoped to this workspace
+	// (ADR-049 D1, Wave 2-C1 deferred REST paths; mirrors the removed
+	// /workspaces/{id}/milestones shape). GET/POST only; individual plan
+	// GET/PUT/DELETE and the /approve /stop actions live at
+	// /api/v1/plans/{id}... (HandlePlans, rest_plans.go).
+	if strings.HasSuffix(rest, "/plans") {
+		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/plans")
+		switch r.Method {
+		case http.MethodGet:
+			a.handleWorkspacePlansList(w, id)
+		case http.MethodPost:
+			a.handleWorkspacePlanCreate(w, r, id)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+		return
+	}
+
 	// /api/v1/workspaces/{id}
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")
@@ -900,6 +919,20 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			if hb == nil || !hb.Enabled {
 				if stored, exists := ws.MemberConfigs[agentID]; exists &&
 					stored.Heartbeat != nil && stored.Heartbeat.SessionID != "" {
+					// ADR-049 D4/FR-065: this codebase has no global per-agent
+					// enable/disable REST toggle — the per-workspace
+					// member-heartbeat flag (ADR-027) is the only one, so it
+					// is the wiring point for PausePlansOwnedBy/
+					// ResumePlansOwnedBy. A stored session_id here is the same
+					// "was previously enabled" signal the session-release
+					// logic immediately below already relies on. Best-effort:
+					// a pause failure is logged, never blocks the PUT.
+					if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
+						if perr := pe.PausePlansOwnedBy(agentID); perr != nil {
+							slog.Warn("rest: workspace PUT: pause plans on heartbeat disable failed",
+								"workspace_id", id, "agent_id", agentID, "error", perr)
+						}
+					}
 					if st := a.agentLoop.GetAgentStore(agentID); st != nil {
 						if delErr := st.DeleteSession(stored.Heartbeat.SessionID); delErr != nil {
 							slog.Warn("rest: workspace PUT: disable-path session release failed",
@@ -927,6 +960,20 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				continue
 			}
 			// Enable path: hb != nil && hb.Enabled.
+			// ADR-049 D4/FR-065: resume any plan owned by this agent that was
+			// paused for owner_disabled (idempotent no-op when nothing was
+			// paused for that reason — see ResumePlansOwnedBy's doc comment).
+			// Fires unconditionally on every enabled=true entry in this PUT
+			// (not gated on the idempotent-enable early-continue below), so a
+			// re-submitted "already enabled" PUT still self-heals a plan that
+			// somehow stayed paused. Best-effort: a failure is logged, never
+			// blocks the PUT.
+			if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
+				if rerr := pe.ResumePlansOwnedBy(agentID); rerr != nil {
+					slog.Warn("rest: workspace PUT: resume plans on heartbeat enable failed",
+						"workspace_id", id, "agent_id", agentID, "error", rerr)
+				}
+			}
 			if hb.SessionID != "" {
 				continue
 			}

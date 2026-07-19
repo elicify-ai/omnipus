@@ -78,6 +78,13 @@ const (
 	// status (queued→running→completed/failed). The WS forwarder turns it into a
 	// task_status_changed frame so the SPA can invalidate its tasks cache.
 	EventKindTaskStatusChanged
+	// EventKindPlanStatusChanged is emitted when a Plan's state, plan_phase,
+	// progress, or paused_reason changes (ADR-049 D4/D7, spec Part B R3). The
+	// WS forwarder turns it into a plan_status frame, broadcast to every
+	// connection (a Plan is workspace-scoped, not tied to one chat session —
+	// mirrors EventKindTaskStatusChanged's broadcast, not EventKindNotification's
+	// per-recipient filter).
+	EventKindPlanStatusChanged
 
 	eventKindCount
 )
@@ -113,6 +120,7 @@ var eventKindNames = [...]string{
 	"whatsapp_pairing",
 	"notification",
 	"task_status_changed",
+	"plan_status_changed",
 }
 
 // String returns the stable string form of an EventKind.
@@ -556,4 +564,21 @@ type TaskStatusChangedPayload struct {
 	Status    string `json:"status"`
 	SessionID string `json:"session_id"`
 	AgentID   string `json:"agent_id,omitempty"`
+}
+
+// PlanStatusChangedPayload carries a Plan status/phase/progress transition for
+// the SPA (ADR-049 D4/D7, spec Part B R3). The WS forwarder turns this into a
+// plan_status frame (generated.PlanStatusFrame, canonical type literal
+// "plan_status" per Round-1 Grill Reconciliation R3). Not session-scoped — a
+// Plan is a standalone workspace-scoped entity. Emitted via
+// AgentLoop.EmitPlanStatusChanged, which pkg/plan's Store.OnChange hook calls
+// after every successful Create/Update so both the plan engine's internal
+// mutations (dispatch/judge-round/idle-sweep/pause-resume) and the gateway's
+// REST-driven mutations (approve/stop/edit) emit through the same path.
+type PlanStatusChangedPayload struct {
+	PlanID       string  `json:"plan_id"`
+	State        string  `json:"state"`
+	PlanPhase    string  `json:"plan_phase"`
+	Progress     float64 `json:"progress"`
+	PausedReason string  `json:"paused_reason,omitempty"`
 }

@@ -6632,7 +6632,7 @@ type PerformanceSettingsUpdate struct {
 }
 
 // Plan A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task DAG under a goal, Definition of Done, owner agent, and state machine. Tasks join a plan via `Task.plan_id` (same-workspace FK, validated); membership and `progress` are computed read-time by scanning member tasks — never stored on the Plan record (mirrors the removed Milestone's `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json` (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones (see the Milestone removal diffs) as the container for grouped, judged, goal-driven work.
-// Returned by GET /workspaces/{id}/plans, GET /plans/{id}, POST /plans, and PUT /plans/{id}.
+// Returned by GET /workspaces/{id}/plans, POST /workspaces/{id}/plans, GET /plans/{id}, PUT /plans/{id}, POST /plans/{id}/approve, and POST /plans/{id}/stop (Wave 2-C1 — the deferred REST paths from Constraint #8's contract-surface table).
 type Plan struct {
 	// ActiveLoop True while this plan counts toward the global active-loop cap — iff `state == running` (Round-1 Grill Reconciliation R5).
 	ActiveLoop *bool `json:"active_loop,omitempty"`
@@ -6758,7 +6758,25 @@ type PlanPlanPhase string
 // PlanState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
 type PlanState string
 
-// PlanCreateRequest Request body for POST /plans (ADR-049 D1/FR-1). Creates a plan in `draft` state. `workspace_id` is required (a Plan is not nested under a workspace path — creation is a top-level `POST /plans` call, unlike the removed Milestone's `POST /workspaces/{id}/milestones`); member tasks are linked afterward via `Task.plan_id`, which is validated same-workspace.
+// PlanApproveError 400 error body for POST /plans/{id}/approve (ADR-049 D1/D5, Round-1 Grill Reconciliation R1 "Approve gating"). `error` carries a plan-level rejection reason (the plan is not in `draft` state, or an agent-authored plan's Definition of Done is empty — strict tier, SD-A7). `task_errors` carries the per-offending-task list when the unconditional member-task-criteria gate (FR-084 — every member task MUST carry >=1 criterion, in ALL tiers) rejects the approval. Exactly one of the two is populated per rejection cause; the SPA renders `task_errors` inline against the offending task cards (SD-C4) and `error` as a toast/banner.
+type PlanApproveError struct {
+	// Error Plan-level rejection reason (state or DoD gate).
+	Error *string `json:"error,omitempty"`
+
+	// TaskErrors Per-offending-member-task errors from the unconditional criteria gate (FR-084). Present only when at least one member task has zero acceptance criteria.
+	TaskErrors *[]struct {
+		// Reason Why this task blocks approval.
+		Reason string `json:"reason"`
+
+		// TaskId ID of the offending member task.
+		TaskId string `json:"task_id"`
+
+		// Title Title of the offending member task (for inline display).
+		Title string `json:"title"`
+	} `json:"task_errors,omitempty"`
+}
+
+// PlanCreateRequest Request body for POST /workspaces/{id}/plans (ADR-049 D1/FR-1, Wave 2-C1 — the workspace-nested shape chosen for the deferred REST paths, mirroring the removed Milestone's `POST /workspaces/{id}/milestones`). Creates a plan in `draft` state. `workspace_id` is also required in the body (validated to match the path); member tasks are linked afterward via `Task.plan_id`, which is validated same-workspace.
 type PlanCreateRequest struct {
 	// Bounds Per-plan overrides of the global `PlanningConfig` bounds (FR-9).
 	Bounds *struct {
@@ -9702,6 +9720,9 @@ type ProbeProviderJSONRequestBody = ProbeProviderRequest
 // UpdatePerformanceSettingsJSONRequestBody defines body for UpdatePerformanceSettings for application/json ContentType.
 type UpdatePerformanceSettingsJSONRequestBody = PerformanceSettingsUpdate
 
+// UpdatePlanJSONRequestBody defines body for UpdatePlan for application/json ContentType.
+type UpdatePlanJSONRequestBody = PlanUpdateRequest
+
 // UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
 type UpdateProviderJSONRequestBody = ProviderUpdateRequest
 
@@ -9797,6 +9818,9 @@ type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
 
 // PutWorkspaceInstructionsJSONRequestBody defines body for PutWorkspaceInstructions for application/json ContentType.
 type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
+
+// CreateWorkspacePlanJSONRequestBody defines body for CreateWorkspacePlan for application/json ContentType.
+type CreateWorkspacePlanJSONRequestBody = PlanCreateRequest
 
 // Getter for additional properties for ChannelConfigureRequest. Returns the specified
 // element and whether it was found

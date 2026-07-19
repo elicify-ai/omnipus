@@ -10,8 +10,10 @@ description: >
   (see the Milestone removal diffs) as the container for grouped, judged,
   goal-driven work.
 
-  Returned by GET /workspaces/{id}/plans, GET /plans/{id}, POST /plans, and
-  PUT /plans/{id}.
+  Returned by GET /workspaces/{id}/plans, POST /workspaces/{id}/plans,
+  GET /plans/{id}, PUT /plans/{id}, POST /plans/{id}/approve, and
+  POST /plans/{id}/stop (Wave 2-C1 — the deferred REST paths from
+  Constraint #8's contract-surface table).
 type: object
 required:
   - id
