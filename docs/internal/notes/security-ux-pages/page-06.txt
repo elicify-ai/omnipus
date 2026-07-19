@@ -1,0 +1,20 @@
+| **Shell command approval** | Auto / Ask / Always deny | Shell-only |
+| **Tool Access — Global Policies** (Advanced) | allow / ask / deny **per tool** | Actual catalog enforcement |
+
+Users who set “Must ask first” then open the Advanced grid see every tool as allow/ask/deny and don’t know which is law.
+
+### B. Sandbox is buried and jargon-heavy
+
+Under Advanced: Landlock ABI, seccomp, blocked syscalls, enforce/permissive/off, allowed paths, SSRF presets **and** a separate “SSRF Proxy” card.
+
+**Permissive** is easy to misread: looks “on” but **does not block**—only logs.
+
+### C. God mode is the nuclear option, off-tab
+
+God mode disables kernel sandbox, floors tool policies to allow, opens egress, kills shell-guard—while Security may still show “Must ask first” until doctor re-runs. Split surface = false confidence.
+
+### D. Restart semantics are uneven
+
+Sandbox mode / paths / some grants need **gateway restart**. Tool policies and vault often apply more live. “Saved” without live effect is common.
+
+### E. Security health ≠ live posture map

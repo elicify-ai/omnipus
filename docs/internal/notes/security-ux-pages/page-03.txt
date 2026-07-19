@@ -1,0 +1,20 @@
+| **Tool policy** | May this agent use *this* tool? | Explicit map; seeded per agent; global can force Deny |
+| **Ask approval** | Does a human confirm risky tools? | When policy = `ask` |
+| **Shell gates** | Which binaries/commands, how long? | Often ask + optional patterns |
+| **Sandbox mode** | If the process misbehaves, does the **kernel** stop it? | `enforce` on capable Linux |
+| **SSRF / egress** | Can tools hit my LAN / cloud metadata? | Block private ranges |
+| **God mode** | Turn most of the above off for power users | Off; password + often restart |
+| **Vault / audit / cost** | Secrets safe? Traceable? Budget-bound? | Vault on; audit on; cap configurable |
+
+**Sandbox ≠ tool policy.**
+
+- **Tool policy** = permission in the product.
+- **Sandbox** = containment if the agent (or a binary it runs) tries to leave the box.
+
+You can Allow `bash` and still have Landlock block `/etc/shadow`. You can Deny `bash` and never reach the sandbox for shell.
+
+**God mode** collapses layers 1–4 (not audit / prompt-guard / rate limits). It lives under **Settings → Gateway**, easy to miss from Security.
+
+---
+
+## 2. What the Security tab contains today

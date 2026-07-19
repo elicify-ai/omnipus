@@ -1,0 +1,16 @@
+4. Surface **god mode** on Security
+5. **Effective permissions** for one agent
+6. Restart-required as first-class UI state
+
+---
+
+## Key source files
+
+- `src/components/screens/SettingsScreen.tsx`
+- `src/components/settings/SecuritySection.tsx`
+- `src/components/settings/SandboxSection.tsx`
+- `src/components/settings/DiagnosticsSection.tsx`
+- `src/components/settings/GodModeControl.tsx` (Gateway)
+- `pkg/config/sandbox.go`
+- `docs/operations/sandbox-config.md`
+- `docs/operations/security-considerations.md`

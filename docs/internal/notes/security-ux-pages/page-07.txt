@@ -1,0 +1,20 @@
+
+Doctor score doesn’t answer: “What can Mia do now?”, “Is the kernel fence on?”, “Is god mode active?”
+
+### F. Settings tab sprawl
+
+~9 Settings tabs; Security itself is a long vertical stack + Advanced. Cognitive load compounds.
+
+### G. Legacy / parallel names
+
+exec / bash history, `policy_mode` vs per-tool policies, SSRF “proxy” vs `allow_internal` vs egress CIDRs.
+
+---
+
+## 4. How to make Settings more user-friendly
+
+Guiding idea: **outcomes first, mechanisms second, raw config last.**
+
+### 1 — One “Protection level” preset (primary)
+
+| Preset | Tool feel | Shell | Sandbox | Notes |

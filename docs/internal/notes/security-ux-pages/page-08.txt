@@ -1,0 +1,20 @@
+|--------|-----------|-------|---------|--------|
+| **Safe (recommended)** | Prefer ask/deny on powerful tools | Ask | Enforce | Fresh-install spirit |
+| **Balanced** | Core allow; bash/browser ask | Ask | Enforce | Daily driver |
+| **Power** | More allow | Auto for allowlisted binaries | Enforce | Still contained |
+| **Unrestricted** | God-mode path | Off | Off | Password + restart + red banner |
+
+Under the preset: **“Customize…”** opens current Advanced controls.
+
+### 2 — Security home as a posture dashboard
+
+Always visible:
+
+```
+Your setup is: BALANCED                    [Change]
+● Agents need approval for shell & browser
+● Kernel sandbox: ON (Linux Landlock)
+● Private network access: blocked
+● God mode: OFF
+● Vault: locked · N keys
+Score 86 — 2 improvements   [Review] [Check now]
