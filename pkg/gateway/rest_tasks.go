@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -122,6 +123,113 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// HandleTaskOccurrences handles GET /api/v1/tasks/occurrences — the Calendar
+// Recurrence Redesign occurrence expansion endpoint (spec "Occurrence
+// expansion endpoint", FR-008/FR-008a, contracts/openapi.yaml operationId
+// listTaskOccurrences). Registered as an EXACT path in
+// registerAdditionalEndpoints (rest.go), which always wins over this file's
+// "/api/v1/tasks/" prefix route regardless of registration order (see that
+// registration's comment) — so this handler never needs to branch on a
+// trailing "occurrences" segment itself.
+//
+// Query params (all required): workspace_id, from_ms, to_ms, tz. The actual
+// expansion/bucketing work is the pure, separately-unit-tested
+// buildOccurrenceSets (task_occurrences.go); this handler only does
+// param validation, the task-selection predicate, and status-code mapping.
+func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	q := r.URL.Query()
+
+	workspaceID := q.Get("workspace_id")
+	if workspaceID == "" {
+		jsonErr(w, http.StatusBadRequest, "workspace_id is required")
+		return
+	}
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
+		return
+	}
+
+	fromMs, fErr := strconv.ParseInt(q.Get("from_ms"), 10, 64)
+	if fErr != nil {
+		jsonErr(w, http.StatusBadRequest, "from_ms is required and must be an integer (Unix epoch milliseconds)")
+		return
+	}
+	toMs, tErr := strconv.ParseInt(q.Get("to_ms"), 10, 64)
+	if tErr != nil {
+		jsonErr(w, http.StatusBadRequest, "to_ms is required and must be an integer (Unix epoch milliseconds)")
+		return
+	}
+	// from_ms >= to_ms (including from == to) is a 400: an empty half-open
+	// range is a client bug, not a valid query returning [].
+	if fromMs >= toMs {
+		jsonErr(w, http.StatusBadRequest, "from_ms must be strictly before to_ms")
+		return
+	}
+	if toMs-fromMs > maxOccurrenceRangeSpanMs {
+		jsonErr(w, http.StatusBadRequest, "requested range exceeds the 400-day maximum span")
+		return
+	}
+
+	tz := q.Get("tz")
+	if tz == "" {
+		jsonErr(w, http.StatusBadRequest, "tz is required")
+		return
+	}
+	if _, tzErr := time.LoadLocation(tz); tzErr != nil {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("tz %q could not be loaded: %v", tz, tzErr))
+		return
+	}
+
+	tasks, err := a.taskStore.List(task.Filter{WorkspaceID: workspaceID})
+	if err != nil {
+		slog.Error("rest: task occurrences list failed", "workspace_id", workspaceID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not list tasks")
+		return
+	}
+
+	// Task selection (spec "Occurrence expansion endpoint"): expand only
+	// tasks the scheduler would actually arm — the SAME non-terminal,
+	// non-heartbeat predicate TaskTriggerScheduler.OnTaskUpserted applies
+	// before registering a job (pkg/agent/task_trigger.go OnTaskUpserted's
+	// early skips). Terminal and heartbeat-surface tasks are omitted
+	// entirely so the calendar never renders an occurrence that will not
+	// fire; buildOccurrenceSets further filters by trigger FLAVOR
+	// (recurring/every only).
+	eligible := make([]task.Task, 0, len(tasks))
+	for _, t := range tasks {
+		if task.IsTerminal(t.Status) || t.EffectiveSurface() == task.SurfaceHeartbeat {
+			continue
+		}
+		eligible = append(eligible, t)
+	}
+
+	// FR-008a: the every_ms projection anchor is the live armed job's
+	// NextRunAtMS, read from the installed TaskTriggerScheduler. Nil-safe —
+	// a nil scheduler (not yet wired / test scaffolding) makes every
+	// `every`-triggered task omit cleanly rather than erroring the request.
+	sched := agent.GetTaskTriggerScheduler(a.agentLoop)
+	everyAnchor := func(taskID string) (int64, bool) {
+		if sched == nil {
+			return 0, false
+		}
+		return sched.NextRunAtMSForTask(taskID)
+	}
+
+	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor)
+	if err != nil {
+		// Range/tz were already validated above, so a non-nil error here
+		// indicates a genuine internal failure rather than bad input.
+		slog.Error("rest: task occurrences expansion failed", "workspace_id", workspaceID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not expand occurrences")
+		return
+	}
+	jsonOK(w, sets)
 }
 
 // --- wire mapping -----------------------------------------------------------
@@ -659,6 +767,10 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.auditTask("task.create", t.ID)
+	// FR-022: no-op today (a freshly-created task has no prior trigger to
+	// diff against) — see auditTriggerChange's doc comment for why this
+	// call site stays in place regardless.
+	a.auditTriggerChange(t.ID, nil, t.Trigger)
 	a.emitTaskStatus(t)
 	// Register the task's time trigger (once/every/recurring) so it actually
 	// fires; a no-op for manual/heartbeat tasks.
@@ -767,7 +879,19 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 		patch.Todos = &todos
 	}
+	// FR-022 audit prerequisite: capture the trigger as it stood BEFORE this
+	// patch, so auditTriggerChange (below, after a successful Update) can
+	// diff old vs new. A dedicated read here — rather than reusing one of
+	// the other conditional reads in this handler — keeps this block
+	// correct regardless of which other fields are present in the same
+	// PATCH (same rationale as the AgentId branch's existingForAgentCheck
+	// read above). gErr is ignored here: a NotFound (or any other read
+	// failure) surfaces identically via the Update call below.
+	var priorTriggerForAudit *task.Trigger
 	if req.Trigger != nil {
+		if existingForTriggerAudit, gErr := a.taskStore.Get(id); gErr == nil {
+			priorTriggerForAudit = existingForTriggerAudit.Trigger
+		}
 		tr := buildTrigger(
 			string(req.Trigger.Type),
 			req.Trigger.Config.AtMs,
@@ -918,6 +1042,12 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	a.auditTask("task.update", id)
+	if req.Trigger != nil {
+		// FR-022: audit a recurrence-trigger change (legacy→RRULE or
+		// RRULE→RRULE) — no-ops on a title-only edit (byte-identical
+		// trigger, FR-024) or a non-recurring new trigger.
+		a.auditTriggerChange(id, priorTriggerForAudit, updated.Trigger)
+	}
 	a.emitTaskStatus(updated)
 	// Re-sync the task's time trigger: a changed/added/removed trigger or a move
 	// to a terminal status (re)registers or removes its cron job.
@@ -1068,6 +1198,56 @@ func (a *restAPI) auditTask(event, id string) {
 		Details:  map[string]any{"id": id},
 	}); err != nil {
 		slog.Error("rest: task audit log failed", "event", event, "error", err)
+	}
+}
+
+// auditTriggerChange implements FR-022: every save that CHANGES a task's
+// recurrence trigger to a new `recurring` (RRULE or legacy cron_expr) rule
+// emits an audit entry recording the task id, the prior trigger, and the
+// new trigger — covering both the US-5.3 legacy→RRULE conversion and an
+// RRULE→RRULE rule change (FR-024's "re-anchor" case) alike, so a change
+// that moves every future fire is reconstructible after the fact.
+//
+// Deliberately scoped narrower than "every trigger patch":
+//   - priorTrigger == nil never fires. On task CREATE there is no prior
+//     trigger to diff against — "changes a recurrence trigger" presupposes
+//     one existed. (handleTaskCreate still calls this — with priorTrigger
+//     always nil today — so every trigger-touching write path is
+//     uniformly covered by one hook; the guard makes that call a
+//     documented no-op rather than a spurious audit entry.)
+//   - newTrigger.Type != task.TriggerRecurring never fires — FR-022 is
+//     scoped to recurrence trigger changes, not e.g. a save that flips a
+//     task to `manual`/`once`.
+//   - a byte-identical trigger never fires — this is FR-024's title-only
+//     edit ("Save MUST preserve the trigger byte-identical when no
+//     recurrence or time field was touched"), which must NOT read as a
+//     rule change.
+//
+// Best-effort: log failures are recorded but never surfaced to the caller,
+// matching auditTask's existing behavior.
+func (a *restAPI) auditTriggerChange(taskID string, priorTrigger, newTrigger *task.Trigger) {
+	if priorTrigger == nil || newTrigger == nil {
+		return
+	}
+	if newTrigger.Type != task.TriggerRecurring {
+		return
+	}
+	if reflect.DeepEqual(*priorTrigger, *newTrigger) {
+		return
+	}
+	if a.auditor == nil {
+		return
+	}
+	if err := a.auditor.Log(&audit.Entry{
+		Event:    "task.trigger.recurrence_changed",
+		Decision: audit.DecisionAllow,
+		Details: map[string]any{
+			"task_id":       taskID,
+			"prior_trigger": priorTrigger,
+			"new_trigger":   newTrigger,
+		},
+	}); err != nil {
+		slog.Error("rest: task trigger recurrence-change audit log failed", "task_id", taskID, "error", err)
 	}
 }
 

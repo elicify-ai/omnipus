@@ -674,6 +674,52 @@ func (s *TaskTriggerScheduler) isArmedLocked(taskID string, nowMs int64) bool {
 	return job.State.NextRunAtMS != nil && *job.State.NextRunAtMS >= nowMs
 }
 
+// NextRunAtMSForTask returns taskID's currently-tracked job's live
+// State.NextRunAtMS — the FR-008a display-projection anchor for a legacy
+// `every` trigger's occurrences (the engine has no stored DTSTART-like
+// anchor for `every` jobs; computeNextRun is `now + interval`,
+// drift-anchored and re-baselined on every fire/restart, so the occurrences
+// endpoint projects forward from whatever this returns "right now"). Read
+// -only: looks up taskToJob then cs.GetJob, mirrors isArmedLocked's shape,
+// never mutates scheduler or cron-engine state.
+//
+// ok is false when: taskID has no tracked job (never registered, or
+// removed by a delete/terminal transition); the tracked job has since gone
+// (a race with removal); or the job's NextRunAtMS is nil (e.g. mid-fire —
+// RunDueJobs clears NextRunAtMS before dispatch, service.go:515-519). All
+// three cases mean "no live anchor to project from right now" — callers
+// (the occurrences endpoint) treat that as "task omitted from this
+// response", not an error.
+func (s *TaskTriggerScheduler) NextRunAtMSForTask(taskID string) (int64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tracked, ok := s.taskToJob[taskID]
+	if !ok {
+		return 0, false
+	}
+	job, ok := s.cs.GetJob(tracked.jobID)
+	if !ok || job.State.NextRunAtMS == nil {
+		return 0, false
+	}
+	return *job.State.NextRunAtMS, true
+}
+
+// GetTaskTriggerScheduler returns al's installed task-trigger scheduler (nil
+// before boot wiring or in tests that don't set one). Mirrors the existing
+// agent.GetTaskExecutor accessor pattern (pkg/agent/loop.go) so gateway
+// handlers (the occurrences endpoint's every_ms anchor lookup) can reach the
+// scheduler through one exported, same-package call to AgentLoop's already
+// -locked private accessor (al.taskTriggerScheduler, defined in loop.go)
+// without AgentLoop needing to expose its private field directly. Defined
+// here (task_trigger.go) rather than loop.go so this scheduler's own public
+// surface for the Calendar Recurrence Redesign lives in one file.
+func GetTaskTriggerScheduler(al *AgentLoop) *TaskTriggerScheduler {
+	if al == nil {
+		return nil
+	}
+	return al.taskTriggerScheduler()
+}
+
 // triggerGeneration computes a content hash of tr, used as the trigger
 // "generation" for the mutex-atomic re-arm guard (Scheduler rule 4). Two
 // triggers with identical content (including a title-only edit that leaves
