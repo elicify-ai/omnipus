@@ -688,13 +688,26 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 		newStatus = st
 		updatedFields = append(updatedFields, "status")
-		if !deferDoneClaimToJudge(existing, st) {
+		if deferDoneClaimToJudge(existing, st) {
+			// review r2 Chunk 1: a hard-tier done claim is ONLY ever
+			// adjudicated inside THAT task's own executor run — finishTaskRun
+			// (task_executor.go) is the sole reader of Task.PendingJudgeClaim.
+			// An out-of-band call (this task is not the caller's
+			// currently-running task, e.g. a stale/idle criteria task nobody
+			// is executing, or a different agent poking at it) must be
+			// rejected outright rather than staged: nothing would ever
+			// adjudicate that claim, stranding the task non-terminal forever
+			// (bounded only by boot's reconcileStuckTasks). Status is
+			// deliberately left unpatched in the genuine in-run case too —
+			// the PendingJudgeClaim block after the result/artifacts fields
+			// stages the claim instead.
+			if ToolRunningTaskID(ctx) != taskID {
+				return ErrorResult("this task has acceptance criteria — completion is adjudicated by " +
+					"the judge during a task run; it cannot be force-completed here")
+			}
+		} else {
 			patch.Status = &st
 		}
-		// else: a hard-tier done claim — Status is deliberately left
-		// unpatched below (see deferDoneClaimToJudge's doc comment); the
-		// PendingJudgeClaim block after the result/artifacts fields stages
-		// the claim instead.
 	}
 
 	// Result / artifacts — accepted with or without a status.

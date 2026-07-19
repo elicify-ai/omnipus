@@ -243,6 +243,11 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 	// is what bounds an A→B→A task-mode delegation chain — without it every task
 	// run starts at depth 0 and the gate never trips (see maxTaskDepth).
 	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
+	// review r2 Chunk 1: mark this turn as THIS task's own executor run so
+	// TaskUpdateTool can tell an in-run done-claim (staged, adjudicated below
+	// by finishTaskRun) from an out-of-band one (rejected — see
+	// tools.WithRunningTaskID's doc comment).
+	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
 	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
 	prompt := te.buildPrompt(t)
@@ -1253,6 +1258,9 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		taskCtx = tools.WithWorkspaceID(taskCtx, t.WorkspaceID)
 	}
 	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
+	// review r2 Chunk 1: same in-run marker as runTask above — see
+	// tools.WithRunningTaskID's doc comment.
+	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
 	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
 	prompt := te.buildPrompt(t)
