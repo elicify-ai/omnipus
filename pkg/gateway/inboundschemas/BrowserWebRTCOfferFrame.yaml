@@ -1,0 +1,46 @@
+title: BrowserWebRTCOfferFrame
+description: >
+  Client → server. Viewer SDP offer to start (or restart) a WebRTC media
+  session for a session's live browser, sent on the existing
+  /api/v1/browser/ws channel after browser_attach. Non-trickle: the SPA
+  gathers all ICE candidates locally before sending, so `sdp` is the
+  complete offer. The gateway's Pion relay (ADR-047 D1) treats agent_id as
+  the binding key exactly like browser_attach (ADR-043 per-agent browser
+  contexts) — it ensures/creates that agent's capture session (starting the
+  tabCapture encoder page on first WebRTC-capable viewer offer, ADR-047 D2)
+  and creates a new viewer PeerConnection fed from the shared media tracks.
+  session_id is correlation-only, echoed back on browser_webrtc_answer /
+  browser_webrtc_state. See ADR-047 D1/D4.
+type: object
+required:
+  - type
+  - agent_id
+  - session_id
+  - sdp
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_webrtc_offer
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Agent whose BrowserManager/capture session this offer targets.
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      The client's chat session id, carried for context/correlation and
+      logging only — echoed back on browser_webrtc_answer /
+      browser_webrtc_state so the client can match them to this offer.
+      Does not select the browsing context; agent_id is the binding key
+      (mirrors BrowserAttachFrame).
+  sdp:
+    type: string
+    minLength: 1
+    maxLength: 131072
+    description: >-
+      Complete SDP offer (application/sdp body), gathered with ICE
+      candidates already resolved (non-trickle, ADR-047 D4).

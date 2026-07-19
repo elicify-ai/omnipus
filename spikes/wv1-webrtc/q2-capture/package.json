@@ -1,0 +1,6 @@
+{
+  "name": "q2-capture-spike",
+  "private": true,
+  "type": "commonjs",
+  "description": "WV1 spike Q2: headless tab MediaStream with real audio (throwaway)"
+}

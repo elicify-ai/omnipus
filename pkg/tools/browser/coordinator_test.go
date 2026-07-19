@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/chromedp/chromedp"
+
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
@@ -53,6 +55,56 @@ func resolveTestBinary(t *testing.T) string {
 	return sharedTestBin
 }
 
+// sharedTestBinaryHeadlessShell resolves chrome-headless-shell SPECIFICALLY,
+// once, for tests that need old-headless CDP semantics rather than whichever
+// build resolveTestBinary's "detect either, prefer full chrome" resolution
+// (findInstalledBinary) happens to find. See resolveTestBinaryHeadlessShell's
+// doc comment for why that distinction is load-bearing, not cosmetic.
+var (
+	sharedTestBinHeadlessShellOnce sync.Once
+	sharedTestBinHeadlessShell     string
+	errSharedTestBinHeadlessShell  error
+)
+
+// resolveTestBinaryHeadlessShell resolves chrome-headless-shell specifically
+// — never the full "chrome" build resolveTestBinary/findInstalledBinary
+// prefer by default on Linux (installer.go's dual-download: WebRTC
+// tabCapture needs full Chrome, so the shared install root prefers it once
+// present). D2Spike needs the OTHER build: it drives chromedp's classic
+// TCP-debug-port ExecAllocator (chromedp.NewExecAllocator, not this
+// package's own cdppipe launch path) to prove pure CDP
+// Target.createBrowserContext isolation — a property "old headless" mode
+// (chrome-headless-shell, a dedicated binary precisely because Chrome split
+// old-headless out of the main "chrome" build) supports, but empirically
+// (verified against Chrome 151 here — a full chromeHardeningBaseFlags()
+// pass-through plus a settle delay before the second context reproduces the
+// SAME failure, ruling out both a missing-flag and a timing-race
+// explanation) full "chrome"'s New Headless mode does not: creating a SECOND
+// isolated browser context and navigating in it reliably errors CDP -32000
+// "no browser is open". Reuses installer.go's per-build resolver
+// (EnsureChromiumBuild) so an already-cached chrome-headless-shell install
+// (this codebase's managed root, or resolveTestBinary's own temp-dir
+// fallback from an earlier pre-dual-download install) is found without a
+// network hit; only downloads if genuinely absent.
+func resolveTestBinaryHeadlessShell(t *testing.T) string {
+	t.Helper()
+	sharedTestBinHeadlessShellOnce.Do(func() {
+		if home, err := os.UserHomeDir(); err == nil {
+			installRoot := filepath.Join(home, ".omnipus", "browser", "chromium")
+			if bin := findInstalledBuild(installRoot, "linux64", headlessShellBuild()); bin != "" {
+				sharedTestBinHeadlessShell = bin
+				return
+			}
+		}
+		sharedTestBinHeadlessShell, errSharedTestBinHeadlessShell = EnsureChromiumBuild(
+			context.Background(), filepath.Join(t.TempDir(), "chromium-headless-shell"), headlessShellBuild())
+	})
+	if errSharedTestBinHeadlessShell != nil {
+		t.Skipf("no managed chrome-headless-shell for D2 spike: %v", errSharedTestBinHeadlessShell)
+	}
+	return sharedTestBinHeadlessShell
+}
+
 func newCoordinatorTestConfig(t *testing.T) (BrowserConfig, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -89,11 +141,11 @@ func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
 	mgrB := newTestManager(t, cfg)
 	mgrB.AttachSharedChrome(coord, "agent-b")
 
-	urlA, ctxA, err := coord.Register(context.Background(), "agent-a", mgrA)
+	rootA, ctxA, err := coord.Register(context.Background(), "agent-a", mgrA)
 	if err != nil {
 		t.Fatalf("Register A: %v", err)
 	}
-	urlB, ctxB, err := coord.Register(context.Background(), "agent-b", mgrB)
+	rootB, ctxB, err := coord.Register(context.Background(), "agent-b", mgrB)
 	if err != nil {
 		t.Fatalf("Register B: %v", err)
 	}
@@ -101,8 +153,19 @@ func TestCoordinator_TwoAgents_OneChrome_TwoContexts(t *testing.T) {
 	if pid == 0 {
 		t.Fatal("expected a live Chrome pid after Register")
 	}
-	if urlA != urlB {
-		t.Fatalf("both agents should dial the SAME shared Chrome URL; got A=%q B=%q", urlA, urlB)
+	// CRIT-001: there is no per-agent URL anymore — both agents drive chromedp
+	// CHILD contexts of the SAME shared rootCtx (one CDP pipe, multiplexed).
+	// Assert that identity directly via the underlying *chromedp.Browser
+	// pointer (rootA/rootB themselves are distinct context.Context values —
+	// each Register call wraps a fresh child — but both must resolve to the
+	// one shared Browser).
+	brA := chromedp.FromContext(rootA)
+	brB := chromedp.FromContext(rootB)
+	if brA == nil || brB == nil || brA.Browser == nil || brB.Browser == nil {
+		t.Fatal("expected both Register calls to return a context bound to a live *chromedp.Browser")
+	}
+	if brA.Browser != brB.Browser {
+		t.Fatal("both agents should share the SAME underlying Chrome (*chromedp.Browser)")
 	}
 	if ctxA == "" || ctxB == "" || ctxA == ctxB {
 		t.Fatalf("expected two distinct non-empty browser context ids; got A=%q B=%q", ctxA, ctxB)
@@ -182,6 +245,112 @@ func TestCoordinator_Shutdown_IsSoleKill(t *testing.T) {
 	}
 	if coord.KillCount() != 1 {
 		t.Fatalf("expected KillCount==1 after Shutdown; got %d", coord.KillCount())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ADR-048 fix-wave: captureSharedContextResolved/SetCaptureSharedContext
+// (condition-1 config knob) helper-contract coverage. Fast, no-Chrome unit
+// coverage — the coordinator fields these tests read/write are exercised via
+// direct method calls (same package), never a real Register()/Chrome launch.
+// (The condition-2 multi-agent capture fence itself no longer reads a
+// coordinator-level signal here — BrowserCoordinator.LiveSessionAgents was
+// removed as dead code once browser_webrtc.go's fence moved to the
+// per-session captureRegistry/ViewerCount()-based check; see ADR-048's
+// "actively-viewed-only deny + supersede" re-scoping.)
+// ---------------------------------------------------------------------------
+
+// TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride proves
+// ADR-048 condition 1's promotion from OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT
+// to config: SetCaptureSharedContext drives the resolved value, and the env
+// var — when non-empty — is an explicit override that wins regardless of
+// the configured value, in EITHER direction. CaptureSharedContextEnabled
+// (the capability classifier's read path) and captureSharedContextResolved
+// (Register's own read path) must never disagree.
+func TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride(t *testing.T) {
+	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{}, 30)
+
+	if coord.CaptureSharedContextEnabled() {
+		t.Fatal(
+			"a freshly-constructed coordinator must default to shared-context capture DISABLED (config drives it explicitly, no implicit default)",
+		)
+	}
+
+	coord.SetCaptureSharedContext(true)
+	if !coord.CaptureSharedContextEnabled() {
+		t.Fatal("CaptureSharedContextEnabled() must reflect SetCaptureSharedContext(true)")
+	}
+	if !coord.captureSharedContextResolved() {
+		t.Fatal("captureSharedContextResolved() must agree with CaptureSharedContextEnabled()")
+	}
+
+	t.Setenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT", "0")
+	if coord.CaptureSharedContextEnabled() {
+		t.Fatal("a non-empty env override (\"0\") must win over the configured true value")
+	}
+
+	coord.SetCaptureSharedContext(false)
+	t.Setenv("OMNIPUS_BROWSER_CAPTURE_DEFAULT_CONTEXT", "1")
+	if !coord.CaptureSharedContextEnabled() {
+		t.Fatal("a non-empty env override (\"1\") must win over the configured false value")
+	}
+}
+
+// TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtxID
+// is QA regression-wave item 3's missing direction: fix-wave A's
+// TestBrowserCoordinator_CaptureSharedContext_ConfigAndEnvOverride only
+// covers CaptureSharedContextEnabled()/captureSharedContextResolved() (the
+// config/env resolution logic) — it never calls Register() at all, so
+// NEITHER of Register's two actual behaviors was proven. The flag-OFF
+// direction (per-agent browser context created, distinct browserCtxIDs) is
+// covered by TestCoordinator_TwoAgents_OneChrome_TwoContexts above; this
+// test covers the flag-ON direction: Register must skip the per-agent CDP
+// browser context entirely and hand back the coordinator's shared root
+// context with an EMPTY browserCtxID (ADR-048 condition 1 — the agent's
+// session then bootstraps in the DEFAULT browser context, which
+// chrome.tabCapture can actually reach).
+func TestCoordinator_Register_SharedContextMode_ReturnsRootCtxAndEmptyBrowserCtxID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("needs a real Chrome")
+	}
+	cfg, home := newCoordinatorTestConfig(t)
+	coord := NewBrowserCoordinator(home, cfg, 30)
+	coord.SetCaptureSharedContext(true)
+	t.Cleanup(func() { coord.Shutdown() })
+
+	mgr := newTestManager(t, cfg)
+	mgr.AttachSharedChrome(coord, "agent-shared-ctx")
+
+	rootCtx, browserCtxID, err := coord.Register(context.Background(), "agent-shared-ctx", mgr)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if browserCtxID != "" {
+		t.Fatalf(
+			"Register in shared-context mode must return an EMPTY browserCtxID (default context), got %q",
+			browserCtxID,
+		)
+	}
+
+	realRoot, ok := coord.RootContext()
+	if !ok {
+		t.Fatal("expected a live root context after Register")
+	}
+	brRoot := chromedp.FromContext(realRoot)
+	brReturned := chromedp.FromContext(rootCtx)
+	if brRoot == nil || brReturned == nil || brRoot.Browser == nil || brReturned.Browser == nil {
+		t.Fatal("expected both contexts to resolve to a live *chromedp.Browser")
+	}
+	if brRoot.Browser != brReturned.Browser {
+		t.Fatal(
+			"Register's returned rootCtx must resolve to the coordinator's OWN shared Browser (coord.rootCtx), not a per-agent one",
+		)
+	}
+	if coord.contextCount() != 0 {
+		t.Fatalf(
+			"shared-context mode must NOT create a per-agent browser context; contextCount() = %d, want 0",
+			coord.contextCount(),
+		)
 	}
 }
 

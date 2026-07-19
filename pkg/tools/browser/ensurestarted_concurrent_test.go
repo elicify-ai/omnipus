@@ -11,10 +11,21 @@ package browser
 // (leaking the first winner's cancel func). This test widens that window with
 // a slow fake probe so N goroutines genuinely overlap inside resolveExecPath,
 // then asserts the final state is a single consistent allocator.
+//
+// WebRTC build W1-A (CRIT-001): the managed-mode launch this test drives
+// switched from a lazy chromedp.NewExecAllocator (build-only, no real spawn
+// until first Run) to an EAGER cdppipe launch (launchManagedPipe actually
+// starts the process and CDP-probes it before returning). The fake
+// "google-chrome" script this test installs on PATH only satisfies
+// resolveExecPath's `--version` probe — it is not a real Chrome and would
+// fail cdppipe's liveness probe if actually launched. m.pipeLauncherFn (the
+// same testability seam pattern as createTabFn/listTargets/evalCDP) is
+// injected with a fast fake so the launch step itself never spawns anything;
+// the concurrency/discard-path assertions this test exists for are otherwise
+// unchanged.
 
 import (
-	"fmt"
-	"net"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -54,17 +65,6 @@ func TestEnsureStarted_Concurrent_LosersDiscard(t *testing.T) {
 		t.Skip("posix shell-script probe double")
 	}
 
-	// Preflight the fixed DebugPort — the winner's ensureStarted runs
-	// checkDebugPortAvailable(DebugPort) and needs it free; if something else
-	// on this host already holds 9223 the winner fails (started stays false)
-	// and the test cannot exercise the discard path deterministically. Skip
-	// rather than flake.
-	preflight, perr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", DebugPort))
-	if perr != nil {
-		t.Skipf("DebugPort %d not available on this host — cannot run concurrency test: %v", DebugPort, perr)
-	}
-	require.NoError(t, preflight.Close())
-
 	// Slow fake probe: sleep 0.3s to widen ensureStarted's m.mu-release window
 	// so concurrent callers genuinely overlap, then record itself by appending
 	// one line (its PID) to probes.log. `echo >> ` is a shell-builtin redirect,
@@ -83,6 +83,17 @@ func TestEnsureStarted_Concurrent_LosersDiscard(t *testing.T) {
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
 	m := &BrowserManager{cfg: cfg}
+	// CRIT-001: the fake "google-chrome" above only satisfies resolveExecPath's
+	// --version probe — launching it for real over the CDP pipe would fail
+	// cdppipe's liveness probe (it never speaks --remote-debugging-pipe
+	// framing). Inject a fake pipe launcher so the winner's actual "launch"
+	// step is instant and spawns nothing, keeping this test's real subject
+	// (the m.mu release/discard discipline around resolveExecPath) isolated
+	// from cdppipe/real-Chrome concerns entirely.
+	m.pipeLauncherFn = func(ctx context.Context, execPath string, pcfg pipeLaunchConfig) (*pipeLaunchResult, error) {
+		fakeCtx, fakeCancel := context.WithCancel(context.Background())
+		return &pipeLaunchResult{rootCtx: fakeCtx, cancel: fakeCancel}, nil
+	}
 
 	const N = 8
 	var (

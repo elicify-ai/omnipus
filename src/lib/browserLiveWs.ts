@@ -26,17 +26,36 @@ import type {
   BrowserStatusFrame,
   BrowserTabActionFrame,
   BrowserTabsFrame,
+  BrowserWebRTCAnswerFrame,
+  BrowserWebRTCOfferFrame,
+  BrowserWebRTCStateFrame,
   ErrorFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
 /** Frame types this socket ever receives — a narrow slice of the full WsFrame union. */
-type BrowserServerFrame = BrowserScreencastFrame | BrowserStatusFrame | BrowserTabsFrame | ErrorFrame
+type BrowserServerFrame =
+  | BrowserScreencastFrame
+  | BrowserStatusFrame
+  | BrowserTabsFrame
+  | BrowserWebRTCAnswerFrame
+  | BrowserWebRTCStateFrame
+  | ErrorFrame
 
 export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback interface passed to BrowserLiveWsConnection's constructor. Never serialized to or from the gateway.
   onScreencast: (frame: BrowserScreencastFrame) => void
   onStatus: (frame: BrowserStatusFrame) => void
   /** ADR-041 D4 — the current tab list + active index, broadcast on any tab open/close/switch/title-change. */
   onTabs: (frame: BrowserTabsFrame) => void
+  /** ADR-047 (WebRTC build) — the gateway's non-trickle SDP answer to a
+   * `browser_webrtc_offer` this connection sent. Feed straight into
+   * `BrowserWebRTCSession.applyAnswer` (browserWebRTC.ts). */
+  onWebRTCAnswer: (frame: BrowserWebRTCAnswerFrame) => void
+  /** ADR-047 — availability/fallback-reason/audio-presence, sent after
+   * attach and again whenever it changes (encoder died, tab-capable build
+   * absent, etc.). Feed into `BrowserWebRTCSession.applyState`; the caller
+   * also reads `available`/`has_audio` directly to decide whether to call
+   * the machine's `start()`. */
+  onWebRTCState: (frame: BrowserWebRTCStateFrame) => void
   /** Fires for both server-sent `error` frames and local transport errors (create/send/reconnect-exhausted). */
   onError: (message: string) => void
   onConnected?: () => void
@@ -59,6 +78,21 @@ function getBrowserWsUrl(): string {
   return `${wsBase}/api/v1/browser/ws`
 }
 
+// fix-wave B (LOW) — Constraint #8's "drop + counter + dev-mode toast on
+// failure" was only half-honored here: invalid payloads were dropped, but
+// silently, with no counter and no dev-visible signal. Deliberately
+// lightweight (no toast — "no prod toast" per the fix-wave scope; a toast per
+// dropped screencast/status frame in a lossy dev session would be noise, not
+// signal) — a module-level counter plus a dev-only console.debug is enough to
+// make schema drift grep-able without adding UI chrome to this socket.
+let _zodDropCount = 0
+
+/** Test/debug hook — the running count of frames dropped by a failed
+ * `WsFrameSchema.safeParse` since module load. */
+export function getBrowserFrameDropCount(): number {
+  return _zodDropCount
+}
+
 /** Validates + narrows an incoming payload to the frames this socket cares about. Never throws. */
 export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   let raw: unknown
@@ -73,13 +107,21 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   }
 
   const result = WsFrameSchema.safeParse(raw)
-  if (!result.success) return null
+  if (!result.success) {
+    _zodDropCount++
+    if (import.meta.env.DEV) {
+      console.debug('[browserLiveWs] dropped a frame that failed schema validation', result.error, raw)
+    }
+    return null
+  }
 
   const frame = result.data
   if (
     frame.type === 'browser_screencast' ||
     frame.type === 'browser_status' ||
     frame.type === 'browser_tabs' ||
+    frame.type === 'browser_webrtc_answer' ||
+    frame.type === 'browser_webrtc_state' ||
     frame.type === 'error'
   ) {
     return frame
@@ -148,6 +190,10 @@ export class BrowserLiveWsConnection {
         this.callbacks.onStatus(frame)
       } else if (frame.type === 'browser_tabs') {
         this.callbacks.onTabs(frame)
+      } else if (frame.type === 'browser_webrtc_answer') {
+        this.callbacks.onWebRTCAnswer(frame)
+      } else if (frame.type === 'browser_webrtc_state') {
+        this.callbacks.onWebRTCState(frame)
       } else {
         this.callbacks.onError(frame.message)
       }
@@ -209,6 +255,21 @@ export class BrowserLiveWsConnection {
 
   sendControl(action: 'take' | 'release'): boolean {
     const frame: BrowserControlFrame = { type: 'browser_control', action }
+    return this._rawSend(frame)
+  }
+
+  /** ADR-047 (WebRTC build) — sends this connection's non-trickle SDP offer
+   * (all ICE candidates already gathered by the caller — browserWebRTC.ts's
+   * `BrowserWebRTCSession` waits for `iceGatheringState === 'complete'`
+   * before calling this). Carries session_id/agent_id explicitly like
+   * `sendTabAction`, since both are required fields on the wire frame. */
+  sendWebRTCOffer(sdp: string): boolean {
+    const frame: BrowserWebRTCOfferFrame = {
+      type: 'browser_webrtc_offer',
+      session_id: this.sessionId,
+      agent_id: this.agentId,
+      sdp,
+    }
     return this._rawSend(frame)
   }
 

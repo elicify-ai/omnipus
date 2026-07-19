@@ -44,6 +44,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 	"github.com/elicify-ai/omnipus/pkg/voice"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -1745,6 +1746,34 @@ func registerSharedTools(
 				// There is no supported way to run non-headless today.
 				browserCfg.PersistSession = cfg.Tools.Browser.PersistSession
 
+				// WebRTC build (ADR-047, wave-plan W2-A): seed the gateway-owned
+				// tabCapture capture extension into $OMNIPUS_HOME/browser/
+				// (config.OmnipusHomeDir()/browser — the helper, never an ad-hoc
+				// join) and wire ExtensionDir/ExtensionID onto browserCfg so the
+				// coordinator's launch flags (--allowlisted-extension-id,
+				// --enable-unsafe-extension-debugging — exec_resolver.go) apply
+				// and its post-launch auto-load (coordinator.go's launchChrome)
+				// picks it up. Seed is atomic/idempotent (captureext.Seed) and
+				// harmless even when WebRTC ends up gated off at request time
+				// (WebRTCEnabled=false, lite build, or ClassifyVideoCapability
+				// not_capable) — the extension simply never gets used. Best-effort:
+				// a seed failure only means the WebRTC capture path degrades to
+				// "not_capable"-equivalent (no ExtensionDir set, so LoadExtension
+				// is never attempted) — it must never abort ordinary browser-tool
+				// registration for this agent.
+				if extDir, seedErr := captureext.Seed(
+					filepath.Join(config.OmnipusHomeDir(), "browser"),
+				); seedErr != nil {
+					logger.WarnCF(
+						"agent",
+						"WebRTC capture extension seed failed — live-view WebRTC will report not_capable",
+						map[string]any{"error": seedErr.Error()},
+					)
+				} else {
+					browserCfg.ExtensionDir = extDir
+					browserCfg.ExtensionID = captureext.ExtensionID
+				}
+
 				// preview-on-main-listener v5 (FR-018/US-10, S21): let the agent's
 				// built-in browser reach the gateway's OWN preview origin.
 				// serve_web mints http://localhost:<gateway.port>/preview/...
@@ -1808,6 +1837,12 @@ func registerSharedTools(
 				} else {
 					al.browserCoordinator.ApplyRuntimeConfig(browserCfg, cfg.Tools.Browser.MaxTotalTabs)
 				}
+				// ADR-048 condition 1: thread tools.browser.capture_shared_context
+				// through to the coordinator on every fresh-seed AND reload pass —
+				// SetCaptureSharedContext (not NewBrowserCoordinator's constructor
+				// args) so this stays a single call site regardless of which
+				// branch above ran.
+				al.browserCoordinator.SetCaptureSharedContext(cfg.Tools.Browser.CaptureSharedContext)
 				coordinator := al.browserCoordinator
 				al.mu.Unlock()
 				// fs-workspace: browser tools (browser_screenshot) get agent.Home +
@@ -1866,6 +1901,33 @@ func registerSharedTools(
 					// re-attach — which resolves the NEW manager via
 					// BrowserManagerForAgent. Teardown for ALL entries still
 					// also happens, unconditionally, in Close().
+					//
+					// BOTH calls below run whenever a coordinator exists,
+					// rather than the coordinator branch being a substitute
+					// for prior.Shutdown() as an earlier version of this fix
+					// assumed: an agent configured with an explicit
+					// tools.browser.cdp_url NEVER calls coordinator.Register
+					// in the first place (ensureStarted's CDPURL branch
+					// returns before ever consulting m.coordinator — see
+					// AttachSharedChrome's doc comment), so `prior` in that
+					// mode is absent from the coordinator's c.managers map
+					// and coord.Release(agentID) is a silent no-op for it —
+					// dropConnection never reaches it, Started() never flips
+					// false, and its remote-allocator connection leaks on
+					// every reload (caught by
+					// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager,
+					// which pins CDPURL specifically to exercise this path).
+					// prior.Shutdown() is safe to call unconditionally
+					// alongside coord.Release: it is idempotent (Shutdown /
+					// dropConnection share the same reset logic) and, per
+					// Shutdown's own doc comment, a no-op on Chrome/context
+					// in coordinator mode (m.allocCancel is the no-op stub
+					// ensureStarted installs there) — so CRIT-002 (Chrome +
+					// context survive a reload) is unaffected. coord.Release
+					// still runs whenever coord != nil so the coordinator's
+					// OWN bookkeeping (c.managers entry, tab-budget counts)
+					// stays correct for managers that WERE actually
+					// registered with it.
 					al.mu.Lock()
 					prior := al.browserMgrs[agentID]
 					coord := al.browserCoordinator

@@ -1,0 +1,64 @@
+title: BrowserWebRTCStateFrame
+description: >
+  Server → client. Availability / lifecycle state for the WebRTC media path
+  on a live-browser connection, distinct from the general lifecycle carried
+  by browser_status. `available` tells the SPA whether it may attempt a
+  browser_webrtc_offer at all (feature flag off, platform/build not
+  capable, or a runtime error takes it out of service); `active` tells the
+  SPA whether a WebRTC session is currently flowing media for this
+  connection. Per ADR-047 D3, the JPEG browser_screencast path keeps
+  running unconditionally as the automatic fallback tier — the SPA falls
+  back to it whenever available=false or active drops to false after being
+  true (e.g. ICE failure), with no separate error frame needed. See
+  ADR-047 D1/D3/D7 (lite builds compile WebRTC out entirely).
+type: object
+required:
+  - type
+  - available
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_webrtc_state
+  session_id:
+    type: string
+    maxLength: 128
+    description: >-
+      Echoes the session_id from the triggering browser_webrtc_offer /
+      browser_attach, for client-side correlation only.
+  available:
+    type: boolean
+    description: >-
+      True if the gateway currently offers WebRTC for this connection (the
+      webrtc_enabled config flag is on, the platform/build supports it, and
+      no runtime error has taken it out of service). False means the SPA
+      must not send browser_webrtc_offer and should rely on the JPEG
+      browser_screencast path only.
+  reason:
+    type: string
+    enum:
+      - disabled
+      - not_capable
+      - lite_build
+      - error
+    description: >-
+      Present when available=false (or when active unexpectedly drops to
+      false): disabled = tools.browser.webrtc_enabled is off; not_capable =
+      platform/managed-Chrome capability classification is below WebRTC
+      eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full
+      Chrome); lite_build = binary built with -tags lite (Pion compiled
+      out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE)
+      took the WebRTC path out of service for this session.
+  has_audio:
+    type: boolean
+    description: >-
+      True if the active (or about-to-be-offered) media includes an audio
+      track from the captured tab. Absent/false when audio is unavailable
+      or not yet known.
+  active:
+    type: boolean
+    description: >-
+      True while a WebRTC PeerConnection for this viewer is currently
+      connected and flowing media. False (or absent) means the viewer is on
+      the JPEG fallback tier, whether by choice, by availability, or after
+      an ICE/connection failure.

@@ -904,3 +904,237 @@ func TestControlledResult(t *testing.T) {
 	mgr.Live().ReleaseControl(defaultSessionID, "viewer1")
 	require.Nil(t, controlledResult(mgr, "browser_click"), "releasing control must un-gate the tool again")
 }
+
+// ---------------------------------------------------------------------------
+// QA regression-wave item 5: BringToFront-before-StartScreencast ordering.
+// ---------------------------------------------------------------------------
+
+// TestLiveView_Attach_BringsTabToFrontBeforeStartingScreencast and
+// TestLiveView_RebindScreencastOnce_BringsTabToFrontBeforeStartingScreencast
+// are brittle-by-design interim guards (W3 e2e finding — full-Chrome
+// --headless=new delivers ZERO screencast frames for a target the
+// compositor considers hidden until Page.bringToFront is called first; see
+// attach()'s and rebindScreencastOnce()'s doc comments in live.go) for the
+// ORDERED PAIR [BringToFront, StartScreencast] within the SAME runCDP call.
+// This does not (and, short of a real headless Chrome, cannot) prove Chrome
+// actually renders the tab visible — it proves the two CDP calls are issued
+// in the specific order the fix requires, using the EXISTING
+// LiveView.runCDP test-injection seam (no production change needed): a
+// future regression that reordered the actions slice, or split them into
+// two separate runCDP calls where a failed BringToFront silently skipped
+// StartScreencast, would be caught here.
+func TestLiveView_Attach_BringsTabToFrontBeforeStartingScreencast(t *testing.T) {
+	mgr := &BrowserManager{cfg: BrowserConfig{PageTimeout: 5 * time.Second}}
+
+	var recorded []chromedp.Action
+	lv := &LiveView{
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+		ackCh:        make(chan int64, 1),
+	}
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+		recorded = append(recorded, actions...)
+		return nil
+	}
+
+	tabCtx, cancel := chromedp.NewContext(context.Background())
+	t.Cleanup(cancel)
+
+	_, err := lv.attach(tabCtx, "viewer1", func(LiveFrame) {}, nil, nil, nil)
+	require.NoError(t, err)
+
+	require.Len(t, recorded, 2, "attach must issue BringToFront and StartScreencast as ONE runCDP call")
+	_, firstIsBringToFront := recorded[0].(chromedp.ActionFunc)
+	require.True(t, firstIsBringToFront, "the FIRST action must be the BringToFront ActionFunc wrapper")
+	_, secondIsStartScreencast := recorded[1].(*page.StartScreencastParams)
+	require.True(t, secondIsStartScreencast,
+		"the SECOND action must be StartScreencastParams — BringToFront must precede StartScreencast (W3 e2e finding)")
+}
+
+// TestLiveView_RebindScreencastOnce_BringsTabToFrontBeforeStartingScreencast
+// is the rebindScreencastOnce() half of the same guard — see the doc comment
+// above. Establishes a real initial epoch via attach() (so
+// rebindScreencastOnce's hasEpochLocked() precondition is met), then rebinds
+// to a second tab and inspects whichever recorded runCDP call carries
+// StartScreencastParams (rebindScreencastOnce issues a SEPARATE runCDP call
+// for the old epoch's StopScreencast first, so the [BringToFront,
+// StartScreencast] pair is not necessarily the first call recorded).
+func TestLiveView_RebindScreencastOnce_BringsTabToFrontBeforeStartingScreencast(t *testing.T) {
+	tabInit, cancelInit := chromedp.NewContext(context.Background())
+	t.Cleanup(cancelInit)
+	tabNext, cancelNext := chromedp.NewContext(context.Background())
+	t.Cleanup(cancelNext)
+
+	mgr := &BrowserManager{
+		cfg:     BrowserConfig{PageTimeout: 5 * time.Second},
+		started: true,
+		sessions: map[string]*sessionEntry{
+			"s1": {
+				tabs:      []*tabEntry{{ctx: tabNext, cancel: cancelNext}},
+				activeIdx: 0,
+			},
+		},
+	}
+
+	var callsMu sync.Mutex
+	var calls [][]chromedp.Action
+	lv := &LiveView{
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+		ackCh:        make(chan int64, 1),
+	}
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+		callsMu.Lock()
+		calls = append(calls, append([]chromedp.Action(nil), actions...))
+		callsMu.Unlock()
+		return nil
+	}
+
+	_, err := lv.attach(tabInit, "viewer1", func(LiveFrame) {}, nil, nil, nil)
+	require.NoError(t, err)
+
+	lv.rebindScreencast(tabNext)
+
+	callsMu.Lock()
+	defer callsMu.Unlock()
+
+	var found bool
+	for _, actions := range calls {
+		if len(actions) != 2 {
+			continue // e.g. the old epoch's lone StopScreencast call
+		}
+		if _, isStart := actions[1].(*page.StartScreencastParams); !isStart {
+			continue
+		}
+		found = true
+		_, firstIsBringToFront := actions[0].(chromedp.ActionFunc)
+		require.True(t, firstIsBringToFront,
+			"the action immediately before StartScreencast must be the BringToFront ActionFunc wrapper")
+	}
+	require.True(t, found, "rebindScreencastOnce must issue a [BringToFront, StartScreencast] pair in one runCDP call")
+}
+
+// ---------------------------------------------------------------------------
+// QA regression-wave item 10: lifecycle wiring TRIGGERS for
+// CaptureSession.Stop()/Recapture() — TestCaptureSession_RecapturePropagatesToRelayAndIngest
+// (capture_session_test.go) already covers what Recapture()/Stop() DO once
+// called; these two tests cover whether live.go's two call sites actually
+// call them at the right moment.
+// ---------------------------------------------------------------------------
+
+// TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSession
+// proves the watchForUnexpectedDeath -> cs.Stop() wire (live.go, wave-plan
+// W2-A item 5: "also on browser_status-relevant lifecycle: browser death ->
+// stop session"). mgr.browserAlive("s1") is made to report false (genuinely
+// dead) simply by never populating mgr.sessions at all — browserAlive's own
+// implementation treats "no sessionEntry for this id" as not-alive, which is
+// exactly the "whole browsing context is gone" case this trigger targets
+// (as opposed to a mere tab close/switch, which watchForUnexpectedDeath
+// deliberately leaves alone — see its doc comment).
+func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSession(t *testing.T) {
+	// NewBrowserManager (not a bare &BrowserManager{} literal) — Stop()
+	// -> ReconcileScreencast() -> mgr.Live().ResumeScreencast() needs a
+	// real, non-nil live-view registry (mgr.live), which only
+	// NewBrowserManager wires up. mgr.sessions starts as an empty map,
+	// which is exactly what this test wants: browserAlive("s1") reports
+	// false (no sessionEntry at all) without any further setup.
+	mgr, err := NewBrowserManager(BrowserConfig{}, security.NewSSRFChecker(nil))
+	require.NoError(t, err)
+	relay := &fakeRelay{}
+	var calls int32
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-death", relay, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+	mgr.capture = cs
+
+	lv := &LiveView{
+		mgr:          mgr,
+		sessionID:    "s1",
+		viewers:      make(map[string]FrameSink),
+		statusSinks:  make(map[string]StatusSink),
+		controlSinks: make(map[string]ControlSink),
+		tabsSinks:    make(map[string]TabsSink),
+		ackCh:        make(chan int64, 1),
+	}
+	watchedCtx, cancel := context.WithCancel(context.Background())
+	lv.listenCtx = watchedCtx
+	lv.stopListen = cancel
+
+	done := make(chan struct{})
+	go func() {
+		lv.watchForUnexpectedDeath(watchedCtx)
+		close(done)
+	}()
+
+	// Simulate the whole browsing context dying (BrowserManager.Shutdown or a
+	// genuine crash) — the tab's own context (and everything derived from
+	// it, including this epoch's listenCtx) dies WITHOUT a clean detach().
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchForUnexpectedDeath never returned")
+	}
+
+	require.Equal(t, 1, relay.closeCount(), "a genuine browser death must call cs.Stop(), which closes the relay")
+}
+
+// TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture
+// proves the onTabsChanged -> cs.Recapture() wire (live.go, wave-plan W2-A
+// item 5: "recapture on active-tab switch"). lastKnownActiveCtx is
+// pre-seeded to a DIFFERENT context than the manager's actual active tab, so
+// this single onTabsChanged call observes activeTabChanged=true on its very
+// first real comparison (mirroring a genuine second call after an initial
+// baseline one). Deliberately leaves lv.listenCtx unset (hasEpochLocked()
+// stays false) so onTabsChanged's separate needsRebind/rebindScreencast
+// branch — which would issue a real (faked) CDP call — is never reached;
+// this test is scoped to the Recapture trigger alone.
+func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(t *testing.T) {
+	tabOld, cancelOld := context.WithCancel(context.Background())
+	t.Cleanup(cancelOld)
+	tabNew, cancelNew := context.WithCancel(context.Background())
+	t.Cleanup(cancelNew)
+
+	mgr := &BrowserManager{
+		started: true,
+		sessions: map[string]*sessionEntry{
+			"s1": {
+				tabs:      []*tabEntry{{ctx: tabNew, cancel: cancelNew}},
+				activeIdx: 0,
+			},
+		},
+	}
+	relay := &fakeRelay{}
+	var calls int32
+	cs, err := NewCaptureSessionWithDeps(mgr, "agent-recapture", relay, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+	mgr.capture = cs
+
+	lv := &LiveView{
+		mgr:                mgr,
+		sessionID:          "s1",
+		viewers:            make(map[string]FrameSink),
+		statusSinks:        make(map[string]StatusSink),
+		controlSinks:       make(map[string]ControlSink),
+		tabsSinks:          make(map[string]TabsSink),
+		ackCh:              make(chan int64, 1),
+		lastKnownActiveCtx: tabOld,
+	}
+
+	lv.onTabsChanged(nil, 0)
+
+	require.Equal(
+		t,
+		1,
+		relay.recaptureCount(),
+		"an active-tab switch must call cs.Recapture(), which signals the relay",
+	)
+}

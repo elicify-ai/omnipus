@@ -46,7 +46,14 @@ export type WsFrameType =
   | "browser_screencast"
   | "browser_status"
   | "browser_tab_action"
-  | "browser_tabs";
+  | "browser_tabs"
+  | "browser_webrtc_offer"
+  | "browser_webrtc_answer"
+  | "browser_webrtc_state"
+  | "browser_capture_hello"
+  | "browser_capture_offer"
+  | "browser_capture_answer"
+  | "browser_capture_control";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -451,6 +458,50 @@ export interface BrowserTabsFrame {
   }>;
 }
 
+export interface BrowserWebRTCOfferFrame {
+  type: "browser_webrtc_offer";
+  agent_id: string;
+  session_id: string;
+  sdp: string;
+}
+
+export interface BrowserWebRTCAnswerFrame {
+  type: "browser_webrtc_answer";
+  session_id?: string;
+  sdp: string;
+}
+
+export interface BrowserWebRTCStateFrame {
+  type: "browser_webrtc_state";
+  session_id?: string;
+  available: boolean;
+  reason?: "disabled" | "not_capable" | "lite_build" | "error";
+  has_audio?: boolean;
+  active?: boolean;
+}
+
+export interface BrowserCaptureHelloFrame {
+  type: "browser_capture_hello";
+  token: string;
+  ext_version: string;
+}
+
+export interface BrowserCaptureOfferFrame {
+  type: "browser_capture_offer";
+  sdp: string;
+}
+
+export interface BrowserCaptureAnswerFrame {
+  type: "browser_capture_answer";
+  sdp: string;
+}
+
+export interface BrowserCaptureControlFrame {
+  type: "browser_capture_control";
+  action: "recapture" | "shutdown" | "ping";
+  reason?: string;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -493,7 +544,14 @@ export type WsFrame =
   | BrowserScreencastFrame
   | BrowserStatusFrame
   | BrowserTabActionFrame
-  | BrowserTabsFrame;
+  | BrowserTabsFrame
+  | BrowserWebRTCOfferFrame
+  | BrowserWebRTCAnswerFrame
+  | BrowserWebRTCStateFrame
+  | BrowserCaptureHelloFrame
+  | BrowserCaptureOfferFrame
+  | BrowserCaptureAnswerFrame
+  | BrowserCaptureControlFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -509,12 +567,13 @@ export type ClientFrame =
   | BrowserAttachFrame
   | BrowserInputFrame
   | BrowserControlFrame
-  | BrowserDetachFrame;
+  | BrowserDetachFrame
+  | BrowserWebRTCOfferFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_webrtc_offer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -546,4 +605,10 @@ export type ServerFrame =
   | BrowserScreencastFrame
   | BrowserStatusFrame
   | BrowserTabActionFrame
-  | BrowserTabsFrame;
+  | BrowserTabsFrame
+  | BrowserWebRTCAnswerFrame
+  | BrowserWebRTCStateFrame
+  | BrowserCaptureHelloFrame
+  | BrowserCaptureOfferFrame
+  | BrowserCaptureAnswerFrame
+  | BrowserCaptureControlFrame;

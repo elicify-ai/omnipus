@@ -148,6 +148,20 @@ With `trust_xff: true` the gateway reads `X-Forwarded-For` for the audit `remote
 
 **Security note:** Only enable `trust_xff` when all traffic to the gateway port passes through your controlled proxy. If any external client can reach the gateway port directly, they can supply a spoofed `X-Forwarded-For` header and insert a fake IP into audit logs.
 
+### Loopback-gated endpoints behind a same-host proxy (added 2026-07-18)
+
+Behind a same-host reverse proxy, every request the gateway sees presents a loopback
+`RemoteAddr` (the proxy's own connection to the gateway, not the original client). This
+means the live-browser capture-ingest endpoint's loopback gate (`127.0.0.1`-only, by
+design — see ADR-047 D6) provides **no additional defense** in that topology: any
+request reaching the proxy on that path also reaches the gateway looking like
+loopback. This is expected and accounted for — the **per-stream capability token**
+(minted by the gateway, injected out-of-band via CDP, never in a URL) is the sole
+security boundary for that endpoint, not the loopback check. The same same-host-proxy
+caveat applies to any other loopback-only gate; see `gateway.trust_xff` above for the
+analogous IP-spoofing consideration on the **login rate limiter**, which keys off the
+same `RemoteAddr`/`X-Forwarded-For` resolution.
+
 ---
 
 ## Disabling previews (`gateway.preview_enabled`)

@@ -117,6 +117,54 @@ describe('BrowserLivePanel (always-docked)', () => {
         '_blank',
         'noopener,noreferrer',
       )
+      // UAT 2026-07-18: popping out HANDS OVER the view — the docked panel
+      // closes (unmount detaches its viewer; the server releases the drive
+      // lock on detach), so the pop-out is never wedged behind this
+      // connection's control lock ("Someone else is driving", dead input).
+      expect(useUiStore.getState().browserPanel).toBeNull()
+      expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
+
+      openSpy.mockRestore()
+    })
+
+    // a11y fix-wave (F1): closeBrowserPanel() unmounts the docked panel,
+    // which drops keyboard focus to <body> — this asserts the pop-out path
+    // restores it to the chat composer instead of stranding keyboard/SR
+    // users. Simulates the composer textarea via the SAME
+    // `data-testid="chat-input"` ChatScreen.tsx's real composer carries
+    // (BrowserLivePanel has no direct handle on ChatScreen's internal ref,
+    // so it queries by this testid — see BrowserLivePanel.tsx's own comment).
+    it('restores focus to the chat composer textarea after popping out', () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const composerInput = document.createElement('textarea')
+      composerInput.setAttribute('data-testid', 'chat-input')
+      document.body.appendChild(composerInput)
+
+      render(<BrowserLivePanel />)
+      act(() => {
+        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+
+      expect(document.activeElement).toBe(composerInput)
+
+      openSpy.mockRestore()
+      document.body.removeChild(composerInput)
+    })
+
+    it('does not throw when popping out and the composer textarea is not mounted (graceful no-op fallback)', () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      expect(document.querySelector('[data-testid="chat-input"]')).toBeNull()
+
+      render(<BrowserLivePanel />)
+      act(() => {
+        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
+      })
+
+      expect(() => {
+        fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+      }).not.toThrow()
 
       openSpy.mockRestore()
     })
