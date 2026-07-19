@@ -170,13 +170,14 @@ func (al *AgentLoop) startIntervalLoop(
 	zero := 0
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	if perr := store.SetMeta(sessionID, session.MetaPatch{
-		LoopMode:       &mode,
-		LoopPrompt:     &prompt,
-		LoopRunCount:   &zero,
-		LoopMaxRuns:    &maxRuns,
-		LoopIntervalMS: &everyMS,
-		LoopJobID:      &jobID,
-		LoopStartedAt:  &nowStr,
+		LoopMode:           &mode,
+		LoopPrompt:         &prompt,
+		LoopRunCount:       &zero,
+		LoopMaxRuns:        &maxRuns,
+		LoopIntervalMS:     &everyMS,
+		LoopJobID:          &jobID,
+		LoopStartedAt:      &nowStr,
+		LoopLastActivityAt: &nowStr,
 	}); perr != nil {
 		logger.WarnCF("agent", "loop: failed to persist interval loop set",
 			map[string]any{"session_id": sessionID, "error": perr.Error()})
@@ -207,13 +208,14 @@ func (al *AgentLoop) startSelfPacedLoop(
 	var zeroMS int64
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	if perr := store.SetMeta(sessionID, session.MetaPatch{
-		LoopMode:       &mode,
-		LoopPrompt:     &prompt,
-		LoopRunCount:   &zero,
-		LoopMaxRuns:    &maxRuns,
-		LoopIntervalMS: &zeroMS,
-		LoopJobID:      &jobID,
-		LoopStartedAt:  &nowStr,
+		LoopMode:           &mode,
+		LoopPrompt:         &prompt,
+		LoopRunCount:       &zero,
+		LoopMaxRuns:        &maxRuns,
+		LoopIntervalMS:     &zeroMS,
+		LoopJobID:          &jobID,
+		LoopStartedAt:      &nowStr,
+		LoopLastActivityAt: &nowStr,
 	}); perr != nil {
 		logger.WarnCF("agent", "loop: failed to persist self-paced loop set",
 			map[string]any{"session_id": sessionID, "error": perr.Error()})
@@ -276,14 +278,15 @@ func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, not
 	zero := 0
 	var zeroMS int64
 	if err := store.SetMeta(sessionID, session.MetaPatch{
-		LoopMode:        &empty,
-		LoopPrompt:      &empty,
-		LoopRunCount:    &zero,
-		LoopMaxRuns:     &zero,
-		LoopIntervalMS:  &zeroMS,
-		LoopNextDelayMS: &zeroMS,
-		LoopJobID:       &empty,
-		LoopStartedAt:   &empty,
+		LoopMode:           &empty,
+		LoopPrompt:         &empty,
+		LoopRunCount:       &zero,
+		LoopMaxRuns:        &zero,
+		LoopIntervalMS:     &zeroMS,
+		LoopNextDelayMS:    &zeroMS,
+		LoopJobID:          &empty,
+		LoopStartedAt:      &empty,
+		LoopLastActivityAt: &empty,
 	}); err != nil {
 		logger.WarnCF("agent", "loop: failed to clear loop state",
 			map[string]any{"session_id": sessionID, "error": err.Error(), "note": note})

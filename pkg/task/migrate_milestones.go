@@ -138,12 +138,14 @@ func MigrateMilestonesToTags(home string) error {
 	if terr != nil && !os.IsNotExist(terr) {
 		return fmt.Errorf("task: milestone migration: read tasks dir: %w", terr)
 	}
+	var migrationFailures int
 	for _, te := range taskEntries {
 		if te.IsDir() || !strings.HasSuffix(te.Name(), ".json") {
 			continue
 		}
 		taskPath := filepath.Join(tasksDir, te.Name())
 		if err := migrateOneTaskFile(taskPath, mapping, emptyMilestones); err != nil {
+			migrationFailures++
 			slog.Warn("task: milestone migration: could not migrate task file", "file", te.Name(), "error", err)
 		}
 	}
@@ -154,8 +156,25 @@ func MigrateMilestonesToTags(home string) error {
 			"milestone_id", id, "name", entry.Name, "due_date", entry.DueDate)
 	}
 
-	// PHASE 3 — finalize: sentinel LAST (before dir removal), only after every
-	// task write above has completed.
+	// PHASE 3 — finalize: sentinel LAST (before dir removal), only after
+	// EVERY task write above succeeded (review r1 silent-failure HIGH 2). A
+	// partial-failure run must NOT write the sentinel or remove the
+	// milestones dir — doing so unconditionally (the pre-fix behavior) meant
+	// any per-file Warn logged above was PERMANENT data loss: the sentinel's
+	// existence short-circuits every future call at this function's own top,
+	// and the milestone source files driving Phase 1's mapping would already
+	// be gone. Leaving both undone lets the NEXT boot retry deterministically
+	// (Phase 1 recomputes an identical mapping from the still-intact
+	// milestone files on any re-run, per this file's own package doc
+	// comment) rather than losing the failed file(s)' milestone_id/tag
+	// mapping forever.
+	if migrationFailures > 0 {
+		return fmt.Errorf(
+			"task: milestone migration: %d task file(s) failed to migrate — sentinel NOT written, "+
+				"milestones dir NOT removed, will retry on next boot",
+			migrationFailures,
+		)
+	}
 	if err := writeMigrationSentinel(sentinelPath); err != nil {
 		return err
 	}
@@ -253,7 +272,21 @@ func migrateOneTaskFile(path string, mapping map[string]milestoneTagAssignment, 
 	if !hasTag {
 		tags = append(tags, entry.Tag) // idempotent: only appended once ever.
 	}
-	tagsJSON, mErr := json.Marshal(tags)
+	// m5 fix (review r1): route the appended list through the SAME
+	// normalizeTags the store's own Create/Update write path uses, instead of
+	// writing the raw slice directly — this was bypassing the
+	// ≤16-tags-per-task/≤64-rune-per-tag caps every other write path
+	// enforces, letting the migration silently produce a task that violates
+	// an invariant nothing else in the codebase is allowed to violate. A cap
+	// violation now surfaces as a per-file migration error (logged Warn by
+	// the caller, and — since this is a genuine ADR-049 D1 spec/data
+	// conflict on a real task, not a transient I/O fault — correctly blocks
+	// this run's sentinel finalization until an operator resolves it).
+	normalizedTags, nErr := normalizeTags(tags)
+	if nErr != nil {
+		return fmt.Errorf("normalize tags after milestone-tag append: %w", nErr)
+	}
+	tagsJSON, mErr := json.Marshal(normalizedTags)
 	if mErr != nil {
 		return fmt.Errorf("marshal tags: %w", mErr)
 	}

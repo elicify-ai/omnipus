@@ -278,3 +278,61 @@ func TestMigrateMilestones_NoMilestonesDir(t *testing.T) {
 	_, err := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
 	assert.NoError(t, err)
 }
+
+// TestMigrateMilestones_PartialFailure_DoesNotFinalize is review r1
+// silent-failure HIGH 2: when at least one task file fails to migrate (here,
+// a task already at the 16-tag cap — SD-A9/spec Part A §B — for which
+// appending the milestone tag would push it to 17, rejected by
+// normalizeTags), the run must NOT write the completion sentinel and must
+// NOT remove the milestones dir. Writing the sentinel unconditionally (the
+// pre-fix behavior) would have made task-bad's milestone_id/tag mapping
+// PERMANENTLY unrecoverable: the sentinel short-circuits every future call,
+// and the milestone source files driving Phase 1's mapping are only safe to
+// delete once every task file has actually incorporated that mapping.
+func TestMigrateMilestones_PartialFailure_DoesNotFinalize(t *testing.T) {
+	home := t.TempDir()
+	milestonesDir := filepath.Join(home, "milestones")
+	tasksDir := filepath.Join(home, "tasks")
+
+	writeMilestoneFixture(t, milestonesDir, "m1", "Q3", "2026-09-30")
+
+	sixteenTags := make([]string, 16)
+	for i := range sixteenTags {
+		sixteenTags[i] = "existing-tag-" + string(rune('a'+i))
+	}
+	writeLegacyTaskFixture(t, tasksDir, "task-good", "ws-1", "m1", "", nil)
+	writeLegacyTaskFixture(t, tasksDir, "task-bad", "ws-1", "m1", "", sixteenTags)
+
+	err := MigrateMilestonesToTags(home)
+	require.Error(t, err, "a partial per-file failure must surface as an error, not be silently swallowed")
+	assert.Contains(t, err.Error(), "failed to migrate")
+
+	_, statErr := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
+	assert.True(t, os.IsNotExist(statErr),
+		"sentinel must NOT be written when any task file failed to migrate")
+	_, statErr = os.Stat(milestonesDir)
+	assert.NoError(t, statErr, "milestones dir must NOT be removed when any task file failed to migrate")
+
+	// task-bad's file must be untouched — still carries the raw milestone_id
+	// key, so a retry finds the SAME mapping and fails the SAME deterministic
+	// way (not silently drifting into a different, undocumented state).
+	rawBad := rawTaskKeys(t, tasksDir, "task-bad")
+	_, hasLegacyKey := rawBad["milestone_id"]
+	assert.True(t, hasLegacyKey, "a failed migration must leave the task file's milestone_id key intact")
+
+	// task-good's own migration succeeded independently (per-file, not
+	// transactional across the whole run) — it already carries its tag.
+	good := readTaskFixture(t, tasksDir, "task-good")
+	assert.Contains(t, good.Tags, "milestone:q3")
+
+	// Retry (e.g. next boot): task-good's migration is a no-op (already
+	// dropped its milestone_id key, idempotent — no duplicate tag), task-bad
+	// fails identically again, and the sentinel/dir removal is still
+	// withheld.
+	err2 := MigrateMilestonesToTags(home)
+	require.Error(t, err2)
+	goodAfterRetry := readTaskFixture(t, tasksDir, "task-good")
+	assert.Len(t, goodAfterRetry.Tags, 1, "already-migrated task-good must not gain a duplicate tag on retry")
+	_, statErr = os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
+	assert.True(t, os.IsNotExist(statErr), "sentinel must still be withheld on a repeated failing retry")
+}

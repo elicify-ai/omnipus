@@ -206,7 +206,18 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 
 	reply, runErr := s.al.ProcessScheduled(ctx, job.AgentID, sessionID, prompt, "", "")
 
-	if perr := store.SetMeta(sessionID, session.MetaPatch{LoopRunCount: &newRun}); perr != nil {
+	// FR-064/D7 idle-expiry (review r1): the job genuinely fired — this IS
+	// activity for the calendar-brake clock, persisted in the SAME write as
+	// run_count (crash-safety: both land together or neither does; see this
+	// function's own doc comment on the "persist first" discipline this
+	// mirrors). Bumped regardless of runErr — a scheduled run that actually
+	// executed (even one whose turn errored) is still real mechanical
+	// progress, not a judge-style unavailability pause.
+	activityNow := time.Now().UTC().Format(time.RFC3339)
+	if perr := store.SetMeta(sessionID, session.MetaPatch{
+		LoopRunCount:       &newRun,
+		LoopLastActivityAt: &activityNow,
+	}); perr != nil {
 		logger.WarnCF("agent", "loop: failed to persist run_count",
 			map[string]any{"session_id": sessionID, "error": perr.Error()})
 	}
@@ -246,6 +257,62 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 	// NextRunAtMS for the "every" schedule — nothing further to schedule.
 	s.al.emitLoopStatusFrame(sessionID, meta.LoopMode, newRun, maxRuns, nil, "run_completed")
 	return reply, runErr
+}
+
+// IdleExpirySweep expires any `/loop` job idle for longer than its effective
+// IdleExpiryDays bound (FR-064/D7, review r1 blocker) — the `/loop`
+// counterpart to plan_engine.go's PlanEngine.idleExpirySweep, driven from the
+// SAME periodic tick (PlanEngine.goalAndLoopIdleExpirySweep) rather than a
+// second ticker. "idle" = no scheduled run has actually fired
+// (LoopLastActivityAt, bumped in RunScheduled above) within the bound. now is
+// caller-supplied (PlanEngine's own injectable clock) so tests can pin exact
+// idle-boundary math without a real sleep.
+func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time) {
+	if s.al == nil {
+		return
+	}
+	maxDays := cfg.EffectiveIdleExpiryDays(nil)
+	for _, job := range s.ListEnabledJobs() {
+		sessionID := job.Payload.Message
+		if sessionID == "" {
+			continue
+		}
+		store := s.al.ResolveSessionStore(sessionID)
+		if store == nil {
+			continue
+		}
+		meta, err := store.GetMeta(sessionID)
+		if err != nil || meta == nil || meta.LoopMode == "" {
+			continue
+		}
+		last := effectiveLoopActivity(meta)
+		if last.IsZero() {
+			continue // nothing to compare against; skip rather than guess
+		}
+		if now.Sub(last) < time.Duration(maxDays)*24*time.Hour {
+			continue
+		}
+		s.RemoveJob(job.ID)
+		// stopLoop Releases the "loop" R5 admission-cap slot (paired with the
+		// Admit("loop") call at set time) as part of its shared body.
+		s.al.stopLoop(sessionID, store, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
+	}
+}
+
+// effectiveLoopActivity returns the best available "last real activity"
+// timestamp for a loop session: LoopLastActivityAt when present, falling
+// back to LoopStartedAt (mirrors plan_engine.go's effectiveLastActivity /
+// goal_loop.go's effectiveGoalActivity).
+func effectiveLoopActivity(m *session.UnifiedMeta) time.Time {
+	for _, s := range []string{m.LoopLastActivityAt, m.LoopStartedAt} {
+		if s == "" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // loopSelfPacedSteeringPrompt wraps a self-paced /loop's stored prompt with

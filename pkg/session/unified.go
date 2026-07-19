@@ -70,23 +70,25 @@ type MetaPatch struct {
 	// Goal loop fields (ADR-049 D6/D7, /goal). Only non-nil fields are
 	// written; callers that want to CLEAR a goal must pass an empty-string
 	// GoalCondition explicitly (matching the TaskID clear convention).
-	GoalCondition    *string
-	GoalRoundsUsed   *int
-	GoalMaxRounds    *int
-	GoalLatestReason *string
-	GoalStartedAt    *string
+	GoalCondition      *string
+	GoalRoundsUsed     *int
+	GoalMaxRounds      *int
+	GoalLatestReason   *string
+	GoalStartedAt      *string
+	GoalLastActivityAt *string
 
 	// Loop fields (ADR-049 D6/D7, /loop). Only non-nil fields are written;
 	// callers that want to CLEAR a loop must pass an empty-string LoopMode
 	// explicitly.
-	LoopMode        *string
-	LoopPrompt      *string
-	LoopRunCount    *int
-	LoopMaxRuns     *int
-	LoopIntervalMS  *int64
-	LoopNextDelayMS *int64
-	LoopJobID       *string
-	LoopStartedAt   *string
+	LoopMode           *string
+	LoopPrompt         *string
+	LoopRunCount       *int
+	LoopMaxRuns        *int
+	LoopIntervalMS     *int64
+	LoopNextDelayMS    *int64
+	LoopJobID          *string
+	LoopStartedAt      *string
+	LoopLastActivityAt *string
 }
 
 // UnifiedMeta extends SessionMeta with the session type field.
@@ -597,6 +599,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	if patch.GoalStartedAt != nil {
 		meta.GoalStartedAt = *patch.GoalStartedAt
 	}
+	if patch.GoalLastActivityAt != nil {
+		meta.GoalLastActivityAt = *patch.GoalLastActivityAt
+	}
 	if patch.LoopMode != nil {
 		meta.LoopMode = *patch.LoopMode
 	}
@@ -620,6 +625,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	if patch.LoopStartedAt != nil {
 		meta.LoopStartedAt = *patch.LoopStartedAt
+	}
+	if patch.LoopLastActivityAt != nil {
+		meta.LoopLastActivityAt = *patch.LoopLastActivityAt
 	}
 	meta.UpdatedAt = time.Now().UTC()
 	return us.writeMetaLocked(sessionID, meta)
