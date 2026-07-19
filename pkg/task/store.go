@@ -17,6 +17,7 @@ import (
 
 	"github.com/adhocore/gronx"
 	"github.com/google/uuid"
+	rrule "github.com/teambition/rrule-go"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
@@ -323,12 +324,23 @@ const minTriggerIntervalSeconds = 60
 
 // ValidateTrigger validates a trigger's type and the config required for that
 // type (Detail #3). Empty/unset config keys for the wrong type are ignored. For
-// a recurring trigger it parses config.cron_expr with the same cron library the
-// trigger executor uses (gronx) and enforces a >= 60s effective interval
-// (LOW-1) by computing the next two fires.
+// a recurring trigger, config must carry exactly one of cron_expr (legacy,
+// validated with the same cron library the trigger executor uses — gronx —
+// enforcing a >= 60s effective interval per LOW-1) or rrule (RFC 5545, Calendar
+// Recurrence Redesign — see validateRRULE and the spec's normative
+// "Validation (ValidateTrigger, RRULE path)" section). The rrule/dtstart_ms/tz
+// keys are legal only on a recurring trigger — present on any other type they
+// are rejected outright (spec Validation §1).
 func ValidateTrigger(tr *Trigger) error {
 	if !IsValidTriggerType(tr.Type) {
 		return verr("invalid trigger type %q", tr.Type)
+	}
+	if tr.Type != TriggerRecurring &&
+		(tr.Config.Rrule != nil || tr.Config.DtstartMs != nil || tr.Config.Tz != nil) {
+		return verr(
+			"trigger %q: config.rrule/dtstart_ms/tz are only valid on a %q trigger",
+			tr.Type, TriggerRecurring,
+		)
 	}
 	switch tr.Type {
 	case TriggerOnce:
@@ -343,11 +355,24 @@ func ValidateTrigger(tr *Trigger) error {
 			return verr("trigger %q config.every_ms must be at least 1000ms", tr.Type)
 		}
 	case TriggerRecurring:
-		if tr.Config.CronExpr == nil || *tr.Config.CronExpr == "" {
-			return verr("trigger %q requires config.cron_expr", tr.Type)
-		}
-		if err := validateCronExpr(*tr.Config.CronExpr); err != nil {
-			return err
+		hasCron := tr.Config.CronExpr != nil && *tr.Config.CronExpr != ""
+		hasRrule := tr.Config.Rrule != nil && *tr.Config.Rrule != ""
+		switch {
+		case hasCron && hasRrule:
+			return verr(
+				"trigger %q config must carry exactly one of config.cron_expr or config.rrule, not both",
+				tr.Type,
+			)
+		case hasRrule:
+			if err := validateRRULE(tr.Config); err != nil {
+				return err
+			}
+		case hasCron:
+			if err := validateCronExpr(*tr.Config.CronExpr); err != nil {
+				return err
+			}
+		default:
+			return verr("trigger %q requires config.cron_expr or config.rrule", tr.Type)
 		}
 	case TriggerManual:
 		// no config required
@@ -381,6 +406,119 @@ func validateCronExpr(expr string) error {
 			minTriggerIntervalSeconds,
 		)
 	}
+	return nil
+}
+
+// rruleMaxLen is the maximum allowed length, in characters, of an RRULE body
+// (Calendar Recurrence Redesign spec, Validation §2 input bounds).
+const rruleMaxLen = 512
+
+// rruleLivenessYears is the liveness-bound horizon (Validation §5): a rule
+// producing zero occurrences within this many years of its DTSTART is
+// rejected as "never fires" (bounds pathological rules such as
+// FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=31).
+const rruleLivenessYears = 5
+
+// rruleMaxCount is the upper bound on an RRULE's COUNT value (Validation §6);
+// it bounds every COUNT-exhaustion check and DTSTART skip-walk elsewhere in
+// the RRULE engine (pkg/task/rrule.go).
+const rruleMaxCount = 100000
+
+// validateRRULE validates the RRULE branch of a `recurring` trigger's config
+// per the normative "Validation (ValidateTrigger, RRULE path)" section of
+// docs/internal/specs/calendar-recurrence-redesign-spec.md (§1-6). Called
+// only when cfg.Rrule is a non-empty string; ValidateTrigger has already
+// established exactly-one-of cron_expr/rrule for the caller.
+//
+// It reuses the unexported loadTZ/parseOption plumbing from rrule.go (same
+// package) so the validator's interpretation of the rule (FREQ, DTSTART,
+// COUNT, UNTIL, BYSECOND) can never drift from the expansion/scheduler
+// engine's interpretation of the same string (Timezone Semantics §4).
+func validateRRULE(cfg TriggerConfig) error {
+	rruleBody := *cfg.Rrule
+
+	// §1: dtstart_ms and tz are required siblings of rrule.
+	if cfg.DtstartMs == nil {
+		return verr("trigger config.rrule requires config.dtstart_ms")
+	}
+	if cfg.Tz == nil || *cfg.Tz == "" {
+		return verr("trigger config.rrule requires config.tz")
+	}
+
+	// §2: length bound, checked before parsing (cheap defense-in-depth against
+	// a pathologically large payload).
+	if len(rruleBody) > rruleMaxLen {
+		return verr("trigger config.rrule must be %d characters or fewer", rruleMaxLen)
+	}
+
+	// §1: tz must load (embedded tzdata, Constraint #1).
+	loc, err := loadTZ(*cfg.Tz)
+	if err != nil {
+		return verr("trigger config.tz %q could not be loaded: %v", *cfg.Tz, err)
+	}
+
+	// §1: the RRULE body must parse.
+	opt, err := parseOption(rruleBody, *cfg.DtstartMs, loc)
+	if err != nil {
+		return verr("trigger config.rrule %q could not be parsed: %v", rruleBody, err)
+	}
+
+	// §2: FREQ=SECONDLY is rejected outright.
+	if opt.Freq == rrule.SECONDLY {
+		return verr("trigger config.rrule must not use FREQ=SECONDLY")
+	}
+
+	// §2: any BYSECOND value other than the DTSTART second is rejected — the
+	// editor never emits BYSECOND at all, so this only fires on hand-crafted
+	// API payloads (spec note).
+	dtstartSecond := opt.Dtstart.Second()
+	for _, sec := range opt.Bysecond {
+		if sec != dtstartSecond {
+			return verr(
+				"trigger config.rrule BYSECOND value %d does not match the DTSTART second (%d)",
+				sec, dtstartSecond,
+			)
+		}
+	}
+
+	// §3: UNTIL, when present, must not precede DTSTART.
+	if !opt.Until.IsZero() && opt.Until.Before(opt.Dtstart) {
+		return verr("trigger config.rrule UNTIL must not precede config.dtstart_ms")
+	}
+
+	// §4: bounded-window minimum-gap scan (defense-in-depth; §2's hard rejects
+	// are the operative sub-minute mechanism — see rrule.go's ExpandForValidation
+	// doc comment). Rules yielding fewer than two occurrences in the window
+	// (e.g. COUNT=1) trivially pass.
+	instants, err := ExpandForValidation(rruleBody, *cfg.DtstartMs, *cfg.Tz)
+	if err != nil {
+		return verr("trigger config.rrule could not be validated: %v", err)
+	}
+	for i := 1; i < len(instants); i++ {
+		if instants[i]-instants[i-1] < minTriggerIntervalSeconds*1000 {
+			return verr(
+				"trigger config.rrule fires more often than once per %ds (self-DoS guard)",
+				minTriggerIntervalSeconds,
+			)
+		}
+	}
+
+	// §5: liveness bound — a rule that never fires within rruleLivenessYears
+	// of DTSTART is rejected (also bounds worst-case work on never-matching
+	// rules such as Feb 31).
+	live, err := HasOccurrenceWithinYears(rruleBody, *cfg.DtstartMs, *cfg.Tz, rruleLivenessYears)
+	if err != nil {
+		return verr("trigger config.rrule could not be validated: %v", err)
+	}
+	if !live {
+		return verr("trigger config.rrule never fires within %d years of config.dtstart_ms (rule never fires)", rruleLivenessYears)
+	}
+
+	// §6: COUNT bound.
+	if opt.Count > rruleMaxCount {
+		return verr("trigger config.rrule COUNT must be %d or fewer", rruleMaxCount)
+	}
+
 	return nil
 }
 
