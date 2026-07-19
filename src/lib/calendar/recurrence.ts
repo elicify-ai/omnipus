@@ -387,14 +387,17 @@ export function compileRecurrence(
 //
 // PARSER GOTCHA (documented for the next reader / the slide-over agent):
 // `RRule.fromString`/`rrulestr` construct a real `RRule` via `new
-// RRule(parseString(str))`, and `parseOptions` (parseoptions.js:32-34) does:
+// RRule(parseString(str))`, and `rrule`'s internal `parseOptions()` (in
+// `parseoptions.js`) starts with:
 //
 //   if (!opts.dtstart) opts.dtstart = new Date(new Date().setMilliseconds(0))
 //
 // — i.e. defaults dtstart to the CURRENT WALL-CLOCK INSTANT when no DTSTART
-// line is present, and then (parseoptions.js:47-68) AUTO-FILLS bymonthday /
-// byweekday / bymonth from that now-instant for any YEARLY/MONTHLY/WEEKLY
-// rule that has no BY* modifier at all. Because our wire contract stores
+// line is present, and then, a little further down, the `if (!(byweekno ||
+// byyearday || bymonthday || byweekday || byeaster))` guard's `switch
+// (opts.freq)` block AUTO-FILLS bymonthday / byweekday / bymonth from that
+// now-instant for any YEARLY/MONTHLY/WEEKLY rule that has no BY* modifier at
+// all. Because our wire contract stores
 // `dtstart_ms`/`tz` as separate sibling fields (never embedded as a DTSTART
 // line inside the `rrule` string itself, FR-005), calling
 // `RRule.fromString(rruleBody)` with no DTSTART line is non-deterministic

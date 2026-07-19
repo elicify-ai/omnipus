@@ -157,8 +157,28 @@ export function RecurrenceEditor({
 }: RecurrenceEditorProps) {
   const timeZone = tz ?? browserTimeZone()
   const presets = React.useMemo(() => computePresets(anchor), [anchor])
-  const selectedId = React.useMemo(() => matchPreset(value, anchor), [value, anchor])
+  const derivedId = React.useMemo(() => matchPreset(value, anchor), [value, anchor])
   const state: RecurrenceEditorState = value.kind === 'rrule' ? value.state : defaultRecurrenceState(anchor)
+
+  // "Custom…" is a presentational mode that is NOT representable in `value`
+  // (both a preset-matched rule and a hand-built rule are `{kind:'rrule'}`).
+  // A freshly-seeded Custom rule that happens to equal a named preset would
+  // otherwise make `matchPreset` snap the dropdown straight back to that preset
+  // and hide the Custom controls — the create-flow reachability bug. Track an
+  // explicit sticky flag: set when the operator picks "Custom…", cleared when
+  // they pick another preset OR when a new `value` arrives from the caller (an
+  // edit-mode load, detected by reference identity against our own last emit).
+  const emittedRef = React.useRef<RecurrenceValue | null>(null)
+  const [stickyCustom, setStickyCustom] = React.useState(false)
+  if (value !== emittedRef.current && stickyCustom) {
+    setStickyCustom(false)
+  }
+  const selectedId = stickyCustom ? 'custom' : derivedId
+
+  function emit(next: RecurrenceValue) {
+    emittedRef.current = next
+    onChange(next)
+  }
 
   const validity = React.useMemo(
     () => (value.kind === 'rrule' ? validateRecurrenceState(value.state) : { valid: true, reason: null }),
@@ -173,22 +193,26 @@ export function RecurrenceEditor({
   }, [validity.valid])
 
   function updateState(patch: Partial<RecurrenceEditorState>) {
-    onChange({ kind: 'rrule', state: { ...state, ...patch } })
+    emit({ kind: 'rrule', state: { ...state, ...patch } })
   }
 
   function handlePresetChange(id: string) {
-    if (id === 'none') {
-      onChange({ kind: 'none' })
+    if (id === 'custom') {
+      // Enter Custom mode explicitly and keep it sticky, even if the seeded
+      // state still equals a named preset — otherwise the dropdown snaps back
+      // to that preset and hides the Custom controls. The panel opens
+      // pre-filled with the current (possibly preset-matched) state.
+      setStickyCustom(true)
+      emit({ kind: 'rrule', state })
       return
     }
-    if (id === 'custom') {
-      // Keep whatever the current (possibly preset-matched) state already
-      // is — the Custom panel opens pre-filled instead of blank.
-      onChange({ kind: 'rrule', state })
+    setStickyCustom(false)
+    if (id === 'none') {
+      emit({ kind: 'none' })
       return
     }
     const preset = presets.find((p) => p.id === id)
-    if (preset) onChange(preset.value)
+    if (preset) emit(preset.value)
   }
 
   function toggleWeekday(code: WeekdayCode) {

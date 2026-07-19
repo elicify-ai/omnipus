@@ -34,6 +34,7 @@ import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { ApiError, ApiSchemaError } from '@/lib/api'
 import { maybeDevToast } from '@/lib/dev-toast'
 import { logError } from '@/lib/telemetry'
+import { browserTimeZone } from '@/lib/calendar/recurrence'
 import { TaskOccurrenceSet as TaskOccurrenceSetSchema } from '@/lib/api/generated/schemas'
 import type { TaskOccurrenceSet } from '@/lib/api/generated/openapi-types'
 
@@ -216,10 +217,12 @@ export interface UseOccurrencesParams { // not-wire-format: internal React hook 
   /** FullCalendar's `view.activeEnd` (or `datesSet` arg `.end`) — EXCLUSIVE (half-open range). */
   activeEnd: Date
   /**
-   * Override the viewer's IANA zone. Defaults to
-   * `Intl.DateTimeFormat().resolvedOptions().timeZone` (the browser zone —
-   * Timezone Semantics §1). Exposed mainly for deterministic tests; real
-   * callers should omit it.
+   * Override the viewer's IANA zone. Defaults to `browserTimeZone()` (the
+   * browser zone — Timezone Semantics §1), which wraps the
+   * `Intl.DateTimeFormat().resolvedOptions().timeZone` read in a try/catch +
+   * `'UTC'` fallback so a hostile/misconfigured `Intl` implementation can
+   * never throw out of this hook. Exposed mainly for deterministic tests;
+   * real callers should omit it.
    */
   tz?: string
   /** Default `true`. Set `false` to suspend fetching (e.g. workspace not yet resolved). */
@@ -243,7 +246,7 @@ export function useOccurrences(
   params: UseOccurrencesParams,
 ): UseQueryResult<TaskOccurrenceSet[], ApiError | ApiSchemaError> {
   const { workspaceId, activeStart, activeEnd, enabled = true } = params
-  const tz = params.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  const tz = params.tz ?? browserTimeZone()
   const fromMs = activeStart.getTime()
   const toMs = activeEnd.getTime()
 

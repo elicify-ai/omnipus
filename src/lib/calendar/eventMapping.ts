@@ -129,8 +129,14 @@ function makeEvent(
  * Format a `DayBucket.interval_ms` as a short human label, e.g. `1_800_000` →
  * `"every 30 min"`. Picks the largest whole unit that evenly divides the
  * interval (day > hour > min > sec); falls back to a rounded second count for
- * a non-whole-unit interval (should not occur given the server's 60 s
- * validation floor, but never throws).
+ * a non-whole-unit or sub-minute interval — never throws.
+ *
+ * The sub-minute "sec" branch is NOT dead code: `DayBucket.interval_ms` is
+ * populated for both `rrule` triggers (60s validation floor, so this branch
+ * is unreachable for them) AND legacy `every`-type triggers, which validate
+ * at a 1000ms floor (`TriggerEvery` in `pkg/task/store.go`) — a legacy
+ * `every_ms: 5000` task legitimately hits this branch and renders "every 5
+ * sec".
  */
 export function formatIntervalLabel(intervalMs: number): string {
   const SEC = 1000
@@ -227,6 +233,18 @@ export function mapToCalendarEvents(
   tasks: Task[],
   milestones: Milestone[],
   occurrenceSets: TaskOccurrenceSet[] = [],
+  /**
+   * F-SFH4 defensive fallback: the instant to place the truncation marker on
+   * when `truncated: true` but the set carries NO data at all (empty
+   * `occurrences_ms` and `day_buckets`, so `lastCoveredOccurrenceDayMs` has
+   * nothing to compute from) — should not occur in practice, but must never
+   * silently drop the marker (the whole point of `truncated` is that the
+   * task has MORE occurrences than shown). Ideally the caller's own query
+   * range start; defaults to "now" so a caller that hasn't threaded its
+   * range through this optional param still never regresses to a vanished
+   * task.
+   */
+  fallbackTruncationMarkerMs: number = Date.now(),
 ): EventInput[] {
   const events: EventInput[] = []
 
@@ -328,10 +346,13 @@ export function mapToCalendarEvents(
         )
       }
 
-      // Truncated expansion → one non-interactive marker on the last covered day.
+      // Truncated expansion → one non-interactive marker on the last covered
+      // day, or the fallback instant (F-SFH4) when the set has no data at
+      // all to compute a "last covered day" from — truncated must never mean
+      // a task silently vanishes with no "more not shown" affordance.
       if (set.truncated) {
-        const lastMs = lastCoveredOccurrenceDayMs(set)
-        const markerDate = lastMs === null ? null : parseMs(lastMs)
+        const lastMs = lastCoveredOccurrenceDayMs(set) ?? fallbackTruncationMarkerMs
+        const markerDate = parseMs(lastMs)
         if (markerDate !== null) {
           events.push(
             makeEvent(

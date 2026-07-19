@@ -166,6 +166,12 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
     expect(formatIntervalLabel(172_800_000)).toBe('every 2 days')
   })
 
+  it('formatIntervalLabel: sub-minute interval (legacy `every_ms` 1000ms floor, F3) falls back to "sec"', () => {
+    // Reachable for a legacy every_ms:5000 task (1000ms floor) — never for
+    // rrule (60s floor). See the updated doc comment above the function.
+    expect(formatIntervalLabel(5_000)).toBe('every 5 sec')
+  })
+
   it('formatBucketLabel: "· " prefix, interval present vs null', () => {
     expect(formatBucketLabel({ count: 48, interval_ms: 1_800_000 })).toBe('· every 30 min')
     expect(formatBucketLabel({ count: 4, interval_ms: null })).toBe('· 4×/day')
@@ -223,6 +229,38 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
     const marker = events.find((e) => e.extendedProps?.kind === 'task-occurrence-more')
     expect(marker).toBeDefined()
     expect(marker!.start).toEqual(new Date(laterBucketDay))
+  })
+
+  it('truncated:true with an entirely empty set still renders the marker (F-SFH4) instead of vanishing', () => {
+    // Defensive edge case: truncated:true but occurrences_ms and day_buckets
+    // are both empty, so lastCoveredOccurrenceDayMs has nothing to compute
+    // from. The marker must still render — on the caller-supplied fallback
+    // (the query range's own start) — never silently dropped.
+    const task = makeTask({ id: 'task-7' })
+    const set = makeOccurrenceSet({
+      task_id: 'task-7',
+      occurrences_ms: [],
+      day_buckets: [],
+      truncated: true,
+    })
+    const fallbackMs = new Date(2026, 5, 1, 0, 0, 0).getTime()
+
+    const events = mapToCalendarEvents([task], [], [set], fallbackMs)
+
+    const markers = events.filter((e) => e.extendedProps?.kind === 'task-occurrence-more')
+    expect(markers).toHaveLength(1)
+    expect(markers[0].start).toEqual(new Date(fallbackMs))
+  })
+
+  it('truncated:true with an empty set and no fallback supplied still renders a marker (defaults to now)', () => {
+    const task = makeTask({ id: 'task-8' })
+    const set = makeOccurrenceSet({ task_id: 'task-8', occurrences_ms: [], day_buckets: [], truncated: true })
+
+    const events = mapToCalendarEvents([task], [], [set])
+
+    const markers = events.filter((e) => e.extendedProps?.kind === 'task-occurrence-more')
+    expect(markers).toHaveLength(1)
+    expect(markers[0].start).toBeInstanceOf(Date)
   })
 
   it('truncated:false renders no marker', () => {

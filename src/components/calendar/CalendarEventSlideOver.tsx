@@ -74,6 +74,7 @@ import {
   RecurrenceEditor,
   compileRecurrence,
   parseRruleString,
+  validateRecurrenceState,
   type RecurrenceValue,
 } from '@/components/calendar/RecurrenceEditor'
 import { useOccurrences } from '@/lib/calendar/useOccurrences'
@@ -125,6 +126,12 @@ function formatFullDateTime(ms: number): string {
 }
 
 const PREVIEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000 // 30 days — short enough to stay well within useOccurrences' own caps
+
+/** Save button label — a small named helper instead of a nested ternary (F6). */
+function saveButtonLabel(isPending: boolean, isEdit: boolean): string {
+  if (isPending) return 'Saving…'
+  return isEdit ? 'Save' : 'Create'
+}
 
 export function CalendarEventSlideOver({
   open,
@@ -204,6 +211,7 @@ export function CalendarEventSlideOver({
     activeEnd: new Date(previewRange.to),
     enabled: open && isEdit && !!workspaceId,
   })
+  const { isError: previewError } = previewQuery
   const previewSet = useMemo(
     () => previewQuery.data?.find((s) => s.task_id === task?.id) ?? null,
     [previewQuery.data, task?.id],
@@ -273,6 +281,12 @@ export function CalendarEventSlideOver({
   }
 
   function handleSave() {
+    // F4 defense-in-depth: the Save button is already disabled while the
+    // Repeat section reports an invalid state, but don't rely on that alone
+    // — re-check here too.
+    if (recurrence.kind === 'rrule' && !validateRecurrenceState(recurrence.state).valid) {
+      return
+    }
     const trimmed = title.trim()
     if (!trimmed) {
       setTitleError('Title is required')
@@ -285,7 +299,16 @@ export function CalendarEventSlideOver({
     }
     setSaveError(null)
 
-    const trigger = buildTriggerForSave()
+    // F-SFH6: buildTriggerForSave reaches the rrule lib's optionsToString —
+    // an exception there must not fire uncaught inside this click handler
+    // (which would leave the button silently dead with no feedback).
+    let trigger: TaskTrigger
+    try {
+      trigger = buildTriggerForSave()
+    } catch (err) {
+      setSaveError(getErrorMessage(err, 'Failed to build the schedule for this event'))
+      return
+    }
 
     if (task) {
       updateMutation.mutate({
@@ -380,9 +403,11 @@ export function CalendarEventSlideOver({
             >
               <p className="font-medium">This task uses an old schedule format.</p>
               <p>
-                {nextRunMs != null
-                  ? `Next run: ${formatFullDateTime(nextRunMs)}`
-                  : 'Next run time unavailable.'}
+                {previewError
+                  ? "Couldn't load upcoming run times."
+                  : nextRunMs != null
+                    ? `Next run: ${formatFullDateTime(nextRunMs)}`
+                    : 'Next run time unavailable.'}
               </p>
               <p className="text-[var(--color-muted)]">
                 Set a new repeat rule below to replace it.
@@ -408,7 +433,12 @@ export function CalendarEventSlideOver({
           </div>
 
           {/* FR-020: upcoming fires preview, server-sourced (edit mode, active RRULE only) */}
-          {isEditingExistingRrule && upcomingPreview.length > 0 && (
+          {isEditingExistingRrule && previewError && (
+            <p className="text-xs text-[var(--color-muted)]" data-testid="upcoming-preview-error">
+              Couldn't load upcoming run times.
+            </p>
+          )}
+          {isEditingExistingRrule && !previewError && upcomingPreview.length > 0 && (
             <div className="flex flex-col gap-1" data-testid="upcoming-occurrences-preview">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Upcoming
@@ -438,7 +468,7 @@ export function CalendarEventSlideOver({
             disabled={saveDisabled}
             className="flex-1 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90"
           >
-            {isPending ? 'Saving…' : isEdit ? 'Save' : 'Create'}
+            {saveButtonLabel(isPending, isEdit)}
           </Button>
         </SheetFooter>
       </SheetContent>

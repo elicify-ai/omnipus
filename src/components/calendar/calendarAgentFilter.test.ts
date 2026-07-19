@@ -172,6 +172,27 @@ describe('eventMatchesAgentFilter — edge cases', () => {
     const weird: EventInput = { id: 'x', start: new Date('2026-08-15'), title: 'x' }
     expect(eventMatchesAgentFilter(weird, tasks, 'mia')).toBe(true)
   })
+
+  it('a task assigned to an agent removed from the roster still renders under its stored agent id (Edge Cases)', () => {
+    // Spec Edge Cases: "A recurring task assigned to an agent later removed
+    // from the workspace team → still renders; filter lists it under its
+    // stored agent id (name fallback 'Unknown agent')." This predicate never
+    // consults a roster/agents list — it compares the task's own agent_id
+    // against the filter value directly — so a stale id that no longer
+    // resolves to a live roster member is functionally identical to any
+    // other agent_id: it still matches when THAT id is the active filter,
+    // and is still excluded from every other agent's filter. The
+    // "Unknown agent" display-name fallback itself lives in the toolbar's
+    // dropdown-option builder (out of this pure predicate's scope).
+    const ghostAgentTask = makeTask({ id: 'task-ghost-agent', agent_id: 'departed-agent-id' })
+    const allTasks = [...tasks, ghostAgentTask]
+
+    expect(eventMatchesAgentFilter(dueEvent('d', ghostAgentTask.id), allTasks, 'departed-agent-id')).toBe(true)
+    expect(eventMatchesAgentFilter(dueEvent('d', ghostAgentTask.id), allTasks, 'mia')).toBe(false)
+    expect(eventMatchesAgentFilter(dueEvent('d', ghostAgentTask.id), allTasks, AGENT_FILTER_ALL)).toBe(true)
+    // Never mistaken for "no agent" — a stale id is not the same as unassigned.
+    expect(eventMatchesAgentFilter(dueEvent('d', ghostAgentTask.id), allTasks, AGENT_FILTER_UNASSIGNED)).toBe(false)
+  })
 })
 
 // ── filterEventsByAgent (the function CalendarScreen calls directly) ────────

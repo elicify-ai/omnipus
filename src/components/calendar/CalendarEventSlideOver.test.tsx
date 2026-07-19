@@ -65,8 +65,9 @@ import {
   ApiError,
 } from '@/lib/api'
 
+const mockUseOccurrences = vi.fn()
 vi.mock('@/lib/calendar/useOccurrences', () => ({
-  useOccurrences: vi.fn(() => ({ data: [], isError: false, isLoading: false })),
+  useOccurrences: (...args: unknown[]) => mockUseOccurrences(...args),
 }))
 
 const mockAddToast = vi.fn()
@@ -110,6 +111,18 @@ const RRULE_TRIGGER: TaskTrigger = {
   type: 'recurring',
   config: {
     rrule: 'FREQ=WEEKLY;BYDAY=MO;COUNT=10',
+    dtstart_ms: ANCHOR.getTime(),
+    tz: 'Europe/Berlin',
+  },
+}
+
+// A rule shaped so it matches NO canonical preset (INTERVAL=2, two weekdays,
+// no end condition) — loads straight into the Custom panel (T3), unlike
+// RRULE_TRIGGER above whose COUNT=10 is used for the anchor-invariance tests.
+const CUSTOM_RRULE_TRIGGER: TaskTrigger = {
+  type: 'recurring',
+  config: {
+    rrule: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE',
     dtstart_ms: ANCHOR.getTime(),
     tz: 'Europe/Berlin',
   },
@@ -160,6 +173,7 @@ beforeEach(() => {
   vi.mocked(updateTask).mockReset()
   vi.mocked(fetchWorkspaceDelegation).mockReset().mockRejectedValue(new Error('not mocked'))
   mockAddToast.mockReset()
+  mockUseOccurrences.mockReset().mockReturnValue({ data: [], isError: false, isLoading: false })
 })
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -322,5 +336,122 @@ describe('CalendarEventSlideOver — end date cannot precede the anchor (US-1 AS
     const dayBefore = document.querySelector('[data-day="2026-07-19"] button') as HTMLButtonElement | null
     expect(dayBefore).not.toBeNull()
     expect(dayBefore).toBeDisabled()
+  })
+})
+
+describe('CalendarEventSlideOver — preview query failure (F-SFH2)', () => {
+  it('legacy note shows a distinct error notice on preview fetch failure, never "unavailable"/blank', async () => {
+    mockUseOccurrences.mockReturnValue({ data: undefined, isError: true, isLoading: false })
+    const legacyTask = makeTask({
+      id: 'legacy-cron',
+      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+    })
+    renderSlideOver({ task: legacyTask })
+
+    const note = await screen.findByTestId('legacy-trigger-note')
+    expect(note).toHaveTextContent(/couldn't load upcoming run times/i)
+    expect(note).not.toHaveTextContent(/next run time unavailable/i)
+    expect(note).not.toHaveTextContent(/next run:/i)
+  })
+
+  it('upcoming preview shows a distinct error notice on fetch failure instead of silently disappearing', async () => {
+    mockUseOccurrences.mockReturnValue({ data: undefined, isError: true, isLoading: false })
+    const task = makeTask({ trigger: RRULE_TRIGGER })
+    renderSlideOver({ task })
+
+    await screen.findByLabelText(/title/i)
+    expect(await screen.findByTestId('upcoming-preview-error')).toHaveTextContent(
+      /couldn't load upcoming run times/i,
+    )
+    expect(screen.queryByTestId('upcoming-occurrences-preview')).not.toBeInTheDocument()
+  })
+})
+
+describe('CalendarEventSlideOver — real Custom flow via RecurrenceEditor widgets (T3)', () => {
+  it('drives interval, weekday toggle, and end-condition through the actual widgets (not a canned preset)', async () => {
+    // Unlike every other save-flow test in this file, this one never calls
+    // pickRepeatOption — it interacts with the raw Input/Button widgets
+    // inside the Custom panel directly.
+    vi.mocked(updateTask).mockResolvedValueOnce(makeTask() as never)
+    const task = makeTask({ trigger: CUSTOM_RRULE_TRIGGER })
+    renderSlideOver({ task })
+
+    await screen.findByLabelText(/title/i)
+    expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Custom')
+
+    // Widget 1: the "Repeat every" interval number input.
+    fireEvent.change(screen.getByLabelText('Repeat every'), { target: { value: '3' } })
+
+    // Widget 2: a weekday toggle button — adds Friday to the existing Mon/Wed set.
+    fireEvent.click(screen.getByRole('button', { name: 'Friday' }))
+
+    // Widget 3: end-condition buttons — switch from "Never" to "After N occurrences".
+    fireEvent.click(screen.getByRole('button', { name: 'After' }))
+    fireEvent.change(screen.getByLabelText('Number of occurrences'), { target: { value: '5' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
+    const [, data] = vi.mocked(updateTask).mock.calls[0]
+    expect(data.trigger?.type).toBe('recurring')
+    expect(data.trigger?.config?.rrule).toContain('FREQ=WEEKLY')
+    expect(data.trigger?.config?.rrule).toContain('INTERVAL=3')
+    expect(data.trigger?.config?.rrule).toContain('BYDAY=MO,WE,FR')
+    expect(data.trigger?.config?.rrule).toContain('COUNT=5')
+  })
+
+  it('disables Save when the Custom editor reports an invalid state (weekly, zero weekdays)', async () => {
+    const task = makeTask({ trigger: CUSTOM_RRULE_TRIGGER })
+    renderSlideOver({ task })
+
+    await screen.findByLabelText(/title/i)
+    expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Custom')
+    expect(screen.getByRole('button', { name: /^save$/i })).not.toBeDisabled()
+
+    // Untoggle both currently-selected weekdays (Monday, Wednesday), leaving zero.
+    fireEvent.click(screen.getByRole('button', { name: 'Monday' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Wednesday' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled())
+    expect(screen.getByText(/select at least one day/i)).toBeInTheDocument()
+
+    // Clicking a disabled button must do nothing — no dead-click mutation.
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(vi.mocked(updateTask)).not.toHaveBeenCalled()
+  })
+
+  it('reaches the Custom editor from a fresh "Does not repeat" create state (regression: create-flow reachability)', async () => {
+    // Regression for the create-flow reachability bug: picking "Custom…" from a
+    // fresh create-mode slide-over seeded weekly-preset-equal state, which
+    // matchPreset snapped straight back to "Weekly on Monday" and hid the
+    // Custom controls — so a brand-new recurring task could NEVER be hand-built
+    // ("every 2 weeks"), defeating US-1's whole purpose. The sticky-custom flag
+    // in RecurrenceEditor fixes it.
+    vi.mocked(createTask).mockResolvedValueOnce(makeTask() as never)
+    renderSlideOver({ task: null, initialDate: ANCHOR })
+
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Sprint sync' } })
+    expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Does not repeat')
+
+    // Pick "Custom…" — the dropdown must STAY on Custom and reveal the widgets.
+    openRepeatDropdown()
+    await pickRepeatOption('Custom…')
+
+    expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Custom')
+    // The Custom-panel interval widget is now reachable (it was NOT, pre-fix).
+    const interval = await screen.findByLabelText('Repeat every')
+    fireEvent.change(interval, { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'After' }))
+    fireEvent.change(screen.getByLabelText('Number of occurrences'), { target: { value: '10' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.trigger?.type).toBe('recurring')
+    // Anchor Jul 20 2026 is a Monday → BYDAY=MO; interval 2, COUNT 10.
+    expect(body.trigger?.config?.rrule).toContain('FREQ=WEEKLY')
+    expect(body.trigger?.config?.rrule).toContain('INTERVAL=2')
+    expect(body.trigger?.config?.rrule).toContain('BYDAY=MO')
+    expect(body.trigger?.config?.rrule).toContain('COUNT=10')
   })
 })
