@@ -6,8 +6,8 @@
 //
 // This file is the integration seam for the parallel build: the pure mapping
 // (eventMapping.ts), the FullCalendar wrapper (FullCalendarView.tsx), the toolbar
-// (CalendarToolbar.tsx), the milestone popover (MilestoneDatePopover.tsx) and the
-// host screen (CalendarScreen.tsx) all depend on the interfaces declared here.
+// (CalendarToolbar.tsx), and the host screen (CalendarScreen.tsx) all depend on
+// the interfaces declared here.
 
 import type { MutableRefObject } from 'react'
 import type FullCalendar from '@fullcalendar/react'
@@ -56,20 +56,18 @@ export type StatusIconKey =
   | 'XCircle' //     failed
   | 'Circle' //      inbox / next / planning (muted)
   | 'Clock' //       once-trigger "fires" chip (overrides status icon)
-  | 'Flag' //        milestone
 
 /**
  * extendedProps carried on every FullCalendar EventInput we produce.
  *
- * Discriminated on `kind` so illegal states (e.g. a milestone carrying a
- * `taskId`, or a task without one) are unrepresentable — the consumer's
- * switch on `kind` then narrows `taskId`/`milestoneId`/`status` with no
- * defensive runtime checks, and `persistReschedule`'s switch can be exhaustive.
+ * Discriminated on `kind` so illegal states (e.g. a task event without a
+ * `taskId`) are unrepresentable — the consumer's switch on `kind` then
+ * narrows `taskId`/`status` with no defensive runtime checks, and
+ * `persistReschedule`'s switch can be exhaustive.
  */
 export type CalendarEventExtProps =
   | { kind: 'task-due'; taskId: string; status: TaskStatus; icon: StatusIconKey }
   | { kind: 'task-fire'; taskId: string; status: TaskStatus; icon: 'Clock' }
-  | { kind: 'milestone'; milestoneId: string; icon: 'Flag' }
 
 /** Near-black chip text — clears WCAG AAA (>=7:1) on every chip background (SC-006b). */
 export const CHIP_TEXT_COLOR = '#0A0A0B'
@@ -96,9 +94,6 @@ export const STATUS_STYLE: Record<TaskStatus, ChipStyle> = {
 
 /** Fallback style for an unknown/missing status. */
 export const STATUS_STYLE_FALLBACK: ChipStyle = { bg: '#94A3B8', icon: 'Circle' }
-
-/** Milestone chip style (Forge Gold + Flag). */
-export const MILESTONE_STYLE: ChipStyle = { bg: '#D4AF37', icon: 'Flag' }
 
 /** The forwarded ref both FullCalendarView and CalendarToolbar share. */
 export type CalendarApiRef = MutableRefObject<FullCalendar | null>
@@ -137,19 +132,3 @@ export interface CalendarToolbarProps {
   onNewTask: (date?: Date) => void
 }
 
-/** The milestone a MilestoneDatePopover edits (null = closed). */
-export interface MilestoneTarget {
-  id: string
-  name: string
-  due_date: string | null
-}
-
-/** Props for the milestone reschedule popover/dialog (MilestoneDatePopover.tsx). */
-export interface MilestoneDatePopoverProps {
-  workspaceId: string
-  /** null closes the dialog. */
-  milestone: MilestoneTarget | null
-  onClose: () => void
-  /** Called after a successful reschedule so the host can invalidate queries. */
-  onRescheduled?: () => void
-}

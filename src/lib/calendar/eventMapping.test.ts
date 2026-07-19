@@ -8,7 +8,6 @@
  *  #2  once-trigger → timed ':fire' chip with Clock icon override
  *  #3  every & recurring triggers → 0 events (deferred v1)
  *  #4  surface 'heartbeat' → 0 events
- *  #5  milestone → gold Flag chip
  *  #6  both due + once → 2 events (:due and :fire)
  *  #7  unparseable due → 0 events, no throw
  *  #8  date-only due parsed local (TZ-safe, no UTC off-by-one)
@@ -27,9 +26,8 @@ import {
   CHIP_TEXT_COLOR,
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
-  MILESTONE_STYLE,
 } from '@/components/calendar/types'
-import type { Task, Milestone, TaskTrigger } from '@/lib/api'
+import type { Task, TaskTrigger } from '@/lib/api'
 
 // ─── Factories ────────────────────────────────────────────────────────────────
 
@@ -50,23 +48,12 @@ function makeOnceTrigger(at_ms: number): TaskTrigger {
   return { type: 'once', config: { at_ms } }
 }
 
-function makeMilestone(overrides: Partial<Milestone> = {}): Milestone {
-  return {
-    id: 'ms-1',
-    workspace_id: 'ws-1',
-    name: 'Beta',
-    created_at: '2026-06-01T00:00:00Z',
-    updated_at: '2026-06-01T00:00:00Z',
-    ...overrides,
-  } as Milestone
-}
-
 // ─── Test #1: due task → all-day chip ────────────────────────────────────────
 
 describe('mapToCalendarEvents', () => {
   it('#1 due task produces an all-day chip with correct shape', () => {
     const task = makeTask({ due: '2026-06-20', status: 'next' })
-    const events = mapToCalendarEvents([task], [])
+    const events = mapToCalendarEvents([task])
 
     expect(events).toHaveLength(1)
     const ev = events[0]
@@ -89,7 +76,7 @@ describe('mapToCalendarEvents', () => {
   it('#2 once-trigger produces a timed :fire chip with Clock icon', () => {
     const at_ms = new Date(2026, 5, 21, 9, 0, 0).getTime() // 2026-06-21T09:00 local
     const task = makeTask({ trigger: makeOnceTrigger(at_ms), status: 'in_progress' })
-    const events = mapToCalendarEvents([task], [])
+    const events = mapToCalendarEvents([task])
 
     expect(events).toHaveLength(1)
     const ev = events[0]
@@ -112,42 +99,21 @@ describe('mapToCalendarEvents', () => {
     const task = makeTask({
       trigger: { type: 'every', config: { every_ms: 3_600_000 } },
     })
-    expect(mapToCalendarEvents([task], [])).toHaveLength(0)
+    expect(mapToCalendarEvents([task])).toHaveLength(0)
   })
 
   it('#3 recurring trigger produces no events (deferred v1)', () => {
     const task = makeTask({
       trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
     })
-    expect(mapToCalendarEvents([task], [])).toHaveLength(0)
+    expect(mapToCalendarEvents([task])).toHaveLength(0)
   })
 
   // ─── Test #4: surface 'heartbeat' → 0 events ──────────────────────────────
 
   it('#4 surface heartbeat is excluded', () => {
     const task = makeTask({ surface: 'heartbeat', due: '2026-06-20' })
-    expect(mapToCalendarEvents([task], [])).toHaveLength(0)
-  })
-
-  // ─── Test #5: milestone → gold Flag chip ──────────────────────────────────
-
-  it('#5 milestone with due_date produces a gold Flag all-day chip', () => {
-    const m = makeMilestone({ due_date: '2026-06-25' })
-    const events = mapToCalendarEvents([], [m])
-
-    expect(events).toHaveLength(1)
-    const ev = events[0]
-
-    expect(ev.id).toBe('milestone:ms-1')
-    expect(ev.allDay).toBe(true)
-    expect(ev.title).toBe('Beta')
-    expect(ev.backgroundColor).toBe(MILESTONE_STYLE.bg) // Forge Gold
-    expect(ev.borderColor).toBe(MILESTONE_STYLE.bg)
-    expect(ev.textColor).toBe(CHIP_TEXT_COLOR)
-    expect(ev.editable).toBe(true)
-    expect(ev.extendedProps?.kind).toBe('milestone')
-    expect(ev.extendedProps?.icon).toBe('Flag')
-    expect(ev.extendedProps?.milestoneId).toBe('ms-1')
+    expect(mapToCalendarEvents([task])).toHaveLength(0)
   })
 
   // ─── Test #6: both due + once → 2 events ──────────────────────────────────
@@ -159,7 +125,7 @@ describe('mapToCalendarEvents', () => {
       trigger: makeOnceTrigger(at_ms),
       status: 'next',
     })
-    const events = mapToCalendarEvents([task], [])
+    const events = mapToCalendarEvents([task])
 
     expect(events).toHaveLength(2)
     const ids = events.map((e) => e.id)
@@ -171,18 +137,12 @@ describe('mapToCalendarEvents', () => {
 
   it('#7 unparseable due date skips the event without throwing', () => {
     const task = makeTask({ due: 'not-a-date' })
-    expect(() => mapToCalendarEvents([task], [])).not.toThrow()
-    expect(mapToCalendarEvents([task], [])).toHaveLength(0)
+    expect(() => mapToCalendarEvents([task])).not.toThrow()
+    expect(mapToCalendarEvents([task])).toHaveLength(0)
   })
 
-  it('#7 milestone with null due_date produces no event', () => {
-    const m = makeMilestone({ due_date: null })
-    expect(mapToCalendarEvents([], [m])).toHaveLength(0)
-  })
-
-  it('#7 milestone with undefined due_date produces no event', () => {
-    const m = makeMilestone({ due_date: undefined })
-    expect(mapToCalendarEvents([], [m])).toHaveLength(0)
+  it('an empty task list produces no events', () => {
+    expect(mapToCalendarEvents([])).toHaveLength(0)
   })
 
   // ─── Test #9: status→{bg,icon} for all 7 statuses (DS-1/row 10) ──────────
@@ -204,7 +164,7 @@ describe('mapToCalendarEvents', () => {
 
     for (const { status, expectedBg, expectedIcon } of cases) {
       const task = makeTask({ status, due: '2026-06-20' })
-      const events = mapToCalendarEvents([task], [])
+      const events = mapToCalendarEvents([task])
       expect(events).toHaveLength(1)
       const ev = events[0]
       expect(ev.backgroundColor, `bg for ${status}`).toBe(expectedBg)
@@ -217,7 +177,7 @@ describe('mapToCalendarEvents', () => {
   it('unknown status falls back to STATUS_STYLE_FALLBACK', () => {
     // Cast to bypass TS — simulating a future/unknown status value at runtime
     const task = makeTask({ status: 'unknown_status' as Task['status'], due: '2026-06-20' })
-    const events = mapToCalendarEvents([task], [])
+    const events = mapToCalendarEvents([task])
     expect(events).toHaveLength(1)
     expect(events[0].backgroundColor).toBe(STATUS_STYLE_FALLBACK.bg)
     expect(events[0].extendedProps?.icon).toBe(STATUS_STYLE_FALLBACK.icon)

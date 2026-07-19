@@ -10,32 +10,40 @@ import { PRIORITY_BADGE } from './TaskCard'
 import { cn } from '@/lib/utils'
 // 7-state unified vocabulary + colour — single source of truth.
 import { STATUS_LABELS, statusColor, statusLabel } from '@/lib/statusColors'
-import type { Task } from '@/lib/api'
-import type { Milestone } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
+import { PLAN_FILTER_UNTAGGED } from '@/lib/planFilter'
 
 type SortDir = 'desc' | 'asc'
 
 interface ListViewProps {
   tasks: Task[]
-  milestones: Milestone[]
+  /** Plans in this workspace (ADR-049) — powers the Plan filter, replacing the removed Milestone filter. */
+  plans: Plan[]
   agents: { id: string; name: string }[]
   onTaskClick: (task: Task) => void
 }
 
-export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewProps) {
+export function ListView({ tasks, plans, agents, onTaskClick }: ListViewProps) {
   const [filterStatus, setFilterStatus] = useState<string>('__all__')
   const [filterPriority, setFilterPriority] = useState<string>('__all__')
-  const [filterMilestone, setFilterMilestone] = useState<string>('__all__')
+  const [filterPlan, setFilterPlan] = useState<string>('__all__')
+  const [filterTag, setFilterTag] = useState<string>('__all__')
   const [filterAgent, setFilterAgent] = useState<string>('__all__')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
   // Filter out heartbeat/non-user surface tasks from general list view
   const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
 
+  // Distinct tags across the visible tasks — there is no fixed tag catalog
+  // (D1: free-form, workspace-scoped), so the Tag filter's option list is
+  // derived from what's actually present, not a fetched registry.
+  const allTags = Array.from(new Set(userTasks.flatMap((t) => t.tags ?? []))).sort()
+
   const filtered = userTasks
     .filter((t) => filterStatus === '__all__' || t.status === filterStatus)
     .filter((t) => filterPriority === '__all__' || String(t.priority ?? 3) === filterPriority)
-    .filter((t) => filterMilestone === '__all__' || (filterMilestone === '__unscheduled__' ? !t.milestone_id : t.milestone_id === filterMilestone))
+    .filter((t) => filterPlan === '__all__' || (filterPlan === '__unassigned__' ? !t.plan_id : t.plan_id === filterPlan))
+    .filter((t) => filterTag === '__all__' || (filterTag === PLAN_FILTER_UNTAGGED ? !(t.tags && t.tags.length > 0) : (t.tags ?? []).includes(filterTag)))
     .filter((t) => filterAgent === '__all__' || (filterAgent === '__unassigned__' ? !t.agent_id : t.agent_id === filterAgent))
     .sort((a, b) => {
       const diff = new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -72,15 +80,27 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
             { value: '5', label: 'P5 — Minimal' },
           ]}
         />
-        {milestones.length > 0 && (
+        {plans.length > 0 && (
           <FilterSelect
-            label="Milestone"
-            value={filterMilestone}
-            onValueChange={setFilterMilestone}
+            label="Plan"
+            value={filterPlan}
+            onValueChange={setFilterPlan}
             options={[
-              { value: '__all__', label: 'All milestones' },
-              { value: '__unscheduled__', label: 'Unscheduled' },
-              ...milestones.map((m) => ({ value: m.id, label: m.name })),
+              { value: '__all__', label: 'All plans' },
+              { value: '__unassigned__', label: 'No plan' },
+              ...plans.map((p) => ({ value: p.id, label: p.title })),
+            ]}
+          />
+        )}
+        {allTags.length > 0 && (
+          <FilterSelect
+            label="Tag"
+            value={filterTag}
+            onValueChange={setFilterTag}
+            options={[
+              { value: '__all__', label: 'All tags' },
+              { value: PLAN_FILTER_UNTAGGED, label: 'Untagged' },
+              ...allTags.map((tag) => ({ value: tag, label: tag })),
             ]}
           />
         )}
@@ -113,7 +133,7 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
                 Status
               </th>
               <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-28">
-                Milestone
+                Tags
               </th>
               <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-24">
                 Agent
@@ -145,7 +165,6 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
                 <TaskRow
                   key={task.id}
                   task={task}
-                  milestones={milestones}
                   agents={agents}
                   onClick={() => onTaskClick(task)}
                 />
@@ -160,18 +179,16 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
 
 function TaskRow({
   task,
-  milestones,
   agents,
   onClick,
 }: {
   task: Task
-  milestones: Milestone[]
   agents: { id: string; name: string }[]
   onClick: () => void
 }) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
-  const milestone = task.milestone_id ? milestones.find((m) => m.id === task.milestone_id) : null
+  const tags = task.tags ?? []
   const agentName = task.agent_name ?? (task.agent_id ? (agents.find((a) => a.id === task.agent_id)?.name ?? task.agent_id) : null)
 
   return (
@@ -219,10 +236,21 @@ function TaskRow({
         </span>
       </td>
       <td className="px-2 py-2.5">
-        {milestone ? (
-          <span className="text-xs text-[var(--color-accent)] truncate max-w-[6rem] block">
-            {milestone.name}
-          </span>
+        {tags.length > 0 ? (
+          <div className="flex items-center gap-1 flex-wrap max-w-[7rem]">
+            {tags.slice(0, 2).map((tag) => (
+              <span
+                key={tag}
+                title={tag}
+                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-1 py-0.5 text-[10px] text-[var(--color-accent)]"
+              >
+                {tag}
+              </span>
+            ))}
+            {tags.length > 2 && (
+              <span className="text-[10px] text-[var(--color-muted)]">+{tags.length - 2}</span>
+            )}
+          </div>
         ) : (
           <span className="text-xs text-[var(--color-muted)]">—</span>
         )}

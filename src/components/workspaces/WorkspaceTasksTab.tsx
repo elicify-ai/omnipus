@@ -1,26 +1,29 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Info, Plus } from '@phosphor-icons/react'
-import { MilestoneFilterPills, MILESTONE_FILTER_UNSCHEDULED } from './MilestoneFilterPills'
+import { Info, Plus, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { PlanFilterBar } from './PlanFilterBar'
+import { PlanCard } from './PlanCard'
+import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { BoardView } from './BoardView'
 import { ListView } from './ListView'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
 import { CreateTaskSlideOver } from './CreateTaskSlideOver'
-import { CreateMilestoneSlideOver } from './CreateMilestoneSlideOver'
 import {
   fetchTasks,
-  fetchMilestones,
+  fetchPlans,
   fetchAgents,
   updateTask,
+  stopPlan,
   isApiError,
   tasksQueryKeys,
-  milestonesQueryKeys,
+  plansQueryKeys,
   workspacesQueryKeys,
 } from '@/lib/api'
-import type { Task } from '@/lib/api'
+import type { Plan, Task } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { BoardAltitude } from '@/store/workspacesStore'
+import { PLAN_FILTER_ALL, PLAN_FILTER_UNTAGGED } from '@/lib/planFilter'
 
 interface WorkspaceTasksTabProps {
   workspaceId: string
@@ -29,18 +32,19 @@ interface WorkspaceTasksTabProps {
 }
 
 /**
- * Shared task-tab body for the Board and List views. Both render the same
- * workspace-scoped task data with the milestone filter + create slide-overs;
- * only the inner view component differs. Board/List view internals are owned
- * by BoardView/ListView (F2 may extend them with delegation roll-ups etc.).
+ * Shared task-tab body for the Board and List views. Owns the Plan filter +
+ * Plans panel (ADR-049 SD-C1 — a collapsible section within this tab, not a
+ * new route) alongside the create task/plan slide-overs; only the inner
+ * Board/List view differs.
  */
 export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps) {
-  const { activeMilestoneId, setActiveMilestoneId, boardAltitude, setBoardAltitude } = useWorkspacesStore()
+  const { activePlanId, setActivePlanId, activeTagFilter, setActiveTagFilter, boardAltitude, setBoardAltitude } = useWorkspacesStore()
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
-  const [createMilestoneOpen, setCreateMilestoneOpen] = useState(false)
+  const [planSlideOver, setPlanSlideOver] = useState<{ open: boolean; plan: Plan | null }>({ open: false, plan: null })
+  const [plansExpanded, setPlansExpanded] = useState(true)
 
   // Kanban drag-to-column status change.
   const moveMutation = useMutation({
@@ -56,10 +60,25 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
     },
   })
 
-  const { data: milestones = [], isError: milestonesError } = useQuery({
-    queryKey: milestonesQueryKeys.list(workspaceId),
-    queryFn: () => fetchMilestones(workspaceId),
-    staleTime: 30_000,
+  const stopPlanMutation = useMutation({
+    mutationFn: (planId: string) => stopPlan(planId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: plansQueryKeys.list(workspaceId) })
+      addToast({ message: 'Plan stopped', variant: 'success' })
+    },
+    onError: (err) => {
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to stop plan'
+      addToast({ message: msg, variant: 'error' })
+    },
+  })
+
+  const { data: plans = [], isError: plansError } = useQuery({
+    queryKey: plansQueryKeys.list(workspaceId),
+    queryFn: () => fetchPlans(workspaceId),
+    // Polled (not WS-driven, out of this wave's scope) so a paused/blocked
+    // owner-disabled state (FR-086) still surfaces without a page reload.
+    refetchInterval: 15_000,
+    staleTime: 10_000,
     enabled: !!workspaceId,
   })
 
@@ -86,27 +105,17 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
-      {/* Toolbar: milestone filter + new task */}
+      {/* Toolbar: plan/tag filter + new task */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
-        <div className="flex-1 min-w-0">
-          {milestones.length > 0 ? (
-            <MilestoneFilterPills
-              milestones={milestones}
-              activeMilestoneId={activeMilestoneId}
-              onSelect={setActiveMilestoneId}
-              onNewMilestone={() => setCreateMilestoneOpen(true)}
-            />
-          ) : !milestonesError ? (
-            <button tabIndex={0}
-              type="button"
-              onClick={() => setCreateMilestoneOpen(true)}
-              className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
-            >
-              <Plus size={10} />
-              Add milestone
-            </button>
-          ) : null}
-        </div>
+        <PlanFilterBar
+          plans={plans}
+          tasks={tasks}
+          activePlanId={activePlanId}
+          activeTagFilter={activeTagFilter}
+          onSelectPlan={setActivePlanId}
+          onSelectTag={setActiveTagFilter}
+          onNewPlan={() => setPlanSlideOver({ open: true, plan: null })}
+        />
 
         <button tabIndex={0}
           type="button"
@@ -124,6 +133,43 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           Agent details failed to load — task avatars may be missing.
         </div>
       )}
+      {plansError && (
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
+          <Info size={12} weight="fill" className="shrink-0" />
+          Plans failed to load — the Plan filter may be incomplete.
+        </div>
+      )}
+
+      {/* Plans panel (SD-C1) — collapsible section within this tab. */}
+      {plans.length > 0 && (
+        <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
+          <button tabIndex={0}
+            type="button"
+            onClick={() => setPlansExpanded((v) => !v)}
+            aria-expanded={plansExpanded}
+            className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+          >
+            {plansExpanded ? <CaretDown size={11} /> : <CaretRight size={11} />}
+            Plans ({plans.length})
+          </button>
+          {plansExpanded && (
+            <div className="flex gap-2 px-4 pb-3 overflow-x-auto">
+              {plans.map((plan) => (
+                <div key={plan.id} className="min-w-[240px] max-w-[280px]">
+                  <PlanCard
+                    plan={plan}
+                    agents={agents}
+                    onEdit={() => setPlanSlideOver({ open: true, plan })}
+                    onApprove={() => setPlanSlideOver({ open: true, plan })}
+                    onStop={() => stopPlanMutation.mutate(plan.id)}
+                    isStopping={stopPlanMutation.isPending && stopPlanMutation.variables === plan.id}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Content */}
       {tasksLoading ? (
@@ -135,9 +181,10 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
       ) : mode === 'board' ? (
         <BoardView
           tasks={tasks}
-          milestones={milestones}
+          plans={plans}
           agents={agents}
-          activeMilestoneId={activeMilestoneId}
+          activePlanId={activePlanId}
+          activeTagFilter={activeTagFilter}
           altitude={boardAltitude}
           onAltitudeChange={(next: BoardAltitude) => setBoardAltitude(next)}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
@@ -148,7 +195,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
       ) : (
         <ListView
           tasks={tasks}
-          milestones={milestones}
+          plans={plans}
           agents={agents}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
         />
@@ -160,17 +207,18 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
         open={createTaskOpen}
         onOpenChange={setCreateTaskOpen}
         workspaceId={workspaceId}
-        milestoneId={
-          activeMilestoneId !== null && activeMilestoneId !== MILESTONE_FILTER_UNSCHEDULED
-            ? activeMilestoneId
+        planId={
+          activePlanId !== PLAN_FILTER_ALL && activePlanId !== PLAN_FILTER_UNTAGGED
+            ? activePlanId
             : null
         }
       />
 
-      <CreateMilestoneSlideOver
-        open={createMilestoneOpen}
-        onOpenChange={setCreateMilestoneOpen}
+      <CreatePlanSlideOver
+        open={planSlideOver.open}
+        onOpenChange={(open) => setPlanSlideOver((s) => ({ ...s, open }))}
         workspaceId={workspaceId}
+        plan={planSlideOver.plan}
       />
     </div>
   )

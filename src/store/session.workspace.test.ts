@@ -25,7 +25,7 @@ function resetAll() {
   })
   useWorkspacesStore.setState({
     activeWorkspaceId: null,
-    activeMilestoneId: null,
+    activePlanId: null,
     boardAltitude: 'top-level',
   })
   useConnectionStore.setState({

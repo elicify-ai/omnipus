@@ -5,19 +5,26 @@ import {
   fetchAgents,
   buildTaskAssigneeItems,
   fetchSubtasks,
-  fetchMilestones,
   fetchWorkspaces,
   fetchTasks,
+  fetchTaskEvidence,
+  fetchTaskVerdicts,
   updateTask,
   deleteTask,
   setTaskTodos,
   setTaskDependencies,
+  stopTaskGoalLoop,
   isApiError,
-  milestonesQueryKeys,
   workspacesQueryKeys,
   tasksQueryKeys,
+  taskEvidenceQueryKeys,
+  taskVerdictsQueryKeys,
 } from '@/lib/api'
 import type { Task, TaskUpdateRequest, Todo, TaskTrigger } from '@/lib/api'
+import { TagInput } from '@/components/workspaces/TagInput'
+import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
+import { CriteriaVerdictList } from '@/components/workspaces/CriteriaVerdictList'
+import { useAuthStore } from '@/store/auth'
 import {
   Sheet,
   SheetContent,
@@ -49,6 +56,7 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import {
   Play,
+  Stop,
   Copy,
   PencilSimple,
   Check,
@@ -119,13 +127,13 @@ interface TaskDetailPanelProps {
 
 export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanelProps) {
   const { addToast } = useUiStore()
+  const username = useAuthStore((s) => s.username)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(task?.workspace_id ?? '')
   const [newTodo, setNewTodo] = useState('')
   // Inline field errors — surfaced instead of silently discarding invalid input.
   const [triggerError, setTriggerError] = useState('')
@@ -155,7 +163,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
-    setSelectedWorkspaceId(task?.workspace_id ?? '')
     setNewTodo('')
     setTriggerError('')
     setDueError('')
@@ -193,11 +200,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     staleTime: 30_000,
   })
 
-  const { data: milestones = [] } = useQuery({
-    queryKey: milestonesQueryKeys.list(selectedWorkspaceId),
-    queryFn: () => fetchMilestones(selectedWorkspaceId),
-    enabled: !!selectedWorkspaceId,
-    staleTime: 30_000,
+  // Acceptance-criteria evidence + judge verdicts (ADR-049 FR-088/089) — only
+  // meaningful once the task has criteria; the query is cheap to skip otherwise.
+  const hasCriteria = (task?.criteria?.length ?? 0) > 0
+  const { data: taskEvidence = [] } = useQuery({
+    queryKey: taskEvidenceQueryKeys.list(task?.id ?? ''),
+    queryFn: () => fetchTaskEvidence(task!.id),
+    enabled: task != null && hasCriteria,
+    staleTime: 10_000,
+  })
+  const { data: taskVerdicts = [] } = useQuery({
+    queryKey: taskVerdictsQueryKeys.list(task?.id ?? ''),
+    queryFn: () => fetchTaskVerdicts(task!.id),
+    enabled: task != null && hasCriteria,
+    staleTime: 10_000,
   })
 
   const { data: subtasks = [] } = useQuery({
@@ -323,6 +339,22 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to retry task', variant: 'error' }),
+  })
+
+  // Stop/Clear (D8) — halts this task's own goal loop (ADR-049).
+  const [confirmStopLoop, setConfirmStopLoop] = useState(false)
+  const { mutate: doStopLoop, isPending: isStoppingLoop } = useMutation({
+    mutationFn: () => {
+      if (!task) return Promise.reject(new Error('No task selected'))
+      return stopTaskGoalLoop(task.id)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      addToast({ message: 'Goal loop stopped.', variant: 'success' })
+      setConfirmStopLoop(false)
+    },
+    onError: (err: unknown) =>
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to stop the goal loop', variant: 'error' }),
   })
 
   // Delete task
@@ -637,22 +669,68 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </p>
       </Field>
 
-      {/* Milestone */}
-      <Field label="Milestone">
-        <SmartSelect
-          value={task.milestone_id ?? '__none__'}
-          onValueChange={(val) => {
-            doUpdate({ milestone_id: val === '__none__' ? '' : val })
-          }}
-          placeholder="No milestone"
-          triggerClassName="h-8 text-xs"
-          ariaLabel="Milestone"
-          items={[
-            { value: '__none__', label: 'No milestone', className: 'text-xs' },
-            ...milestones.map((m) => ({ value: m.id, label: m.name, className: 'text-xs' })),
-          ]}
+      {/* Tags (ADR-049 — replaces the milestone dropdown). Migrated
+          `milestone:<name>` tags render as ordinary chips here. */}
+      <Field label="Tags">
+        <TagInput
+          ariaLabel="Add tag"
+          tags={task.tags ?? []}
+          onChange={(tags) => doUpdate({ tags })}
         />
       </Field>
+
+      {/* Acceptance criteria + per-attempt verdicts (ADR-049 FR-087/088) */}
+      <Field label="Acceptance criteria">
+        <AcceptanceCriteriaEditor
+          criteria={task.criteria ?? []}
+          onChange={(criteria) => doUpdate({ criteria })}
+          currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+          emptyHint="No criteria — this task will be judged against its title and description (D5)."
+        />
+        <div className="mt-2">
+          <CriteriaVerdictList
+            criteria={task.criteria ?? []}
+            verdicts={taskVerdicts}
+            evidence={taskEvidence}
+            attemptCount={task.attempt_count}
+            maxAttempts={task.max_attempts}
+          />
+        </div>
+      </Field>
+
+      {/* Clear/Stop — a task actively running its own goal loop (US-11 AS-5) */}
+      {isRunning && typeof task.attempt_count === 'number' && task.attempt_count > 0 && (
+        <Button
+          variant="outline"
+          className="w-full gap-2 text-xs h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
+          onClick={() => setConfirmStopLoop(true)}
+          disabled={isStoppingLoop}
+        >
+          <Stop size={13} weight="fill" />
+          {isStoppingLoop ? 'Stopping…' : 'Stop/Clear goal loop'}
+        </Button>
+      )}
+
+      <AlertDialog open={confirmStopLoop} onOpenChange={setConfirmStopLoop}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop this task's goal loop?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This winds down the attempt loop for “{task.title}”. In-flight work finishes gracefully; it will not restart automatically.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => doStopLoop()}
+              disabled={isStoppingLoop}
+              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+            >
+              {isStoppingLoop ? 'Stopping…' : 'Stop/Clear'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Agent */}
       <Field label="Agent">

@@ -26,7 +26,6 @@ import {
   XCircle,
   Circle,
   Clock,
-  Flag,
 } from '@phosphor-icons/react'
 
 import '@/styles/fullcalendar-theme.css'
@@ -53,7 +52,6 @@ const ICON_MAP: Record<StatusIconKey, IconComponent> = {
   XCircle,
   Circle,
   Clock,
-  Flag,
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +85,7 @@ function EventChip({ arg }: { arg: EventContentArg }) {
   // for FC's wrapping `<a>` per the accname spec, so it becomes what gets
   // announced on focus — title + status + time, meaningfully, with zero
   // duplicate stops.
-  const statusText = ext.kind === 'milestone' ? 'Milestone' : statusLabel(ext.status)
+  const statusText = statusLabel(ext.status)
   const chipLabel = [arg.event.title, statusText, timeText].filter(Boolean).join(', ')
 
   return (

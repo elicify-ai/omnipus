@@ -1,4 +1,4 @@
-import type { Task, Milestone } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { TaskCard } from './TaskCard'
 
@@ -15,11 +15,11 @@ const EXECUTION_COLUMNS = [
 
 interface ExecutionViewProps {
   tasks: Task[]
-  milestones: Milestone[]
+  plans: Plan[]
   onTaskClick: (task: Task) => void
 }
 
-export function ExecutionView({ tasks, milestones, onTaskClick }: ExecutionViewProps) {
+export function ExecutionView({ tasks, plans, onTaskClick }: ExecutionViewProps) {
   return (
     <div className="flex gap-2 p-4 overflow-x-auto min-h-0 flex-1">
       {EXECUTION_COLUMNS.map((col) => {
@@ -43,7 +43,7 @@ export function ExecutionView({ tasks, milestones, onTaskClick }: ExecutionViewP
                 <TaskCard
                   key={task.id}
                   task={task}
-                  milestones={milestones}
+                  plans={plans}
                   onClick={() => onTaskClick(task)}
                 />
               ))}
