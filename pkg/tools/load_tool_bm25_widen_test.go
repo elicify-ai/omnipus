@@ -257,8 +257,6 @@ func TestBM25_CacheInvalidationOnVisibleRegistration(t *testing.T) {
 // search discoverability), but canLoad and auto-load will correctly deny them.
 // This test verifies the auto-load skip-past-denied behavior works for visible
 // lazy tools just like for hidden tools.
-//
-//nolint:dupl // near-identical to TestToolsTool_Query_DeniedTopHitFallsThrough; separate to test visible vs hidden tools
 func TestBM25_PolicyDeniedVisibleToolExcludedFromAutoLoad(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.Register(&mockSearchableTool{name: "denied_visible_tool", desc: "denied but visible tool"})

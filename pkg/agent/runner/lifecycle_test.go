@@ -159,8 +159,6 @@ exit 0
 
 // TestCodexDriver_EventChReset_AllowsResume mirrors the claude lifecycle test for
 // the codex driver.
-//
-//nolint:dupl // parallel test scaffolding intentionally mirrors TestOpencodeDriver_EventChReset_AllowsResume (same lifecycle, different driver/stub)
 func TestCodexDriver_EventChReset_AllowsResume(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")
@@ -199,8 +197,6 @@ exit 0
 
 // TestOpencodeDriver_EventChReset_AllowsResume mirrors the lifecycle test for the
 // opencode driver.
-//
-//nolint:dupl // parallel test scaffolding intentionally mirrors TestCodexDriver_EventChReset_AllowsResume (same lifecycle, different driver/stub)
 func TestOpencodeDriver_EventChReset_AllowsResume(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")

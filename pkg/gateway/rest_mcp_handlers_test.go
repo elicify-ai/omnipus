@@ -511,8 +511,6 @@ func TestListMCPServers_ReturnsNonSecretConfigForEdit(t *testing.T) {
 
 // TestPatchMCPServer_RejectsTransportMismatch proves the PATCH transport-consistency
 // guard: setting a url on a stdio server is 422.
-//
-//nolint:dupl // parallel test for the symmetric transport-mismatch guard (stdio vs sse)
 func TestPatchMCPServer_RejectsTransportMismatch(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
@@ -549,8 +547,6 @@ func TestPatchMCPServer_RejectsTransportMismatch(t *testing.T) {
 // TestPatchMCPServer_RejectsCommandOnRemote proves the symmetric transport-consistency
 // guard: setting a command on an sse/http server is 422 (the second, previously
 // untested guard direction).
-//
-//nolint:dupl // parallel test for the symmetric transport-mismatch guard (sse vs stdio)
 func TestPatchMCPServer_RejectsCommandOnRemote(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()

@@ -869,8 +869,11 @@ func (te *TaskExecutor) closeRun(taskID string, run *activeRun, status task.Stat
 	}
 	if err := te.store.CloseRun(taskID, run.runID, status, result); err != nil {
 		if errors.Is(err, task.ErrRunAlreadyClosed) {
-			logger.InfoCF("task_executor", "Task run already closed by an earlier step; ignoring duplicate close from panic-recovery/housekeeping",
-				map[string]any{"task_id": taskID, "run_id": run.runID, "attempted_status": string(status)})
+			logger.InfoCF(
+				"task_executor",
+				"Task run already closed by an earlier step; ignoring duplicate close from panic-recovery/housekeeping",
+				map[string]any{"task_id": taskID, "run_id": run.runID, "attempted_status": string(status)},
+			)
 			return
 		}
 		// M3-log: escalated from Warn to Error — a failed close permanently

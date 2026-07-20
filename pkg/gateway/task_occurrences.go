@@ -391,7 +391,13 @@ func buildOneOccurrenceSet(
 // absent until populated") when runsInRange is nil (a caller/test that
 // doesn't exercise the overlay), the call errors, or it returns zero runs
 // for this task's [fromMs, toMs) window.
-func populateRunOverlay(set *gen.TaskOccurrenceSet, taskID string, fromMs, toMs int64, loc *time.Location, runsInRange runsInRangeFn) {
+func populateRunOverlay(
+	set *gen.TaskOccurrenceSet,
+	taskID string,
+	fromMs, toMs int64,
+	loc *time.Location,
+	runsInRange runsInRangeFn,
+) {
 	if runsInRange == nil {
 		return
 	}

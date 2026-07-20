@@ -413,9 +413,26 @@ export function CreateTaskSlideOver({
               ariaLabel="Agent"
               items={[
                 { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                ...buildTaskAssigneeItems(agents, {
-                  teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
-                }),
+                // While the team-set query is in flight, don't feed the full
+                // unscoped global roster into the picker — SmartSelect swaps
+                // its underlying implementation (and thus its accessible
+                // role: implicit "button" vs. explicit "combobox") based on
+                // item COUNT (SEARCHABLE_THRESHOLD=5 in smart-select.tsx). A
+                // real install's global agent roster is commonly >5 while a
+                // workspace's own team is commonly <=5, so feeding the
+                // unscoped roster in here made the control's accessible
+                // identity flip the instant the query resolved — breaking
+                // role-based automation/assistive-tech interaction with a
+                // control that was ALREADY disabled and offering nothing
+                // selectable. Scoping to an empty team set keeps the item
+                // count — and therefore the rendered branch — stable across
+                // the loading→resolved transition for the common (<=5-member
+                // team) case.
+                ...(teamLoading
+                  ? []
+                  : buildTaskAssigneeItems(agents, {
+                      teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
+                    })),
               ]}
             />
             {/* F1: a failed team-set fetch degrades to the unscoped roster —

@@ -314,7 +314,25 @@ test(
       // to run — enforced client-side by a disabled Save and server-side by a
       // 400). Fill both here, BEFORE the recurrence rejection sub-check below,
       // so that sub-check isolates recurrence validity (not agent/prompt).
-      await page.getByRole('button', { name: 'Agent' }).click();
+      // The Agent field is a SmartSelect (src/components/ui/smart-select.tsx)
+      // whose trigger is always a Radix Select with an explicit
+      // role="combobox" (see CalendarEventSlideOver.test.tsx's own
+      // `selectAgent()` helper, which uses the same locator) — NOT a bare
+      // `role="button"`. Do not "fix" this back to `role: 'button'`: before
+      // the workspace-team scoping fix (useWorkspaceTeamIds / Fix B), the
+      // picker's loading state fed the full UNSCOPED global agent roster
+      // (commonly >5) into SmartSelect, which flips to its search-popover
+      // variant — a bare `<button aria-haspopup="dialog">` with no explicit
+      // role — whenever item count exceeds smart-select.tsx's
+      // SEARCHABLE_THRESHOLD (5). That transient, count-driven identity swap
+      // is what made a `role: 'button'` locator time out here: it matched
+      // the disabled loading-state button, but the resolved (team-scoped,
+      // <=5-item) state re-renders as role="combobox", so the click wait
+      // never found an enabled match. CreateTaskSlideOver.tsx /
+      // CalendarEventSlideOver.tsx now pin the picker to an empty item set
+      // while `teamLoading` is true, keeping it on the combobox branch for
+      // the whole loading→resolved transition.
+      await page.getByRole('combobox', { name: 'Agent' }).click();
       await page.getByRole('option', { name: /Mia/ }).first().click();
       await page.locator('#ces-prompt').fill('Post the sprint status summary to the team channel.');
 

@@ -162,8 +162,6 @@ func TestHandlePendingRestart_CleanInstallNoPhantomDiff(t *testing.T) {
 // TestHandlePendingRestart_GenuineChangeStillShows verifies that a real
 // post-boot edit to a restart-gated key (gateway.port 5000 → 8080 written to
 // disk) STILL surfaces in the diff after the clean-install normalization fix.
-//
-//nolint:dupl // parallel test scaffolding intentionally mirrors TestHandlePendingRestart_HostChangeStillShows (port vs host, same restart-gated diff assertion)
 func TestHandlePendingRestart_GenuineChangeStillShows(t *testing.T) {
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),
@@ -247,8 +245,6 @@ func TestHandlePendingRestart_GodModeKeysExcluded(t *testing.T) {
 // edit to gateway.host (the bind address; "Bind address" in the UI) surfaces in
 // the diff — gateway.host is restart-gated like gateway.port because changing it
 // re-binds the listener, which can only happen safely on restart.
-//
-//nolint:dupl // parallel test scaffolding intentionally mirrors TestHandlePendingRestart_GenuineChangeStillShows (host vs port, same restart-gated diff assertion)
 func TestHandlePendingRestart_HostChangeStillShows(t *testing.T) {
 	applied := map[string]any{
 		"version": float64(config.CurrentVersion),

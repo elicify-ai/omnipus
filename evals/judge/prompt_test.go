@@ -68,7 +68,6 @@ func TestRenderPrompt_TranscriptIsValidJSON(t *testing.T) {
 }
 
 func TestRenderPrompt_UnicodeAndControlChars(t *testing.T) {
-	//nolint:gosmopolitan // deliberate CJK+emoji probe for JSON-marshal robustness
 	ctx := PromptContext{
 		AgentName: "ava",
 		AgentRole: "Builder",

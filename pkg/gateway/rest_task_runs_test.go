@@ -193,31 +193,37 @@ func TestTaskRunsEndpoint(t *testing.T) {
 		assert.Empty(t, runs, "a D1-rejected future-occurrence Run-now must not open a TaskRun")
 	})
 
-	t.Run("past occurrence_ms clears the D1 gate (falls through to the 503 executor-unavailable path)", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
-		tsk := createTaskViaAPI(t, api, "RunsPastOccTask", "")
+	t.Run(
+		"past occurrence_ms clears the D1 gate (falls through to the 503 executor-unavailable path)",
+		func(t *testing.T) {
+			api := newTestRestAPIWithHome(t)
+			tsk := createTaskViaAPI(t, api, "RunsPastOccTask", "")
 
-		pastMs := time.Now().Add(-24 * time.Hour).UnixMilli()
-		reqBody, err := json.Marshal(map[string]any{"occurrence_ms": pastMs})
-		require.NoError(t, err)
+			pastMs := time.Now().Add(-24 * time.Hour).UnixMilli()
+			reqBody, err := json.Marshal(map[string]any{"occurrence_ms": pastMs})
+			require.NoError(t, err)
 
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+tsk.Id+"/runs", bytes.NewReader(reqBody))
-		r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
-		api.HandleTasks(w, r)
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
-	})
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+tsk.Id+"/runs", bytes.NewReader(reqBody))
+			r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
+			api.HandleTasks(w, r)
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
+		},
+	)
 
-	t.Run("omitted occurrence_ms (task-level Run-now) clears the D1 gate (falls through to the 503 executor-unavailable path)", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
-		tsk := createTaskViaAPI(t, api, "RunsOmittedOccTask", "")
+	t.Run(
+		"omitted occurrence_ms (task-level Run-now) clears the D1 gate (falls through to the 503 executor-unavailable path)",
+		func(t *testing.T) {
+			api := newTestRestAPIWithHome(t)
+			tsk := createTaskViaAPI(t, api, "RunsOmittedOccTask", "")
 
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+tsk.Id+"/runs", nil)
-		r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
-		api.HandleTasks(w, r)
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
-	})
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+tsk.Id+"/runs", nil)
+			r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
+			api.HandleTasks(w, r)
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
+		},
+	)
 }
 
 // TestTaskRunNow_LiveExecutor_ViaRealServer is the regression guard for the

@@ -407,8 +407,15 @@ func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessio
 		if occurrenceMs != nil {
 			occLog = fmt.Sprintf("%d", *occurrenceMs)
 		}
-		slog.Warn("task: OpenRun called with empty session_id — TaskRun.session_id is documented as always non-empty; recording the run anyway rather than losing run history",
-			"task_id", taskID, "occurrence_ms", occLog, "kind", string(kind))
+		slog.Warn(
+			"task: OpenRun called with empty session_id — TaskRun.session_id is documented as always non-empty; recording the run anyway rather than losing run history",
+			"task_id",
+			taskID,
+			"occurrence_ms",
+			occLog,
+			"kind",
+			string(kind),
+		)
 	}
 
 	mu := s.lock.Get(taskID)

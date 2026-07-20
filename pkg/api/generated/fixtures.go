@@ -2829,7 +2829,7 @@ func FixtureTaskRun_ZeroValue() TaskRun {
 // loader setup) to fix. Flagged for follow-up rather than silently masked.
 func FixtureTaskRun_Edge() TaskRun {
 	occMs := int64(0)
-	result := "失败：远程服务在 30 秒后超时 (⚠ retry exhausted)"
+	result := "失败：远程服务在 30 秒后超时 (⚠ retry exhausted)" //nolint:gosmopolitan // intentional non-ASCII result text — this fixture deliberately exercises unicode rendering (see doc comment above)
 	startedAt := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
 	endedAt := startedAt
 	return TaskRun{

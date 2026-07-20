@@ -596,11 +596,15 @@ func TestPruneRuns_StaleDayFileWithOpenRunIsNotDeleted(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	assert.ElementsMatch(t, []string{
-		oldOpenDay.Format("2006-01-02") + ".jsonl",
-		recentDay.Format("2006-01-02") + ".jsonl",
-	}, names,
-		"the stale closed-only file must be deleted; the stale file holding the orphaned open run must survive; the newest file is always retained (floor-of-one)")
+	assert.ElementsMatch(
+		t,
+		[]string{
+			oldOpenDay.Format("2006-01-02") + ".jsonl",
+			recentDay.Format("2006-01-02") + ".jsonl",
+		},
+		names,
+		"the stale closed-only file must be deleted; the stale file holding the orphaned open run must survive; the newest file is always retained (floor-of-one)",
+	)
 
 	runs, err := s.ListRuns(taskID)
 	require.NoError(t, err)
@@ -676,8 +680,12 @@ func TestPruneRuns_OldFileWithClosedRunClosedInNewerFileIsDeleted(t *testing.T) 
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	assert.ElementsMatch(t, []string{recentDay.Format("2006-01-02") + ".jsonl"}, names,
-		"both old files hold only a superseded/closed record for the same globally-closed run and must be deleted; only the newest file survives (floor-of-one)")
+	assert.ElementsMatch(
+		t,
+		[]string{recentDay.Format("2006-01-02") + ".jsonl"},
+		names,
+		"both old files hold only a superseded/closed record for the same globally-closed run and must be deleted; only the newest file survives (floor-of-one)",
+	)
 
 	runs, err := s.ListRuns(taskID)
 	require.NoError(t, err)

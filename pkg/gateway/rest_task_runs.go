@@ -211,7 +211,15 @@ func toWireTaskRun(r task.TaskRun) (gen.TaskRun, bool) {
 			startedAt := out.StartedAt
 			out.EndedAt = &startedAt
 		} else {
-			slog.Warn("rest: task run has corrupt ended_at, omitting", "task_id", r.TaskID, "run_id", r.RunID, "value", *r.EndedAt)
+			slog.Warn(
+				"rest: task run has corrupt ended_at, omitting",
+				"task_id",
+				r.TaskID,
+				"run_id",
+				r.RunID,
+				"value",
+				*r.EndedAt,
+			)
 		}
 	}
 	return out, true

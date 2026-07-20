@@ -2071,8 +2071,6 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 }
 
 // TestToolResult_SilentToolDoesNotSendUserMessage verifies silent tools don't trigger outbound
-//
-//nolint:dupl // parallel test scaffolding intentionally mirrors TestToolResult_UserFacingToolDoesSendMessage (silent vs user-facing path)
 func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -2117,8 +2115,6 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 }
 
 // TestToolResult_UserFacingToolDoesSendMessage verifies user-facing tools trigger outbound
-//
-//nolint:dupl // parallel test scaffolding intentionally mirrors TestToolResult_SilentToolDoesNotSendUserMessage (silent vs user-facing path)
 func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {

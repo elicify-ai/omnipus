@@ -39,8 +39,6 @@ import (
 //	Then the provider is shown as "disconnected" (not "connected").
 //
 // Traces to: FR-104, US-2/AC1, SC-103, test dataset row: no-key → Disconnected.
-//
-//nolint:dupl // parallel-by-design to the EnvVarKey variant (two explicit cases)
 func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
@@ -127,8 +125,6 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 //	Then the provider is shown as "connected".
 //
 // Traces to: FR-104, US-2/AC2, SC-103, test dataset row: inline-key → Connected.
-//
-//nolint:dupl // parallel-by-design to the NoKey variant (two explicit cases)
 func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")

@@ -67,7 +67,7 @@ func FuzzIsCarveOut(f *testing.F) {
 		"../../etc/passwd",
 		"/omnh/agents/../credentials.json",
 		"/omnh/agents/self/SOUL.md\x00",
-		"工作/データ/файл.txt", //nolint:gosmopolitan // intentional non-ASCII fuzz seed
+		"工作/データ/файл.txt",
 		`\\server\share\x`,
 		string([]byte{0x00, 0x01, 0xff}),
 	}

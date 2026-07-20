@@ -1405,7 +1405,13 @@ func (a *restAPI) reconcileStuckTasks() {
 func (a *restAPI) reconcileStuckTaskRuns(taskID string) {
 	runs, err := a.taskStore.ListRuns(taskID)
 	if err != nil {
-		slog.Warn("rest: reconcile stuck tasks: list runs failed, leaving any open run untouched", "task_id", taskID, "error", err)
+		slog.Warn(
+			"rest: reconcile stuck tasks: list runs failed, leaving any open run untouched",
+			"task_id",
+			taskID,
+			"error",
+			err,
+		)
 		return
 	}
 	closed := 0
@@ -1413,14 +1419,33 @@ func (a *restAPI) reconcileStuckTaskRuns(taskID string) {
 		if !run.IsOpen() {
 			continue
 		}
-		if cErr := a.taskStore.CloseRun(taskID, run.RunID, task.StatusFailed, "abandoned: gateway restarted mid-execution"); cErr != nil {
-			slog.Warn("rest: reconcile stuck tasks: close orphaned run failed", "task_id", taskID, "run_id", run.RunID, "error", cErr)
+		if cErr := a.taskStore.CloseRun(
+			taskID,
+			run.RunID,
+			task.StatusFailed,
+			"abandoned: gateway restarted mid-execution",
+		); cErr != nil {
+			slog.Warn(
+				"rest: reconcile stuck tasks: close orphaned run failed",
+				"task_id",
+				taskID,
+				"run_id",
+				run.RunID,
+				"error",
+				cErr,
+			)
 			continue
 		}
 		closed++
 	}
 	if closed > 0 {
-		slog.Info("rest: reconcile stuck tasks: closed orphaned in_progress run(s) on boot", "task_id", taskID, "count", closed)
+		slog.Info(
+			"rest: reconcile stuck tasks: closed orphaned in_progress run(s) on boot",
+			"task_id",
+			taskID,
+			"count",
+			closed,
+		)
 	}
 }
 

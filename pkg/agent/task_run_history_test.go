@@ -764,7 +764,10 @@ func TestCloseRun_DuplicateCloseAfterAlreadyClosedLogsInfoNotError(t *testing.T)
 		t.Fatalf("read log file: %v", rerr)
 	}
 	if strings.Contains(string(logged), "Could not close task run record") {
-		t.Fatalf("duplicate-close-of-an-already-closed-run must NOT log at ERROR (false on-call alert), got log:\n%s", logged)
+		t.Fatalf(
+			"duplicate-close-of-an-already-closed-run must NOT log at ERROR (false on-call alert), got log:\n%s",
+			logged,
+		)
 	}
 
 	// Contrast: a GENUINE close failure (unknown run id) must still log at
