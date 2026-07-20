@@ -240,15 +240,23 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
                 {activePlan.goal}
               </p>
             )}
-            <div className="flex flex-shrink-0 items-center gap-1.5">
+            {/* Selected plan's completion — the share of its tasks that are
+                `done`. Labelled + tooltipped so it reads as plan progress, not
+                some ambient metric. */}
+            <div
+              className="flex flex-shrink-0 items-center gap-1.5"
+              role="img"
+              aria-label={`Plan progress: ${Math.round((activePlan.progress ?? 0) * 100)}% of tasks done`}
+              title={`Plan progress — ${Math.round((activePlan.progress ?? 0) * 100)}% of this plan's tasks are done`}
+            >
               <div className="h-1.5 w-16 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
                 <div
                   className="h-full rounded-full bg-[var(--color-accent)]"
                   style={{ width: `${Math.round((activePlan.progress ?? 0) * 100)}%` }}
                 />
               </div>
-              <span className="w-8 flex-shrink-0 text-right text-[10px] text-[var(--color-muted)]">
-                {Math.round((activePlan.progress ?? 0) * 100)}%
+              <span className="flex-shrink-0 text-right text-[10px] text-[var(--color-muted)]">
+                {Math.round((activePlan.progress ?? 0) * 100)}% done
               </span>
             </div>
           </div>

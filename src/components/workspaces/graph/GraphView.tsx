@@ -15,10 +15,9 @@ import {
   type OnConnect,
   type OnReconnect,
 } from '@xyflow/react'
-import { CaretDown, GraphIcon, StackIcon } from '@phosphor-icons/react'
+import { GraphIcon } from '@phosphor-icons/react'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import type { Task } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import { TaskNode } from './TaskNode'
 import { DependencyEdge } from './DependencyEdge'
 import {
@@ -290,10 +289,11 @@ function GraphViewInner({
     return <GraphPlanEmptyState />
   }
 
-  // Truly nothing to show: no DAG-relevant nodes AND nothing collapsed into
-  // the tray either (collapseOrphans off, or the workspace is genuinely
-  // empty).
-  if (layout.nodes.length === 0 && layout.unlinked.length === 0) {
+  // Nothing to graph: no DAG-relevant nodes. One-time tasks with no
+  // dependencies (`layout.unlinked`) are deliberately NOT rendered on the DAG
+  // canvas — they live on the Board/List — so an all-unlinked workspace shows
+  // the empty state here rather than a canvas full of nothing.
+  if (layout.nodes.length === 0) {
     return <GraphEmptyState />
   }
 
@@ -336,74 +336,6 @@ function GraphViewInner({
           className="!bottom-4 !right-4"
         />
       </ReactFlow>
-      {layout.unlinked.length > 0 && (
-        <UnlinkedTasksTray tasks={layout.unlinked} onTaskClick={onTaskClick} />
-      )}
-    </div>
-  )
-}
-
-interface UnlinkedTasksTrayProps {
-  tasks: Task[]
-  onTaskClick: (task: Task) => void
-}
-
-/**
- * Attention/Gestalt-grounded collapse of one-time tasks with no DAG structure
- * (see `isDagRelevant` in taskGraph.ts) — a single chip instead of a field of
- * disconnected dots. Expands into a scrollable list on click so the collapsed
- * tasks stay discoverable (recognition, not memory); clicking a listed task
- * opens it via the same `onTaskClick` a node click uses.
- */
-function UnlinkedTasksTray({ tasks, onTaskClick }: UnlinkedTasksTrayProps) {
-  const [expanded, setExpanded] = useState(false)
-  if (tasks.length === 0) return null
-
-  return (
-    <div className="absolute left-4 top-4 z-10 max-w-[280px]" data-testid="unlinked-tasks-tray">
-      <button tabIndex={0}
-        type="button"
-        onClick={() => setExpanded((e) => !e)}
-        aria-expanded={expanded}
-        aria-controls="unlinked-tasks-tray-list"
-        className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] transition-colors hover:border-[var(--color-accent)]/50"
-      >
-        <StackIcon size={13} weight="bold" className="text-[var(--color-muted)]" />
-        {tasks.length} unlinked task{tasks.length === 1 ? '' : 's'}
-        <CaretDown
-          size={11}
-          className={cn('text-[var(--color-muted)] transition-transform', expanded && 'rotate-180')}
-        />
-      </button>
-
-      {expanded && (
-        <div
-          id="unlinked-tasks-tray-list"
-          role="list"
-          aria-label="Unlinked tasks"
-          className="mt-1.5 max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] py-1 shadow-[0_4px_16px_rgba(0,0,0,0.4)]"
-        >
-          {tasks.map((task) => {
-            const visual = statusVisual(task.status)
-            return (
-              <button tabIndex={0}
-                key={task.id}
-                type="button"
-                role="listitem"
-                onClick={() => onTaskClick(task)}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
-              >
-                <span
-                  aria-hidden
-                  className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                  style={{ backgroundColor: visual.color }}
-                />
-                <span className="truncate">{task.title}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }
