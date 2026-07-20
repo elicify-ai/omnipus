@@ -1,16 +1,19 @@
 /**
  * ListView.filters.test.tsx
  *
- * ADR-051 flat List with Excel-style column headers: every column header is a
- * dropdown offering sort (asc/desc) and, where the column has discrete values,
- * a checkbox value-filter (Pri / Status / Tags / Agent). Filtering is
- * column-local (AND across columns, OR within a column's checklist) over the
- * plan-scoped `tasks` prop. Covers:
+ * ADR-051 flat List with Excel-style column headers: each column header is a
+ * dropdown. Sortable columns (Pri / Title / Status / Agent / Updated) offer
+ * sort asc/desc; columns with discrete values (Pri / Status / Tags / Agent)
+ * offer a checkbox value-filter — so Tags is filter-only and Title/Updated are
+ * sort-only. Filtering is column-local (AND across columns, OR within a
+ * column's checklist) over the plan-scoped `tasks` prop. Covers:
  *   1. No milestone UI anywhere (SC-040).
  *   2. Column-header sort (Pri / Status / Title / Agent / Updated), default Updated desc.
  *   3. Column value-filters: Status, Pri, Tags (+ Untagged), Agent (+ Unassigned),
- *      union-within-column, and the filtered empty state.
- *   4. Agent-column resolution + the surface!=='user' filter + the Tags column render.
+ *      union-within-column, present-values-only, and the Clear-filter action.
+ *   4. Empty states: unfiltered ("No tasks to show") and filtered ("No tasks match…").
+ *   5. Stale-value pruning when the plan scope changes.
+ *   6. Agent-column resolution + the surface!=='user' filter + the Tags column render.
  *
  * The Radix DropdownMenu is stubbed inline (its pointer/portal internals don't
  * drive in jsdom — same convention as WorkspaceTasksTab.test.tsx) so each
@@ -232,6 +235,65 @@ describe('ListView — column value filters', () => {
     fireEvent.click(columnMenu('Agent').getByRole('menuitemcheckbox', { name: 'Ray' }))
     expect(screen.getByText('RayTask')).toBeInTheDocument()
     expect(screen.queryByText('BareTask')).toBeNull()
+
+    // The Unassigned bucket selects only tasks with no agent — exercises the
+    // UNASSIGNED sentinel path (mirror of the Tags Untagged case above).
+    fireEvent.click(columnMenu('Agent').getByRole('menuitemcheckbox', { name: 'Ray' })) // clear Ray
+    fireEvent.click(columnMenu('Agent').getByRole('menuitemcheckbox', { name: 'Unassigned' }))
+    expect(screen.getByText('BareTask')).toBeInTheDocument()
+    expect(screen.queryByText('RayTask')).toBeNull()
+  })
+
+  it('offers only the values present in the current task set, in canonical order', () => {
+    render(
+      <ListView
+        tasks={[makeTask({ id: 't1', status: 'inbox' }), makeTask({ id: 't2', status: 'done' })]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    const names = columnMenu('Status')
+      .getAllByRole('menuitemcheckbox')
+      .map((el) => el.textContent)
+    // Only inbox + done are present; absent statuses aren't offered, and present
+    // ones keep the canonical STATUS_ORDER order (inbox before done).
+    expect(names).toEqual(['Inbox', 'Done'])
+    expect(columnMenu('Status').queryByRole('menuitemcheckbox', { name: 'Failed' })).toBeNull()
+  })
+
+  it('the Clear filter action resets a column filter', () => {
+    render(
+      <ListView
+        tasks={[makeTask({ id: 't1', title: 'InboxT', status: 'inbox' }), makeTask({ id: 't2', title: 'DoneT', status: 'done' })]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Status').getByRole('menuitemcheckbox', { name: 'Inbox' }))
+    expect(screen.queryByText('DoneT')).toBeNull()
+    // "Clear filter" appears once a value is checked and restores every row.
+    fireEvent.click(columnMenu('Status').getByRole('menuitem', { name: /clear filter/i }))
+    expect(screen.getByText('InboxT')).toBeInTheDocument()
+    expect(screen.getByText('DoneT')).toBeInTheDocument()
+  })
+
+  it('prunes a checked filter value once it leaves the plan scope (no stuck-empty list)', () => {
+    const rayTask = makeTask({ id: 't1', title: 'RayTask', agent_id: 'ray' })
+    const bareTask = makeTask({ id: 't2', title: 'BareTask' })
+    const { rerender } = render(
+      <ListView tasks={[rayTask, bareTask]} agents={[{ id: 'ray', name: 'Ray' }]} onTaskClick={() => {}} />,
+    )
+    fireEvent.click(columnMenu('Agent').getByRole('menuitemcheckbox', { name: 'Ray' }))
+    expect(screen.getByText('RayTask')).toBeInTheDocument()
+    expect(screen.queryByText('BareTask')).toBeNull()
+
+    // Plan scope changes and Ray's task is gone. The stale 'Ray' key must be
+    // pruned — BareTask shows, no filtered-empty copy, and Ray is no longer an
+    // offered value.
+    rerender(<ListView tasks={[bareTask]} agents={[{ id: 'ray', name: 'Ray' }]} onTaskClick={() => {}} />)
+    expect(screen.getByText('BareTask')).toBeInTheDocument()
+    expect(screen.queryByText('No tasks match the column filters')).toBeNull()
+    expect(columnMenu('Agent').queryByRole('menuitemcheckbox', { name: 'Ray' })).toBeNull()
   })
 
 })

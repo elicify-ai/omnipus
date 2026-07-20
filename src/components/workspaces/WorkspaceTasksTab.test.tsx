@@ -228,14 +228,22 @@ describe('WorkspaceTasksTab — view switcher', () => {
     expect(graph).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('switching to List renders the ListView table', async () => {
+  it('switching to List renders the ListView table and hides the Board-only Agent/Tag filters', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
     renderTab()
+    // Board-only toolbar filters are present in Board view.
+    expect(await screen.findByTestId('tasks-agent-filter')).toBeInTheDocument()
+    expect(screen.getByTestId('tasks-tag-filter')).toBeInTheDocument()
+
     await user.click(screen.getByTestId('tasks-view-list'))
     expect(await screen.findByText('Write report')).toBeInTheDocument()
     // The List table's own column headers only render in list mode.
     expect(screen.getByText('Updated ↓')).toBeInTheDocument()
+    // The List owns per-column filtering, so the toolbar Agent/Tag filters are
+    // Board-only and must be gone here (mirror of the Graph gating below).
+    expect(screen.queryByTestId('tasks-agent-filter')).toBeNull()
+    expect(screen.queryByTestId('tasks-tag-filter')).toBeNull()
   })
 
 })
