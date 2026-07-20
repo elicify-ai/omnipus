@@ -85,6 +85,97 @@ describe('ListView — sortable column headers', () => {
   })
 })
 
+describe('ListView — Agent column resolution', () => {
+  it('prefers the server-set agent_name over the agents lookup', () => {
+    render(
+      <ListView tasks={[makeTask({ agent_name: 'Ray Direct', agent_id: 'ray-1' })]} agents={[]} onTaskClick={() => {}} />,
+    )
+    const row = screen.getByText('Task').closest('tr')!
+    expect(within(row).getByText('Ray Direct')).toBeInTheDocument()
+  })
+
+  it('resolves agent_id via the agents list when agent_name is absent', () => {
+    render(
+      <ListView tasks={[makeTask({ agent_id: 'ray-1' })]} agents={[{ id: 'ray-1', name: 'Ray' }]} onTaskClick={() => {}} />,
+    )
+    const row = screen.getByText('Task').closest('tr')!
+    expect(within(row).getByText('Ray')).toBeInTheDocument()
+  })
+
+  it('falls back to the raw agent_id when it is not in the agents list', () => {
+    render(<ListView tasks={[makeTask({ agent_id: 'ghost' })]} agents={[]} onTaskClick={() => {}} />)
+    const row = screen.getByText('Task').closest('tr')!
+    expect(within(row).getByText('ghost')).toBeInTheDocument()
+  })
+
+  it('renders "—" in the Agent cell when a task has no agent', () => {
+    render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
+    const row = screen.getByText('Task').closest('tr')!
+    // Agent is the 5th <td> (index 4): Pri, Title, Status, Tags, Agent, Updated.
+    const cells = within(row).getAllByRole('cell')
+    expect(within(cells[4]).getByText('—')).toBeInTheDocument()
+  })
+})
+
+describe('ListView — surface filter (user tasks only)', () => {
+  it('excludes non-user (heartbeat) tasks from the list', () => {
+    render(
+      <ListView
+        tasks={[
+          makeTask({ id: 'u', title: 'UserTask', surface: 'user' }),
+          makeTask({ id: 'h', title: 'HeartbeatTask', surface: 'heartbeat' }),
+        ]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    expect(screen.getByText('UserTask')).toBeInTheDocument()
+    expect(screen.queryByText('HeartbeatTask')).toBeNull()
+  })
+
+  it('renders tasks whose surface is undefined (treated as user)', () => {
+    render(<ListView tasks={[makeTask({ title: 'NoSurface', surface: undefined })]} agents={[]} onTaskClick={() => {}} />)
+    expect(screen.getByText('NoSurface')).toBeInTheDocument()
+  })
+
+  it('shows the empty state when every task is non-user', () => {
+    render(<ListView tasks={[makeTask({ surface: 'heartbeat' })]} agents={[]} onTaskClick={() => {}} />)
+    expect(screen.getByText('No tasks to show')).toBeInTheDocument()
+  })
+})
+
+describe('ListView — empty state', () => {
+  it('renders "No tasks to show" when there are no tasks', () => {
+    render(<ListView tasks={[]} agents={[]} onTaskClick={() => {}} />)
+    expect(screen.getByText('No tasks to show')).toBeInTheDocument()
+    // No task Title button renders (the only row is the empty-state row).
+    expect(screen.queryByText('Task')).toBeNull()
+  })
+})
+
+describe('ListView — default Updated sort', () => {
+  const older = makeTask({ id: 'old', title: 'Older', updated_at: '2026-06-20T10:00:00Z', priority: 1 })
+  const newer = makeTask({ id: 'new', title: 'Newer', updated_at: '2026-06-20T12:00:00Z', priority: 5 })
+
+  it('defaults to newest-first (updated desc) on initial render', () => {
+    render(<ListView tasks={[older, newer]} agents={[]} onTaskClick={() => {}} />)
+    expect(within(screen.getAllByRole('row')[1]).getByText('Newer')).toBeInTheDocument()
+  })
+
+  it('toggles to oldest-first when the Updated header is clicked', () => {
+    render(<ListView tasks={[older, newer]} agents={[]} onTaskClick={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /sort by updated/i }))
+    expect(within(screen.getAllByRole('row')[1]).getByText('Older')).toBeInTheDocument()
+  })
+
+  it('resets to newest-first when returning to Updated from another column', () => {
+    render(<ListView tasks={[older, newer]} agents={[]} onTaskClick={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /sort by pri/i })) // priority asc → P1 (Older) first
+    fireEvent.click(screen.getByRole('button', { name: /sort by updated/i })) // back to Updated → natural desc
+    expect(within(screen.getAllByRole('row')[1]).getByText('Newer')).toBeInTheDocument()
+  })
+})
+
 describe('ListView — Tags column', () => {
   it('renders a Tags column header, not Milestone', () => {
     render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
