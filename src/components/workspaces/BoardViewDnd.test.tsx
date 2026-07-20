@@ -69,7 +69,6 @@ function renderBoard(props: Partial<React.ComponentProps<typeof BoardView>> = {}
       workspaceId="ws-1"
       activeTagFilter={null}
       altitude="top-level"
-      onAltitudeChange={vi.fn()}
       onTaskClick={vi.fn()}
       onNewTask={vi.fn()}
       onTaskMove={vi.fn()}

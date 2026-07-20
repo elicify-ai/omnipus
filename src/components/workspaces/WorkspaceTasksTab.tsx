@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Plus, Strategy } from '@phosphor-icons/react'
 import { TagFilterBar } from './TagFilterBar'
+import { AltitudeToggle } from './AltitudeToggle'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { BoardView } from './BoardView'
 import { ListView } from './ListView'
@@ -24,7 +25,6 @@ import {
 import type { Plan, Task } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import type { BoardAltitude } from '@/store/workspacesStore'
 
 interface WorkspaceTasksTabProps {
   workspaceId: string
@@ -157,6 +157,11 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
         <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
 
         <div className="flex items-center gap-2 ml-auto flex-shrink-0">
+          {/* Altitude toggle (Top-level / Show all) — board-only view control,
+              consolidated into this toolbar row instead of its own second row. */}
+          {mode === 'board' && (
+            <AltitudeToggle value={boardAltitude} onChange={setBoardAltitude} />
+          )}
           <button tabIndex={0}
             type="button"
             onClick={() => setPlanSlideOver({ open: true, plan: null })}
@@ -204,7 +209,6 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           workspaceId={workspaceId}
           activeTagFilter={activeTagFilter}
           altitude={boardAltitude}
-          onAltitudeChange={(next: BoardAltitude) => setBoardAltitude(next)}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
           onNewTask={() => setCreateTaskOpen(true)}
           onTaskMove={(task, status) => moveMutation.mutate({ task, status })}
