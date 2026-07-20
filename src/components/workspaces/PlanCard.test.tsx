@@ -9,10 +9,10 @@
  *   2. Progress (done/total member tasks) renders as visible text and an
  *      accessible label.
  *   3. Owner chip.
- *   4. Body click (not on a control) opens the plan's edit slide-over via
- *      `onEdit`; clicking a nested control never ALSO fires `onEdit`
- *      (stopPropagation).
- *   5. The ⤢ drill-in control sets the shared Board⇄Graph plan scope.
+ *   4. The plan TITLE is a drill-in control (sets the shared Board⇄Graph
+ *      scope); edit is reachable ONLY via the ⋯ menu. No control double-fires
+ *      onEdit, and the portalled Stop/Clear confirm dialogs never re-fire it.
+ *   5. The ⤢ drill-in control also sets the shared Board⇄Graph plan scope.
  *   6. The ⑂ "view graph" control is disabled below 2 member tasks and
  *      otherwise scopes + opens the Graph tab.
  *   7. The ⋯ menu's Approve (draft-only) / Stop (running/approved) / Edit /
@@ -167,36 +167,46 @@ describe('PlanCard — owner', () => {
   })
 })
 
-// ── Body click → edit ────────────────────────────────────────────────────────
+// ── Title = drill-in; edit is menu-only ──────────────────────────────────────
 
-describe('PlanCard — body click opens the edit slide-over', () => {
-  it('clicking the card body calls onEdit', async () => {
+describe('PlanCard — title drills in; edit is menu-only', () => {
+  it('clicking the plan title drills into the plan (activePlanId), not edit', async () => {
     const user = userEvent.setup()
     const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x', title: 'Launch' }) })
-    await user.click(screen.getByTestId('plan-card-plan-x'))
-    expect(onEdit).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Launch' }))
+    expect(mockSetActivePlanId).toHaveBeenCalledWith('plan-x')
+    expect(onEdit).not.toHaveBeenCalled()
   })
 
-  it('pressing Enter on the focused card calls onEdit', async () => {
+  it('pressing Enter on the focused title drills in', async () => {
     const user = userEvent.setup()
-    const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x' }) })
-    screen.getByTestId('plan-card-plan-x').focus()
+    renderCard({ plan: makePlan({ id: 'plan-x', title: 'Launch' }) })
+    screen.getByRole('button', { name: 'Launch' }).focus()
     await user.keyboard('{Enter}')
-    expect(onEdit).toHaveBeenCalledTimes(1)
+    expect(mockSetActivePlanId).toHaveBeenCalledWith('plan-x')
   })
 
-  it('clicking the drill-in control does not also fire onEdit', async () => {
+  it('clicking the drill-in (⤢) control does not fire onEdit', async () => {
     const user = userEvent.setup()
     const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x' }) })
     await user.click(screen.getByRole('button', { name: 'Open plan board' }))
     expect(onEdit).not.toHaveBeenCalled()
   })
 
-  it('clicking the ⋯ Edit menu item calls onEdit exactly once (not twice via bubbling)', async () => {
+  it('edit fires only via the ⋯ menu Edit item (once, no bubbling)', async () => {
     const user = userEvent.setup()
     const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x' }) })
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     expect(onEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('confirming Stop calls onStop but NEVER onEdit (portalled dialog must not re-fire the card)', async () => {
+    const user = userEvent.setup()
+    const { onEdit, onStop } = renderCard({ plan: makePlan({ id: 'plan-x', state: 'running' }) })
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Stop' }))
+    expect(onStop).toHaveBeenCalledTimes(1)
+    expect(onEdit).not.toHaveBeenCalled()
   })
 })
 

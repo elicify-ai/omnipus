@@ -12,12 +12,12 @@ interface WorkspacesState {
   activeWorkspaceId: string | null
   setActiveWorkspaceId: (id: string | null) => void
   /**
-   * The Plan a view should scope to (Swimlane board redesign — this field's
-   * job changed from "Board filter" to "which plan the Graph tab focuses",
-   * set by a lane header's ⑂ view-graph button via `setActivePlanId` before
-   * navigating to the Graph tab). null = no scoped plan. The Board itself no
-   * longer filters by this field — it groups ALL plans into swimlane bands
-   * instead (see BoardView.tsx).
+   * Shared Board⇄Graph plan scope (Hierarchical Drill-Down board). `null` =
+   * TOP LEVEL: the Board shows plan cards + loose tasks together and the Graph
+   * shows the whole workspace. A plan id = DRILLED: the Board shows that plan's
+   * own task board and the Graph shows that plan's DAG. Set by a plan card's
+   * drill-in (title / ⤢) and its ⑂ view-graph button (which also navigates to
+   * the Graph tab), plus the Graph tab's "By plan" selector.
    */
   activePlanId: string | null
   setActivePlanId: (id: string | null) => void
@@ -35,27 +35,6 @@ interface WorkspacesState {
    */
   boardAltitude: BoardAltitude
   setBoardAltitude: (altitude: BoardAltitude) => void
-  /**
-   * Swimlane board redesign — explicit collapse-state OVERRIDES, keyed by
-   * lane id (a Plan's `id`, or BoardView's `LOOSE_LANE_ID` for the "no plan"
-   * band). Absence of a key does NOT mean "expanded" — the caller (BoardView)
-   * applies its own default (terminal plans default-collapsed, everything
-   * else default-expanded per the swimlane spec) whenever a key is missing,
-   * then calls `setLaneCollapsed` with the resolved effective value on
-   * toggle. Keeping the map override-only (rather than baking a default in
-   * here) avoids this store having to know about Plan states at all.
-   */
-  collapsedLanes: Record<string, boolean>
-  setLaneCollapsed: (id: string, collapsed: boolean) => void
-  /**
-   * Clear every lane-collapse override. `collapsedLanes` is keyed by Plan id
-   * (workspace-scoped) plus the shared `LOOSE_LANE_ID` sentinel — that
-   * sentinel is the SAME literal across every workspace, so without a reset
-   * on workspace change, collapsing Loose in workspace A leaks into
-   * workspace B. Called by `WorkspaceTabContainer` alongside its
-   * `setActivePlanId(null)` reset.
-   */
-  resetCollapsedLanes: () => void
 }
 
 export const useWorkspacesStore = create<WorkspacesState>((set) => ({
@@ -67,8 +46,4 @@ export const useWorkspacesStore = create<WorkspacesState>((set) => ({
   setActiveTagFilter: (tag) => set({ activeTagFilter: tag }),
   boardAltitude: 'top-level',
   setBoardAltitude: (altitude) => set({ boardAltitude: altitude }),
-  collapsedLanes: {},
-  setLaneCollapsed: (id, collapsed) =>
-    set((s) => ({ collapsedLanes: { ...s.collapsedLanes, [id]: collapsed } })),
-  resetCollapsedLanes: () => set({ collapsedLanes: {} }),
 }))
