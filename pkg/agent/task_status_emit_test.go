@@ -225,10 +225,10 @@ func TestTaskStatusEmit_StateCriticalDrop(t *testing.T) {
 	}
 }
 
-// TestTaskStatusEmit_AllCanonicalStatuses verifies that every canonical 7-state
+// TestTaskStatusEmit_AllCanonicalStatuses verifies that every canonical 6-state
 // task status can be carried by the emitStatusChanged payload without surprise.
 //
-// Traces to: wave spec — emitStatusChanged: all 7 statuses are transport-safe.
+// Traces to: wave spec — emitStatusChanged: all 6 statuses are transport-safe.
 func TestTaskStatusEmit_AllCanonicalStatuses(t *testing.T) {
 	te, store, al := newEmitTestExecutor(t)
 	sub := al.SubscribeEvents(16)
@@ -236,11 +236,10 @@ func TestTaskStatusEmit_AllCanonicalStatuses(t *testing.T) {
 
 	tk := createTask(t, store, "running", nil)
 
-	// All 7 canonical statuses from the unified vocabulary (Detail #1).
+	// All 6 canonical statuses from the unified vocabulary (ADR-051 D5).
 	statuses := []task.Status{
 		task.StatusInbox,
 		task.StatusNext,
-		task.StatusPlanning,
 		task.StatusInProgress,
 		task.StatusBlocked,
 		task.StatusDone,

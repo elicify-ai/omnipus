@@ -220,7 +220,7 @@ export interface TaskStatusChangedFrame {
   type: "task_status_changed";
   session_id: string;
   task_id: string;
-  status: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+  status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id?: string;
 }
 

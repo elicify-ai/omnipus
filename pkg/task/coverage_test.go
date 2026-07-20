@@ -194,9 +194,7 @@ func TestValidateTransition_LegalTransitions(t *testing.T) {
 	// Traces to: store.go line 452 — validateTransition legal paths
 	legal := []struct{ from, to Status }{
 		{StatusInbox, StatusNext},
-		{StatusNext, StatusPlanning},
 		{StatusNext, StatusInProgress},
-		{StatusPlanning, StatusInProgress},
 		{StatusInProgress, StatusDone},
 		{StatusInProgress, StatusFailed},
 		{StatusFailed, StatusInbox}, // retry path
@@ -214,7 +212,7 @@ func TestValidateTransition_LegalTransitions(t *testing.T) {
 
 func TestValidateTransition_DoneIsFrozen(t *testing.T) {
 	// Traces to: store.go line 459 — done is terminal, no transition out
-	frozen := []Status{StatusInbox, StatusNext, StatusPlanning, StatusInProgress, StatusFailed}
+	frozen := []Status{StatusInbox, StatusNext, StatusInProgress, StatusFailed}
 	for _, to := range frozen {
 		t.Run(fmt.Sprintf("done→%s", to), func(t *testing.T) {
 			err := validateTransition(StatusDone, to, false)

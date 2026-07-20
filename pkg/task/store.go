@@ -63,15 +63,20 @@ type Store struct {
 // New creates a Store rooted at dir using the process-wide TaskFileLock. dir
 // is, by universal convention across every call site in this codebase,
 // "<home>/tasks" — New derives home from it to run the one-way Milestone→Tag
-// migration (ADR-049 D1, migrate_milestones.go) exactly once, guarded by its
-// own completion sentinel, before the store is used. New's signature cannot
-// itself return an error without a breaking change rippling across ~30 call
-// sites in other packages, so a migration failure is logged at Error and does
-// NOT prevent the Store from being constructed — the migration is safe to
-// retry on the next call/boot (idempotent, crash-safe).
+// migration (ADR-049 D1, migrate_milestones.go) and the `planning`→`next` task
+// status backfill (ADR-051 D5, migrate_planning_status.go) exactly once each,
+// guarded by their own completion sentinels, before the store is used. New's
+// signature cannot itself return an error without a breaking change rippling
+// across ~30 call sites in other packages, so a migration failure is logged at
+// Error and does NOT prevent the Store from being constructed — each
+// migration is safe to retry on the next call/boot (idempotent, crash-safe).
 func New(dir string) *Store {
-	if err := MigrateMilestonesToTags(filepath.Dir(dir)); err != nil {
+	home := filepath.Dir(dir)
+	if err := MigrateMilestonesToTags(home); err != nil {
 		slog.Error("task: milestone migration failed", "error", err)
+	}
+	if err := MigratePlanningStatusToNext(home); err != nil {
+		slog.Error("task: planning-status migration failed", "error", err)
 	}
 	return &Store{dir: dir, lock: TaskFileLock}
 }
@@ -901,7 +906,7 @@ func (s *Store) AddDependency(id, blockerID string) (updated *Task, added bool, 
 // current blocked_by set. A `next` task with at least one not-`done` blocker
 // becomes `blocked`; a `blocked` task whose blockers are now all `done` (or
 // empty) returns to `next`. It mutates t in place and never touches a task that
-// is past dispatch (planning/in_progress/terminal). The caller holds the
+// is past dispatch (in_progress/terminal). The caller holds the
 // per-task lock for t.ID; this reads OTHER task files (the blockers) without
 // their locks, which is safe because it only reads their Status.
 func (s *Store) recomputeBlockedStateLocked(t *Task) {

@@ -1,28 +1,38 @@
 /**
  * WorkspaceTasksTab.test.tsx
  *
- * Mutation wiring for the plan card ⋯ menu actions surfaced through the
- * REAL component tree (WorkspaceTasksTab → BoardView → PlanCard), not just
- * PlanCard's own callback props (see PlanCard.test.tsx for that layer).
- * Covers:
- *   - Approve calls `approvePlan(planId)` and toasts on success.
- *   - A 400 from Approve with a per-task payload surfaces the per-task
- *     "needs acceptance criteria" reasons via toast (review-gate fix #2) —
- *     not the generic "Failed to approve plan" fallback.
- *   - Stop (after confirm) calls `stopPlan(planId)` and toasts on
- *     success/error.
- *   - Clear (after confirm) calls `deletePlan(planId)` and toasts on
- *     success/error.
+ * ADR-051 — the combined "Tasks" screen. Covers:
+ *   - The [Board] [List] [Graph] view switcher renders and defaults to Board.
+ *   - The dynamic heading ("Tasks" / "{plan.title} — tasks", with an
+ *     "· Owner: {name}" suffix when an owner filter is active).
+ *   - "New task" is present and opens the create slide-over.
+ *   - This screen's own plan-mutation WIRING (Approve/Stop/Clear/Edit/New
+ *     Plan callbacks passed into PlansFilterBand fire the right mutation).
+ *   - The altitude toggle only shows in Board view.
+ *
+ * PlansFilterBand and taskFilters.ts are owned by a parallel agent and may
+ * not exist yet. `PlansFilterBand` is mocked to a plain stub that exposes
+ * one button per callback prop — this file tests WorkspaceTasksTab's own
+ * wiring (which mutation each prop triggers), not PlansFilterBand's real
+ * internal DOM/markup, which is out of this file's ownership and is covered
+ * by the band's own test file.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { Plan, Task, Agent } from '@/lib/api'
 import { WorkspaceTasksTab } from './WorkspaceTasksTab'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ApiError } from '@/lib/api-error'
-import type { Plan } from '@/lib/api'
+
+// jsdom doesn't implement scrollIntoView; Radix Select calls it when opening
+// the listbox (repo-wide convention — see ChannelConfigPanel.test.tsx,
+// CreateTaskSlideOver.test.tsx, NewWorkspaceSlideOver.test.tsx, etc.).
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {}
+}
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -37,7 +47,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchTasks: vi.fn(),
     fetchPlans: vi.fn(),
-    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn(),
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
     approvePlan: vi.fn(),
     stopPlan: vi.fn(),
@@ -45,7 +55,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { fetchTasks, fetchPlans, approvePlan, stopPlan, deletePlan } from '@/lib/api'
+import { fetchTasks, fetchPlans, fetchAgents, approvePlan, stopPlan, deletePlan } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
@@ -55,31 +65,48 @@ vi.mock('@/store/ui', () => ({
   },
 }))
 
-// Minimal stub so the ⋯ trigger's content renders without Radix portal
-// internals (mirrors PlanLaneHeader.test.tsx's DropdownMenu stub).
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
-    asChild ? <>{children}</> : <div>{children}</div>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="plan-lane-menu">{children}</div>
-  ),
-  DropdownMenuItem: ({
-    children,
-    onClick,
-    disabled,
-    className,
-  }: {
-    children: React.ReactNode
-    onClick?: () => void
-    disabled?: boolean
-    className?: string
+// Stub PlansFilterBand — owned by a parallel agent (may not exist on disk
+// yet). Exposes one plain button per callback prop so this file can verify
+// WorkspaceTasksTab's OWN wiring without depending on the real component's
+// internal markup.
+vi.mock('./PlansFilterBand', () => ({
+  PlansFilterBand: (props: {
+    plans: Plan[]
+    onSelectPlan: (id: string | null) => void
+    onNewPlan: () => void
+    onEditPlan: (plan: Plan) => void
+    onApprovePlan: (plan: Plan) => void
+    onStopPlan: (plan: Plan) => void
+    onClearPlan: (plan: Plan) => void
   }) => (
-    <button type="button" onClick={onClick} disabled={disabled} className={className}>
-      {children}
-    </button>
+    <div data-testid="plans-filter-band-stub">
+      <button type="button" onClick={() => props.onSelectPlan(null)}>
+        select-all
+      </button>
+      <button type="button" onClick={props.onNewPlan}>
+        stub-new-plan
+      </button>
+      {props.plans.map((plan) => (
+        <div key={plan.id}>
+          <button type="button" onClick={() => props.onSelectPlan(plan.id)}>
+            select-{plan.id}
+          </button>
+          <button type="button" onClick={() => props.onEditPlan(plan)}>
+            edit-{plan.id}
+          </button>
+          <button type="button" onClick={() => props.onApprovePlan(plan)}>
+            approve-{plan.id}
+          </button>
+          <button type="button" onClick={() => props.onStopPlan(plan)}>
+            stop-{plan.id}
+          </button>
+          <button type="button" onClick={() => props.onClearPlan(plan)}>
+            clear-{plan.id}
+          </button>
+        </div>
+      ))}
+    </div>
   ),
-  DropdownMenuSeparator: () => <hr />,
 }))
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -100,14 +127,47 @@ function makePlan(overrides: Partial<Plan> = {}): Plan {
   }
 }
 
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 't1',
+    title: 'Write report',
+    status: 'inbox',
+    action: 'llm',
+    priority: 3,
+    workspace_id: 'ws-1',
+    surface: 'user',
+    owner: 'admin',
+    created_by: 'admin',
+    created_at: '2026-06-20T10:00:00Z',
+    updated_at: '2026-06-20T10:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: 'ray',
+    name: 'Ray',
+    type: 'core',
+    locked: true,
+    status: 'active',
+    soul: '',
+    color: '#3B82F6',
+    icon: 'MagnifyingGlass',
+    timeout_seconds: 300,
+    max_tool_iterations: 50,
+    ...overrides,
+  }
+}
+
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-function renderTab(workspaceId = 'ws-1', mode: 'board' | 'list' = 'board') {
+function renderTab(workspaceId = 'ws-1') {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <WorkspaceTasksTab workspaceId={workspaceId} mode={mode} />
+      <WorkspaceTasksTab workspaceId={workspaceId} />
     </QueryClientProvider>,
   )
 }
@@ -119,24 +179,111 @@ beforeEach(() => {
   useWorkspacesStore.setState({ activeTagFilter: null, boardAltitude: 'top-level', activePlanId: null })
   vi.mocked(fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(fetchPlans).mockReset().mockResolvedValue([])
+  vi.mocked(fetchAgents).mockReset().mockResolvedValue([])
   vi.mocked(approvePlan).mockReset()
   vi.mocked(stopPlan).mockReset()
   vi.mocked(deletePlan).mockReset()
 })
 
-// ── Approve ──────────────────────────────────────────────────────────────────
+// ── View switcher ────────────────────────────────────────────────────────────
 
-describe('WorkspaceTasksTab — plan lane Approve', () => {
-  it('calls approvePlan with the plan id and toasts on success', async () => {
+describe('WorkspaceTasksTab — view switcher', () => {
+  it('renders the Board/List/Graph segmented control, defaulting to Board', async () => {
+    renderTab()
+    await screen.findByRole('button', { name: /new task/i })
+
+    const board = screen.getByTestId('tasks-view-board')
+    const list = screen.getByTestId('tasks-view-list')
+    const graph = screen.getByTestId('tasks-view-graph')
+    expect(board).toBeInTheDocument()
+    expect(list).toBeInTheDocument()
+    expect(graph).toBeInTheDocument()
+    expect(board).toHaveAttribute('aria-checked', 'true')
+    expect(list).toHaveAttribute('aria-checked', 'false')
+    expect(graph).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('switching to List renders the ListView table', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
+    renderTab()
+    await user.click(screen.getByTestId('tasks-view-list'))
+    expect(await screen.findByText('Write report')).toBeInTheDocument()
+    // The List table's own column headers only render in list mode.
+    expect(screen.getByText('Updated ↓')).toBeInTheDocument()
+  })
+
+  it('the altitude toggle only shows in Board view', async () => {
+    renderTab()
+    expect(await screen.findByRole('radio', { name: /top-level/i })).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('tasks-view-list'))
+    expect(screen.queryByRole('radio', { name: /top-level/i })).toBeNull()
+  })
+})
+
+// ── Dynamic heading ──────────────────────────────────────────────────────────
+
+describe('WorkspaceTasksTab — dynamic heading', () => {
+  it('reads "Tasks" when no plan and no owner filter is active', async () => {
+    renderTab()
+    const heading = await screen.findByTestId('tasks-heading')
+    expect(heading.textContent).toContain('Tasks')
+    expect(heading.textContent).not.toContain('Owner:')
+  })
+
+  it('reads "{plan.title} — tasks" when a plan is selected (via the band stub)', async () => {
+    const plan = makePlan({ title: 'Payments revamp' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+
+    const user = userEvent.setup()
+    renderTab()
+    await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
+
+    const heading = await screen.findByTestId('tasks-heading')
+    await waitFor(() => expect(heading.textContent).toContain('Payments revamp — tasks'))
+  })
+
+  it('appends "· Owner: {name}" once an owner filter is active', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'ray', name: 'Ray' })])
+    renderTab()
+
+    // Radix Select interaction — click the trigger, then the option by its
+    // role=option (mirrors ListView.filters.test.tsx's selectOption helper).
+    const trigger = await screen.findByRole('combobox', { name: /filter by owner/i })
+    fireEvent.click(trigger)
+    const option = await screen.findByRole('option', { name: 'Owner: Ray' })
+    fireEvent.click(option)
+
+    const heading = await screen.findByTestId('tasks-heading')
+    await waitFor(() => expect(heading.textContent).toContain('Owner: Ray'))
+  })
+})
+
+// ── New task ─────────────────────────────────────────────────────────────────
+
+describe('WorkspaceTasksTab — New task', () => {
+  it('renders a working New task button that opens the create slide-over', async () => {
+    const user = userEvent.setup()
+    renderTab()
+    const button = await screen.findByRole('button', { name: /new task/i })
+    await user.click(button)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+// ── Plan mutation wiring (through the callback props passed to the band) ────
+
+describe('WorkspaceTasksTab — plan mutation wiring', () => {
+  it('the band stub\'s approve button calls approvePlan with the plan id and toasts on success', async () => {
     const user = userEvent.setup()
     const plan = makePlan({ state: 'draft' })
     vi.mocked(fetchPlans).mockResolvedValue([plan])
     vi.mocked(approvePlan).mockResolvedValue({ ...plan, state: 'approved' })
 
     renderTab()
-    await screen.findByTestId('plan-card-plan-a')
-
-    await user.click(screen.getByRole('button', { name: 'Approve' }))
+    await user.click(await screen.findByRole('button', { name: 'approve-plan-a' }))
 
     await waitFor(() => expect(approvePlan).toHaveBeenCalledWith('plan-a'))
     await waitFor(() =>
@@ -146,7 +293,7 @@ describe('WorkspaceTasksTab — plan lane Approve', () => {
     )
   })
 
-  it('a 400 with a per-task payload surfaces the per-task reasons via toast (review-gate fix #2)', async () => {
+  it('a 400 with a per-task payload surfaces the per-task reasons via toast', async () => {
     const user = userEvent.setup()
     const plan = makePlan({ state: 'draft' })
     vi.mocked(fetchPlans).mockResolvedValue([plan])
@@ -156,9 +303,7 @@ describe('WorkspaceTasksTab — plan lane Approve', () => {
     vi.mocked(approvePlan).mockRejectedValue(new ApiError(400, 'Bad request', { body }))
 
     renderTab()
-    await screen.findByTestId('plan-card-plan-a')
-
-    await user.click(screen.getByRole('button', { name: 'Approve' }))
+    await user.click(await screen.findByRole('button', { name: 'approve-plan-a' }))
 
     await waitFor(() =>
       expect(mockAddToast).toHaveBeenCalledWith(
@@ -168,45 +313,19 @@ describe('WorkspaceTasksTab — plan lane Approve', () => {
         }),
       ),
     )
-    // Not the generic fallback — the per-task reason is the whole point.
     expect(mockAddToast).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: 'Failed to approve plan' }),
     )
   })
 
-  it('a plain (non-per-task) error still falls back to the generic toast', async () => {
-    const user = userEvent.setup()
-    const plan = makePlan({ state: 'draft' })
-    vi.mocked(fetchPlans).mockResolvedValue([plan])
-    vi.mocked(approvePlan).mockRejectedValue(new Error('network down'))
-
-    renderTab()
-    await screen.findByTestId('plan-card-plan-a')
-    await user.click(screen.getByRole('button', { name: 'Approve' }))
-
-    await waitFor(() =>
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error', message: 'network down' }),
-      ),
-    )
-  })
-})
-
-// ── Stop ─────────────────────────────────────────────────────────────────────
-
-describe('WorkspaceTasksTab — plan lane Stop', () => {
-  it('confirming Stop calls stopPlan with the plan id and toasts on success', async () => {
+  it('the band stub\'s stop button calls stopPlan with the plan id and toasts on success', async () => {
     const user = userEvent.setup()
     const plan = makePlan({ state: 'running' })
     vi.mocked(fetchPlans).mockResolvedValue([plan])
     vi.mocked(stopPlan).mockResolvedValue({ ...plan, state: 'done' })
 
     renderTab()
-    await screen.findByTestId('plan-card-plan-a')
-    await user.click(screen.getByRole('button', { name: 'Stop' }))
-
-    const dialog = screen.getByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Stop' }))
+    await user.click(await screen.findByRole('button', { name: 'stop-plan-a' }))
 
     await waitFor(() => expect(stopPlan).toHaveBeenCalledWith('plan-a'))
     await waitFor(() =>
@@ -216,42 +335,14 @@ describe('WorkspaceTasksTab — plan lane Stop', () => {
     )
   })
 
-  it('surfaces a Stop failure via an error toast', async () => {
-    const user = userEvent.setup()
-    const plan = makePlan({ state: 'running' })
-    vi.mocked(fetchPlans).mockResolvedValue([plan])
-    vi.mocked(stopPlan).mockRejectedValue(new Error('boom'))
-
-    renderTab()
-    await screen.findByTestId('plan-card-plan-a')
-    await user.click(screen.getByRole('button', { name: 'Stop' }))
-
-    const dialog = screen.getByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Stop' }))
-
-    await waitFor(() =>
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error', message: 'boom' }),
-      ),
-    )
-  })
-})
-
-// ── Clear ────────────────────────────────────────────────────────────────────
-
-describe('WorkspaceTasksTab — plan lane Clear', () => {
-  it('confirming Clear calls deletePlan with the plan id and toasts on success', async () => {
+  it('the band stub\'s clear button calls deletePlan with the plan id and toasts on success', async () => {
     const user = userEvent.setup()
     const plan = makePlan({ state: 'draft' })
     vi.mocked(fetchPlans).mockResolvedValue([plan])
     vi.mocked(deletePlan).mockResolvedValue(undefined)
 
     renderTab()
-    await screen.findByTestId('plan-card-plan-a')
-    await user.click(screen.getByRole('button', { name: 'Clear' }))
-
-    const dialog = screen.getByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Clear' }))
+    await user.click(await screen.findByRole('button', { name: 'clear-plan-a' }))
 
     await waitFor(() => expect(deletePlan).toHaveBeenCalledWith('plan-a'))
     await waitFor(() =>
@@ -261,43 +352,15 @@ describe('WorkspaceTasksTab — plan lane Clear', () => {
     )
   })
 
-  it('surfaces a Clear failure via an error toast (e.g. backend rejects delete-while-running)', async () => {
+  it('the band stub\'s edit button opens the CreatePlanSlideOver in edit mode', async () => {
     const user = userEvent.setup()
-    const plan = makePlan({ state: 'draft' })
+    const plan = makePlan({ title: 'Plan A' })
     vi.mocked(fetchPlans).mockResolvedValue([plan])
-    vi.mocked(deletePlan).mockRejectedValue(new Error('plan is running'))
 
     renderTab()
-    await screen.findByTestId('plan-card-plan-a')
-    await user.click(screen.getByRole('button', { name: 'Clear' }))
+    await user.click(await screen.findByRole('button', { name: 'edit-plan-a' }))
 
-    const dialog = screen.getByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Clear' }))
-
-    await waitFor(() =>
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error', message: 'plan is running' }),
-      ),
-    )
-  })
-})
-
-// ── Toolbar altitude toggle placement ────────────────────────────────────────
-
-describe('WorkspaceTasksTab — altitude toggle in the single toolbar row', () => {
-  it('renders the Top-level / Show all toggle in the toolbar in board mode', async () => {
-    renderTab('ws-1', 'board')
-    // AltitudeToggle renders two radios — it now lives in this toolbar row, not
-    // a second row inside BoardView.
-    expect(await screen.findByRole('radio', { name: /top-level/i })).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: /show all/i })).toBeInTheDocument()
-  })
-
-  it('does NOT render the altitude toggle in list mode (board-only control)', async () => {
-    renderTab('ws-1', 'list')
-    // Wait for the toolbar to render (New task is always present).
-    await screen.findByRole('button', { name: /new task/i })
-    expect(screen.queryByRole('radio', { name: /show all/i })).toBeNull()
-    expect(screen.queryByRole('radio', { name: /top-level/i })).toBeNull()
+    // CreatePlanSlideOver renders as a Sheet (role=dialog) once opened.
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 })

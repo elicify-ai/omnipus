@@ -11,11 +11,11 @@ interface TagFilterBarProps {
 }
 
 /**
- * Board toolbar tag filter (Hierarchical Drill-Down board redesign) — plan
- * pills are superseded entirely by the top-level board's plan cards
- * (BoardView.tsx's `PlanCard`), so this keeps just the tag filter. Uses
- * `planFilter.ts`'s `PLAN_FILTER_UNTAGGED` sentinel plus a
- * `role=group`/`aria-pressed` a11y grammar.
+ * Tasks-screen toolbar tag filter (ADR-051) — plan filtering lives entirely
+ * in the PlansFilterBand above the board now (plan tiles, not plan pills
+ * here), so this component keeps just the tag filter. Uses `planFilter.ts`'s
+ * `PLAN_FILTER_UNTAGGED` sentinel plus a `role=group`/`aria-pressed` a11y
+ * grammar.
  */
 export function TagFilterBar({ tasks, activeTagFilter, onSelectTag }: TagFilterBarProps) {
   const tags = useMemo(() => distinctTags(tasks), [tasks])

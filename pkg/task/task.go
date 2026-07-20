@@ -7,8 +7,9 @@
 // board) and pkg/taskstore (workflow queue) — with one per-entity JSON store
 // under ~/.omnipus/tasks/<id>.json.
 //
-// There is no back-compat (remediation Detail #7): one entity, one 7-state
-// status vocabulary, one create/update path. The store carries over from
+// There is no back-compat (remediation Detail #7): one entity, one 6-state
+// status vocabulary (ADR-051 D5 removed `planning`), one create/update path.
+// The store carries over from
 // pkg/boardtask: the blocked_by DAG cycle validator (self-edge / 2-node /
 // N-node cycle rejection, max depth 50, orphan-edge drop on boot via
 // DropOrphanEdges) and the auto-advance behavior (blocked → next when every
@@ -24,19 +25,21 @@ import (
 	"time"
 )
 
-// Status is the unified 7-state task lifecycle (remediation Detail #1).
+// Status is the unified 6-state task lifecycle (remediation Detail #1;
+// ADR-051 D5 removed the redundant `planning` status now that Plans are
+// first-class — existing `planning` tasks are backfilled to `next`, see
+// MigratePlanningStatusToNext in migrate_planning_status.go).
 //
-//	inbox → next → planning → in_progress → done   (+ failed)
+//	inbox → next → in_progress → done   (+ failed)
 //
 // with blocked an auto side-state (set when a dependency is unmet, cleared to
 // next when every blocked_by dep reaches done).
 type Status string
 
-// The seven canonical task statuses. These are the ONLY valid Status values.
+// The six canonical task statuses. These are the ONLY valid Status values.
 const (
 	StatusInbox      Status = "inbox"       // captured / untriaged
 	StatusNext       Status = "next"        // triaged & ready to start
-	StatusPlanning   Status = "planning"    // an agent is decomposing it
 	StatusInProgress Status = "in_progress" // worked by a human OR agent
 	StatusBlocked    Status = "blocked"     // auto side-state: unmet dependency
 	StatusDone       Status = "done"        // terminal success
@@ -47,14 +50,13 @@ const (
 var validStatuses = map[Status]bool{ //nolint:gochecknoglobals
 	StatusInbox:      true,
 	StatusNext:       true,
-	StatusPlanning:   true,
 	StatusInProgress: true,
 	StatusBlocked:    true,
 	StatusDone:       true,
 	StatusFailed:     true,
 }
 
-// IsValidStatus reports whether s is one of the seven canonical statuses.
+// IsValidStatus reports whether s is one of the six canonical statuses.
 func IsValidStatus(s Status) bool { return validStatuses[s] }
 
 // IsTerminal reports whether s is a terminal status (done or failed).

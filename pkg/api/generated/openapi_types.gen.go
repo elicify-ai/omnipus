@@ -3094,7 +3094,6 @@ const (
 	TaskRollupStatusInProgress TaskRollupStatus = "in_progress"
 	TaskRollupStatusInbox      TaskRollupStatus = "inbox"
 	TaskRollupStatusNext       TaskRollupStatus = "next"
-	TaskRollupStatusPlanning   TaskRollupStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the TaskRollupStatus enum.
@@ -3112,8 +3111,6 @@ func (e TaskRollupStatus) Valid() bool {
 		return true
 	case TaskRollupStatusNext:
 		return true
-	case TaskRollupStatusPlanning:
-		return true
 	default:
 		return false
 	}
@@ -3127,7 +3124,6 @@ const (
 	TaskStatusInProgress TaskStatus = "in_progress"
 	TaskStatusInbox      TaskStatus = "inbox"
 	TaskStatusNext       TaskStatus = "next"
-	TaskStatusPlanning   TaskStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the TaskStatus enum.
@@ -3144,8 +3140,6 @@ func (e TaskStatus) Valid() bool {
 	case TaskStatusInbox:
 		return true
 	case TaskStatusNext:
-		return true
-	case TaskStatusPlanning:
 		return true
 	default:
 		return false
@@ -3415,7 +3409,6 @@ const (
 	TaskUpdateRequestStatusInProgress TaskUpdateRequestStatus = "in_progress"
 	TaskUpdateRequestStatusInbox      TaskUpdateRequestStatus = "inbox"
 	TaskUpdateRequestStatusNext       TaskUpdateRequestStatus = "next"
-	TaskUpdateRequestStatusPlanning   TaskUpdateRequestStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestStatus enum.
@@ -3432,8 +3425,6 @@ func (e TaskUpdateRequestStatus) Valid() bool {
 	case TaskUpdateRequestStatusInbox:
 		return true
 	case TaskUpdateRequestStatusNext:
-		return true
-	case TaskUpdateRequestStatusPlanning:
 		return true
 	default:
 		return false
@@ -3889,7 +3880,6 @@ const (
 	InProgress ListTasksParamsStatus = "in_progress"
 	Inbox      ListTasksParamsStatus = "inbox"
 	Next       ListTasksParamsStatus = "next"
-	Planning   ListTasksParamsStatus = "planning"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
@@ -3906,8 +3896,6 @@ func (e ListTasksParamsStatus) Valid() bool {
 	case Inbox:
 		return true
 	case Next:
-		return true
-	case Planning:
 		return true
 	default:
 		return false
@@ -8648,7 +8636,7 @@ type Task struct {
 	// StartedAt RFC 3339 timestamp when the task started. Absent until started.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 
-	// Status Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged · `next` triaged & ready · `planning` agent decomposing (light in Tier 2) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
+	// Status Current lifecycle state (ADR-051 D5, 6-state). `inbox` captured/untriaged · `next` triaged & ready (also the landing state for a task remapped from the removed `planning` status) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
 	Status TaskStatus `json:"status"`
 
 	// Surface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
@@ -8714,7 +8702,7 @@ type TaskCriteriaStatus string
 // TaskRollupStatus Current status of the child run.
 type TaskRollupStatus string
 
-// TaskStatus Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged · `next` triaged & ready · `planning` agent decomposing (light in Tier 2) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
+// TaskStatus Current lifecycle state (ADR-051 D5, 6-state). `inbox` captured/untriaged · `next` triaged & ready (also the landing state for a task remapped from the removed `planning` status) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
 type TaskStatus string
 
 // TaskSurface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
@@ -8928,7 +8916,7 @@ type TaskTrigger_Config struct {
 }
 
 // TaskUpdateRequest Request body for PATCH /tasks/{id} — the unified partial-update body that replaces the two legacy update bodies (`TaskUpdateRequest` and `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only provided fields are updated (PATCH semantics). At least one field is required.
-// `status` accepts the full 7-state vocabulary. Note: `blocked` is normally an AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is unmet, cleared to `next` when deps complete); setting it directly is allowed but the engine may override on the next dependency evaluation. Advancing a partial task to `next` is rejected server-side (Detail #8 — only fully-captured tasks may be triaged to `next`).
+// `status` accepts the full 6-state vocabulary (ADR-051 D5). Note: `blocked` is normally an AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is unmet, cleared to `next` when deps complete); setting it directly is allowed but the engine may override on the next dependency evaluation. Advancing a partial task to `next` is rejected server-side (Detail #8 — only fully-captured tasks may be triaged to `next`).
 type TaskUpdateRequest struct {
 	// AgentId Re-assign the task to this agent.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -9002,7 +8990,7 @@ type TaskUpdateRequest struct {
 	// StartedAt When the task started execution.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 
-	// Status New task status (7-state lifecycle, Detail
+	// Status New task status (6-state lifecycle, ADR-051 D5).
 	Status *TaskUpdateRequestStatus `json:"status,omitempty"`
 
 	// Surface New UI surface ownership (Detail
@@ -9056,7 +9044,7 @@ type TaskUpdateRequestCriteriaKind string
 // TaskUpdateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type TaskUpdateRequestCriteriaStatus string
 
-// TaskUpdateRequestStatus New task status (7-state lifecycle, Detail
+// TaskUpdateRequestStatus New task status (6-state lifecycle, ADR-051 D5).
 type TaskUpdateRequestStatus string
 
 // TaskUpdateRequestSurface New UI surface ownership (Detail
@@ -9599,7 +9587,7 @@ type ListTasksParams struct {
 	// WorkspaceId Filter by workspace ID. Tasks are workspace-scoped; when omitted the server resolves the active workspace.
 	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 
-	// Status Filter tasks by status (7-state lifecycle).
+	// Status Filter tasks by status (6-state lifecycle, ADR-051 D5).
 	Status *ListTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
 
 	// AgentId Filter by assigned agent ID.

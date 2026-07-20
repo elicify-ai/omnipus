@@ -1,0 +1,402 @@
+import { useState } from 'react'
+import {
+  ListChecks,
+  Plus,
+  PencilSimple,
+  DotsThreeVertical,
+  Play,
+  Stop,
+  Broom,
+  CheckCircle,
+  XCircle,
+  CircleNotch,
+} from '@phosphor-icons/react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Progress } from '@/components/ui/progress'
+import type { Agent, Plan, Task } from '@/lib/api'
+import { planStateColor, planStateLabel } from '@/lib/planStateColors'
+import { cn } from '@/lib/utils'
+
+interface PlansFilterBandProps {
+  plans: Plan[]
+  tasks: Task[]
+  agents: Agent[]
+  selectedPlanId: string | null
+  onSelectPlan: (planId: string | null) => void
+  onNewPlan: () => void
+  onEditPlan: (plan: Plan) => void
+  onApprovePlan: (plan: Plan) => void
+  onStopPlan: (plan: Plan) => void
+  onClearPlan: (plan: Plan) => void
+  approvingPlanId?: string | null
+  stoppingPlanId?: string | null
+  clearingPlanId?: string | null
+}
+
+/** Shared footprint for the "All tasks" tile and every plan tile — Requirement: "Keep tiles the SAME size as each other." */
+const TILE_SIZE = 'w-56 flex-shrink-0'
+
+/**
+ * Per-state glyph — mirrors PlanCard's `PlanStateGlyph` (always paired with
+ * `planStateLabel`'s visible text, never color-alone, a11y).
+ */
+function PlanStateGlyph({ state, size = 9 }: { state: Plan['state']; size?: number }) {
+  switch (state) {
+    case 'draft':
+      return <PencilSimple size={size} />
+    case 'approved':
+      return <CheckCircle size={size} />
+    case 'running':
+      return <CircleNotch size={size} className="animate-spin" />
+    case 'done':
+      return <CheckCircle size={size} weight="fill" />
+    case 'failed':
+      return <XCircle size={size} weight="fill" />
+    default:
+      return <CheckCircle size={size} />
+  }
+}
+
+/**
+ * ADR-051 D2/D3 — Plans-as-Filter band. A horizontal row of plan tiles above
+ * the (combined, workspace-wide) task board. Clicking a tile's body FILTERS
+ * the board to that plan — it does NOT navigate/drill (that's the
+ * superseded Hierarchical Drill-Down board model). A leading "All tasks"
+ * tile is the default selected state and clears the filter; re-clicking the
+ * already-active plan tile also clears it (toggle-off).
+ *
+ * Because the tile body is a filter control (not an edit affordance), each
+ * plan tile exposes an explicit pencil (edit) button plus a ⋯ menu
+ * (Approve/Stop/Clear) as SIBLINGS of the select button — never nested
+ * inside it — so a click on either can never bubble into the tile's
+ * onSelectPlan. This mirrors the isolation pattern PlanCard already ships:
+ * the tile is `role="group"`, not a `role="button"` wrapping other buttons.
+ * The ⋯ menu content and both AlertDialog confirms render through a Radix
+ * portal (outside the tile's DOM subtree), so their clicks structurally
+ * cannot reach the tile's select button either.
+ */
+export function PlansFilterBand({
+  plans,
+  tasks,
+  agents,
+  selectedPlanId,
+  onSelectPlan,
+  onNewPlan,
+  onEditPlan,
+  onApprovePlan,
+  onStopPlan,
+  onClearPlan,
+  approvingPlanId = null,
+  stoppingPlanId = null,
+  clearingPlanId = null,
+}: PlansFilterBandProps) {
+  return (
+    <div
+      role="group"
+      aria-label="Plans filter"
+      className="flex items-stretch gap-2 overflow-x-auto px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0"
+    >
+      <AllTasksTile
+        selected={selectedPlanId === null}
+        onSelect={() => onSelectPlan(null)}
+        totalTasks={tasks.length}
+      />
+
+      {plans.map((plan) => {
+        // "member tasks" = this plan's own top-level tasks (mirrors
+        // PlanCard's memberTotal/memberDone contract — excludes subtasks,
+        // which nest under their parent and would otherwise double-count).
+        const memberTasks = tasks.filter((t) => t.plan_id === plan.id && !t.parent_task_id)
+        const memberTotal = memberTasks.length
+        const memberDone = memberTasks.filter((t) => t.status === 'done').length
+        const isSelected = selectedPlanId === plan.id
+
+        return (
+          <PlanFilterTile
+            key={plan.id}
+            plan={plan}
+            agents={agents}
+            memberTotal={memberTotal}
+            memberDone={memberDone}
+            selected={isSelected}
+            onSelect={() => onSelectPlan(isSelected ? null : plan.id)}
+            onEdit={() => onEditPlan(plan)}
+            onApprove={() => onApprovePlan(plan)}
+            onStop={() => onStopPlan(plan)}
+            onClear={() => onClearPlan(plan)}
+            isApproving={approvingPlanId === plan.id}
+            isStopping={stoppingPlanId === plan.id}
+            isClearing={clearingPlanId === plan.id}
+          />
+        )
+      })}
+
+      <button tabIndex={0}
+        type="button"
+        onClick={onNewPlan}
+        aria-label="New plan"
+        className={cn(
+          TILE_SIZE,
+          'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--color-border)] p-3 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
+        )}
+      >
+        <Plus size={16} />
+        <span className="text-xs font-medium">New plan</span>
+      </button>
+    </div>
+  )
+}
+
+function AllTasksTile({
+  selected,
+  onSelect,
+  totalTasks,
+}: {
+  selected: boolean
+  onSelect: () => void
+  totalTasks: number
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="All tasks"
+      data-testid="all-tasks-tile"
+      className={cn(
+        TILE_SIZE,
+        'rounded-lg border bg-[var(--color-surface-1)] p-3 transition-colors',
+        selected
+          ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
+          : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
+      )}
+    >
+      <button tabIndex={0}
+        type="button"
+        aria-pressed={selected}
+        aria-label="All tasks"
+        onClick={onSelect}
+        className="flex h-full w-full flex-col items-start gap-2 text-left"
+      >
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 text-sm font-medium',
+            selected ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]',
+          )}
+        >
+          <ListChecks size={14} weight={selected ? 'fill' : 'regular'} />
+          All tasks
+        </span>
+        <span className="text-[10px] text-[var(--color-muted)]">
+          {totalTasks} task{totalTasks === 1 ? '' : 's'}
+        </span>
+      </button>
+    </div>
+  )
+}
+
+interface PlanFilterTileProps {
+  plan: Plan
+  agents: Agent[]
+  memberTotal: number
+  memberDone: number
+  selected: boolean
+  onSelect: () => void
+  onEdit: () => void
+  onApprove: () => void
+  onStop: () => void
+  onClear: () => void
+  isApproving: boolean
+  isStopping: boolean
+  isClearing: boolean
+}
+
+function PlanFilterTile({
+  plan,
+  agents,
+  memberTotal,
+  memberDone,
+  selected,
+  onSelect,
+  onEdit,
+  onApprove,
+  onStop,
+  onClear,
+  isApproving,
+  isStopping,
+  isClearing,
+}: PlanFilterTileProps) {
+  const [confirmStop, setConfirmStop] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+
+  const owner = agents.find((a) => a.id === plan.owner_agent_id)
+  const pct = memberTotal > 0 ? Math.round((memberDone / memberTotal) * 100) : 0
+  const canApprove = plan.state === 'draft'
+  const canStop = plan.state === 'running' || plan.state === 'approved'
+  const stateColor = planStateColor(plan.state)
+
+  return (
+    <div
+      role="group"
+      aria-label={plan.title}
+      data-testid={`plan-filter-tile-${plan.id}`}
+      title={plan.title}
+      className={cn(
+        TILE_SIZE,
+        'group relative rounded-lg border border-l-2 border-l-[var(--color-accent)]/40 bg-[var(--color-surface-1)] p-3 transition-colors',
+        selected
+          ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
+          : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
+      )}
+    >
+      {/* Edit + ⋯ actions — SIBLINGS of the select button below, never
+          nested inside it, so they can never trigger onSelect. Hover-
+          revealed on pointer-fine devices, always visible on touch. */}
+      <div
+        className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button tabIndex={0}
+          type="button"
+          aria-label={`Edit plan ${plan.title}`}
+          onClick={onEdit}
+          className="inline-flex items-center justify-center rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+        >
+          <PencilSimple size={13} />
+        </button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button tabIndex={0}
+              type="button"
+              aria-label={`Plan actions for ${plan.title}`}
+              className="inline-flex items-center justify-center rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+            >
+              <DotsThreeVertical size={14} weight="bold" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            {canApprove && (
+              <DropdownMenuItem onClick={onApprove} disabled={isApproving} className="flex items-center gap-2">
+                <Play size={13} weight="fill" />
+                {isApproving ? 'Approving…' : 'Approve'}
+              </DropdownMenuItem>
+            )}
+            {canStop && (
+              <DropdownMenuItem onClick={() => setConfirmStop(true)} disabled={isStopping} className="flex items-center gap-2">
+                <Stop size={13} weight="fill" />
+                {isStopping ? 'Stopping…' : 'Stop'}
+              </DropdownMenuItem>
+            )}
+            {(canApprove || canStop) && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              onClick={() => setConfirmClear(true)}
+              disabled={isClearing || plan.state === 'running'}
+              className={cn('flex items-center gap-2', 'text-[color:var(--color-error)]')}
+            >
+              <Broom size={13} />
+              {isClearing ? 'Clearing…' : 'Clear'}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {/* Select control — the tile's TITLE/body is the filter toggle (Von
+          Restorff: `aria-pressed` + gold ring communicate the active tile). */}
+      <button tabIndex={0}
+        type="button"
+        aria-pressed={selected}
+        aria-label={plan.title}
+        onClick={onSelect}
+        className="flex h-full w-full flex-col items-start gap-2 pr-10 text-left"
+      >
+        <span
+          className="inline-flex flex-shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold leading-tight"
+          style={{ color: stateColor, backgroundColor: `${stateColor}1a`, borderColor: `${stateColor}4d` }}
+        >
+          <PlanStateGlyph state={plan.state} />
+          {planStateLabel(plan.state)}
+        </span>
+
+        <span className="line-clamp-2 text-sm font-medium leading-snug text-[var(--color-secondary)]">
+          {plan.title}
+        </span>
+
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+            role="img"
+            aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}
+          >
+            <Progress value={pct} className="h-1 w-8" />
+            <span className="tabular-nums">
+              {memberDone}/{memberTotal}
+            </span>
+          </span>
+          {owner && (
+            <span
+              title={owner.name}
+              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+            >
+              {owner.name.split('—')[0].trim()}
+            </span>
+          )}
+        </span>
+      </button>
+
+      <AlertDialog open={confirmStop} onOpenChange={setConfirmStop}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop this plan?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This winds down “{plan.title}”'s active loop. In-flight work finishes gracefully; the plan will not resume automatically.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { setConfirmStop(false); onStop() }}
+              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+            >
+              Stop
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmClear} onOpenChange={setConfirmClear}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear this plan?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes “{plan.title}”. Member tasks are not deleted, but lose their plan grouping. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { setConfirmClear(false); onClear() }}
+              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+            >
+              Clear
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}

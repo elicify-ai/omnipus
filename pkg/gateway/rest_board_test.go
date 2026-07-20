@@ -64,7 +64,6 @@ func createTaskViaAPI(t *testing.T, api *restAPI, title, workspaceID string) gen
 // status via the correct legal transition path. Legal paths are:
 //
 //	inbox → next (needs description for the partial-task guard)
-//	inbox → next → planning
 //	inbox → next → in_progress
 //	inbox → next → in_progress → done
 //	inbox → next → in_progress → failed
@@ -87,15 +86,6 @@ func createTaskWithStatusViaAPI(t *testing.T, api *restAPI, title, workspaceID, 
 	if status == "next" {
 		var updated gen.Task
 		require.NoError(t, json.Unmarshal(wNext.Body.Bytes(), &updated))
-		return updated
-	}
-	// next → planning
-	if status == "planning" {
-		w := patchTask(t, api, tsk.Id, `{"status":"planning"}`)
-		require.Equal(t, http.StatusOK, w.Code,
-			"createTaskWithStatusViaAPI: next→planning must return 200; body=%s", w.Body.String())
-		var updated gen.Task
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 		return updated
 	}
 	// next → in_progress

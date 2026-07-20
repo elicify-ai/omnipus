@@ -3075,8 +3075,8 @@ func newTaskEntityFixture(status string) taskEntityFixture {
 }
 
 func TestContract_TaskEntity_AllStatusValues_Validate(t *testing.T) {
-	// Sprint 2 unified 7-state vocabulary.
-	allStatuses := []string{"inbox", "next", "planning", "in_progress", "blocked", "done", "failed"}
+	// Unified 6-state vocabulary (ADR-051 D5 removed `planning`).
+	allStatuses := []string{"inbox", "next", "in_progress", "blocked", "done", "failed"}
 	for _, status := range allStatuses {
 		t.Run(status, func(t *testing.T) {
 			raw, err := json.Marshal(newTaskEntityFixture(status))
@@ -3089,16 +3089,18 @@ func TestContract_TaskEntity_AllStatusValues_Validate(t *testing.T) {
 }
 
 func TestContract_TaskEntity_LegacyStatusValuesRejected(t *testing.T) {
-	// The legacy GTD/workflow vocabularies are gone. Any of these must FAIL —
-	// they are the canary catching a regression that re-introduces a dual enum.
-	legacy := []string{"queued", "assigned", "running", "completed", "active", "waiting"}
+	// The legacy GTD/workflow vocabularies (and, since ADR-051 D5, the removed
+	// `planning` status) are gone. Any of these must FAIL — they are the canary
+	// catching a regression that re-introduces a dual enum or resurrects
+	// `planning`.
+	legacy := []string{"queued", "assigned", "running", "completed", "active", "waiting", "planning"}
 	for _, status := range legacy {
 		t.Run(status, func(t *testing.T) {
 			raw, err := json.Marshal(newTaskEntityFixture(status))
 			require.NoError(t, err)
 			validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
 			assert.Error(t, validationErr,
-				"legacy status=%q must FAIL the unified Task schema (7-state only)", status)
+				"legacy status=%q must FAIL the unified Task schema (6-state only)", status)
 		})
 	}
 }

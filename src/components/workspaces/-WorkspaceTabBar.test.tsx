@@ -76,11 +76,11 @@ beforeEach(() => {
 })
 
 describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
-  it('renders all six workspace tab links in the full strip with correct test ids and hrefs', () => {
+  it('renders all four workspace tab links in the full strip with correct test ids and hrefs', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
-    // All six tabs present — each segment appears at least once (full strip + sr-only strip).
+    // All four tabs present — each segment appears at least once (full strip + sr-only strip).
     for (const tab of WORKSPACE_TABS) {
       const els = screen.getAllByTestId(`workspace-tab-${tab.segment}`)
       expect(els.length).toBeGreaterThan(0)
@@ -95,7 +95,8 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
     mockPathname = '/workspaces/ws-1/board'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
-    // aria-selected=true on board tabs, false on chat tabs (may be multiple from sr-only strip)
+    // aria-selected=true on the Tasks (board segment) tabs, false on chat tabs
+    // (may be multiple from sr-only strip)
     const boardTabs = screen.getAllByTestId('workspace-tab-board')
     boardTabs.forEach((el) => {
       expect(el.getAttribute('aria-selected')).toBe('true')
@@ -119,11 +120,14 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
     expect(WORKSPACE_TABS.map((t) => t.segment)).toEqual([
       'chat',
       'board',
-      'list',
-      'graph',
       'calendar',
       'team',
     ])
+  })
+
+  it('the board segment is labelled "Tasks" (ADR-051 D1 — Board/List/Graph collapse into one screen)', () => {
+    const boardTab = WORKSPACE_TABS.find((t) => t.segment === 'board')
+    expect(boardTab?.label).toBe('Tasks')
   })
 })
 
@@ -139,7 +143,7 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     mockPathname = '/workspaces/ws-1/board'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const switcher = screen.getByTestId('workspace-view-switcher')
-    expect(switcher.textContent).toContain('Board')
+    expect(switcher.textContent).toContain('Tasks')
   })
 
   it('view-switcher aria-label references the active view', () => {
@@ -167,13 +171,13 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     expect(found, `No ancestor div with 'flex @6xl:hidden' found. Container HTML:\n${container.innerHTML}`).toBe(true)
   })
 
-  it('view-switcher menu renders all six view tab options', () => {
+  it('view-switcher menu renders all four view tab options', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     // The DropdownMenuContent stub renders with data-testid="view-switcher-menu"
     const menu = screen.getByTestId('view-switcher-menu')
     expect(menu).toBeInTheDocument()
-    // All six view-tab labels should appear in the menu (plus the settings
+    // All four view-tab labels should appear in the menu (plus the settings
     // entry, covered separately below).
     for (const tab of WORKSPACE_TABS) {
       expect(menu.textContent).toContain(tab.label)
@@ -253,7 +257,7 @@ describe('WorkspaceTabBar — tab test ids', () => {
 
 describe('resolveActiveSegment', () => {
   it('resolves the active segment from a tab pathname', () => {
-    expect(resolveActiveSegment('/workspaces/ws-1/graph', 'ws-1')).toBe('graph')
+    expect(resolveActiveSegment('/workspaces/ws-1/board', 'ws-1')).toBe('board')
     expect(resolveActiveSegment('/workspaces/ws-1/team', 'ws-1')).toBe('team')
   })
 
@@ -264,6 +268,11 @@ describe('resolveActiveSegment', () => {
   it('defaults to chat for an unrelated path or unknown segment', () => {
     expect(resolveActiveSegment('/agents', 'ws-1')).toBe('chat')
     expect(resolveActiveSegment('/workspaces/ws-1/bogus', 'ws-1')).toBe('chat')
+  })
+
+  it('defaults to chat for the retired list/graph segments (ADR-051 D1 — no longer WORKSPACE_TABS entries; their routes redirect to board before this would ever be read live)', () => {
+    expect(resolveActiveSegment('/workspaces/ws-1/list', 'ws-1')).toBe('chat')
+    expect(resolveActiveSegment('/workspaces/ws-1/graph', 'ws-1')).toBe('chat')
   })
 
   it('resolves the settings segment for the workspace settings route', () => {
@@ -284,7 +293,7 @@ describe('WorkspaceTabBar — workspace-name button (settings entry, full strip)
     expect(nameButton).toBeInTheDocument()
     expect(nameButton.getAttribute('role')).toBe('tab')
     // Inside the tablist (not a stray sibling) — and first in DOM order,
-    // ahead of all six view tabs.
+    // ahead of all four view tabs.
     expect(tablist.contains(nameButton)).toBe(true)
     expect(tablist.children[0]).toBe(nameButton)
   })

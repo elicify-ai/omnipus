@@ -42,7 +42,7 @@ func (t *TaskListTool) Parameters() map[string]any {
 			},
 			"status": map[string]any{
 				"type":        "string",
-				"enum":        []string{"inbox", "next", "planning", "in_progress", "blocked", "done", "failed"},
+				"enum":        []string{"inbox", "next", "in_progress", "blocked", "done", "failed"},
 				"description": "Filter by status (optional)",
 			},
 		},
