@@ -52,13 +52,25 @@ const BOARD_SCREEN_READER_INSTRUCTIONS: ScreenReaderInstructions = {
 
 /**
  * Whether a card may be dropped into the target column, mirroring the backend
- * transition guard (pkg/task/store.go::validateTransition):
+ * transition guard:
  *   - `blocked` is a backend-managed side-state — you may never drop INTO it.
  *   - `done` is terminal — you may never drag a card OUT of done.
  *   - `blocked` clears automatically — you may never drag a card OUT of blocked.
+ *   - `failed` + repeating trigger → `in_progress` is also blocked, mirroring
+ *     `pkg/gateway/rest_tasks.go`'s `IsTerminal(status) && Trigger.IsRepeating()`
+ *     PATCH-status guard: re-running a terminal repeating task must go through
+ *     POST /api/v1/tasks/{id}/runs (ADR-050 RD7 "Run now"), not a raw status
+ *     PATCH — the old client-side fresh-run-reset that let PATCH do this was
+ *     retired, and the backend now hard-rejects it with 400. `isRepeating`
+ *     defaults to `false` so callers that don't track a task's trigger (or
+ *     that only ever transition non-repeating tasks) are unaffected.
  * Returns { ok, reason } so the caller can show a graceful message.
  */
-export function canDropTransition(from: TaskStatus, to: TaskStatus): { ok: boolean; reason?: string } {
+export function canDropTransition(
+  from: TaskStatus,
+  to: TaskStatus,
+  isRepeating = false,
+): { ok: boolean; reason?: string } {
   if (from === to) return { ok: true }
   if (to === 'blocked') {
     return { ok: false, reason: 'Blocked is set automatically when a dependency is unmet — you can’t move a task here.' }
@@ -68,6 +80,12 @@ export function canDropTransition(from: TaskStatus, to: TaskStatus): { ok: boole
   }
   if (from === 'blocked') {
     return { ok: false, reason: 'Blocked clears automatically when its dependencies complete.' }
+  }
+  if (from === 'failed' && to === 'in_progress' && isRepeating) {
+    return {
+      ok: false,
+      reason: 'A repeating task’s failed run can’t be restarted by dragging — use Run now on the task’s calendar entry or detail panel instead.',
+    }
   }
   return { ok: true }
 }
@@ -177,7 +195,7 @@ export function BoardView({
     if (!event.over || !dragged) return
     const targetStatus = String(event.over.id) as TaskStatus
     if (targetStatus === dragged.status) return
-    const verdict = canDropTransition(dragged.status, targetStatus)
+    const verdict = canDropTransition(dragged.status, targetStatus, isRecurringTrigger(dragged.trigger))
     if (!verdict.ok) {
       if (verdict.reason) onMoveRejected?.(verdict.reason)
       return
@@ -276,7 +294,7 @@ function BoardColumn({
 
   // Visual feedback: highlight a column the dragged card can legally land in.
   const canAccept = activeTask
-    ? canDropTransition(activeTask.status, config.status).ok
+    ? canDropTransition(activeTask.status, config.status, isRecurringTrigger(activeTask.trigger)).ok
     : true
 
   return (

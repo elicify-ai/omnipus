@@ -2,6 +2,8 @@
 
 **Status:** Draft Rev 1 · **Date:** 2026-07-19 · **Implements:** ADR-050 (grilled)
 **Branch:** `feat/calendar-scheduler-ui` (folded into the calendar recurrence work)
+**Amended:** 2026-07-20 — RD10 reaper retired, RD7/RD8 future Run-now retired; see
+§3.4/§3.5/§4.3/§6/§8 and BDD scenario 4.
 
 Derived from ADR-050 after 4 adversarial grill passes. The governing decision: **runs are a
 purely additive record layer; `Task.status`/`result`/`session_id` semantics are unchanged;
@@ -15,7 +17,8 @@ wire contracts, the exact code seams, the display rules, retention, and the test
 **In:** a `TaskRun` record per execution (append-only, day-partitioned); the calendar reads
 per-occurrence runs; task-detail gains a run-history list; Run-now is per-occurrence
 (recurring) and per-attempt (normal, re-run after failure); age-based retention with a
-floor; a stuck-run reaper.
+floor; a stuck-run reaper REMOVED (2026-07-20 — see §3.5; a liveness-aware reaper is
+deferred, §8).
 
 **Out (explicit):** task **cancellation** (no producer exists today — runs are
 `in_progress → {done, failed}`; a `canceled` value is not introduced); series **pause/
@@ -90,8 +93,10 @@ func (s *Store) ListRuns(taskID string) ([]TaskRun, error)
 func (s *Store) RunsInRange(taskID string, fromMs, toMs int64) ([]TaskRun, error)
 
 // PruneRuns removes day files older than cutoff, ALWAYS retaining the newest day file
-// (floor-of-one). Also closes in_progress runs with no live execution older than staleAfter (reaper).
-func (s *Store) PruneRuns(taskID string, cutoff time.Time, staleAfter time.Duration) error
+// (floor-of-one) and any day file holding an in_progress run, regardless of age.
+// No reaper: an in_progress run is closed only by its own execution or boot
+// reconciliation (§3.5) — never by PruneRuns.
+func (s *Store) PruneRuns(taskID string, cutoff time.Time) error
 ```
 
 `OpenRun` is the missing per-occurrence idempotency guard (ADR-050 RD7; executor-grill
@@ -130,13 +135,25 @@ with the same outcome. Because the close is driven here, **`update_task` /
   the prior failed run is preserved. The ADR-049 fresh-run reset is superseded by this in
   the same change (do not keep both paths).
 
-### 3.5 Retention + reaper (`pkg/session/retention_sweep.go` neighbour)
+**Amended 2026-07-20 (operator decision, D1).** Run-now is rejected for a future occurrence:
+`handleTaskRunNow` (`pkg/gateway/rest_task_runs.go`) returns 400 when `occurrence_ms` is
+present and `occurrence_ms > time.Now().UnixMilli()` ("cannot Run-now a future occurrence;
+it will run at its scheduled time"). API-level gate, not just UI. Task-level Run-now (no
+`occurrence_ms`) and a past/current occurrence (`occurrence_ms <= now`) are unaffected.
 
-Add runs to the existing retention sweep pass: for each task, `PruneRuns(cutoff,
-staleAfter)`. Day-partitioned mtime deletion applies unmodified **except** the newest day
-file per task is always retained (floor-of-one, ADR-050 RD9). The reaper closes
-`in_progress` runs with no matching live execution older than `staleAfter` to `failed`
-(MED-#M2). **No new goroutine/scheduler** — piggyback the session-retention cadence.
+### 3.5 Retention (`pkg/session/retention_sweep.go` neighbour)
+
+Runs join the existing retention sweep: for each task, `PruneRuns(cutoff)` (signature
+dropped `staleAfter` — no reaper). Day-partitioned mtime deletion applies unmodified
+**except** (a) the newest day file per task is always retained (floor-of-one, ADR-050 RD9),
+and (b) a day file holding any `in_progress` run is never deleted regardless of age (a run
+stays `in_progress` until its own execution closes it; operator decision 2026-07-20).
+
+**No stuck-run reaper.** An `in_progress` run is closed only by (a) its own execution
+completing, or (b) boot reconciliation on a crashed gateway (`reconcileStuckTasks` →
+`reconcileStuckTaskRuns`, `pkg/gateway/rest_tasks.go`) best-effort closing a reset task's
+open runs to `failed`, bounding the orphaned-run gap to "next restart". No new goroutine. A
+liveness-aware reaper is a deferred future feature (§8).
 
 ### 3.6 New REST endpoint
 
@@ -198,7 +215,12 @@ run since the overlay carries only `has_result`). States:
 
 - occurrence **with** a run → its status badge, result, Open-in-Chat; **Run now** re-opens a
   run for that occurrence.
-- **future** occurrence, no run → only **Run now** (no badge, no result).
+- **Amended 2026-07-20.** A **future** occurrence (`occurrence_ms > now`), no run → shows
+  only its "Scheduled" status text — **no badge, no Run-now button**. Rationale: firing
+  early doesn't cancel the natural scheduled fire (the scheduler is RRULE/`Task.status`-
+  driven, unaware of `TaskRun`s), so it would double-execute. Run-now for an occurrence is
+  offered only when `occurrence_ms <= now`. `TaskRunStatusField` takes an injected `now`
+  prop for deterministic tests. Enforced server-side too (§3.4).
 - **bucket** click → a mini-list of that day's runs (not a single-occurrence view).
 - Always show the **run-history list** (`GET /tasks/{id}/runs`) so history survives a
   schedule edit (calendar-grill B2).
@@ -221,9 +243,12 @@ excluded from Board/List (ADR-049 D3).
    Jul-20's.
 3. **Re-run a failed once-task.** Given a `once` task that failed, When I Run-now, Then a new
    run starts, the prior failed run remains in the Runs list, and both chats are openable.
-4. **Run-now a future occurrence.** Given a future scheduled occurrence, When I Run-now, Then
-   it materializes a run for that occurrence (chip → In progress → Done/Failed) and does not
-   disturb other occurrences.
+4. **Run-now is unavailable for a future occurrence.** Given a future scheduled occurrence
+   with no run, When I open its slide-over, Then it shows only its "Scheduled" status — no
+   badge, no result, no Run-now button — and a direct `POST /tasks/{id}/runs {occurrence_ms}`
+   for that future instant is rejected 400. (Amended 2026-07-20, D1 — supersedes the original
+   "Run-now a future occurrence materializes a run ahead of schedule", which is retired: it
+   would double-execute.)
 5. **Double-fire safety.** Given a scheduler fire and a Run-now for the same occurrence race,
    Then exactly one run is opened (OpenRun idempotency), not two.
 6. **Schedule edit preserves history.** Given a daily series with 10 days of runs, When I
@@ -244,7 +269,8 @@ excluded from Board/List (ADR-049 D3).
 
 - `pkg/task`: `OpenRun` idempotency (same key → created=false); `CloseRun` fold; `ListRuns`/
   `RunsInRange` fold-last-wins across day files; day-partition assignment; `PruneRuns` age +
-  floor-of-one + reaper; concurrency (parallel OpenRun same key → one run).
+  floor-of-one + open-run-day-file skip (no reaper — 2026-07-20); concurrency (parallel
+  OpenRun same key → one run).
 - `pkg/agent`: dispatch threads occurrence_ms; run opened at claim, closed at completion for
   both marker and `update_task` paths; mirror still cycles (regression: terminal-status hooks
   still fire); scheduled vs manual `kind`.
@@ -252,8 +278,8 @@ excluded from Board/List (ADR-049 D3).
   `run_counts`; overlay respects the 500 cap; Run-now-occurrence opens a run; contract_test
   (TaskRun JSON schema-valid).
 - Frontend (vitest): four-state chip rule (with-run / scheduled / no-record / bucket);
-  occurrenceMs threading; slide-over run re-pointing incl. future-occurrence "Run now only";
-  Runs list; worst-wins glyph.
+  occurrenceMs threading; slide-over run re-pointing incl. future-occurrence "Scheduled, no
+  Run-now" (2026-07-20 — supersedes "Run now only"); Runs list; worst-wins glyph.
 - Contract: `make verify-contracts` after `TaskRun` + overlay + WS frame regen.
 
 ## 7. Traceability
@@ -269,3 +295,7 @@ findings → resolution table in ADR-050 §"Grill findings → resolution".
   transition, self-heals next fire — accepted, no tolerance window (HIGH-#H3).
 - `blocked_by` a recurring task: behaviour **unchanged** from today (the mirror still cycles,
   so today's flaky transient-unblock is neither fixed nor worsened here).
+- **(2026-07-20)** The stuck-run reaper is removed; a liveness-aware reaper is a deferred
+  future feature.
+- **(2026-07-20)** `RunsInRange`'s "future Run-now lands in an old day file" edge case is now
+  moot since Run-now is rejected for any future `occurrence_ms`.

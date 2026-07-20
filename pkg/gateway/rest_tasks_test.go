@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // putTaskTodos sends PUT /api/v1/tasks/{id}/todos with the given bare-array body
@@ -496,4 +497,101 @@ func TestValidateTaskAgentID_EmptyAgentID_StillSkipsCheck(t *testing.T) {
 	api := &restAPI{}
 	err := api.validateTaskAgentID("", "some-workspace")
 	require.NoError(t, err, "an empty agent_id has nothing to validate and must remain a no-op")
+}
+
+// ── reconcileStuckTasks: orphaned TaskRun closure (ADR-050 RD10 / MED-#M2) ──
+//
+// ADR-050 removed the stuck-run reaper (operator decision 2026-07-20: no
+// liveness-aware background sweep — "a run stays in_progress until closed").
+// That leaves reconcileStuckTasks's own boot-time reset as the ONLY place an
+// abandoned run for a crashed task can ever be closed; without also closing
+// the TaskRun, it would stay in_progress forever, even across further
+// restarts, diverging from the just-recovered (failed) Task.
+
+// TestReconcileStuckTasks_ClosesOrphanedTaskRun proves that when
+// reconcileStuckTasks resets a stuck in_progress task to failed, it also
+// closes that task's own open TaskRun to failed — bounding the orphaned-run
+// gap to "next restart" instead of leaving it in_progress permanently.
+//
+// BDD:
+//
+//	Given a task file with status="in_progress" that has an OPEN TaskRun,
+//	When reconcileStuckTasks() is called,
+//	Then the task is reset to failed AND its open run is closed to failed
+//	  with an "abandoned: gateway restarted mid-execution" result.
+//	Given a second in_progress task whose run is ALREADY closed (done),
+//	Then reconcile leaves that already-terminal run untouched (no double-close).
+func TestReconcileStuckTasks_ClosesOrphanedTaskRun(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Task A: genuinely stuck — an in_progress task with an OPEN run, as a
+	// crashed dispatch (OpenRun called, never CloseRun'd) would leave it.
+	// createTaskWithStatusViaAPI (rest_board_test.go) drives the legal
+	// inbox→next→in_progress transition path — a direct inbox→in_progress
+	// PATCH is not itself a legal transition.
+	taskA := createTaskWithStatusViaAPI(t, api, "ReconcileOrphanRunTask", "", "in_progress")
+
+	openRun, created, err := api.taskStore.OpenRun(taskA.Id, nil, task.RunKindManual, "sess-orphan")
+	require.NoError(t, err)
+	require.True(t, created)
+
+	// Task B: also in_progress, but its run was already closed BEFORE the
+	// crash (e.g. the completion handler raced the crash and won) — reconcile
+	// must not attempt to close it a second time (CloseRun would error on an
+	// already-terminal run; this proves reconcile doesn't blindly force one).
+	taskB := createTaskWithStatusViaAPI(t, api, "ReconcileClosedRunTask", "", "in_progress")
+
+	closedRun, createdB, err := api.taskStore.OpenRun(taskB.Id, nil, task.RunKindManual, "sess-already-done")
+	require.NoError(t, err)
+	require.True(t, createdB)
+	require.NoError(t, api.taskStore.CloseRun(taskB.Id, closedRun.RunID, task.StatusDone, "finished before the crash"))
+
+	api.reconcileStuckTasks()
+
+	// Task A's Task row: reset to failed (existing reconcileStuckTasks behavior).
+	gotA, err := api.taskStore.Get(taskA.Id)
+	require.NoError(t, err)
+	assert.Equal(t, task.StatusFailed, gotA.Status)
+
+	// Task A's run: the NEW behavior under test — the previously-open run is
+	// now closed to failed with a diagnostic result, not stranded in_progress.
+	runsA, err := api.taskStore.ListRuns(taskA.Id)
+	require.NoError(t, err)
+	require.Len(t, runsA, 1)
+	assert.Equal(t, openRun.RunID, runsA[0].RunID)
+	assert.Equal(t, task.StatusFailed, runsA[0].Status,
+		"reconcile must close the orphaned open run to failed, not leave it in_progress forever")
+	assert.False(t, runsA[0].IsOpen(), "the orphaned run must no longer be open after reconcile")
+	assert.Equal(t, "abandoned: gateway restarted mid-execution", runsA[0].Result)
+	require.NotNil(t, runsA[0].EndedAt, "a closed run must carry ended_at")
+
+	// Task B's run: already terminal before reconcile ran — untouched, not
+	// double-closed or overwritten.
+	runsB, err := api.taskStore.ListRuns(taskB.Id)
+	require.NoError(t, err)
+	require.Len(t, runsB, 1)
+	assert.Equal(t, task.StatusDone, runsB[0].Status,
+		"an already-closed run must not be touched by reconcile")
+	assert.Equal(t, "finished before the crash", runsB[0].Result)
+}
+
+// TestReconcileStuckTasks_TaskWithNoRuns_IsNoOp proves reconcile does not
+// error or panic on a stuck task that has zero recorded runs (a pre-ADR-050
+// task that was never dispatched through OpenRun, or one whose runs
+// directory was pruned) — reconcileStuckTaskRuns's ListRuns call folds to an
+// empty slice and there is nothing to close.
+func TestReconcileStuckTasks_TaskWithNoRuns_IsNoOp(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	tsk := createTaskWithStatusViaAPI(t, api, "ReconcileNoRunsTask", "", "in_progress")
+
+	require.NotPanics(t, func() { api.reconcileStuckTasks() })
+
+	got, err := api.taskStore.Get(tsk.Id)
+	require.NoError(t, err)
+	assert.Equal(t, task.StatusFailed, got.Status, "the task itself must still be reset to failed")
+
+	runs, err := api.taskStore.ListRuns(tsk.Id)
+	require.NoError(t, err)
+	assert.Empty(t, runs, "a task with zero runs stays with zero runs after reconcile")
 }

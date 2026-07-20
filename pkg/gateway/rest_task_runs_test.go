@@ -160,6 +160,64 @@ func TestTaskRunsEndpoint(t *testing.T) {
 		api.HandleTasks(w, r)
 		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
 	})
+
+	// D1 (operator decision 2026-07-20, TaskRunStatusField.tsx): Run-now must
+	// never be allowed for a FUTURE occurrence — running it early would
+	// double-execute the occurrence once at the manual instant and again at
+	// its naturally-scheduled fire, since the scheduler is
+	// RRULE/Task.status-driven and has no awareness of TaskRuns. The React
+	// gate (`occurrence.ms > now`) only protects the calendar UI; these two
+	// subtests prove handleTaskRunNow enforces the SAME threshold at the API
+	// boundary, so a direct POST cannot bypass it. Both use
+	// newTestRestAPIWithHome (nil taskExecutor) so the two outcomes are
+	// unambiguous: 400 means the D1 gate itself rejected the request BEFORE
+	// ever reaching the executor; 503 means the request cleared D1 and was
+	// only then blocked by the (intentionally) missing executor — proving D1
+	// let a past/current occurrence THROUGH rather than also rejecting it.
+	t.Run("future occurrence_ms is rejected 400 by the D1 gate and opens no run", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		tsk := createTaskViaAPI(t, api, "RunsFutureOccTask", "")
+
+		futureMs := time.Now().Add(24 * time.Hour).UnixMilli()
+		reqBody, err := json.Marshal(map[string]any{"occurrence_ms": futureMs})
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+tsk.Id+"/runs", bytes.NewReader(reqBody))
+		r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
+		api.HandleTasks(w, r)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+
+		runs, err := api.taskStore.ListRuns(tsk.Id)
+		require.NoError(t, err)
+		assert.Empty(t, runs, "a D1-rejected future-occurrence Run-now must not open a TaskRun")
+	})
+
+	t.Run("past occurrence_ms clears the D1 gate (falls through to the 503 executor-unavailable path)", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		tsk := createTaskViaAPI(t, api, "RunsPastOccTask", "")
+
+		pastMs := time.Now().Add(-24 * time.Hour).UnixMilli()
+		reqBody, err := json.Marshal(map[string]any{"occurrence_ms": pastMs})
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+tsk.Id+"/runs", bytes.NewReader(reqBody))
+		r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
+		api.HandleTasks(w, r)
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
+	})
+
+	t.Run("omitted occurrence_ms (task-level Run-now) clears the D1 gate (falls through to the 503 executor-unavailable path)", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		tsk := createTaskViaAPI(t, api, "RunsOmittedOccTask", "")
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+tsk.Id+"/runs", nil)
+		r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
+		api.HandleTasks(w, r)
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
+	})
 }
 
 // TestTaskRunNow_LiveExecutor_ViaRealServer is the regression guard for the
@@ -201,7 +259,14 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	t.Run("occurrence run: POST {occurrence_ms:N} returns 202 and reaches a terminal status", func(t *testing.T) {
-		occMs := int64(1_784_620_800_000)
+		// D1 (operator decision 2026-07-20, TaskRunStatusField.tsx /
+		// handleTaskRunNow's own D1 gate): Run-now rejects a FUTURE
+		// occurrence_ms with 400. This subtest exercises the ALLOWED path
+		// (occurrence_ms in the past), so occMs is computed relative to
+		// "now" rather than a fixed literal — the original hardcoded
+		// constant (2026-07-19T16:00:00Z) silently drifted into the future
+		// as real time passed it, which would now 400 instead of 202.
+		occMs := time.Now().Add(-1 * time.Hour).UnixMilli()
 		reqBody, err := json.Marshal(map[string]any{"occurrence_ms": occMs})
 		require.NoError(t, err)
 

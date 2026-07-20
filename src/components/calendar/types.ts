@@ -128,7 +128,12 @@ export type StatusIconKey =
  * `CalendarScreen.handleEventClick` → `CalendarEventSlideOver`'s
  * `selectedOccurrenceMs`) plus the matched run's `runId`/`sessionId`/
  * `hasResult` when one exists. `task-occurrence-agg` carries `dayStartMs`
- * (the bucket's own join key) instead.
+ * (the bucket's own join key) instead, plus `dayEndMs` — the wire's
+ * `DayBucket.day_end_ms` (delta-review HIGH fix), the server's own DST-aware
+ * civil-next-midnight boundary for this bucket's window, carried through
+ * verbatim so the client never recomputes it with a fixed-24h assumption
+ * that would diverge from the server's `run_counts` tally window (and the
+ * drilled-in run list) on a DST-transition day.
  */
 export type CalendarEventExtProps =
   | { kind: 'task-due'; taskId: string; status: TaskStatus; icon: StatusIconKey }
@@ -156,6 +161,12 @@ export type CalendarEventExtProps =
       tooltip: string
       /** The bucket's own `day_start_ms` join key (distinct from an individual `occurrenceMs`). */
       dayStartMs: number
+      /**
+       * The bucket's own `day_end_ms` (exclusive) — the server's DST-aware
+       * civil-next-midnight boundary, threaded verbatim (delta-review HIGH
+       * fix) so `CalendarScreen` never recomputes it as a fixed 24h span.
+       */
+      dayEndMs: number
     }
   | { kind: 'task-occurrence-more'; taskId: string; status: TaskStatus; icon: 'Clock'; tooltip: string }
 

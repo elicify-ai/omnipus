@@ -134,6 +134,21 @@ func (a *restAPI) handleTaskRunNow(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
+	// D1 (operator decision 2026-07-20, TaskRunStatusField.tsx): Run-now is
+	// NEVER allowed for a FUTURE occurrence — running it early would still
+	// materialize a run now AND the scheduler would fire the same occurrence
+	// again at its real instant (the scheduler is RRULE/Task.status-driven
+	// and has no awareness of TaskRuns), double-executing it. The React
+	// gate (`occurrence.ms > now`) only protects the calendar UI; a direct
+	// POST must be rejected at the API boundary too. Task-level Run-now
+	// (occurrence_ms omitted) and a past/current occurrence (<= now) are
+	// unaffected — mirrors the client's own `occurrenceMs! > now` threshold
+	// (strictly greater-than, so "now" itself is still allowed).
+	if req.OccurrenceMs != nil && *req.OccurrenceMs > time.Now().UnixMilli() {
+		jsonErr(w, http.StatusBadRequest, "cannot Run-now a future occurrence; it will run at its scheduled time")
+		return
+	}
+
 	if a.taskExecutor == nil {
 		slog.Warn("rest: run now: taskExecutor is nil (gateway degraded)", "task_id", id)
 		jsonErr(w, http.StatusServiceUnavailable, "task executor unavailable")

@@ -1354,6 +1354,21 @@ var errTaskAgentLoopUnavailable = errors.New("task: agent loop not initialized; 
 // reconcileStuckTasks resets any task left `in_progress` by a crashed/abandoned
 // previous gateway process to `failed`, so a crash does not strand a task in a
 // running state forever. Idempotent; safe when the tasks dir is absent.
+//
+// ADR-050 RD10 / task-run-history-spec.md §3.5 removed the stuck-run reaper
+// (operator decision 2026-07-20: "a run stays in_progress until closed" — no
+// liveness-aware background sweep). That leaves a gap this boot reconciler
+// must close: a TaskRun opened by the crashed process (task.Store.OpenRun,
+// pkg/task/run_store.go) is never told the task it belongs to was reset here,
+// so — with no reaper — it would stay `in_progress` FOREVER, even across
+// further restarts, diverging from the just-recovered Task. For each task
+// this function resets to failed, it also best-effort closes that task's own
+// open TaskRun(s) to `failed`, bounding the orphaned-run gap to "next
+// restart" (MED-#M2 in the ADR). This does not touch pkg/task's store logic
+// (CloseRun already refuses to double-close or accept a non-terminal
+// status) — it only calls the existing store API, mirroring how this
+// function already only calls taskStore.Update rather than writing task
+// files directly.
 func (a *restAPI) reconcileStuckTasks() {
 	tasks, err := a.taskStore.List(task.Filter{Status: task.StatusInProgress})
 	if err != nil {
@@ -1374,9 +1389,38 @@ func (a *restAPI) reconcileStuckTasks() {
 			continue
 		}
 		reset++
+		a.reconcileStuckTaskRuns(t.ID)
 	}
 	if reset > 0 {
 		slog.Info("rest: reconcile stuck tasks: reset in_progress→failed on boot", "count", reset)
+	}
+}
+
+// reconcileStuckTaskRuns closes every currently-open (in_progress) TaskRun
+// belonging to taskID to `failed`, called immediately after reconcileStuckTasks
+// resets that same task's Task.status. Best-effort and non-fatal: a task with
+// zero runs (pre-ADR-050 history, or a task that was never dispatched through
+// OpenRun) is not an error, and any store failure is logged at Warn rather
+// than aborting the boot reconciliation pass for the remaining stuck tasks.
+func (a *restAPI) reconcileStuckTaskRuns(taskID string) {
+	runs, err := a.taskStore.ListRuns(taskID)
+	if err != nil {
+		slog.Warn("rest: reconcile stuck tasks: list runs failed, leaving any open run untouched", "task_id", taskID, "error", err)
+		return
+	}
+	closed := 0
+	for _, run := range runs {
+		if !run.IsOpen() {
+			continue
+		}
+		if cErr := a.taskStore.CloseRun(taskID, run.RunID, task.StatusFailed, "abandoned: gateway restarted mid-execution"); cErr != nil {
+			slog.Warn("rest: reconcile stuck tasks: close orphaned run failed", "task_id", taskID, "run_id", run.RunID, "error", cErr)
+			continue
+		}
+		closed++
+	}
+	if closed > 0 {
+		slog.Info("rest: reconcile stuck tasks: closed orphaned in_progress run(s) on boot", "task_id", taskID, "count", closed)
 	}
 }
 

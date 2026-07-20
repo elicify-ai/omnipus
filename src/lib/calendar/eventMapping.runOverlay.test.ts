@@ -218,6 +218,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
       day_buckets: [
         {
           day_start_ms: dayStart,
+          day_end_ms: dayStart + 86_400_000,
           count: 40,
           first_ms: dayStart,
           interval_ms: null,
@@ -245,6 +246,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
       day_buckets: [
         {
           day_start_ms: dayStart,
+          day_end_ms: dayStart + 86_400_000,
           count: 10,
           first_ms: dayStart,
           interval_ms: null,
@@ -264,6 +266,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
       day_buckets: [
         {
           day_start_ms: dayStart,
+          day_end_ms: dayStart + 86_400_000,
           count: 5,
           first_ms: dayStart,
           interval_ms: null,
@@ -283,6 +286,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
       day_buckets: [
         {
           day_start_ms: dayStart,
+          day_end_ms: dayStart + 86_400_000,
           count: 4,
           first_ms: dayStart,
           interval_ms: null,
@@ -305,6 +309,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
       day_buckets: [
         {
           day_start_ms: dayStart,
+          day_end_ms: dayStart + 86_400_000,
           count: 10,
           first_ms: dayStart,
           interval_ms: null,
@@ -338,7 +343,9 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
     const dayStart = new Date(2026, 6, 25).getTime() // after NOW (2026-07-15)
     const firstMs = new Date(2026, 6, 25, 9, 0, 0).getTime()
     const set = makeOccurrenceSet({
-      day_buckets: [{ day_start_ms: dayStart, count: 48, first_ms: firstMs, interval_ms: 1_800_000 }],
+      day_buckets: [
+        { day_start_ms: dayStart, day_end_ms: dayStart + 86_400_000, count: 48, first_ms: firstMs, interval_ms: 1_800_000 },
+      ],
     })
 
     const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
@@ -355,7 +362,7 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
   it('a bucket day exactly equal to now is treated as scheduled (>= boundary)', () => {
     const task = makeTask()
     const set = makeOccurrenceSet({
-      day_buckets: [{ day_start_ms: NOW, count: 5, first_ms: NOW, interval_ms: null }],
+      day_buckets: [{ day_start_ms: NOW, day_end_ms: NOW + 86_400_000, count: 5, first_ms: NOW, interval_ms: null }],
     })
     const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('scheduled')
@@ -366,7 +373,9 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
     const dayStart = new Date(2026, 6, 10).getTime() // before NOW (2026-07-15)
     const firstMs = new Date(2026, 6, 10, 9, 0, 0).getTime()
     const set = makeOccurrenceSet({
-      day_buckets: [{ day_start_ms: dayStart, count: 12, first_ms: firstMs, interval_ms: null }],
+      day_buckets: [
+        { day_start_ms: dayStart, day_end_ms: dayStart + 86_400_000, count: 12, first_ms: firstMs, interval_ms: null },
+      ],
     })
 
     const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
@@ -466,7 +475,9 @@ describe('occurrenceMs / dayStartMs threading', () => {
     const task = makeTask()
     const dayStart = new Date(2026, 6, 26).getTime()
     const set = makeOccurrenceSet({
-      day_buckets: [{ day_start_ms: dayStart, count: 2, first_ms: dayStart, interval_ms: null }],
+      day_buckets: [
+        { day_start_ms: dayStart, day_end_ms: dayStart + 86_400_000, count: 2, first_ms: dayStart, interval_ms: null },
+      ],
     })
     const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
     expect((events[0].extendedProps as { dayStartMs: number }).dayStartMs).toBe(dayStart)

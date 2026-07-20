@@ -1066,6 +1066,7 @@ func TestContract_TaskOccurrenceSet_NilOccurrencesMsRejected(t *testing.T) {
 		TaskId: "task-1",
 		DayBuckets: []struct {
 			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
 			DayStartMs int64  `json:"day_start_ms"`
 			FirstMs    int64  `json:"first_ms"`
 			IntervalMs *int64 `json:"interval_ms"`

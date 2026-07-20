@@ -2664,6 +2664,7 @@ func FixtureTaskOccurrenceSet_Populated() TaskOccurrenceSet {
 		OccurrencesMs: []int64{1784620800000, 1785225600000},
 		DayBuckets: []struct {
 			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
 			DayStartMs int64  `json:"day_start_ms"`
 			FirstMs    int64  `json:"first_ms"`
 			IntervalMs *int64 `json:"interval_ms"`
@@ -2674,7 +2675,7 @@ func FixtureTaskOccurrenceSet_Populated() TaskOccurrenceSet {
 				Scheduled  int32 `json:"scheduled"`
 			} `json:"run_counts,omitempty"`
 		}{
-			{Count: 48, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval},
+			{Count: 48, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval},
 		},
 		Truncated: false,
 	}
@@ -2691,6 +2692,7 @@ func FixtureTaskOccurrenceSet_BucketsOnly() TaskOccurrenceSet {
 		OccurrencesMs: []int64{},
 		DayBuckets: []struct {
 			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
 			DayStartMs int64  `json:"day_start_ms"`
 			FirstMs    int64  `json:"first_ms"`
 			IntervalMs *int64 `json:"interval_ms"`
@@ -2701,7 +2703,7 @@ func FixtureTaskOccurrenceSet_BucketsOnly() TaskOccurrenceSet {
 				Scheduled  int32 `json:"scheduled"`
 			} `json:"run_counts,omitempty"`
 		}{
-			{Count: 1440, DayStartMs: 1784592000000, FirstMs: 1784592000000, IntervalMs: &interval},
+			{Count: 1440, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784592000000, IntervalMs: &interval},
 		},
 		Truncated: false,
 	}
@@ -2716,6 +2718,7 @@ func FixtureTaskOccurrenceSet_OccurrencesOnly() TaskOccurrenceSet {
 		OccurrencesMs: []int64{1784620800000, 1784624400000, 1784628000000},
 		DayBuckets: []struct {
 			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
 			DayStartMs int64  `json:"day_start_ms"`
 			FirstMs    int64  `json:"first_ms"`
 			IntervalMs *int64 `json:"interval_ms"`
@@ -2742,6 +2745,7 @@ func FixtureTaskOccurrenceSet_WithRunOverlay() TaskOccurrenceSet {
 		OccurrencesMs: []int64{1784620800000, 1784624400000},
 		DayBuckets: []struct {
 			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
 			DayStartMs int64  `json:"day_start_ms"`
 			FirstMs    int64  `json:"first_ms"`
 			IntervalMs *int64 `json:"interval_ms"`
@@ -2753,7 +2757,7 @@ func FixtureTaskOccurrenceSet_WithRunOverlay() TaskOccurrenceSet {
 			} `json:"run_counts,omitempty"`
 		}{
 			{
-				Count: 48, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval,
+				Count: 48, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval,
 				RunCounts: &struct {
 					Done       int32 `json:"done"`
 					Failed     int32 `json:"failed"`

@@ -283,7 +283,7 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
     expect(capturedEventSlideOver.selectedBucketDayRange).toBeNull()
   })
 
-  it('clicking an aggregated bucket chip opens the slide-over WITHOUT a selectedOccurrenceMs, WITH a selectedBucketDayRange', async () => {
+  it('clicking an aggregated bucket chip opens the slide-over WITHOUT a selectedOccurrenceMs, WITH a selectedBucketDayRange sourced verbatim from the wire (delta-review HIGH fix)', async () => {
     // A bucket's day_start_ms is not a real occurrence instant and would
     // never exact-match a run's occurrence_ms in the slide-over — passing it
     // as selectedOccurrenceMs would silently hide the Result/Open-in-Chat
@@ -296,6 +296,12 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
     await waitFor(() => expect(capturedProps.events.length).toBeGreaterThan(0))
 
     const dayStartMs = 1_784_592_000_000
+    // Deliberately a 23h span (NOT dayStartMs + 24h) — simulates the server's
+    // DST-aware `day_end_ms` on a spring-forward transition day. If
+    // CalendarScreen still recomputed a fixed dayStartMs+24h span instead of
+    // reading `ext.dayEndMs` off the wire, this assertion would fail —
+    // proving the client no longer recomputes the boundary itself.
+    const dayEndMs = dayStartMs + 23 * 60 * 60 * 1000
     const ext: CalendarEventExtProps = {
       kind: 'task-occurrence-agg',
       taskId: 'task-1',
@@ -303,6 +309,7 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
       icon: 'CheckCircle',
       tooltip: '3 done',
       dayStartMs,
+      dayEndMs,
     }
     await act(async () => {
       capturedProps.onEventClick!({
@@ -316,7 +323,7 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
     expect(capturedEventSlideOver.selectedOccurrenceMs).toBeUndefined()
     expect(capturedEventSlideOver.selectedBucketDayRange).toEqual({
       startMs: dayStartMs,
-      endMs: dayStartMs + 24 * 60 * 60 * 1000,
+      endMs: dayEndMs,
     })
   })
 

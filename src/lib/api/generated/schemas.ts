@@ -616,6 +616,7 @@ type TaskOccurrenceSet = {
 };
 type DayBucket = {
   day_start_ms: number;
+  day_end_ms: number;
   count: number;
   first_ms: number;
   interval_ms: number | null;
@@ -2096,6 +2097,7 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
 });
 export const DayBucket: z.ZodType<DayBucket> = z.object({
   day_start_ms: z.number().int(),
+  day_end_ms: z.number().int(),
   count: z.number().int(),
   first_ms: z.number().int(),
   interval_ms: z.number().int().nullable(),

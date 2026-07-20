@@ -539,6 +539,7 @@ export function mapToCalendarEvents(
               icon: chip.style.icon,
               tooltip: chip.tooltip,
               dayStartMs: bucket.day_start_ms,
+              dayEndMs: bucket.day_end_ms,
             },
             false,
           ),

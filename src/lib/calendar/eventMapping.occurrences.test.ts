@@ -133,7 +133,9 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
     const nowMs = new Date(2026, 4, 1).getTime() // before dayStart
     const set = makeOccurrenceSet({
       task_id: 'task-2',
-      day_buckets: [{ day_start_ms: dayStart, count: 48, first_ms: firstMs, interval_ms: 1_800_000 }],
+      day_buckets: [
+        { day_start_ms: dayStart, day_end_ms: dayStart + 86_400_000, count: 48, first_ms: firstMs, interval_ms: 1_800_000 },
+      ],
     })
 
     const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
@@ -161,7 +163,9 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
     const nowMs = new Date(2026, 4, 1).getTime() // before dayStart — keeps the "first at" tooltip branch
     const set = makeOccurrenceSet({
       task_id: 'task-3',
-      day_buckets: [{ day_start_ms: dayStart, count: 4, first_ms: firstMs, interval_ms: null }],
+      day_buckets: [
+        { day_start_ms: dayStart, day_end_ms: dayStart + 86_400_000, count: 4, first_ms: firstMs, interval_ms: null },
+      ],
     })
 
     const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
@@ -237,7 +241,15 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
     const set = makeOccurrenceSet({
       task_id: 'task-5',
       occurrences_ms: [earlyInstant],
-      day_buckets: [{ day_start_ms: laterBucketDay, count: 10, first_ms: laterBucketDay, interval_ms: null }],
+      day_buckets: [
+        {
+          day_start_ms: laterBucketDay,
+          day_end_ms: laterBucketDay + 86_400_000,
+          count: 10,
+          first_ms: laterBucketDay,
+          interval_ms: null,
+        },
+      ],
       truncated: true,
     })
 
@@ -300,7 +312,7 @@ describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
     const c = 3000
     const set = makeOccurrenceSet({
       occurrences_ms: [a, c],
-      day_buckets: [{ day_start_ms: b, count: 1, first_ms: b, interval_ms: null }],
+      day_buckets: [{ day_start_ms: b, day_end_ms: b + 86_400_000, count: 1, first_ms: b, interval_ms: null }],
     })
     expect(lastCoveredOccurrenceDayMs(set)).toBe(b)
   })

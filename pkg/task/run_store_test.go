@@ -7,10 +7,11 @@
 // idempotency, CloseRun fold semantics (including H9's truncate-not-reject
 // oversized-result behavior), ListRuns/RunsInRange fold-last-wins across
 // multiple day files, day-partition assignment, PruneRuns age +
-// floor-of-one retention, and OpenRun's concurrency guarantee. There is no
-// stuck-run reaper (operator decision 2026-07-20, superseding ADR-050
-// RD10's original design) — a run stays in_progress until its own execution
-// closes it, so no reaper tests exist here.
+// floor-of-one retention plus its global-fold-aware open-run file
+// protection (delta-review Fix 1, 2026-07-20), and OpenRun's concurrency
+// guarantee. There is no stuck-run reaper (operator decision 2026-07-20,
+// superseding ADR-050 RD10's original design) — a run stays in_progress
+// until its own execution closes it, so no reaper tests exist here.
 //
 // Reuses newStore/ptr/mustCreate helpers already defined in store_test.go /
 // coverage_test.go (same package).
@@ -524,6 +525,167 @@ func TestPruneRuns_OpenRunSurvivesAgeCutoff(t *testing.T) {
 	require.Len(t, runs, 1)
 	assert.Equal(t, StatusInProgress, runs[0].Status, "PruneRuns must never close an open run")
 	assert.Nil(t, runs[0].EndedAt)
+}
+
+// TestPruneRuns_StaleDayFileWithOpenRunIsNotDeleted is the regression for
+// delta-review Fix 1 (2026-07-20): with no stuck-run reaper, a day file that
+// is the ONLY surviving record of a still-open run must never be deleted
+// purely on age — doing so would make an orphaned in_progress run vanish
+// from history entirely (worse than the intended "stays in_progress
+// forever"). A stale file whose only run is already closed has no such
+// record to protect and is deleted normally by the ordinary age+floor-of-one
+// rule.
+func TestPruneRuns_StaleDayFileWithOpenRunIsNotDeleted(t *testing.T) {
+	s := newStore(t)
+	taskID := "task-1"
+	dir := filepath.Join(s.Dir(), taskID, "runs")
+
+	oldClosedDay := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	oldOpenDay := time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC)
+	recentDay := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	closedRun := TaskRun{
+		RunID:     "closed-run",
+		TaskID:    taskID,
+		Status:    StatusDone,
+		Result:    "ok",
+		SessionID: "s-closed",
+		Kind:      RunKindManual,
+		StartedAt: oldClosedDay.Format(time.RFC3339),
+	}
+	closedEndedAt := oldClosedDay.Format(time.RFC3339)
+	closedRun.EndedAt = &closedEndedAt
+	writeRunRecordAt(t, s, taskID, closedRun, oldClosedDay)
+
+	// This run's open record is its ONLY record anywhere — no close record
+	// exists in any file, simulating a crashed/orphaned execution with no
+	// reaper to close it.
+	openRun := TaskRun{
+		RunID:     "orphaned-open-run",
+		TaskID:    taskID,
+		Status:    StatusInProgress,
+		SessionID: "s-open",
+		Kind:      RunKindScheduled,
+		StartedAt: oldOpenDay.Format(time.RFC3339),
+	}
+	writeRunRecordAt(t, s, taskID, openRun, oldOpenDay)
+
+	recentRun := TaskRun{
+		RunID:     "recent-run",
+		TaskID:    taskID,
+		Status:    StatusDone,
+		Result:    "ok",
+		SessionID: "s-recent",
+		Kind:      RunKindManual,
+		StartedAt: recentDay.Format(time.RFC3339),
+	}
+	recentEndedAt := recentDay.Format(time.RFC3339)
+	recentRun.EndedAt = &recentEndedAt
+	writeRunRecordAt(t, s, taskID, recentRun, recentDay)
+
+	chtimes(t, filepath.Join(dir, oldClosedDay.Format("2006-01-02")+".jsonl"), oldClosedDay)
+	chtimes(t, filepath.Join(dir, oldOpenDay.Format("2006-01-02")+".jsonl"), oldOpenDay)
+	chtimes(t, filepath.Join(dir, recentDay.Format("2006-01-02")+".jsonl"), recentDay)
+
+	cutoff := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, s.PruneRuns(taskID, cutoff))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.ElementsMatch(t, []string{
+		oldOpenDay.Format("2006-01-02") + ".jsonl",
+		recentDay.Format("2006-01-02") + ".jsonl",
+	}, names,
+		"the stale closed-only file must be deleted; the stale file holding the orphaned open run must survive; the newest file is always retained (floor-of-one)")
+
+	runs, err := s.ListRuns(taskID)
+	require.NoError(t, err)
+	var stillHasOpenRun bool
+	for _, r := range runs {
+		if r.RunID == "orphaned-open-run" {
+			stillHasOpenRun = true
+			assert.True(t, r.IsOpen(), "the orphaned run must still read as in_progress — its record was not deleted")
+		}
+	}
+	assert.True(t, stillHasOpenRun, "the orphaned open run must remain visible in run history after PruneRuns")
+}
+
+// TestPruneRuns_OldFileWithClosedRunClosedInNewerFileIsDeleted proves the
+// Fix 1 guard is GLOBAL-fold-aware, not per-file: a run whose open record
+// landed in an old day file (e.g. it started right before a UTC day
+// boundary) but whose close record was appended to a NEWER file
+// (appendRunRecord always targets the CLOSE time's day, per CloseRun's own
+// doc comment) must NOT be treated as still open. The old file holding only
+// its (superseded) open record is safe to delete once its day is past
+// cutoff — the run's identity/result survive via the newer file's full-copy
+// close record (RD9). This guards against the guard itself becoming
+// overly conservative and defeating retention for the common case of a run
+// that opens and closes on different calendar days.
+func TestPruneRuns_OldFileWithClosedRunClosedInNewerFileIsDeleted(t *testing.T) {
+	s := newStore(t)
+	taskID := "task-1"
+	dir := filepath.Join(s.Dir(), taskID, "runs")
+
+	openDay := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	closeDay := time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC) // still stale, but newer than openDay
+	recentDay := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	openRec := TaskRun{
+		RunID:     "spans-midnight-run",
+		TaskID:    taskID,
+		Status:    StatusInProgress,
+		SessionID: "s",
+		Kind:      RunKindManual,
+		StartedAt: openDay.Format(time.RFC3339),
+	}
+	writeRunRecordAt(t, s, taskID, openRec, openDay)
+
+	closeRec := openRec
+	closeRec.Status = StatusDone
+	closeRec.Result = "done"
+	closedAt := closeDay.Format(time.RFC3339)
+	closeRec.EndedAt = &closedAt
+	writeRunRecordAt(t, s, taskID, closeRec, closeDay)
+
+	recentRun := TaskRun{
+		RunID:     "recent-run",
+		TaskID:    taskID,
+		Status:    StatusDone,
+		SessionID: "s2",
+		Kind:      RunKindManual,
+		StartedAt: recentDay.Format(time.RFC3339),
+	}
+	recentEndedAt := recentDay.Format(time.RFC3339)
+	recentRun.EndedAt = &recentEndedAt
+	writeRunRecordAt(t, s, taskID, recentRun, recentDay)
+
+	chtimes(t, filepath.Join(dir, openDay.Format("2006-01-02")+".jsonl"), openDay)
+	chtimes(t, filepath.Join(dir, closeDay.Format("2006-01-02")+".jsonl"), closeDay)
+	chtimes(t, filepath.Join(dir, recentDay.Format("2006-01-02")+".jsonl"), recentDay)
+
+	cutoff := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, s.PruneRuns(taskID, cutoff))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.ElementsMatch(t, []string{recentDay.Format("2006-01-02") + ".jsonl"}, names,
+		"both old files hold only a superseded/closed record for the same globally-closed run and must be deleted; only the newest file survives (floor-of-one)")
+
+	runs, err := s.ListRuns(taskID)
+	require.NoError(t, err)
+	for _, r := range runs {
+		if r.RunID == "spans-midnight-run" {
+			t.Fatalf("closed run's record must have been pruned along with both stale day files, got %+v", r)
+		}
+	}
 }
 
 // ---- Concurrency -------------------------------------------------------------

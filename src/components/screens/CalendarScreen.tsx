@@ -53,14 +53,6 @@ function formatShort(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-/**
- * A day bucket's fixed-width span in ms — the SAME literal 24h window the
- * server's `populateBucketRunCounts` (pkg/gateway/task_occurrences.go) uses
- * to tally a bucket's runs, not a timezone-aware "civil next day" the client
- * would have to recompute (Explicit Non-Behaviors: no client RRULE/day math).
- */
-const BUCKET_DAY_SPAN_MS = 24 * 60 * 60 * 1000
-
 /** Same calendar day as `d`, with the time-of-day set to `hour`:00 local. Used
  *  to give an all-day day-cell click a sensible default event time (US-1). */
 function withDefaultHour(d: Date, hour: number): Date {
@@ -215,11 +207,16 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // day instead of the task's entire run history. Only ever set from a
   // `task-occurrence-agg` (bucket) chip click — an individual `task-occurrence`
   // click leaves this `null`, the mirror image of how `selectedOccurrenceMs`
-  // is only set from an individual instant click (see above). `endMs` is
-  // `startMs` plus a literal 24h span — the SAME fixed-width window the
-  // server's `populateBucketRunCounts` uses to tally a bucket's runs
-  // (pkg/gateway/task_occurrences.go), not a client-recomputed civil-day
-  // boundary (Explicit Non-Behaviors: no client-side RRULE/day math).
+  // is only set from an individual instant click (see above). `endMs` comes
+  // straight off the wire (`DayBucket.day_end_ms` → `ext.dayEndMs`) — the
+  // server's own DST-aware civil-next-midnight boundary for this bucket
+  // (`civilDayNext`, pkg/gateway/task_occurrences.go), the SAME window
+  // `populateBucketRunCounts` uses to tally `run_counts`. Delta-review HIGH
+  // fix: a client-recomputed fixed dayStartMs+24h span diverges from that
+  // DST-aware window on a transition day, disagreeing with the aggregate
+  // `run_counts` and the drilled-in run list — carrying the boundary on the
+  // wire means the client never recomputes it (Explicit Non-Behaviors: no
+  // client-side RRULE/day math).
   const [selectedBucketDayRange, setSelectedBucketDayRange] = useState<{
     startMs: number
     endMs: number
@@ -433,7 +430,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
             // day's worth).
             setSelectedBucketDayRange(
               ext.kind === 'task-occurrence-agg'
-                ? { startMs: ext.dayStartMs, endMs: ext.dayStartMs + BUCKET_DAY_SPAN_MS }
+                ? { startMs: ext.dayStartMs, endMs: ext.dayEndMs }
                 : null,
             )
             setEventSlideOverOpen(true)

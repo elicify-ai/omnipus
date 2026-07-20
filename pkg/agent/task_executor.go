@@ -852,11 +852,27 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 // completeTaskWithResult always AFTER the existing Task.status/result mirror
 // write those functions already perform, so run-history strictly observes
 // the SAME completion signal, never a second source of truth for it.
+//
+// closeRun can legitimately be invoked TWICE for the same run (delta-review
+// Fix 2, 2026-07-20): runTask's own top-level panic-recovery defer
+// (~line 218) closes over the SAME *activeRun completeTaskWithResult already
+// closed, and re-invokes closeRun if a panic occurs in POST-completion
+// housekeeping (onTaskComplete / notifyParentIfAllSiblingsDone) that runs
+// AFTER completeTaskWithResult's own successful closeRun call. That second
+// call hits task.ErrRunAlreadyClosed — the record is correctly terminal, not
+// stranded — so it is logged at Info, not Error: an ERROR log here reading
+// "permanently strands" would fire a false on-call alert for a run that
+// closed successfully the first time.
 func (te *TaskExecutor) closeRun(taskID string, run *activeRun, status task.Status, result string) {
 	if run == nil || run.runID == "" {
 		return
 	}
 	if err := te.store.CloseRun(taskID, run.runID, status, result); err != nil {
+		if errors.Is(err, task.ErrRunAlreadyClosed) {
+			logger.InfoCF("task_executor", "Task run already closed by an earlier step; ignoring duplicate close from panic-recovery/housekeeping",
+				map[string]any{"task_id": taskID, "run_id": run.runID, "attempted_status": string(status)})
+			return
+		}
 		// M3-log: escalated from Warn to Error — a failed close permanently
 		// strands this run in_progress; there is no reaper to close it later.
 		logger.ErrorCF("task_executor", "Could not close task run record",

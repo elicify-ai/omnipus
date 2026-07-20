@@ -2,6 +2,10 @@
 
 **Status:** Proposed (grilled — 4 adversarial review passes, 2026-07-19; pivoted after)
 **Date:** 2026-07-19
+**Amended:** 2026-07-20 — two operator decisions, implemented in code, recorded below:
+(1) the RD10 stuck-run reaper is **removed** (not deferred); (2) Run-now is **retired for
+future occurrences** (RD7/RD8). See the inline amendment notes at RD7/RD8/RD10 and the
+"Amendment Log — 2026-07-20" section near the end.
 **Deciders:** architect (+ backend-lead, frontend-lead, qa-lead for implementation/review)
 **Amends:** ADR-049 (RRULE recurrence model) — occurrences gain per-run state; nothing in
 ADR-049's scheduling or expansion model changes.
@@ -168,6 +172,12 @@ prevents a scheduler fire and a user Run-now from double-running the same occurr
   the prior failed run is preserved, its chat still openable. (Note: `once`-task Run-now UI
   is genuinely new — normal tasks have no such affordance today; HIGH-#10.)
 
+> **Amended 2026-07-20 (operator decision).** "Recurring occurrence Run-now" above is
+> narrower in practice than the original text implies: Run-now is per-occurrence, but it is
+> **no longer offered for a FUTURE occurrence** (`occurrence_ms > now`) — see RD8's amendment
+> for the full rationale and the API-level enforcement. RD7's idempotent `OpenRun` mechanism
+> itself is unchanged; only *which* occurrences are allowed to reach it changed.
+
 ### RD8 — run-history surfaces (independent of occurrence projection)
 
 - `GET /api/v1/tasks/{id}/runs` → `TaskRun[]` (retention-bounded, full result strings).
@@ -183,9 +193,19 @@ prevents a scheduler fire and a user Run-now from double-running the same occurr
   instant lives only in the FullCalendar event id; HIGH-#M7). `TaskRunStatusField` /
   `TaskResultField` / `OpenInChatButton` are re-pointed from `task.*` to the **resolved
   run** for that occurrence (the overlay carries `run_id`; `result` text is fetched per-run
-  since the overlay only carries `has_result`). A **future** occurrence with no run shows
-  only "Run now" — no status badge, no result. A **bucket** click opens a mini-list of that
-  day's runs, not a single-occurrence view.
+  since the overlay only carries `has_result`). ~~A **future** occurrence with no run shows
+  only "Run now" — no status badge, no result.~~ **Amended 2026-07-20 (operator decision,
+  D1): superseded.** A **future** occurrence (`occurrence_ms > now`) never offers Run-now at
+  all — materializing it early would still leave the scheduler firing the same occurrence
+  again at its real instant (the scheduler is RRULE/`Task.status`-driven and has no
+  awareness of `TaskRun`s), double-executing it. A future occurrence with no run shows only
+  its **"Scheduled"** status text — no badge, no Run-now button. Run-now is offered only for
+  a **past/current** occurrence (`occurrence_ms <= now`, strictly-greater-than gate so "now"
+  itself still qualifies) or at the **task level** (no `occurrence_ms` at all). Enforced in
+  both the UI (`TaskRunStatusField`'s `now`-gated `isFutureOccurrence` check) **and** at the
+  API (`handleTaskRunNow` rejects `occurrence_ms > now` with 400) — the UI gate alone would
+  not stop a direct POST. A **bucket** click opens a mini-list of that day's runs, not a
+  single-occurrence view.
 
 ### RD9 — retention: day-partitioned sweep + keep-newest-day floor
 
@@ -195,15 +215,49 @@ task's single newest day file** so a long-idle task never loses its last run (th
 one, which naive whole-file deletion would violate). Pruning piggybacks the existing
 session-retention cadence — no new scheduler.
 
-### RD10 — cancel and pause are out of scope; a stuck-run reaper closes abandoned runs
+### RD10 — cancel and pause are out of scope; stuck runs close via execution + boot reconciliation (Amended 2026-07-20 — reaper removed)
 
 `canceled` and `paused` are **not** in this ADR: task cancellation does not exist anywhere
 in the codebase today (`finishTaskRun` maps every error to `failed`; the per-run cancel func
 is never invoked), and pause is a separate pause/resume feature. Runs are `in_progress →
-{done, failed}`. A run whose gateway died mid-execution is closed to `failed` by a
-**stuck-run reaper** folded onto the retention sweep (close `in_progress` runs with no
-matching live execution older than N) — this also closes a currently-permanent gap where
-`reconcileStuckTasks` only runs at boot (MED-#M2). Cross-references ADR-045.
+{done, failed}`.
+
+> **Amended 2026-07-20 (operator decision).** The original text below is **superseded**:
+>
+> ~~A run whose gateway died mid-execution is closed to `failed` by a **stuck-run reaper**
+> folded onto the retention sweep (close `in_progress` runs with no matching live execution
+> older than N) — this also closes a currently-permanent gap where `reconcileStuckTasks`
+> only runs at boot (MED-#M2). Cross-references ADR-045.~~
+>
+> The stuck-run reaper is **removed entirely**, not deferred-and-later-added: no age-only
+> background sweep force-closes an `in_progress` run. Rationale — the original age-only
+> reaper could not distinguish a long-running *legitimate* execution from an *abandoned* one
+> ("close anything `in_progress` older than N" is unsound once runs are allowed to
+> legitimately stay open for arbitrarily long: a `once` task with a slow external step, a
+> MINUTELY series row mid-fire). Removing it avoids false-closing a run that is still
+> genuinely in flight. The replacement invariant:
+>
+> - **A run stays `in_progress` until its own execution closes it.** The only legitimate
+>   closers are the executor's own completion paths (`finishTaskRun` / `completeTaskWithResult`,
+>   RD5) and, on a crashed/restarted gateway, boot reconciliation (below).
+> - **`PruneRuns` refuses to delete a day file that still holds an open run**, even past the
+>   age cutoff (`pkg/task/run_store.go`) — an `in_progress` run can legitimately survive for
+>   days under this model, and deleting its day file out from under it would corrupt the
+>   fold. The keep-newest-day floor (RD9) is unchanged and independent of this guard.
+> - **Boot reconciliation closes orphans.** `reconcileStuckTasks`
+>   (`pkg/gateway/rest_tasks.go`) already reset a crashed process's `in_progress` Tasks to
+>   `failed` on boot; it now additionally best-effort closes that same task's own open
+>   `TaskRun`(s) to `failed` (`reconcileStuckTaskRuns`) — bounding the orphaned-run gap to
+>   "next restart" instead of leaving it open forever. This is how MED-#M2 (the "reconciler
+>   only runs at boot" gap) is actually closed — via the boot path doing more, not via a
+>   background reaper running more often.
+> - **A liveness-aware reaper remains a real, deferred gap** for a gateway process that
+>   crashes but whose *gateway itself* never restarts (an `in_progress` run whose worker died
+>   but the gateway keeps running has no closer until the next boot). This is accepted as a
+>   known limitation, not solved here: a liveness-aware reaper is a **planned follow-up**
+>   requiring its own design — distinguishing "still legitimately running" from "abandoned"
+>   needs executor/process liveness tracking, not an age threshold, and deserves a fresh ADR
+>   rather than folding onto this one. Cross-references ADR-045.
 
 ### RD11 — migration: none (purely additive)
 
@@ -240,7 +294,9 @@ instance — confirmed orthogonal; the spec must state "no changes to
 fold/prune) + `OpenRun` primitive; `occurrenceMs` threaded through the dispatch signature
 and the calendar event props/click handler; run-open at claim + run-close in the completion
 handler; `TaskDetailPanel` Runs section; calendar slide-over run re-pointing + per-run
-result fetch; the keep-newest-day retention tweak + stuck-run reaper.
+result fetch; the keep-newest-day retention tweak + ~~stuck-run reaper~~ (removed
+2026-07-20 — see RD10 amendment; `PruneRuns`' open-run skip + boot reconciliation close
+orphans instead).
 
 ### Realtime
 A recurring occurrence's `queued→in_progress→done` transition does not move `Task.status`
@@ -273,7 +329,9 @@ File-based JSONL only; no new runtime dependency, no CGo, no SQLite.
 - **SpawnReset/ClaimForRun incompatibility, per-occurrence double-run** (executor B1/B2/B3,
   blast #5/#6) → RD5 keeps them unchanged; RD7 adds the idempotent `OpenRun`.
 - **`canceled` has no producer** (executor B4) → RD10 scopes cancel out; runs are
-  done/failed; stuck-run reaper closes abandoned runs.
+  done/failed; ~~stuck-run reaper closes abandoned runs~~ (2026-07-20: reaper removed — a
+  run now closes only via its own execution, or via boot reconciliation on a crashed
+  gateway; see RD10 amendment).
 - **Storage rewrite cost, retention sweep mismatch, floor-of-one** (calendar H5, model #7)
   → RD4 event-sourced day-partitioned + RD9 keep-newest-day.
 - **Day-bucket status, pruned-vs-scheduled, occurrence-scoped click/result** (calendar
@@ -284,6 +342,35 @@ File-based JSONL only; no new runtime dependency, no CGo, no SQLite.
 - **`occurrence_ms` not threaded; heartbeats orthogonal; SeriesRetired forward-compatible**
   (executor H2/SOUND) → RD3 widens the signature; heartbeats untouched.
 
+## Amendment Log — 2026-07-20
+
+Two operator decisions, already implemented on `feat/calendar-scheduler-ui`, recorded here
+because they change RD10's and RD7/RD8's letter — not this ADR's core decision (the
+additive-runs model, RD1–RD6/RD9/RD11, is unaffected):
+
+1. **RD10 stuck-run reaper removed, not deferred.** No age-only background sweep force-closes
+   an `in_progress` run. Replacement invariant: a run closes only via its own execution
+   (`finishTaskRun`/`completeTaskWithResult`) or, on a crashed gateway, boot reconciliation
+   (`reconcileStuckTasks` → `reconcileStuckTaskRuns`, `pkg/gateway/rest_tasks.go`).
+   `PruneRuns` (`pkg/task/run_store.go`) now refuses to delete a day file holding an open
+   run, regardless of age; the keep-newest-day floor (RD9) is unchanged. A
+   **liveness-aware reaper remains a real, deferred future feature** — distinguishing
+   "still legitimately running" from "abandoned" on a gateway that never restarts needs its
+   own design (executor/process liveness tracking, not an age threshold), and deserves its
+   own ADR rather than folding onto this one. See RD10 above.
+2. **Run-now retired for future occurrences (D1).** Materializing a future occurrence early
+   would not cancel its natural scheduled fire (the scheduler is RRULE/`Task.status`-driven,
+   unaware of `TaskRun`s) — it would double-execute it. Run-now is now offered only for a
+   past/current occurrence (`occurrence_ms <= now`) or at the task level (no `occurrence_ms`
+   at all). A future occurrence with no run shows only its "Scheduled" status — no badge, no
+   button. Enforced in both the UI (`TaskRunStatusField`) and the API (`handleTaskRunNow`
+   rejects `occurrence_ms > now` with 400 — the UI gate alone does not stop a direct POST).
+   See RD7/RD8 above.
+
+Neither decision touches RD1–RD6, RD9, or RD11. `docs/internal/specs/task-run-history-spec.md`
+§3.5 (retention/reaper), §4.3, and BDD scenario 4 require matching amendments (tracked
+separately — that file is out of this ADR's directory).
+
 ## References
 
 - Amends ADR-049 (RRULE recurrence model). Related: ADR-045 (orphaned-run timeout).
@@ -291,6 +378,7 @@ File-based JSONL only; no new runtime dependency, no CGo, no SQLite.
   runs linked to a task").
 - Grill: 4 adversarial passes, 2026-07-19 (model coherence, status blast-radius, calendar
   join + retention, executor/scheduler seam).
-- Spec (to be written): `docs/internal/specs/task-run-history-spec.md`.
+- Spec: `docs/internal/specs/task-run-history-spec.md`. Amended 2026-07-20 alongside this
+  ADR to record the same two operator decisions (see that spec's own amendment notes).
 - Reused infra: session day-partitioned JSONL + retention sweep, `fileutil.WriteFileAtomic`,
   `StripedLock`/sharded-mutex pool.

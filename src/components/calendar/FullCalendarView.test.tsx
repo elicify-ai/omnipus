@@ -78,6 +78,7 @@ describe('extTooltip (L3 — chip tooltip surfacing)', () => {
       icon: 'XCircle',
       tooltip: '12 done · 2 failed · 26 scheduled',
       dayStartMs: 2000,
+      dayEndMs: 2000 + 24 * 60 * 60 * 1000,
     }
     expect(extTooltip(ext)).toBe('12 done · 2 failed · 26 scheduled')
   })

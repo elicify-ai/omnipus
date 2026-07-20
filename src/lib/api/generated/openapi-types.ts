@@ -6803,6 +6803,12 @@ export interface components {
              */
             day_start_ms: number;
             /**
+             * Format: int64
+             * @description Exclusive end of this bucket's window: the QUERY `tz`'s civil next midnight after `day_start_ms` (`civilDayNext` in `pkg/gateway/task_occurrences.go`), DST-aware (23h/25h on a transition day) — NOT a fixed `day_start_ms + 24h` offset. This is the SAME window boundary `populateBucketRunCounts` uses to tally `run_counts`, carried on the wire so the client never recomputes it (delta-review HIGH: a client-side fixed-24h recomputation diverges from this DST-aware value on transition days, disagreeing with `run_counts` and the drilled-in run list). The client MUST use this value verbatim as the exclusive upper bound when filtering/joining runs for this bucket.
+             * @example 1784678400000
+             */
+            day_end_ms: number;
+            /**
              * Format: int32
              * @description Number of occurrences of the task on this day.
              * @example 48

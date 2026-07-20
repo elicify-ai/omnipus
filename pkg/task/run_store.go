@@ -613,11 +613,87 @@ func (s *Store) RunsInRange(taskID string, fromMs, toMs int64) ([]TaskRun, error
 	return runs, nil
 }
 
+// openRunSourceFiles reads every day file under taskID's runs directory and
+// folds records by RunID exactly like foldRunsLockedFrom (files processed in
+// os.ReadDir's ascending-filename order, last record per RunID wins), but
+// additionally remembers which file produced each run's WINNING (final,
+// folded) record. It returns the subset of file names whose winning record
+// is still open (TaskRun.IsOpen — EndedAt == nil).
+//
+// PruneRuns (delta-review Fix 1, 2026-07-20) uses this to decide whether a
+// day file is safe to delete: fold-awareness must be GLOBAL, not per-file.
+// CloseRun always appends the close record to the day file matching the
+// CLOSE time (appendRunRecord's own doc comment), not the file holding the
+// original open record — so a run that opened on one calendar day and closed
+// on a later one has its open record and close record in two DIFFERENT
+// files, and the older (open-record) file is safe to delete once the close
+// record lands in a newer file: the run's identity survives via the close
+// record's full field copy (RD9). Only when a run's true cross-file-folded
+// state is STILL open — no close record exists anywhere, e.g. a
+// crashed/orphaned execution with no reaper to close it (operator's
+// 2026-07-20 no-reaper decision) — must its file be protected: deleting it
+// would make the run vanish from history entirely, which is worse than the
+// intended "stays in_progress forever".
+//
+// Caller must hold the per-task lock (s.lock.Get(taskID)).
+func (s *Store) openRunSourceFiles(taskID string) (map[string]bool, error) {
+	dir := s.runsDir(taskID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, fmt.Errorf("task: list runs dir %q: %w", dir, err)
+	}
+
+	type winningRecord struct {
+		rec  TaskRun
+		file string
+	}
+	winners := make(map[string]winningRecord)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			slog.Warn("task: skip unreadable run day file", "task_id", taskID, "file", path, "error", readErr)
+			continue
+		}
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			var rec TaskRun
+			if unmarshalErr := json.Unmarshal(line, &rec); unmarshalErr != nil {
+				slog.Warn("task: skip malformed run record", "task_id", taskID, "file", path, "error", unmarshalErr)
+				continue
+			}
+			winners[rec.RunID] = winningRecord{rec: rec, file: e.Name()}
+		}
+	}
+
+	openFiles := make(map[string]bool)
+	for _, w := range winners {
+		if w.rec.IsOpen() {
+			openFiles[w.file] = true
+		}
+	}
+	return openFiles, nil
+}
+
 // PruneRuns enforces the run-history retention window for taskID (RD9):
 // every day file under taskID's runs directory whose mtime is strictly
 // before cutoff is deleted — EXCEPT the single most-recently-named file,
 // which is always retained (the floor-of-one: a long-idle task never loses
-// its last run).
+// its last run), AND except any file that is the sole surviving record of a
+// still-open run (delta-review Fix 1, 2026-07-20, see openRunSourceFiles):
+// with no stuck-run reaper, a run whose open record lives ONLY in an old day
+// file must keep that file until its own execution eventually closes it —
+// otherwise the run would vanish from history entirely rather than staying
+// visible as in_progress.
 //
 // No stuck-run reaper: a run stays in_progress until its own execution
 // closes it (operator decision 2026-07-20). A liveness-aware reaper is a
@@ -650,6 +726,10 @@ func (s *Store) PruneRuns(taskID string, cutoff time.Time) error {
 	if len(dayFiles) <= 1 {
 		return nil // floor-of-one: nothing eligible for deletion.
 	}
+	openFiles, err := s.openRunSourceFiles(taskID)
+	if err != nil {
+		return err
+	}
 	// os.ReadDir sorts by filename ascending; day files are named
 	// YYYY-MM-DD.jsonl, so the last entry is the newest day — always retained.
 	newestIdx := len(dayFiles) - 1
@@ -665,6 +745,15 @@ func (s *Store) PruneRuns(taskID string, cutoff time.Time) error {
 		}
 		if !info.ModTime().Before(cutoff) {
 			continue // not old enough yet
+		}
+		if openFiles[e.Name()] {
+			// This file holds the ONLY surviving record of a run whose
+			// cross-file-folded state is still in_progress — deleting it
+			// would make the run vanish from history entirely rather than
+			// staying visible as in_progress until something closes it.
+			slog.Info("task: prune runs: retaining stale day file holding an open run",
+				"task_id", taskID, "file", path)
+			continue
 		}
 		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
 			slog.Warn("task: prune runs: delete failed", "task_id", taskID, "file", path, "error", rmErr)

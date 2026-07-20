@@ -772,6 +772,19 @@ func TestCountRegularInRange_DSTTransitionDayBound(t *testing.T) {
 		dayFrom := b.DayStartMs
 		dayTo := civilDayNext(dayFrom, berlin)
 
+		// delta-review HIGH fix: the wire's day_end_ms must equal this SAME
+		// DST-aware civilDayNext(dayFrom, loc) boundary — including on the
+		// transition day itself (23h civil day) — not a client-recomputed
+		// fixed dayFrom+24h that would diverge here.
+		if b.DayEndMs != dayTo {
+			kind := "non-transition"
+			if dayFrom == transitionDayStart {
+				kind = "transition"
+			}
+			t.Errorf("%s day %v: DayEndMs=%d, want civilDayNext=%d (diff=%dms)",
+				kind, time.UnixMilli(dayFrom).In(berlin), b.DayEndMs, dayTo, b.DayEndMs-dayTo)
+		}
+
 		bruteForce, truncated, err := task.ExpandRRULE(
 			"FREQ=HOURLY", dtstart.UnixMilli(), "Europe/Berlin", dayFrom, dayTo, 100,
 		)

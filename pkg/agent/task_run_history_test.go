@@ -15,6 +15,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -659,5 +661,86 @@ func TestTaskRunHistory_StartTaskNow_OpensAndClosesManualRun(t *testing.T) {
 	}
 	if final.Status != task.StatusDone {
 		t.Errorf("task status = %q, want done (regression: the mirror must still cycle too)", final.Status)
+	}
+}
+
+// TestCloseRun_DuplicateCloseAfterAlreadyClosedLogsInfoNotError is the
+// regression for delta-review Fix 2 (2026-07-20): a SECOND closeRun call for
+// a run that is already terminal — e.g. runTask's top-level panic-recovery
+// defer re-invoking closeRun after a panic in POST-completion housekeeping
+// (onTaskComplete / notifyParentIfAllSiblingsDone) that runs AFTER
+// completeTaskWithResult already closed the run successfully — is a benign
+// duplicate, not a stranded run. It must:
+//  1. never mutate the already-closed run's terminal record (the store
+//     layer rejects the duplicate with task.ErrRunAlreadyClosed and appends
+//     nothing new), and
+//  2. never log at ERROR ("permanently strands") for that specific,
+//     distinguishable error — proven here by contrast with a genuine close
+//     failure (an unknown run id), which must still log at ERROR.
+func TestCloseRun_DuplicateCloseAfterAlreadyClosedLogsInfoNotError(t *testing.T) {
+	te, store := newTestTaskExecutor(t)
+	taskID := "task-close-dup"
+
+	run, created, oerr := store.OpenRun(taskID, nil, task.RunKindManual, "session-a")
+	if oerr != nil || !created {
+		t.Fatalf("setup OpenRun: run=%+v created=%v err=%v", run, created, oerr)
+	}
+	active := &activeRun{runID: run.RunID}
+
+	logFile := filepath.Join(t.TempDir(), "close-run-dup.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.ERROR)
+	if ferr := logger.EnableFileLogging(logFile); ferr != nil {
+		t.Fatalf("EnableFileLogging: %v", ferr)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	// First close: the real, successful completion (mirrors
+	// completeTaskWithResult's own closeRun call).
+	te.closeRun(taskID, active, task.StatusDone, "first result")
+
+	closedRuns, lerr := store.ListRuns(taskID)
+	if lerr != nil {
+		t.Fatalf("ListRuns after first close: %v", lerr)
+	}
+	if len(closedRuns) != 1 || closedRuns[0].Status != task.StatusDone || closedRuns[0].Result != "first result" {
+		t.Fatalf("unexpected state after first close: %+v", closedRuns)
+	}
+
+	// Second close: simulates the panic-recovery defer re-invoking closeRun
+	// on the SAME already-closed *activeRun with a different (panic/failed)
+	// outcome, exactly as runTask's defer would after a housekeeping panic.
+	te.closeRun(taskID, active, task.StatusFailed, "panic during task execution: boom")
+
+	afterDup, lerr2 := store.ListRuns(taskID)
+	if lerr2 != nil {
+		t.Fatalf("ListRuns after duplicate close: %v", lerr2)
+	}
+	if len(afterDup) != 1 || afterDup[0].Status != task.StatusDone || afterDup[0].Result != "first result" {
+		t.Fatalf("duplicate close must not mutate the already-terminal run record, got %+v", afterDup)
+	}
+
+	logged, rerr := os.ReadFile(logFile)
+	if rerr != nil {
+		t.Fatalf("read log file: %v", rerr)
+	}
+	if strings.Contains(string(logged), "Could not close task run record") {
+		t.Fatalf("duplicate-close-of-an-already-closed-run must NOT log at ERROR (false on-call alert), got log:\n%s", logged)
+	}
+
+	// Contrast: a GENUINE close failure (unknown run id) must still log at
+	// ERROR — proving the guard is specific to ErrRunAlreadyClosed, not a
+	// blanket demotion of every CloseRun error.
+	te.closeRun(taskID, &activeRun{runID: "does-not-exist"}, task.StatusFailed, "x")
+	logged2, rerr2 := os.ReadFile(logFile)
+	if rerr2 != nil {
+		t.Fatalf("read log file (2nd read): %v", rerr2)
+	}
+	if !strings.Contains(string(logged2), "Could not close task run record") {
+		t.Fatalf("a genuine close failure (run not found) must still log at ERROR, got log:\n%s", logged2)
 	}
 }

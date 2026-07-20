@@ -118,8 +118,16 @@ type wireRunCounts = struct {
 // the wire schema, populated by populateBucketRunCounts (called from
 // buildOneOccurrenceSet via populateRunOverlay) — nil/absent when no
 // runsInRange dependency was supplied or no run fell in that day.
+//
+// DayEndMs (delta-review HIGH fix, DayBucket.yaml) carries the bucket's own
+// exclusive window end — the civil next-midnight boundary populateBucketRunCounts
+// already computes via civilDayNext — on the wire, so the client never
+// recomputes it with a fixed-24h assumption that diverges from the server's
+// DST-aware tally window on transition days. Populated unconditionally in
+// buildOverview, unlike RunCounts which is conditionally nil.
 type wireDayBucket = struct {
 	Count      int32          `json:"count"`
+	DayEndMs   int64          `json:"day_end_ms"`
 	DayStartMs int64          `json:"day_start_ms"`
 	FirstMs    int64          `json:"first_ms"`
 	IntervalMs *int64         `json:"interval_ms"`
@@ -619,6 +627,13 @@ dayLoop:
 			case dr.count > 3:
 				res.buckets = append(res.buckets, wireDayBucket{
 					DayStartMs: day,
+					// DayEndMs reuses `next` — already computed above as
+					// civilDayNext(day, loc) — the SAME DST-aware civil
+					// next-midnight populateBucketRunCounts recomputes from
+					// this same DayStartMs for its own [dayFrom, dayTo) tally
+					// window (delta-review HIGH fix: the wire value must equal
+					// the tally window exactly, not a fixed-24h client guess).
+					DayEndMs:   next,
 					Count:      int32(dr.count), //nolint:gosec // dr.count is bounded by perTaskIterationBudget (10000), well within int32 range
 					FirstMs:    dr.firstMs,
 					IntervalMs: intervalMs,
