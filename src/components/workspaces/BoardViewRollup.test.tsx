@@ -109,7 +109,6 @@ function renderBoard(
         workspaceId="ws-1"
         altitude={altitude}
         onTaskClick={vi.fn()}
-        onNewTask={vi.fn()}
       />
     </QueryClientProvider>,
   )
@@ -200,7 +199,6 @@ describe('BoardView delegation roll-up', () => {
           workspaceId="ws-1"
           altitude="show-all"
           onTaskClick={vi.fn()}
-          onNewTask={vi.fn()}
         />
       </QueryClientProvider>,
     )

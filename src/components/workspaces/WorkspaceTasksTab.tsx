@@ -210,7 +210,6 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           activeTagFilter={activeTagFilter}
           altitude={boardAltitude}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
-          onNewTask={() => setCreateTaskOpen(true)}
           onTaskMove={(task, status) => moveMutation.mutate({ task, status })}
           onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })}
           onApprovePlan={(plan) => approvePlanMutation.mutate(plan.id)}
