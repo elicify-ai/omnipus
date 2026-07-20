@@ -1064,6 +1064,37 @@ describe('TaskDetailPanel — editable dependencies (blocked_by)', () => {
     await waitFor(() => expect(vi.mocked(setTaskDependencies)).toHaveBeenCalled())
     expect(vi.mocked(setTaskDependencies).mock.calls[0][1]).toEqual(['other-1'])
   })
+
+  it('lists only SAME-plan tasks as candidates (cross-plan / plan-less excluded)', async () => {
+    const { fetchTasks } = await import('@/lib/api')
+    vi.mocked(fetchTasks).mockResolvedValueOnce([
+      makeTask({ id: 'same-1', title: 'Same Plan Sibling', plan_id: 'plan-x', workspace_id: 'ws-test' }),
+      makeTask({ id: 'other-1', title: 'Other Plan Task', plan_id: 'plan-y', workspace_id: 'ws-test' }),
+      makeTask({ id: 'loose-1', title: 'Loose Task', workspace_id: 'ws-test' }),
+    ])
+    renderPanel(makeTask({ id: 'task-scoped', status: 'next', plan_id: 'plan-x', workspace_id: 'ws-test' }))
+
+    fireEvent.click(await screen.findByText(/no dependencies/i))
+
+    expect(await screen.findByText('Same Plan Sibling')).toBeInTheDocument()
+    expect(screen.queryByText('Other Plan Task')).not.toBeInTheDocument()
+    expect(screen.queryByText('Loose Task')).not.toBeInTheDocument()
+  })
+
+  it('still shows an existing cross-plan dependency as a chip (removable, not silently dropped)', async () => {
+    const { fetchTasks } = await import('@/lib/api')
+    vi.mocked(fetchTasks).mockResolvedValueOnce([
+      makeTask({ id: 'legacy-dep', title: 'Legacy Cross-Plan Dep', plan_id: 'plan-y', workspace_id: 'ws-test' }),
+    ])
+    // task is in plan-x but already depends on a plan-y task (pre-enforcement /
+    // agent-set): the candidate list won't offer it, but the chip must still
+    // render (title resolved from the full task list) so it stays removable.
+    renderPanel(
+      makeTask({ id: 'task-legacy', status: 'next', plan_id: 'plan-x', workspace_id: 'ws-test', blocked_by: ['legacy-dep'] }),
+    )
+
+    expect(await screen.findByText('Legacy Cross-Plan Dep')).toBeInTheDocument()
+  })
 })
 
 describe('TaskDetailPanel — editable todos checklist', () => {

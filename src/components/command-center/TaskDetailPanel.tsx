@@ -241,8 +241,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     enabled: task != null && !!task.workspace_id,
     staleTime: 10_000,
   })
+  // Candidate dependencies are same-plan, top-level siblings (exclude self).
+  // A `blocked_by` edge must stay inside one plan's DAG — cross-plan deps
+  // aren't meaningful. Existing cross-plan deps (pre-enforcement / agent-set)
+  // still render and stay removable because the chip list below resolves
+  // titles from the full `wsTasks`, not this filtered candidate set.
   const depCandidates: Task[] = wsTasks.filter(
-    (t) => t.id !== task?.id && !t.parent_task_id,
+    (t) =>
+      t.id !== task?.id &&
+      !t.parent_task_id &&
+      (t.plan_id || null) === (task?.plan_id || null),
   )
 
   // Reset the "Saved" indicator back to idle after a short fade so it does not

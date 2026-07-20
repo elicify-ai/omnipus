@@ -146,8 +146,15 @@ export function CreateTaskSlideOver({
     enabled: !!workspaceId && open,
   })
 
-  // Only top-level tasks are eligible dependencies (subtasks nest under parents).
-  const depCandidates: Task[] = wsTasks.filter((t) => !t.parent_task_id)
+  // Eligible dependencies are top-level tasks (subtasks nest under parents)
+  // that belong to the SAME plan as the task being created — a `blocked_by`
+  // edge must stay inside one plan's DAG (cross-plan deps aren't meaningful;
+  // the plan engine + graph treat each plan as a self-contained DAG). `planId`
+  // is the plan this new task will join; `null`/absent = the plan-less "Loose"
+  // group, whose members may still depend on one another.
+  const depCandidates: Task[] = wsTasks.filter(
+    (t) => !t.parent_task_id && (t.plan_id || null) === (planId || null),
+  )
 
   function buildBody(): TaskCreateRequest {
     const body: TaskCreateRequest = {

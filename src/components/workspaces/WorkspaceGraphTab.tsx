@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info } from '@phosphor-icons/react'
 import {
   Select,
@@ -10,9 +10,18 @@ import {
 } from '@/components/ui/select'
 import { GraphView } from './graph/GraphView'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
-import { fetchTasks, fetchAgents, fetchPlans, tasksQueryKeys, plansQueryKeys } from '@/lib/api'
+import {
+  fetchTasks,
+  fetchAgents,
+  fetchPlans,
+  setTaskDependencies,
+  isApiError,
+  tasksQueryKeys,
+  plansQueryKeys,
+} from '@/lib/api'
 import { planStateColor, planStateLabel } from '@/lib/planStateColors'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
 
 // ── F2 COMPONENT BOUNDARY ────────────────────────────────────────────────────
 // The Graph (Task DAG) tab. Tasks as nodes, `blocked_by` as dependency edges,
@@ -77,6 +86,63 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
 
   const selectedTask =
     selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
+
+  const queryClient = useQueryClient()
+  const { addToast } = useUiStore()
+
+  // Persist a dependency add/remove made by dragging (or deleting) an edge on
+  // the canvas — PUT /tasks/{id}/dependencies replaces the blocked set
+  // atomically. On BOTH outcomes we re-invalidate the tasks query so the canvas
+  // re-seeds to server truth: a rejected add (backend rejects cycles; cross-plan
+  // is guarded below) never lingers, and a failed delete is restored.
+  const depMutation = useMutation({
+    mutationFn: ({ taskId, blockedBy }: { taskId: string; blockedBy: string[] }) =>
+      setTaskDependencies(taskId, blockedBy),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+    },
+    onError: (err) => {
+      addToast({
+        message: isApiError(err)
+          ? err.userMessage
+          : err instanceof Error
+            ? err.message
+            : 'Failed to update dependencies',
+        variant: 'error',
+      })
+    },
+  })
+
+  // Drag connect: the source handle is the blocker, the target handle is the
+  // blocked task → add `blockerId` to blocked.blocked_by. Guard self / duplicate
+  // / cross-plan (a dependency edge must stay inside one plan's DAG) before the
+  // PUT; the backend additionally rejects cycles.
+  const handleConnectDependency = useCallback(
+    (blockerId: string, blockedId: string) => {
+      if (blockerId === blockedId) return
+      const blocked = tasks.find((t) => t.id === blockedId)
+      const blocker = tasks.find((t) => t.id === blockerId)
+      if (!blocked || !blocker) return
+      if ((blocker.plan_id || null) !== (blocked.plan_id || null)) {
+        addToast({ message: 'Dependencies must be within the same plan.', variant: 'error' })
+        return
+      }
+      const current = blocked.blocked_by ?? []
+      if (current.includes(blockerId)) return
+      depMutation.mutate({ taskId: blockedId, blockedBy: [...current, blockerId] })
+    },
+    [tasks, addToast, depMutation],
+  )
+
+  const handleRemoveDependency = useCallback(
+    (blockerId: string, blockedId: string) => {
+      const blocked = tasks.find((t) => t.id === blockedId)
+      const current = blocked?.blocked_by ?? []
+      if (!current.includes(blockerId)) return
+      depMutation.mutate({ taskId: blockedId, blockedBy: current.filter((x) => x !== blockerId) })
+    },
+    [tasks, depMutation],
+  )
 
   if (tasksLoading) {
     return <GraphSkeleton />
@@ -183,6 +249,8 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
           // plan has no dependencies yet" empty state (review-gate fix #3).
           planId={activePlan ? activePlanId : null}
           collapseOrphans
+          onConnectDependency={handleConnectDependency}
+          onRemoveDependency={handleRemoveDependency}
         />
       </div>
 

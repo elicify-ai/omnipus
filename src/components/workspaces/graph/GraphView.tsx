@@ -8,9 +8,11 @@ import {
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
+  type Connection,
   type Edge,
   type NodeMouseHandler,
   type NodeTypes,
+  type OnConnect,
 } from '@xyflow/react'
 import { CaretDown, GraphIcon, StackIcon } from '@phosphor-icons/react'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
@@ -57,6 +59,21 @@ interface GraphViewProps {
    * the real Graph tab (WorkspaceGraphTab) opts in explicitly.
    */
   collapseOrphans?: boolean
+  /**
+   * Enable mouse-drag dependency creation. Dragging from one node's RIGHT
+   * (source) handle to another's LEFT (target) handle calls this with
+   * `(blockerId, blockedId)` — "blocker must finish before blocked", the exact
+   * `blocked_by` semantics the edges already encode (buildTaskGraph lays edges
+   * blocker→blocked). When omitted the canvas is read-only: nodes stay
+   * non-connectable (the default for tests / non-editable embeddings).
+   */
+  onConnectDependency?: (blockerId: string, blockedId: string) => void
+  /**
+   * Remove a dependency edge (select it, then Backspace/Delete), called with
+   * the same `(blockerId, blockedId)` pair the edge represents. Omit to keep
+   * edges non-deletable.
+   */
+  onRemoveDependency?: (blockerId: string, blockedId: string) => void
 }
 
 /**
@@ -75,6 +92,8 @@ function GraphViewInner({
   selectedTaskId,
   planId = null,
   collapseOrphans = false,
+  onConnectDependency,
+  onRemoveDependency,
 }: GraphViewProps) {
   const layout = useMemo(
     () => buildTaskGraph(tasks, agents, planId != null ? { planId } : { collapseOrphans }),
@@ -113,6 +132,11 @@ function GraphViewInner({
       layout.nodes.map((n) => ({
         ...n,
         focusable: false,
+        // Nodes are never deletable — only dependency EDGES can be removed
+        // (Backspace/Delete on a selected edge). Without this, the same delete
+        // key would also drop a selected node from the canvas (local-only, then
+        // restored on re-seed — a confusing flicker).
+        deletable: false,
         data: { ...n.data, onOpen: stableOnOpen },
       })),
     [layout.nodes, stableOnOpen],
@@ -151,6 +175,47 @@ function GraphViewInner({
     [onTaskClick],
   )
 
+  // Mouse-drag dependency creation. A handle drag runs source(right) →
+  // target(left), so `source` is the blocker and `target` is the blocked task
+  // (matches buildTaskGraph's blocker→blocked edge direction). We do NOT
+  // optimistically add the edge: the parent's mutation invalidates the tasks
+  // query on success and the fresh dagre layout re-seeds the canvas with the
+  // persisted edge; on failure nothing changed so nothing needs undoing.
+  const handleConnect = useCallback<OnConnect>(
+    (conn) => {
+      const { source, target } = conn
+      if (!source || !target || source === target) return
+      onConnectDependency?.(source, target)
+    },
+    [onConnectDependency],
+  )
+
+  // Live drag validation — reject self-links and existing duplicates so the
+  // connection line renders invalid before the user drops it. Cross-plan
+  // rejection needs plan data the parent owns, so it surfaces as a drop-time
+  // toast rather than here.
+  const isValidConnection = useCallback(
+    (conn: Connection | Edge) => {
+      const { source, target } = conn
+      if (!source || !target || source === target) return false
+      return !edges.some((e) => e.source === source && e.target === target)
+    },
+    [edges],
+  )
+
+  // Edge removal (Backspace/Delete on a selected edge). React Flow drops the
+  // edge from local state first; the parent persists the removal and, on
+  // EITHER outcome, re-invalidates so the canvas re-seeds to server truth (a
+  // failed delete restores the edge).
+  const handleEdgesDelete = useCallback(
+    (deleted: Edge[]) => {
+      for (const e of deleted) {
+        if (e.source && e.target) onRemoveDependency?.(e.source, e.target)
+      }
+    },
+    [onRemoveDependency],
+  )
+
   // React Flow renders the <Controls> zoom/fit buttons itself — no JSX site
   // here can carry the repo's explicit-tabIndex convention, so stamp them
   // post-render (WebKit Tab reachability; see useLibraryTabIndex).
@@ -180,13 +245,17 @@ function GraphViewInner({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onConnect={handleConnect}
+        onEdgesDelete={handleEdgesDelete}
+        isValidConnection={isValidConnection}
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
         minZoom={0.2}
         maxZoom={1.75}
         proOptions={{ hideAttribution: false }}
-        nodesConnectable={false}
+        nodesConnectable={!!onConnectDependency}
         nodesDraggable
+        deleteKeyCode={onRemoveDependency ? ['Backspace', 'Delete'] : null}
         elementsSelectable
         defaultEdgeOptions={{ type: 'smoothstep' }}
       >

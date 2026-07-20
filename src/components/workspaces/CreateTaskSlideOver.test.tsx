@@ -701,6 +701,25 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     expect(body.blocked_by).toEqual(['dep-a'])
   })
 
+  it('lists only SAME-plan tasks as dependency candidates', async () => {
+    // A blocked_by edge must stay inside one plan's DAG — the picker offers
+    // only tasks in the plan this new task will join, not cross-plan or
+    // plan-less ones.
+    vi.mocked(fetchTasks).mockResolvedValue([
+      makeWsTask({ id: 'dep-same', title: 'Same Plan Task', plan_id: 'plan-x' }),
+      makeWsTask({ id: 'dep-other', title: 'Other Plan Task', plan_id: 'plan-y' }),
+      makeWsTask({ id: 'dep-none', title: 'No Plan Task', plan_id: undefined }),
+    ] as never)
+    renderSlideOver({ planId: 'plan-x' })
+
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Dependent' } })
+    fireEvent.click(await screen.findByText(/no dependencies/i))
+
+    expect(await screen.findByText('Same Plan Task')).toBeInTheDocument()
+    expect(screen.queryByText('Other Plan Task')).not.toBeInTheDocument()
+    expect(screen.queryByText('No Plan Task')).not.toBeInTheDocument()
+  })
+
   it('posts due as an RFC3339 string when a due date is set', async () => {
     vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
     renderSlideOver()
