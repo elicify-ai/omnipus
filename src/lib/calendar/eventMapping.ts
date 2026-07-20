@@ -20,14 +20,24 @@
 
 import type { EventInput } from '@fullcalendar/core'
 import type { Task, Milestone } from '@/lib/api'
-import type { TaskOccurrenceSet } from '@/lib/api/generated/openapi-types'
+import type { TaskOccurrenceSet, DayBucket } from '@/lib/api/generated/openapi-types'
 import {
   CHIP_TEXT_COLOR,
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
   MILESTONE_STYLE,
+  SCHEDULED_STYLE,
+  NO_RECORD_STYLE,
   type CalendarEventExtProps,
+  type ChipStyle,
+  type OccurrenceChipStatus,
 } from '@/components/calendar/types'
+
+/** One entry of `TaskOccurrenceSet.occurrence_runs[]` — the per-instant run overlay. */
+type OccurrenceRunEntry = NonNullable<TaskOccurrenceSet['occurrence_runs']>[number]
+
+/** `DayBucket.run_counts` — the per-day run-status tally overlay. */
+type RunCounts = NonNullable<DayBucket['run_counts']>
 
 // ─── TZ-safe date helpers (FR-015, F-06) ────────────────────────────────────
 
@@ -195,6 +205,104 @@ export function lastCoveredOccurrenceDayMs(set: TaskOccurrenceSet): number | nul
   return max
 }
 
+// ─── Per-occurrence run overlay — the four-state chip rule (ADR-050 RD6) ──────
+// docs/internal/specs/task-run-history-spec.md §4.2. Occurrence chips STOP
+// reading `task.status` — the render state is resolved from the additive
+// `occurrence_runs[]` / `run_counts` overlay fields instead.
+
+/**
+ * Resolve a single `task-occurrence` chip's render state under the four-state
+ * rule:
+ *  - a matching run → the RUN's own status/color/glyph, plus its `runId`/
+ *    `sessionId`/`hasResult` for the click-through (Open-in-Chat, spec §4.3).
+ *  - no run, instant >= `nowMs` → `'scheduled'` (today's Clock chip).
+ *  - no run, instant < `nowMs` → `'no_record'` — a distinct muted glyph,
+ *    never rendered as a future "Scheduled" fire, with an explanatory tooltip.
+ */
+function resolveOccurrenceChipState(
+  occurrenceMs: number,
+  run: OccurrenceRunEntry | undefined,
+  nowMs: number,
+): {
+  status: OccurrenceChipStatus
+  style: ChipStyle
+  runId?: string
+  sessionId?: string
+  hasResult?: boolean
+  tooltip?: string
+} {
+  if (run) {
+    return {
+      status: run.status,
+      style: STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK,
+      runId: run.run_id,
+      sessionId: run.session_id,
+      hasResult: run.has_result,
+    }
+  }
+  if (occurrenceMs >= nowMs) {
+    return { status: 'scheduled', style: SCHEDULED_STYLE }
+  }
+  return {
+    status: 'no_record',
+    style: NO_RECORD_STYLE,
+    tooltip: 'Run history unavailable — retention expired or the schedule changed since this ran.',
+  }
+}
+
+/**
+ * Format a bucket's `run_counts` tally as a breakdown tooltip, e.g.
+ * `"12 done · 2 failed · 26 scheduled"` (task-run-history-spec.md §4.2, BDD
+ * scenario 9). Zero-count categories are omitted. The fixed presentation
+ * order (done, failed, in_progress, scheduled) reproduces the spec's own
+ * example wording exactly.
+ */
+export function buildRunCountsTooltip(counts: RunCounts): string {
+  const parts: string[] = []
+  if (counts.done > 0) parts.push(`${counts.done} done`)
+  if (counts.failed > 0) parts.push(`${counts.failed} failed`)
+  if (counts.in_progress > 0) parts.push(`${counts.in_progress} in progress`)
+  if (counts.scheduled > 0) parts.push(`${counts.scheduled} scheduled`)
+  return parts.join(' · ')
+}
+
+/**
+ * Worst-wins glyph/status for an aggregated bucket: failed > in_progress >
+ * done > scheduled. Never a single clean status — the bucket shows the WORST
+ * outcome present that day, not an average or the first one.
+ */
+function resolveBucketWorstWins(counts: RunCounts): { status: OccurrenceChipStatus; style: ChipStyle } {
+  if (counts.failed > 0) return { status: 'failed', style: STATUS_STYLE.failed }
+  if (counts.in_progress > 0) return { status: 'in_progress', style: STATUS_STYLE.in_progress }
+  if (counts.done > 0) return { status: 'done', style: STATUS_STYLE.done }
+  return { status: 'scheduled', style: SCHEDULED_STYLE }
+}
+
+/**
+ * Resolve a `task-occurrence-agg` bucket chip's render state. When the
+ * overlay populated `run_counts`, renders the worst-wins glyph plus a
+ * breakdown tooltip (never a single clean status). When absent (overlay not
+ * populated for this bucket), falls back to today's pre-overlay rendering —
+ * `task.status`-colored background, Clock icon, "first at HH:MM" tooltip —
+ * byte-for-byte unchanged (spec §4.2, "If `run_counts` absent... fall back to
+ * today's rendering").
+ */
+function resolveBucketChip(
+  bucket: DayBucket,
+  fallbackStatus: Task['status'],
+  fallbackBg: string,
+): { status: OccurrenceChipStatus; style: ChipStyle; tooltip: string } {
+  if (!bucket.run_counts) {
+    return {
+      status: fallbackStatus,
+      style: { bg: fallbackBg, icon: 'Clock' },
+      tooltip: `first at ${formatTimeOfDay(bucket.first_ms)}`,
+    }
+  }
+  const worst = resolveBucketWorstWins(bucket.run_counts)
+  return { ...worst, tooltip: buildRunCountsTooltip(bucket.run_counts) }
+}
+
 // ─── Main mapping function ────────────────────────────────────────────────────
 
 /**
@@ -219,11 +327,14 @@ export function lastCoveredOccurrenceDayMs(set: TaskOccurrenceSet): number | nul
  *    (defense-in-depth — the server's own selection predicate should already
  *    exclude it, but the client never trusts a dangling id).
  *  - Each raw instant in `occurrences_ms` → one timed `task-occurrence` chip
- *    (title = task title; time = the instant).
+ *    (title = task title; time = the instant), colored/glyphed by the
+ *    four-state run-overlay rule (ADR-050 RD6, task-run-history-spec.md
+ *    §4.2 — `resolveOccurrenceChipState`), NOT by `task.status`.
  *  - Each `DayBucket` → one all-day `task-occurrence-agg` chip on
  *    `day_start_ms`, titled `"{task title} {label}"` where `label` is derived
- *    from `interval_ms` (`formatBucketLabel` — never recomputed client-side),
- *    carrying a `"first at HH:MM"` tooltip from `first_ms`.
+ *    from `interval_ms` (`formatBucketLabel` — never recomputed client-side);
+ *    colored/glyphed by the worst-wins `run_counts` rule when present, else
+ *    a `"first at HH:MM"` tooltip from `first_ms` (`resolveBucketChip`).
  *  - `truncated: true` → one all-day `task-occurrence-more` marker on the
  *    last covered day (`lastCoveredOccurrenceDayMs`) — never a silently
  *    emptier calendar beyond it.
@@ -245,6 +356,15 @@ export function mapToCalendarEvents(
    * task.
    */
   fallbackTruncationMarkerMs: number = Date.now(),
+  /**
+   * The "now" instant the four-state occurrence-chip rule (ADR-050 RD6,
+   * task-run-history-spec.md §4.2) compares each run-less occurrence against
+   * to pick `'scheduled'` (future) vs `'no_record'` (past). Injected — never
+   * read via a bare `Date.now()` deep in this pure mapper — so callers (and
+   * tests) can pin it deterministically. Defaults to real "now" so the one
+   * production call site (`CalendarScreen`) needs no change.
+   */
+  nowMs: number = Date.now(),
 ): EventInput[] {
   const events: EventInput[] = []
 
@@ -301,45 +421,65 @@ export function mapToCalendarEvents(
 
       const style = STATUS_STYLE[task.status] ?? STATUS_STYLE_FALLBACK
 
-      // Individual raw instants → timed task-occurrence chips.
+      // Additive per-occurrence run overlay (ADR-050 RD6) — keyed by the
+      // instant it matches. Absent/empty overlay → every instant falls
+      // through to the scheduled/no_record branch below, which is the
+      // correct four-state behaviour, not a special-cased fallback.
+      const runsByOccurrenceMs = new Map<number, OccurrenceRunEntry>(
+        (set.occurrence_runs ?? []).map((r) => [r.occurrence_ms, r]),
+      )
+
+      // Individual raw instants → timed task-occurrence chips, four-state
+      // (spec §4.2): run status > scheduled (future, no run) > no_record
+      // (past, no run) — never `task.status`.
       for (const ms of set.occurrences_ms) {
         const instant = parseMs(ms)
         if (instant === null) continue
+        const chip = resolveOccurrenceChipState(ms, runsByOccurrenceMs.get(ms), nowMs)
         events.push(
           makeEvent(
             `task:${task.id}:occurrence:${ms}`,
             instant,
             task.title,
-            style.bg,
+            chip.style.bg,
             false,
             {
               kind: 'task-occurrence',
               taskId: task.id,
-              status: task.status,
-              icon: 'Clock',
+              status: chip.status,
+              icon: chip.style.icon,
+              occurrenceMs: ms,
+              runId: chip.runId,
+              sessionId: chip.sessionId,
+              hasResult: chip.hasResult,
+              tooltip: chip.tooltip,
             },
             false,
           ),
         )
       }
 
-      // Aggregated days → one all-day task-occurrence-agg chip per bucket.
+      // Aggregated days → one all-day task-occurrence-agg chip per bucket,
+      // worst-wins over `run_counts` when present (spec §4.2), else today's
+      // pre-overlay rendering (task.status + Clock + "first at HH:MM").
       for (const bucket of set.day_buckets) {
         const dayStart = parseMs(bucket.day_start_ms)
         if (dayStart === null) continue
+        const chip = resolveBucketChip(bucket, task.status, style.bg)
         events.push(
           makeEvent(
             `task:${task.id}:occurrence-agg:${bucket.day_start_ms}`,
             dayStart,
             `${task.title} ${formatBucketLabel(bucket)}`,
-            style.bg,
+            chip.style.bg,
             true,
             {
               kind: 'task-occurrence-agg',
               taskId: task.id,
-              status: task.status,
-              icon: 'Clock',
-              tooltip: `first at ${formatTimeOfDay(bucket.first_ms)}`,
+              status: chip.status,
+              icon: chip.style.icon,
+              tooltip: chip.tooltip,
+              dayStartMs: bucket.day_start_ms,
             },
             false,
           ),

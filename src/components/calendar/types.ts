@@ -23,6 +23,18 @@ import type { Task } from '@/lib/api'
 /** The 7-member task status union (reused from the wire contract). */
 export type TaskStatus = Task['status']
 
+/**
+ * Occurrence chip render states beyond the raw 7-member `TaskStatus` union
+ * (ADR-050 RD6, docs/internal/specs/task-run-history-spec.md §4.2's
+ * four-state rule). `'scheduled'` = no matching run yet, occurrence instant
+ * still in the future ("today's Clock chip", now deliberately decoupled from
+ * `task.status` — see `SCHEDULED_STYLE`). `'no_record'` = no matching run,
+ * occurrence instant already in the past (pruned by retention or the
+ * schedule was edited since it fired) — must never be confused with a future
+ * `'scheduled'` fire.
+ */
+export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record'
+
 /** The four views offered by the toolbar (FR-006). */
 export type CalendarViewName =
   | 'dayGridMonth'
@@ -82,13 +94,45 @@ export type StatusIconKey =
  * FullCalendarView.tsx's existing unconditional `ext.icon` / `ext.status`
  * reads (EventChip) keep type-checking without that file needing to change
  * just to accommodate this union growing.
+ *
+ * Per-occurrence run overlay (ADR-050 RD6, docs/internal/specs/task-run-history-spec.md
+ * §4.1/§4.2) widens `task-occurrence`/`task-occurrence-agg` further: those two
+ * kinds stop reading `task.status` for their color/glyph entirely — see
+ * `OccurrenceChipStatus` and the four-state rule implemented in
+ * `eventMapping.ts`'s `resolveOccurrenceChipState`/`resolveBucketChip`.
+ * `task-occurrence` carries `occurrenceMs` (the join key threaded to
+ * `CalendarScreen.handleEventClick` → `CalendarEventSlideOver`'s
+ * `selectedOccurrenceMs`) plus the matched run's `runId`/`sessionId`/
+ * `hasResult` when one exists. `task-occurrence-agg` carries `dayStartMs`
+ * (the bucket's own join key) instead.
  */
 export type CalendarEventExtProps =
   | { kind: 'task-due'; taskId: string; status: TaskStatus; icon: StatusIconKey }
   | { kind: 'task-fire'; taskId: string; status: TaskStatus; icon: 'Clock' }
   | { kind: 'milestone'; milestoneId: string; icon: 'Flag' }
-  | { kind: 'task-occurrence'; taskId: string; status: TaskStatus; icon: 'Clock' }
-  | { kind: 'task-occurrence-agg'; taskId: string; status: TaskStatus; icon: 'Clock'; tooltip: string }
+  | {
+      kind: 'task-occurrence'
+      taskId: string
+      status: OccurrenceChipStatus
+      icon: StatusIconKey
+      /** The raw occurrence instant (ms) this chip renders — the calendar-overlay join key. */
+      occurrenceMs: number
+      /** Present only when `occurrence_runs` matched a run for this instant (spec §4.2 row 1). */
+      runId?: string
+      sessionId?: string
+      hasResult?: boolean
+      /** Present only for the "No record" state — explains why (spec §4.2 row 4). */
+      tooltip?: string
+    }
+  | {
+      kind: 'task-occurrence-agg'
+      taskId: string
+      status: OccurrenceChipStatus
+      icon: StatusIconKey
+      tooltip: string
+      /** The bucket's own `day_start_ms` join key (distinct from an individual `occurrenceMs`). */
+      dayStartMs: number
+    }
   | { kind: 'task-occurrence-more'; taskId: string; status: TaskStatus; icon: 'Clock'; tooltip: string }
 
 /** Near-black chip text — clears WCAG AAA (>=7:1) on every chip background (SC-006b). */
@@ -119,6 +163,25 @@ export const STATUS_STYLE_FALLBACK: ChipStyle = { bg: '#94A3B8', icon: 'Circle' 
 
 /** Milestone chip style (Forge Gold + Flag). */
 export const MILESTONE_STYLE: ChipStyle = { bg: '#D4AF37', icon: 'Flag' }
+
+/**
+ * "Scheduled" occurrence chip style (ADR-050 RD6) — no run yet, instant still
+ * in the future. Deliberately NOT `task.status`-colored: the whole point of
+ * the run overlay is decoupling an individual occurrence's own state from the
+ * parent task's aggregate status (a future fire must never render red merely
+ * because a PRIOR occurrence's run failed). Reuses the same muted-neutral bg
+ * already proven >=7:1 vs `CHIP_TEXT_COLOR` as `STATUS_STYLE.inbox/next/planning`.
+ */
+export const SCHEDULED_STYLE: ChipStyle = { bg: '#94A3B8', icon: 'Clock' }
+
+/**
+ * "No record" occurrence chip style — no run, instant already in the past
+ * (pruned by retention, or the schedule was edited since it fired). Same
+ * neutral bg family as `SCHEDULED_STYLE` but a distinct glyph (Circle, not
+ * Clock) so it reads as visually different from both a future "Scheduled"
+ * chip and any status-colored run chip (task-run-history-spec.md §4.2).
+ */
+export const NO_RECORD_STYLE: ChipStyle = { bg: '#94A3B8', icon: 'Circle' }
 
 /** The forwarded ref both FullCalendarView and CalendarToolbar share. */
 export type CalendarApiRef = MutableRefObject<FullCalendar | null>

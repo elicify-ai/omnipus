@@ -190,6 +190,17 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const [eventSlideOverOpen, setEventSlideOverOpen] = useState(false)
   const [eventSlideOverTask, setEventSlideOverTask] = useState<Task | null>(null)
   const [eventSlideOverInitialDate, setEventSlideOverInitialDate] = useState<Date | undefined>(undefined)
+  // The clicked occurrence's join key (ADR-050 RD8 / task-run-history-spec.md
+  // §4.1/§4.3), threaded to CalendarEventSlideOver's `selectedOccurrenceMs` so
+  // it can re-point the Run status/Result/Open-in-Chat sections at THAT
+  // occurrence's own run instead of the task-level mirror. Only ever set from
+  // an individual `task-occurrence` chip click — see handleEventClick: a
+  // `task-occurrence-agg` (bucket) click intentionally leaves this unset
+  // (undefined), since selectedOccurrenceMs is matched by the slide-over as
+  // an EXACT `run.occurrence_ms`, and a bucket's `day_start_ms` would never
+  // match a real run's occurrence_ms — passing it here would silently hide
+  // the Result/Open-in-Chat sections instead of the day's run mini-list.
+  const [selectedOccurrenceMs, setSelectedOccurrenceMs] = useState<number | undefined>(undefined)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [milestoneTarget, setMilestoneTarget] = useState<MilestoneTarget | null>(null)
 
@@ -388,6 +399,11 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           const t = tasks.find((x) => x.id === ext.taskId)
           if (t) {
             setEventSlideOverTask(t)
+            // Individual instant → its exact occurrence_ms (matches a run's
+            // occurrence_ms 1:1). Bucket → leave unset; day_start_ms is not
+            // a real occurrence instant and would never match a run (see the
+            // state declaration above for why passing it here would be wrong).
+            setSelectedOccurrenceMs(ext.kind === 'task-occurrence' ? ext.occurrenceMs : undefined)
             setEventSlideOverOpen(true)
           } else {
             console.warn('[calendar] occurrence event has no backing task', ext)
@@ -418,6 +434,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     triggerElRef.current =
       (target?.closest('[tabindex]') as HTMLElement | null) ?? target ?? null
     setEventSlideOverTask(null)
+    setSelectedOccurrenceMs(undefined)
     setEventSlideOverInitialDate(allDay ? withDefaultHour(date, 9) : date)
     setEventSlideOverOpen(true)
   }, [])
@@ -441,6 +458,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const handleNewTask = useCallback((date?: Date) => {
     triggerElRef.current = null
     setEventSlideOverTask(null)
+    setSelectedOccurrenceMs(undefined)
     setEventSlideOverInitialDate(date ? withDefaultHour(date, 9) : undefined)
     setEventSlideOverOpen(true)
   }, [])
@@ -481,6 +499,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           setEventSlideOverOpen(open)
           if (!open) {
             setEventSlideOverTask(null)
+            setSelectedOccurrenceMs(undefined)
             invalidate()
             restoreFocus()
           }
@@ -488,6 +507,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         workspaceId={workspaceId}
         task={eventSlideOverTask}
         initialDate={eventSlideOverInitialDate}
+        selectedOccurrenceMs={selectedOccurrenceMs}
       />
 
       <TaskDetailSlideOver

@@ -133,6 +133,8 @@ import {
   // Workspace / Project Instructions (contract-first #8):
   WorkspaceInstructionsResponse as WorkspaceInstructionsResponseSchema,
   Task as TaskSchema,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1):
+  TaskRun as TaskRunSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
   // Milestones (contract-first #8):
   Milestone as MilestoneSchema,
@@ -358,6 +360,9 @@ import type {
   TaskUpdateRequest,
   Todo,
   TaskTrigger,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1):
+  TaskRun,
+  RunNowRequest,
   // #264 Notifications (contract-first #8):
   NotificationList,
   // Milestones:
@@ -512,6 +517,9 @@ export type {
   TaskUpdateRequest,
   Todo,
   TaskTrigger,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1):
+  TaskRun,
+  RunNowRequest,
   Milestone,
   MilestoneCreateRequest,
   MilestoneUpdateRequest,
@@ -1921,6 +1929,10 @@ export const tasksQueryKeys = {
   },
   detail: (id: string) => ['tasks', id] as const,
   subtasks: (id: string) => ['tasks', id, 'subtasks'] as const,
+  // Per-task run history (ADR-050 / task-run-history-spec §4.1) — invalidated
+  // by the task_run_status WS frame handler (src/store/chat.ts) so the
+  // calendar slide-over and TaskDetailPanel's Runs list update live.
+  runs: (id: string) => ['tasks', id, 'runs'] as const,
 }
 
 // Keep boardTasksQueryKeys as an alias so tests and existing queries still compile
@@ -1969,6 +1981,45 @@ export function setTaskDependencies(taskId: string, blockedBy: string[]): Promis
 
 export function deleteTask(id: string): Promise<void> {
   return request<void>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── Per-task run history (ADR-050 / task-run-history-spec §4.1) ────────────────
+//
+// TaskRun is a purely additive execution-record layer — Task.status/result/
+// session_id keep their existing behaviour unchanged. GET /tasks/{id}/runs is
+// the authoritative history list (retention-bounded, newest first, full
+// result strings); POST /tasks/{id}/runs ("Run now") opens + dispatches a new
+// run and returns 202 (fire-and-forget — observe progress via the
+// task_run_status WS frame, see src/store/chat.ts, or by refetching this
+// list). Foundation for the calendar slide-over + TaskDetailPanel Runs
+// section (both consume the shared TaskRunsList component).
+
+export function fetchTaskRuns(taskId: string): Promise<TaskRun[]> {
+  return request<TaskRun[]>(`/tasks/${encodeURIComponent(taskId)}/runs`, undefined, z.array(TaskRunSchema) as ZodType<TaskRun[]>)
+}
+
+/**
+ * POST /tasks/{id}/runs ("Run now", ADR-050 RD7).
+ *
+ * - `occurrenceMs` provided (including explicit `null`) → body carries
+ *   `{occurrence_ms}`: materializes/re-runs that specific recurring
+ *   occurrence (idempotent against a concurrent scheduler fire for the same
+ *   instant).
+ * - `occurrenceMs` omitted (`undefined`) → empty body: re-runs a normal/once
+ *   task as a fresh run: the prior run (if any) is preserved in the run
+ *   history, not overwritten.
+ *
+ * Returns 202 with no body — the run executes asynchronously; no response
+ * schema to validate (request() resolves `undefined` for a schema-less,
+ * bodyless 2xx).
+ */
+export function runTaskNow(taskId: string, occurrenceMs?: number | null): Promise<void> {
+  const init: RequestInit = { method: 'POST' }
+  if (occurrenceMs !== undefined) {
+    const body: RunNowRequest = { occurrence_ms: occurrenceMs }
+    init.body = JSON.stringify(body)
+  }
+  return request<void>(`/tasks/${encodeURIComponent(taskId)}/runs`, init)
 }
 
 // ── #264 Schedules ──────────────────────────────────────────────────────────────

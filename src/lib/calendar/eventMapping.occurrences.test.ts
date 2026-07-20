@@ -61,16 +61,22 @@ function makeOccurrenceSet(overrides: Partial<TaskOccurrenceSet> = {}): TaskOccu
 describe('mapToCalendarEvents — occurrence instants (test 17)', () => {
   it('weekly task: 4 Monday instants render as 4 timed task-occurrence chips', () => {
     // "Weekly task renders on every Monday of the month" — 4 Mondays, 09:00 each.
+    // `nowMs` pinned before all four instants (ADR-050 RD6 four-state rule,
+    // task-run-history-spec.md §4.2): with no occurrence_runs overlay and every
+    // instant in the future, they resolve to 'scheduled' — this test is about
+    // chip MECHANICS (id/title/allDay/editable), not the run-overlay states,
+    // which get their own dedicated coverage below.
     const mondays = [
       new Date(2026, 5, 1, 9, 0, 0).getTime(),
       new Date(2026, 5, 8, 9, 0, 0).getTime(),
       new Date(2026, 5, 15, 9, 0, 0).getTime(),
       new Date(2026, 5, 22, 9, 0, 0).getTime(),
     ]
+    const nowMs = new Date(2026, 4, 1).getTime() // before every Monday above
     const task = makeTask({ title: 'Weekly report' })
     const set = makeOccurrenceSet({ occurrences_ms: mondays })
 
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
 
     expect(events).toHaveLength(4)
     for (const [i, ev] of events.entries()) {
@@ -81,7 +87,11 @@ describe('mapToCalendarEvents — occurrence instants (test 17)', () => {
       expect(ev.editable).toBe(false)
       expect(ev.extendedProps?.kind).toBe('task-occurrence')
       expect(ev.extendedProps?.taskId).toBe('task-1')
-      expect(ev.extendedProps?.status).toBe('next')
+      expect(ev.extendedProps?.status).toBe('scheduled')
+      expect(ev.extendedProps?.icon).toBe('Clock')
+      if (ev.extendedProps?.kind === 'task-occurrence') {
+        expect(ev.extendedProps.occurrenceMs).toBe(mondays[i])
+      }
     }
   })
 

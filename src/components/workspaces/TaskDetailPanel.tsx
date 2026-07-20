@@ -11,6 +11,7 @@ import {
   updateTask,
   deleteTask,
   setTaskDependencies,
+  runTaskNow,
   isApiError,
   milestonesQueryKeys,
   workspacesQueryKeys,
@@ -48,6 +49,7 @@ import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
 import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
+import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
 import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
 import {
   Play,
@@ -279,19 +281,28 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
   })
 
-  // Retry = move failed task back to next
+  // Retry = re-run a failed task via a FRESH run (ADR-050 RD7 / spec §3.4,
+  // §4.4). POST /tasks/{id}/runs with occurrence_ms omitted opens a new run
+  // and dispatches it — the prior failed run's status/result/session stay
+  // exactly as they are, now visible in the Runs section below. This
+  // replaces the old `updateTask(status:'next')` PATCH, which was the
+  // pre-ADR-050 "fresh-run reset" that overwrote the failed attempt instead
+  // of preserving it (the defect ADR-050 exists to fix — see Acceptance
+  // Scenario 3). The visible label stays "Retry" (least surprising for a
+  // failed task); only the wiring changed.
   const { mutate: doRetry, isPending: isRetrying } = useMutation({
     mutationFn: () => {
       if (!task) return Promise.reject(new Error('No task selected'))
-      return updateTask(task.id, { status: 'next' })
+      return runTaskNow(task.id)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
-      addToast({ message: 'Task retried — moved to Next.', variant: 'success' })
+      if (task) queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(task.id) })
+      addToast({ message: 'Task re-run started.', variant: 'success' })
     },
     onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to retry task', variant: 'error' }),
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to re-run task', variant: 'error' }),
   })
 
   // Delete task
@@ -776,6 +787,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Result section — done or failed — shared with the calendar's
           recurring-task edit slide-over (TaskResultField). */}
       <TaskResultField task={task} />
+
+      {/* Runs — per-execution run history (ADR-050 / task-run-history-spec
+          §4.4). Shared TaskRunsList component (also embedded by the
+          calendar occurrence slide-over) — do not fork/duplicate its
+          rendering here. Recurring tasks are excluded from Board/List
+          (ADR-049 D3), so every task reaching this panel is normal/once/
+          manual — this section's value is exactly the re-run-after-failure
+          history (Retry above opens a fresh run via runTaskNow; the prior
+          attempt stays listed here, each with Open-in-Chat). */}
+      <TaskRunsList
+        taskId={task.id}
+        onNavigate={onClose}
+        className="pt-2 border-t border-[var(--color-border)]"
+      />
 
       {/* Artifacts */}
       {(task.artifacts?.length ?? 0) > 0 && (

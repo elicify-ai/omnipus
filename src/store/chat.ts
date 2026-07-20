@@ -5,6 +5,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
+import { tasksQueryKeys } from '@/lib/api'
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
@@ -3697,6 +3698,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'task_status_changed':
           queryClient.invalidateQueries({ queryKey: ['tasks'] })
+          break
+
+        // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires
+        // at run open AND close (not just terminal), so the calendar chip
+        // flips to "In progress" immediately, not only on completion. Unlike
+        // task_status_changed this frame carries no session_id (it is not
+        // session-scoped — see SESSION_SCOPED_FRAME_TYPES above, deliberately
+        // NOT listed there) since a run can be materialized for a future
+        // occurrence with no session yet attached to Task itself. Invalidate
+        // BOTH the occurrence overlay (every workspace/range/tz variant —
+        // partial-key match) and this task's own run-history list so the
+        // calendar chips and the Runs list (TaskRunsList) update live.
+        case 'task_run_status':
+          queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
+          queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(frame.task_id) })
           break
 
         case 'agent_switched': {

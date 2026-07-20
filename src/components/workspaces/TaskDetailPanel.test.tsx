@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import type { Task, TaskUpdateRequest } from '@/lib/api'
+import type { Task, TaskUpdateRequest, TaskRun } from '@/lib/api'
 
 // DateTimePicker (shadcn Calendar + Select) needs these jsdom polyfills to open
 // (same gap noted in date-time-picker.test.tsx).
@@ -97,6 +97,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteTask: vi.fn().mockResolvedValue(undefined),
     setTaskTodos: vi.fn().mockResolvedValue({}),
     setTaskDependencies: vi.fn().mockResolvedValue({}),
+    // ADR-050 / task-run-history-spec §4.4 — the Runs section (TaskRunsList)
+    // and the "Retry" re-run wiring both go through these.
+    fetchTaskRuns: vi.fn().mockResolvedValue([]),
+    runTaskNow: vi.fn().mockResolvedValue(undefined),
     isApiError: vi.fn().mockReturnValue(false),
     tasksQueryKeys: actual.tasksQueryKeys,
     milestonesQueryKeys: actual.milestonesQueryKeys,
@@ -184,8 +188,26 @@ beforeEach(async () => {
   // unscoped agent list, i.e. today's pre-scoping behaviour. Tests that
   // exercise team-scoping itself override this per-test.
   vi.mocked(api.fetchWorkspaceDelegation).mockReset().mockRejectedValue(new Error('not mocked'))
+  vi.mocked(api.fetchTaskRuns).mockReset().mockResolvedValue([])
+  vi.mocked(api.runTaskNow).mockReset().mockResolvedValue(undefined)
   mockAddToast.mockReset()
 })
+
+// Minimal required fields for TaskRun (ADR-050 §2.1) — mirrors TaskRunsList.test.tsx's makeRun.
+function makeRun(overrides: Partial<TaskRun> = {}): TaskRun {
+  return {
+    run_id: 'run-1',
+    task_id: 'task-1',
+    occurrence_ms: null,
+    status: 'done',
+    result: 'All good.',
+    session_id: 'sess-run-1',
+    kind: 'manual',
+    started_at: '2026-07-20T09:00:00Z',
+    ended_at: '2026-07-20T09:05:00Z',
+    ...overrides,
+  }
+}
 
 describe('TaskDetailPanel — Open in Chat (#250 regression)', () => {
   it('shows "Open in Chat" button only when task has a session_id', async () => {
@@ -274,6 +296,95 @@ describe('TaskDetailPanel — 7-state status rendering', () => {
 
     // Start Task button must NOT appear (blocked is not startable)
     expect(screen.queryByRole('button', { name: /Start Task/i })).toBeNull()
+  })
+})
+
+// ── Runs section (ADR-050 / task-run-history-spec §4.4) ──────────────────────
+// TaskDetailPanel embeds the shared TaskRunsList as a "Runs" history section,
+// and the failed-task "Retry" affordance now re-runs via runTaskNow (a fresh
+// run; occurrence_ms omitted) instead of the old PATCH-status path — so a
+// failed once-task can be re-run without overwriting the prior attempt.
+
+describe('TaskDetailPanel — Runs section (ADR-050 §4.4)', () => {
+  it('renders the run history for the task', async () => {
+    const { fetchTaskRuns } = await import('@/lib/api')
+    vi.mocked(fetchTaskRuns).mockResolvedValue([
+      makeRun({ run_id: 'run-a', status: 'failed', result: 'Boom.' }),
+      makeRun({ run_id: 'run-b', status: 'done', result: 'All good.' }),
+    ])
+
+    renderPanel(makeTask({ id: 'task-1', status: 'failed' }))
+
+    expect(await screen.findByText(/run history/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(2))
+    expect(screen.getByText('Boom.')).toBeInTheDocument()
+    expect(screen.getByText('All good.')).toBeInTheDocument()
+    expect(vi.mocked(fetchTaskRuns)).toHaveBeenCalledWith('task-1')
+  })
+
+  it('shows the empty-runs state when the task has no run history yet', async () => {
+    const { fetchTaskRuns } = await import('@/lib/api')
+    vi.mocked(fetchTaskRuns).mockResolvedValue([])
+
+    renderPanel(makeTask({ id: 'task-empty-runs', status: 'next' }))
+
+    expect(await screen.findByTestId('task-runs-empty')).toBeInTheDocument()
+  })
+
+  it('clicking "Retry" on a failed task calls runTaskNow(task.id) with no occurrence_ms', async () => {
+    // BDD: Given a failed once/normal task,
+    //      When the user clicks "Retry",
+    //      Then runTaskNow is called with just the task id — occurrence_ms
+    //      is omitted entirely (undefined), which is what tells the backend
+    //      to open a fresh run rather than re-open a specific occurrence.
+    const { runTaskNow } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-retry-1', status: 'failed' }))
+
+    const retryBtn = await screen.findByRole('button', { name: /Retry/i })
+    await act(async () => { fireEvent.click(retryBtn) })
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalled())
+    expect(vi.mocked(runTaskNow).mock.calls[0]).toEqual(['task-retry-1'])
+  })
+
+  it('a failed task keeps showing its prior run in the Runs list after Retry is clicked (re-run does not overwrite history)', async () => {
+    // BDD: Given a failed task whose Runs list already contains the failed
+    //      attempt, When the user clicks Retry (which calls runTaskNow),
+    //      Then the prior failed run is still listed afterward — the fresh
+    //      run is additive, not a replacement (ADR-050 Acceptance Scenario 3).
+    const { fetchTaskRuns, runTaskNow } = await import('@/lib/api')
+    vi.mocked(fetchTaskRuns).mockResolvedValue([
+      makeRun({ run_id: 'run-failed-1', status: 'failed', result: 'It broke.', session_id: 'sess-failed-1' }),
+    ])
+    vi.mocked(runTaskNow).mockResolvedValue(undefined)
+
+    renderPanel(makeTask({ id: 'task-retry-2', status: 'failed' }))
+
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(1))
+    expect(screen.getByText('It broke.')).toBeInTheDocument()
+
+    const retryBtn = await screen.findByRole('button', { name: /Retry/i })
+    await act(async () => { fireEvent.click(retryBtn) })
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-retry-2'))
+
+    // The prior failed run is still in the list — re-running did not clear it.
+    expect(screen.getByText('It broke.')).toBeInTheDocument()
+    expect(screen.getAllByTestId('task-run-row')).toHaveLength(1)
+  })
+
+  it('surfaces a Retry/re-run failure via toast instead of failing silently', async () => {
+    const { runTaskNow } = await import('@/lib/api')
+    vi.mocked(runTaskNow).mockRejectedValueOnce(new Error('dispatch failed'))
+
+    renderPanel(makeTask({ id: 'task-retry-err', status: 'failed' }))
+
+    const retryBtn = await screen.findByRole('button', { name: /Retry/i })
+    await act(async () => { fireEvent.click(retryBtn) })
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' }),
+    ))
   })
 })
 

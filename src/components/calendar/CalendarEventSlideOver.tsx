@@ -64,11 +64,12 @@ import {
   createTask,
   updateTask,
   fetchAgents,
+  fetchTaskRuns,
   buildTaskAssigneeItems,
   tasksQueryKeys,
   getErrorMessage,
 } from '@/lib/api'
-import type { Task, TaskTrigger, TaskCreateRequest, TaskUpdateRequest, Todo } from '@/lib/api'
+import type { Task, TaskTrigger, TaskCreateRequest, TaskUpdateRequest, TaskRun, Todo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import {
@@ -84,6 +85,7 @@ import { TaskRunStatusField } from '@/components/workspaces/TaskRunStatusField'
 import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
 import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
+import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
 
 export interface CalendarEventSlideOverProps {
   open: boolean
@@ -93,6 +95,16 @@ export interface CalendarEventSlideOverProps {
   task: Task | null
   /** Create-mode only: pre-fills the Date & time field (e.g. from a day-cell click). */
   initialDate?: Date
+  /**
+   * The occurrence instant the operator clicked to open this slide-over
+   * (ADR-050 RD8 / task-run-history-spec §4.3) — e.g. from an individual
+   * `task-occurrence` calendar chip. Re-points the Run status / Result /
+   * Open-in-Chat sections at THAT SPECIFIC occurrence's run instead of the
+   * task-level aggregate. `null`/omitted for a series-config edit or a
+   * normal (non-recurring) task — those keep the existing task-level
+   * behaviour.
+   */
+  selectedOccurrenceMs?: number | null
 }
 
 // ── Trigger classification (local — no client cron/RRULE math) ─────────────
@@ -144,6 +156,7 @@ export function CalendarEventSlideOver({
   workspaceId,
   task,
   initialDate,
+  selectedOccurrenceMs,
 }: CalendarEventSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -232,6 +245,34 @@ export function CalendarEventSlideOver({
   )
   const nextRunMs = previewSet ? earliestInstant(previewSet) : null
   const upcomingPreview = previewSet ? upcomingInstants(previewSet, 3) : []
+
+  // ── ADR-050 RD8 / spec §4.3 — resolve the clicked occurrence's own run ─────
+  // A calendar occurrence chip carries selectedOccurrenceMs; re-point the
+  // Run status / Result / Open-in-Chat sections at THAT occurrence's run
+  // instead of the task-level mirror (which only ever reflects the LATEST
+  // fire). Absent selectedOccurrenceMs → those sections keep their existing
+  // task-level behaviour untouched.
+  const hasOccurrenceContext = isEdit && selectedOccurrenceMs != null
+  const runsForOccurrenceQuery = useQuery({
+    queryKey: tasksQueryKeys.runs(task?.id ?? ''),
+    // Guarded by `enabled` below — task is non-null whenever hasOccurrenceContext.
+    queryFn: () => fetchTaskRuns(task!.id),
+    enabled: open && hasOccurrenceContext,
+  })
+  const resolvedRun = useMemo<TaskRun | undefined>(() => {
+    if (!hasOccurrenceContext || !runsForOccurrenceQuery.data) return undefined
+    const matches = runsForOccurrenceQuery.data.filter((r) => r.occurrence_ms === selectedOccurrenceMs)
+    if (matches.length === 0) return undefined
+    // Newest by started_at wins when a scheduler fire and a manual Run-now
+    // race for the same instant (ADR-050 RD7 idempotency still guarantees at
+    // most one run per key in the common case; this is the tie-break if the
+    // list ever carries more than one).
+    return matches.reduce((newest, r) => (new Date(r.started_at) > new Date(newest.started_at) ? r : newest))
+  }, [hasOccurrenceContext, runsForOccurrenceQuery.data, selectedOccurrenceMs])
+  // A resolved-run section is shown only when there's no occurrence context
+  // (task-level fallback) OR a run was actually found — a future occurrence
+  // with no run yet shows ONLY TaskRunStatusField's "Run now" (spec §4.3).
+  const showResultAndChat = !hasOccurrenceContext || !!resolvedRun
 
   // ── Trigger construction (FR-024) ───────────────────────────────────────────
   function buildTriggerForSave(): TaskTrigger {
@@ -540,10 +581,28 @@ export function CalendarEventSlideOver({
               checklist is offered in CREATE too (buffered, persisted on Save). */}
           {isEdit && task ? (
             <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">
-              <TaskRunStatusField task={task} />
+              {hasOccurrenceContext && runsForOccurrenceQuery.isError && (
+                <p
+                  className="text-xs text-[color:var(--color-error)]"
+                  data-testid="occurrence-run-resolve-error"
+                >
+                  Couldn't load this occurrence's run status.
+                </p>
+              )}
+              <TaskRunStatusField
+                task={task}
+                run={resolvedRun}
+                occurrenceMs={hasOccurrenceContext ? selectedOccurrenceMs : undefined}
+              />
               <TaskChecklistField task={task} />
-              <TaskResultField task={task} />
-              <OpenInChatButton task={task} onNavigate={() => onOpenChange(false)} />
+              {showResultAndChat && <TaskResultField task={task} run={resolvedRun} />}
+              {showResultAndChat && (
+                <OpenInChatButton task={task} run={resolvedRun} onNavigate={() => onOpenChange(false)} />
+              )}
+              {/* RD8 — always embed run history so it survives a schedule edit,
+                  independent of whether the current trigger can still project
+                  a given run's occurrence_ms (spec §4.3/§3.6). */}
+              <TaskRunsList taskId={task.id} onNavigate={() => onOpenChange(false)} />
             </div>
           ) : (
             <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">

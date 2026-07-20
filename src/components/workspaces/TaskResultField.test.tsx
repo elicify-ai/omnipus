@@ -4,13 +4,15 @@
  * Unit coverage for the result field extracted out of TaskDetailPanel — self
  * gates to (status done|failed) AND a non-empty result, identical to
  * TaskDetailPanel's `showResult` (see CalendarEventSlideOver.test.tsx for the
- * calendar-side integration coverage).
+ * calendar-side integration coverage). Also covers the run-aware `run` prop
+ * (ADR-050 RD8): when provided, the RUN's status/result gate and render
+ * instead of the task's.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { TaskResultField } from './TaskResultField'
-import type { Task } from '@/lib/api'
+import type { Task, TaskRun } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
@@ -33,6 +35,21 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     created_by: 'alice',
     created_at: '2026-06-20T10:00:00Z',
     updated_at: '2026-06-20T10:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeRun(overrides: Partial<TaskRun> = {}): TaskRun {
+  return {
+    run_id: 'run-1',
+    task_id: 'task-1',
+    occurrence_ms: 1_800_000_000_000,
+    status: 'done',
+    result: 'Run result.',
+    session_id: 'sess-run-1',
+    kind: 'scheduled',
+    started_at: '2026-07-20T09:00:00Z',
+    ended_at: '2026-07-20T09:05:00Z',
     ...overrides,
   }
 }
@@ -90,5 +107,39 @@ describe('TaskResultField — copy', () => {
     await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(
       expect.objectContaining({ variant: 'error' }),
     ))
+  })
+})
+
+describe('TaskResultField — run-aware (`run` prop, ADR-050 RD8)', () => {
+  it('with a resolved `run`, renders the RUN result, not task.result', () => {
+    // Task mirror shows an unrelated (e.g. more recent) result — the RUN's
+    // own result must win when `run` is provided.
+    const task = makeTask({ status: 'done', result: 'Task-level (latest fire) result.' })
+    const run = makeRun({ status: 'done', result: 'This occurrence’s own result.' })
+    render(<TaskResultField task={task} run={run} />)
+
+    expect(screen.getByText('This occurrence’s own result.')).toBeInTheDocument()
+    expect(screen.queryByText('Task-level (latest fire) result.')).not.toBeInTheDocument()
+  })
+
+  it('with a resolved `run`, gates on the RUN status — renders nothing for an in-progress run even if task.status is done', () => {
+    const task = makeTask({ status: 'done', result: 'Stale task-level result.' })
+    const run = makeRun({ status: 'in_progress', result: undefined })
+    const { container } = render(<TaskResultField task={task} run={run} />)
+
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('with a resolved failed `run`, shows that run’s failure result', () => {
+    const task = makeTask({ status: 'done', result: 'Task says done.' })
+    const run = makeRun({ status: 'failed', result: 'This occurrence failed.' })
+    render(<TaskResultField task={task} run={run} />)
+
+    expect(screen.getByText('This occurrence failed.')).toBeInTheDocument()
+  })
+
+  it('without `run`, behaviour is unchanged (reads task.result)', () => {
+    render(<TaskResultField task={makeTask({ status: 'done', result: 'Plain task result.' })} />)
+    expect(screen.getByText('Plain task result.')).toBeInTheDocument()
   })
 })

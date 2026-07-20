@@ -59,12 +59,25 @@ vi.mock('@/components/calendar/CalendarToolbar', () => ({
 
 // ── 2. Mock slide-overs / popover with testid stubs ─────────────────────────
 
-const capturedEventSlideOver = { open: false, taskId: '' }
+const capturedEventSlideOver: { open: boolean; taskId: string; selectedOccurrenceMs: number | undefined } = {
+  open: false,
+  taskId: '',
+  selectedOccurrenceMs: undefined,
+}
 
 vi.mock('@/components/calendar/CalendarEventSlideOver', () => ({
-  CalendarEventSlideOver: ({ open, task }: { open: boolean; task: { id: string } | null }) => {
+  CalendarEventSlideOver: ({
+    open,
+    task,
+    selectedOccurrenceMs,
+  }: {
+    open: boolean
+    task: { id: string } | null
+    selectedOccurrenceMs?: number
+  }) => {
     capturedEventSlideOver.open = open
     capturedEventSlideOver.taskId = task?.id ?? ''
+    capturedEventSlideOver.selectedOccurrenceMs = selectedOccurrenceMs
     return <div data-testid="calendar-event-slideover" data-open={String(open)} data-task-id={task?.id ?? ''} />
   },
 }))
@@ -167,6 +180,7 @@ beforeEach(() => {
   capturedProps.isEmpty = undefined
   capturedEventSlideOver.open = false
   capturedEventSlideOver.taskId = ''
+  capturedEventSlideOver.selectedOccurrenceMs = undefined
   capturedTaskDetailSlideOver.taskId = ''
 
   vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
@@ -233,11 +247,13 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
     // closure over the pre-load empty `tasks` array.
     await waitFor(() => expect(capturedProps.events.length).toBeGreaterThan(0))
 
+    const occurrenceMs = 1_784_620_800_000
     const ext: CalendarEventExtProps = {
       kind: 'task-occurrence',
       taskId: 'task-1',
-      status: 'next',
+      status: 'scheduled',
       icon: 'Clock',
+      occurrenceMs,
     }
     await act(async () => {
       capturedProps.onEventClick!({
@@ -249,6 +265,39 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
     await waitFor(() => expect(capturedEventSlideOver.open).toBe(true))
     expect(capturedEventSlideOver.taskId).toBe('task-1')
     expect(capturedTaskDetailSlideOver.taskId).toBe('')
+    // ADR-050 RD8 / task-run-history-spec.md §4.1: the individual instant's
+    // own occurrenceMs is threaded through as selectedOccurrenceMs.
+    expect(capturedEventSlideOver.selectedOccurrenceMs).toBe(occurrenceMs)
+  })
+
+  it('clicking an aggregated bucket chip opens the slide-over WITHOUT a selectedOccurrenceMs', async () => {
+    // A bucket's day_start_ms is not a real occurrence instant and would
+    // never exact-match a run's occurrence_ms in the slide-over — passing it
+    // as selectedOccurrenceMs would silently hide the Result/Open-in-Chat
+    // sections instead of falling back to task-level behaviour.
+    mockUseOccurrences.mockReturnValue({ data: [], isError: false, isLoading: false })
+    renderCalendarScreen()
+
+    await waitFor(() => expect(capturedProps.events.length).toBeGreaterThan(0))
+
+    const ext: CalendarEventExtProps = {
+      kind: 'task-occurrence-agg',
+      taskId: 'task-1',
+      status: 'done',
+      icon: 'CheckCircle',
+      tooltip: '3 done',
+      dayStartMs: 1_784_592_000_000,
+    }
+    await act(async () => {
+      capturedProps.onEventClick!({
+        event: { extendedProps: ext },
+        jsEvent: { target: document.createElement('div') },
+      } as unknown as EventClickArg)
+    })
+
+    await waitFor(() => expect(capturedEventSlideOver.open).toBe(true))
+    expect(capturedEventSlideOver.taskId).toBe('task-1')
+    expect(capturedEventSlideOver.selectedOccurrenceMs).toBeUndefined()
   })
 
   it('clicking a due chip still opens the existing task detail panel, not the event slide-over', async () => {

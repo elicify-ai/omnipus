@@ -62,7 +62,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // Task-lifecycle sections (edit mode only): TaskChecklistField's own
     // checklist mutation.
     setTaskTodos: vi.fn().mockResolvedValue({}),
-    tasksQueryKeys: { list: () => ['tasks'] },
+    // ADR-050 RD8 (§4.3) — occurrence run resolution + "Run now". Default:
+    // no runs (matches most tests, which don't pass selectedOccurrenceMs so
+    // the query is disabled anyway); per-test overrides resolve specific runs.
+    fetchTaskRuns: vi.fn().mockResolvedValue([]),
+    runTaskNow: vi.fn().mockResolvedValue(undefined),
+    tasksQueryKeys: actual.tasksQueryKeys,
   }
 })
 
@@ -70,9 +75,12 @@ import {
   createTask,
   updateTask,
   setTaskTodos,
+  fetchTaskRuns,
+  runTaskNow,
   fetchWorkspaceDelegation,
   ApiError,
 } from '@/lib/api'
+import type { TaskRun } from '@/lib/api'
 
 const mockUseOccurrences = vi.fn()
 vi.mock('@/lib/calendar/useOccurrences', () => ({
@@ -145,6 +153,21 @@ const CUSTOM_RRULE_TRIGGER: TaskTrigger = {
   },
 }
 
+function makeRun(overrides: Partial<TaskRun> = {}): TaskRun {
+  return {
+    run_id: 'run-1',
+    task_id: 'task-1',
+    occurrence_ms: ANCHOR.getTime(),
+    status: 'done',
+    result: 'Occurrence result.',
+    session_id: 'sess-occurrence-1',
+    kind: 'scheduled',
+    started_at: '2026-07-20T09:00:00Z',
+    ended_at: '2026-07-20T09:05:00Z',
+    ...overrides,
+  }
+}
+
 function renderSlideOver(
   props: Partial<{
     open: boolean
@@ -152,6 +175,7 @@ function renderSlideOver(
     workspaceId: string
     task: Task | null
     initialDate: Date
+    selectedOccurrenceMs: number | null
   }> = {},
 ) {
   const defaults = {
@@ -170,6 +194,7 @@ function renderSlideOver(
         workspaceId={merged.workspaceId}
         task={merged.task}
         initialDate={merged.initialDate}
+        selectedOccurrenceMs={merged.selectedOccurrenceMs}
       />
     </QueryClientProvider>,
   )
@@ -209,6 +234,8 @@ beforeEach(() => {
   vi.mocked(updateTask).mockReset().mockResolvedValue(makeTask() as never)
   vi.mocked(setTaskTodos).mockReset().mockResolvedValue({} as never)
   vi.mocked(fetchWorkspaceDelegation).mockReset().mockRejectedValue(new Error('not mocked'))
+  vi.mocked(fetchTaskRuns).mockReset().mockResolvedValue([])
+  vi.mocked(runTaskNow).mockReset().mockResolvedValue(undefined)
   mockAddToast.mockReset()
   mockNavigate.mockReset()
   mockUseOccurrences.mockReset().mockReturnValue({ data: [], isError: false, isLoading: false })
@@ -681,16 +708,13 @@ describe('CalendarEventSlideOver — task-lifecycle sections', () => {
     expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
   })
 
-  it('"Run now" calls updateTask with {status: "in_progress"}', async () => {
+  it('"Run now" calls runTaskNow(task.id, undefined) — task-level, no occurrence selected', async () => {
     const task = makeTask({ id: 'task-edit-run', status: 'next' })
     renderSlideOver({ task })
 
     fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
 
-    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith(
-      'task-edit-run',
-      { status: 'in_progress' },
-    ))
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-edit-run', undefined))
   })
 
   it('checklist toggle calls setTaskTodos with the flipped item', async () => {
@@ -752,5 +776,143 @@ describe('CalendarEventSlideOver — task-lifecycle sections', () => {
       expect.objectContaining({ to: '/sessions/$sessionId', params: { sessionId: 'sess-cal-1' } }),
     ))
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('always embeds the run-history list (RD8 — survives regardless of occurrence selection)', async () => {
+    const task = makeTask({ id: 'task-edit-history' })
+    renderSlideOver({ task })
+
+    expect(await screen.findByText(/run history/i)).toBeInTheDocument()
+    expect(await screen.findByTestId('task-runs-empty')).toBeInTheDocument()
+    expect(vi.mocked(fetchTaskRuns)).toHaveBeenCalledWith('task-edit-history')
+  })
+})
+
+// ── Occurrence run resolution (ADR-050 RD8 / spec §4.3) ────────────────────
+//
+// `selectedOccurrenceMs` re-points TaskRunStatusField/TaskResultField/
+// OpenInChatButton at a SPECIFIC occurrence's run instead of the task-level
+// mirror. See TaskRunStatusField.test.tsx / TaskResultField.test.tsx /
+// OpenInChatButton.test.tsx for the run-aware `run`/`occurrenceMs` prop unit
+// coverage in isolation — this describe block covers the SLIDE-OVER's own
+// resolution (fetchTaskRuns + occurrence_ms match + newest-wins) and the
+// three states from spec §4.3.
+describe('CalendarEventSlideOver — occurrence run resolution (selectedOccurrenceMs, ADR-050 RD8 / spec §4.3)', () => {
+  const OCC_MS = 1_800_000_000_000
+
+  it('resolves the matching run by occurrence_ms and shows ITS status/result/Open-in-Chat (not the task-level mirror)', async () => {
+    // Task-level mirror deliberately disagrees (in_progress / no session) so
+    // a pass here proves the RUN, not the task, drove the render.
+    const task = makeTask({ id: 'task-occ-a', status: 'in_progress', session_id: undefined })
+    const run = makeRun({
+      occurrence_ms: OCC_MS,
+      status: 'failed',
+      result: 'This occurrence failed.',
+      session_id: 'sess-occ-a',
+    })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([run])
+    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+
+    expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Failed')
+    // Scoped to TaskResultField's own testid — the SAME run's result also
+    // legitimately appears in the always-embedded Run history list below
+    // (RD8 §3.6), so a page-wide text query would find both.
+    expect(await screen.findByTestId('task-result-text')).toHaveTextContent('This occurrence failed.')
+
+    // The same run also legitimately gets an "Open in Chat" row-button inside
+    // the always-embedded Run history list (RD8 §3.6) — the top-level
+    // OpenInChatButton (this section's own) renders first in DOM order.
+    const [chatButton] = await screen.findAllByRole('button', { name: /open in chat/i })
+    fireEvent.click(chatButton)
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/sessions/$sessionId', params: { sessionId: 'sess-occ-a' } }),
+    ))
+  })
+
+  it('picks the NEWEST run by started_at when several runs match the same occurrence', async () => {
+    const task = makeTask({ id: 'task-occ-b' })
+    const older = makeRun({
+      run_id: 'run-old',
+      occurrence_ms: OCC_MS,
+      status: 'failed',
+      started_at: '2026-07-20T09:00:00Z',
+      result: 'Old attempt failed.',
+    })
+    const newer = makeRun({
+      run_id: 'run-new',
+      occurrence_ms: OCC_MS,
+      status: 'done',
+      started_at: '2026-07-20T10:00:00Z',
+      result: 'Retried and succeeded.',
+    })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([older, newer])
+    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+
+    expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Done')
+    // Scoped to TaskResultField's own testid — the OLDER run's result also
+    // legitimately appears in the always-embedded Run history list (RD8
+    // §3.6, both runs render there), so this must not be a page-wide query.
+    expect(await screen.findByTestId('task-result-text')).toHaveTextContent('Retried and succeeded.')
+  })
+
+  it('a future occurrence with no resolved run shows ONLY "Run now" — no badge, no result, no chat link', async () => {
+    const task = makeTask({ id: 'task-occ-future', status: 'done', result: 'Unrelated task-level result.' })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([]) // no run yet for this occurrence
+    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+
+    // Settle the shared fetchTaskRuns query (TaskRunsList renders its own
+    // empty state once it resolves) before asserting the negative states,
+    // so this isn't just catching the transient pre-fetch render.
+    expect(await screen.findByTestId('task-runs-empty')).toBeInTheDocument()
+
+    expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('task-run-status-badge')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unrelated task-level result.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /open in chat/i })).not.toBeInTheDocument()
+  })
+
+  it('"Run now" for a WITH-run occurrence calls runTaskNow(task.id, selectedOccurrenceMs)', async () => {
+    const task = makeTask({ id: 'task-occ-runnow-with' })
+    const run = makeRun({ occurrence_ms: OCC_MS, status: 'done' })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([run])
+    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+
+    fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-runnow-with', OCC_MS))
+  })
+
+  it('"Run now" for a FUTURE (no-run) occurrence also calls runTaskNow(task.id, selectedOccurrenceMs)', async () => {
+    const task = makeTask({ id: 'task-occ-runnow-future' })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([])
+    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+
+    fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-runnow-future', OCC_MS))
+  })
+
+  it('shows an inline error when the occurrence-run resolution query fails, but "Run now" remains available', async () => {
+    const task = makeTask({ id: 'task-occ-error' })
+    vi.mocked(fetchTaskRuns).mockRejectedValue(new Error('network down'))
+    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+
+    expect(await screen.findByTestId('occurrence-run-resolve-error')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('task-run-status-badge')).not.toBeInTheDocument()
+  })
+
+  it('without selectedOccurrenceMs, task-level behaviour is unchanged (series-config edit / normal task)', async () => {
+    const task = makeTask({
+      id: 'task-no-occ',
+      status: 'done',
+      result: 'Series-level result.',
+      session_id: 'sess-series',
+    })
+    renderSlideOver({ task })
+
+    expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Done')
+    expect(await screen.findByText('Series-level result.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open in chat/i })).toBeInTheDocument()
   })
 })

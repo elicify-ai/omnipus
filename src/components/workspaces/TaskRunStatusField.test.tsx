@@ -3,21 +3,24 @@
  *
  * Unit coverage for the read-only status badge + "Run now" action extracted
  * for the calendar's recurring-task EDIT mode (CalendarEventSlideOver.test.tsx
- * covers the integration). "Run now" performs the exact same mutation as
- * TaskDetailPanel's "Start Task" button — PATCH status → in_progress.
+ * covers the integration). "Run now" calls runTaskNow (POST /tasks/{id}/runs,
+ * ADR-050 RD7) — see task-run-history-spec.md §3.4/§4.3. Also covers the
+ * run-aware `run`/`occurrenceMs` props (ADR-050 RD8): a resolved run
+ * re-points the badge at THAT run's status; an occurrence with no resolved
+ * run yet renders only "Run now" (no badge).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskRunStatusField } from './TaskRunStatusField'
-import type { Task } from '@/lib/api'
+import type { Task, TaskRun } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    updateTask: vi.fn().mockResolvedValue({}),
+    runTaskNow: vi.fn().mockResolvedValue(undefined),
     isApiError: vi.fn().mockReturnValue(false),
     tasksQueryKeys: actual.tasksQueryKeys,
   }
@@ -52,17 +55,35 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   }
 }
 
-function renderField(task: Task) {
+function makeRun(overrides: Partial<TaskRun> = {}): TaskRun {
+  return {
+    run_id: 'run-1',
+    task_id: 'task-1',
+    occurrence_ms: 1_800_000_000_000,
+    status: 'done',
+    result: 'Done.',
+    session_id: 'sess-run-1',
+    kind: 'scheduled',
+    started_at: '2026-07-20T09:00:00Z',
+    ended_at: '2026-07-20T09:05:00Z',
+    ...overrides,
+  }
+}
+
+function renderField(
+  task: Task,
+  extra: { run?: TaskRun; occurrenceMs?: number | null } = {},
+) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <TaskRunStatusField task={task} />
+      <TaskRunStatusField task={task} run={extra.run} occurrenceMs={extra.occurrenceMs} />
     </QueryClientProvider>,
   )
 }
 
 beforeEach(async () => {
   const api = await import('@/lib/api')
-  vi.mocked(api.updateTask).mockReset().mockResolvedValue({} as never)
+  vi.mocked(api.runTaskNow).mockReset().mockResolvedValue(undefined)
   mockAddToast.mockReset()
 })
 
@@ -142,21 +163,21 @@ describe('TaskRunStatusField — "Run now"', () => {
     expect(screen.queryByRole('button', { name: /run now/i })).toBeNull()
   })
 
-  it('clicking "Run now" calls updateTask(task.id, {status: "in_progress"})', async () => {
-    const { updateTask } = await import('@/lib/api')
+  it('clicking "Run now" calls runTaskNow(task.id, undefined) — task-level, no occurrence', async () => {
+    const { runTaskNow } = await import('@/lib/api')
     renderField(makeTask({ id: 'task-run', status: 'next' }))
 
     fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
 
-    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith('task-run', { status: 'in_progress' }))
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-run', undefined))
     await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(
       expect.objectContaining({ variant: 'success' }),
     ))
   })
 
   it('surfaces a mutation failure via a toast', async () => {
-    const { updateTask } = await import('@/lib/api')
-    vi.mocked(updateTask).mockRejectedValueOnce(new Error('server rejected'))
+    const { runTaskNow } = await import('@/lib/api')
+    vi.mocked(runTaskNow).mockRejectedValueOnce(new Error('server rejected'))
     renderField(makeTask({ status: 'next' }))
 
     fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
@@ -164,5 +185,61 @@ describe('TaskRunStatusField — "Run now"', () => {
     await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(
       expect.objectContaining({ variant: 'error' }),
     ))
+  })
+})
+
+describe('TaskRunStatusField — run-aware (`run` / `occurrenceMs`, ADR-050 RD8)', () => {
+  it('with a resolved `run`, the badge reflects the RUN status, not task.status', async () => {
+    const task = makeTask({ id: 'task-occ', status: 'in_progress' })
+    const run = makeRun({ status: 'failed' })
+    renderField(task, { run, occurrenceMs: run.occurrence_ms })
+
+    expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Failed')
+  })
+
+  it('with a resolved `run`, "Run now" calls runTaskNow(task.id, occurrenceMs)', async () => {
+    const { runTaskNow } = await import('@/lib/api')
+    const task = makeTask({ id: 'task-occ-run', status: 'done' })
+    const run = makeRun({ status: 'done', occurrence_ms: 1_900_000_000_000 })
+    renderField(task, { run, occurrenceMs: 1_900_000_000_000 })
+
+    fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-run', 1_900_000_000_000))
+  })
+
+  it('hides "Run now" when the resolved run is already in_progress', async () => {
+    const task = makeTask({ id: 'task-occ-inflight' })
+    const run = makeRun({ status: 'in_progress' })
+    renderField(task, { run, occurrenceMs: run.occurrence_ms })
+
+    await screen.findByTestId('task-run-status-badge')
+    expect(screen.queryByRole('button', { name: /run now/i })).toBeNull()
+  })
+
+  it('an occurrence with NO resolved run shows ONLY "Run now" — no badge', async () => {
+    const task = makeTask({ id: 'task-occ-future', status: 'next' })
+    renderField(task, { occurrenceMs: 2_000_000_000_000 }) // no `run` — future/unresolved
+
+    expect(await screen.findByRole('button', { name: /run now/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('task-run-status-badge')).not.toBeInTheDocument()
+  })
+
+  it('a future/unresolved occurrence "Run now" still calls runTaskNow(task.id, occurrenceMs)', async () => {
+    const { runTaskNow } = await import('@/lib/api')
+    const task = makeTask({ id: 'task-occ-future-run' })
+    renderField(task, { occurrenceMs: 2_100_000_000_000 })
+
+    fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-future-run', 2_100_000_000_000))
+  })
+
+  it('with neither `run` nor `occurrenceMs`, behaviour is unchanged (task-level badge)', async () => {
+    const task = makeTask({ id: 'task-plain', status: 'failed' })
+    renderField(task)
+
+    expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Failed')
+    expect(screen.queryByTestId('occurrence-run-now-only')).not.toBeInTheDocument()
   })
 })
