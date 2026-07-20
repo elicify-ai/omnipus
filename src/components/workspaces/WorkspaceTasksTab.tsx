@@ -224,13 +224,30 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   const selectedTask =
     selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
 
-  const heading = selectedPlan ? `${selectedPlan.title} — tasks` : 'Tasks'
+  const heading = selectedPlan ? `${selectedPlan.title} — tasks` : 'Team Task Backlog'
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
+      {/* ── Plans section ── bold heading + a minimalist "+ New Plan" text
+          link, over a thin separator. (Matches the operator mockup: section
+          labels + hairline separators + link-style create actions, generous
+          spacing.) */}
+      <div className="flex items-center justify-between px-6 pt-5 pb-3 flex-shrink-0">
+        <h2 className="font-headline text-base font-bold text-[var(--color-secondary)]">Plans</h2>
+        <button tabIndex={0}
+          type="button"
+          onClick={() => setPlanSlideOver({ open: true, plan: null })}
+          className="flex items-center gap-1 text-sm text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+        >
+          <Plus size={14} />
+          New Plan
+        </button>
+      </div>
+      <div className="mx-6 border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
+
       {/* Plans-as-filter band (ADR-051 D2/D3) — overview + single-select
-          filter, not navigation. Selecting a tile scopes the board below;
-          it never drills into a separate screen. */}
+          filter, not navigation. Its own dashed "New plan" tile is hidden;
+          the section header above owns that action. */}
       <PlansFilterBand
         plans={plans}
         tasks={tasks}
@@ -243,21 +260,31 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         onStopPlan={(plan) => stopPlanMutation.mutate(plan.id)}
         onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)}
         pendingAction={pendingAction}
+        showNewPlanTile={false}
       />
 
-      {/* Toolbar: view switcher + tag filter + owner filter + new task */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0 flex-wrap">
+      {/* ── Team Task Backlog section ── dynamic heading (the plan name
+          replaces "Team Task Backlog" when a plan filter is active — ADR-051
+          D2, Visibility of System Status) + the Board/List/Graph switcher +
+          filters + a minimalist "+ New Task" link, over a thin separator. */}
+      <div className="flex items-center gap-5 px-6 pt-6 pb-3 flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-1" data-testid="tasks-heading">
+          <h2 className="font-headline text-base font-bold text-[var(--color-secondary)]">
+            {heading}
+          </h2>
+          {view !== 'graph' && ownerAgent && (
+            <span className="text-xs text-[var(--color-muted)]">· Owner: {ownerAgent.name}</span>
+          )}
+        </div>
         <ViewSwitcher value={view} onChange={setView} />
-        {/* Tag + Owner filters only apply to Board/List — the Graph view
-            honors the plan filter alone (see the header comment), so these
-            never render for a filter Graph doesn't actually claim to apply
-            (precedent: AltitudeToggle below is already board-only). */}
-        {view !== 'graph' && (
-          <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
-        )}
-
-        <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-          {/* Altitude toggle (Top-level / Show all) — board-only view control. */}
+        {/* Tag + Owner filters only apply to Board/List — the Graph view honors
+            the plan filter alone, so these never render for a filter Graph
+            doesn't actually claim to apply (AltitudeToggle is likewise
+            board-only). */}
+        <div className="ml-auto flex items-center gap-3 flex-shrink-0 flex-wrap">
+          {view !== 'graph' && (
+            <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
+          )}
           {view === 'board' && (
             <AltitudeToggle value={boardAltitude} onChange={setBoardAltitude} />
           )}
@@ -267,28 +294,14 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           <button tabIndex={0}
             type="button"
             onClick={() => setCreateTaskOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90 transition-colors flex-shrink-0"
+            className="flex items-center gap-1 text-sm text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
           >
-            <Plus size={13} />
-            New task
+            <Plus size={14} />
+            New Task
           </button>
         </div>
       </div>
-
-      {/* Dynamic heading (ADR-051 D2 — Visibility of System Status) */}
-      <div
-        className="flex items-center gap-1 px-4 py-1.5 border-b border-[var(--color-border)]/50 flex-shrink-0"
-        data-testid="tasks-heading"
-      >
-        <h2 className="text-sm font-headline font-semibold text-[var(--color-secondary)]">
-          {heading}
-        </h2>
-        {view !== 'graph' && ownerAgent && (
-          <span className="text-xs text-[var(--color-muted)]">
-            {' '}· Owner: {ownerAgent.name}
-          </span>
-        )}
-      </div>
+      <div className="mx-6 border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
 
       {agentsError && (
         <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
