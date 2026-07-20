@@ -44,17 +44,19 @@ interface PlansFilterBandProps {
   onApprovePlan: (plan: Plan) => void
   onStopPlan: (plan: Plan) => void
   onClearPlan: (plan: Plan) => void
-  approvingPlanId?: string | null
-  stoppingPlanId?: string | null
-  clearingPlanId?: string | null
+  /** The plan (if any) with an approve/stop/clear mutation currently in
+   * flight, and which one — at most one plan action is ever pending at a
+   * time, so this is a single discriminated field rather than three
+   * independently-nullable id props. */
+  pendingAction?: { planId: string; action: 'approve' | 'stop' | 'clear' } | null
 }
 
 /** Shared footprint for the "All tasks" tile and every plan tile — Requirement: "Keep tiles the SAME size as each other." */
 const TILE_SIZE = 'w-56 flex-shrink-0'
 
 /**
- * Per-state glyph — mirrors PlanCard's `PlanStateGlyph` (always paired with
- * `planStateLabel`'s visible text, never color-alone, a11y).
+ * Per-state glyph — always paired with `planStateLabel`'s visible text,
+ * never color-alone (a11y).
  */
 function PlanStateGlyph({ state, size = 9 }: { state: Plan['state']; size?: number }) {
   switch (state) {
@@ -85,11 +87,11 @@ function PlanStateGlyph({ state, size = 9 }: { state: Plan['state']; size?: numb
  * plan tile exposes an explicit pencil (edit) button plus a ⋯ menu
  * (Approve/Stop/Clear) as SIBLINGS of the select button — never nested
  * inside it — so a click on either can never bubble into the tile's
- * onSelectPlan. This mirrors the isolation pattern PlanCard already ships:
- * the tile is `role="group"`, not a `role="button"` wrapping other buttons.
- * The ⋯ menu content and both AlertDialog confirms render through a Radix
- * portal (outside the tile's DOM subtree), so their clicks structurally
- * cannot reach the tile's select button either.
+ * onSelectPlan. The tile itself is `role="group"`, not a `role="button"`
+ * wrapping other buttons, so this isolation holds structurally rather than
+ * by convention. The ⋯ menu content and both AlertDialog confirms render
+ * through a Radix portal (outside the tile's DOM subtree), so their clicks
+ * structurally cannot reach the tile's select button either.
  */
 export function PlansFilterBand({
   plans,
@@ -102,9 +104,7 @@ export function PlansFilterBand({
   onApprovePlan,
   onStopPlan,
   onClearPlan,
-  approvingPlanId = null,
-  stoppingPlanId = null,
-  clearingPlanId = null,
+  pendingAction = null,
 }: PlansFilterBandProps) {
   return (
     <div
@@ -119,9 +119,9 @@ export function PlansFilterBand({
       />
 
       {plans.map((plan) => {
-        // "member tasks" = this plan's own top-level tasks (mirrors
-        // PlanCard's memberTotal/memberDone contract — excludes subtasks,
-        // which nest under their parent and would otherwise double-count).
+        // "member tasks" = this plan's own top-level tasks — subtasks nest
+        // under their parent and would otherwise double-count toward the
+        // tile's done/total progress.
         const memberTasks = tasks.filter((t) => t.plan_id === plan.id && !t.parent_task_id)
         const memberTotal = memberTasks.length
         const memberDone = memberTasks.filter((t) => t.status === 'done').length
@@ -140,9 +140,9 @@ export function PlansFilterBand({
             onApprove={() => onApprovePlan(plan)}
             onStop={() => onStopPlan(plan)}
             onClear={() => onClearPlan(plan)}
-            isApproving={approvingPlanId === plan.id}
-            isStopping={stoppingPlanId === plan.id}
-            isClearing={clearingPlanId === plan.id}
+            isApproving={pendingAction?.planId === plan.id && pendingAction.action === 'approve'}
+            isStopping={pendingAction?.planId === plan.id && pendingAction.action === 'stop'}
+            isClearing={pendingAction?.planId === plan.id && pendingAction.action === 'clear'}
           />
         )
       })}

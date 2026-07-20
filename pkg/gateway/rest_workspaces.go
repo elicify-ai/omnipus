@@ -136,7 +136,7 @@ func listWorkspaceFiles(home string) ([]storedWorkspace, error) {
 }
 
 // scanTasks walks the unified tasks directory and calls fn for every file that
-// deserialises to a valid task (status in the 7-state vocabulary).
+// deserialises to a valid task (status in the 6-state vocabulary).
 // Returns the first I/O error; fn errors are not propagated.
 func scanTasks(home string, fn func(id string, t task.Task)) error {
 	dir := filepath.Join(home, "tasks")

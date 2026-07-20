@@ -206,6 +206,17 @@ describe('PlansFilterBand — plan tile progress + owner', () => {
     renderBand({ plans: [makePlan({ owner_agent_id: 'jim' })] })
     expect(screen.getByText('Jim')).toBeInTheDocument()
   })
+
+  it('shows 0/0 (never NaN) when a plan has zero member tasks', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-empty' })],
+      tasks: [],
+    })
+    expect(screen.getByText('0/0')).toBeInTheDocument()
+    expect(screen.getByLabelText('Progress: 0 of 0 tasks done')).toBeInTheDocument()
+    // Guard against a regression to `Math.round(NaN)` — no "NaN" anywhere.
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+  })
 })
 
 // ── Edit isolation (pencil never filters) ────────────────────────────────────
@@ -253,11 +264,15 @@ describe('PlansFilterBand — ⋯ menu isolation', () => {
 
   it('Cancel dismisses the Stop confirm dialog without calling onStopPlan', async () => {
     const user = userEvent.setup()
-    const { onStopPlan } = renderBand({ plans: [makePlan({ state: 'running' })] })
+    const { onStopPlan, onSelectPlan } = renderBand({ plans: [makePlan({ state: 'running' })] })
     await user.click(screen.getByRole('button', { name: 'Stop' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(onStopPlan).not.toHaveBeenCalled()
+    // Parity with the confirm-path isolation tests above — cancelling out of
+    // the ⋯ menu's confirm dialog must never bubble into the tile's own
+    // select/filter control either.
+    expect(onSelectPlan).not.toHaveBeenCalled()
   })
 
   it('Clear opens a confirm dialog naming the plan; confirming calls onClearPlan but NEVER onSelectPlan', async () => {
@@ -292,5 +307,65 @@ describe('PlansFilterBand — New Plan affordance', () => {
     const { onNewPlan } = renderBand()
     await user.click(screen.getByRole('button', { name: 'New plan' }))
     expect(onNewPlan).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── pendingAction (discriminated prop) ──────────────────────────────────────
+//
+// PlansFilterBand collapses the three independently-pending mutation states
+// (approve/stop/clear) into ONE `pendingAction: { planId, action } | null`
+// prop — the tile derives its own isApproving/isStopping/isClearing by
+// matching `pendingAction.planId` against its own plan id AND checking
+// `action`. These tests exercise that derivation directly via the real prop
+// shape (not the old approvingPlanId/stoppingPlanId/clearingPlanId props).
+
+describe('PlansFilterBand — pendingAction (discriminated prop)', () => {
+  it('disables Approve and shows "Approving…" when pendingAction matches this plan\'s approve', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
+      pendingAction: { planId: 'plan-x', action: 'approve' },
+    })
+    const approveBtn = screen.getByRole('button', { name: 'Approving…' })
+    expect(approveBtn).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+  })
+
+  it('disables Stop and shows "Stopping…" when pendingAction matches this plan\'s stop', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-x', state: 'running' })],
+      pendingAction: { planId: 'plan-x', action: 'stop' },
+    })
+    const stopBtn = screen.getByRole('button', { name: 'Stopping…' })
+    expect(stopBtn).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+  })
+
+  it('disables Clear and shows "Clearing…" when pendingAction matches this plan\'s clear', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
+      pendingAction: { planId: 'plan-x', action: 'clear' },
+    })
+    const clearBtn = screen.getByRole('button', { name: 'Clearing…' })
+    expect(clearBtn).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument()
+  })
+
+  it('a pendingAction for a DIFFERENT plan does not disable this plan\'s actions (proves the planId match, not a global flag)', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
+      pendingAction: { planId: 'plan-other', action: 'approve' },
+    })
+    const approveBtn = screen.getByRole('button', { name: 'Approve' })
+    expect(approveBtn).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Approving…' })).not.toBeInTheDocument()
+  })
+
+  it('a pendingAction for a DIFFERENT action on this same plan does not disable Approve (proves the action match)', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
+      pendingAction: { planId: 'plan-x', action: 'clear' },
+    })
+    const approveBtn = screen.getByRole('button', { name: 'Approve' })
+    expect(approveBtn).not.toBeDisabled()
   })
 })

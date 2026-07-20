@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -139,6 +139,19 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     },
   })
 
+  // At most one plan action is ever in flight — collapse the three
+  // mutations' pending state into the one discriminated value PlansFilterBand
+  // takes, instead of three independently-nullable "which plan is pending"
+  // props.
+  const pendingAction: { planId: string; action: 'approve' | 'stop' | 'clear' } | null =
+    approvePlanMutation.isPending && approvePlanMutation.variables
+      ? { planId: approvePlanMutation.variables, action: 'approve' }
+      : stopPlanMutation.isPending && stopPlanMutation.variables
+        ? { planId: stopPlanMutation.variables, action: 'stop' }
+        : clearPlanMutation.isPending && clearPlanMutation.variables
+          ? { planId: clearPlanMutation.variables, action: 'clear' }
+          : null
+
   const { data: plans = [], isError: plansError } = useQuery({
     queryKey: plansQueryKeys.list(workspaceId),
     queryFn: () => fetchPlans(workspaceId),
@@ -167,14 +180,6 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     staleTime: 60_000,
   })
 
-  // Plan + owner + tag filters AND together (ADR-051 D2/D6) — the one
-  // filtered task set every view below renders (Graph excepted; it scopes
-  // itself off the shared activePlanId store field, see the header comment).
-  const filteredTasks = useMemo(() => {
-    const tagFiltered = filterByTag(tasks, activeTagFilter)
-    return filterTasks(tagFiltered, { planId: activePlanId, ownerAgentId })
-  }, [tasks, activeTagFilter, activePlanId, ownerAgentId])
-
   const selectedPlan = useMemo(
     () => (activePlanId != null ? (plans.find((p) => p.id === activePlanId) ?? null) : null),
     [activePlanId, plans],
@@ -183,6 +188,38 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     () => (ownerAgentId != null ? (agents.find((a) => a.id === ownerAgentId) ?? null) : null),
     [ownerAgentId, agents],
   )
+
+  // Defensively reset a stale filter once its source list has actually
+  // loaded — e.g. right after a plan tile's ⋯ → Clear deletes the plan the
+  // board is currently scoped to, `activePlanId` still points at it for one
+  // render. An empty `plans`/`agents` array before the first fetch resolves
+  // must never be read as "this id doesn't exist", hence the `.length` guard.
+  useEffect(() => {
+    if (activePlanId && plans.length && !plans.some((p) => p.id === activePlanId)) {
+      setActivePlanId(null)
+    }
+  }, [activePlanId, plans, setActivePlanId])
+  useEffect(() => {
+    if (ownerAgentId && agents.length && !agents.some((a) => a.id === ownerAgentId)) {
+      setOwnerAgentId(null)
+    }
+  }, [ownerAgentId, agents])
+
+  // Plan + owner + tag filters AND together (ADR-051 D2/D6) — the one
+  // filtered task set every view below renders (Graph excepted; it scopes
+  // itself off the shared activePlanId store field, see the header comment).
+  // Only scope by plan once `activePlanId` actually resolves against the
+  // loaded `plans` list (`selectedPlan`) — mirrors the Graph tab's own guard
+  // (WorkspaceGraphTab passes `planId={activePlan ? activePlanId : null}`),
+  // so a stale id (e.g. mid-Clear, or before `plans` has loaded) never blanks
+  // the board to zero matches with no active tile and no signal why.
+  const filteredTasks = useMemo(() => {
+    const tagFiltered = filterByTag(tasks, activeTagFilter)
+    return filterTasks(tagFiltered, { planId: selectedPlan ? activePlanId : null, ownerAgentId })
+  }, [tasks, activeTagFilter, activePlanId, selectedPlan, ownerAgentId])
+
+  // Drives BoardView's empty-state copy ("no tasks match" vs "no tasks yet").
+  const hasActiveFilter = selectedPlan != null || ownerAgentId != null || activeTagFilter != null
 
   const selectedTask =
     selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
@@ -205,22 +242,28 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         onApprovePlan={(plan) => approvePlanMutation.mutate(plan.id)}
         onStopPlan={(plan) => stopPlanMutation.mutate(plan.id)}
         onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)}
-        approvingPlanId={approvePlanMutation.isPending ? (approvePlanMutation.variables ?? null) : null}
-        stoppingPlanId={stopPlanMutation.isPending ? (stopPlanMutation.variables ?? null) : null}
-        clearingPlanId={clearPlanMutation.isPending ? (clearPlanMutation.variables ?? null) : null}
+        pendingAction={pendingAction}
       />
 
       {/* Toolbar: view switcher + tag filter + owner filter + new task */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0 flex-wrap">
         <ViewSwitcher value={view} onChange={setView} />
-        <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
+        {/* Tag + Owner filters only apply to Board/List — the Graph view
+            honors the plan filter alone (see the header comment), so these
+            never render for a filter Graph doesn't actually claim to apply
+            (precedent: AltitudeToggle below is already board-only). */}
+        {view !== 'graph' && (
+          <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
+        )}
 
         <div className="flex items-center gap-2 ml-auto flex-shrink-0">
           {/* Altitude toggle (Top-level / Show all) — board-only view control. */}
           {view === 'board' && (
             <AltitudeToggle value={boardAltitude} onChange={setBoardAltitude} />
           )}
-          <OwnerFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
+          {view !== 'graph' && (
+            <OwnerFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
+          )}
           <button tabIndex={0}
             type="button"
             onClick={() => setCreateTaskOpen(true)}
@@ -240,7 +283,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         <h2 className="text-sm font-headline font-semibold text-[var(--color-secondary)]">
           {heading}
         </h2>
-        {ownerAgent && (
+        {view !== 'graph' && ownerAgent && (
           <span className="text-xs text-[var(--color-muted)]">
             {' '}· Owner: {ownerAgent.name}
           </span>
@@ -259,6 +302,12 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           Plans failed to load — the plans filter band may be incomplete.
         </div>
       )}
+      {tasksError && tasks.length > 0 && (
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
+          <Info size={12} weight="fill" className="shrink-0" />
+          Couldn't refresh — showing last-known tasks.
+        </div>
+      )}
 
       {/* Content */}
       <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
@@ -267,7 +316,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           // shared activePlanId store field directly, so it bypasses the
           // tasksLoading/tasksError gate below (which only guards Board/List,
           // both fed from THIS screen's own filtered task query).
-          <WorkspaceGraphTab workspaceId={workspaceId} />
+          <WorkspaceGraphTab workspaceId={workspaceId} hidePlanSelector />
         ) : tasksLoading ? (
           <BoardSkeleton />
         ) : tasksError && tasks.length === 0 ? (
@@ -280,6 +329,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             plans={plans}
             agents={agents}
             altitude={boardAltitude}
+            hasActiveFilter={hasActiveFilter}
             onTaskClick={(task) => setSelectedTaskId(task.id)}
             onTaskMove={(task, status) => moveMutation.mutate({ task, status })}
             onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })}

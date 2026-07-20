@@ -12,12 +12,11 @@ interface WorkspacesState {
   activeWorkspaceId: string | null
   setActiveWorkspaceId: (id: string | null) => void
   /**
-   * Shared Board⇄Graph plan scope (Hierarchical Drill-Down board). `null` =
-   * TOP LEVEL: the Board shows plan cards + loose tasks together and the Graph
-   * shows the whole workspace. A plan id = DRILLED: the Board shows that plan's
-   * own task board and the Graph shows that plan's DAG. Set by a plan card's
-   * drill-in (title / ⤢) and its ⑂ view-graph button (which also navigates to
-   * the Graph tab), plus the Graph tab's "By plan" selector.
+   * Shared Board⇄Graph plan FILTER (ADR-051). `null` = no plan filter — the
+   * "All tasks" tile is active and the Board/Graph show the whole workspace.
+   * A plan id = the Board and Graph are both scoped to that plan's tasks. Set
+   * by `PlansFilterBand`'s tile selection; the Graph reads this directly so it
+   * stays scope-synced with the Board.
    */
   activePlanId: string | null
   setActivePlanId: (id: string | null) => void

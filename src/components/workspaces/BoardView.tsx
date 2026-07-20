@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   DndContext,
   PointerSensor,
@@ -14,6 +14,7 @@ import {
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core'
+import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import type { Task, Agent, Plan } from '@/lib/api'
@@ -38,6 +39,12 @@ const COLUMNS: ColumnConfig[] = STATUS_ORDER.map((status) => ({
   label: STATUS_LABELS[status],
   headerColor: STATUS_COLORS[status],
 }))
+
+/** The canonical status vocabulary, for spotting tasks whose `status` isn't
+ * one of the STATUS_ORDER columns (e.g. a `planning` task left over from a
+ * partial migration) — those tasks match no column and must not be dropped
+ * silently. See the orphan-task banner in `BoardView`. */
+const STATUS_SET = new Set<TaskStatus>(STATUS_ORDER)
 
 // Screen-reader-only instructions dnd-kit surfaces via aria-describedby on
 // every draggable card, announced once when a card first receives focus.
@@ -123,6 +130,9 @@ interface BoardViewProps {
   plans: Plan[]
   agents?: Agent[]
   altitude: BoardAltitude
+  /** Whether a plan/owner/tag filter is currently narrowing `tasks` — drives
+   * the empty-state copy ("no tasks match the filter" vs "no tasks yet"). */
+  hasActiveFilter?: boolean
   onTaskClick: (task: Task) => void
   /** Persist a drag-to-column status change. Required for kanban DnD. */
   onTaskMove?: (task: Task, newStatus: TaskStatus) => void
@@ -144,6 +154,7 @@ export function BoardView({
   plans,
   agents = [],
   altitude,
+  hasActiveFilter = false,
   onTaskClick,
   onTaskMove,
   onMoveRejected,
@@ -154,14 +165,38 @@ export function BoardView({
   // NEVER rendered as standalone cards. They nest under their parent (altitude 'show-all').
   const rootTasks = useMemo(() => userTasks.filter((t) => !t.parent_task_id), [userTasks])
 
+  // Tasks whose status isn't one of the STATUS_ORDER columns — they match no
+  // column in the grid below and would otherwise vanish with no signal (they
+  // still count toward `tasks.length` everywhere else, e.g. List).
+  const orphanTasks = useMemo(() => rootTasks.filter((t) => !STATUS_SET.has(t.status)), [rootTasks])
+
+  useEffect(() => {
+    if (import.meta.env.DEV && orphanTasks.length > 0) {
+      console.warn(
+        '[BoardView] tasks with a status outside STATUS_ORDER (hidden from every column):',
+        orphanTasks.map((t) => [t.id, t.status]),
+      )
+    }
+  }, [orphanTasks])
+
   const counts = useMemo(() => countByStatus(rootTasks), [rootTasks])
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      <div className="flex-1 min-h-0 overflow-auto">
+      {orphanTasks.length > 0 && (
+        <div
+          role="status"
+          className="flex items-center gap-1.5 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)] px-3 py-1 text-[10px] text-[var(--color-warning)] flex-shrink-0"
+        >
+          <Info size={11} weight="fill" className="shrink-0" />
+          {orphanTasks.length} task{orphanTasks.length === 1 ? '' : 's'} with an unrecognized status{' '}
+          {orphanTasks.length === 1 ? "isn't" : "aren't"} shown in any column.
+        </div>
+      )}
+      <div className="relative flex-1 min-h-0 overflow-auto">
         <div className="min-w-max flex flex-col min-h-full">
           <StatusHeaderRow counts={counts} />
-          <LaneStatusRow
+          <StatusColumnsRow
             tasks={rootTasks}
             plans={plans}
             agents={agents}
@@ -171,7 +206,23 @@ export function BoardView({
             onMoveRejected={onMoveRejected}
           />
         </div>
+        {/* The column grid (drop targets) stays mounted even when empty; this
+            centered message just makes a legitimately-empty board read as
+            empty rather than as a load failure. */}
+        {rootTasks.length === 0 && <BoardEmptyState filtered={hasActiveFilter} />}
       </div>
+    </div>
+  )
+}
+
+/** Centered, subtle empty-state — a legitimately-empty (filtered or
+ * genuinely task-free) board must never read as a load failure. */
+function BoardEmptyState({ filtered }: { filtered: boolean }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
+      <p className="text-sm text-[var(--color-muted)]">
+        {filtered ? 'No tasks match the current filter.' : 'No tasks yet.'}
+      </p>
     </div>
   )
 }
@@ -198,7 +249,7 @@ function StatusHeaderRow({ counts }: { counts: Record<TaskStatus, number> }) {
 
 // ── One row of N status cells (single DndContext) ──────────────────────────
 
-interface LaneStatusRowProps {
+interface StatusColumnsRowProps {
   tasks: Task[]
   plans: Plan[]
   agents: Agent[]
@@ -209,11 +260,11 @@ interface LaneStatusRowProps {
 }
 
 /**
- * One full-height row of status cells (one per STATUS_ORDER entry), each
+ * One full-height row of status columns (one per STATUS_ORDER entry), each
  * independently droppable — horizontal status DnD scoped to the given tasks
  * via its own `DndContext`.
  */
-function LaneStatusRow({
+function StatusColumnsRow({
   tasks,
   plans,
   agents,
@@ -221,7 +272,7 @@ function LaneStatusRow({
   onTaskClick,
   onTaskMove,
   onMoveRejected,
-}: LaneStatusRowProps) {
+}: StatusColumnsRowProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
 
   const sensors = useSensors(
@@ -273,7 +324,7 @@ function LaneStatusRow({
     >
       <div className="flex flex-1">
         {COLUMNS.map((col) => (
-          <LaneStatusCell
+          <StatusColumn
             key={col.status}
             config={col}
             tasks={tasks.filter((t) => t.status === col.status)}
@@ -305,7 +356,7 @@ function LaneStatusRow({
   )
 }
 
-interface LaneStatusCellProps {
+interface StatusColumnProps {
   config: ColumnConfig
   tasks: Task[]
   plans: Plan[]
@@ -315,7 +366,7 @@ interface LaneStatusCellProps {
   onTaskClick: (task: Task) => void
 }
 
-function LaneStatusCell({
+function StatusColumn({
   config,
   tasks,
   plans,
@@ -323,7 +374,7 @@ function LaneStatusCell({
   altitude,
   activeTask,
   onTaskClick,
-}: LaneStatusCellProps) {
+}: StatusColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: config.status })
 
   // Visual feedback: highlight a cell the dragged card can legally land in.

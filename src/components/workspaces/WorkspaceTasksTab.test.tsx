@@ -109,6 +109,14 @@ vi.mock('./PlansFilterBand', () => ({
   ),
 }))
 
+// Sentinel stub for the Graph tab — real WorkspaceGraphTab has its own data
+// fetching/canvas concerns (covered by its own test file); this file only
+// needs to prove WorkspaceTasksTab actually swaps it in on view=graph and
+// gates the Board-only filter controls around it (the W1 fix).
+vi.mock('./WorkspaceGraphTab', () => ({
+  WorkspaceGraphTab: () => <div data-testid="graph-tab-sentinel">Graph Sentinel</div>,
+}))
+
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 function makePlan(overrides: Partial<Plan> = {}): Plan {
@@ -362,5 +370,116 @@ describe('WorkspaceTasksTab — plan mutation wiring', () => {
 
     // CreatePlanSlideOver renders as a Sheet (role=dialog) once opened.
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+// ── End-to-end filter behavior (the board actually filters) ────────────────
+//
+// Everything above verifies WIRING through the PlansFilterBand stub. These
+// tests verify the actual PAYLOAD: selecting a plan/owner narrows what
+// renders on the real (unmocked) Board below, proving `filteredTasks`
+// (WorkspaceTasksTab.tsx) is genuinely applied — not just computed and
+// ignored.
+
+describe('WorkspaceTasksTab — end-to-end filter behavior (Board actually filters)', () => {
+  it('selecting a plan tile filters the board down to that plan\'s member tasks', async () => {
+    const user = userEvent.setup()
+    const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+    vi.mocked(fetchTasks).mockResolvedValue([
+      makeTask({ id: 't-member', title: 'Member task', plan_id: 'plan-a' }),
+      makeTask({ id: 't-loose', title: 'Loose task' }), // no plan_id — plan-less
+    ])
+
+    renderTab()
+    // Both tasks render on the unfiltered board first — proves the board
+    // really renders real cards before we narrow it.
+    expect(await screen.findByText('Member task')).toBeInTheDocument()
+    expect(screen.getByText('Loose task')).toBeInTheDocument()
+
+    await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
+
+    // The plan-less task must actually disappear — not just the heading
+    // changing while the board silently keeps rendering everything.
+    await waitFor(() => expect(screen.queryByText('Loose task')).toBeNull())
+    expect(screen.getByText('Member task')).toBeInTheDocument()
+  })
+
+  it('selecting an owner filters the board down to that owner\'s tasks', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'ray', name: 'Ray' }),
+      makeAgent({ id: 'jim', name: 'Jim' }),
+    ])
+    vi.mocked(fetchTasks).mockResolvedValue([
+      makeTask({ id: 't-ray', title: "Ray's task", agent_id: 'ray' }),
+      makeTask({ id: 't-jim', title: "Jim's task", agent_id: 'jim' }),
+    ])
+
+    renderTab()
+    expect(await screen.findByText("Ray's task")).toBeInTheDocument()
+    expect(screen.getByText("Jim's task")).toBeInTheDocument()
+
+    const trigger = screen.getByRole('combobox', { name: /filter by owner/i })
+    fireEvent.click(trigger)
+    const option = await screen.findByRole('option', { name: 'Owner: Ray' })
+    fireEvent.click(option)
+
+    await waitFor(() => expect(screen.queryByText("Jim's task")).toBeNull())
+    expect(screen.getByText("Ray's task")).toBeInTheDocument()
+  })
+})
+
+// ── Stale-filter reset (SF2 / code-reviewer fix) ────────────────────────────
+
+describe('WorkspaceTasksTab — stale-filter reset', () => {
+  it('nulls a stale activePlanId once `plans` loads without it — board is not stuck empty', async () => {
+    // Simulate the scenario the reset effect guards against: activePlanId
+    // already points at a plan id (e.g. leftover from a previous session, or
+    // a plan tile's ⋯ → Clear that just deleted its own plan) that does NOT
+    // exist in the freshly-loaded `plans` list.
+    useWorkspacesStore.setState({ activePlanId: 'stale-plan-id' })
+    vi.mocked(fetchTasks).mockResolvedValue([makeTask({ id: 't1', title: 'Surviving task' })])
+    // A non-empty, genuinely different plans list — required so the effect's
+    // `.length` guard (never fires before the first fetch resolves) actually
+    // clears, exercising the real reset branch rather than the "haven't
+    // loaded yet" no-op branch.
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'other-plan', title: 'Other plan' })])
+
+    renderTab()
+
+    await waitFor(() => expect(useWorkspacesStore.getState().activePlanId).toBeNull())
+
+    const heading = await screen.findByTestId('tasks-heading')
+    expect(heading.textContent?.trim()).toBe('Tasks')
+    // The board itself must not be left stuck empty by the stale id.
+    expect(screen.getByText('Surviving task')).toBeInTheDocument()
+  })
+})
+
+// ── Graph view switch (W1 gating fix) ───────────────────────────────────────
+
+describe('WorkspaceTasksTab — Graph view switch', () => {
+  it('switching to Graph renders the Graph tab and hides the owner filter + tag bar', async () => {
+    const user = userEvent.setup()
+    // A tagged task so TagFilterBar actually renders something in Board view
+    // (it renders null when there are zero tags AND no active filter) —
+    // otherwise its "hidden in Graph view" assertion would be vacuously true.
+    vi.mocked(fetchTasks).mockResolvedValue([makeTask({ id: 't1', tags: ['urgent'] })])
+
+    renderTab()
+    expect(await screen.findByRole('group', { name: 'Tag filter' })).toBeInTheDocument()
+    expect(screen.getByTestId('tasks-owner-filter')).toBeInTheDocument()
+
+    const boardButton = screen.getByTestId('tasks-view-board')
+    const graphButton = screen.getByTestId('tasks-view-graph')
+    await user.click(graphButton)
+
+    expect(await screen.findByTestId('graph-tab-sentinel')).toBeInTheDocument()
+    expect(graphButton).toHaveAttribute('aria-checked', 'true')
+    expect(boardButton).toHaveAttribute('aria-checked', 'false')
+
+    // Board-only filter controls are gone in Graph view.
+    expect(screen.queryByTestId('tasks-owner-filter')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Tag filter' })).toBeNull()
   })
 })

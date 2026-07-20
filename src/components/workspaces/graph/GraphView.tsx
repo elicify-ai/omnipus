@@ -48,9 +48,10 @@ interface GraphViewProps {
   /** Id of the currently-open task, so its node renders selected. */
   selectedTaskId?: string | null
   /**
-   * Scope the canvas to a single Plan's member tasks + edges (Plan Swimlane
-   * board redesign — the Board's lane ⑂ button sets this and navigates here).
-   * `null`/`undefined` = whole-workspace "All" mode.
+   * Scope the canvas to a single Plan's member tasks + edges (ADR-051
+   * plans-as-filter — `PlansFilterBand`'s tile selection sets the shared plan
+   * filter and the Graph reads it). `null`/`undefined` = whole-workspace
+   * "All" mode.
    */
   planId?: string | null
   /**

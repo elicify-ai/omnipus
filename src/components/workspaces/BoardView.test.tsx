@@ -148,6 +148,73 @@ describe('BoardView — drop guard drives onTaskMove vs onMoveRejected', () => {
   })
 })
 
+describe('BoardView — orphan-status tasks (status outside STATUS_ORDER)', () => {
+  it('shows an orphan warning banner accounting for a task whose status matches no column', () => {
+    // 'planning' was removed from the canonical status set (ADR-051 D5) but
+    // stale/un-migrated data could still carry it (or any other unrecognized
+    // wire value) — cast past the now-strict Task['status'] literal union to
+    // simulate that on-disk reality.
+    const orphan = makeTask({ id: 'orphan-1', title: 'Orphan task', status: 'planning' as Task['status'] })
+    renderBoard({ tasks: [orphan] })
+
+    // Text-query (not role=status) — dnd-kit's own hidden live region also
+    // carries role="status", so getByRole('status') would ambiguously match
+    // two elements.
+    const banner = screen.getByText(/with an unrecognized status/)
+    expect(banner).toHaveTextContent('1 task with an unrecognized status')
+    expect(banner).toHaveTextContent("isn't shown in any column")
+
+    // The task is not silently dropped with zero trace — the banner above
+    // explicitly accounts for it (an accurate, non-zero count). Consistent
+    // with the "hidden from every column" design (its status matches none of
+    // the STATUS_ORDER columns), it correctly does NOT render as a card.
+    expect(screen.queryByText('Orphan task')).toBeNull()
+  })
+
+  it('pluralizes the banner correctly for multiple orphan tasks', () => {
+    const orphans = [
+      makeTask({ id: 'o1', title: 'Orphan 1', status: 'planning' as Task['status'] }),
+      makeTask({ id: 'o2', title: 'Orphan 2', status: 'bogus' as Task['status'] }),
+    ]
+    renderBoard({ tasks: orphans })
+
+    const banner = screen.getByText(/with an unrecognized status/)
+    expect(banner).toHaveTextContent('2 tasks with an unrecognized status')
+    expect(banner).toHaveTextContent("aren't shown in any column")
+  })
+
+  it('does not show the orphan banner when every task matches a real STATUS_ORDER column', () => {
+    renderBoard({ tasks: [makeTask({ status: 'inbox' })] })
+    expect(screen.queryByText(/with an unrecognized status/)).toBeNull()
+  })
+})
+
+describe('BoardView — empty-state overlay (filtered vs. genuinely empty)', () => {
+  it('shows "No tasks match the current filter." when a filter is active and the (filtered) task set is empty', () => {
+    renderBoard({ tasks: [], hasActiveFilter: true })
+    expect(screen.getByText('No tasks match the current filter.')).toBeInTheDocument()
+  })
+
+  it('shows "No tasks yet." when no filter is active and the task set is genuinely empty', () => {
+    renderBoard({ tasks: [], hasActiveFilter: false })
+    expect(screen.getByText('No tasks yet.')).toBeInTheDocument()
+  })
+
+  it('shows neither empty-state message once tasks are present', () => {
+    renderBoard({ tasks: [makeTask({ status: 'inbox' })], hasActiveFilter: true })
+    expect(screen.queryByText('No tasks match the current filter.')).toBeNull()
+    expect(screen.queryByText('No tasks yet.')).toBeNull()
+  })
+
+  it('keeps every STATUS_ORDER column mounted alongside the empty-state overlay (overlay, not a replacement)', () => {
+    renderBoard({ tasks: [], hasActiveFilter: true })
+    for (const status of STATUS_ORDER) {
+      expect(screen.getByLabelText(`${STATUS_LABELS[status]} column`)).toBeInTheDocument()
+    }
+    expect(screen.getByText('No tasks match the current filter.')).toBeInTheDocument()
+  })
+})
+
 describe('BoardView — no plan cards anywhere on the board (ADR-051 D4)', () => {
   it('renders no plan-card test ids or plan-only affordances, even when plans are passed in', () => {
     const tasks = [makeTask({ id: 't1', title: 'Loose task', plan_id: 'plan-a' })]

@@ -112,7 +112,14 @@ func TestMigratePlanningStatus_NoTasksDir(t *testing.T) {
 // TestMigratePlanningStatus_CorruptFileSkippedNotFatal verifies a single
 // corrupt/unreadable task file does not abort the whole migration run, and
 // (mirroring MigrateMilestonesToTags's Phase-3 discipline) the sentinel is
-// NOT written when a file fails, so the run retries on the next boot.
+// NOT written when a file fails, so the run retries on the next boot. It then
+// proves the deterministic retry the code promises (mirroring
+// TestMigrateMilestones_PartialFailure_DoesNotFinalize's retry discipline in
+// migrate_milestones_test.go): a second run, with the corrupt file still
+// present, still errors and still withholds the sentinel, without re-touching
+// or re-corrupting the already-migrated good file; a third run, after the
+// corrupt file is removed (simulating operator remediation), succeeds and
+// finalizes.
 func TestMigratePlanningStatus_CorruptFileSkippedNotFatal(t *testing.T) {
 	home := t.TempDir()
 	tasksDir := filepath.Join(home, "tasks")
@@ -130,4 +137,33 @@ func TestMigratePlanningStatus_CorruptFileSkippedNotFatal(t *testing.T) {
 	// corrupt one failed (per-file isolation).
 	tk := readTaskFixture(t, tasksDir, "good")
 	assert.Equal(t, StatusNext, tk.Status, "well-formed task must still be remapped despite a sibling failure")
+
+	// Retry (e.g. next boot): the corrupt file is still present, so the run
+	// must still error and the sentinel must still be withheld. The good file
+	// must not be duplicated, re-corrupted, or otherwise re-touched — its
+	// migration was already applied and is idempotent (no "planning" status
+	// left to remap).
+	err2 := MigratePlanningStatusToNext(home)
+	require.Error(t, err2, "retry with the corrupt file still present must still error")
+
+	_, statErr2 := os.Stat(filepath.Join(home, planningStatusMigrationSentinelFile))
+	assert.True(t, os.IsNotExist(statErr2), "sentinel must still be withheld on a repeated failing retry")
+
+	tkAfterRetry := readTaskFixture(t, tasksDir, "good")
+	assert.Equal(t, StatusNext, tkAfterRetry.Status,
+		"already-migrated good task must remain next, not duplicated or re-corrupted by the retry")
+
+	// Remove the corrupt file (simulating operator remediation) and retry a
+	// third time: the migration must now succeed and finalize, and the good
+	// file must remain next (not re-migrated a second time).
+	require.NoError(t, os.Remove(filepath.Join(tasksDir, "corrupt.json")))
+
+	err3 := MigratePlanningStatusToNext(home)
+	require.NoError(t, err3, "once the corrupt file is gone, the retry must succeed and finalize")
+
+	_, statErr3 := os.Stat(filepath.Join(home, planningStatusMigrationSentinelFile))
+	assert.NoError(t, statErr3, "sentinel must be written once every remaining file migrates without error")
+
+	tkFinal := readTaskFixture(t, tasksDir, "good")
+	assert.Equal(t, StatusNext, tkFinal.Status, "good task remains next after finalization")
 }

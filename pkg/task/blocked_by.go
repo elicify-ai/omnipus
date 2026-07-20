@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // blocked_by DAG validator + auto-advance, carried over from pkg/boardtask and
-// re-cast onto the unified store and 7-state vocabulary.
+// re-cast onto the unified store and 6-state vocabulary.
 //
 //   - Write-time validation rejects self-edges, 2-node and N-node cycles, and
 //     references to missing tasks; bounds the chain at maxBlockedByDepth (50).

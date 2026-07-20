@@ -4218,7 +4218,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // ADR-049 R3/FR-099: GLOBAL frame — PlanStatusFrame carries no
           // session_id (correlated by plan_id, not any chat thread), so it
           // is NOT routed through targetSid/withBucket at all. Invalidate
-          // the plan/task query caches so PlanCard/BoardView (which read
+          // the plan/task query caches so PlansFilterBand/BoardView (which read
           // Plan.state/plan_phase/paused_reason directly off the REST
           // response, not off this frame) refetch and re-render with the
           // new state — including the "paused — owner disabled" surfacing

@@ -44,7 +44,7 @@ type taskSlot struct {
 }
 
 // TaskExecutor runs dispatchable tasks by handing them to agent sessions. It
-// operates over the unified pkg/task store and 7-state vocabulary: a
+// operates over the unified pkg/task store and 6-state vocabulary: a
 // dispatchable task is `next`, running is `in_progress`, terminal is
 // `done`/`failed`.
 type TaskExecutor struct {
