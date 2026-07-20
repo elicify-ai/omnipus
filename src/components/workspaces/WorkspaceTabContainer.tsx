@@ -40,7 +40,7 @@ interface WorkspaceTabContainerProps {
  */
 export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProps) {
   const navigate = useNavigate()
-  const { activeWorkspaceId, setActiveWorkspaceId, setActivePlanId, resetCollapsedLanes } = useWorkspacesStore()
+  const { activeWorkspaceId, setActiveWorkspaceId, setActivePlanId } = useWorkspacesStore()
   const toggle = useSidebarStore((s) => s.toggle)
   const enterWorkspaceChat = useSessionStore((s) => s.enterWorkspaceChat)
 
@@ -75,14 +75,11 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     }
   }, [workspaceId, activeWorkspaceId, setActiveWorkspaceId])
 
-  // Reset plan filter + lane-collapse overrides on workspace change (ADR-049
-  // — replaces milestone filter). `collapsedLanes`' Loose-band key is the
-  // same literal (`LOOSE_LANE_ID`) across every workspace, so without this
-  // reset a Loose-band collapse in one workspace leaks into the next.
+  // Reset the plan scope on workspace change so the Board/Graph don't stay
+  // drilled into a plan that belongs to the previous workspace.
   useEffect(() => {
     setActivePlanId(null)
-    resetCollapsedLanes()
-  }, [workspaceId, setActivePlanId, resetCollapsedLanes])
+  }, [workspaceId, setActivePlanId])
 
   // Bug 1 fix: manage session lifecycle at the workspace level.
   // Fires only on workspaceId change — tab switches don't re-run this.

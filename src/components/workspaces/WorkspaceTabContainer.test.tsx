@@ -86,14 +86,12 @@ vi.mock('@/store/session', () => ({
 // WorkspacesStore — the component calls it with NO selector, getting back the full state
 const mockSetActiveWorkspaceId = vi.fn()
 const mockSetActivePlanId = vi.fn()
-const mockResetCollapsedLanes = vi.fn()
 vi.mock('@/store/workspacesStore', () => ({
   useWorkspacesStore: (selector?: ((s: {
     activeWorkspaceId: string | null
     setActiveWorkspaceId: (id: string | null) => void
     activePlanId: string | null
     setActivePlanId: (id: string | null) => void
-    resetCollapsedLanes: () => void
     boardAltitude: string
     setBoardAltitude: (a: string) => void
   }) => unknown)) => {
@@ -102,7 +100,6 @@ vi.mock('@/store/workspacesStore', () => ({
       setActiveWorkspaceId: mockSetActiveWorkspaceId,
       activePlanId: null,
       setActivePlanId: mockSetActivePlanId,
-      resetCollapsedLanes: mockResetCollapsedLanes,
       boardAltitude: 'top-level',
       setBoardAltitude: vi.fn(),
     }

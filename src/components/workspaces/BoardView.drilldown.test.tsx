@@ -288,12 +288,15 @@ describe('BoardView — drilling into a plan', () => {
     expect(within(screen.getByTestId('plan-breadcrumb')).getByRole('button', { name: 'View plan graph' })).toBeDisabled()
   })
 
-  it('clicking a plan card body opens the edit slide-over via onEditPlan', async () => {
+  it('opens the edit slide-over via onEditPlan from the plan card ⋯ Edit item', async () => {
+    // The card body is no longer a click-to-edit target (a11y: the card is a
+    // role="group", not a role="button" wrapping buttons). Edit is menu-only;
+    // the plan TITLE is the drill-in control (covered in PlanCard.test.tsx).
     const user = userEvent.setup()
     const onEditPlan = vi.fn()
     const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
     renderBoard({ plans: [plan], tasks: [], onEditPlan })
-    await user.click(screen.getByTestId('plan-card-plan-a'))
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
     expect(onEditPlan).toHaveBeenCalledWith(plan)
   })
 

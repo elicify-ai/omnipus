@@ -124,33 +124,31 @@ export function PlanCard({
     void navigate({ to: '/workspaces/$workspaceId/graph', params: { workspaceId } })
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    // Ignore keydowns bubbled up from a nested interactive control (the
-    // drill-in/graph/⋯ buttons below) — only the card itself opening Edit.
-    if (e.target !== e.currentTarget) return
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      onEdit()
-    }
-  }
-
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onEdit}
-      onKeyDown={handleKeyDown}
+      role="group"
+      aria-label={secondary ? `${plan.title} — ${secondary}` : plan.title}
       data-testid={`plan-card-${plan.id}`}
       title={secondary ? `${plan.title} — ${secondary}` : plan.title}
-      className="rounded-lg border border-[var(--color-border)] border-l-2 border-l-[var(--color-accent)]/50 bg-[var(--color-surface-1)] p-3 cursor-pointer transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40"
+      className="rounded-lg border border-[var(--color-border)] border-l-2 border-l-[var(--color-accent)]/50 bg-[var(--color-surface-1)] p-3 transition-colors"
     >
-      {/* Row 1 — plan icon + title */}
-      <div className="flex items-start gap-2">
+      {/* Row 1 — plan icon + title. The TITLE is the primary drill-in control
+          (open this plan's own task board): a real, keyboard-focusable button.
+          The card itself is a `role="group"`, NOT a `role="button"` — a button
+          may not legally contain the action buttons below it, and a card-level
+          onClick would also be re-fired by the (portalled) confirm dialogs. */}
+      <button
+        tabIndex={0}
+        type="button"
+        onClick={handleDrillIn}
+        title="Open plan board"
+        className="group/title flex items-start gap-2 w-full text-left"
+      >
         <Strategy size={14} weight="fill" className="shrink-0 mt-0.5 text-[color:var(--color-accent)]" aria-hidden="true" />
-        <p className="flex-1 text-sm font-semibold text-[var(--color-secondary)] leading-snug line-clamp-2">
+        <span className="flex-1 text-sm font-semibold text-[var(--color-secondary)] leading-snug line-clamp-2 transition-colors group-hover/title:text-[var(--color-accent)]">
           {plan.title}
-        </p>
-      </div>
+        </span>
+      </button>
 
       {/* Row 2 — state badge (icon + text, never color-alone) */}
       <div className="mt-1.5 flex items-center gap-1.5">

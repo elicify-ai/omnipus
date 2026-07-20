@@ -116,7 +116,7 @@ beforeEach(() => {
   mockNavigate.mockReset()
   mockAddToast.mockReset()
   // Real Zustand store — reset between tests (module-level singleton).
-  useWorkspacesStore.setState({ collapsedLanes: {}, activeTagFilter: null, boardAltitude: 'top-level', activePlanId: null })
+  useWorkspacesStore.setState({ activeTagFilter: null, boardAltitude: 'top-level', activePlanId: null })
   vi.mocked(fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(fetchPlans).mockReset().mockResolvedValue([])
   vi.mocked(approvePlan).mockReset()
