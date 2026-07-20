@@ -234,10 +234,10 @@ describe('WorkspaceTasksTab — view switcher', () => {
 // ── Dynamic heading ──────────────────────────────────────────────────────────
 
 describe('WorkspaceTasksTab — dynamic heading', () => {
-  it('reads "Tasks" when no plan and no owner filter is active', async () => {
+  it('reads "Team Task Backlog" when no plan and no owner filter is active', async () => {
     renderTab()
     const heading = await screen.findByTestId('tasks-heading')
-    expect(heading.textContent).toContain('Tasks')
+    expect(heading.textContent).toContain('Team Task Backlog')
     expect(heading.textContent).not.toContain('Owner:')
   })
 
@@ -450,7 +450,7 @@ describe('WorkspaceTasksTab — stale-filter reset', () => {
     await waitFor(() => expect(useWorkspacesStore.getState().activePlanId).toBeNull())
 
     const heading = await screen.findByTestId('tasks-heading')
-    expect(heading.textContent?.trim()).toBe('Tasks')
+    expect(heading.textContent?.trim()).toBe('Team Task Backlog')
     // The board itself must not be left stuck empty by the stale id.
     expect(screen.getByText('Surviving task')).toBeInTheDocument()
   })

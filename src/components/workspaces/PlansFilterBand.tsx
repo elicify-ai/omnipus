@@ -49,6 +49,10 @@ interface PlansFilterBandProps {
    * time, so this is a single discriminated field rather than three
    * independently-nullable id props. */
   pendingAction?: { planId: string; action: 'approve' | 'stop' | 'clear' } | null
+  /** Render the trailing dashed "New plan" tile. Default true (standalone use);
+   * the Tasks screen sets false because its "Plans" section header owns the
+   * minimalist "+ New Plan" link, so the band isn't duplicated. */
+  showNewPlanTile?: boolean
 }
 
 /** Shared footprint for the "All tasks" tile and every plan tile — Requirement: "Keep tiles the SAME size as each other." */
@@ -105,12 +109,13 @@ export function PlansFilterBand({
   onStopPlan,
   onClearPlan,
   pendingAction = null,
+  showNewPlanTile = true,
 }: PlansFilterBandProps) {
   return (
     <div
       role="group"
       aria-label="Plans filter"
-      className="flex items-stretch gap-2 overflow-x-auto px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0"
+      className="flex items-stretch gap-3 overflow-x-auto px-6 py-4 bg-[var(--color-surface-0)] flex-shrink-0"
     >
       <AllTasksTile
         selected={selectedPlanId === null}
@@ -147,18 +152,20 @@ export function PlansFilterBand({
         )
       })}
 
-      <button tabIndex={0}
-        type="button"
-        onClick={onNewPlan}
-        aria-label="New plan"
-        className={cn(
-          TILE_SIZE,
-          'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--color-border)] p-3 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
-        )}
-      >
-        <Plus size={16} />
-        <span className="text-xs font-medium">New plan</span>
-      </button>
+      {showNewPlanTile && (
+        <button tabIndex={0}
+          type="button"
+          onClick={onNewPlan}
+          aria-label="New plan"
+          className={cn(
+            TILE_SIZE,
+            'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--color-border)] p-3 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
+          )}
+        >
+          <Plus size={16} />
+          <span className="text-xs font-medium">New plan</span>
+        </button>
+      )}
     </div>
   )
 }
