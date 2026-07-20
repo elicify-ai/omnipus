@@ -159,8 +159,14 @@ export function PlanLaneHeader({
       </div>
 
       {owner && (
-        <span className="flex-shrink-0 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)] truncate max-w-[70px]">
-          {owner.name}
+        // Recognition-over-Recall (ux-psychology): the gutter is narrow, so a full
+        // display name ("Jim — Planner & Orchestrator") truncates to unreadable
+        // ("Jim — Pla…"). Show the short lead token; full name stays on hover.
+        <span
+          title={owner.name}
+          className="flex-shrink-0 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)] truncate max-w-[90px]"
+        >
+          {owner.name.split('—')[0].trim()}
         </span>
       )}
 
