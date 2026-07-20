@@ -1,24 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Background,
-  BackgroundVariant,
   Controls,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  reconnectEdge,
   useEdgesState,
   useNodesState,
   type Connection,
   type Edge,
+  type EdgeTypes,
   type NodeMouseHandler,
   type NodeTypes,
   type OnConnect,
+  type OnReconnect,
 } from '@xyflow/react'
 import { CaretDown, GraphIcon, StackIcon } from '@phosphor-icons/react'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import type { Task } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { TaskNode } from './TaskNode'
+import { DependencyEdge } from './DependencyEdge'
 import {
   buildTaskGraph,
   statusVisual,
@@ -29,8 +31,9 @@ import '@xyflow/react/dist/style.css'
 import '../reactflow-theme.css'
 
 // Registered once (stable identity) so React Flow doesn't warn about a new
-// nodeTypes object every render.
+// nodeTypes/edgeTypes object every render.
 const NODE_TYPES: NodeTypes = { task: TaskNode }
+const EDGE_TYPES: EdgeTypes = { dependency: DependencyEdge }
 
 // Minimap node colour = the task's status colour, so the overview map reads
 // like the canvas at a glance.
@@ -69,11 +72,22 @@ interface GraphViewProps {
    */
   onConnectDependency?: (blockerId: string, blockedId: string) => void
   /**
-   * Remove a dependency edge (select it, then Backspace/Delete), called with
-   * the same `(blockerId, blockedId)` pair the edge represents. Omit to keep
-   * edges non-deletable.
+   * Remove a dependency edge (via its inline × button, or select-then-Backspace),
+   * called with the same `(blockerId, blockedId)` pair the edge represents. When
+   * provided, edges render as the custom `dependency` type (with the × button);
+   * omit to keep edges plain and non-deletable.
    */
   onRemoveDependency?: (blockerId: string, blockedId: string) => void
+  /**
+   * Reconnect a dependency by dragging an edge endpoint onto another task.
+   * Called with the OLD and the NEW `(blocker, blocked)` pair — the handler
+   * removes the old edge and adds the new one (same-plan-guarded). When
+   * provided, edges become reconnectable.
+   */
+  onReconnectDependency?: (
+    oldDep: { blocker: string; blocked: string },
+    newDep: { blocker: string; blocked: string },
+  ) => void
 }
 
 /**
@@ -94,6 +108,7 @@ function GraphViewInner({
   collapseOrphans = false,
   onConnectDependency,
   onRemoveDependency,
+  onReconnectDependency,
 }: GraphViewProps) {
   const layout = useMemo(
     () => buildTaskGraph(tasks, agents, planId != null ? { planId } : { collapseOrphans }),
@@ -111,6 +126,19 @@ function GraphViewInner({
   const onTaskClickRef = useRef(onTaskClick)
   onTaskClickRef.current = onTaskClick
   const stableOnOpen = useCallback((task: Task) => onTaskClickRef.current(task), [])
+
+  // Same stable-identity treatment for the edge remove callback so injecting it
+  // into edge `data` (edgesWithData below) doesn't churn the re-seed effect on
+  // every parent re-render (the parent passes a fresh closure each time).
+  // `editable` is a stable boolean (presence, not identity) gating the custom
+  // edge type + its × button.
+  const onRemoveRef = useRef(onRemoveDependency)
+  onRemoveRef.current = onRemoveDependency
+  const stableRemove = useCallback(
+    (blocker: string, blocked: string) => onRemoveRef.current?.(blocker, blocked),
+    [],
+  )
+  const editable = !!onRemoveDependency
 
   // React Flow wraps every node in its OWN focusable element
   // (`.react-flow__node`, role="group" tabIndex=0, with a built-in
@@ -142,19 +170,35 @@ function GraphViewInner({
     [layout.nodes, stableOnOpen],
   )
 
+  // Inject the (stable) remove callback into each edge's data and switch them
+  // to the custom `dependency` type (the one with the × button) — but only when
+  // editing is enabled, so read-only canvases (tests / non-editable embeddings)
+  // keep the plain built-in smoothstep edge and its existing behaviour.
+  const edgesWithData = useMemo<Edge[]>(
+    () =>
+      editable
+        ? layout.edges.map((e) => ({
+            ...e,
+            type: 'dependency',
+            data: { ...e.data, onRemove: stableRemove },
+          }))
+        : layout.edges,
+    [layout.edges, editable, stableRemove],
+  )
+
   const [nodes, setNodes, onNodesChange] = useNodesState<TaskGraphNode>(nodesWithOpen)
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(layout.edges)
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(edgesWithData)
 
   // Re-seed React Flow state whenever the computed layout changes (task added /
-  // status changed / agent resolved). React Flow owns interactive positions
-  // after mount, so we reset from the fresh dagre layout on data change. Both
-  // deps here are identity-stable across a parent re-render that only passes
-  // a new `onTaskClick` closure — see `stableOnOpen` above — so this never
-  // fires just because the parent re-rendered.
+  // status changed / agent resolved / dependency edited). React Flow owns
+  // interactive positions after mount, so we reset from the fresh dagre layout
+  // on data change. All deps here are identity-stable across a parent re-render
+  // that only passes fresh callback closures — see `stableOnOpen`/`stableRemove`
+  // above — so this never fires just because the parent re-rendered.
   useEffect(() => {
     setNodes(nodesWithOpen)
-    setEdges(layout.edges)
-  }, [nodesWithOpen, layout.edges, setNodes, setEdges])
+    setEdges(edgesWithData)
+  }, [nodesWithOpen, edgesWithData, setNodes, setEdges])
 
   // Reflect external selection (the open slide-over) onto the nodes.
   useEffect(() => {
@@ -216,6 +260,24 @@ function GraphViewInner({
     [onRemoveDependency],
   )
 
+  // Drag an edge endpoint onto another task to MOVE the dependency. Optimistically
+  // reconnect the edge locally so it doesn't snap back before the refetch, then
+  // hand the old + new (blocker, blocked) pairs to the parent, which persists the
+  // move (same-plan-guarded) and re-seeds the canvas to server truth on settle —
+  // so a rejected move reverts cleanly.
+  const handleReconnect = useCallback<OnReconnect>(
+    (oldEdge, newConnection) => {
+      const { source, target } = newConnection
+      if (!source || !target || source === target) return
+      setEdges((els) => reconnectEdge(oldEdge, newConnection, els))
+      onReconnectDependency?.(
+        { blocker: oldEdge.source, blocked: oldEdge.target },
+        { blocker: source, blocked: target },
+      )
+    },
+    [onReconnectDependency, setEdges],
+  )
+
   // React Flow renders the <Controls> zoom/fit buttons itself — no JSX site
   // here can carry the repo's explicit-tabIndex convention, so stamp them
   // post-render (WebKit Tab reachability; see useLibraryTabIndex).
@@ -242,11 +304,14 @@ function GraphViewInner({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
         onConnect={handleConnect}
         onEdgesDelete={handleEdgesDelete}
+        onReconnect={handleReconnect}
+        edgesReconnectable={!!onReconnectDependency}
         isValidConnection={isValidConnection}
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
@@ -259,12 +324,6 @@ function GraphViewInner({
         elementsSelectable
         defaultEdgeOptions={{ type: 'smoothstep' }}
       >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={22}
-          size={1}
-          color="var(--color-border)"
-        />
         <Controls
           showInteractive={false}
           className="!bottom-4 !left-4"

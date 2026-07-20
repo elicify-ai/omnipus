@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   ReactFlow,
   ReactFlowProvider,
-  Background,
   Controls,
   Handle,
   Position,
@@ -627,7 +626,7 @@ function WorkspaceTeamGraphInner({
     <div
       ref={canvasDomRef}
       data-testid="team-graph-canvas"
-      className="h-full w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]"
+      className="h-full w-full bg-[var(--color-surface-0)]"
     >
       <TeamGraphCanvasContext.Provider value={canvasContextValue}>
         <ReactFlow
@@ -657,7 +656,6 @@ function WorkspaceTeamGraphInner({
           defaultEdgeOptions={{ type: 'delegation' }}
           colorMode="dark"
         >
-          <Background color="var(--color-border)" gap={20} />
           <Controls
             showInteractive={false}
             className="!border-[var(--color-border)] !bg-[var(--color-surface-1)]"
