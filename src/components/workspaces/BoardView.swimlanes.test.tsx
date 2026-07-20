@@ -11,8 +11,9 @@
  *      last, regardless of input order.
  *   3. Collapse/expand: terminal (done/failed) plans default-collapsed,
  *      everything else default-expanded; clicking the chevron toggles and
- *      hides/shows that band's status-cell row; a collapsed band still shows
- *      its one-line progress summary in the header.
+ *      hides/shows that band's status-cell row; a collapsed band shows ONLY
+ *      its title line (row 2 — progress, owner, actions — is hidden so the
+ *      collapsed state stays a single compact line).
  *   4. The ⑂ "view graph" button is disabled below 2 member tasks (plan-wide,
  *      NOT scoped to the active tag filter) and, when enabled, sets
  *      `activePlanId` and navigates to this workspace's Graph tab.
@@ -304,14 +305,19 @@ describe('BoardView swimlanes — default collapse state', () => {
     expect(screen.queryByText('Loose task')).not.toBeInTheDocument()
   })
 
-  it('a collapsed band still shows its one-line progress summary in the header', () => {
-    const plan = makePlan({ id: 'plan-done', state: 'done' })
+  it('a collapsed band shows ONLY its title line — progress row hidden', () => {
+    const plan = makePlan({ id: 'plan-done', state: 'done', title: 'Done plan' })
     const t1 = makeTask({ id: 't1', plan_id: 'plan-done', status: 'done' })
     const t2 = makeTask({ id: 't2', plan_id: 'plan-done', status: 'inbox' })
     renderBoard({ plans: [plan], tasks: [t1, t2] })
 
     const header = within(screen.getByTestId('plan-lane-header-plan-done'))
-    expect(header.getByText('1/2')).toBeInTheDocument()
+    // The title line (row 1) is still shown...
+    expect(header.getByText('Done plan')).toBeInTheDocument()
+    // ...but row 2 (progress summary, owner, actions) is hidden when collapsed
+    // so a collapsed band is a single title line — the full row 2 made the
+    // collapsed state too tall.
+    expect(header.queryByText('1/2')).not.toBeInTheDocument()
     // And its status-cell row is genuinely not rendered (collapsed) — scope
     // to this band specifically (the Loose lane below it is expanded by
     // default and has its own 7 "column" cells, which would otherwise make

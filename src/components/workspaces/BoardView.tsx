@@ -277,7 +277,7 @@ export function BoardView({
             return (
               <div
                 key={col.status}
-                className="flex-1 min-w-[180px] flex items-center justify-between gap-2 px-3 py-2.5"
+                className="flex-1 min-w-[162px] flex items-center justify-between gap-2 px-3 py-2.5"
               >
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold" style={{ color: col.headerColor }}>
@@ -532,7 +532,7 @@ function LaneStatusCell({
       role="group"
       aria-label={`${laneLabel} ${config.label} column`}
       className={cn(
-        'flex flex-col flex-1 min-w-[180px] min-h-[56px] gap-2 p-2 border-r border-[var(--color-border)] last:border-r-0 transition-colors',
+        'flex flex-col flex-1 min-w-[162px] min-h-[56px] gap-2 p-2 border-r border-[var(--color-border)] last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
         isOver && !canAccept && 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40',
       )}

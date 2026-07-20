@@ -161,7 +161,10 @@ export function PlanLaneHeader({
 
       {/* Row 2 — progress, owner, and lane actions. Left-padded so it hangs
           under the title (clearing the caret+icon on row 1). The `flex-1`
-          spacer pushes the actions to the right edge of the gutter. */}
+          spacer pushes the actions to the right edge of the gutter. HIDDEN when
+          the lane is collapsed, so a collapsed band is a single title line —
+          rendering the full row 2 made the collapsed state too tall. */}
+      {!collapsed && (
       <div className="flex items-center gap-1.5 min-w-0 pl-[18px]">
         <div className="flex items-center gap-1 flex-shrink-0" role="img" aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}>
           <Progress value={pct} className="h-1.5 w-8" />
@@ -234,6 +237,7 @@ export function PlanLaneHeader({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      )}
 
       <AlertDialog open={confirmStop} onOpenChange={setConfirmStop}>
         <AlertDialogContent>
