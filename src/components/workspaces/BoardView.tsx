@@ -260,7 +260,7 @@ export function BoardView({
             wider task card grows past the header and they misalign again. */}
         <div className="min-w-max">
         {/* Sticky status-column header row — spans every swimlane band below it. */}
-        <div className="flex sticky top-0 z-10 bg-[var(--color-surface-0)]">
+        <div className="flex sticky top-0 z-10 bg-[var(--color-surface-0)] border-b border-[var(--color-border)]/15">
           <div className="w-[224px] shrink-0 sticky left-0 z-20 bg-[var(--color-surface-0)]" aria-hidden="true" />
           {COLUMNS.map((col) => {
             const count = renderedTasksVisible.filter((t) => t.status === col.status).length
@@ -290,7 +290,7 @@ export function BoardView({
           const laneTasks = laneTasksByPlanId.get(plan.id) ?? []
           const collapsed = effectiveCollapsed(plan.id, isTerminalPlanState(plan.state))
           return (
-            <div key={plan.id} className="flex" data-testid={`swimlane-band-${plan.id}`}>
+            <div key={plan.id} className="flex border-b border-[var(--color-border)]/15" data-testid={`swimlane-band-${plan.id}`}>
               <div className="w-[224px] shrink-0 sticky left-0 z-10 bg-[var(--color-surface-0)]">
                 <PlanLaneHeader
                   plan={plan}
