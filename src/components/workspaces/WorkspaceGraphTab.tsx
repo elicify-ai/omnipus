@@ -22,6 +22,7 @@ import {
 import { planStateColor, planStateLabel } from '@/lib/planStateColors'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
+import { planDependencyReconnect } from './dependencyReconnect'
 
 // ── F2 COMPONENT BOUNDARY ────────────────────────────────────────────────────
 // The Graph (Task DAG) tab. Tasks as nodes, `blocked_by` as dependency edges,
@@ -144,6 +145,25 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
     [tasks, depMutation],
   )
 
+  // Reconnect: drag an edge endpoint onto another task to MOVE the dependency.
+  // GraphView optimistically reconnects the edge; the pure `planDependencyReconnect`
+  // decides the exact PUT(s) (or rejects), and on any no-op/rejection we
+  // re-invalidate so the canvas reverts to server truth.
+  const handleReconnectDependency = useCallback(
+    (oldDep: { blocker: string; blocked: string }, newDep: { blocker: string; blocked: string }) => {
+      const plan = planDependencyReconnect(tasks, oldDep, newDep)
+      if (plan.error === 'same-plan') {
+        addToast({ message: 'Dependencies must be within the same plan.', variant: 'error' })
+      }
+      if (plan.puts.length === 0) {
+        void queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+        return
+      }
+      for (const put of plan.puts) depMutation.mutate(put)
+    },
+    [tasks, addToast, depMutation, queryClient],
+  )
+
   if (tasksLoading) {
     return <GraphSkeleton />
   }
@@ -251,6 +271,7 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
           collapseOrphans
           onConnectDependency={handleConnectDependency}
           onRemoveDependency={handleRemoveDependency}
+          onReconnectDependency={handleReconnectDependency}
         />
       </div>
 
