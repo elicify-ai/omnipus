@@ -257,6 +257,18 @@ export function BoardView({
       </div>
 
       <div className="flex-1 min-h-0 overflow-auto">
+        {/* min-w-max wrapper — floors ALL rows (header + every band) at ONE
+            shared content width so their backgrounds and border lines span the
+            FULL horizontal scroll width. Each row is `width:auto`, i.e. 100% of
+            this wrapper, so they're always equal; the wrapper itself is floored
+            at its content's max-content (the widest row) and still stretches to
+            fill the viewport on wide screens. Without this, each row was only as
+            wide as the visible viewport while its columns overflowed past it —
+            so the sticky header bar and the horizontal band separators "broke
+            up" (stopped dead) the moment you scrolled right. A per-row min-w-max
+            does NOT work: it sizes each row to its OWN content, so a band with a
+            wider task card grows past the header and they misalign again. */}
+        <div className="min-w-max">
         {/* Sticky status-column header row — spans every swimlane band below it. */}
         <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
           <div className="w-[224px] shrink-0 sticky left-0 z-20 bg-[var(--color-surface-1)]" aria-hidden="true" />
@@ -368,6 +380,7 @@ export function BoardView({
               onMoveRejected={onMoveRejected}
             />
           )}
+        </div>
         </div>
       </div>
     </div>
