@@ -1,19 +1,46 @@
 /**
  * ListView.filters.test.tsx
  *
- * ADR-051 flat/minimal List. Filtering (plan / agent / tag) is owned by the
- * Tasks screen toolbar — the List has NO filter bar of its own any more (it
- * used to duplicate them). Covers:
+ * ADR-051 flat List with Excel-style column headers: every column header is a
+ * dropdown offering sort (asc/desc) and, where the column has discrete values,
+ * a checkbox value-filter (Pri / Status / Tags / Agent). Filtering is
+ * column-local (AND across columns, OR within a column's checklist) over the
+ * plan-scoped `tasks` prop. Covers:
  *   1. No milestone UI anywhere (SC-040).
- *   2. No filter dropdowns render (the redundant boxed filter row is gone).
- *   3. Clickable column headers sort by Priority / Status / Updated.
- *   4. The Tags column renders tag chips (capped with "+N" overflow).
+ *   2. Column-header sort (Pri / Status / Title / Agent / Updated), default Updated desc.
+ *   3. Column value-filters: Status, Pri, Tags (+ Untagged), Agent (+ Unassigned),
+ *      union-within-column, and the filtered empty state.
+ *   4. Agent-column resolution + the surface!=='user' filter + the Tags column render.
+ *
+ * The Radix DropdownMenu is stubbed inline (its pointer/portal internals don't
+ * drive in jsdom — same convention as WorkspaceTasksTab.test.tsx) so each
+ * column menu's items render inline; tests scope to a column via its <th>.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within, fireEvent } from '@testing-library/react'
-import { ListView } from './ListView'
 import type { Task } from '@/lib/api'
+
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
+    asChild ? <>{children}</> : <div>{children}</div>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: ({ children, onClick, className }: { children: React.ReactNode; onClick?: () => void; className?: string }) => (
+    <button type="button" role="menuitem" onClick={onClick} className={className}>
+      {children}
+    </button>
+  ),
+  DropdownMenuCheckboxItem: ({ children, checked, onCheckedChange, className }: { children: React.ReactNode; checked?: boolean; onCheckedChange?: (v: boolean) => void; className?: string }) => (
+    <button type="button" role="menuitemcheckbox" aria-checked={checked} onClick={() => onCheckedChange?.(!checked)} className={className}>
+      {children}
+    </button>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+}))
+
+// Imported after the mock so ListView picks up the stubbed dropdown-menu.
+import { ListView } from './ListView'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -32,6 +59,21 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   }
 }
 
+/** Scope queries to one column's header menu (trigger + inline stub content). */
+function columnMenu(label: string) {
+  const trigger = screen.getByRole('button', { name: new RegExp(`^${label} column`, 'i') })
+  return within(trigger.closest('th')!)
+}
+
+/** Titles of the data rows, in render order (skips the header row). */
+function rowTitles(): string[] {
+  return screen
+    .getAllByRole('row')
+    .slice(1)
+    .map((r) => within(r).queryAllByRole('cell')[1]?.textContent ?? '')
+    .filter((t) => t.length > 0)
+}
+
 describe('ListView — no milestone UI anywhere (SC-040)', () => {
   it('renders no "Milestone" filter, column, or text', () => {
     render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
@@ -39,18 +81,24 @@ describe('ListView — no milestone UI anywhere (SC-040)', () => {
   })
 })
 
-describe('ListView — no filter bar (filtering owned by the toolbar)', () => {
-  it('renders no filter dropdowns of its own', () => {
-    const tasks = [makeTask({ id: 't1', tags: ['release'] })]
-    render(<ListView tasks={tasks} agents={[{ id: 'ray', name: 'Ray' }]} onTaskClick={() => {}} />)
-    // The old view had 5 boxed Radix Selects (status/priority/plan/tag/agent);
-    // they are gone — the toolbar (plan band + Agent + Tags) owns filtering.
-    expect(screen.queryAllByRole('combobox')).toHaveLength(0)
+describe('ListView — column header sort', () => {
+  it('defaults to newest-first (Updated desc) on initial render', () => {
+    render(
+      <ListView
+        tasks={[
+          makeTask({ id: 'old', title: 'Older', updated_at: '2026-06-20T10:00:00Z' }),
+          makeTask({ id: 'new', title: 'Newer', updated_at: '2026-06-20T12:00:00Z' }),
+        ]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    expect(rowTitles()[0]).toBe('Newer')
+    // The Updated header shows the active descending arrow.
+    expect(columnMenu('Updated').getByText('Updated ↓')).toBeInTheDocument()
   })
-})
 
-describe('ListView — sortable column headers', () => {
-  it('sorts by priority (most-critical first) when the Pri header is clicked', () => {
+  it('sorts by priority via the Pri column menu (asc = P1 first, desc = P5 first)', () => {
     render(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'Low', priority: 5 }), makeTask({ id: 't2', title: 'High', priority: 1 })]}
@@ -58,15 +106,13 @@ describe('ListView — sortable column headers', () => {
         onTaskClick={() => {}}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { name: /sort by pri/i }))
-    const rows = screen.getAllByRole('row') // [0] = header, [1..] = data
-    expect(within(rows[1]).getByText('High')).toBeInTheDocument()
-    // Re-click toggles direction (least-critical first).
-    fireEvent.click(screen.getByRole('button', { name: /sort by pri/i }))
-    expect(within(screen.getAllByRole('row')[1]).getByText('Low')).toBeInTheDocument()
+    fireEvent.click(columnMenu('Pri').getByRole('menuitem', { name: /sort ascending/i }))
+    expect(rowTitles()[0]).toBe('High')
+    fireEvent.click(columnMenu('Pri').getByRole('menuitem', { name: /sort descending/i }))
+    expect(rowTitles()[0]).toBe('Low')
   })
 
-  it('sorts by status order when the Status header is clicked', () => {
+  it('sorts by status via the Status column menu', () => {
     render(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'DoneTask', status: 'done' }), makeTask({ id: 't2', title: 'InboxTask', status: 'inbox' })]}
@@ -74,30 +120,159 @@ describe('ListView — sortable column headers', () => {
         onTaskClick={() => {}}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { name: /sort by status/i }))
+    fireEvent.click(columnMenu('Status').getByRole('menuitem', { name: /sort ascending/i }))
     // inbox is first in the lifecycle order → its row comes first.
-    expect(within(screen.getAllByRole('row')[1]).getByText('InboxTask')).toBeInTheDocument()
+    expect(rowTitles()[0]).toBe('InboxTask')
   })
 
-  it('exposes Updated as a sortable header (default view)', () => {
-    render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
-    expect(screen.getByRole('button', { name: /sort by updated/i })).toBeInTheDocument()
+  it('sorts by title A–Z via the Title column menu', () => {
+    render(
+      <ListView
+        tasks={[makeTask({ id: 't1', title: 'Zebra' }), makeTask({ id: 't2', title: 'Apple' })]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Title').getByRole('menuitem', { name: /sort ascending/i }))
+    expect(rowTitles()[0]).toBe('Apple')
+  })
+
+  it('sorts by agent A–Z via the Agent column menu', () => {
+    render(
+      <ListView
+        tasks={[makeTask({ id: 't1', title: 'RayTask', agent_name: 'Ray' }), makeTask({ id: 't2', title: 'AvaTask', agent_name: 'Ava' })]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Agent').getByRole('menuitem', { name: /sort ascending/i }))
+    expect(rowTitles()[0]).toBe('AvaTask')
+  })
+})
+
+describe('ListView — column value filters', () => {
+  it('filters by status via the Status column checklist', () => {
+    render(
+      <ListView
+        tasks={[makeTask({ id: 't1', title: 'InboxT', status: 'inbox' }), makeTask({ id: 't2', title: 'DoneT', status: 'done' })]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Status').getByRole('menuitemcheckbox', { name: 'Inbox' }))
+    expect(screen.getByText('InboxT')).toBeInTheDocument()
+    expect(screen.queryByText('DoneT')).toBeNull()
+  })
+
+  it('a column filter is a union across the checked values', () => {
+    render(
+      <ListView
+        tasks={[
+          makeTask({ id: 't1', title: 'InboxT', status: 'inbox' }),
+          makeTask({ id: 't2', title: 'DoneT', status: 'done' }),
+          makeTask({ id: 't3', title: 'FailedT', status: 'failed' }),
+        ]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Status').getByRole('menuitemcheckbox', { name: 'Inbox' }))
+    fireEvent.click(columnMenu('Status').getByRole('menuitemcheckbox', { name: 'Done' }))
+    expect(screen.getByText('InboxT')).toBeInTheDocument()
+    expect(screen.getByText('DoneT')).toBeInTheDocument()
+    expect(screen.queryByText('FailedT')).toBeNull()
+  })
+
+  it('filters by priority via the Pri column checklist', () => {
+    render(
+      <ListView
+        tasks={[makeTask({ id: 't1', title: 'P1T', priority: 1 }), makeTask({ id: 't2', title: 'P3T', priority: 3 })]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Pri').getByRole('menuitemcheckbox', { name: 'P1' }))
+    expect(screen.getByText('P1T')).toBeInTheDocument()
+    expect(screen.queryByText('P3T')).toBeNull()
+  })
+
+  it('filters by tag, with an Untagged bucket', () => {
+    render(
+      <ListView
+        tasks={[
+          makeTask({ id: 't1', title: 'Tagged', tags: ['release'] }),
+          makeTask({ id: 't2', title: 'Bare' }),
+        ]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Tags').getByRole('menuitemcheckbox', { name: 'release' }))
+    expect(screen.getByText('Tagged')).toBeInTheDocument()
+    expect(screen.queryByText('Bare')).toBeNull()
+
+    // Untagged bucket selects only tasks with no tags.
+    fireEvent.click(columnMenu('Tags').getByRole('menuitemcheckbox', { name: 'release' })) // clear
+    fireEvent.click(columnMenu('Tags').getByRole('menuitemcheckbox', { name: 'Untagged' }))
+    expect(screen.getByText('Bare')).toBeInTheDocument()
+    expect(screen.queryByText('Tagged')).toBeNull()
+  })
+
+  it('filters by agent, with an Unassigned bucket', () => {
+    render(
+      <ListView
+        tasks={[
+          makeTask({ id: 't1', title: 'RayTask', agent_id: 'ray' }),
+          makeTask({ id: 't2', title: 'BareTask' }),
+        ]}
+        agents={[{ id: 'ray', name: 'Ray' }]}
+        onTaskClick={() => {}}
+      />,
+    )
+    fireEvent.click(columnMenu('Agent').getByRole('menuitemcheckbox', { name: 'Ray' }))
+    expect(screen.getByText('RayTask')).toBeInTheDocument()
+    expect(screen.queryByText('BareTask')).toBeNull()
+  })
+
+})
+
+describe('ListView — empty state', () => {
+  it('renders "No tasks to show" when there are no tasks', () => {
+    render(<ListView tasks={[]} agents={[]} onTaskClick={() => {}} />)
+    expect(screen.getByText('No tasks to show')).toBeInTheDocument()
+    expect(screen.queryByText('Task')).toBeNull()
+  })
+
+  it('renders the filtered-empty copy when ANDed column filters exclude every row', () => {
+    render(
+      <ListView
+        tasks={[
+          makeTask({ id: 'a', title: 'InboxP1', status: 'inbox', priority: 1 }),
+          makeTask({ id: 'b', title: 'DoneP3', status: 'done', priority: 3 }),
+        ]}
+        agents={[]}
+        onTaskClick={() => {}}
+      />,
+    )
+    // Status=Inbox keeps only InboxP1; Pri=P3 keeps only DoneP3. ANDed across
+    // columns, no single row satisfies both → filtered-empty.
+    fireEvent.click(columnMenu('Status').getByRole('menuitemcheckbox', { name: 'Inbox' }))
+    fireEvent.click(columnMenu('Pri').getByRole('menuitemcheckbox', { name: 'P3' }))
+    expect(screen.getByText('No tasks match the column filters')).toBeInTheDocument()
+    expect(screen.queryByText('InboxP1')).toBeNull()
+    expect(screen.queryByText('DoneP3')).toBeNull()
   })
 })
 
 describe('ListView — Agent column resolution', () => {
   it('prefers the server-set agent_name over the agents lookup', () => {
-    render(
-      <ListView tasks={[makeTask({ agent_name: 'Ray Direct', agent_id: 'ray-1' })]} agents={[]} onTaskClick={() => {}} />,
-    )
+    render(<ListView tasks={[makeTask({ agent_name: 'Ray Direct', agent_id: 'ray-1' })]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     expect(within(row).getByText('Ray Direct')).toBeInTheDocument()
   })
 
   it('resolves agent_id via the agents list when agent_name is absent', () => {
-    render(
-      <ListView tasks={[makeTask({ agent_id: 'ray-1' })]} agents={[{ id: 'ray-1', name: 'Ray' }]} onTaskClick={() => {}} />,
-    )
+    render(<ListView tasks={[makeTask({ agent_id: 'ray-1' })]} agents={[{ id: 'ray-1', name: 'Ray' }]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     expect(within(row).getByText('Ray')).toBeInTheDocument()
   })
@@ -137,49 +312,12 @@ describe('ListView — surface filter (user tasks only)', () => {
     render(<ListView tasks={[makeTask({ title: 'NoSurface', surface: undefined })]} agents={[]} onTaskClick={() => {}} />)
     expect(screen.getByText('NoSurface')).toBeInTheDocument()
   })
-
-  it('shows the empty state when every task is non-user', () => {
-    render(<ListView tasks={[makeTask({ surface: 'heartbeat' })]} agents={[]} onTaskClick={() => {}} />)
-    expect(screen.getByText('No tasks to show')).toBeInTheDocument()
-  })
 })
 
-describe('ListView — empty state', () => {
-  it('renders "No tasks to show" when there are no tasks', () => {
-    render(<ListView tasks={[]} agents={[]} onTaskClick={() => {}} />)
-    expect(screen.getByText('No tasks to show')).toBeInTheDocument()
-    // No task Title button renders (the only row is the empty-state row).
-    expect(screen.queryByText('Task')).toBeNull()
-  })
-})
-
-describe('ListView — default Updated sort', () => {
-  const older = makeTask({ id: 'old', title: 'Older', updated_at: '2026-06-20T10:00:00Z', priority: 1 })
-  const newer = makeTask({ id: 'new', title: 'Newer', updated_at: '2026-06-20T12:00:00Z', priority: 5 })
-
-  it('defaults to newest-first (updated desc) on initial render', () => {
-    render(<ListView tasks={[older, newer]} agents={[]} onTaskClick={() => {}} />)
-    expect(within(screen.getAllByRole('row')[1]).getByText('Newer')).toBeInTheDocument()
-  })
-
-  it('toggles to oldest-first when the Updated header is clicked', () => {
-    render(<ListView tasks={[older, newer]} agents={[]} onTaskClick={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: /sort by updated/i }))
-    expect(within(screen.getAllByRole('row')[1]).getByText('Older')).toBeInTheDocument()
-  })
-
-  it('resets to newest-first when returning to Updated from another column', () => {
-    render(<ListView tasks={[older, newer]} agents={[]} onTaskClick={() => {}} />)
-    fireEvent.click(screen.getByRole('button', { name: /sort by pri/i })) // priority asc → P1 (Older) first
-    fireEvent.click(screen.getByRole('button', { name: /sort by updated/i })) // back to Updated → natural desc
-    expect(within(screen.getAllByRole('row')[1]).getByText('Newer')).toBeInTheDocument()
-  })
-})
-
-describe('ListView — Tags column', () => {
-  it('renders a Tags column header, not Milestone', () => {
+describe('ListView — Tags column render', () => {
+  it('renders a Tags column header (sort/filter menu), not Milestone', () => {
     render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
-    expect(screen.getByRole('columnheader', { name: 'Tags' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Tags column/i })).toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: /milestone/i })).toBeNull()
   })
 
@@ -196,8 +334,6 @@ describe('ListView — Tags column', () => {
   it('renders "—" in the Tags cell when a task has no tags', () => {
     render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
-    // Both the Tags cell and the Agent cell render "—" for a bare task — scope
-    // to the 4th <td> (Pri, Title, Status, Tags, Agent, Updated) specifically.
     const cells = within(row).getAllByRole('cell')
     expect(within(cells[3]).getByText('—')).toBeInTheDocument()
   })

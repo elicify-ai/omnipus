@@ -217,6 +217,16 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     return filterTasks(tagFiltered, { planId: selectedPlan ? activePlanId : null, ownerAgentId })
   }, [tasks, activeTags, activePlanId, selectedPlan, ownerAgentId])
 
+  // The List view owns its own per-column (Excel-style) Agent/Tag/Status/Pri
+  // filtering, so it receives the PLAN-scoped set only — not the toolbar's
+  // Agent/Tags narrowing (which stays a Board affordance). This keeps the
+  // column filter dropdowns showing the full value set in the current plan
+  // scope rather than a doubly-filtered subset.
+  const listTasks = useMemo(
+    () => filterTasks(tasks, { planId: selectedPlan ? activePlanId : null, ownerAgentId: null }),
+    [tasks, activePlanId, selectedPlan],
+  )
+
   // Drives BoardView's empty-state copy ("no tasks match" vs "no tasks yet").
   const hasActiveFilter = selectedPlan != null || ownerAgentId != null || activeTags.length > 0
 
@@ -273,7 +283,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             <h2 className="font-headline text-base font-bold text-[var(--color-secondary)] truncate">
               {heading}
             </h2>
-            {view !== 'graph' && ownerAgent && (
+            {view === 'board' && ownerAgent && (
               <span className="whitespace-nowrap text-xs text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>
             )}
           </div>
@@ -281,14 +291,15 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         </div>
 
         {/* Center: Agent + Tag filters, centered over the board. Both flat
-            (borderless, chat-composer style). Board/List only — the Graph view
-            honors the plan filter alone, so these don't render for a filter it
-            doesn't actually apply. */}
+            (borderless, chat-composer style). BOARD ONLY — the List view owns
+            per-column Excel-style filtering (Agent/Tags/Status/Pri live in the
+            table headers there), and the Graph view honors the plan filter
+            alone, so neither renders these toolbar filters. */}
         <div className="flex items-center justify-center gap-2">
-          {view !== 'graph' && (
+          {view === 'board' && (
             <AgentFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
           )}
-          {view !== 'graph' && (
+          {view === 'board' && (
             <TagFilterMultiSelect tasks={tasks} value={activeTags} onChange={setActiveTags} />
           )}
         </div>
@@ -353,7 +364,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           />
         ) : (
           <ListView
-            tasks={filteredTasks}
+            tasks={listTasks}
             agents={agents}
             onTaskClick={(task) => setSelectedTaskId(task.id)}
           />
