@@ -207,23 +207,45 @@ func TestTriggerScheduler_RruleRearmAllPaths(t *testing.T) {
 		tsk := makeRruleTask(t, store, "agent-rearm-spawnreset-err", "FREQ=DAILY", dtstart, "UTC")
 		sched.OnTaskUpserted(tsk)
 
-		// Lock down the task store directory so SpawnReset's write fails while
-		// store.Get (read-only, already succeeded before this) is unaffected —
-		// forcing the SpawnReset-other-error exit path deterministically without
-		// touching production code.
-		taskDir := store.Dir()
-		if err := os.Chmod(taskDir, 0o500); err != nil {
-			t.Fatalf("chmod taskDir: %v", err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(taskDir, 0o700) })
+		// Force a generic (non-ErrNotFound, non-ErrAlreadyRunning) SpawnReset
+		// failure deterministically and portably, via the SAME
+		// spawnResetTestHook seam TestTriggerScheduler_SpawnResetTaskNotFound_NoReArm
+		// (F5) uses: it fires immediately after RunScheduled's own store.Get has
+		// already succeeded (t below is that valid in-memory snapshot) but
+		// immediately before SpawnReset's own read.
+		//
+		// A prior version of this subtest chmod'd the task store directory to
+		// 0o500 to make SpawnReset's write fail with EACCES. That is NOT
+		// portable: a process running as root (as this repo's ci-omnipus CI
+		// worker does — deploy/ci-worker/Dockerfile is `FROM golang:1.26-bookworm`
+		// with no USER directive, so the container's default user is root)
+		// bypasses directory-write permission checks entirely (CAP_DAC_OVERRIDE),
+		// so the chmod silently failed to block the write — SpawnReset then
+		// actually SUCCEEDED, dispatch was reached, and this assertion failed
+		// deterministically on CI (reproduced 5/5 locally via `sudo`, vs. 0
+		// failures in 250+ non-root runs, including heavy synthetic CPU
+		// contention) — a root-vs-non-root environment difference, not a race.
+		//
+		// Swapping the task's on-disk file for a directory of the same name
+		// sidesteps privilege entirely: os.ReadFile on a directory returns
+		// EISDIR unconditionally, for root and non-root alike, so
+		// store.SpawnReset's internal re-read of the task deterministically
+		// fails with a generic wrapped error (not os.IsNotExist, so not
+		// task.ErrNotFound) regardless of which user runs the test.
+		taskPath := filepath.Join(store.Dir(), tsk.ID+".json")
+		sched.SetSpawnResetTestHook(func() {
+			if err := os.Remove(taskPath); err != nil {
+				t.Errorf("remove task file before directory swap: %v", err)
+				return
+			}
+			if err := os.Mkdir(taskPath, 0o700); err != nil {
+				t.Errorf("swap task file for a directory: %v", err)
+			}
+		})
 
 		clk.Advance(2 * time.Minute)
 		sched.RunDueJobs(clk.Now())
 		sched.WaitForLane()
-
-		if err := os.Chmod(taskDir, 0o700); err != nil {
-			t.Fatalf("restore chmod: %v", err)
-		}
 
 		if n := len(rec.calls()); n != 0 {
 			t.Fatalf("dispatch should never be reached when SpawnReset fails, got %d calls", n)

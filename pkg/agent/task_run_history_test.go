@@ -29,28 +29,58 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// drainEventsWithTimeout blocks on sub.C until at least minCount events have
-// been received or timeout elapses, then grabs any further already-buffered
-// events non-blockingly. A blocking receive (unlike a bare non-blocking
-// snapshot drain) is required here: a run's close events are published from
-// the SAME goroutine that performs the task's completion writes, moments
-// AFTER waitForCompletionContractTerminal's polling goroutine can observe
-// those writes on disk — there is no happens-before edge between "the test
-// goroutine observed the terminal write" and "the worker goroutine has
-// already reached its LATER emit call", so only an actual channel receive
-// (which the Go memory model does synchronize) can deterministically wait
-// for those events rather than racing a snapshot read against them.
-func drainEventsWithTimeout(t *testing.T, sub EventSubscription, minCount int, timeout time.Duration) []Event {
+// drainEventsWithTimeout blocks on sub.C, collecting every event received
+// (of any kind), until it has observed at least wantStatus
+// EventKindTaskStatusChanged events AND wantRun EventKindTaskRunStatus
+// events for taskID, or timeout elapses — then grabs any further
+// already-buffered events non-blockingly. A blocking receive (unlike a bare
+// non-blocking snapshot drain) is required here: a run's close events are
+// published from the SAME goroutine that performs the task's completion
+// writes, moments AFTER waitForCompletionContractTerminal's polling
+// goroutine can observe those writes on disk — there is no happens-before
+// edge between "the test goroutine observed the terminal write" and "the
+// worker goroutine has already reached its LATER emit call", so only an
+// actual channel receive (which the Go memory model does synchronize) can
+// deterministically wait for those events rather than racing a snapshot
+// read against them.
+//
+// Counting toward a fixed total event count (an earlier version of this
+// helper stopped as soon as ANY minCount events of ANY kind arrived) is NOT
+// sufficient: a single task execution also emits turn_start/llm_request/
+// llm_response/turn_end (and possibly more) events interleaved with the two
+// status-changed and two run-status events under test. If those unrelated
+// events happen to arrive first — a timing detail sensitive to system load,
+// which is exactly why this only reproduced under contention — the
+// count-based loop could stop having collected 4 events none of which are
+// the LATER completion signals, and the trailing non-blocking drain would
+// then return immediately without them (they had not been emitted yet).
+// Waiting for the SPECIFIC signals of interest (or a genuine timeout, which
+// would indicate a real functional problem, not a race artifact) removes
+// that hazard.
+func drainEventsWithTimeout(
+	t *testing.T, sub EventSubscription, taskID string, wantStatus, wantRun int, timeout time.Duration,
+) []Event {
 	t.Helper()
 	var out []Event
+	var statusCount, runCount int
 	deadline := time.After(timeout)
-	for len(out) < minCount {
+	for statusCount < wantStatus || runCount < wantRun {
 		select {
 		case evt, ok := <-sub.C:
 			if !ok {
 				return out
 			}
 			out = append(out, evt)
+			switch evt.Kind {
+			case EventKindTaskStatusChanged:
+				if p, ok := evt.Payload.(TaskStatusChangedPayload); ok && p.TaskID == taskID {
+					statusCount++
+				}
+			case EventKindTaskRunStatus:
+				if p, ok := evt.Payload.(TaskRunStatusPayload); ok && p.TaskID == taskID {
+					runCount++
+				}
+			}
 		case <-deadline:
 			return out
 		}
@@ -148,14 +178,15 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnMarkerCompletion(t *testing.T) {
 		t.Fatalf("status = %q, want done (result: %s)", final.Status, final.Result)
 	}
 
-	runs, err := al.taskStore.ListRuns(tk.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("expected exactly 1 run, got %d: %+v", len(runs), runs)
-	}
-	run := runs[0]
+	// waitForRunClosed, not a raw ListRuns right after the Task.status mirror
+	// goes terminal (Constraint #7 fix, matching MirrorStillCycles): the
+	// mirror write (completeTaskWithResult's te.store.Update) happens BEFORE
+	// closeRun in task_executor.go, so waitForCompletionContractTerminal can
+	// observe the terminal mirror moments before the run's own EndedAt lands
+	// — polling the run store directly is what actually waits on the
+	// guarantee under test instead of racing it. See waitForRunClosed's own
+	// doc comment below.
+	run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
 	if run.Kind != task.RunKindScheduled {
 		t.Errorf("kind = %q, want %q (ExecuteTask's default kind)", run.Kind, task.RunKindScheduled)
 	}
@@ -273,7 +304,7 @@ func TestTaskRunHistory_MirrorStillCyclesAndEmitsRunStatusFrames(t *testing.T) {
 		t.Fatalf("status = %q, want done (result: %s)", final.Status, final.Result)
 	}
 
-	events := drainEventsWithTimeout(t, sub, 4, 5*time.Second)
+	events := drainEventsWithTimeout(t, sub, tk.ID, 2, 2, 5*time.Second)
 
 	var statusEvents []TaskStatusChangedPayload
 	var runEvents []TaskRunStatusPayload
@@ -475,14 +506,15 @@ func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *tes
 		t.Fatalf("status = %q, want done (result: %s)", final.Status, final.Result)
 	}
 
-	runs, err := al.taskStore.ListRuns(tk.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("expected exactly 1 run, got %d: %+v", len(runs), runs)
-	}
-	run := runs[0]
+	// waitForRunClosed, not a raw ListRuns right after the Task.status mirror
+	// goes terminal (Constraint #7 fix, matching MirrorStillCycles): the
+	// mirror write (completeTaskWithResult's te.store.Update) happens BEFORE
+	// closeRun in task_executor.go, so waitForCompletionContractTerminal can
+	// observe the terminal mirror moments before the run's own EndedAt lands
+	// — polling the run store directly is what actually waits on the
+	// guarantee under test instead of racing it. See waitForRunClosed's own
+	// doc comment below.
+	run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
 	if run.Kind != task.RunKindScheduled {
 		t.Errorf("kind = %q, want %q", run.Kind, task.RunKindScheduled)
 	}
