@@ -259,7 +259,7 @@ export function BoardView({
       <div className="flex-1 min-h-0 overflow-auto">
         {/* Sticky status-column header row — spans every swimlane band below it. */}
         <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
-          <div className="w-[300px] shrink-0" aria-hidden="true" />
+          <div className="w-[224px] shrink-0 sticky left-0 z-20 bg-[var(--color-surface-1)]" aria-hidden="true" />
           {COLUMNS.map((col) => {
             const count = renderedTasksVisible.filter((t) => t.status === col.status).length
             return (
@@ -300,7 +300,7 @@ export function BoardView({
           const collapsed = effectiveCollapsed(plan.id, isTerminalPlanState(plan.state))
           return (
             <div key={plan.id} className="flex border-b border-[var(--color-border)]" data-testid={`swimlane-band-${plan.id}`}>
-              <div className="w-[300px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
+              <div className="w-[224px] shrink-0 sticky left-0 z-10 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
                 <PlanLaneHeader
                   plan={plan}
                   workspaceId={workspaceId}
@@ -338,7 +338,7 @@ export function BoardView({
             when empty), so a plan-less workspace behaves exactly like the
             pre-swimlane flat board. */}
         <div className="flex" data-testid="swimlane-band-loose">
-          <div className="w-[300px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
+          <div className="w-[224px] shrink-0 sticky left-0 z-10 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
             <div className="flex items-center gap-1.5 px-2.5 py-2 w-full min-w-0" data-testid="plan-lane-header-loose">
               <button tabIndex={0}
                 type="button"
