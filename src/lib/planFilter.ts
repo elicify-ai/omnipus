@@ -1,9 +1,10 @@
 // Pure Board/List tag-filter helpers (ADR-049, SD-C2). The plan half of this
 // module (a `PLAN_FILTER_ALL`/`filterByPlan`/`filterByPlanAndTag` sentinel
-// filter) was removed by the Plan Swimlane board redesign — the Board no
-// longer filters by plan, it groups ALL plans into swimlane bands instead
-// (see BoardView.tsx). Only the tag filter survives as a toolbar control
-// (`TagFilterBar.tsx`).
+// filter) was removed with the Plan Swimlane board. Plan filtering was later
+// REINSTATED — but as a first-class task filter (`filterTasks` in
+// `taskFilters.ts`, ADR-051 D2/D6) driven by `PlansFilterBand`, not here:
+// swimlane bands are gone and BoardView is a flat kanban. Only the tag filter
+// survives in this module, as a toolbar control (`TagFilterBar.tsx`).
 
 import type { Task } from '@/lib/api'
 

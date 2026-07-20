@@ -5,7 +5,7 @@
  * by `plan_id` instead, R3), unlike `goal_status`/`loop_status`. Asserts the
  * reducer invalidates `['plans']`/`['tasks']` (the "owner disabled surfaces
  * paused" scenario is driven entirely by the refetched `Plan.paused_reason`
- * field — PlanCard already renders it, see planStateColors.ts's
+ * field — PlansFilterBand already renders it, see planStateColors.ts's
  * `planSecondaryChipLabel` — this reducer's only job is triggering that
  * refetch) and does NOT touch any chat-store session bucket.
  *
@@ -62,7 +62,7 @@ describe('chat handleFrame — plan_status (ADR-049 R1/R3)', () => {
       )
     })
     // The frame carries paused_reason, but this reducer's contract is only
-    // to invalidate — PlanCard reads the refetched Plan.paused_reason field
+    // to invalidate — PlansFilterBand reads the refetched Plan.paused_reason field
     // directly (US-10 AS-7), not anything stored from this frame.
     expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['plans'] }))
   })

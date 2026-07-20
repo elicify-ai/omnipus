@@ -200,9 +200,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     staleTime: 30_000,
   })
 
-  // Plans in this task's workspace (Plan Swimlane redesign) — the "Move to
-  // plan…" picker below is the explicit cross-plan reassignment path (the
-  // Board does not support dragging a card between swimlane bands).
+  // Plans in this task's workspace (ADR-051 plans-as-filter) — the "Move to
+  // plan…" picker below is the explicit cross-plan reassignment path: the
+  // Board doesn't change a task's plan via drag; use this dropdown to move it.
   const { data: plans = [] } = useQuery({
     queryKey: plansQueryKeys.list(task?.workspace_id ?? ''),
     queryFn: () => fetchPlans(task!.workspace_id),
@@ -687,9 +687,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </p>
       </Field>
 
-      {/* Plan (Plan Swimlane redesign) — "Move to plan…", the explicit
-          cross-plan reassignment path since the Board no longer supports
-          dragging a card between plan lanes. */}
+      {/* Plan (ADR-051 plans-as-filter) — "Move to plan…", the explicit
+          cross-plan reassignment path: the Board doesn't change a task's plan
+          via drag; use this dropdown to move it. */}
       <Field label="Plan">
         <SmartSelect
           value={task.plan_id ?? '__none__'}
@@ -699,7 +699,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           triggerClassName="h-8 text-xs"
           ariaLabel="Plan"
           items={[
-            { value: '__none__', label: 'No plan (Loose tasks)', className: 'text-xs' },
+            { value: '__none__', label: 'No plan', className: 'text-xs' },
             ...plans.map((p) => ({ value: p.id, label: p.title, className: 'text-xs' })),
           ]}
         />

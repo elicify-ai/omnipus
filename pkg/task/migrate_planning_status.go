@@ -10,8 +10,8 @@
 // sentinel file, mirroring MigrateMilestonesToTags's discipline
 // (migrate_milestones.go): idempotent and crash-safe — a per-file I/O error is
 // logged at Warn and that file is skipped, and the sentinel is only written
-// after every file that DID need remapping was rewritten successfully, so a
-// partial-failure run retries deterministically on the next boot.
+// after every task file was processed without error (any read/parse/write
+// failure withholds the sentinel and forces a retry next boot).
 package task
 
 import (

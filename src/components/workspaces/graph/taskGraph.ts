@@ -1,7 +1,7 @@
 // Task DAG graph model + auto-layout.
 //
 // Pure, side-effect-free helpers shared by the Graph view and its tests:
-//   - the 7-state status → colour/label map (Sovereign Deep palette),
+//   - the 6-state status → colour/label map (Sovereign Deep palette),
 //   - the priority map,
 //   - `buildTaskGraph`, which turns a list of tasks into dagre-laid-out
 //     React Flow nodes + edges (blocker → blocked, left→right).
@@ -33,7 +33,7 @@ export interface StatusVisual {
   muted: boolean
 }
 
-// 7-state lifecycle, projected from the single source of truth in
+// 6-state lifecycle, projected from the single source of truth in
 // `@/lib/statusColors` so the Graph, Board, roll-ups, and List can never drift.
 // in_progress is Forge Gold (#D4AF37) — the marquee "live work" accent.
 export const STATUS_VISUALS: Record<TaskStatus, StatusVisual> = Object.fromEntries(
@@ -102,7 +102,7 @@ export interface AgentLike {
 
 /**
  * DAG-relevance test for orphan-collapsing (whole-workspace "All" mode of the
- * Graph tab — Plan Swimlane board redesign, psychology-grounded: Attention —
+ * Graph tab — ADR-051 (plans-as-filter), psychology-grounded: Attention —
  * a disconnected single node is noise; Gestalt — a connected component is
  * meaning). A task is "DAG-relevant" — worth its own node on the canvas —
  * when it participates in some structure: it depends on something
@@ -136,8 +136,8 @@ export type BuildTaskGraphOptions =
   | {
       /**
        * Scope the graph to a single Plan's member tasks (`task.plan_id ===
-       * planId`) + the `blocked_by` edges between them (Plan Swimlane board
-       * redesign — plan-scoped graph).
+       * planId`) + the `blocked_by` edges between them (ADR-051 plans-as-filter
+       * — plan-scoped graph).
        */
       planId: string
     }

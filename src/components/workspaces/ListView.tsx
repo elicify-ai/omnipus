@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/select'
 import { PRIORITY_BADGE } from './TaskCard'
 import { cn } from '@/lib/utils'
-// 7-state unified vocabulary + colour — single source of truth.
+// 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_LABELS, statusColor, statusLabel } from '@/lib/statusColors'
 import type { Task, Plan } from '@/lib/api'
 import { PLAN_FILTER_UNTAGGED } from '@/lib/planFilter'

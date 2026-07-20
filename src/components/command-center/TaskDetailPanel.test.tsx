@@ -89,7 +89,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSubtasks: vi.fn().mockResolvedValue([]),
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
-    // Plan Swimlane redesign — the "Move to plan…" picker's plans query.
+    // ADR-051 plans-as-filter — the "Move to plan…" picker's plans query.
     fetchPlans: vi.fn().mockResolvedValue([]),
     fetchTaskEvidence: vi.fn().mockResolvedValue([]),
     fetchTaskVerdicts: vi.fn().mockResolvedValue([]),
@@ -554,9 +554,9 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
   })
 })
 
-// ── Plan field (Plan Swimlane redesign) ────────────────────────────────────────
-// The "Move to plan…" picker — the explicit cross-plan reassignment path since
-// the Board no longer supports dragging a card between swimlane bands.
+// ── Plan field (ADR-051 plans-as-filter) ────────────────────────────────────────
+// The "Move to plan…" picker — the explicit cross-plan reassignment path: the
+// Board doesn't change a task's plan via drag; use this dropdown to move it.
 
 function makePlan(overrides: Partial<Plan> = {}): Plan {
   return {
@@ -594,7 +594,7 @@ describe('TaskDetailPanel — Plan field', () => {
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 
-  it('renders the workspace plans as options, alongside "No plan (Loose tasks)"', async () => {
+  it('renders the workspace plans as options, alongside "No plan"', async () => {
     const { fetchPlans } = await import('@/lib/api')
     vi.mocked(fetchPlans).mockResolvedValue([
       makePlan({ id: 'plan-1', title: 'Launch' }),
@@ -610,7 +610,7 @@ describe('TaskDetailPanel — Plan field', () => {
       )
       expect(options.some((t) => t.includes('Launch'))).toBe(true)
       expect(options.some((t) => t.includes('Onboarding'))).toBe(true)
-      expect(options.some((t) => t.includes('No plan (Loose tasks)'))).toBe(true)
+      expect(options.some((t) => t.includes('No plan'))).toBe(true)
     })
   })
 
@@ -632,7 +632,7 @@ describe('TaskDetailPanel — Plan field', () => {
     ))
   })
 
-  it('selecting "No plan (Loose tasks)" sends an empty plan_id', async () => {
+  it('selecting "No plan" sends an empty plan_id', async () => {
     const { fetchPlans, updateTask } = await import('@/lib/api')
     vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch' })] as never)
     vi.mocked(updateTask).mockResolvedValue({} as never)
@@ -641,7 +641,7 @@ describe('TaskDetailPanel — Plan field', () => {
     renderPanel(plannedTask)
     await openPlanPicker()
 
-    const option = await screen.findByRole('option', { name: 'No plan (Loose tasks)' })
+    const option = await screen.findByRole('option', { name: 'No plan' })
     fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
     fireEvent.click(option)
 

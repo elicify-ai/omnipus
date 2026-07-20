@@ -10,7 +10,7 @@
 // Round-1 Grill Reconciliation R1 is the authoritative source for the 5-value
 // enum: draft, approved, running, done, failed. `plan_phase` and
 // `paused_reason`/`failed_reason` are NOT states — they are secondary chips a
-// caller may render alongside the primary badge (see PlanCard.tsx) — this
+// caller may render alongside the primary badge (see PlansFilterBand.tsx) — this
 // module only maps the 5 closed `PlanState` values (+ an unknown fallback).
 
 import type { Plan } from '@/lib/api'

@@ -40,6 +40,12 @@ const GRAPH_PLAN_ALL = '__all__'
 
 interface WorkspaceGraphTabProps {
   workspaceId: string
+  /** Hide the in-graph "By plan" dropdown — set true when a parent screen
+   * (the combined Tasks screen's PlansFilterBand) already exposes plan
+   * selection, so the two controls don't duplicate each other. Defaults to
+   * false so standalone use of this tab is unaffected. The plan info strip
+   * (state/goal/progress) still renders regardless. */
+  hidePlanSelector?: boolean
 }
 
 /**
@@ -47,13 +53,13 @@ interface WorkspaceGraphTabProps {
  * cache (for avatar colour/icon), renders the DAG canvas, and opens the shared
  * task detail slide-over on node click — mirroring the Board's onTaskClick.
  */
-export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
+export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: WorkspaceGraphTabProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
 
-  // Plan scope (Plan Swimlane board redesign): the SAME store field the
-  // Board's lane ⑂ button writes before navigating here, so the graph opens
-  // already scoped to the plan that was clicked. The switcher below reads
-  // and writes this same field, so Board ⇄ Graph stay in sync either way.
+  // Plan scope (ADR-051 — plans-as-filter): the SAME store field the Board's
+  // lane ⑂ button writes before navigating here, so the graph opens already
+  // scoped to the plan that was clicked. The switcher below reads and writes
+  // this same field, so Board ⇄ Graph stay in sync either way.
   const activePlanId = useWorkspacesStore((s) => s.activePlanId)
   const setActivePlanId = useWorkspacesStore((s) => s.setActivePlanId)
 
@@ -201,25 +207,29 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
       )}
 
       <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2 flex-shrink-0">
-        <span className="text-xs font-medium text-[var(--color-muted)] flex-shrink-0">By plan</span>
-        <Select
-          value={activePlanId ?? GRAPH_PLAN_ALL}
-          onValueChange={(v) => setActivePlanId(v === GRAPH_PLAN_ALL ? null : v)}
-        >
-          <SelectTrigger className="h-8 w-56 text-xs" aria-label="Filter the graph by plan">
-            <SelectValue placeholder="All tasks" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={GRAPH_PLAN_ALL} className="text-xs">
-              All tasks
-            </SelectItem>
-            {plans.map((p) => (
-              <SelectItem key={p.id} value={p.id} className="text-xs">
-                {p.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {!hidePlanSelector && (
+          <>
+            <span className="text-xs font-medium text-[var(--color-muted)] flex-shrink-0">By plan</span>
+            <Select
+              value={activePlanId ?? GRAPH_PLAN_ALL}
+              onValueChange={(v) => setActivePlanId(v === GRAPH_PLAN_ALL ? null : v)}
+            >
+              <SelectTrigger className="h-8 w-56 text-xs" aria-label="Filter the graph by plan">
+                <SelectValue placeholder="All tasks" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={GRAPH_PLAN_ALL} className="text-xs">
+                  All tasks
+                </SelectItem>
+                {plans.map((p) => (
+                  <SelectItem key={p.id} value={p.id} className="text-xs">
+                    {p.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        )}
 
         {activePlan && (
           <div className="flex flex-1 min-w-0 items-center gap-2 pl-2">
