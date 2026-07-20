@@ -10,11 +10,11 @@
  */
 
 import { useState } from 'react'
-import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import type { Task, TaskUpdateRequest } from '@/lib/api'
+import type { Task, TaskUpdateRequest, Plan } from '@/lib/api'
 
 // DateTimePicker (shadcn Calendar + Select) needs these jsdom polyfills to open
 // (same gap noted in date-time-picker.test.tsx).
@@ -551,6 +551,104 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
     })
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+})
+
+// ── Plan field (Plan Swimlane redesign) ────────────────────────────────────────
+// The "Move to plan…" picker — the explicit cross-plan reassignment path since
+// the Board no longer supports dragging a card between swimlane bands.
+
+function makePlan(overrides: Partial<Plan> = {}): Plan {
+  return {
+    id: 'plan-1',
+    workspace_id: 'ws-test',
+    title: 'Launch',
+    state: 'draft',
+    plan_phase: 'idle',
+    owner_agent_id: 'jim',
+    owner: 'admin',
+    created_by: 'admin',
+    created_at: '2026-06-20T10:00:00Z',
+    updated_at: '2026-06-20T10:00:00Z',
+    ...overrides,
+  }
+}
+
+// Open the Plan field's SmartSelect (mirrors openAgentPicker above).
+async function openPlanPicker(): Promise<HTMLElement> {
+  const planLabel = await screen.findByText('Plan')
+  const fieldRoot = planLabel.parentElement as HTMLElement
+  const planTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+  fireEvent.click(planTrigger)
+  return planTrigger
+}
+
+describe('TaskDetailPanel — Plan field', () => {
+  // Radix Select needs `scrollIntoView` to open (see the worker-inclusion
+  // describe block above, which deletes it off the shared prototype after
+  // each of its own tests) — reinstate it for this block too.
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('renders the workspace plans as options, alongside "No plan (Loose tasks)"', async () => {
+    const { fetchPlans } = await import('@/lib/api')
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-1', title: 'Launch' }),
+      makePlan({ id: 'plan-2', title: 'Onboarding' }),
+    ] as never)
+
+    renderPanel(taskWithPrompt)
+    await openPlanPicker()
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Launch'))).toBe(true)
+      expect(options.some((t) => t.includes('Onboarding'))).toBe(true)
+      expect(options.some((t) => t.includes('No plan (Loose tasks)'))).toBe(true)
+    })
+  })
+
+  it('selecting a plan sends its id via updateTask', async () => {
+    const { fetchPlans, updateTask } = await import('@/lib/api')
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch' })] as never)
+    vi.mocked(updateTask).mockResolvedValue({} as never)
+
+    renderPanel(taskWithPrompt)
+    await openPlanPicker()
+
+    const option = await screen.findByRole('option', { name: 'Launch' })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith(
+      taskWithPrompt.id,
+      expect.objectContaining({ plan_id: 'plan-1' }),
+    ))
+  })
+
+  it('selecting "No plan (Loose tasks)" sends an empty plan_id', async () => {
+    const { fetchPlans, updateTask } = await import('@/lib/api')
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch' })] as never)
+    vi.mocked(updateTask).mockResolvedValue({} as never)
+
+    const plannedTask = makeTask({ id: 'task-planned', plan_id: 'plan-1' })
+    renderPanel(plannedTask)
+    await openPlanPicker()
+
+    const option = await screen.findByRole('option', { name: 'No plan (Loose tasks)' })
+    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+    fireEvent.click(option)
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledWith(
+      'task-planned',
+      expect.objectContaining({ plan_id: '' }),
+    ))
   })
 })
 

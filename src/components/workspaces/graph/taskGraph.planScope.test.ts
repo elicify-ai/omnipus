@@ -66,7 +66,10 @@ describe('buildTaskGraph — plan scoping', () => {
     const tasks = [
       makeTask({ id: 'a', plan_id: 'plan-1' }), // lone member, no edges
     ]
-    const { unlinked, nodes } = buildTaskGraph(tasks, [], { planId: 'plan-1', collapseOrphans: true })
+    // `collapseOrphans` isn't even representable alongside `planId` anymore
+    // (BuildTaskGraphOptions is a discriminated union, review-gate fix #6) —
+    // this now exercises the same guarantee via the plain plan-scope call.
+    const { unlinked, nodes } = buildTaskGraph(tasks, [], { planId: 'plan-1' })
     expect(unlinked).toHaveLength(0)
     // Still rendered as a node — plan scope never collapses its own members.
     expect(nodes.map((n) => n.id)).toEqual(['a'])

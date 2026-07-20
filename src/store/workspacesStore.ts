@@ -46,17 +46,16 @@ interface WorkspacesState {
    * here) avoids this store having to know about Plan states at all.
    */
   collapsedLanes: Record<string, boolean>
-  /**
-   * Flip whatever is currently in the map for `id` (defaulting a MISSING key
-   * to `false` before flipping, i.e. "assume expanded, so first toggle
-   * collapses"). This generic flip is intentionally naive about any
-   * plan-state-driven default — BoardView's lane header always calls
-   * `setLaneCollapsed` with an explicit, effective-state-aware value instead
-   * of relying on this method, so the naivety here never surfaces in the UI.
-   * Kept as a small, direct store action for completeness/testability.
-   */
-  toggleLane: (id: string) => void
   setLaneCollapsed: (id: string, collapsed: boolean) => void
+  /**
+   * Clear every lane-collapse override. `collapsedLanes` is keyed by Plan id
+   * (workspace-scoped) plus the shared `LOOSE_LANE_ID` sentinel — that
+   * sentinel is the SAME literal across every workspace, so without a reset
+   * on workspace change, collapsing Loose in workspace A leaks into
+   * workspace B. Called by `WorkspaceTabContainer` alongside its
+   * `setActivePlanId(null)` reset.
+   */
+  resetCollapsedLanes: () => void
 }
 
 export const useWorkspacesStore = create<WorkspacesState>((set) => ({
@@ -69,8 +68,7 @@ export const useWorkspacesStore = create<WorkspacesState>((set) => ({
   boardAltitude: 'top-level',
   setBoardAltitude: (altitude) => set({ boardAltitude: altitude }),
   collapsedLanes: {},
-  toggleLane: (id) =>
-    set((s) => ({ collapsedLanes: { ...s.collapsedLanes, [id]: !s.collapsedLanes[id] } })),
   setLaneCollapsed: (id, collapsed) =>
     set((s) => ({ collapsedLanes: { ...s.collapsedLanes, [id]: collapsed } })),
+  resetCollapsedLanes: () => set({ collapsedLanes: {} }),
 }))

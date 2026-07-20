@@ -16,6 +16,7 @@ import {
   stopPlan,
   deletePlan,
   isApiError,
+  parsePlanApproveTaskErrors,
   tasksQueryKeys,
   plansQueryKeys,
   workspacesQueryKeys,
@@ -33,11 +34,10 @@ interface WorkspaceTasksTabProps {
 
 /**
  * Shared task-tab body for the Board and List views. Board mode groups tasks
- * into per-plan swimlane bands (Plan Swimlane redesign — `BoardView.tsx`'s
- * `PlanLaneHeader` rows replace the old collapsible Plans panel AND the plan
- * half of `PlanFilterBar`; only the tag filter survives as a toolbar
- * control, via `TagFilterBar`). Owns the create task/plan slide-overs;
- * only the inner Board/List view differs.
+ * into per-plan swimlane bands (Plan Swimlane redesign) via BoardView.tsx's
+ * `PlanLaneHeader` rows; `TagFilterBar` provides the toolbar's tag filter.
+ * Owns the create task/plan slide-overs; only the inner Board/List view
+ * differs.
  */
 export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps) {
   const { activeTagFilter, setActiveTagFilter, boardAltitude, setBoardAltitude } = useWorkspacesStore()
@@ -71,6 +71,21 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
       addToast({ message: 'Plan approved', variant: 'success' })
     },
     onError: (err) => {
+      // Mirror CreatePlanSlideOver's Edit-panel Approve: a 400 carries a
+      // per-task "needs acceptance criteria" payload — surface those reasons
+      // instead of the generic fallback (the lane ⋯ Approve is now the
+      // primary path, so it must not regress to a less useful toast).
+      if (isApiError(err) && err.status === 400) {
+        const taskErrors = parsePlanApproveTaskErrors(err.body)
+        if (taskErrors) {
+          const lines = taskErrors.map((e) => `${e.title ?? e.task_id}: ${e.reason}`)
+          addToast({
+            message: `Cannot approve — the following tasks are missing criteria:\n${lines.join('\n')}`,
+            variant: 'error',
+          })
+          return
+        }
+      }
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to approve plan'
       addToast({ message: msg, variant: 'error' })
     },
@@ -170,7 +185,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
       {plansError && (
         <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
-          Plans failed to load — swimlanes may be incomplete.
+          Plans failed to load — planned tasks are hidden from their plan lanes and shown under Loose tasks instead.
         </div>
       )}
 

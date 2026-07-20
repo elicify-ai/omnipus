@@ -11,12 +11,11 @@ interface TagFilterBarProps {
 }
 
 /**
- * Board toolbar tag filter (Plan Swimlane redesign) — the tag-chip half of
- * the removed `PlanFilterBar` (plan pills are superseded entirely by the
- * swimlane bands themselves; this keeps just the tag filter, per the
- * redesign's "KEEP the tag filter" requirement). Reuses `PlanFilterBar`'s
- * `PLAN_FILTER_UNTAGGED` sentinel and `role=group`/`aria-pressed` a11y
- * grammar unchanged.
+ * Board toolbar tag filter (Plan Swimlane redesign) — plan pills are
+ * superseded entirely by the swimlane bands themselves (BoardView.tsx's
+ * `PlanLaneHeader` rows), so this keeps just the tag filter. Uses
+ * `planFilter.ts`'s `PLAN_FILTER_UNTAGGED` sentinel plus a
+ * `role=group`/`aria-pressed` a11y grammar.
  */
 export function TagFilterBar({ tasks, activeTagFilter, onSelectTag }: TagFilterBarProps) {
   const tags = useMemo(() => distinctTags(tasks), [tasks])

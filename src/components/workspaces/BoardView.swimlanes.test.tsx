@@ -156,6 +156,66 @@ describe('BoardView swimlanes — grouping by plan', () => {
   })
 })
 
+// ── Orphaned plan_id (review-gate fix #1) ───────────────────────────────────
+//
+// A root task whose `plan_id` is truthy but matches NO plan in the loaded
+// `plans` list (plansError → `plans` defaults to `[]`, a create-plan/tasks
+// refetch race, or the post-Clear window before the plans query re-settles)
+// must still render — routed into the Loose band — instead of landing in
+// neither a plan band nor Loose and silently vanishing while the sticky
+// per-status header count still includes it.
+
+describe('BoardView swimlanes — orphaned plan_id tasks never vanish', () => {
+  it('a task whose plan_id matches no loaded plan renders in the Loose band', () => {
+    const orphan = makeTask({ id: 't-orphan', title: 'Orphan task', plan_id: 'plan-gone' })
+    renderBoard({ plans: [], tasks: [orphan] })
+
+    const loose = screen.getByTestId('swimlane-band-loose')
+    expect(within(loose).getByText('Orphan task')).toBeInTheDocument()
+    // No plan band exists for the dangling plan_id — there's nowhere else it could hide.
+    expect(screen.queryAllByTestId(/^swimlane-band-plan-/)).toHaveLength(0)
+  })
+
+  it('an orphaned task lands in Loose even alongside a real plan band (not a phantom third home)', () => {
+    const plan = makePlan({ id: 'plan-a', title: 'Plan A', state: 'running' })
+    const member = makeTask({ id: 't-member', title: 'Member task', plan_id: 'plan-a' })
+    const orphan = makeTask({ id: 't-orphan', title: 'Orphan task', plan_id: 'plan-gone' })
+    renderBoard({ plans: [plan], tasks: [member, orphan] })
+
+    const bandA = screen.getByTestId('swimlane-band-plan-a')
+    expect(within(bandA).getByText('Member task')).toBeInTheDocument()
+    expect(within(bandA).queryByText('Orphan task')).not.toBeInTheDocument()
+
+    const loose = screen.getByTestId('swimlane-band-loose')
+    expect(within(loose).getByText('Orphan task')).toBeInTheDocument()
+  })
+
+  it('the sticky per-status header count reflects the orphaned task, never exceeding the cards rendered', () => {
+    const orphan = makeTask({ id: 't-orphan', title: 'Orphan task', plan_id: 'plan-gone', status: 'inbox' })
+    renderBoard({ plans: [], tasks: [orphan] })
+
+    // The task actually renders (in Loose)...
+    expect(screen.getByText('Orphan task')).toBeInTheDocument()
+    // ...and the Inbox column's sticky header count is 1 (the pre-fix bug
+    // counted it from the raw task list while the card itself had vanished,
+    // so the count could exceed what was actually on screen).
+    const inboxLabel = screen.getByText('Inbox')
+    const countBadge = inboxLabel.parentElement!.querySelector('span:nth-child(2)')
+    expect(countBadge).toHaveTextContent('1')
+  })
+
+  it('simulates plansError (plans defaults to []) — every planned task still renders, grouped into Loose', () => {
+    const t1 = makeTask({ id: 't1', title: 'Task One', plan_id: 'plan-a' })
+    const t2 = makeTask({ id: 't2', title: 'Task Two', plan_id: 'plan-b' })
+    // plansError → the caller's `plans` query defaults to `[]`, same as here.
+    renderBoard({ plans: [], tasks: [t1, t2] })
+
+    const loose = screen.getByTestId('swimlane-band-loose')
+    expect(within(loose).getByText('Task One')).toBeInTheDocument()
+    expect(within(loose).getByText('Task Two')).toBeInTheDocument()
+  })
+})
+
 // ── Lane order ───────────────────────────────────────────────────────────────
 
 describe('BoardView swimlanes — lane order', () => {
