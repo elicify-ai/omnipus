@@ -4,7 +4,7 @@
  * ADR-051 — the combined "Tasks" screen. Covers:
  *   - The [Board] [List] [Graph] view switcher renders and defaults to Board.
  *   - The dynamic heading ("Tasks" / "{plan.title} — tasks", with an
- *     "· Owner: {name}" suffix when an owner filter is active).
+ *     "· Agent: {name}" suffix when an agent filter is active).
  *   - "New task" is present and opens the create slide-over.
  *   - This screen's own plan-mutation WIRING (Approve/Stop/Clear/Edit/New
  *     Plan callbacks passed into PlansFilterBand fire the right mutation).
@@ -63,6 +63,23 @@ vi.mock('@/store/ui', () => ({
     const store = { addToast: mockAddToast }
     return selector ? selector(store) : store
   },
+}))
+
+// Stub DropdownMenu (Radix pointer/portal internals don't drive in jsdom) so
+// the Agent + Tag filter menu items render inline and are directly clickable —
+// this file tests WorkspaceTasksTab's filter WIRING, not Radix's open/close.
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
+    asChild ? <>{children}</> : <div>{children}</div>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: ({ children, onClick, className }: { children: React.ReactNode; onClick?: () => void; className?: string }) => (
+    <button type="button" role="menuitem" onClick={onClick} className={className}>{children}</button>
+  ),
+  DropdownMenuCheckboxItem: ({ children, checked, onCheckedChange, className }: { children: React.ReactNode; checked?: boolean; onCheckedChange?: (v: boolean) => void; className?: string }) => (
+    <button type="button" role="menuitemcheckbox" aria-checked={checked} onClick={() => onCheckedChange?.(!checked)} className={className}>{children}</button>
+  ),
+  DropdownMenuSeparator: () => <hr />,
 }))
 
 // Stub PlansFilterBand — owned by a parallel agent (may not exist on disk
@@ -184,7 +201,7 @@ beforeEach(() => {
   mockNavigate.mockReset()
   mockAddToast.mockReset()
   // Real Zustand store — reset between tests (module-level singleton).
-  useWorkspacesStore.setState({ activeTagFilter: null, boardAltitude: 'top-level', activePlanId: null })
+  useWorkspacesStore.setState({ activeTags: [], boardAltitude: 'top-level', activePlanId: null })
   vi.mocked(fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(fetchPlans).mockReset().mockResolvedValue([])
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([])
@@ -230,7 +247,7 @@ describe('WorkspaceTasksTab — dynamic heading', () => {
     renderTab()
     const heading = await screen.findByTestId('tasks-heading')
     expect(heading.textContent).toContain('Team Task Backlog')
-    expect(heading.textContent).not.toContain('Owner:')
+    expect(heading.textContent).not.toContain('Agent:')
   })
 
   it('reads "{plan.title} — tasks" when a plan is selected (via the band stub)', async () => {
@@ -245,20 +262,16 @@ describe('WorkspaceTasksTab — dynamic heading', () => {
     await waitFor(() => expect(heading.textContent).toContain('Payments revamp — tasks'))
   })
 
-  it('appends "· Owner: {name}" once an owner filter is active', async () => {
+  it('appends "· Agent: {name}" once an agent filter is active', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'ray', name: 'Ray' })])
     renderTab()
 
-    // Shared agent selector (SmartSelect + buildTaskAssigneeItems) — with a
-    // small roster it renders as a Radix Select: click the trigger, then the
-    // agent option by name (the shared item label is the agent's name).
-    const trigger = await screen.findByRole('combobox', { name: /filter by owner/i })
-    fireEvent.click(trigger)
-    const option = await screen.findByRole('option', { name: 'Ray' })
-    fireEvent.click(option)
+    // Agent filter — the chat-composer-style icon DropdownMenu (mocked here so
+    // its items render inline). Click the agent's menu item by name.
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Ray' }))
 
     const heading = await screen.findByTestId('tasks-heading')
-    await waitFor(() => expect(heading.textContent).toContain('Owner: Ray'))
+    await waitFor(() => expect(heading.textContent).toContain('Agent: Ray'))
   })
 })
 
@@ -412,10 +425,7 @@ describe('WorkspaceTasksTab — end-to-end filter behavior (Board actually filte
     expect(await screen.findByText("Ray's task")).toBeInTheDocument()
     expect(screen.getByText("Jim's task")).toBeInTheDocument()
 
-    const trigger = screen.getByRole('combobox', { name: /filter by owner/i })
-    fireEvent.click(trigger)
-    const option = await screen.findByRole('option', { name: 'Ray' })
-    fireEvent.click(option)
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Ray' }))
 
     await waitFor(() => expect(screen.queryByText("Jim's task")).toBeNull())
     expect(screen.getByText("Ray's task")).toBeInTheDocument()
@@ -454,14 +464,12 @@ describe('WorkspaceTasksTab — stale-filter reset', () => {
 describe('WorkspaceTasksTab — Graph view switch', () => {
   it('switching to Graph renders the Graph tab and hides the owner filter + tag bar', async () => {
     const user = userEvent.setup()
-    // A tagged task so TagFilterBar actually renders something in Board view
-    // (it renders null when there are zero tags AND no active filter) —
-    // otherwise its "hidden in Graph view" assertion would be vacuously true.
     vi.mocked(fetchTasks).mockResolvedValue([makeTask({ id: 't1', tags: ['urgent'] })])
 
     renderTab()
-    expect(await screen.findByRole('group', { name: 'Tag filter' })).toBeInTheDocument()
-    expect(screen.getByTestId('tasks-owner-filter')).toBeInTheDocument()
+    // Board-only filter controls are present in Board view.
+    expect(await screen.findByTestId('tasks-tag-filter')).toBeInTheDocument()
+    expect(screen.getByTestId('tasks-agent-filter')).toBeInTheDocument()
 
     const boardButton = screen.getByTestId('tasks-view-board')
     const graphButton = screen.getByTestId('tasks-view-graph')
@@ -472,7 +480,7 @@ describe('WorkspaceTasksTab — Graph view switch', () => {
     expect(boardButton).toHaveAttribute('aria-checked', 'false')
 
     // Board-only filter controls are gone in Graph view.
-    expect(screen.queryByTestId('tasks-owner-filter')).toBeNull()
-    expect(screen.queryByRole('group', { name: 'Tag filter' })).toBeNull()
+    expect(screen.queryByTestId('tasks-agent-filter')).toBeNull()
+    expect(screen.queryByTestId('tasks-tag-filter')).toBeNull()
   })
 })

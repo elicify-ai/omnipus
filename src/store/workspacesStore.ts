@@ -21,12 +21,13 @@ interface WorkspacesState {
   activePlanId: string | null
   setActivePlanId: (id: string | null) => void
   /**
-   * The currently-active tag filter (ADR-049). null = no tag filter. See
-   * `PLAN_FILTER_UNTAGGED` (`src/lib/planFilter.ts`) for the "no tags at
-   * all" sentinel.
+   * The currently-selected tag filters (ADR-051 — the toolbar tag filter is a
+   * multiselect). Empty = no tag filter; a task matches if it has ANY selected
+   * tag. See `PLAN_FILTER_UNTAGGED` (`src/lib/planFilter.ts`) for the "no tags
+   * at all" sentinel.
    */
-  activeTagFilter: string | null
-  setActiveTagFilter: (tag: string | null) => void
+  activeTags: string[]
+  setActiveTags: (tags: string[]) => void
   /**
    * Board depth/altitude toggle. 'top-level' = root tasks only (children
    * nested-collapsed under their parent). 'show-all' = children expanded
@@ -41,8 +42,8 @@ export const useWorkspacesStore = create<WorkspacesState>((set) => ({
   setActiveWorkspaceId: (id) => set({ activeWorkspaceId: id }),
   activePlanId: null,
   setActivePlanId: (id) => set({ activePlanId: id }),
-  activeTagFilter: null,
-  setActiveTagFilter: (tag) => set({ activeTagFilter: tag }),
+  activeTags: [],
+  setActiveTags: (tags) => set({ activeTags: tags }),
   boardAltitude: 'top-level',
   setBoardAltitude: (altitude) => set({ boardAltitude: altitude }),
 }))
