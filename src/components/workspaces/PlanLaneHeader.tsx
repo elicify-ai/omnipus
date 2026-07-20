@@ -125,73 +125,87 @@ export function PlanLaneHeader({
 
   return (
     <div
-      className="flex items-center gap-1.5 px-2.5 py-2 w-full min-w-0"
+      className="flex flex-col gap-1 px-2.5 py-2 w-full min-w-0"
       data-testid={`plan-lane-header-${plan.id}`}
       title={secondary ? `${plan.title} — ${secondary}` : plan.title}
     >
-      <button tabIndex={0}
-        type="button"
-        onClick={onToggleCollapse}
-        aria-expanded={!collapsed}
-        aria-label={collapsed ? `Expand ${plan.title} lane` : `Collapse ${plan.title} lane`}
-        className="flex items-center gap-1 min-w-0 flex-1 text-left text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
-      >
-        {collapsed ? <CaretRight size={12} className="shrink-0" /> : <CaretDown size={12} className="shrink-0" />}
-        <Strategy size={13} weight="fill" className="shrink-0 text-[color:var(--color-accent)]" aria-hidden="true" />
-        <span className="text-xs font-semibold text-[var(--color-secondary)] truncate">
-          {plan.title}
-        </span>
-      </button>
+      {/* Row 1 — collapse toggle + plan title + state badge. The title gets
+          its OWN row so the narrow 224px gutter can never squeeze it to zero
+          width: the previous single-row layout packed the state badge,
+          progress, owner chip and two action buttons alongside a `flex-1`
+          title, and their fixed widths summed past 224px — collapsing the
+          title to nothing (it rendered as an empty `truncate` span). */}
+      <div className="flex items-center gap-1.5 min-w-0">
+        <button tabIndex={0}
+          type="button"
+          onClick={onToggleCollapse}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? `Expand ${plan.title} lane` : `Collapse ${plan.title} lane`}
+          className="flex items-center gap-1 min-w-0 flex-1 text-left text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+        >
+          {collapsed ? <CaretRight size={12} className="shrink-0" /> : <CaretDown size={12} className="shrink-0" />}
+          <Strategy size={13} weight="fill" className="shrink-0 text-[color:var(--color-accent)]" aria-hidden="true" />
+          <span className="text-xs font-semibold text-[var(--color-secondary)] truncate">
+            {plan.title}
+          </span>
+        </button>
 
-      <span
-        className="flex-shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold"
-        style={{ color: planStateColor(plan.state), backgroundColor: `${planStateColor(plan.state)}1a` }}
-      >
-        <PlanStateGlyph state={plan.state} />
-        {planStateLabel(plan.state)}
-      </span>
-
-      <div className="flex items-center gap-1 w-[62px] flex-shrink-0" role="img" aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}>
-        <Progress value={pct} className="h-1.5 w-7" />
-        <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0 tabular-nums">
-          {memberDone}/{memberTotal}
+        <span
+          className="flex-shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold"
+          style={{ color: planStateColor(plan.state), backgroundColor: `${planStateColor(plan.state)}1a` }}
+        >
+          <PlanStateGlyph state={plan.state} />
+          {planStateLabel(plan.state)}
         </span>
       </div>
 
-      {owner && (
-        // Recognition-over-Recall (ux-psychology): the gutter is narrow, so a full
-        // display name ("Jim — Planner & Orchestrator") truncates to unreadable
-        // ("Jim — Pla…"). Show the short lead token; full name stays on hover.
-        <span
-          title={owner.name}
-          className="flex-shrink-0 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)] truncate max-w-[90px]"
-        >
-          {owner.name.split('—')[0].trim()}
-        </span>
-      )}
+      {/* Row 2 — progress, owner, and lane actions. Left-padded so it hangs
+          under the title (clearing the caret+icon on row 1). The `flex-1`
+          spacer pushes the actions to the right edge of the gutter. */}
+      <div className="flex items-center gap-1.5 min-w-0 pl-[18px]">
+        <div className="flex items-center gap-1 flex-shrink-0" role="img" aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}>
+          <Progress value={pct} className="h-1.5 w-8" />
+          <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0 tabular-nums">
+            {memberDone}/{memberTotal}
+          </span>
+        </div>
 
-      <button tabIndex={0}
-        type="button"
-        onClick={handleViewGraph}
-        disabled={!hasGraph}
-        aria-label="View plan graph"
-        title={hasGraph ? 'View plan graph' : 'Needs at least 2 tasks in this plan'}
-        className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-30 disabled:pointer-events-none disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-      >
-        <TreeStructure size={13} />
-      </button>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button tabIndex={0}
-            type="button"
-            aria-label={`Plan actions for ${plan.title}`}
-            className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+        {owner && (
+          // Recognition-over-Recall (ux-psychology): the gutter is narrow, so a full
+          // display name ("Jim — Planner & Orchestrator") truncates to unreadable
+          // ("Jim — Pla…"). Show the short lead token; full name stays on hover.
+          <span
+            title={owner.name}
+            className="min-w-0 truncate rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)] max-w-[100px]"
           >
-            <DotsThreeVertical size={14} weight="bold" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-40">
+            {owner.name.split('—')[0].trim()}
+          </span>
+        )}
+
+        <div className="flex-1" aria-hidden="true" />
+
+        <button tabIndex={0}
+          type="button"
+          onClick={handleViewGraph}
+          disabled={!hasGraph}
+          aria-label="View plan graph"
+          title={hasGraph ? 'View plan graph' : 'Needs at least 2 tasks in this plan'}
+          className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-30 disabled:pointer-events-none disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+        >
+          <TreeStructure size={13} />
+        </button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button tabIndex={0}
+              type="button"
+              aria-label={`Plan actions for ${plan.title}`}
+              className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+            >
+              <DotsThreeVertical size={14} weight="bold" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-40">
           {canApprove && (
             <DropdownMenuItem onClick={onApprove} disabled={isApproving} className="flex items-center gap-2">
               <Play size={13} weight="fill" />
@@ -217,8 +231,9 @@ export function PlanLaneHeader({
             <Broom size={13} />
             {isClearing ? 'Clearing…' : 'Clear'}
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
       <AlertDialog open={confirmStop} onOpenChange={setConfirmStop}>
         <AlertDialogContent>
