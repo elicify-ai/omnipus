@@ -40,6 +40,7 @@
 // history for the frontend-side candidate (src/store/chat.ts's startSpan:
 // `if (!lastMsgId) return {}` silently drops a subagent_start WS frame when
 // no assistant message exists yet in the store for that session).
+
 package agent
 
 import (
@@ -81,7 +82,7 @@ import (
 //     (which it must NOT take for a cancel) versus formatting a normal
 //     "Subagent task completed" result the LLM/UI can render.
 //  4. EventKindSubTurnEnd is recorded Status=Interrupted, Reason=
-//     "parent_cancelled" — matching the async sibling test's assertions
+//     the awaited-cancel wire reason value — matching the async sibling
 //     verbatim, proving parity between the two delegation modes.
 //  5. The session transcript's turn_canceled entry actually contains the
 //     child's turn ID in DescendantsCancelled — the literal on-disk field the

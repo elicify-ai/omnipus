@@ -384,6 +384,22 @@ describe('WorkspaceTeamTab', () => {
       'planner',
       'ray',
     ])
+
+    // Drain further microtasks under these REAL timers (this test never
+    // switches to fake timers) before it ends. Every assertion above checks
+    // cache writes that happen INSIDE saveFn itself — i.e. BEFORE saveFn's
+    // promise resolves back to useAutoSave's doSave(), which is what
+    // actually runs the post-save bookkeeping (status→'saved', and the 2s
+    // "fade to idle" setTimeout it arms). None of the assertions above give
+    // a causal guarantee that the fade-timer arm has completed. Without
+    // this flush, that arm can race past this test's end and RTL's
+    // afterEach cleanup() (src/test/setup.ts), leaking a genuine setTimeout
+    // that fires ~2s later during a LATER test and throws on this
+    // already-unmounted component. See useAutoSave.ts's fade-timer comment.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
   })
 
   it('partial-failure ordering: updateWorkspace rejects — updateWorkspaceDelegation is never called and status becomes error', async () => {

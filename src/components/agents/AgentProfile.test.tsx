@@ -1854,6 +1854,24 @@ describe('AgentProfile — sheet-close flush (item 1)', () => {
     // drive), exercising `handleCloseAgentSheet` for real rather than
     // calling the store action directly.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    // The close handler's flush calls saveNow() synchronously, which starts
+    // doSave() up to its first await (the mocked, already-resolved
+    // updateAgent promise) — but doSave()'s OWN post-await bookkeeping
+    // (status→'saved', and the 2s "fade to idle" setTimeout it arms) is not
+    // gated by any timer here, so a plain sync `advanceTimersByTime` has
+    // nothing to advance. Flush the pending microtasks while STILL on fake
+    // timers (advanceTimersByTimeAsync(0) is this codebase's established
+    // idiom for exactly this — see browserWebRTC.test.ts) so that
+    // continuation — including the fade-timer arm — settles as a FAKE timer
+    // before switching to real ones below. Without this, the arm can race
+    // past the vi.useRealTimers() switch on unlucky microtask orderings,
+    // leaking a genuine setTimeout that fires ~2s later during a LATER test
+    // and throws on this already-unmounted component. See useAutoSave.ts's
+    // fade-timer comment.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     vi.useRealTimers()
 
     await waitFor(() => {

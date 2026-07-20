@@ -181,8 +181,19 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     expect(api.updateWorkspaceInstructions).not.toHaveBeenCalled()
 
     // Advance past the 1500 ms debounce (deliberately raised from 500ms).
+    // ASYNC variant: drains the mocked save's resolved promise AND
+    // useAutoSave's post-await bookkeeping (status→'saved', and the 2s
+    // "fade to idle" setTimeout it arms) while STILL on fake timers, so a
+    // fade timer that gets armed here is a FAKE one — safely discarded by
+    // the vi.useRealTimers() switch below. The old pattern (sync
+    // `advanceTimersByTime` + immediate switch to real timers) let that
+    // continuation race past the switch on unlucky microtask orderings,
+    // arming a genuine REAL 2s timer that leaked past this test — it fires
+    // ~2s later (mid a LATER test or at suite teardown), calling setState
+    // on this already-unmounted component and crashing the whole vitest
+    // run with an unhandled error. See useAutoSave.ts's fade-timer comment.
     await act(async () => {
-      vi.advanceTimersByTime(1600)
+      await vi.advanceTimersByTimeAsync(1600)
     })
 
     // Switch back so waitFor can poll.
@@ -258,9 +269,11 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     fireEvent.change(textarea, { target: { value: '' } })
 
     // Advance past the 1500 ms debounce (deliberately raised from 500ms —
-    // see Test 2's comment above).
+    // see Test 2's comment above). ASYNC variant — see Test 2's fade-timer
+    // leak comment for why this must drain the save's continuation while
+    // still on fake timers, before switching to real ones below.
     await act(async () => {
-      vi.advanceTimersByTime(1600)
+      await vi.advanceTimersByTimeAsync(1600)
     })
 
     vi.useRealTimers()
@@ -459,8 +472,22 @@ describe('WorkspaceSettingsTab — trim-vs-raw isCurrent gap (name field, traili
     // Resolve PUT #2 — the queued re-save persists the newer (space-
     // trailing, trimmed-identical) text; dirty finally clears because this
     // save's raw snapshot now equals the live draft.
+    //
+    // Unlike the resolvePut1 block above (whose waitFor(calledTimes 2)
+    // condition is causally downstream of doSave()'s post-await bookkeeping
+    // — the queued re-run only dispatches AFTER that bookkeeping, including
+    // arming the 2s "fade to idle" setTimeout — this resolve's own
+    // waitFor below checks an ALREADY-true call count, so it gives no such
+    // guarantee. Without forcing extra microtask ticks here, save #2's
+    // fade-timer arm (now under REAL timers, switched above) can race past
+    // this test's end, leaking a genuine setTimeout that fires ~2s later
+    // during a LATER test and throws on this already-unmounted component.
+    // See useAutoSave.ts's fade-timer comment and Test 2's matching note in
+    // this file (above).
     await act(async () => {
       resolvePut2({ ...mockWorkspace, name: 'New name' })
+      await Promise.resolve()
+      await Promise.resolve()
     })
     await waitFor(() => {
       expect(api.updateWorkspace).toHaveBeenCalledTimes(2)
@@ -500,7 +527,10 @@ describe('WorkspaceSettingsTab — no-op invalidation (item 6)', () => {
     const nameInput = await screen.findByLabelText('Name')
     vi.useFakeTimers()
     fireEvent.change(nameInput, { target: { value: 'Renamed Workspace' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
+    // ASYNC variant — see Test 2's fade-timer leak comment in this file
+    // (above) for why the save's continuation must drain while still on
+    // fake timers, before switching to real ones below.
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
     vi.useRealTimers()
 
     await waitFor(() => {
