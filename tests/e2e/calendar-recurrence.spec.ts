@@ -470,6 +470,9 @@ test(
       action: 'llm',
       workspace_id: workspaceId,
       surface: 'user',
+      // A scheduled (recurring) task requires an assigned agent (backend
+      // validation); the workspace's core_team seeds mia + jim.
+      agent_id: 'mia',
       trigger: {
         type: 'recurring',
         config: {
@@ -614,6 +617,8 @@ test(
       action: 'llm',
       workspace_id: workspaceId,
       surface: 'user',
+      // once is a scheduled trigger → agent_id required (backend validation).
+      agent_id: 'mia',
       trigger: { type: 'once', config: { at_ms: todayAt(11, 0).getTime() } },
     });
     const recurringTask = await createTaskApi(adminToken, {
@@ -621,6 +626,8 @@ test(
       action: 'llm',
       workspace_id: workspaceId,
       surface: 'user',
+      // recurring is a scheduled trigger → agent_id required (backend validation).
+      agent_id: 'mia',
       trigger: {
         type: 'recurring',
         config: { rrule: 'FREQ=WEEKLY;BYDAY=TU', dtstart_ms: dtstart.getTime(), tz: LOCAL_TZ },
