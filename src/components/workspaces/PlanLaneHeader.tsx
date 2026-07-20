@@ -82,11 +82,10 @@ interface PlanLaneHeaderProps {
 
 /**
  * The plan-lane header — left-hand label of one swimlane band on the Board
- * (Plan Swimlane redesign). Reuses PlanCard/PlanFilterBar's state-color and
- * secondary-chip logic (`planStateColors.ts`) but is a distinct component:
- * PlanCard rendered a whole standalone summary card in a side panel: this is
- * a compact, single-row band header that also owns lane collapse and the
- * cross-tab "view this plan's graph" hop.
+ * (Plan Swimlane redesign). Uses `planStateColors.ts`'s state-color and
+ * secondary-chip logic, but is its own compact, single-row band header
+ * (distinct from a standalone plan summary card) that also owns lane
+ * collapse and the cross-tab "view this plan's graph" hop.
  */
 export function PlanLaneHeader({
   plan,
@@ -170,7 +169,7 @@ export function PlanLaneHeader({
         onClick={handleViewGraph}
         disabled={!hasGraph}
         aria-label="View plan graph"
-        title={hasGraph ? 'View plan graph' : 'Needs at least 2 linked tasks to show a graph'}
+        title={hasGraph ? 'View plan graph' : 'Needs at least 2 tasks in this plan'}
         className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-30 disabled:pointer-events-none disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
       >
         <TreeStructure size={13} />

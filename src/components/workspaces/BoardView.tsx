@@ -164,7 +164,9 @@ interface BoardViewProps {
  * Plan Swimlane board (v0.3 UX rework, psychology-grounded redesign): a
  * single sticky `STATUS_ORDER` header row + horizontal swimlane bands
  * grouped by plan, each with a collapsible `PlanLaneHeader` on its left.
- * Tasks with no `plan_id` render in a final "Loose tasks (no plan)" band.
+ * Tasks with no `plan_id` — or whose `plan_id` doesn't resolve to a loaded
+ * plan (plansError, a create-plan/tasks refetch race, a just-cleared plan)
+ * — render in a final "Loose tasks (no plan)" band; they never vanish.
  * Horizontal status DnD (dnd-kit) is preserved WITHIN each band — moving a
  * task between plans is a separate, explicit action ("Move to plan…" on the
  * task detail panel), not drag-and-drop, so a card can never silently change
@@ -209,8 +211,42 @@ export function BoardView({
     return collapsedLanes[laneId] ?? defaultCollapsed
   }
 
-  const looseTasksVisible = rootTasksVisible.filter((t) => !t.plan_id)
-  const looseTasksAllCount = rootTasksAll.filter((t) => !t.plan_id).length
+  // Ids of plans actually present in the loaded `plans` list. A task's
+  // `plan_id` can point at a plan that ISN'T in that list — plansError
+  // (`plans` defaults to `[]`), the create-plan/tasks refetch race, or the
+  // post-Clear window before the plans query re-settles. Route those
+  // orphaned-plan_id tasks into the Loose band below instead of the old
+  // `!t.plan_id` check, which rendered them in NEITHER a plan band nor
+  // Loose — silently vanishing them from the board (review-gate fix #1).
+  const planIds = useMemo(() => new Set(plans.map((p) => p.id)), [plans])
+
+  // Single pass over the (tag-filtered) visible root tasks: bucket each into
+  // its plan's lane, or Loose when `plan_id` is absent or unresolved. Every
+  // task lands in exactly one bucket, so the union of every plan bucket +
+  // Loose is exactly `rootTasksVisible` — the sticky per-status header
+  // counts below are derived from this SAME bucketing (`renderedTasksVisible`),
+  // so a count can never exceed the cards that actually render.
+  const { laneTasksByPlanId, looseTasksVisible } = useMemo(() => {
+    const byPlan = new Map<string, Task[]>()
+    const loose: Task[] = []
+    for (const t of rootTasksVisible) {
+      if (t.plan_id && planIds.has(t.plan_id)) {
+        const existing = byPlan.get(t.plan_id)
+        if (existing) existing.push(t)
+        else byPlan.set(t.plan_id, [t])
+      } else {
+        loose.push(t)
+      }
+    }
+    return { laneTasksByPlanId: byPlan, looseTasksVisible: loose }
+  }, [rootTasksVisible, planIds])
+
+  const renderedTasksVisible = useMemo(
+    () => [...laneTasksByPlanId.values()].flat().concat(looseTasksVisible),
+    [laneTasksByPlanId, looseTasksVisible],
+  )
+
+  const looseTasksAllCount = rootTasksAll.filter((t) => !t.plan_id || !planIds.has(t.plan_id)).length
   const looseCollapsed = effectiveCollapsed(LOOSE_LANE_ID, false)
 
   return (
@@ -225,7 +261,7 @@ export function BoardView({
         <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
           <div className="w-[300px] shrink-0" aria-hidden="true" />
           {COLUMNS.map((col) => {
-            const count = rootTasksVisible.filter((t) => t.status === col.status).length
+            const count = renderedTasksVisible.filter((t) => t.status === col.status).length
             return (
               <div
                 key={col.status}
@@ -242,7 +278,11 @@ export function BoardView({
                 <button tabIndex={0}
                   type="button"
                   onClick={() => onNewTask(col.status)}
-                  aria-label={`New ${col.label} task`}
+                  // The parent (WorkspaceTasksTab) always opens a generic,
+                  // unscoped create flow regardless of which column this
+                  // button lives in — the label must not promise a status
+                  // the created task won't actually land in.
+                  aria-label="New task"
                   className="inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                 >
                   <Plus size={12} />
@@ -256,7 +296,7 @@ export function BoardView({
         {orderedPlans.map((plan) => {
           const memberTotal = rootTasksAll.filter((t) => t.plan_id === plan.id).length
           const memberDone = rootTasksAll.filter((t) => t.plan_id === plan.id && t.status === 'done').length
-          const laneTasks = rootTasksVisible.filter((t) => t.plan_id === plan.id)
+          const laneTasks = laneTasksByPlanId.get(plan.id) ?? []
           const collapsed = effectiveCollapsed(plan.id, isTerminalPlanState(plan.state))
           return (
             <div key={plan.id} className="flex border-b border-[var(--color-border)]" data-testid={`swimlane-band-${plan.id}`}>

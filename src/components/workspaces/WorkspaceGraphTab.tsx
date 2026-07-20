@@ -23,8 +23,9 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 
 // Sentinel for the "All tasks" option in the plan switcher — Radix Select
 // requires a non-empty string value, so this stands in for `activePlanId ===
-// null` (the `PLAN_FILTER_ALL` sentinel used elsewhere is `null` itself,
-// which Select can't carry as an item value).
+// null` (the store field itself uses `null`, same as the "no tag filter"
+// null sentinel in `planFilter.ts` — Select just can't carry `null` as an
+// item value).
 const GRAPH_PLAN_ALL = '__all__'
 
 interface WorkspaceGraphTabProps {
@@ -174,7 +175,13 @@ export function WorkspaceGraphTab({ workspaceId }: WorkspaceGraphTabProps) {
           agents={agents}
           selectedTaskId={selectedTaskId}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
-          planId={activePlanId}
+          // Only scope the canvas to a plan once it's actually resolvable
+          // against the loaded `plans` list (`activePlan` above) — while
+          // plansError/loading/just-cleared leaves `activePlanId` pointing at
+          // a plan that ISN'T in that list, scoping to it would silently
+          // filter the canvas down to nothing and show the misleading "This
+          // plan has no dependencies yet" empty state (review-gate fix #3).
+          planId={activePlan ? activePlanId : null}
           collapseOrphans
         />
       </div>

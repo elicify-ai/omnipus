@@ -203,8 +203,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   })
 
   // Plans in this task's workspace (Plan Swimlane redesign) — the "Move to
-  // plan…" picker below is the explicit cross-plan reassignment path (no
-  // vertical DnD between swimlane bands in v1).
+  // plan…" picker below is the explicit cross-plan reassignment path (the
+  // Board does not support dragging a card between swimlane bands).
   const { data: plans = [] } = useQuery({
     queryKey: plansQueryKeys.list(task?.workspace_id ?? ''),
     queryFn: () => fetchPlans(task!.workspace_id),

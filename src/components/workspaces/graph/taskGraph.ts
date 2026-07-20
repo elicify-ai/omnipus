@@ -125,26 +125,34 @@ export function isDagRelevant(task: Task, candidates: Task[]): boolean {
   )
 }
 
-export interface BuildTaskGraphOptions {
-  /**
-   * Scope the graph to a single Plan's member tasks (`task.plan_id ===
-   * planId`) + the `blocked_by` edges between them (Plan Swimlane board
-   * redesign — plan-scoped graph). `null`/`undefined` = no plan scoping, the
-   * whole-workspace view, where `collapseOrphans` decides whether unlinked
-   * tasks still render. Plan scope is never orphan-collapsed — the plan
-   * boundary IS the scope, so every member renders even with zero edges.
-   */
-  planId?: string | null
-  /**
-   * Whole-workspace "All" mode only (ignored whenever `planId` is set): when
-   * true, tasks that fail `isDagRelevant` are excluded from `nodes` and
-   * returned via `unlinked` instead, so the canvas never shows a field of
-   * disconnected one-time-task dots. Defaults to false, preserving the
-   * historical "every visible task is a node" behaviour for existing
-   * callers/tests.
-   */
-  collapseOrphans?: boolean
-}
+/**
+ * `planId` and `collapseOrphans` are mutually exclusive: plan scope is never
+ * orphan-collapsed (the plan boundary IS the scope, so every member renders
+ * even with zero edges), and `collapseOrphans` only means anything in the
+ * whole-workspace "All" view. A discriminated union makes "both set" a type
+ * error instead of a silently-ignored runtime combination.
+ */
+export type BuildTaskGraphOptions =
+  | {
+      /**
+       * Scope the graph to a single Plan's member tasks (`task.plan_id ===
+       * planId`) + the `blocked_by` edges between them (Plan Swimlane board
+       * redesign — plan-scoped graph).
+       */
+      planId: string
+    }
+  | {
+      planId?: null
+      /**
+       * Whole-workspace "All" mode: when true, tasks that fail
+       * `isDagRelevant` are excluded from `nodes` and returned via
+       * `unlinked` instead, so the canvas never shows a field of
+       * disconnected one-time-task dots. Defaults to false, preserving the
+       * historical "every visible task is a node" behaviour for existing
+       * callers/tests.
+       */
+      collapseOrphans?: boolean
+    }
 
 /**
  * Build a left→right dependency DAG from the workspace's tasks.
@@ -161,7 +169,11 @@ export function buildTaskGraph(
   agents: AgentLike[] = [],
   options: BuildTaskGraphOptions = {},
 ): { nodes: TaskGraphNode[]; edges: Edge[]; unlinked: Task[] } {
-  const { planId = null, collapseOrphans = false } = options
+  // Can't destructure `collapseOrphans` directly alongside `planId` — it
+  // only exists on the union's "no planId" branch, so TS needs the
+  // discriminant check inline to narrow `options` before reading it.
+  const planId = options.planId ?? null
+  const collapseOrphans = options.planId == null ? (options.collapseOrphans ?? false) : false
 
   // Match the Board: only top-level, user-surface tasks are graphable at all.
   const graphable = tasks.filter(
@@ -175,8 +187,15 @@ export function buildTaskGraph(
     visible = graphable.filter((t) => t.plan_id === planId)
     unlinked = []
   } else if (collapseOrphans) {
-    visible = graphable.filter((t) => isDagRelevant(t, graphable))
-    unlinked = graphable.filter((t) => !isDagRelevant(t, graphable))
+    // Single pass — `isDagRelevant` is only evaluated once per task, not
+    // once per filter (it itself scans `graphable`, so evaluating it twice
+    // per task doubled that cost for no benefit).
+    visible = []
+    unlinked = []
+    for (const t of graphable) {
+      if (isDagRelevant(t, graphable)) visible.push(t)
+      else unlinked.push(t)
+    }
   } else {
     visible = graphable
     unlinked = []
