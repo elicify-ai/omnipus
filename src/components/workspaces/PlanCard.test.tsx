@@ -12,7 +12,9 @@
  *   4. The plan TITLE is a drill-in control (sets the shared Board⇄Graph
  *      scope); edit is reachable ONLY via the ⋯ menu. No control double-fires
  *      onEdit, and the portalled Stop/Clear confirm dialogs never re-fire it.
- *   5. The ⤢ drill-in control also sets the shared Board⇄Graph plan scope.
+ *   5. Actions collapse into ONE ⋯ menu: Open board (drills in) / View graph
+ *      (scopes + opens the Graph tab, disabled below 2 tasks) / Approve / Stop /
+ *      Edit / Clear.
  *   6. The ⑂ "view graph" control is disabled below 2 member tasks and
  *      otherwise scopes + opens the Graph tab.
  *   7. The ⋯ menu's Approve (draft-only) / Stop (running/approved) / Edit /
@@ -186,10 +188,10 @@ describe('PlanCard — title drills in; edit is menu-only', () => {
     expect(mockSetActivePlanId).toHaveBeenCalledWith('plan-x')
   })
 
-  it('clicking the drill-in (⤢) control does not fire onEdit', async () => {
+  it('clicking the ⋯ Open board item drills in but does not fire onEdit', async () => {
     const user = userEvent.setup()
     const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x' }) })
-    await user.click(screen.getByRole('button', { name: 'Open plan board' }))
+    await user.click(screen.getByRole('button', { name: 'Open board' }))
     expect(onEdit).not.toHaveBeenCalled()
   })
 
@@ -210,13 +212,13 @@ describe('PlanCard — title drills in; edit is menu-only', () => {
   })
 })
 
-// ── Drill-in (⤢) ─────────────────────────────────────────────────────────────
+// ── Drill-in (title + ⋯ Open board) ──────────────────────────────────────────
 
-describe('PlanCard — drill-in (⤢)', () => {
-  it('clicking Open plan board sets activePlanId to this plan and does not navigate', async () => {
+describe('PlanCard — drill-in', () => {
+  it('clicking the ⋯ Open board item sets activePlanId to this plan and does not navigate', async () => {
     const user = userEvent.setup()
     renderCard({ plan: makePlan({ id: 'plan-9' }) })
-    await user.click(screen.getByRole('button', { name: 'Open plan board' }))
+    await user.click(screen.getByRole('button', { name: 'Open board' }))
     expect(mockSetActivePlanId).toHaveBeenCalledWith('plan-9')
     expect(mockNavigate).not.toHaveBeenCalled()
   })
@@ -228,7 +230,7 @@ describe('PlanCard — view plan graph (⑂)', () => {
   it('is enabled with ≥2 member tasks, and clicking scopes the Graph tab then navigates', async () => {
     const user = userEvent.setup()
     renderCard({ memberTotal: 2, plan: makePlan({ id: 'plan-9' }), workspaceId: 'ws-9' })
-    const btn = screen.getByRole('button', { name: 'View plan graph' })
+    const btn = screen.getByRole('button', { name: 'View graph' })
     expect(btn).not.toBeDisabled()
 
     await user.click(btn)
@@ -243,7 +245,7 @@ describe('PlanCard — view plan graph (⑂)', () => {
   it('is disabled (greyed) with exactly 1 member task — no DAG possible', async () => {
     const user = userEvent.setup()
     renderCard({ memberTotal: 1 })
-    const btn = screen.getByRole('button', { name: 'View plan graph' })
+    const btn = screen.getByRole('button', { name: 'View graph' })
     expect(btn).toBeDisabled()
 
     await user.click(btn)
@@ -253,7 +255,7 @@ describe('PlanCard — view plan graph (⑂)', () => {
 
   it('is disabled with zero member tasks', () => {
     renderCard({ memberTotal: 0 })
-    expect(screen.getByRole('button', { name: 'View plan graph' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'View graph' })).toBeDisabled()
   })
 })
 

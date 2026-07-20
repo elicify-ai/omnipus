@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
-  Strategy,
   ArrowsOut,
   TreeStructure,
   DotsThreeVertical,
@@ -32,15 +31,15 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Progress } from '@/components/ui/progress'
 import type { Agent, Plan } from '@/lib/api'
-import { planStateColor, planStateLabel, planSecondaryChipLabel } from '@/lib/planStateColors'
+import { planStateColor, planStateLabel } from '@/lib/planStateColors'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { cn } from '@/lib/utils'
 
 /**
- * Per-state icon (paired ALWAYS with `planStateLabel`'s text — never
- * color-alone, a11y). Ported verbatim from the retired PlanLaneHeader.
+ * Per-state glyph — ALWAYS paired with `planStateLabel`'s text (never
+ * colour-alone, a11y).
  */
-function PlanStateGlyph({ state, size = 10 }: { state: Plan['state']; size?: number }) {
+function PlanStateGlyph({ state, size = 9 }: { state: Plan['state']; size?: number }) {
   switch (state) {
     case 'draft':
       return <PencilSimple size={size} />
@@ -66,7 +65,7 @@ interface PlanCardProps {
   memberTotal: number
   /** Member tasks currently `done`. */
   memberDone: number
-  /** Body click (not on a control) → open the plan's edit slide-over. Also used by the ⋯ menu's Edit item. */
+  /** Open the plan's edit slide-over (from the ⋯ menu's Edit item). */
   onEdit: () => void
   onApprove: () => void
   onStop: () => void
@@ -77,14 +76,15 @@ interface PlanCardProps {
 }
 
 /**
- * Top-level Board card for a Plan (Hierarchical Drill-Down board redesign,
- * replaces PlanLaneHeader's per-lane band header). Rendered into the status
- * column `derivePlanColumn` computes from the plan's member tasks
- * (BoardView.tsx) — NOT draggable, its column is derived, never user-set.
- *
- * Body click opens the plan's edit slide-over (`onEdit`); the controls row
- * (drill-in / graph / ⋯ actions) `stopPropagation`s so clicking any control
- * never also fires the body's edit handler.
+ * Top-level Board card for a Plan (Hierarchical Drill-Down board). Deliberately
+ * shares the TASK CARD's shell — same size, radius, padding, and `chip + title
+ * + meta` layout — so plans and tasks read as peers of one system (Law of
+ * Similarity). A plan is marked only by a subtle gold left accent + a STATE
+ * chip in the task card's priority slot (Von Restorff — one differentiator, not
+ * a different card). Its actions collapse into a single ⋯ menu revealed on
+ * hover (progressive disclosure), so the resting card is visually identical to
+ * a task card. The plan TITLE is the drill-in control (opens this plan's own
+ * task board via the shared `activePlanId` scope).
  */
 export function PlanCard({
   plan,
@@ -106,13 +106,12 @@ export function PlanCard({
   const [confirmClear, setConfirmClear] = useState(false)
 
   const owner = agents.find((a) => a.id === plan.owner_agent_id)
-  const secondary = planSecondaryChipLabel(plan)
   const pct = memberTotal > 0 ? Math.round((memberDone / memberTotal) * 100) : 0
   const canApprove = plan.state === 'draft'
   const canStop = plan.state === 'running' || plan.state === 'approved'
-  // A DAG needs at least 2 tasks to draw any edges — below that the Graph
-  // tab has nothing meaningful to show for this plan.
+  // A DAG needs ≥2 tasks to have any edges — below that "View graph" is a no-op.
   const hasGraph = memberTotal >= 2
+  const stateColor = planStateColor(plan.state)
 
   function handleDrillIn() {
     setActivePlanId(plan.id)
@@ -127,101 +126,37 @@ export function PlanCard({
   return (
     <div
       role="group"
-      aria-label={secondary ? `${plan.title} — ${secondary}` : plan.title}
+      aria-label={plan.title}
       data-testid={`plan-card-${plan.id}`}
-      title={secondary ? `${plan.title} — ${secondary}` : plan.title}
-      className="rounded-lg border border-[var(--color-border)] border-l-2 border-l-[var(--color-accent)]/50 bg-[var(--color-surface-1)] p-3 transition-colors"
+      title={plan.title}
+      className="group relative rounded-lg border border-[var(--color-border)] border-l-2 border-l-[var(--color-accent)]/40 bg-[var(--color-surface-1)] p-3 transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40"
     >
-      {/* Row 1 — plan icon + title. The TITLE is the primary drill-in control
-          (open this plan's own task board): a real, keyboard-focusable button.
-          The card itself is a `role="group"`, NOT a `role="button"` — a button
-          may not legally contain the action buttons below it, and a card-level
-          onClick would also be re-fired by the (portalled) confirm dialogs. */}
-      <button
-        tabIndex={0}
-        type="button"
-        onClick={handleDrillIn}
-        title="Open plan board"
-        className="group/title flex items-start gap-2 w-full text-left"
+      {/* Actions — ONE ⋯ menu, hover-revealed (touch: always visible). Keeps the
+          resting plan card the same footprint + look as a task card. */}
+      <div
+        className="absolute right-1.5 top-1.5 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+        onClick={(e) => e.stopPropagation()}
       >
-        <Strategy size={14} weight="fill" className="shrink-0 mt-0.5 text-[color:var(--color-accent)]" aria-hidden="true" />
-        <span className="flex-1 text-sm font-semibold text-[var(--color-secondary)] leading-snug line-clamp-2 transition-colors group-hover/title:text-[var(--color-accent)]">
-          {plan.title}
-        </span>
-      </button>
-
-      {/* Row 2 — state badge (icon + text, never color-alone) */}
-      <div className="mt-1.5 flex items-center gap-1.5">
-        <span
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold"
-          style={{ color: planStateColor(plan.state), backgroundColor: `${planStateColor(plan.state)}1a` }}
-        >
-          <PlanStateGlyph state={plan.state} />
-          {planStateLabel(plan.state)}
-        </span>
-      </div>
-
-      {/* Row 3 — progress + owner */}
-      <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-        <div
-          className="flex items-center gap-1 flex-shrink-0"
-          role="img"
-          aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}
-        >
-          <Progress value={pct} className="h-1.5 w-10" />
-          <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0 tabular-nums">
-            {memberDone}/{memberTotal}
-          </span>
-        </div>
-
-        {owner && (
-          // Recognition-over-Recall (ux-psychology): show the short lead
-          // token; full name stays on hover via `title`.
-          <span
-            title={owner.name}
-            className="min-w-0 truncate rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)] max-w-[100px]"
-          >
-            {owner.name.split('—')[0].trim()}
-          </span>
-        )}
-      </div>
-
-      {/* Row 4 — controls (drill-in / graph / actions). stopPropagation so
-          clicking any control here never also fires the card body's Edit
-          handler above. */}
-      <div className="mt-2 flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-        <button tabIndex={0}
-          type="button"
-          onClick={handleDrillIn}
-          aria-label="Open plan board"
-          title="Open plan board"
-          className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-        >
-          <ArrowsOut size={13} />
-        </button>
-
-        <button tabIndex={0}
-          type="button"
-          onClick={handleViewGraph}
-          disabled={!hasGraph}
-          aria-label="View plan graph"
-          title={hasGraph ? 'View plan graph' : 'Needs at least 2 tasks in this plan'}
-          className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-30 disabled:pointer-events-none disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-        >
-          <TreeStructure size={13} />
-        </button>
-
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button tabIndex={0}
               type="button"
               aria-label={`Plan actions for ${plan.title}`}
-              className="flex-shrink-0 inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+              className="inline-flex items-center justify-center rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
             >
               <DotsThreeVertical size={14} weight="bold" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-40">
+          <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuItem onClick={handleDrillIn} className="flex items-center gap-2">
+              <ArrowsOut size={13} />
+              Open board
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleViewGraph} disabled={!hasGraph} className="flex items-center gap-2">
+              <TreeStructure size={13} />
+              View graph
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             {canApprove && (
               <DropdownMenuItem onClick={onApprove} disabled={isApproving} className="flex items-center gap-2">
                 <Play size={13} weight="fill" />
@@ -249,6 +184,49 @@ export function PlanCard({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+      </div>
+
+      {/* Row 1 — state chip (the task card's priority slot) + title. The title
+          is the primary drill-in control (open this plan's task board). */}
+      <div className="flex items-start gap-2 pr-6">
+        <span
+          className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold leading-tight"
+          style={{ color: stateColor, backgroundColor: `${stateColor}1a`, borderColor: `${stateColor}4d` }}
+        >
+          <PlanStateGlyph state={plan.state} />
+          {planStateLabel(plan.state)}
+        </span>
+        <button tabIndex={0}
+          type="button"
+          onClick={handleDrillIn}
+          title="Open plan board"
+          className="flex-1 line-clamp-2 text-left text-sm font-medium leading-snug text-[var(--color-secondary)] transition-colors hover:text-[var(--color-accent)]"
+        >
+          {plan.title}
+        </button>
+      </div>
+
+      {/* Row 2 — meta: progress + owner (mirrors the task card's assignee row). */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span
+          className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+          role="img"
+          aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}
+        >
+          <Progress value={pct} className="h-1 w-8" />
+          <span className="tabular-nums">
+            {memberDone}/{memberTotal}
+          </span>
+        </span>
+        {owner && (
+          // Recognition-over-Recall: show the short lead token; full name on hover.
+          <span
+            title={owner.name}
+            className="max-w-[120px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+          >
+            {owner.name.split('—')[0].trim()}
+          </span>
+        )}
       </div>
 
       <AlertDialog open={confirmStop} onOpenChange={setConfirmStop}>
