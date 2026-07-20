@@ -206,7 +206,12 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
         </div>
       )}
 
-      <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2 flex-shrink-0">
+      {/* Graph toolbar — flat, borderless (no top rule on the canvas). Skipped
+          entirely when it would be empty: embedded in the Tasks screen the plan
+          selector is hidden, so with no active plan there's nothing to show and
+          an empty bordered strip read as a stray line above the canvas. */}
+      {(!hidePlanSelector || activePlan) && (
+      <div className="flex items-center gap-3 px-4 py-2 flex-shrink-0">
         {!hidePlanSelector && (
           <>
             <span className="text-xs font-medium text-[var(--color-muted)] flex-shrink-0">By plan</span>
@@ -272,6 +277,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
           </div>
         )}
       </div>
+      )}
 
       <div className="relative flex-1 min-h-0">
         <GraphView
