@@ -221,7 +221,7 @@ export function BoardView({
         onDragEnd={handleDragEnd}
         onDragCancel={() => setActiveTask(null)}
       >
-        <div className="flex gap-2 p-4 overflow-x-auto min-h-0 flex-1">
+        <div className="flex gap-2 p-4 overflow-x-auto overscroll-contain min-h-0 flex-1">
           {COLUMNS.map((col) => (
             <BoardColumn
               key={col.status}
@@ -329,7 +329,7 @@ function BoardColumn({
       </div>
 
       {/* Task cards */}
-      <div className="flex flex-col gap-2 p-2 flex-1 overflow-y-auto">
+      <div className="flex flex-col gap-2 p-2 flex-1 overflow-y-auto overscroll-contain">
         {tasks.length === 0 ? (
           <button tabIndex={0}
             type="button"

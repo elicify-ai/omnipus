@@ -17,6 +17,7 @@ import { useUiStore } from '@/store/ui'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { computeAppMetrics } from './appShellViewport'
 
 // US-4: Application shell — sidebar + main content area
 export function AppShell() {
@@ -63,20 +64,37 @@ export function AppShell() {
   }, [])
 
   // Pin the shell to the actual VISUAL viewport via window.visualViewport, not
-  // CSS viewport units, but ONLY while an editable is focused (the keyboard-up
-  // case — see the focus gate below). At load / with no editable focused, the
-  // vars are removed and the shell is plain 100dvh; load-time stability there
-  // comes from `body{position:fixed}` in globals.css (which also stops iOS
-  // from reporting the LARGE 100dvh pre-first-scroll), not from this hook.
-  //  • Focusing the chat input shows the keyboard and iOS scrolls the VISUAL
-  //    viewport (not the document — that's locked) to reveal the input, so
-  //    `vv.offsetTop` becomes > 0 and a shell anchored to the layout-viewport
-  //    top has its header pushed above the visible area. We mirror `vv.offsetTop`
-  //    into the shell's `top` so the shell follows the visible viewport and the
-  //    header stays put.
+  // CSS viewport units — ALWAYS ON, not gated on focus. See
+  // docs/internal/architecture/ios-scroll-stability.md (part 2) for the full
+  // regression history; the short version:
+  //  • iOS pans the VISUAL viewport (not the document — that's locked by
+  //    `body{position:fixed}`) whenever the keyboard opens OR a tap lands on
+  //    non-editable chrome (a message bubble, a tab, empty space). Either way
+  //    `vv.offsetTop` can become > 0, and a shell anchored to the
+  //    layout-viewport top has its header pushed above the visible area
+  //    unless it mirrors `vv.offsetTop` into its own `top`.
+  //  • A prior "fix" (`dec7713b`) gated var-publishing on an editable being
+  //    focused. That REMOVED the vars (shell snaps to top:0/100dvh) the
+  //    instant focus left the composer for anything non-editable — the
+  //    exact "tap a message and the header jumps" regression this hook now
+  //    fixes. The gate is gone; tracking runs on every vv resize/scroll
+  //    regardless of `document.activeElement`.
+  //  • The gate existed to guard against a DIFFERENT bug: always-on tracking
+  //    could latch a stale-short `vv.height` after the keyboard closed (a
+  //    missed final `resize` event), permanently shortening the shell
+  //    (IMG_0616). That guard is now DETERMINISTIC instead of focus-based —
+  //    see `computeAppMetrics` in `./appShellViewport`: `--app-vh` is
+  //    removed (CSS `100dvh` fallback) whenever `|vv.height - innerHeight| <
+  //    2px` (keyboard closed by height math, not by what's focused), and set
+  //    to `vv.height` otherwise. `--app-top` is never gated at all.
+  //  • iOS can still drop the FINAL `resize` event right as the keyboard
+  //    closes — the same miss `dec7713b` was papering over. Instead of
+  //    disabling tracking, a `focusout` listener schedules a trailing
+  //    re-read (~250ms) that recomputes the vars from whatever
+  //    `visualViewport` reports once things have settled.
   // Published as `--app-vh` / `--app-top`; the shell consumes them below and
-  // falls back to (100dvh, 0) whenever no editable is focused (including
-  // visualViewport-unavailable / pre-hydrate).
+  // falls back to (100dvh, 0) whenever visualViewport is unavailable
+  // (desktop, older browsers, pre-hydrate).
   useEffect(() => {
     const vv = window.visualViewport
     // Only track visualViewport on touch devices (iOS Safari needs it for the
@@ -84,48 +102,40 @@ export function AppShell() {
     // always correct.
     if (!vv || !window.matchMedia('(pointer: coarse)').matches) return undefined
     let raf = 0
-    // FOCUS-BASED gate — the deterministic keyboard signal (see
-    // docs/internal/architecture/ios-scroll-stability.md, regression log).
-    // The iOS keyboard is up IFF an editable element has focus. Two failed
-    // alternatives, do not resurrect:
-    //  • height-math gate (innerHeight vs vv.height): never fired on iOS
-    //    (the two track each other) → header slid off under the keyboard.
-    //  • always-on tracking (no gate): a stale short vv.height could stick
-    //    after keyboard close (missed final resize) → whole shell shortened
-    //    (IMG_0616: sidebar + composer ending ~140px above the bottom).
-    // With the focus gate: keyboard down → vars REMOVED (CSS fallback
-    // 100dvh@0 — always full height); keyboard up → follow vv (header stays
-    // visible). body{position:fixed} keeps scroll gestures from panning vv.
-    const editableFocused = () => {
-      const el = document.activeElement as HTMLElement | null
-      if (!el) return false
-      return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
+    let trailingRead: ReturnType<typeof setTimeout> | undefined
+    const applyMetrics = () => {
+      const { appTop, appVh } = computeAppMetrics(vv, window.innerHeight)
+      document.documentElement.style.setProperty('--app-top', appTop)
+      if (appVh) {
+        document.documentElement.style.setProperty('--app-vh', appVh)
+      } else {
+        document.documentElement.style.removeProperty('--app-vh')
+      }
     }
     const setAppMetrics = () => {
       cancelAnimationFrame(raf)
-      raf = requestAnimationFrame(() => {
-        if (editableFocused()) {
-          document.documentElement.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
-          document.documentElement.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
-        } else {
-          document.documentElement.style.removeProperty('--app-vh')
-          document.documentElement.style.removeProperty('--app-top')
-        }
-      })
+      raf = requestAnimationFrame(applyMetrics)
+    }
+    // iOS occasionally drops the final vv `resize` right as the keyboard
+    // closes on blur — re-read once things have settled to catch it.
+    const handleFocusOut = () => {
+      setAppMetrics()
+      if (trailingRead) clearTimeout(trailingRead)
+      trailingRead = setTimeout(() => {
+        trailingRead = undefined
+        applyMetrics()
+      }, 250)
     }
     setAppMetrics()
     vv.addEventListener('resize', setAppMetrics)
     vv.addEventListener('scroll', setAppMetrics)
-    // focusin/focusout flip the gate the moment focus moves — by the time the
-    // rAF callback runs, document.activeElement reflects the new state.
-    document.addEventListener('focusin', setAppMetrics)
-    document.addEventListener('focusout', setAppMetrics)
+    document.addEventListener('focusout', handleFocusOut)
     return () => {
       cancelAnimationFrame(raf)
+      if (trailingRead) clearTimeout(trailingRead)
       vv.removeEventListener('resize', setAppMetrics)
       vv.removeEventListener('scroll', setAppMetrics)
-      document.removeEventListener('focusin', setAppMetrics)
-      document.removeEventListener('focusout', setAppMetrics)
+      document.removeEventListener('focusout', handleFocusOut)
     }
   }, [])
 

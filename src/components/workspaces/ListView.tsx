@@ -104,7 +104,7 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
             <tr>

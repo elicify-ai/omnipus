@@ -78,6 +78,17 @@
   border-color: var(--color-border);
 }
 
+/* iOS scroll-stability (docs/internal/architecture/ios-scroll-stability.md,
+ * part 4): FullCalendar owns its own internal scroll containers (`.fc-scroller`,
+ * used by dayGrid/timeGrid/list views) — there is no React prop to reach them,
+ * so containment is applied here instead of wrapping in a duplicate
+ * `overflow-auto` div (which would create nested scrollbars). Without this,
+ * scrolling to the end of a day/week grid can chain the gesture up into the
+ * page, defeating the `body{position:fixed}` lock (part 1). */
+.fc-scroller {
+  overscroll-behavior: contain;
+}
+
 /* ------------------------------------------------------------------ */
 /* Header row (weekday labels)                                         */
 /* ------------------------------------------------------------------ */
