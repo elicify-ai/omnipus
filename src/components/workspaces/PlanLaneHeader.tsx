@@ -151,7 +151,7 @@ export function PlanLaneHeader({
         {planStateLabel(plan.state)}
       </span>
 
-      <div className="flex items-center gap-1 w-[62px] flex-shrink-0" aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}>
+      <div className="flex items-center gap-1 w-[62px] flex-shrink-0" role="img" aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}>
         <Progress value={pct} className="h-1.5 w-7" />
         <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0 tabular-nums">
           {memberDone}/{memberTotal}
