@@ -257,14 +257,13 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnUpdateTaskToolCompletion(t *testin
 		t.Fatalf("status = %q, want done (result: %s)", final.Status, final.Result)
 	}
 
-	runs, err := al.taskStore.ListRuns(tk.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("expected exactly 1 run, got %d: %+v", len(runs), runs)
-	}
-	run := runs[0]
+	// waitForRunClosed, not a raw ListRuns right after the Task.status mirror
+	// goes terminal (Constraint #7 fix, matching MirrorStillCycles/
+	// OpenedAtClaim_ClosedOnMarkerCompletion/SchedulerFire_...): the mirror
+	// write happens BEFORE closeRun in task_executor.go, so
+	// waitForCompletionContractTerminal can observe the terminal mirror
+	// moments before the run's own EndedAt lands.
+	run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
 	if run.Status != task.StatusDone {
 		t.Errorf("run status = %q, want done", run.Status)
 	}
@@ -368,12 +367,14 @@ func TestTaskRunHistory_ScheduledVsManualKind(t *testing.T) {
 		}
 		waitForCompletionContractTerminal(t, al, tk.ID)
 
-		runs, err := al.taskStore.ListRuns(tk.ID)
-		if err != nil || len(runs) != 1 {
-			t.Fatalf("ListRuns: runs=%d err=%v", len(runs), err)
-		}
-		if runs[0].Kind != task.RunKindScheduled {
-			t.Errorf("kind = %q, want %q", runs[0].Kind, task.RunKindScheduled)
+		// waitForRunClosed, not a raw ListRuns right after the Task.status
+		// mirror goes terminal (Constraint #7 fix): the mirror write happens
+		// BEFORE closeRun in task_executor.go, so
+		// waitForCompletionContractTerminal can observe the terminal mirror
+		// moments before the run's own EndedAt lands.
+		run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
+		if run.Kind != task.RunKindScheduled {
+			t.Errorf("kind = %q, want %q", run.Kind, task.RunKindScheduled)
 		}
 	})
 
@@ -384,12 +385,14 @@ func TestTaskRunHistory_ScheduledVsManualKind(t *testing.T) {
 		}
 		waitForCompletionContractTerminal(t, al, tk.ID)
 
-		runs, err := al.taskStore.ListRuns(tk.ID)
-		if err != nil || len(runs) != 1 {
-			t.Fatalf("ListRuns: runs=%d err=%v", len(runs), err)
-		}
-		if runs[0].Kind != task.RunKindManual {
-			t.Errorf("kind = %q, want %q", runs[0].Kind, task.RunKindManual)
+		// waitForRunClosed, not a raw ListRuns right after the Task.status
+		// mirror goes terminal (Constraint #7 fix): the mirror write happens
+		// BEFORE closeRun in task_executor.go, so
+		// waitForCompletionContractTerminal can observe the terminal mirror
+		// moments before the run's own EndedAt lands.
+		run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
+		if run.Kind != task.RunKindManual {
+			t.Errorf("kind = %q, want %q", run.Kind, task.RunKindManual)
 		}
 	})
 }
@@ -421,14 +424,14 @@ func TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire(t *testing.
 	}
 	waitForCompletionContractTerminal(t, al, tk.ID)
 
-	runs, err := al.taskStore.ListRuns(tk.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("expected exactly 1 run for the occurrence (OpenRun idempotency), got %d: %+v", len(runs), runs)
-	}
-	got := runs[0]
+	// waitForRunClosed, not a raw ListRuns right after the Task.status mirror
+	// goes terminal (Constraint #7 fix): the mirror write happens BEFORE
+	// closeRun in task_executor.go, so waitForCompletionContractTerminal can
+	// observe the terminal mirror moments before the run's own EndedAt
+	// lands. It also folds in the "exactly 1 run" idempotency assertion this
+	// test itself is about — waitForRunClosed only ever returns once
+	// ListRuns reports precisely one closed run.
+	got := waitForRunClosed(t, al, tk.ID, 5*time.Second)
 	if got.RunID != seeded.RunID {
 		t.Errorf("run_id = %q, want the scheduler's pre-existing run_id %q — whichever OpenRun call "+
 			"reaches the store first is authoritative", got.RunID, seeded.RunID)
