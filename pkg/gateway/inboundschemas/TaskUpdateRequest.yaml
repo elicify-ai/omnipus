@@ -5,7 +5,7 @@ description: >
   `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only
   provided fields are updated (PATCH semantics). At least one field is required.
 
-  `status` accepts the full 7-state vocabulary. Note: `blocked` is normally an
+  `status` accepts the full 6-state vocabulary (ADR-051 D5). Note: `blocked` is normally an
   AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is
   unmet, cleared to `next` when deps complete); setting it directly is allowed but
   the engine may override on the next dependency evaluation. Advancing a partial
@@ -36,12 +36,11 @@ properties:
     enum:
       - inbox
       - next
-      - planning
       - in_progress
       - blocked
       - done
       - failed
-    description: New task status (7-state lifecycle, Detail #1).
+    description: New task status (6-state lifecycle, ADR-051 D5).
     example: "in_progress"
   agent_id:
     type: string

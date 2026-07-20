@@ -151,13 +151,13 @@ describe('WorkspaceTabContainer — layout', () => {
     expect(topBar.contains(hamburger)).toBe(true)
   })
 
-  it('renders all six workspace tabs inside the top bar row (settings via the name button)', async () => {
+  it('renders all four workspace tabs inside the top bar row (settings via the name button)', async () => {
     await act(async () => {
       render(<WorkspaceTabContainer workspaceId="ws-1" />)
     })
 
     const topBar = screen.getByTestId('workspace-top-bar')
-    const segments = ['chat', 'board', 'list', 'graph', 'calendar', 'team']
+    const segments = ['chat', 'board', 'calendar', 'team']
     for (const seg of segments) {
       // WorkspaceTabBar renders each segment twice (full strip + sr-only strip).
       const tabs = screen.getAllByTestId(`workspace-tab-${seg}`)

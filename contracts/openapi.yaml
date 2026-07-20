@@ -4294,12 +4294,11 @@ paths:
           enum:
             - inbox
             - next
-            - planning
             - in_progress
             - blocked
             - done
             - failed
-        description: Filter tasks by status (7-state lifecycle).
+        description: Filter tasks by status (6-state lifecycle, ADR-051 D5).
       - name: agent_id
         in: query
         required: false

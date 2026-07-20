@@ -27,13 +27,12 @@ properties:
     enum:
       - inbox
       - next
-      - planning
       - in_progress
       - blocked
       - done
       - failed
     description: >
-      New status of the task (7-state unified lifecycle, Detail #1). Canonical
+      New status of the task (6-state unified lifecycle, ADR-051 D5). Canonical
       values from the new pkg/task store.
   agent_id:
     type: string

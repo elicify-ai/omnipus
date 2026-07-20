@@ -458,7 +458,7 @@ describe('createTask', () => {
 // ── updateTask (unified Sprint 2 model) ──────────────────────────────────────
 //
 // Replaces the old updateBoardTask tests. PATCH /tasks/{id} (not PUT /board/tasks/{id}).
-// Accepts 7-state status vocab: inbox/next/planning/in_progress/blocked/done/failed.
+// Accepts 6-state status vocab (ADR-051 D5): inbox/next/in_progress/blocked/done/failed.
 
 describe('updateTask', () => {
   it('calls PATCH /api/v1/tasks/{id} and returns the updated Task', async () => {
@@ -497,9 +497,9 @@ describe('updateTask', () => {
     expect(result.status).toBe('next')
   })
 
-  it('accepts all 7 status values', async () => {
-    // Verify the 7-state lifecycle statuses are accepted as update values.
-    const statuses = ['inbox', 'next', 'planning', 'in_progress', 'blocked', 'done', 'failed'] as const
+  it('accepts all 6 status values', async () => {
+    // Verify the 6-state lifecycle statuses are accepted as update values (ADR-051 D5).
+    const statuses = ['inbox', 'next', 'in_progress', 'blocked', 'done', 'failed'] as const
     for (const status of statuses) {
       const updated = {
         id: 'task-001', title: 'T', action: 'llm', status, priority: 3,

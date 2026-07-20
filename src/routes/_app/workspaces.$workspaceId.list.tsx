@@ -1,12 +1,16 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { WorkspaceTasksTab } from '@/components/workspaces/WorkspaceTasksTab'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-// List tab — flat, filterable task table. Renders the existing ListView.
-function WorkspaceListRoute() {
-  const { workspaceId } = Route.useParams()
-  return <WorkspaceTasksTab workspaceId={workspaceId} mode="list" />
-}
-
+// ADR-051 D1 — List is no longer a top-level tab: it's one of the view
+// switcher options on the combined "Tasks" screen (the `board` route
+// segment). This route survives only so old deep links to /list don't 404 —
+// it redirects straight to the Tasks screen (the List view can be picked
+// back up from its own in-screen switcher).
 export const Route = createFileRoute('/_app/workspaces/$workspaceId/list')({
-  component: WorkspaceListRoute,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/workspaces/$workspaceId/board',
+      params: { workspaceId: params.workspaceId },
+      replace: true,
+    })
+  },
 })

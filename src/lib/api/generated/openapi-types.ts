@@ -5301,11 +5301,11 @@ export interface components {
              */
             action: "llm";
             /**
-             * @description Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged · `next` triaged & ready · `planning` agent decomposing (light in Tier 2) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
+             * @description Current lifecycle state (ADR-051 D5, 6-state). `inbox` captured/untriaged · `next` triaged & ready (also the landing state for a task remapped from the removed `planning` status) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
              * @example inbox
              * @enum {string}
              */
-            status: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+            status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
             /**
              * @description ID of the agent assigned to this task. Optional — human-only tasks have none.
              * @example jim
@@ -5457,7 +5457,7 @@ export interface components {
                  * @example in_progress
                  * @enum {string}
                  */
-                status: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+                status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
             }[];
         };
         /**
@@ -6681,7 +6681,7 @@ export interface components {
         /**
          * TaskUpdateRequest
          * @description Request body for PATCH /tasks/{id} — the unified partial-update body that replaces the two legacy update bodies (`TaskUpdateRequest` and `BoardTaskUpdateRequest`). No back-compat aliases. All fields are optional; only provided fields are updated (PATCH semantics). At least one field is required.
-         *     `status` accepts the full 7-state vocabulary. Note: `blocked` is normally an AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is unmet, cleared to `next` when deps complete); setting it directly is allowed but the engine may override on the next dependency evaluation. Advancing a partial task to `next` is rejected server-side (Detail #8 — only fully-captured tasks may be triaged to `next`).
+         *     `status` accepts the full 6-state vocabulary (ADR-051 D5). Note: `blocked` is normally an AUTO side-state managed by the dependency engine (set when a `blocked_by` dep is unmet, cleared to `next` when deps complete); setting it directly is allowed but the engine may override on the next dependency evaluation. Advancing a partial task to `next` is rejected server-side (Detail #8 — only fully-captured tasks may be triaged to `next`).
          */
         TaskUpdateRequest: {
             /**
@@ -6700,11 +6700,11 @@ export interface components {
              */
             prompt?: string;
             /**
-             * @description New task status (7-state lifecycle, Detail
+             * @description New task status (6-state lifecycle, ADR-051 D5).
              * @example in_progress
              * @enum {string}
              */
-            status?: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+            status?: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
             /**
              * @description Re-assign the task to this agent.
              * @example jim
@@ -12118,8 +12118,8 @@ export interface operations {
             query?: {
                 /** @description Filter by workspace ID. Tasks are workspace-scoped; when omitted the server resolves the active workspace. */
                 workspace_id?: string;
-                /** @description Filter tasks by status (7-state lifecycle). */
-                status?: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
+                /** @description Filter tasks by status (6-state lifecycle, ADR-051 D5). */
+                status?: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
                 /** @description Filter by assigned agent ID. */
                 agent_id?: string;
                 /** @description Filter by UI surface (Detail #5). Defaults to `user` when omitted — dedicated-UI tasks (e.g. heartbeat) are excluded from general listings. */

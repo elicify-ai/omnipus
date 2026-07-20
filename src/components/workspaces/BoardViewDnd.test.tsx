@@ -8,7 +8,7 @@
  *      prevented; dragging OUT of `done`/`blocked` is prevented; other moves
  *      are allowed.
  *   2. Cards render as draggable elements (dnd-kit attributes) and columns are
- *      registered droppables for every one of the 7 statuses.
+ *      registered droppables for every status in STATUS_ORDER.
  *   3. A simulated drag-end into a legal column calls onTaskMove with the new
  *      status; a drag-end into `blocked` calls onMoveRejected instead.
  *
@@ -66,9 +66,6 @@ function renderBoard(props: Partial<React.ComponentProps<typeof BoardView>> = {}
       tasks={[baseTask()]}
       plans={plans}
       agents={[]}
-      workspaceId="ws-1"
-      activePlanId={null}
-      activeTagFilter={null}
       altitude="top-level"
       onTaskClick={vi.fn()}
       onTaskMove={vi.fn()}
@@ -113,7 +110,7 @@ describe('canDropTransition — backend-mirrored guard', () => {
     expect(canDropTransition('inbox', 'next').ok).toBe(true)
     expect(canDropTransition('next', 'in_progress').ok).toBe(true)
     expect(canDropTransition('in_progress', 'done').ok).toBe(true)
-    expect(canDropTransition('planning', 'failed').ok).toBe(true)
+    expect(canDropTransition('inbox', 'failed').ok).toBe(true)
     expect(canDropTransition('failed', 'next').ok).toBe(true)
   })
 
@@ -148,12 +145,13 @@ describe('BoardView — DnD wiring', () => {
     expect(wrapper?.querySelectorAll('[role="button"]').length).toBe(1)
   })
 
-  it('renders one droppable column per status (all 7)', () => {
+  it('renders one droppable column per STATUS_ORDER entry', () => {
     renderBoard({ tasks: [] })
-    // Columns carry aria-label "<Label> column" — one per status.
+    // Columns carry aria-label "<Label> column" — one per status. NOT a
+    // hardcoded count (ADR-051 D5 drops `planning` from STATUS_ORDER,
+    // 7 → 6) — this just mirrors whatever STATUS_ORDER currently holds.
     const cols = screen.getAllByLabelText(/column$/i)
     expect(cols.length).toBe(STATUS_ORDER.length)
-    expect(STATUS_ORDER.length).toBe(7)
   })
 })
 

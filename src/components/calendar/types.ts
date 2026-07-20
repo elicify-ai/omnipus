@@ -54,7 +54,7 @@ export type StatusIconKey =
   | 'CircleNotch' // in_progress
   | 'Prohibit' //    blocked
   | 'XCircle' //     failed
-  | 'Circle' //      inbox / next / planning (muted)
+  | 'Circle' //      inbox / next (muted)
   | 'Clock' //       once-trigger "fires" chip (overrides status icon)
 
 /**
@@ -75,7 +75,7 @@ export const CHIP_TEXT_COLOR = '#0A0A0B'
 /**
  * Canonical status → chip style map (single source of truth, FR-005).
  * `bg` is the chip background; the icon is the StatusIconKey. All clear >=7:1
- * contrast with CHIP_TEXT_COLOR. `next`/`inbox`/`planning` are muted/slate.
+ * contrast with CHIP_TEXT_COLOR. `next`/`inbox` are muted/slate.
  */
 export interface ChipStyle {
   bg: string
@@ -89,7 +89,6 @@ export const STATUS_STYLE: Record<TaskStatus, ChipStyle> = {
   failed: { bg: '#F87171', icon: 'XCircle' },
   inbox: { bg: '#94A3B8', icon: 'Circle' },
   next: { bg: '#94A3B8', icon: 'Circle' },
-  planning: { bg: '#94A3B8', icon: 'Circle' },
 }
 
 /** Fallback style for an unknown/missing status. */

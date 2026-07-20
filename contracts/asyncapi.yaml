@@ -1858,7 +1858,6 @@ components:
           enum:
             - inbox
             - next
-            - planning
             - in_progress
             - blocked
             - done

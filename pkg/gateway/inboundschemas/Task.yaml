@@ -66,18 +66,18 @@ properties:
     enum:
       - inbox
       - next
-      - planning
       - in_progress
       - blocked
       - done
       - failed
     description: >
-      Current lifecycle state (Detail #1, 7-state). `inbox` captured/untriaged ·
-      `next` triaged & ready · `planning` agent decomposing (light in Tier 2) ·
-      `in_progress` worked by a human OR agent (decoupled from /start) · `blocked`
-      auto side-state for an unmet dependency (set automatically; clears to `next`
-      when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything
-      lands in `inbox` by default; nothing auto-lands in `next`.
+      Current lifecycle state (ADR-051 D5, 6-state). `inbox` captured/untriaged ·
+      `next` triaged & ready (also the landing state for a task remapped from the
+      removed `planning` status) · `in_progress` worked by a human OR agent
+      (decoupled from /start) · `blocked` auto side-state for an unmet dependency
+      (set automatically; clears to `next` when all `blocked_by` deps reach
+      `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing
+      auto-lands in `next`.
     example: "inbox"
   agent_id:
     type: string
@@ -292,7 +292,6 @@ properties:
           enum:
             - inbox
             - next
-            - planning
             - in_progress
             - blocked
             - done

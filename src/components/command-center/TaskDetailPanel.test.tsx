@@ -6,7 +6,7 @@
  *
  * Sprint 2 migration: TaskDetailPanel now uses the unified Task type — the
  * old two-mode (workflow/gtd) API is gone. BoardTask is gone. All tasks use
- * the 7-state lifecycle: inbox/next/planning/in_progress/blocked/done/failed.
+ * the 6-state lifecycle (ADR-051 D5): inbox/next/in_progress/blocked/done/failed.
  */
 
 import { useState } from 'react'
@@ -239,12 +239,12 @@ describe('TaskDetailPanel — task without session (closed panel)', () => {
   })
 })
 
-// ── 7-state lifecycle tests ───────────────────────────────────────────────────
+// ── 6-state lifecycle tests (ADR-051 D5) ──────────────────────────────────────
 // Verify the unified status vocabulary renders correctly.
 
-describe('TaskDetailPanel — 7-state status rendering', () => {
-  it('renders Start Task button for inbox/next/planning tasks', async () => {
-    for (const status of ['inbox', 'next', 'planning'] as const) {
+describe('TaskDetailPanel — 6-state status rendering', () => {
+  it('renders Start Task button for inbox/next tasks', async () => {
+    for (const status of ['inbox', 'next'] as const) {
       const task = makeTask({ status })
       const { unmount } = renderPanel(task)
       expect(await screen.findByRole('button', { name: /Start Task/i })).toBeInTheDocument()
@@ -1201,8 +1201,10 @@ describe('TaskDetailPanel — done-terminal status guard', () => {
 
     const statusLabel = await screen.findByText(/^status$/i)
     const fieldRoot = statusLabel.parentElement as HTMLElement
-    // 6 options → SmartSelect renders a SearchableSelect (button, listbox popup).
-    const trigger = fieldRoot.querySelector('[aria-haspopup="dialog"]') as HTMLElement
+    // 5 options (ADR-051 D5 removed `planning`) → at/under SmartSelect's
+    // SEARCHABLE_THRESHOLD, so it renders the plain Radix Select (combobox
+    // trigger), not the searchable cmdk popover.
+    const trigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
     expect(trigger).toBeTruthy()
     fireEvent.click(trigger)
 

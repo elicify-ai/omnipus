@@ -91,7 +91,6 @@ import {
 const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
   { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
   { value: 'next',        label: 'Next',        color: 'text-[color:var(--color-accent)]' },
-  { value: 'planning',    label: 'Planning',    color: 'text-[color:var(--color-muted)]' },
   { value: 'in_progress', label: 'In Progress', color: 'text-[color:var(--color-warning)]' },
   { value: 'done',        label: 'Done',        color: 'text-[color:var(--color-success)]' },
   { value: 'failed',      label: 'Failed',      color: 'text-[color:var(--color-error)]' },
@@ -100,7 +99,6 @@ const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] 
 const STATUS_BADGE: Record<string, string> = {
   inbox:       'text-[var(--color-muted)] bg-white/5',
   next:        'text-[color:var(--color-accent)] bg-[var(--color-accent)]/10',
-  planning:    'text-[color:var(--color-muted)] bg-white/5',
   in_progress: 'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
   blocked:     'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
   done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',
@@ -557,7 +555,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // against"). Disable the picker instead of offering guaranteed-400 choices.
   const noWorkspaceForAssignment = !task.workspace_id
 
-  const isStartable = task.status === 'inbox' || task.status === 'next' || task.status === 'planning'
+  const isStartable = task.status === 'inbox' || task.status === 'next'
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
   const showResult = (task.status === 'done' || task.status === 'failed') && !!task.result
@@ -1020,7 +1018,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </div>
       </Field>
 
-      {/* Start button — inbox / next / planning tasks */}
+      {/* Start button — inbox / next tasks */}
       {isStartable && (
         <Button
           className="w-full gap-2 text-xs h-8"

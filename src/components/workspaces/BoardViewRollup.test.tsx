@@ -104,10 +104,7 @@ function renderBoard(
       <BoardView
         tasks={tasks}
         plans={plans}
-        activePlanId={null}
-        activeTagFilter={null}
         agents={agents}
-        workspaceId="ws-1"
         altitude={altitude}
         onTaskClick={vi.fn()}
       />
@@ -144,7 +141,7 @@ describe('BoardView delegation roll-up', () => {
     const parentWithRollup = baseTask({
       rollup: [
         { agent_id: 'ray', label: 'Research', status: 'in_progress' },
-        { agent_id: 'ava', label: 'Build', status: 'planning' },
+        { agent_id: 'ava', label: 'Build', status: 'next' },
       ],
     })
 
@@ -195,10 +192,7 @@ describe('BoardView delegation roll-up', () => {
         <BoardView
           tasks={[parent]}
           plans={plans}
-          activePlanId={null}
-          activeTagFilter={null}
           agents={[]}
-          workspaceId="ws-1"
           altitude="show-all"
           onTaskClick={vi.fn()}
         />

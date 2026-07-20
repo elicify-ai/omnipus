@@ -145,9 +145,9 @@ describe('mapToCalendarEvents', () => {
     expect(mapToCalendarEvents([])).toHaveLength(0)
   })
 
-  // ─── Test #9: status→{bg,icon} for all 7 statuses (DS-1/row 10) ──────────
+  // ─── Test #9: status→{bg,icon} for all 6 statuses (DS-1/row 10, ADR-051 D5) ──
 
-  it('#9 status→{bg,icon} table for all 7 task statuses', () => {
+  it('#9 status→{bg,icon} table for all 6 task statuses', () => {
     const cases: Array<{
       status: Task['status']
       expectedBg: string
@@ -159,7 +159,6 @@ describe('mapToCalendarEvents', () => {
       { status: 'failed', expectedBg: '#F87171', expectedIcon: 'XCircle' },
       { status: 'inbox', expectedBg: '#94A3B8', expectedIcon: 'Circle' },
       { status: 'next', expectedBg: '#94A3B8', expectedIcon: 'Circle' },
-      { status: 'planning', expectedBg: '#94A3B8', expectedIcon: 'Circle' },
     ]
 
     for (const { status, expectedBg, expectedIcon } of cases) {

@@ -423,14 +423,7 @@ type Task = {
   description?: string | undefined;
   prompt?: string | undefined;
   action: "llm";
-  status:
-    | "inbox"
-    | "next"
-    | "planning"
-    | "in_progress"
-    | "blocked"
-    | "done"
-    | "failed";
+  status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id?: string | undefined;
   agent_name?: string | undefined;
   priority?: number | undefined;
@@ -464,7 +457,6 @@ type Task = {
         status:
           | "inbox"
           | "next"
-          | "planning"
           | "in_progress"
           | "blocked"
           | "done"
@@ -624,14 +616,7 @@ type TaskUpdateRequest = Partial<{
   title: string;
   description: string;
   prompt: string;
-  status:
-    | "inbox"
-    | "next"
-    | "planning"
-    | "in_progress"
-    | "blocked"
-    | "done"
-    | "failed";
+  status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id: string;
   priority: number;
   blocked_by: Array<string>;
@@ -2137,7 +2122,6 @@ export const Task: z.ZodType<Task> = z
     status: z.enum([
       "inbox",
       "next",
-      "planning",
       "in_progress",
       "blocked",
       "done",
@@ -2177,7 +2161,6 @@ export const Task: z.ZodType<Task> = z
           status: z.enum([
             "inbox",
             "next",
-            "planning",
             "in_progress",
             "blocked",
             "done",
@@ -2217,7 +2200,6 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     status: z.enum([
       "inbox",
       "next",
-      "planning",
       "in_progress",
       "blocked",
       "done",
@@ -6305,15 +6287,7 @@ Polled by the SPA StatusBar every 15 seconds.
         name: "status",
         type: "Query",
         schema: z
-          .enum([
-            "inbox",
-            "next",
-            "planning",
-            "in_progress",
-            "blocked",
-            "done",
-            "failed",
-          ])
+          .enum(["inbox", "next", "in_progress", "blocked", "done", "failed"])
           .optional(),
       },
       {
@@ -7710,7 +7684,7 @@ export const TaskStatusChangedFrame = z
     type: z.literal("task_status_changed"),
     session_id: z.string().min(1),
     task_id: z.string().min(1),
-    status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
+    status: z.enum(["inbox", "next", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
   })
   .strict();
