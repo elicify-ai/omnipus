@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,6 +105,22 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.handleTaskDependencies(w, r, id)
+		case "runs":
+			// GET /api/v1/tasks/{id}/runs (history list) AND POST
+			// /api/v1/tasks/{id}/runs (Run-now) BOTH land here — a single
+			// dispatch point, handleTaskRuns (rest_task_runs.go), which
+			// itself switches on r.Method (GET falls through to the
+			// history-list body; POST delegates to handleTaskRunNow; any
+			// other method is 405). ADR-050 RD8/RD7, task-run-history-spec.md
+			// §3.6/§3.4. Wrapped in the SAME dedicated taskReadLimiter
+			// /tasks/occurrences uses (rest_auth.go) — applied here rather
+			// than at top-level registration since this "/api/v1/tasks/"
+			// prefix route (registerAdditionalEndpoints, rest.go) carries no
+			// limiter of its own and a dynamic {id} segment cannot be its own
+			// registered pattern (see rest_task_runs.go's doc comment).
+			withRateLimit(taskReadLimiter, func(w http.ResponseWriter, r *http.Request) {
+				a.handleTaskRuns(w, r, id)
+			})(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -122,6 +139,132 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// HandleTaskOccurrences handles GET /api/v1/tasks/occurrences — the Calendar
+// Recurrence Redesign occurrence expansion endpoint (spec "Occurrence
+// expansion endpoint", FR-008/FR-008a, contracts/openapi.yaml operationId
+// listTaskOccurrences). Registered as an EXACT path in
+// registerAdditionalEndpoints (rest.go), which always wins over this file's
+// "/api/v1/tasks/" prefix route regardless of registration order (see that
+// registration's comment) — so this handler never needs to branch on a
+// trailing "occurrences" segment itself.
+//
+// Query params (all required): workspace_id, from_ms, to_ms, tz. The actual
+// expansion/bucketing work is the pure, separately-unit-tested
+// buildOccurrenceSets (task_occurrences.go); this handler only does
+// param validation, the task-selection predicate, and status-code mapping.
+func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	q := r.URL.Query()
+
+	workspaceID := q.Get("workspace_id")
+	if workspaceID == "" {
+		jsonErr(w, http.StatusBadRequest, "workspace_id is required")
+		return
+	}
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
+		return
+	}
+
+	fromMs, fErr := strconv.ParseInt(q.Get("from_ms"), 10, 64)
+	if fErr != nil {
+		jsonErr(w, http.StatusBadRequest, "from_ms is required and must be an integer (Unix epoch milliseconds)")
+		return
+	}
+	toMs, tErr := strconv.ParseInt(q.Get("to_ms"), 10, 64)
+	if tErr != nil {
+		jsonErr(w, http.StatusBadRequest, "to_ms is required and must be an integer (Unix epoch milliseconds)")
+		return
+	}
+	// from_ms >= to_ms (including from == to) is a 400: an empty half-open
+	// range is a client bug, not a valid query returning [].
+	if fromMs >= toMs {
+		jsonErr(w, http.StatusBadRequest, "from_ms must be strictly before to_ms")
+		return
+	}
+	if toMs-fromMs > maxOccurrenceRangeSpanMs {
+		jsonErr(w, http.StatusBadRequest, "requested range exceeds the 400-day maximum span")
+		return
+	}
+
+	tz := q.Get("tz")
+	if tz == "" {
+		jsonErr(w, http.StatusBadRequest, "tz is required")
+		return
+	}
+	if _, tzErr := time.LoadLocation(tz); tzErr != nil {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("tz %q could not be loaded: %v", tz, tzErr))
+		return
+	}
+
+	tasks, err := a.taskStore.List(task.Filter{WorkspaceID: workspaceID})
+	if err != nil {
+		slog.Error("rest: task occurrences list failed", "workspace_id", workspaceID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not list tasks")
+		return
+	}
+
+	// Task selection (spec "Occurrence expansion endpoint"): expand only
+	// tasks the scheduler would actually arm — the SAME predicate
+	// TaskTriggerScheduler.OnTaskUpserted applies before registering a job
+	// (pkg/agent/task_trigger.go OnTaskUpserted's early skips). Heartbeat
+	// -surface tasks are always omitted (the heartbeat service owns those
+	// fires). A terminal task is omitted UNLESS its trigger REPEATS
+	// (recurring/every): a per-run done/failed status does not end a
+	// repeating series (see OnTaskUpserted's doc comment) — the scheduler
+	// re-arms a terminal recurring/every task's next occurrence exactly as it
+	// would a non-terminal one, so the calendar must keep rendering it too.
+	// A truly exhausted RRULE series (COUNT/UNTIL) naturally yields zero
+	// occurrences from buildOccurrenceSets below and is omitted that way, not
+	// by this predicate. A terminal `once`/manual task is still omitted here
+	// (task.Trigger.IsRepeating is false for them) — its single occurrence IS
+	// its whole series — and would be omitted a second time regardless by
+	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring/every only).
+	eligible := make([]task.Task, 0, len(tasks))
+	for _, t := range tasks {
+		if t.EffectiveSurface() == task.SurfaceHeartbeat {
+			continue
+		}
+		if t.SeriesRetired() {
+			continue
+		}
+		eligible = append(eligible, t)
+	}
+
+	// FR-008a: the every_ms projection anchor is the live armed job's
+	// NextRunAtMS, read from the installed TaskTriggerScheduler. Nil-safe —
+	// a nil scheduler (not yet wired / test scaffolding) makes every
+	// `every`-triggered task omit cleanly rather than erroring the request.
+	sched := agent.GetTaskTriggerScheduler(a.agentLoop)
+	everyAnchor := func(taskID string) (int64, bool) {
+		if sched == nil {
+			return 0, false
+		}
+		return sched.NextRunAtMSForTask(taskID)
+	}
+
+	// ADR-050 RD6, task-run-history-spec.md §3.7: the occurrence-run overlay
+	// dependency is wired in here, sourced from the live store. Unlike
+	// everyAnchor above — a required, non-variadic func(taskID string)
+	// (int64, bool) parameter — runsInRange is buildOccurrenceSets' own
+	// trailing VARIADIC parameter (see its doc comment, task_occurrences.go);
+	// that is what lets this single positional call add the dependency
+	// without breaking the pre-existing task_occurrences_test.go call sites
+	// that predate this feature and pass none.
+	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor, a.taskStore.RunsInRange)
+	if err != nil {
+		// Range/tz were already validated above, so a non-nil error here
+		// indicates a genuine internal failure rather than bad input.
+		slog.Error("rest: task occurrences expansion failed", "workspace_id", workspaceID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not expand occurrences")
+		return
+	}
+	jsonOK(w, sets)
 }
 
 // --- wire mapping -----------------------------------------------------------
@@ -247,6 +390,18 @@ func toWireTrigger(tr *task.Trigger) *struct {
 		v := *tr.Config.CronExpr
 		cfg.CronExpr = &v
 	}
+	if tr.Config.Rrule != nil {
+		v := *tr.Config.Rrule
+		cfg.Rrule = &v
+	}
+	if tr.Config.DtstartMs != nil {
+		v := *tr.Config.DtstartMs
+		cfg.DtstartMs = &v
+	}
+	if tr.Config.Tz != nil {
+		v := *tr.Config.Tz
+		cfg.Tz = &v
+	}
 	return &struct {
 		Config gen.Task_Trigger_Config `json:"config"`
 		Type   gen.TaskTriggerType     `json:"type"`
@@ -257,7 +412,13 @@ func toWireTrigger(tr *task.Trigger) *struct {
 // three generated request structs (Task/TaskCreateRequest/TaskUpdateRequest) each
 // have their own anonymous trigger type with an identically-shaped config, so
 // the callers decompose them and pass the primitives here.
-func buildTrigger(kind string, atMs, everyMs *int64, cronExpr *string) *task.Trigger {
+func buildTrigger(
+	kind string,
+	atMs, everyMs *int64,
+	cronExpr, rrule *string,
+	dtstartMs *int64,
+	tz *string,
+) *task.Trigger {
 	tr := &task.Trigger{Type: task.TriggerType(kind)}
 	if atMs != nil {
 		v := *atMs
@@ -270,6 +431,18 @@ func buildTrigger(kind string, atMs, everyMs *int64, cronExpr *string) *task.Tri
 	if cronExpr != nil {
 		v := *cronExpr
 		tr.Config.CronExpr = &v
+	}
+	if rrule != nil {
+		v := *rrule
+		tr.Config.Rrule = &v
+	}
+	if dtstartMs != nil {
+		v := *dtstartMs
+		tr.Config.DtstartMs = &v
+	}
+	if tz != nil {
+		v := *tz
+		tr.Config.Tz = &v
 	}
 	return tr
 }
@@ -612,6 +785,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			req.Trigger.Config.AtMs,
 			req.Trigger.Config.EveryMs,
 			req.Trigger.Config.CronExpr,
+			req.Trigger.Config.Rrule,
+			req.Trigger.Config.DtstartMs,
+			req.Trigger.Config.Tz,
 		)
 	}
 
@@ -626,6 +802,10 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.auditTask("task.create", t.ID)
+	// FR-022: no-op today (a freshly-created task has no prior trigger to
+	// diff against) — see auditTriggerChange's doc comment for why this
+	// call site stays in place regardless.
+	a.auditTriggerChange(t.ID, nil, t.Trigger)
 	a.emitTaskStatus(t)
 	// Register the task's time trigger (once/every/recurring) so it actually
 	// fires; a no-op for manual/heartbeat tasks.
@@ -734,12 +914,26 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 		patch.Todos = &todos
 	}
+	// FR-022 audit prerequisite: patch.Trigger is built here; the prior
+	// trigger snapshot itself is captured atomically below by
+	// UpdateWithPrior (M-BE1), under the SAME per-task lock as the write —
+	// closing the TOCTOU window a separate pre-patch Get() had under two
+	// concurrent same-task trigger PATCHes (the second call's "prior" read
+	// could complete before the first call's write landed, then the first
+	// call's write would land, then the second call's own write would land
+	// on top of it — leaving the second call's recorded "prior" stale, never
+	// reflecting the first call's write even though both calls' own writes
+	// were correctly serialized by the store's per-task lock).
+	var priorTriggerForAudit *task.Trigger
 	if req.Trigger != nil {
 		tr := buildTrigger(
 			string(req.Trigger.Type),
 			req.Trigger.Config.AtMs,
 			req.Trigger.Config.EveryMs,
 			req.Trigger.Config.CronExpr,
+			req.Trigger.Config.Rrule,
+			req.Trigger.Config.DtstartMs,
+			req.Trigger.Config.Tz,
 		)
 		patch.Trigger = &tr
 	}
@@ -783,10 +977,48 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		// to distinguish "was already in_progress" from "just moved to in_progress".
 		if existing, gErr := a.taskStore.Get(id); gErr == nil {
 			preUpdateStatus = existing.Status
+			// ADR-050 RD7, task-run-history-spec.md §3.4 ("the ADR-049
+			// fresh-run reset is superseded by this in the same change...do
+			// not keep both paths"): a "Run now" on a done/failed REPEATING
+			// task must go through the run-aware POST
+			// /api/v1/tasks/{id}/runs entry point (handleTaskRunNow ->
+			// TaskExecutor.StartOccurrenceRun -> Store.SpawnReset +
+			// Store.OpenRun, rest_task_runs.go), not this PATCH-status
+			// endpoint. This PATCH path's in_progress launch (below) goes
+			// through StartTaskNow -> runTaskFromInProgress, which passes
+			// nil for ADR-050's *activeRun and therefore never opens/closes
+			// a TaskRun record (see runTaskFromInProgress's own doc comment
+			// in pkg/agent/task_executor.go) — a repeating task re-run
+			// through this path would be invisible to the calendar
+			// occurrence overlay and the run-history list.
+			//
+			// This used to be handled by a field-clearing "fresh-run reset"
+			// (session_id/result/artifacts/completed_at/followed_up wiped
+			// pre-emptively so the launch guard below, which requires
+			// updated.SessionID == "", would fire). That reset existed ONLY
+			// to force this untracked path to launch at all; deleting it
+			// with no replacement would leave a PATCH like this silently
+			// flip the task to in_progress with the PRIOR run's stale
+			// session_id still attached (the guard below never fires since
+			// SessionID != ""), so the task never re-launches and sits
+			// permanently "in progress" with a dead session. Reject instead,
+			// before any store write, and point the caller at the run-aware
+			// endpoint.
+			if patch.Status != nil && *patch.Status == task.StatusInProgress &&
+				task.IsTerminal(existing.Status) &&
+				existing.Trigger.IsRepeating() {
+				jsonErr(w, http.StatusBadRequest,
+					"cannot re-run a repeating task via PATCH status; use POST /api/v1/tasks/"+id+"/runs instead")
+				return
+			}
 		}
 	}
 
-	updated, err := a.taskStore.Update(id, patch)
+	// M-BE1: UpdateWithPrior captures the pre-patch task snapshot under the
+	// same per-task lock as the write, so priorTriggerForAudit below is the
+	// true immediately-prior state rather than a separately-read, possibly
+	// stale one (see the doc comment above patch.Trigger's construction).
+	updated, priorForUpdate, err := a.taskStore.UpdateWithPrior(id, patch)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			jsonErr(w, http.StatusNotFound, "task not found")
@@ -799,6 +1031,9 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		slog.Error("rest: task update failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not update task")
 		return
+	}
+	if req.Trigger != nil && priorForUpdate != nil {
+		priorTriggerForAudit = priorForUpdate.Trigger
 	}
 
 	// If the task transitioned INTO in_progress (from a different state) and has
@@ -831,14 +1066,19 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		preUpdateStatus != task.StatusInProgress &&
 		updated.AgentID != "" &&
 		updated.SessionID == "" {
-		if a.taskExecutor == nil {
-			// Revert the task to its prior status so it is not left stranded.
+		// buildLaunchRevertPatch assembles the revert-to-prior-state patch shared
+		// by both failure branches below (nil executor, StartTaskNow error).
+		buildLaunchRevertPatch := func() task.Patch {
 			revertStatus := preUpdateStatus
 			revertStartedAt := ""
-			revertPatch := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+			return task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+		}
+		if a.taskExecutor == nil {
+			// Revert the task to its prior status so it is not left stranded.
+			revertPatch := buildLaunchRevertPatch()
 			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after nil-executor failure",
-					"id", id, "revert_to", revertStatus, "error", rErr)
+					"id", id, "revert_to", preUpdateStatus, "error", rErr)
 			}
 			slog.Warn("rest: taskExecutor is nil; rejecting in_progress transition",
 				"id", id, "agent_id", updated.AgentID)
@@ -848,12 +1088,10 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		sessID, startErr := a.taskExecutor.StartTaskNow(r.Context(), id)
 		if startErr != nil {
 			// Revert the task to its prior status so it is not left stranded.
-			revertStatus := preUpdateStatus
-			revertStartedAt := ""
-			revertPatch := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
+			revertPatch := buildLaunchRevertPatch()
 			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after StartTaskNow failure",
-					"id", id, "revert_to", revertStatus, "error", rErr)
+					"id", id, "revert_to", preUpdateStatus, "error", rErr)
 			}
 			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
 				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
@@ -882,6 +1120,12 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	a.auditTask("task.update", id)
+	if req.Trigger != nil {
+		// FR-022: audit a recurrence-trigger change (legacy→RRULE or
+		// RRULE→RRULE) — no-ops on a title-only edit (byte-identical
+		// trigger, FR-024) or a non-recurring new trigger.
+		a.auditTriggerChange(id, priorTriggerForAudit, updated.Trigger)
+	}
 	a.emitTaskStatus(updated)
 	// Re-sync the task's time trigger: a changed/added/removed trigger or a move
 	// to a terminal status (re)registers or removes its cron job.
@@ -1035,6 +1279,56 @@ func (a *restAPI) auditTask(event, id string) {
 	}
 }
 
+// auditTriggerChange implements FR-022: every save that CHANGES a task's
+// recurrence trigger to a new `recurring` (RRULE or legacy cron_expr) rule
+// emits an audit entry recording the task id, the prior trigger, and the
+// new trigger — covering both the US-5.3 legacy→RRULE conversion and an
+// RRULE→RRULE rule change (FR-024's "re-anchor" case) alike, so a change
+// that moves every future fire is reconstructible after the fact.
+//
+// Deliberately scoped narrower than "every trigger patch":
+//   - priorTrigger == nil never fires. On task CREATE there is no prior
+//     trigger to diff against — "changes a recurrence trigger" presupposes
+//     one existed. (handleTaskCreate still calls this — with priorTrigger
+//     always nil today — so every trigger-touching write path is
+//     uniformly covered by one hook; the guard makes that call a
+//     documented no-op rather than a spurious audit entry.)
+//   - newTrigger.Type != task.TriggerRecurring never fires — FR-022 is
+//     scoped to recurrence trigger changes, not e.g. a save that flips a
+//     task to `manual`/`once`.
+//   - a byte-identical trigger never fires — this is FR-024's title-only
+//     edit ("Save MUST preserve the trigger byte-identical when no
+//     recurrence or time field was touched"), which must NOT read as a
+//     rule change.
+//
+// Best-effort: log failures are recorded but never surfaced to the caller,
+// matching auditTask's existing behavior.
+func (a *restAPI) auditTriggerChange(taskID string, priorTrigger, newTrigger *task.Trigger) {
+	if priorTrigger == nil || newTrigger == nil {
+		return
+	}
+	if newTrigger.Type != task.TriggerRecurring {
+		return
+	}
+	if reflect.DeepEqual(*priorTrigger, *newTrigger) {
+		return
+	}
+	if a.auditor == nil {
+		return
+	}
+	if err := a.auditor.Log(&audit.Entry{
+		Event:    "task.trigger.recurrence_changed",
+		Decision: audit.DecisionAllow,
+		Details: map[string]any{
+			"task_id":       taskID,
+			"prior_trigger": priorTrigger,
+			"new_trigger":   newTrigger,
+		},
+	}); err != nil {
+		slog.Error("rest: task trigger recurrence-change audit log failed", "task_id", taskID, "error", err)
+	}
+}
+
 // isTaskValidationErr reports whether err is a user-facing validation error
 // (400) rather than an internal failure (500). All store validation errors wrap
 // task.ErrValidation (ErrBlockedByCycle, ErrBlockedBySelfEdge,
@@ -1060,6 +1354,21 @@ var errTaskAgentLoopUnavailable = errors.New("task: agent loop not initialized; 
 // reconcileStuckTasks resets any task left `in_progress` by a crashed/abandoned
 // previous gateway process to `failed`, so a crash does not strand a task in a
 // running state forever. Idempotent; safe when the tasks dir is absent.
+//
+// ADR-050 RD10 / task-run-history-spec.md §3.5 removed the stuck-run reaper
+// (operator decision 2026-07-20: "a run stays in_progress until closed" — no
+// liveness-aware background sweep). That leaves a gap this boot reconciler
+// must close: a TaskRun opened by the crashed process (task.Store.OpenRun,
+// pkg/task/run_store.go) is never told the task it belongs to was reset here,
+// so — with no reaper — it would stay `in_progress` FOREVER, even across
+// further restarts, diverging from the just-recovered Task. For each task
+// this function resets to failed, it also best-effort closes that task's own
+// open TaskRun(s) to `failed`, bounding the orphaned-run gap to "next
+// restart" (MED-#M2 in the ADR). This does not touch pkg/task's store logic
+// (CloseRun already refuses to double-close or accept a non-terminal
+// status) — it only calls the existing store API, mirroring how this
+// function already only calls taskStore.Update rather than writing task
+// files directly.
 func (a *restAPI) reconcileStuckTasks() {
 	tasks, err := a.taskStore.List(task.Filter{Status: task.StatusInProgress})
 	if err != nil {
@@ -1080,9 +1389,38 @@ func (a *restAPI) reconcileStuckTasks() {
 			continue
 		}
 		reset++
+		a.reconcileStuckTaskRuns(t.ID)
 	}
 	if reset > 0 {
 		slog.Info("rest: reconcile stuck tasks: reset in_progress→failed on boot", "count", reset)
+	}
+}
+
+// reconcileStuckTaskRuns closes every currently-open (in_progress) TaskRun
+// belonging to taskID to `failed`, called immediately after reconcileStuckTasks
+// resets that same task's Task.status. Best-effort and non-fatal: a task with
+// zero runs (pre-ADR-050 history, or a task that was never dispatched through
+// OpenRun) is not an error, and any store failure is logged at Warn rather
+// than aborting the boot reconciliation pass for the remaining stuck tasks.
+func (a *restAPI) reconcileStuckTaskRuns(taskID string) {
+	runs, err := a.taskStore.ListRuns(taskID)
+	if err != nil {
+		slog.Warn("rest: reconcile stuck tasks: list runs failed, leaving any open run untouched", "task_id", taskID, "error", err)
+		return
+	}
+	closed := 0
+	for _, run := range runs {
+		if !run.IsOpen() {
+			continue
+		}
+		if cErr := a.taskStore.CloseRun(taskID, run.RunID, task.StatusFailed, "abandoned: gateway restarted mid-execution"); cErr != nil {
+			slog.Warn("rest: reconcile stuck tasks: close orphaned run failed", "task_id", taskID, "run_id", run.RunID, "error", cErr)
+			continue
+		}
+		closed++
+	}
+	if closed > 0 {
+		slog.Info("rest: reconcile stuck tasks: closed orphaned in_progress run(s) on boot", "task_id", taskID, "count", closed)
 	}
 }
 

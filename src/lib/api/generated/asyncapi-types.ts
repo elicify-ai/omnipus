@@ -23,6 +23,7 @@ export type WsFrameType =
   | "subagent_start"
   | "subagent_end"
   | "task_status_changed"
+  | "task_run_status"
   | "replay_message"
   | "replay_error"
   | "rate_limit"
@@ -218,6 +219,14 @@ export interface TaskStatusChangedFrame {
   task_id: string;
   status: "inbox" | "next" | "planning" | "in_progress" | "blocked" | "done" | "failed";
   agent_id?: string;
+}
+
+export interface TaskRunStatusFrame {
+  type: "task_run_status";
+  task_id: string;
+  run_id: string;
+  occurrence_ms?: number;
+  status: "in_progress" | "done" | "failed";
 }
 
 export interface ReplayMessageFrame {
@@ -521,6 +530,7 @@ export type WsFrame =
   | SubagentStartFrame
   | SubagentEndFrame
   | TaskStatusChangedFrame
+  | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
   | RateLimitFrame
@@ -588,6 +598,7 @@ export type ServerFrame =
   | SubagentStartFrame
   | SubagentEndFrame
   | TaskStatusChangedFrame
+  | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
   | RateLimitFrame

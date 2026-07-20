@@ -9,8 +9,8 @@
  * Modelled on the CreateAgentModal.tsx:278-307 collapsed pattern but extracted
  * into a single reusable primitive (spec §2, #316).
  *
- * Consumed by: ToolPolicyEditor (#318), ScheduleFormSheet (US-A1), and any
- * future surface that wants a safe-to-skip advanced section.
+ * Consumed by: ToolPolicyEditor (#318) and any future surface that wants a
+ * safe-to-skip advanced section.
  */
 
 import { useState } from 'react'

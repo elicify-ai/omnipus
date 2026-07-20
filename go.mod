@@ -2,8 +2,6 @@ module github.com/elicify-ai/omnipus
 
 go 1.26.5
 
-toolchain go1.26.5
-
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/adhocore/gronx v1.19.6
@@ -45,6 +43,7 @@ require (
 	github.com/slack-go/slack v0.24.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
+	github.com/teambition/rrule-go v1.8.2
 	github.com/tencent-connect/botgo v0.2.1
 	go.mau.fi/util v0.9.10
 	go.mau.fi/whatsmeow v0.0.0-20260713112832-d8960d9575d2

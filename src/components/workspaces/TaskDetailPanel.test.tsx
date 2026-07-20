@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskDetailPanel } from './TaskDetailPanel'
-import type { Task, TaskUpdateRequest } from '@/lib/api'
+import type { Task, TaskUpdateRequest, TaskRun } from '@/lib/api'
 
 // DateTimePicker (shadcn Calendar + Select) needs these jsdom polyfills to open
 // (same gap noted in date-time-picker.test.tsx).
@@ -97,6 +97,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteTask: vi.fn().mockResolvedValue(undefined),
     setTaskTodos: vi.fn().mockResolvedValue({}),
     setTaskDependencies: vi.fn().mockResolvedValue({}),
+    // ADR-050 / task-run-history-spec §4.4 — the Runs section (TaskRunsList)
+    // and the "Retry" re-run wiring both go through these.
+    fetchTaskRuns: vi.fn().mockResolvedValue([]),
+    runTaskNow: vi.fn().mockResolvedValue(undefined),
     isApiError: vi.fn().mockReturnValue(false),
     tasksQueryKeys: actual.tasksQueryKeys,
     milestonesQueryKeys: actual.milestonesQueryKeys,
@@ -184,8 +188,26 @@ beforeEach(async () => {
   // unscoped agent list, i.e. today's pre-scoping behaviour. Tests that
   // exercise team-scoping itself override this per-test.
   vi.mocked(api.fetchWorkspaceDelegation).mockReset().mockRejectedValue(new Error('not mocked'))
+  vi.mocked(api.fetchTaskRuns).mockReset().mockResolvedValue([])
+  vi.mocked(api.runTaskNow).mockReset().mockResolvedValue(undefined)
   mockAddToast.mockReset()
 })
+
+// Minimal required fields for TaskRun (ADR-050 §2.1) — mirrors TaskRunsList.test.tsx's makeRun.
+function makeRun(overrides: Partial<TaskRun> = {}): TaskRun {
+  return {
+    run_id: 'run-1',
+    task_id: 'task-1',
+    occurrence_ms: null,
+    status: 'done',
+    result: 'All good.',
+    session_id: 'sess-run-1',
+    kind: 'manual',
+    started_at: '2026-07-20T09:00:00Z',
+    ended_at: '2026-07-20T09:05:00Z',
+    ...overrides,
+  }
+}
 
 describe('TaskDetailPanel — Open in Chat (#250 regression)', () => {
   it('shows "Open in Chat" button only when task has a session_id', async () => {
@@ -274,6 +296,107 @@ describe('TaskDetailPanel — 7-state status rendering', () => {
 
     // Start Task button must NOT appear (blocked is not startable)
     expect(screen.queryByRole('button', { name: /Start Task/i })).toBeNull()
+  })
+})
+
+// ── Runs section (ADR-050 / task-run-history-spec §4.4) ──────────────────────
+// TaskDetailPanel embeds the shared TaskRunsList as a "Runs" history section,
+// and the failed-task "Retry" affordance now re-runs via runTaskNow (a fresh
+// run; occurrence_ms omitted) instead of the old PATCH-status path — so a
+// failed once-task can be re-run without overwriting the prior attempt.
+
+describe('TaskDetailPanel — Runs section (ADR-050 §4.4)', () => {
+  it('renders the run history for the task', async () => {
+    const { fetchTaskRuns } = await import('@/lib/api')
+    vi.mocked(fetchTaskRuns).mockResolvedValue([
+      makeRun({ run_id: 'run-a', status: 'failed', result: 'Boom.' }),
+      makeRun({ run_id: 'run-b', status: 'done', result: 'All good.' }),
+    ])
+
+    renderPanel(makeTask({ id: 'task-1', status: 'failed' }))
+
+    expect(await screen.findByText(/run history/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(2))
+    expect(screen.getByText('Boom.')).toBeInTheDocument()
+    expect(screen.getByText('All good.')).toBeInTheDocument()
+    expect(vi.mocked(fetchTaskRuns)).toHaveBeenCalledWith('task-1')
+  })
+
+  it('shows the empty-runs state when the task has no run history yet', async () => {
+    const { fetchTaskRuns } = await import('@/lib/api')
+    vi.mocked(fetchTaskRuns).mockResolvedValue([])
+
+    renderPanel(makeTask({ id: 'task-empty-runs', status: 'next' }))
+
+    expect(await screen.findByTestId('task-runs-empty')).toBeInTheDocument()
+  })
+
+  it('clicking "Retry" on a failed task calls runTaskNow(task.id) with no occurrence_ms', async () => {
+    // BDD: Given a failed once/normal task,
+    //      When the user clicks "Retry",
+    //      Then runTaskNow is called with just the task id — occurrence_ms
+    //      is omitted entirely (undefined), which is what tells the backend
+    //      to open a fresh run rather than re-open a specific occurrence.
+    const { runTaskNow } = await import('@/lib/api')
+    renderPanel(makeTask({ id: 'task-retry-1', status: 'failed' }))
+
+    const retryBtn = await screen.findByRole('button', { name: /Retry/i })
+    await act(async () => { fireEvent.click(retryBtn) })
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalled())
+    expect(vi.mocked(runTaskNow).mock.calls[0]).toEqual(['task-retry-1'])
+  })
+
+  it('a failed task keeps showing its prior run in the Runs list after Retry is clicked, AND the new run appears (re-run does not overwrite history)', async () => {
+    // BDD: Given a failed task whose Runs list already contains the failed
+    //      attempt, When the user clicks Retry (which calls runTaskNow),
+    //      Then the prior failed run is still listed afterward AND a new run
+    //      appears — the fresh run is additive, not a replacement (ADR-050
+    //      Acceptance Scenario 3).
+    //
+    // Q4 (de-tautologize): a STATEFUL mock — the fetch AFTER Retry's
+    // onSuccess `invalidateQueries` refetch returns a DIFFERENT (longer)
+    // list. A static `mockResolvedValue` here would pass this test even if
+    // Retry silently did nothing (the assertion "still 1 row" is trivially
+    // true against a mock that never changes) — this version fails unless
+    // the refetch actually happens and actually reflects a new run.
+    const { fetchTaskRuns, runTaskNow } = await import('@/lib/api')
+    const failedRun = makeRun({ run_id: 'run-failed-1', status: 'failed', result: 'It broke.', session_id: 'sess-failed-1' })
+    const freshRun = makeRun({ run_id: 'run-fresh-1', status: 'in_progress', result: undefined, session_id: 'sess-fresh-1' })
+    vi.mocked(fetchTaskRuns)
+      .mockResolvedValueOnce([failedRun])
+      .mockResolvedValue([failedRun, freshRun])
+    vi.mocked(runTaskNow).mockResolvedValue(undefined)
+
+    renderPanel(makeTask({ id: 'task-retry-2', status: 'failed' }))
+
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(1))
+    expect(screen.getByText('It broke.')).toBeInTheDocument()
+
+    const retryBtn = await screen.findByRole('button', { name: /Retry/i })
+    await act(async () => { fireEvent.click(retryBtn) })
+
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-retry-2'))
+
+    // The prior failed run is STILL listed, and the fresh run now appears
+    // too — proving Retry's invalidateQueries actually drove a refetch that
+    // surfaced a genuinely new run row, not just an unchanged static mock.
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(2))
+    expect(screen.getByText('It broke.')).toBeInTheDocument()
+  })
+
+  it('surfaces a Retry/re-run failure via toast instead of failing silently', async () => {
+    const { runTaskNow } = await import('@/lib/api')
+    vi.mocked(runTaskNow).mockRejectedValueOnce(new Error('dispatch failed'))
+
+    renderPanel(makeTask({ id: 'task-retry-err', status: 'failed' }))
+
+    const retryBtn = await screen.findByRole('button', { name: /Retry/i })
+    await act(async () => { fireEvent.click(retryBtn) })
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' }),
+    ))
   })
 })
 
@@ -793,33 +916,23 @@ describe('TaskDetailPanel — renders subtask section when subtasks exist', () =
 // ── Full task UX edits (trigger / depends-on / due / todos) ────────────────────
 
 describe('TaskDetailPanel — editable trigger', () => {
-  it('selecting "Recurring" PATCHes a recurring trigger with a default cron', async () => {
-    const { updateTask } = await import('@/lib/api')
+  // FR-011/D3/FR-005: recurring-trigger editing is removed from the generic
+  // detail panel entirely — it exists only in the calendar editor. The two
+  // tests that used to select "Recurring" and edit a cron expression from
+  // this panel are replaced by the trim + FR-023 defensive-guard tests below.
+  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" for a manual/once task', async () => {
     Element.prototype.scrollIntoView = vi.fn()
     renderPanel(makeTask({ id: 'task-trig', status: 'next' }))
 
-    // The Trigger field SmartSelect — open it and choose Recurring
-    const recurringOption = await openSmartSelectAndFind(/trigger/i, /recurring \(cron\)/i)
-    fireEvent.click(recurringOption)
-
-    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
-    const arg = lastUpdateArg(updateTask)
-    expect(arg.trigger?.type).toBe('recurring')
-    expect(arg.trigger?.config.cron_expr).toBeTruthy()
+    await openSmartSelectAndFind(/^trigger$/i, /once \(at a time\)/i)
+    // Query by role="option" — the closed trigger's own selected-value
+    // display ALSO reads "None (manual)" (the default), so a plain
+    // getByText would ambiguously match both it and the open option.
+    expect(screen.getByRole('option', { name: /none \(manual\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /once \(at a time\)/i })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /every \(interval\)/i })).toBeNull()
+    expect(screen.queryByRole('option', { name: /recurring \(cron\)/i })).toBeNull()
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
-  })
-
-  it('editing the cron expression PATCHes the new cron on blur', async () => {
-    const { updateTask } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-cron', status: 'next', trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } } }))
-
-    const cron = await screen.findByLabelText(/cron expression/i)
-    fireEvent.change(cron, { target: { value: '15 6 * * *' } })
-    fireEvent.blur(cron)
-
-    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalled())
-    const arg = lastUpdateArg(updateTask)
-    expect(arg.trigger?.config.cron_expr).toBe('15 6 * * *')
   })
 
   it('picking a date + time for the "Once" trigger PATCHes trigger.config.at_ms', async () => {
@@ -846,6 +959,63 @@ describe('TaskDetailPanel — editable trigger', () => {
       expect(arg.trigger?.type).toBe('once')
       expect(arg.trigger?.config.at_ms).toBe(expectedAtMs)
     }, { timeout: 3000 })
+  })
+})
+
+// ── FR-023 defensive guard ────────────────────────────────────────────────────
+// Board/List already exclude every/recurring tasks (BoardView/ListView's
+// isRecurringTrigger filter) — this panel should never receive one in
+// practice. These tests force-feed one directly as the `task` prop (the
+// documented "stale cache or a race" path, Acceptance Scenario 5) and assert
+// the defensive read-only rendering: a plain-English summary, an "Edit in
+// workspace calendar" link, no SmartSelect trigger picker, and — critically —
+// no raw cron/rule string anywhere in the rendered output.
+
+describe('TaskDetailPanel — FR-023 defensive guard for a force-fed recurring task', () => {
+  it('renders a read-only summary and an "Edit in workspace calendar" link for a recurring (cron) task — never the raw cron string', async () => {
+    renderPanel(makeTask({
+      id: 'task-recurring-forced',
+      status: 'next',
+      workspace_id: 'ws-test',
+      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+    }))
+
+    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
+    // No cron string is ever displayed (D8/D9/FR-023).
+    expect(screen.queryByText(/0 9 \* \* MON/)).toBeNull()
+    expect(screen.queryByLabelText(/cron expression/i)).toBeNull()
+    // No editable trigger picker for a recurring task.
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
+  })
+
+  it('renders a read-only summary for an every-interval task, derived from every_ms, with no interval input', async () => {
+    renderPanel(makeTask({
+      id: 'task-every-forced',
+      status: 'next',
+      workspace_id: 'ws-test',
+      trigger: { type: 'every', config: { every_ms: 45 * 60_000 } },
+    }))
+
+    expect(await screen.findByText(/repeats every 45 minutes/i)).toBeInTheDocument()
+    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
+    const label = await screen.findByText(/^trigger$/i)
+    const fieldRoot = label.parentElement as HTMLElement
+    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
+  })
+
+  it('omits the calendar link when the force-fed task has no workspace_id, but still shows the read-only summary', async () => {
+    renderPanel(makeTask({
+      id: 'task-recurring-no-ws',
+      status: 'next',
+      workspace_id: '',
+      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+    }))
+
+    expect(await screen.findByText(/repeats on a recurring schedule/i)).toBeInTheDocument()
+    expect(screen.queryByText(/edit in workspace calendar/i)).toBeNull()
   })
 })
 

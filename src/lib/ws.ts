@@ -31,6 +31,11 @@ import type {
   SubagentStartFrame,
   SubagentEndFrame,
   TaskStatusChangedFrame,
+  // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires at
+  // run open + close so the calendar chip + Runs list (TaskRunsList,
+  // src/components/workspaces/TaskRunsList.tsx) update live. Handled in
+  // src/store/chat.ts's handleFrame (mirrors task_status_changed).
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   RateLimitFrame,
   MediaFrame,
@@ -75,6 +80,7 @@ export type {
   SubagentStartFrame,
   SubagentEndFrame,
   TaskStatusChangedFrame,
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   RateLimitFrame,
   MediaFrame,

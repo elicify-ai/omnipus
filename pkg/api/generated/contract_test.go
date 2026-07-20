@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -1047,6 +1048,400 @@ func TestContract_Task_Differentiation(t *testing.T) {
 		"Populated and Edge Task fixtures must produce different JSON")
 	mustPassComponent(t, "Task", f1)
 	mustPassComponent(t, "Task", f2)
+}
+
+// ── TaskOccurrenceSet ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskOccurrenceSet.yaml (required:
+// [task_id, occurrences_ms, day_buckets, truncated]; both array fields are
+// non-nullable). Mirrors TestContract_SessionStateFrame_NilPendingApprovalsRejected
+// above — proves nil really does marshal to null in this codebase (which is
+// what makes the pkg/gateway/task_occurrences.go buildOneOccurrenceSet
+// nil-guard load-bearing) and that a null-bearing payload is rejected by the
+// schema.
+
+func TestContract_TaskOccurrenceSet_NilOccurrencesMsRejected(t *testing.T) {
+	// nil OccurrencesMs -> JSON null -> schema requires type: array, no null.
+	// Traces to: TaskOccurrenceSet.yaml (occurrences_ms: type: array, required)
+	fixture := TaskOccurrenceSet{
+		TaskId: "task-1",
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+			RunCounts  *struct {
+				Done       int32 `json:"done"`
+				Failed     int32 `json:"failed"`
+				InProgress int32 `json:"in_progress"`
+				Scheduled  int32 `json:"scheduled"`
+			} `json:"run_counts,omitempty"`
+		}{},
+		OccurrencesMs: nil, // bug: nil slice marshals to null
+		Truncated:     false,
+	}
+
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"occurrences_ms":null`,
+		"nil slice must marshal to null to exercise the bug path")
+
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "TaskOccurrenceSet", raw)
+	assert.Error(t, validationErr,
+		"occurrences_ms:null MUST fail validation — schema requires type: array")
+}
+
+func TestContract_TaskOccurrenceSet_NilDayBucketsRejected(t *testing.T) {
+	// nil DayBuckets -> JSON null -> schema requires type: array, no null.
+	// Traces to: TaskOccurrenceSet.yaml (day_buckets: type: array, required)
+	fixture := TaskOccurrenceSet{
+		TaskId:        "task-1",
+		OccurrencesMs: []int64{},
+		DayBuckets:    nil, // bug: nil slice marshals to null
+		Truncated:     false,
+	}
+
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"day_buckets":null`,
+		"nil slice must marshal to null to exercise the bug path")
+
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "TaskOccurrenceSet", raw)
+	assert.Error(t, validationErr,
+		"day_buckets:null MUST fail validation — schema requires type: array")
+}
+
+func TestContract_TaskOccurrenceSet_Populated(t *testing.T) {
+	// Both arrays non-empty. Traces to: TaskOccurrenceSet.yaml
+	mustPassComponent(t, "TaskOccurrenceSet", FixtureTaskOccurrenceSet_Populated())
+}
+
+func TestContract_TaskOccurrenceSet_BucketsOnly(t *testing.T) {
+	// Edge: day_buckets populated, occurrences_ms empty-but-non-nil (the
+	// "dense overview" shape — every day bucketed). Traces to:
+	// TaskOccurrenceSet.yaml — occurrences_ms has no minItems, so [] is valid.
+	mustPassComponent(t, "TaskOccurrenceSet", FixtureTaskOccurrenceSet_BucketsOnly())
+}
+
+func TestContract_TaskOccurrenceSet_OccurrencesOnly(t *testing.T) {
+	// Edge: occurrences_ms populated, day_buckets empty-but-non-nil (the
+	// "detail mode" shape — never bucketed). Traces to:
+	// TaskOccurrenceSet.yaml — day_buckets has no minItems, so [] is valid.
+	mustPassComponent(t, "TaskOccurrenceSet", FixtureTaskOccurrenceSet_OccurrencesOnly())
+}
+
+func TestContract_TaskOccurrenceSet_Differentiation(t *testing.T) {
+	// The three properly-initialized fixtures (the healthy counterparts to
+	// the two NilXxxRejected tests above) must all produce different,
+	// null-free JSON and all pass schema validation cleanly.
+	f1 := FixtureTaskOccurrenceSet_Populated()
+	f2 := FixtureTaskOccurrenceSet_BucketsOnly()
+	f3 := FixtureTaskOccurrenceSet_OccurrencesOnly()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	raw3, err := json.Marshal(f3)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, string(raw1), string(raw2))
+	assert.NotEqual(t, string(raw1), string(raw3))
+	assert.NotEqual(t, string(raw2), string(raw3))
+
+	assert.NotContains(t, string(raw1), "null", "properly-initialized fixture must never contain a null field")
+	assert.NotContains(t, string(raw2), "null", "properly-initialized fixture must never contain a null field")
+	assert.NotContains(t, string(raw3), "null", "properly-initialized fixture must never contain a null field")
+
+	mustPassComponent(t, "TaskOccurrenceSet", f1)
+	mustPassComponent(t, "TaskOccurrenceSet", f2)
+	mustPassComponent(t, "TaskOccurrenceSet", f3)
+}
+
+// ── TaskOccurrenceSet run overlay (ADR-050 §3.7) ──────────────────────────────
+// Traces to: contracts/components/schemas/TaskOccurrenceSet.yaml
+// (occurrence_runs) + DayBucket.yaml (run_counts). Previously ZERO coverage
+// of the populated-overlay shape (M2/H5) — the three fixtures above never
+// set OccurrenceRuns or DayBuckets[].RunCounts.
+
+func TestContract_TaskOccurrenceSet_WithRunOverlay(t *testing.T) {
+	// Both additive overlay fields populated in the same response.
+	// Traces to: TaskOccurrenceSet.yaml (occurrence_runs), DayBucket.yaml (run_counts)
+	mustPassComponent(t, "TaskOccurrenceSet", FixtureTaskOccurrenceSet_WithRunOverlay())
+}
+
+func TestContract_TaskOccurrenceSet_WithRunOverlay_NullFree(t *testing.T) {
+	// The overlay fixture must not contain a stray null anywhere — proves
+	// OccurrenceRuns/RunCounts were populated, not left as their nil zero
+	// values (which would omit the keys entirely via omitempty, not null,
+	// but a differentiation check still catches an accidental copy-paste of
+	// an un-populated fixture).
+	raw, err := json.Marshal(FixtureTaskOccurrenceSet_WithRunOverlay())
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"occurrence_runs"`, "occurrence_runs must be present")
+	assert.Contains(t, string(raw), `"run_counts"`, "run_counts must be present")
+	assert.NotContains(t, string(raw), "null", "populated overlay fixture must never contain a null field")
+}
+
+func TestContract_TaskOccurrenceSet_OccurrenceRunsInvalidStatus(t *testing.T) {
+	// Traces to: TaskOccurrenceSet.yaml — occurrence_runs[].status enum:
+	// [in_progress, done, failed]. "wibble" is not a member.
+	doc := map[string]any{
+		"task_id":        "task-1",
+		"occurrences_ms": []int64{1784620800000},
+		"day_buckets":    []any{},
+		"truncated":      false,
+		"occurrence_runs": []map[string]any{
+			{
+				"occurrence_ms": 1784620800000,
+				"status":        "wibble", // NOT in enum
+				"run_id":        "run-1",
+				"session_id":    "sess-1",
+				"has_result":    false,
+			},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TaskOccurrenceSet", raw),
+		"occurrence_runs[].status='wibble' must fail — not in enum [in_progress, done, failed]")
+}
+
+// ── TaskRun ──────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskRun.yaml (ADR-050 / task-run-
+// history-spec.md §2.1). Previously ZERO contract coverage (M2/H5).
+
+func TestContract_TaskRun_Populated(t *testing.T) {
+	mustPassComponent(t, "TaskRun", FixtureTaskRun_Populated())
+}
+
+func TestContract_TaskRun_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "TaskRun", FixtureTaskRun_ZeroValue(),
+		"zero value: kind=\"\" and status=\"\" are not members of their enums")
+}
+
+func TestContract_TaskRun_Edge(t *testing.T) {
+	// Closed (failed) manual run at the epoch-ms boundary (occurrence_ms=0,
+	// zero-duration). See FixtureTaskRun_Edge's doc comment for why this
+	// fixture avoids an actual null occurrence_ms/ended_at (known jsonschema/
+	// v6 `nullable` gap in the shared component-schema validator, out of
+	// this task's file scope).
+	mustPassComponent(t, "TaskRun", FixtureTaskRun_Edge())
+}
+
+func TestContract_TaskRun_Differentiation(t *testing.T) {
+	f1 := FixtureTaskRun_Populated()
+	f2 := FixtureTaskRun_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated and Edge TaskRun fixtures must produce different JSON")
+	mustPassComponent(t, "TaskRun", f1)
+	mustPassComponent(t, "TaskRun", f2)
+}
+
+func TestContract_TaskRun_InvalidStatus(t *testing.T) {
+	// Traces to: TaskRun.yaml — status enum: [in_progress, done, failed]
+	doc := map[string]any{
+		"run_id": "run-1", "task_id": "task-1", "occurrence_ms": nil,
+		"status": "wibble", "session_id": "sess-1", "kind": "scheduled",
+		"started_at": "2026-07-20T09:00:00Z", "ended_at": nil,
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TaskRun", raw),
+		"status='wibble' must fail TaskRun — not in enum [in_progress, done, failed]")
+}
+
+func TestContract_TaskRun_InvalidKind(t *testing.T) {
+	// Traces to: TaskRun.yaml — kind enum: [scheduled, manual]. No `canceled`/
+	// `queued`/`active`/`paused`/`exhausted` in v1 (spec §1 "Out", RD10).
+	doc := map[string]any{
+		"run_id": "run-1", "task_id": "task-1", "occurrence_ms": nil,
+		"status": "done", "session_id": "sess-1", "kind": "queued",
+		"started_at": "2026-07-20T09:00:00Z", "ended_at": nil,
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TaskRun", raw),
+		"kind='queued' must fail TaskRun — not in enum [scheduled, manual]")
+}
+
+func TestContract_TaskRun_RejectsExtraneousField(t *testing.T) {
+	// Traces to: TaskRun.yaml — additionalProperties: false
+	doc := map[string]any{
+		"run_id": "run-1", "task_id": "task-1", "occurrence_ms": nil,
+		"status": "done", "session_id": "sess-1", "kind": "manual",
+		"started_at": "2026-07-20T09:00:00Z", "ended_at": nil,
+		"canceled": true, // not a v1 field — RD10 rejects a canceled status/field
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TaskRun", raw),
+		"TaskRun with extraneous field must fail — additionalProperties: false")
+}
+
+// TestContract_TaskRun_OccurrenceMsIsInt64Type is the regression guard for
+// the int64 codegen drift fix. TaskRun.OccurrenceMs was already correctly
+// generated as *int64 by oapi-codegen (the OpenAPI side never had the bug —
+// only scripts/gen-asyncapi-go's custom converter ignored `format: int64`).
+// This test pins that correctness so a future codegen change can't silently
+// regress the OpenAPI side too.
+func TestContract_TaskRun_OccurrenceMsIsInt64Type(t *testing.T) {
+	field, ok := reflect.TypeOf(TaskRun{}).FieldByName("OccurrenceMs")
+	require.True(t, ok, "TaskRun must have an OccurrenceMs field")
+	assert.Equal(t, "*int64", field.Type.String(),
+		"TaskRun.OccurrenceMs must be *int64 — epoch-ms values exceed 32-bit int range")
+}
+
+func TestContract_TaskRun_OccurrenceMsInt64RoundTrip(t *testing.T) {
+	// A ms-epoch value already exceeds math.MaxInt32 (2147483647) for any
+	// date after 1970-01-25 — this is why 32-bit `int` truncation on
+	// mipsle/arm is silent and dangerous rather than an obvious overflow.
+	// Regression guard for scripts/gen-asyncapi-go/main.go's int64-format
+	// fix; documents the property on the OpenAPI-generated type too (see
+	// TestContract_TaskRunStatusFrame_OccurrenceMsIsInt64Type for the
+	// AsyncAPI-generated type this bug actually lived in).
+	large := int64(4102444800000) // 2100-01-01T00:00:00Z in epoch ms
+	f := FixtureTaskRun_Populated()
+	f.OccurrenceMs = &large
+
+	raw, err := json.Marshal(f)
+	require.NoError(t, err)
+
+	var roundTrip TaskRun
+	require.NoError(t, json.Unmarshal(raw, &roundTrip))
+	require.NotNil(t, roundTrip.OccurrenceMs)
+	assert.Equal(t, large, *roundTrip.OccurrenceMs,
+		"occurrence_ms must round-trip exactly through int64 — no 32-bit truncation")
+
+	mustPassComponent(t, "TaskRun", f)
+}
+
+// ── RunNowRequest ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RunNowRequest.yaml (ADR-050 RD7).
+// Previously ZERO contract coverage (M2/H5).
+
+func TestContract_RunNowRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "RunNowRequest", FixtureRunNowRequest_Populated())
+}
+
+func TestContract_RunNowRequest_Empty(t *testing.T) {
+	// The empty body is explicitly VALID (re-run a normal/once task) — not a
+	// failure case, unlike other _ZeroValue fixtures. occurrence_ms is
+	// optional+nullable so an entirely-omitted key also passes.
+	mustPassComponent(t, "RunNowRequest", FixtureRunNowRequest_Empty())
+}
+
+func TestContract_RunNowRequest_RejectsExtraneousField(t *testing.T) {
+	// Traces to: RunNowRequest.yaml — additionalProperties: false
+	doc := map[string]any{
+		"occurrence_ms": 1784620800000,
+		"force":         true, // not a defined field
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RunNowRequest", raw),
+		"RunNowRequest with extraneous field must fail — additionalProperties: false")
+}
+
+// ── TaskRunStatusFrame ───────────────────────────────────────────────────────
+// Traces to: contracts/asyncapi.yaml components.schemas.TaskRunStatusFrame
+// (ADR-050 §3.8). Previously ZERO contract coverage (M2/H5). No standalone
+// contracts/components/schemas/TaskRunStatusFrame.yaml file exists (unlike
+// TaskStatusChangedFrame), so these tests validate against the AsyncAPI
+// document directly via mustPassAsyncAPI/mustFailAsyncAPI, not
+// mustPassComponent.
+
+func TestContract_TaskRunStatusFrame_Populated(t *testing.T) {
+	mustPassAsyncAPI(t, "TaskRunStatusFrame", FixtureTaskRunStatusFrame_Populated())
+}
+
+func TestContract_TaskRunStatusFrame_ZeroValue(t *testing.T) {
+	mustFailAsyncAPI(t, "TaskRunStatusFrame", FixtureTaskRunStatusFrame_ZeroValue(),
+		"zero value has empty required type/task_id/run_id/status fields")
+}
+
+func TestContract_TaskRunStatusFrame_ManualRun(t *testing.T) {
+	// occurrence_ms omitted — valid for an ad-hoc/once/manual run (not required).
+	mustPassAsyncAPI(t, "TaskRunStatusFrame", FixtureTaskRunStatusFrame_ManualRun())
+}
+
+func TestContract_TaskRunStatusFrame_Differentiation(t *testing.T) {
+	f1 := FixtureTaskRunStatusFrame_Populated()
+	f2 := FixtureTaskRunStatusFrame_ManualRun()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated and ManualRun TaskRunStatusFrame fixtures must produce different JSON")
+	mustPassAsyncAPI(t, "TaskRunStatusFrame", f1)
+	mustPassAsyncAPI(t, "TaskRunStatusFrame", f2)
+}
+
+func TestContract_TaskRunStatusFrame_InvalidStatus(t *testing.T) {
+	// Traces to: asyncapi.yaml TaskRunStatusFrame.status enum:
+	// [in_progress, done, failed] — the narrower 3-state TaskRun vocabulary
+	// (no canceled/queued in v1, RD10).
+	fixture := map[string]any{
+		"type": "task_run_status", "task_id": "task-1", "run_id": "run-1",
+		"status": "wibble", // NOT in enum
+	}
+	mustFailAsyncAPI(t, "TaskRunStatusFrame", fixture,
+		"status='wibble' must fail TaskRunStatusFrame — not in enum [in_progress, done, failed]")
+}
+
+func TestContract_TaskRunStatusFrame_RejectsExtraneousField(t *testing.T) {
+	// Traces to: asyncapi.yaml TaskRunStatusFrame — additionalProperties: false
+	fixture := map[string]any{
+		"type": "task_run_status", "task_id": "task-1", "run_id": "run-1",
+		"status": "done", "canceled": true, // not a v1 field
+	}
+	mustFailAsyncAPI(t, "TaskRunStatusFrame", fixture,
+		"TaskRunStatusFrame with extraneous field must fail — additionalProperties: false")
+}
+
+// TestContract_TaskRunStatusFrame_OccurrenceMsIsInt64Type is THE regression
+// guard for the AsyncAPI int64 codegen drift fix (M1 / this task's Fix 1).
+// scripts/gen-asyncapi-go/main.go previously ignored the `format: int64`
+// modifier on `type: integer` fields, generating `*int` instead of `*int64`
+// for TaskRunStatusFrame.OccurrenceMs — a silent 32-bit truncation risk for
+// an epoch-ms value on mipsle/arm targets (shipped, see CLAUDE.md Tech
+// Stack). Asserting the generated field's exact reflect.Type gives a clear,
+// readable failure here rather than a downstream compile error in
+// pkg/gateway/websocket.go, which now assigns *p.OccurrenceMs directly (no
+// narrowing cast) — that assignment itself would fail to compile against
+// *int, making this test partially redundant with the build but still
+// valuable as fast, documented, and independent of that call site surviving
+// a future refactor.
+func TestContract_TaskRunStatusFrame_OccurrenceMsIsInt64Type(t *testing.T) {
+	field, ok := reflect.TypeOf(TaskRunStatusFrame{}).FieldByName("OccurrenceMs")
+	require.True(t, ok, "TaskRunStatusFrame must have an OccurrenceMs field")
+	assert.Equal(t, "*int64", field.Type.String(),
+		"OccurrenceMs must be *int64, not *int — 32-bit truncation regression guard")
+}
+
+func TestContract_TaskRunStatusFrame_OccurrenceMsInt64RoundTrip(t *testing.T) {
+	// Companion to the reflect-type guard above: proves an actual large
+	// value (already > math.MaxInt32 for any modern date) round-trips
+	// through marshal → schema validation → unmarshal with no precision
+	// loss.
+	large := int64(4102444800000) // 2100-01-01T00:00:00Z in epoch ms
+	f := FixtureTaskRunStatusFrame_Populated()
+	f.OccurrenceMs = &large
+
+	raw, err := json.Marshal(f)
+	require.NoError(t, err)
+
+	var roundTrip TaskRunStatusFrame
+	require.NoError(t, json.Unmarshal(raw, &roundTrip))
+	require.NotNil(t, roundTrip.OccurrenceMs)
+	assert.Equal(t, large, *roundTrip.OccurrenceMs,
+		"occurrence_ms must round-trip exactly through int64 — no 32-bit truncation")
+
+	mustPassAsyncAPI(t, "TaskRunStatusFrame", f)
 }
 
 // ── McpServer ─────────────────────────────────────────────────────────────────
@@ -2105,6 +2500,13 @@ func TestContract_TaskTrigger_Edge(t *testing.T) {
 	mustPassComponent(t, "TaskTrigger", FixtureTaskTrigger_Edge())
 }
 
+// TestContract_TaskTrigger_Rrule pins the rrule/dtstart_ms/tz wire keys
+// (Calendar Recurrence Redesign) against TaskTrigger.yaml — previously
+// untested by any FixtureTaskTrigger_* (only cron_expr was exercised).
+func TestContract_TaskTrigger_Rrule(t *testing.T) {
+	mustPassComponent(t, "TaskTrigger", FixtureTaskTrigger_Rrule())
+}
+
 // ── ActivityEventsResponse ────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ActivityEventsResponse.yaml
 // Note: ActivityEventsResponse is not a named Go type (it's inlined). We test
@@ -3054,16 +3456,22 @@ func TestContract_TaskEntity_LegacyStatusValuesRejected(t *testing.T) {
 func TestContract_TaskTrigger_AllKinds_Validate(t *testing.T) {
 	// Tier-2 trigger kinds with their required config.
 	cases := []struct {
+		name   string
 		kind   string
 		config map[string]any
 	}{
-		{"manual", map[string]any{}},
-		{"once", map[string]any{"at_ms": int64(1781000000000)}},
-		{"every", map[string]any{"every_ms": int64(3600000)}},
-		{"recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
+		{"manual", "manual", map[string]any{}},
+		{"once", "once", map[string]any{"at_ms": int64(1781000000000)}},
+		{"every", "every", map[string]any{"every_ms": int64(3600000)}},
+		{"recurring_cron_expr", "recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
+		{"recurring_rrule", "recurring", map[string]any{
+			"rrule":      "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10",
+			"dtstart_ms": int64(1784624400000),
+			"tz":         "Europe/Berlin",
+		}},
 	}
 	for _, c := range cases {
-		t.Run(c.kind, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			raw, err := json.Marshal(map[string]any{"type": c.kind, "config": c.config})
 			require.NoError(t, err)
 			validationErr := validateAgainstComponentSchemaRawJSON(t, "TaskTrigger", raw)

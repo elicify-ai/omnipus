@@ -452,6 +452,9 @@ type TaskTrigger = {
       at_ms: number;
       every_ms: number;
       cron_expr: string;
+      rrule: string;
+      dtstart_ms: number;
+      tz: string;
     } & {
       [key: string]: any;
     }
@@ -596,6 +599,36 @@ type TaskUpdateRequest = Partial<{
   started_at: string;
   completed_at: string;
 }>;
+type TaskOccurrenceSet = {
+  task_id: string;
+  occurrences_ms: Array<number>;
+  day_buckets: Array<DayBucket>;
+  occurrence_runs?:
+    | Array<{
+        occurrence_ms: number;
+        status: "in_progress" | "done" | "failed";
+        run_id: string;
+        session_id: string;
+        has_result: boolean;
+      }>
+    | undefined;
+  truncated: boolean;
+};
+type DayBucket = {
+  day_start_ms: number;
+  day_end_ms: number;
+  count: number;
+  first_ms: number;
+  interval_ms: number | null;
+  run_counts?:
+    | {
+        scheduled: number;
+        in_progress: number;
+        done: number;
+        failed: number;
+      }
+    | undefined;
+};
 type ChannelConfigureRequest = Partial<
   {
     instance_id: string;
@@ -1980,6 +2013,9 @@ export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
       at_ms: z.number().int(),
       every_ms: z.number().int().gte(1000),
       cron_expr: z.string(),
+      rrule: z.string().max(512),
+      dtstart_ms: z.number().int(),
+      tz: z.string(),
     })
     .partial()
     .passthrough(),
@@ -2059,6 +2095,38 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   source_channel: z.string().optional(),
   source_chat_id: z.string().optional(),
 });
+export const DayBucket: z.ZodType<DayBucket> = z.object({
+  day_start_ms: z.number().int(),
+  day_end_ms: z.number().int(),
+  count: z.number().int(),
+  first_ms: z.number().int(),
+  interval_ms: z.number().int().nullable(),
+  run_counts: z
+    .object({
+      scheduled: z.number().int(),
+      in_progress: z.number().int(),
+      done: z.number().int(),
+      failed: z.number().int(),
+    })
+    .optional(),
+});
+export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
+  task_id: z.string(),
+  occurrences_ms: z.array(z.number().int()),
+  day_buckets: z.array(DayBucket),
+  occurrence_runs: z
+    .array(
+      z.object({
+        occurrence_ms: z.number().int(),
+        status: z.enum(["in_progress", "done", "failed"]),
+        run_id: z.string(),
+        session_id: z.string(),
+        has_result: z.boolean(),
+      })
+    )
+    .optional(),
+  truncated: z.boolean(),
+});
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
   .object({
     title: z.string().min(1).max(200),
@@ -2087,6 +2155,20 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     started_at: z.string().datetime({ offset: true }),
     completed_at: z.string().datetime({ offset: true }),
   })
+  .partial();
+export const TaskRun = z.object({
+  run_id: z.string(),
+  task_id: z.string(),
+  occurrence_ms: z.number().int().nullable(),
+  status: z.enum(["in_progress", "done", "failed"]),
+  result: z.string().max(50000).optional(),
+  session_id: z.string(),
+  kind: z.enum(["scheduled", "manual"]),
+  started_at: z.string().datetime({ offset: true }),
+  ended_at: z.string().datetime({ offset: true }).nullable(),
+});
+export const RunNowRequest = z
+  .object({ occurrence_ms: z.number().int().nullable() })
   .partial();
 export const McpServer = z
   .object({
@@ -6151,6 +6233,90 @@ Polled by the SPA StatusBar every 15 seconds.
   },
   {
     method: "get",
+    path: "/tasks/:id/runs",
+    alias: "listTaskRuns",
+    description: `Returns every execution record (TaskRun) for a task, newest first (ADR-050 / task-run-history-spec §3.6) — the authoritative history list, independent of whether the task&#x27;s current trigger can still project a run&#x27;s occurrence_ms (a series whose schedule was edited still lists every past run). Retention-bounded (day-partitioned sweep with a keep-newest-day floor); full result strings. Read-only; no state change. Rate-limited by the same dedicated taskReadLimiter (240 requests/min) as GET /tasks/occurrences.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(TaskRun),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/runs",
+    alias: "runTaskNow",
+    description: `Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With &#x60;occurrence_ms&#x60;, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z
+          .object({ occurrence_ms: z.number().int().nullable() })
+          .partial()
+          .optional(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Invalid task ID or request body.`,
+        schema: z.void(),
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Task executor unavailable (gateway degraded).`,
+        schema: z.void(),
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/tasks/:id/subtasks",
     alias: "listSubtasks",
     description: `Returns all subtasks (children with this parent_task_id).`,
@@ -6210,6 +6376,54 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks/occurrences",
+    alias: "listTaskOccurrences",
+    description: `Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not &#x60;surface: heartbeat&#x60;, the same predicate &#x60;OnTaskUpserted&#x60; applies before registering a job — covering &#x60;rrule&#x60; (rrule-go, normalized per the Timezone Semantics DST policy), legacy &#x60;cron_expr&#x60; (gronx, expanded in the server&#x27;s local zone, display-only per D8), and &#x60;every_ms&#x60; (a forward-only projection off the live job&#x27;s next-run instant, FR-008a). &#x60;tz&#x60; is the viewer&#x27;s IANA zone and is the day-boundary authority for bucketing — the &gt;3-occurrences-per-day threshold and &#x60;day_start_ms&#x60; are evaluated on days in this zone for every trigger flavor, regardless of each rule&#x27;s own &#x60;tz&#x60;. Range is half-open &#x60;[from_ms, to_ms)&#x60;. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans &gt; 8×24h return one &#x60;DayBucket&#x60; per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); &#x60;truncated&#x60; signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is &#x60;[]&#x60;, never null. Read-only; no state change. Rate-limited by a dedicated &#x60;taskReadLimiter&#x60; (240 requests/min), distinct from &#x60;configLimiter&#x60; and from the unthrottled task CRUD routes.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "from_ms",
+        type: "Query",
+        schema: z.number().int(),
+      },
+      {
+        name: "to_ms",
+        type: "Query",
+        schema: z.number().int(),
+      },
+      {
+        name: "tz",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(TaskOccurrenceSet),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
@@ -7117,7 +7331,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
 
 export const AuthFrame = z
   .object({
@@ -7332,6 +7546,16 @@ export const TaskStatusChangedFrame = z
     task_id: z.string().min(1),
     status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
+  })
+  .strict();
+
+export const TaskRunStatusFrame = z
+  .object({
+    type: z.literal("task_run_status"),
+    task_id: z.string().min(1),
+    run_id: z.string().min(1),
+    occurrence_ms: z.number().int().optional(),
+    status: z.enum(["in_progress", "done", "failed"]),
   })
   .strict();
 
@@ -7705,6 +7929,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   SubagentStartFrame,
   SubagentEndFrame,
   TaskStatusChangedFrame,
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
   RateLimitFrame,

@@ -19,6 +19,8 @@ import type { DateClickArg } from '@fullcalendar/interaction'
 import {
   fetchTasks,
   fetchMilestones,
+  fetchAgents,
+  buildTaskAssigneeItems,
   updateTask,
   updateMilestone,
   tasksQueryKeys,
@@ -27,34 +29,36 @@ import {
   type Milestone,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { mapToCalendarEvents, formatLocalDate } from '@/lib/calendar/eventMapping'
+import { useOccurrences } from '@/lib/calendar/useOccurrences'
 import { FullCalendarView } from '@/components/calendar/FullCalendarView'
 import { CalendarToolbar } from '@/components/calendar/CalendarToolbar'
 import { MilestoneDatePopover } from '@/components/calendar/MilestoneDatePopover'
+import { AGENT_FILTER_ALL, filterEventsByAgent } from '@/components/calendar/calendarAgentFilter'
 import type {
   CalendarViewName,
   CalendarEventExtProps,
   MilestoneTarget,
 } from '@/components/calendar/types'
-import { CreateTaskSlideOver } from '@/components/workspaces/CreateTaskSlideOver'
+import { CalendarEventSlideOver } from '@/components/calendar/CalendarEventSlideOver'
 import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
 
 interface CalendarScreenProps {
   workspaceId: string
 }
 
-/** Format a Date as a `datetime-local` value ("YYYY-MM-DDTHH:mm") in LOCAL time. */
-function toDatetimeLocal(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
-  )
-}
-
 /** Short human label for a reschedule toast ("Jun 23"). */
 function formatShort(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+/** Same calendar day as `d`, with the time-of-day set to `hour`:00 local. Used
+ *  to give an all-day day-cell click a sensible default event time (US-1). */
+function withDefaultHour(d: Date, hour: number): Date {
+  const nd = new Date(d)
+  nd.setHours(hour, 0, 0, 0)
+  return nd
 }
 
 export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
@@ -88,9 +92,71 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     enabled: !!workspaceId,
   })
 
-  const events = useMemo(() => mapToCalendarEvents(tasks, milestones), [tasks, milestones])
+  // ── Recurring-task occurrences (Calendar Recurrence Redesign, US-2, FR-008) ─
+  // Keyed to FullCalendar's own visible range, reported via onDatesSet below.
+  // `activeRange` starts null (no range known yet — before FullCalendar's
+  // first datesSet fires) so the query stays disabled until a real range
+  // exists; the placeholder Dates below are inert (enabled:false skips them).
+  const [activeRange, setActiveRange] = useState<{ start: Date; end: Date } | null>(null)
+  const {
+    data: occurrenceSets = [],
+    isError: occurrencesError,
+  } = useOccurrences({
+    workspaceId,
+    activeStart: activeRange?.start ?? new Date(0),
+    activeEnd: activeRange?.end ?? new Date(1),
+    enabled: !!activeRange && !!workspaceId,
+  })
+
+  // Degrade on occurrences failure (FR-017/Behavioral Contract "Error flows")
+  // — non-blocking toast, due/fire chips still render (occurrenceSets simply
+  // stays whatever it last successfully was, or [] on first-load failure).
+  useEffect(() => {
+    if (occurrencesError) {
+      addToast({ message: "Couldn't load recurring occurrences", variant: 'error' })
+    }
+  }, [occurrencesError, addToast])
+
+  const events = useMemo(
+    () => mapToCalendarEvents(tasks, milestones, occurrenceSets),
+    [tasks, milestones, occurrenceSets],
+  )
+
+  // ── Agent filter (FR-015 / US-4) ─────────────────────────────────────────
+  // Client-side only — SC-004 requires ZERO additional network requests for
+  // the filter itself, so `filterEventsByAgent` is a pure in-memory pass over
+  // `events` + the already-fetched `tasks` (no new query). The roster reuses
+  // the identical workspace-team-scoping + degrade convention as the task
+  // assignee picker (CreateTaskSlideOver/TaskDetailPanel): on a failed
+  // team-set fetch, `useWorkspaceTeamIds` returns `teamIds: undefined`,
+  // `buildTaskAssigneeItems` falls back to the FULL unscoped agent list (never
+  // an empty/broken dropdown), and `teamError` drives the toolbar's "Team
+  // list unavailable — showing all agents" notice (Edge Cases).
+  const [agentFilter, setAgentFilter] = useState<string>(AGENT_FILTER_ALL)
+  const { data: allAgents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
+  const { teamIds, isError: teamError } = useWorkspaceTeamIds(workspaceId)
+  const agentOptions = useMemo(
+    () =>
+      buildTaskAssigneeItems(allAgents, {
+        teamScope: teamIds ? { kind: 'scoped', ids: teamIds } : { kind: 'unscoped' },
+      }),
+    [allAgents, teamIds],
+  )
+  // Keys off each event's underlying TASK `agent_id` (via `tasks`, already
+  // fetched above) rather than per-chip data — see calendarAgentFilter.ts for
+  // why this transparently covers Wave-2's recurring occurrence/aggregated
+  // chips too, with milestones exempt (US-4.3).
+  const filteredEvents = useMemo(
+    () => filterEventsByAgent(events, tasks, agentFilter),
+    [events, tasks, agentFilter],
+  )
+
   const isLoading = tasksLoading || milestonesLoading
-  const isEmpty = !isLoading && events.length === 0
+  const isEmpty = !isLoading && filteredEvents.length === 0
 
   // Degrade on query failure (FR-016, I-2) — non-blocking toast, grid still renders.
   useEffect(() => {
@@ -104,16 +170,57 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const [currentView, setCurrentView] = useState<CalendarViewName>('dayGridMonth')
   const [title, setTitle] = useState('')
 
-  const handleDatesSet = useCallback((nextTitle: string, view: CalendarViewName) => {
-    setTitle(nextTitle)
-    setCurrentView(view)
-  }, [])
+  const handleDatesSet = useCallback(
+    (nextTitle: string, view: CalendarViewName, activeStart: Date, activeEnd: Date) => {
+      setTitle(nextTitle)
+      setCurrentView(view)
+      setActiveRange({ start: activeStart, end: activeEnd })
+    },
+    [],
+  )
 
   const handleViewChange = useCallback((view: CalendarViewName) => setCurrentView(view), [])
 
   // ── Slide-over / popover state ───────────────────────────────────────────────
-  const [createOpen, setCreateOpen] = useState(false)
-  const [initialDue, setInitialDue] = useState<string | undefined>(undefined)
+  // CalendarEventSlideOver is a single component covering BOTH create (US-1)
+  // and recurring/legacy series edit (US-2/US-5) — `eventSlideOverTask` null
+  // means create mode, non-null means edit mode. It fully replaces the
+  // generic CreateTaskSlideOver on this screen: per the Behavioral Contract,
+  // a day/slot click now always opens the calendar-specific event panel.
+  const [eventSlideOverOpen, setEventSlideOverOpen] = useState(false)
+  const [eventSlideOverTask, setEventSlideOverTask] = useState<Task | null>(null)
+  const [eventSlideOverInitialDate, setEventSlideOverInitialDate] = useState<Date | undefined>(undefined)
+  // The clicked occurrence's join key (ADR-050 RD8 / task-run-history-spec.md
+  // §4.1/§4.3), threaded to CalendarEventSlideOver's `selectedOccurrenceMs` so
+  // it can re-point the Run status/Result/Open-in-Chat sections at THAT
+  // occurrence's own run instead of the task-level mirror. Only ever set from
+  // an individual `task-occurrence` chip click — see handleEventClick: a
+  // `task-occurrence-agg` (bucket) click intentionally leaves this unset
+  // (undefined), since selectedOccurrenceMs is matched by the slide-over as
+  // an EXACT `run.occurrence_ms`, and a bucket's `day_start_ms` would never
+  // match a real run's occurrence_ms — passing it here would silently hide
+  // the Result/Open-in-Chat sections instead of the day's run mini-list.
+  const [selectedOccurrenceMs, setSelectedOccurrenceMs] = useState<number | undefined>(undefined)
+  // The clicked bucket's own day span (ADR-050 RD8 / task-run-history-spec.md
+  // §4.1/§4.3), threaded to CalendarEventSlideOver's `selectedBucketDayRange`
+  // so it can day-scope the slide-over's run mini-list to just that bucket's
+  // day instead of the task's entire run history. Only ever set from a
+  // `task-occurrence-agg` (bucket) chip click — an individual `task-occurrence`
+  // click leaves this `null`, the mirror image of how `selectedOccurrenceMs`
+  // is only set from an individual instant click (see above). `endMs` comes
+  // straight off the wire (`DayBucket.day_end_ms` → `ext.dayEndMs`) — the
+  // server's own DST-aware civil-next-midnight boundary for this bucket
+  // (`civilDayNext`, pkg/gateway/task_occurrences.go), the SAME window
+  // `populateBucketRunCounts` uses to tally `run_counts`. Delta-review HIGH
+  // fix: a client-recomputed fixed dayStartMs+24h span diverges from that
+  // DST-aware window on a transition day, disagreeing with the aggregate
+  // `run_counts` and the drilled-in run list — carrying the boundary on the
+  // wire means the client never recomputes it (Explicit Non-Behaviors: no
+  // client-side RRULE/day math).
+  const [selectedBucketDayRange, setSelectedBucketDayRange] = useState<{
+    startMs: number
+    endMs: number
+  } | null>(null)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [milestoneTarget, setMilestoneTarget] = useState<MilestoneTarget | null>(null)
 
@@ -122,6 +229,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
       queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
     })
     void queryClient.invalidateQueries({ queryKey: milestonesQueryKeys.list(workspaceId) })
+    void queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
   }, [queryClient, workspaceId])
 
   // Restore focus to the chip/cell that opened a dialog (C-4 / FR-013).
@@ -287,34 +395,78 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     [runReschedule, addToast],
   )
 
+  // Chip-click routing (Calendar Recurrence Redesign, FR-001/FR-012, US-2
+  // Acceptance Scenarios 5–6): occurrence/aggregated chips (recurring series,
+  // legacy chips included — they render as 'task-occurrence'/'-agg' too, see
+  // eventMapping) open the calendar event slide-over in edit mode; due/fire
+  // chips keep opening TODAY'S existing task detail panel, unchanged. The
+  // truncation marker chip is non-interactive (no click action).
   const handleEventClick = useCallback(
     (arg: EventClickArg) => {
       const raw = arg.jsEvent?.target as HTMLElement | null
       triggerElRef.current =
         (raw?.closest('[tabindex]') as HTMLElement | null) ?? raw ?? null
       const ext = arg.event.extendedProps as CalendarEventExtProps
-      if (ext.kind === 'milestone') {
-        const m = milestones.find((x) => x.id === ext.milestoneId)
-        if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
-        else console.warn('[calendar] milestone event has no backing milestone', ext)
-        return
+      switch (ext.kind) {
+        case 'milestone': {
+          const m = milestones.find((x) => x.id === ext.milestoneId)
+          if (m) setMilestoneTarget({ id: m.id, name: m.name, due_date: m.due_date ?? null })
+          else console.warn('[calendar] milestone event has no backing milestone', ext)
+          return
+        }
+        case 'task-occurrence':
+        case 'task-occurrence-agg': {
+          const t = tasks.find((x) => x.id === ext.taskId)
+          if (t) {
+            setEventSlideOverTask(t)
+            // Individual instant → its exact occurrence_ms (matches a run's
+            // occurrence_ms 1:1). Bucket → leave unset; day_start_ms is not
+            // a real occurrence instant and would never match a run (see the
+            // state declaration above for why passing it here would be wrong).
+            setSelectedOccurrenceMs(ext.kind === 'task-occurrence' ? ext.occurrenceMs : undefined)
+            // Mirror image: a bucket click threads its day span so the
+            // slide-over can day-scope its run mini-list; an individual
+            // instant click leaves this null (it re-points at ONE run, not a
+            // day's worth).
+            setSelectedBucketDayRange(
+              ext.kind === 'task-occurrence-agg'
+                ? { startMs: ext.dayStartMs, endMs: ext.dayEndMs }
+                : null,
+            )
+            setEventSlideOverOpen(true)
+          } else {
+            console.warn('[calendar] occurrence event has no backing task', ext)
+          }
+          return
+        }
+        case 'task-occurrence-more':
+          // Non-interactive truncation marker — no click action.
+          return
+        case 'task-due':
+        case 'task-fire': {
+          const t = tasks.find((x) => x.id === ext.taskId)
+          if (t) setSelectedTask(t)
+          else console.warn('[calendar] task event has no backing task', ext)
+          return
+        }
       }
-      // task-due | task-fire → taskId is guaranteed by the discriminated union.
-      const t = tasks.find((x) => x.id === ext.taskId)
-      if (t) setSelectedTask(t)
-      else console.warn('[calendar] task event has no backing task', ext)
     },
     [tasks, milestones],
   )
 
-  // Open the create slide-over prefilled with a date (all-day → midnight; timed → slot).
-  // Store the nearest focusable ancestor of the trigger so restoreFocus() can actually
-  // focus it (WCAG 2.4.3 — raw chip divs have no tabindex, their FC harness does).
+  // Open the calendar event slide-over in create mode, prefilled with a date
+  // (all-day day-cell click → 9am default; timed slot click → the exact
+  // slot). Store the nearest focusable ancestor of the trigger so
+  // restoreFocus() can actually focus it (WCAG 2.4.3 — raw chip divs have no
+  // tabindex, their FC harness does).
   const openCreateAt = useCallback((target: HTMLElement | null, date: Date, allDay: boolean) => {
     triggerElRef.current =
       (target?.closest('[tabindex]') as HTMLElement | null) ?? target ?? null
-    setInitialDue(allDay ? `${formatLocalDate(date)}T00:00` : toDatetimeLocal(date))
-    setCreateOpen(true)
+    setEventSlideOverTask(null)
+    setSelectedOccurrenceMs(undefined)
+    setSelectedBucketDayRange(null)
+    setEventSlideOverInitialDate(allDay ? withDefaultHour(date, 9) : date)
+    setEventSlideOverOpen(true)
   }, [])
 
   const handleDateClick = useCallback(
@@ -335,8 +487,11 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // the all-day format `openCreateAt` uses for a dateClick on an all-day cell.
   const handleNewTask = useCallback((date?: Date) => {
     triggerElRef.current = null
-    setInitialDue(date ? `${formatLocalDate(date)}T00:00` : undefined)
-    setCreateOpen(true)
+    setEventSlideOverTask(null)
+    setSelectedOccurrenceMs(undefined)
+    setSelectedBucketDayRange(null)
+    setEventSlideOverInitialDate(date ? withDefaultHour(date, 9) : undefined)
+    setEventSlideOverOpen(true)
   }, [])
 
   return (
@@ -348,12 +503,16 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           title={title}
           onViewChange={handleViewChange}
           onNewTask={handleNewTask}
+          agentFilter={agentFilter}
+          onAgentFilterChange={setAgentFilter}
+          agentOptions={agentOptions}
+          agentRosterError={teamError}
         />
       </div>
 
       <div className="flex-1 min-h-0 min-w-0 p-3" data-testid="calendar-grid">
         <FullCalendarView
-          events={events}
+          events={filteredEvents}
           calendarRef={calendarRef}
           isLoading={isLoading}
           isEmpty={isEmpty}
@@ -365,17 +524,23 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         />
       </div>
 
-      <CreateTaskSlideOver
-        open={createOpen}
+      <CalendarEventSlideOver
+        open={eventSlideOverOpen}
         onOpenChange={(open) => {
-          setCreateOpen(open)
+          setEventSlideOverOpen(open)
           if (!open) {
+            setEventSlideOverTask(null)
+            setSelectedOccurrenceMs(undefined)
+            setSelectedBucketDayRange(null)
             invalidate()
             restoreFocus()
           }
         }}
         workspaceId={workspaceId}
-        initialDue={initialDue}
+        task={eventSlideOverTask}
+        initialDate={eventSlideOverInitialDate}
+        selectedOccurrenceMs={selectedOccurrenceMs}
+        selectedBucketDayRange={selectedBucketDayRange}
       />
 
       <TaskDetailSlideOver

@@ -5,7 +5,7 @@
  * Radix Popover renders inline in jsdom. The hour/minute <Select>s use Radix
  * Select, which needs `hasPointerCapture` / `scrollIntoView` / `ResizeObserver`
  * polyfills to open in jsdom (same gap noted in
- * ScheduleFormSheet.test.tsx and model-selector.test.tsx) — verified working
+ * model-selector.test.tsx) — verified working
  * here with `fireEvent.click` (trigger) + `fireEvent.pointerDown` +
  * `fireEvent.click` (item).
  */

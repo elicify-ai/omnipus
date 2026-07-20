@@ -1,0 +1,13 @@
+type: object
+additionalProperties: false
+description: >
+  Body for POST /tasks/{id}/runs ("Run now", ADR-050 RD7). Optional — an empty
+  body re-runs a normal/once task.
+properties:
+  occurrence_ms:
+    type: integer
+    format: int64
+    nullable: true
+    description: >
+      The scheduled RRULE occurrence instant to run (materialize-on-demand for a
+      recurring series). Omit or null to re-run a normal/once task as a fresh run.

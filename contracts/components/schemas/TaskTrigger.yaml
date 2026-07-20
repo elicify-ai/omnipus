@@ -14,8 +14,12 @@ description: >
     - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
                     interval in milliseconds (required, min 1000). Each fire spawns
                     a FRESH run (fresh session + run history + pause).
-    - `recurring` — fire on a cron schedule. `config.cron_expr` is a 5/6-field cron
-                    expression (required). Each fire spawns a FRESH run.
+    - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
+                    `cron_expr` (legacy, 5/6-field cron expression, still accepted
+                    and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
+                    `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
+                    siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
+                    Each fire spawns a FRESH run.
 
   `once`/`every`/`recurring` triggers are executed by the existing per-agent
   Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just
@@ -59,7 +63,8 @@ properties:
     description: >
       Kind-specific parameters. The relevant subset depends on `type`:
       `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` →
-      `cron_expr`. Validated server-side against `type`. This object is the open
+      exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and
+      `tz`). Validated server-side against `type`. This object is the open
       growth surface — v0.3 event kinds add their own keys here without changing
       the outer shape.
     properties:
@@ -81,6 +86,36 @@ properties:
       cron_expr:
         type: string
         description: >
-          Cron expression (5 or 6 fields). Required when `type = recurring`;
-          ignored otherwise.
+          Cron expression (5 or 6 fields), legacy path. Valid only when
+          `type = recurring`; ignored otherwise. Exactly one of `cron_expr` /
+          `rrule` is present on a `recurring` trigger — never both.
         example: "0 9 * * MON"
+      rrule:
+        type: string
+        maxLength: 512
+        description: >
+          RFC 5545 RRULE body (no `RRULE:` prefix), e.g.
+          `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when
+          `type = recurring`; ignored otherwise. Exactly one of `cron_expr` /
+          `rrule` is present on a `recurring` trigger — never both. Requires the
+          sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds
+          (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window
+          minimum-gap scan (≥60s between occurrences), liveness (must produce an
+          occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+        example: "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10"
+      dtstart_ms:
+        type: integer
+        format: int64
+        description: >
+          Anchor instant for `rrule` — the first occurrence's wall-clock moment,
+          Unix epoch milliseconds. Required sibling of `rrule`; ignored
+          otherwise.
+        example: 1784624400000
+      tz:
+        type: string
+        description: >
+          IANA timezone name in which `rrule`'s wall-clock times are
+          interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`;
+          ignored otherwise. Occurrences are wall-clock in this zone across DST
+          transitions (Timezone Semantics).
+        example: "Europe/Berlin"

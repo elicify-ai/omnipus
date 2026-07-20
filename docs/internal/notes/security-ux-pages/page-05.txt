@@ -1,0 +1,20 @@
+- Audit log viewer
+
+### Elsewhere (same story, different door)
+
+| Control | Where it lives | Why that hurts |
+|---------|----------------|----------------|
+| **God mode** | Gateway | Biggest security lever not on Security |
+| **Per-agent tools** | Agents → Tools | Global grid + agent grid; “which wins?” unclear |
+| **Workspace team / delegation** | Workspaces | Trust to *other agents*, not host FS |
+| **Browser evaluate** | Config/sandbox field | High risk, easy to not surface |
+
+---
+
+## 3. Why it feels confusing
+
+### A. Three different “can agents run things?” controls
+
+| UI label | Values | Real role |
+|----------|--------|-----------|
+| **Agent tool access** | Must ask / Run freely | Coarse global posture (`policy_mode`) |

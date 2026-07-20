@@ -1665,8 +1665,11 @@ func registerSharedTools(
 				if al.taskExecutor != nil {
 					al.taskExecutor.onTaskComplete(t)
 				}
-				// A terminal update removes the task's trigger job (OnTaskUpserted
-				// drops jobs for terminal tasks); a non-terminal update re-syncs it.
+				// A terminal update removes the task's trigger job UNLESS the
+				// trigger repeats (recurring/every), whose series survives past a
+				// per-run terminal status (OnTaskUpserted, pkg/agent/task_trigger.go);
+				// a non-terminal update re-syncs it (a no-op if it is already
+				// correctly armed for the current trigger content).
 				al.NotifyTaskUpserted(t)
 			})
 			// ADR-037: legacy SetDelegateChecker retired here too — see the
@@ -3455,6 +3458,17 @@ func (al *AgentLoop) EmitNotification(p NotificationPayload) {
 // subscriber rather than blocking.
 func (al *AgentLoop) EmitTaskStatusChanged(p TaskStatusChangedPayload) {
 	al.emitEvent(EventKindTaskStatusChanged, EventMeta{AgentID: p.AgentID, Source: "task_executor"}, p)
+}
+
+// EmitTaskRunStatus publishes a per-execution TaskRun open/close transition
+// (ADR-050 §3.8) onto the event bus so every connected SPA WebSocket client
+// receives a task_run_status frame — additive alongside EmitTaskStatusChanged
+// (see EventKindTaskRunStatus's own doc comment for why a separate event is
+// needed: a recurring occurrence's run transitions do not move Task.status
+// between distinct values). Safe to call from any goroutine — the bus drops
+// to a full subscriber rather than blocking.
+func (al *AgentLoop) EmitTaskRunStatus(p TaskRunStatusPayload) {
+	al.emitEvent(EventKindTaskRunStatus, EventMeta{Source: "task_executor"}, p)
 }
 
 func cloneEventArguments(args map[string]any) map[string]any {

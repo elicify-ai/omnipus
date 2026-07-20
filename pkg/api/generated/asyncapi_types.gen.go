@@ -301,7 +301,7 @@ type MessageFrame struct {
 type NotificationFrame struct {
 	AgentId          *string `json:"agent_id,omitempty"`
 	Body             *string `json:"body,omitempty"`
-	CreatedAtMs      int     `json:"created_at_ms"`
+	CreatedAtMs      int64   `json:"created_at_ms"`
 	Id               string  `json:"id"`
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
@@ -450,6 +450,16 @@ type SystemOverloadFrame struct {
 	Type      string  `json:"type"`
 }
 
+// TaskRunStatusFrame — Server → client task RUN status updated (open or close). Additive alongside TaskStatusChangedFrame (ADR-050 / task-run-history-spec §3.8) — emitted at run open and close so the calendar's per-occurrence chip can update live without a full refetch.
+type TaskRunStatusFrame struct {
+	// The scheduled RRULE instant this run realizes (the calendar join key). Null for an ad-hoc/once/manual run.
+	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
+	RunId        string `json:"run_id"`
+	Status       string `json:"status"`
+	TaskId       string `json:"task_id"`
+	Type         string `json:"type"`
+}
+
 // TaskStatusChangedFrame — Server → client task status updated.
 type TaskStatusChangedFrame struct {
 	AgentId   *string `json:"agent_id,omitempty"`
@@ -560,6 +570,7 @@ const (
 	WsFrameTypeSubagentStart            WsFrameType = "subagent_start"
 	WsFrameTypeSubagentEnd              WsFrameType = "subagent_end"
 	WsFrameTypeTaskStatusChanged        WsFrameType = "task_status_changed"
+	WsFrameTypeTaskRunStatus            WsFrameType = "task_run_status"
 	WsFrameTypeReplayMessage            WsFrameType = "replay_message"
 	WsFrameTypeReplayError              WsFrameType = "replay_error"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"

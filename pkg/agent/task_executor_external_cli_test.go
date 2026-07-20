@@ -201,7 +201,7 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -252,7 +252,7 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -323,7 +323,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Timeout_TaskFailsWithoutHanging(t *
 	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := al.taskExecutor.ExecuteTask(shortCtx, tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(shortCtx, tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -395,7 +395,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 

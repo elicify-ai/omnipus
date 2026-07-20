@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File-Sending & Skill-Install Issues — Findings and Proposal</title>
+<style>
+  :root {
+    --bg: #0A0A0B; --panel: #141417; --panel2: #1b1b20; --ink: #E2E8F0;
+    --muted: #9aa3b2; --gold: #D4AF37; --line: #2a2a31;
+    --red: #ff6b6b; --amber: #f5b942; --green: #4ade80; --blue: #6ab0ff;
+    --code: #cbd5e1;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f7f8; --panel: #ffffff; --panel2: #f0f1f3; --ink: #1a1c22;
+      --muted: #5b6472; --gold: #9a7d1a; --line: #e2e4e8;
+      --red: #c0392b; --amber: #a06a00; --green: #1a8a4a; --blue: #1560b0;
+      --code: #24303f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.6; font-size: 16px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.02em; }
+  h2 { font-size: 23px; margin: 44px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); letter-spacing: -0.01em; }
+  h3 { font-size: 18px; margin: 26px 0 8px; color: var(--gold); }
+  h4 { font-size: 15px; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  p { margin: 10px 0; }
+  a { color: var(--blue); }
+  code, .mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.86em; color: var(--code); }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; word-break: break-word; }
+  .lead { color: var(--muted); font-size: 17px; margin-top: 4px; }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 16px 0; }
+  .callout { border-left: 3px solid var(--gold); background: var(--panel); border-radius: 0 10px 10px 0; padding: 12px 18px; margin: 16px 0; }
+  .callout.bug { border-left-color: var(--red); }
+  .callout.ok  { border-left-color: var(--green); }
+  .callout.you { border-left-color: var(--blue); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+           padding: 2px 8px; border-radius: 999px; vertical-align: middle; }
+  .b-bug { background: rgba(255,107,107,.15); color: var(--red); border: 1px solid var(--red); }
+  .b-warn{ background: rgba(245,185,66,.15); color: var(--amber); border: 1px solid var(--amber); }
+  .b-ok  { background: rgba(74,222,128,.15); color: var(--green); border: 1px solid var(--green); }
+  .b-info{ background: rgba(106,176,255,.13); color: var(--blue); border: 1px solid var(--blue); }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); font-weight: 600; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 5px 0; }
+  .toc { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 20px; margin: 22px 0; }
+  .toc ol { margin: 4px 0; }
+  .toc a { text-decoration: none; }
+  .file { color: var(--muted); font-size: 12.5px; }
+  .flow { font-family: "JetBrains Mono", monospace; font-size: 13px; background: var(--panel2); border: 1px solid var(--line);
+          border-radius: 8px; padding: 12px 14px; overflow-x: auto; color: var(--code); white-space: pre; }
+  .tag { color: var(--gold); font-weight: 600; }
+  .small { font-size: 13px; color: var(--muted); }
+  hr { border: none; border-top: 1px solid var(--line); margin: 30px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>File-Sending &amp; Skill-Install: what's broken and how to fix it</h1>
+  <p class="lead">Two things you noticed while testing — an agent couldn't send you a file it clearly had, and skills an agent installs go to the wrong place. Both are real. Here's exactly why, in plain English, with the fix.</p>
+  <p class="meta">Internal note · 2026-07-16 · based on a 4-track code investigation of <code>pkg/tools</code>, <code>pkg/agent</code>, <code>pkg/skills</code>, <code>pkg/sysagent/tools</code>, <code>pkg/gateway</code>, and the SPA. All line references are code-cited.</p>
+
+  <div class="toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#tldr">The short version</a></li>
+      <li><a href="#p1">Problem 1 — Agents can't send files they can read</a></li>
+      <li><a href="#p2">Problem 2 — Skills install to the wrong place</a></li>
+      <li><a href="#ava">Problem 2b — Why Ava installed skills for herself, not the new agent</a></li>
+      <li><a href="#solution">The proposed model (one consistent rule for both)</a></li>
+      <li><a href="#usecases">Use cases: today vs. after the fix</a></li>
+      <li><a href="#fixlist">Concrete change list</a></li>
+      <li><a href="#decisions">Decisions we need from you</a></li>
+    </ol>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="tldr">1 · The short version</h2>
+
+  <div class="card">
+    <p><span class="badge b-bug">Bug 1</span> &nbsp;<strong>Sending files.</strong> There is one tool that sends a file to you in chat: <code>send_file</code>. It checks paths with the <em>same</em> function <code>read_file</code> uses — but it was wired up with narrower settings and never updated when the other file tools got two upgrades. So <code>send_file</code>'s "allowed files" list is a <strong>strict subset</strong> of what the agent can actually read. The everyday result: an agent working in a shared workspace can read/create a file there, then fails to send it. <strong>Your instinct is right</strong> — this restriction is an accident of wiring, not a security decision.</p>
+  </div>
+
+  <div class="card">
+    <p><span class="badge b-bug">Bug 2</span> &nbsp;<strong>Installing skills.</strong> There are two ways a skill gets installed, and they disagree. The <strong>button in the UI</strong> (<code>POST /api/v1/skills/install</code>) installs to the <em>central</em> skills folder — correct. The <strong>chat tool</strong> (<code>install_skill</code>) installs into the <em>calling agent's own private folder</em> — wrong. So when an agent installs a skill by talking to it, no other agent (and no UI screen) can ever see that skill. The "central registry + per-agent checkboxes" you remember <strong>already exists and works</strong>; only the chat tool writes to the wrong place.</p>
+  </div>
+
+  <div class="card">
+    <p><span class="badge b-bug">Bug 2b</span> &nbsp;<strong>The Ava case.</strong> You asked Ava to install skills for a <em>new</em> agent; they landed on Ava instead. That's a direct consequence of Bug 2 plus two more gaps: <code>install_skill</code> has no "which agent" parameter, and <code>create_agent</code> has no way to hand skills to the agent it creates. There is currently <em>no</em> path — tool or API — that says "give skill X to agent Y."</p>
+  </div>
+
+  <p><span class="badge b-ok">Good news</span> The target design is mostly already built. The fixes are small and land on a handful of known lines. Bug 2's core fix is essentially <strong>one call site</strong>.</p>
+
+  <!-- ============================================================= -->
+  <h2 id="p1">2 · Problem 1 — Agents can't send files they can read</h2>
+
+  <h3>What you saw</h3>
+  <p>An agent had access to a file but couldn't send it to you. It likely replied with something like <span class="mono">"access denied: path is outside the workspace"</span> or <span class="mono">"file not found"</span>.</p>
+
+  <h3>What's actually happening</h3>
+  <p><code>send_file</code> is the <strong>only</strong> tool that delivers an arbitrary local file to you as a chat attachment. <span class="file">(<code>pkg/tools/send_file.go</code>; it's the sole caller of <code>MediaResult</code> in <code>pkg/tools</code>. <code>send_email</code> is a different channel and has no attach-file support.)</span></p>
+  <p>It validates the requested path with <code>validatePathWithAllowPaths</code> <span class="file">(<code>pkg/tools/filesystem.go:26-87</code>)</span> — the very same function used by <code>read_file</code>, <code>write_file</code>, <code>list_directory</code>, and <code>bash</code>. So in principle the rules are identical. The problem is that <code>send_file</code> is <em>fed</em> narrower inputs than <code>read_file</code>, through <strong>two wiring gaps</strong>:</p>
+
+  <div class="callout bug">
+    <h4 style="margin-top:0">Gap 1 — the everyday one: shared-workspace re-rooting isn't applied to <code>send_file</code></h4>
+    <p>When an agent belongs to a Workspace's team, all its file tools are re-pointed <em>for that turn</em> to the shared project directory <code>workspaces/&lt;id&gt;/work/</code> instead of the agent's own private <code>agents/&lt;id&gt;/</code> folder. This is <strong>unconditional — no feature flag</strong> <span class="file">(<code>pkg/agent/loop.go:5603-5673</code>, via <code>WithTurnWorkspaceDir</code>)</span>.</p>
+    <p><code>read_file</code>, <code>write_file</code>, <code>list_directory</code> (through the shared <code>rerootable</code> helper) and <code>bash</code> <span class="file">(<code>pkg/tools/shell.go:507</code>)</span> all honor this. <strong><code>send_file</code> does not</strong> — it has zero references to the re-rooting mechanism and always validates against the agent's <em>private</em> workspace.</p>
+    <p><strong>Effect:</strong> a file the agent just created or read in the shared <code>work/</code> directory is checked by <code>send_file</code> against the wrong root. A relative path resolves to a nonexistent spot under the private folder → <span class="mono">"file not found"</span>; an absolute path into <code>work/</code> fails the "inside my workspace?" check → <span class="mono">"access denied: path is outside the workspace"</span>. This needs <strong>no special configuration</strong> — it happens for any team agent using the default shared project directory.</p>
+  </div>
+
+  <div class="callout bug">
+    <h4 style="margin-top:0">Gap 2 — the escape-hatch one: <code>AllowReadOutsideWorkspace</code> isn't applied to <code>send_file</code></h4>
+    <p>When an operator turns on the read-anywhere escape hatch, <code>read_file</code>/<code>list_directory</code> become fully unrestricted <span class="file">(<code>pkg/agent/instance.go:133-134</code> computes <code>readRestrict = restrict &amp;&amp; !AllowReadOutsideWorkspace</code>)</span>. But <code>send_file</code> is built with the <em>raw</em> <code>RestrictToWorkspace</code> flag and never sees <code>AllowReadOutsideWorkspace</code> <span class="file">(<code>pkg/agent/loop.go:1449-1455</code>)</span>. So even with the hatch open, <code>read_file</code> can read the whole host but <code>send_file</code> stays boxed in.</p>
+  </div>
+
+  <h3>How a file actually reaches you (for context)</h3>
+  <div class="flow">send_file  →  registers a  media://&lt;uuid&gt;  reference (NO copy of the file is made)
+           →  WebSocket "media" frame with URL  /api/v1/media/&lt;ref&gt;
+           →  gateway streams the ORIGINAL file from disk  (http.ServeFile)
+           →  SPA renders it as an inline image / download card</div>
+  <p class="small">Refs: <code>pkg/media/store.go:52</code> (no copy) · <code>pkg/gateway/webchat_channel.go:149</code> · <code>pkg/gateway/rest.go:8801</code>. The file is served straight from wherever it lives — there is no "uploads" copy step that would need its own directory rules.</p>
+
+  <h3>What is <em>correctly</em> restricted — and must stay</h3>
+  <p>One restriction on <code>send_file</code> is deliberate and shared symmetrically with <code>read_file</code>: an agent cannot read or send files from <strong>another agent's private workspace</strong> <span class="file">(<code>isCrossAgentPath</code>, <code>pkg/tools/filesystem.go:98-115</code>; red-team tests in <code>redteam_cross_agent_test.go</code>)</span>. That's an intentional insider-isolation control and is <em>not</em> the cause of your complaint. Likewise, secret files like <code>master.key</code> / <code>credentials.json</code> should remain non-readable in the first place <span class="file">(<code>pkg/sandbox/sandbox.go</code> <code>SecretFilesRelative</code>)</span>.</p>
+
+  <div class="callout you">
+    <h4 style="margin-top:0">Is your thesis right? <span class="badge b-info">assessment</span></h4>
+    <p><strong>For this bug: yes.</strong> There is no comment, test, or design doc anywhere claiming <code>send_file</code> is deliberately narrower than <code>read_file</code> for anti-exfiltration reasons. The narrowness is an <strong>accidental omission</strong> — <code>send_file</code> simply wasn't updated when the re-rooting refactor and the <code>readRestrict</code> computation were added to the other tools.</p>
+    <p><strong>One nuance</strong> on "restrictions should <em>only</em> ever be at the sandbox/access level, never at send": as an absolute rule that's slightly too strong. An agent may legitimately need read access to system files for its own operation without that meaning it should hand every such file to a user (egress control is a valid defense-in-depth layer in multi-tenant setups). But that's a <em>future, deliberate, named</em> policy — it is not what exists today. Today the correct fix is simply: <strong>make <code>send_file</code>'s allowed-file set equal <code>read_file</code>'s.</strong> If we can read it, we can send it.</p>
+  </div>
+
+  <h3>The fix</h3>
+  <ol>
+    <li>Give <code>SendFileTool</code> the same <code>rerootable</code> behavior the other file tools have, so it honors the per-turn shared-workspace directory (closes Gap 1).</li>
+    <li>Construct <code>send_file</code> with the same <code>readRestrict</code> value <code>read_file</code> uses, instead of the raw <code>RestrictToWorkspace</code> flag (closes Gap 2).</li>
+    <li>Keep the cross-agent guard and the operator <code>AllowReadPaths</code> whitelist exactly as they are — they already apply to both tools equally.</li>
+  </ol>
+  <p class="small">Net effect: <code>send_file</code>'s "can I send this?" answer becomes identical to <code>read_file</code>'s "can I read this?" answer, at both the kernel (Landlock, already identical) and app level.</p>
+
+  <!-- ============================================================= -->
+  <h2 id="p2">3 · Problem 2 — Skills install to the wrong place</h2>
+
+  <h3>Three "skills folders" that don't line up</h3>
+  <p>The codebase has three different on-disk skill locations, and the tools disagree about which one to use:</p>
+  <table>
+    <tr><th>Folder</th><th>Meant to be</th><th>Who writes here</th></tr>
+    <tr>
+      <td><code>$OMNIPUS_HOME/skills/</code></td>
+      <td class="tag">The central / global registry ✔</td>
+      <td>Seeded at boot; scanned by <em>every</em> agent as the "global" tier; written by <code>create_skill</code>, <code>edit_skill</code>, <strong>and the UI's <code>POST /api/v1/skills/install</code></strong>.</td>
+    </tr>
+    <tr>
+      <td><code>$OMNIPUS_HOME/workspace/skills/</code></td>
+      <td>Shared "default workspace" tier</td>
+      <td>Where the system tools <code>list_skills</code> / <code>remove_skill</code> look.</td>
+    </tr>
+    <tr>
+      <td><code>$OMNIPUS_HOME/agents/&lt;id&gt;/skills/</code></td>
+      <td>An agent's private folder</td>
+      <td><span class="badge b-bug">the bug</span> The chat tool <code>install_skill</code> writes here — into whichever agent invoked it.</td>
+    </tr>
+  </table>
+
+  <h3>The core bug: the chat <code>install_skill</code> tool writes per-agent</h3>
+  <p><code>install_skill</code> computes its target as <code>filepath.Join(t.workspace, "skills", slug)</code> <span class="file">(<code>pkg/tools/skills_install.go:97-98</code>)</span>, where <code>t.workspace</code> is the calling agent's own private workspace, baked in when the tool is built once per agent <span class="file">(<code>pkg/agent/loop.go:1480</code> passes <code>agent.Workspace</code>)</span>. It has no "target agent" parameter — only <code>slug</code>, <code>version</code>, <code>registry</code>, <code>force</code>.</p>
+  <p><strong>So a skill Jim installs by chatting lands in <code>agents/jim/skills/&lt;slug&gt;/</code></strong> — and is invisible to:</p>
+  <ul>
+    <li>the <code>GET /api/v1/skills</code> catalog the UI shows (it reads the default agent's view of skills);</li>
+    <li>every other agent's own skills loader;</li>
+    <li><code>validateSkillIDs</code> — so that skill can't even be granted to another agent through the UI, because the backend doesn't believe it's installed.</li>
+  </ul>
+
+  <div class="callout bug">
+    <p><strong>Two install paths, two behaviors:</strong> the <em>UI button</em> (<code>POST /api/v1/skills/install</code>) installs to the central folder — visible everywhere <span class="file">(<code>pkg/gateway/rest.go:4437</code>)</span>. The <em>chat tool</em> (<code>install_skill</code>) installs to the caller's private folder — visible to no one else. Same word "install", opposite outcome.</p>
+  </div>
+
+  <h3>What already works (your "central registry + per-agent" memory is correct)</h3>
+  <div class="callout ok">
+    <ul style="margin-bottom:0">
+      <li><strong>Central catalog:</strong> <code>GET /api/v1/skills</code> lists installed skills from the global tier.</li>
+      <li><strong>Per-agent enablement data model:</strong> <code>AgentConfig.Skills []string</code> <span class="file">(<code>pkg/config/config.go:771</code>)</span> — empty/absent means "all skills allowed"; a non-empty list means "only these." Enforced each turn by <code>WithSkillAllowlist</code> <span class="file">(<code>pkg/agent/context.go:161-196</code>)</span>.</li>
+      <li><strong>The UI you remember:</strong> the Agent profile's <em>Skills</em> section renders the central catalog as one checkbox per skill and saves the chosen list via <code>PUT /api/v1/agents/{id}</code> <span class="file">(<code>src/components/agents/AgentProfile.tsx</code>)</span>. This is exactly "install once centrally, then toggle per agent" — and it works, <em>for skills installed via the central path.</em></li>
+    </ul>
+  </div>
+  <p>So the whole "skills behave like tools: one central registry, enabled per agent" model is <strong>already built</strong>. The only thing off-model is the chat tool's write location.</p>
+
+  <!-- ============================================================= -->
+  <h2 id="ava">4 · Problem 2b — Why Ava installed skills for herself</h2>
+  <p>You asked Ava (the agent-builder) to install skills for a brand-new agent. Three separate gaps combine to make that impossible today:</p>
+  <ol>
+    <li><strong><code>create_agent</code> can't hand over skills.</strong> Its parameters <span class="file">(<code>pkg/sysagent/tools/agent.go:83-149</code>)</span> include name, model, soul, etc. — but <em>no</em> skills field. It creates an empty <code>skills/</code> folder for the new agent and never puts anything in it.</li>
+    <li><strong><code>install_skill</code> can't target another agent.</strong> The tool call is dispatched against <em>Ava's</em> tool registry, whose <code>install_skill</code> was built with Ava's private workspace. There is no argument, and no runtime hook, to redirect the write to the new agent. So it lands in <code>agents/ava/skills/</code>.</li>
+    <li><strong>No "assign skill X to agent Y" exists anywhere.</strong> Not as a tool, not as an API. The closest thing (the global REST install) gives the skill to <em>everyone</em>, which is not the same as equipping one specific agent.</li>
+  </ol>
+  <p><strong>Could delegation solve it?</strong> In theory Ava could delegate "install this skill" to the new agent, and thanks to delegation identity rules the install would correctly run <em>as</em> the new agent (into its own folder). But it dead-ends twice today: (a) no agent tool can create the workspace <em>delegation trust edge</em> a new agent would need — only a human via <code>PUT /api/v1/workspaces/{id}/delegation</code>; and (b) a fresh agent's default tool policy denies <code>install_skill</code> outright <span class="file">(<code>NewCustomAgentToolsCfg</code>, <code>pkg/coreagent/core.go:1085</code> — allows only read/list/remember/recall)</span>. Not a practical path without changes.</p>
+
+  <!-- ============================================================= -->
+  <h2 id="solution">5 · The proposed model — one rule for both problems</h2>
+  <p>The same principle fixes both areas: <strong>store centrally, gate per-agent.</strong> That's already how <em>tools</em> work, how <em>skills</em> are <em>meant</em> to work, and (after Problem&nbsp;1's fix) how files should work.</p>
+
+  <h3>Files</h3>
+  <p><strong>Rule:</strong> if an agent can read a file, it can send it. Access is decided once, at the read/sandbox layer (kernel Landlock + the app-level workspace rules). <code>send_file</code> stops computing its own narrower answer and reuses <code>read_file</code>'s. No separate "send allow-list."</p>
+
+  <h3>Skills</h3>
+  <p><strong>Rule:</strong> every install goes to the <em>central</em> registry (<code>$OMNIPUS_HOME/skills/</code>); which agent may <em>use</em> a skill is controlled by that agent's <code>Skills</code> allow-list. Concretely:</p>
+  <ul>
+    <li><strong>Point the chat tool at the central folder.</strong> Change <code>install_skill</code>'s target from the calling agent's workspace to the global skills dir. Per the investigation, <em>"once that one call site is corrected, nothing else needs to change"</em> for basic central install — the catalog, allow-list, UI, and validation already do the rest.</li>
+    <li><strong>Preserve "install for myself".</strong> When an agent installs a skill for its own use, also add the slug to <em>that agent's</em> <code>Skills</code> allow-list (if it has one) so the self-serve experience still works after the central move.</li>
+    <li><strong>Add "equip another agent".</strong> Give <code>install_skill</code> an optional <code>agent_id</code> (and/or add a small dedicated "assign skill to agent" operation) that installs centrally and adds the slug to the <em>target</em> agent's allow-list.</li>
+    <li><strong>Let the builder equip at creation.</strong> Add an optional <code>skills: []</code> parameter to <code>create_agent</code> that seeds the new agent's allow-list (installing any missing ones centrally first). This is the clean fix for the Ava case.</li>
+    <li><strong>(Optional) enable the delegate path</strong> for "go install this for yourself," if we want it: needs an agent-reachable way to add a delegation edge and a policy that lets a new agent hold <code>install_skill</code>.</li>
+  </ul>
+
+  <!-- ============================================================= -->
+  <h2 id="usecases">6 · Use cases: today vs. after the fix</h2>
+  <table>
+    <tr><th>Use case</th><th>Today</th><th>After fix</th></tr>
+    <tr><td>Agent sends you a file it can read (incl. in a shared workspace)</td><td><span class="badge b-bug">broken</span> Gap 1/2</td><td><span class="badge b-ok">works</span> send tracks read</td></tr>
+    <tr><td>Agent installs a skill for itself via chat</td><td><span class="badge b-warn">wrong place</span> lands in private folder, invisible elsewhere</td><td><span class="badge b-ok">works</span> central + self enabled</td></tr>
+    <tr><td>Install a skill from the UI (SkillBrowser)</td><td><span class="badge b-ok">works</span> already central</td><td><span class="badge b-ok">works</span> unchanged</td></tr>
+    <tr><td>Enable/disable a central skill per agent (checkboxes)</td><td><span class="badge b-ok">works</span> for centrally-installed skills</td><td><span class="badge b-ok">works</span> for all installs</td></tr>
+    <tr><td>Builder (Ava) equips a NEW agent with skills at creation</td><td><span class="badge b-bug">impossible</span> no skills param</td><td><span class="badge b-ok">works</span> <code>create_agent(skills:[…])</code></td></tr>
+    <tr><td>Install / assign a skill FOR another existing agent</td><td><span class="badge b-bug">impossible</span> no target param</td><td><span class="badge b-ok">works</span> <code>install_skill(agent_id)</code> / assign op</td></tr>
+    <tr><td>Delegate "go install this for yourself" to a new agent</td><td><span class="badge b-bug">blocked</span> no edge + policy denies</td><td><span class="badge b-info">optional</span> if we choose to enable it</td></tr>
+  </table>
+
+  <!-- ============================================================= -->
+  <h2 id="fixlist">7 · Concrete change list (for whoever implements)</h2>
+
+  <h4>Problem 1 — file sending</h4>
+  <table>
+    <tr><th>Change</th><th>Where</th></tr>
+    <tr><td>Give <code>SendFileTool</code> the <code>rerootable</code> embed so it honors <code>TurnWorkspaceDir(ctx)</code></td><td><code>pkg/tools/send_file.go</code> · <code>pkg/tools/filesystem.go:391-415</code></td></tr>
+    <tr><td>Build <code>send_file</code> with <code>readRestrict</code> (not raw <code>RestrictToWorkspace</code>); pass <code>AllowReadOutsideWorkspace</code> through</td><td><code>pkg/agent/loop.go:1449-1455</code> · mirror <code>pkg/agent/instance.go:133-134</code></td></tr>
+    <tr><td>Keep cross-agent guard + <code>AllowReadPaths</code> whitelist as-is (already shared)</td><td><code>pkg/tools/filesystem.go:98-136</code></td></tr>
+    <tr><td>Add tests: team agent sends a file from <code>workspaces/&lt;id&gt;/work/</code>; escape-hatch send</td><td><code>pkg/tools/*_test.go</code></td></tr>
+  </table>
+
+  <h4>Problem 2 — skill install</h4>
+  <table>
+    <tr><th>Change</th><th>Where</th></tr>
+    <tr><td><strong>Core fix:</strong> point <code>install_skill</code> at the global skills dir instead of the calling agent's workspace</td><td><code>pkg/agent/loop.go:1480</code> · <code>NewInstallSkillTool</code> workspace arg (<code>pkg/tools/skills_install.go:31,97</code>)</td></tr>
+    <tr><td>On self-install, add slug to the calling agent's <code>Skills</code> allow-list (keep self-serve working)</td><td><code>pkg/tools/skills_install.go</code> + agent config write</td></tr>
+    <tr><td>Add optional <code>agent_id</code> to <code>install_skill</code> → central install + add to target's allow-list</td><td><code>pkg/tools/skills_install.go</code> (Parameters + Execute)</td></tr>
+    <tr><td>Add optional <code>skills: []</code> to <code>create_agent</code> → seed new agent's allow-list</td><td><code>pkg/sysagent/tools/agent.go:83-149,226-233</code></td></tr>
+    <tr><td>(Optional) allow the delegate-install path: agent-reachable delegation edge + policy for <code>install_skill</code></td><td><code>pkg/sysagent/tools/workspace.go:212-235</code> · <code>pkg/coreagent/core.go:1085</code></td></tr>
+    <tr><td>Doc cleanup: <code>docs/skills.md</code> still says SkillBrowser is a stub and the REST endpoints return 501 — both are stale (fully implemented now)</td><td><code>docs/skills.md:151-157,209-211</code></td></tr>
+  </table>
+
+  <!-- ============================================================= -->
+  <h2 id="decisions">8 · Decisions we need from you</h2>
+  <ol>
+    <li><strong>Files:</strong> confirm the target rule is simply "if the agent can read it, it can send it" (no separate send-only restriction now). If you ever want a deliberate egress boundary later, we'd add it as a named, tested policy — not an accident.</li>
+    <li><strong>Self-install after centralizing:</strong> when an agent installs a skill for itself, should we auto-add it to that agent's allow-list, or install centrally-only and leave enablement to the UI? (Recommended: auto-add, so nothing regresses.)</li>
+    <li><strong>Cross-agent equipping:</strong> prefer an <code>agent_id</code> parameter on <code>install_skill</code>, a dedicated "assign skill to agent(s)" operation, or both?</li>
+    <li><strong>Ava/builder flow:</strong> is a <code>skills: []</code> parameter on <code>create_agent</code> the flow you want (equip at creation), plus post-creation assignment?</li>
+    <li><strong>Delegate-install:</strong> in scope now, or leave for later? It needs two extra changes (edge creation + policy) that the other fixes don't.</li>
+    <li><strong>Release phase:</strong> these touch agents/skills/workspaces — per the routing rule that's v0.3 territory, but the file-send fix is a small correctness bug that could ride a hotfix. Which phase do you want each in?</li>
+  </ol>
+
+  <hr>
+  <p class="small">Investigation basis: four parallel read-only code traces (file-send tools; skill install/find tools; central registry + per-agent UI; the Ava cross-agent case). Every claim above is anchored to specific <code>file:line</code> references in the current checkout. Nothing in the code was modified to produce this note.</p>
+
+</div>
+</body>
+</html>

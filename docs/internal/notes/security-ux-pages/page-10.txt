@@ -1,0 +1,20 @@
+
+### 5 — “Effective permissions” preview
+
+> For **Jim**: bash = ask (global), browser_navigate = allow, kernel sandbox = enforce, god mode = off.
+
+### 6 — Restart UX as a product rule
+
+Badge **“Applies after restart”** on the control; primary CTA **Restart gateway**; don’t treat “Saved” alone as success if not live.
+
+### 7 — Slim Settings chrome
+
+Fewer top-level tabs; merge Performance under Gateway Advanced; Chat prefs under Profile; optional Data+Memory merge.
+
+### 8 — Copy principles
+
+| Avoid | Prefer |
+|-------|--------|
+| Landlock / seccomp / SSRF / ABI | Kernel isolation / private network block |
+| policy_mode / tool_policies | Ask before tools / per-tool rules |
+| Permissive | Log only — not protected |

@@ -198,6 +198,15 @@ var (
 	// caller-supplied path (<cli> --version); validate-on-blur is debounced on
 	// the SPA so 20/min is ample for legitimate editing.
 	cliValidateLimiter = newAPIRateLimiter(20, 1*time.Minute)
+	// /api/v1/tasks/occurrences — 240 requests/minute per IP. A DEDICATED
+	// limiter (Calendar Recurrence Redesign spec, "Occurrence expansion
+	// endpoint" — MAJ-201/FR-008), distinct from configLimiter (that
+	// bucket's 429s already broke the calendar once) and from the
+	// existing task CRUD routes (/api/v1/tasks, /api/v1/tasks/{id}, …),
+	// which remain plain withAuth with no limiter at all. Matches
+	// configLimiter's post-incident ceiling, which calendar navigation
+	// cadence is known to fit.
+	taskReadLimiter = newAPIRateLimiter(240, 1*time.Minute)
 )
 
 // clientIP extracts the client IP from the request for rate-limiting and

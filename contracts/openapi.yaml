@@ -450,6 +450,14 @@ components:
       $ref: ./components/schemas/Todo.yaml
     TaskTrigger:
       $ref: ./components/schemas/TaskTrigger.yaml
+    TaskOccurrenceSet:
+      $ref: ./components/schemas/TaskOccurrenceSet.yaml
+    DayBucket:
+      $ref: ./components/schemas/DayBucket.yaml
+    TaskRun:
+      $ref: ./components/schemas/TaskRun.yaml
+    RunNowRequest:
+      $ref: ./components/schemas/RunNowRequest.yaml
     ProviderUpdateRequest:
       $ref: ./components/schemas/ProviderUpdateRequest.yaml
     ProviderValidation:
@@ -4387,6 +4395,95 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /tasks/occurrences:
+    get:
+      operationId: listTaskOccurrences
+      summary: Expand recurring task occurrences in a date range
+      description: >
+        Server-side occurrence expansion for the workspace calendar (Calendar
+        Recurrence Redesign). Expands every recurring-capable trigger the
+        scheduler would actually arm — non-terminal AND not
+        `surface: heartbeat`, the same predicate `OnTaskUpserted` applies
+        before registering a job — covering `rrule` (rrule-go, normalized per
+        the Timezone Semantics DST policy), legacy `cron_expr` (gronx,
+        expanded in the server's local zone, display-only per D8), and
+        `every_ms` (a forward-only projection off the live job's next-run
+        instant, FR-008a). `tz` is the viewer's IANA zone and is the
+        day-boundary authority for bucketing — the >3-occurrences-per-day
+        threshold and `day_start_ms` are evaluated on days in this zone for
+        every trigger flavor, regardless of each rule's own `tz`. Range is
+        half-open `[from_ms, to_ms)`. Responses are bucketed: spans ≤ 8×24h
+        return raw instants for every day (Week/Day views); spans > 8×24h
+        return one `DayBucket` per query-tz day with more than 3 occurrences,
+        raw instants for days with 3 or fewer (Month/overview views, D6).
+        Capped at 500 instants per task per request plus a 10,000-computed-
+        occurrence total iteration budget per task per request (arithmetic
+        derivation, not iteration, for provably regular triggers); `truncated`
+        signals either cap was hit. Tasks with zero occurrences in range are
+        omitted; the result is `[]`, never null. Read-only; no state change.
+        Rate-limited by a dedicated `taskReadLimiter` (240 requests/min),
+        distinct from `configLimiter` and from the unthrottled task CRUD
+        routes.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace to expand occurrences for. Tasks are workspace-scoped.
+      - name: from_ms
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+        description: >
+          Start of the query range, Unix epoch milliseconds, inclusive
+          (half-open range start).
+        example: 1784592000000
+      - name: to_ms
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+        description: >
+          End of the query range, Unix epoch milliseconds, exclusive
+          (half-open range end). Must be strictly greater than `from_ms`;
+          `from_ms >= to_ms` is rejected with 400. A span greater than 400
+          days is also rejected with 400.
+        example: 1787270400000
+      - name: tz
+        in: query
+        required: true
+        schema:
+          type: string
+        description: >
+          IANA timezone name of the viewer (e.g. the browser's resolved
+          zone) — the day-boundary authority for occurrence bucketing.
+          Unloadable `tz` is rejected with 400.
+        example: "Europe/Berlin"
+      responses:
+        '200':
+          description: >
+            One TaskOccurrenceSet per task with at least one occurrence in
+            range. Tasks with zero occurrences in range are omitted.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TaskOccurrenceSet'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
   /tasks/{id}:
     get:
       operationId: getTask
@@ -4586,6 +4683,86 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+  /tasks/{id}/runs:
+    get:
+      operationId: listTaskRuns
+      summary: List a task's run history
+      description: >
+        Returns every execution record (TaskRun) for a task, newest first
+        (ADR-050 / task-run-history-spec §3.6) — the authoritative history
+        list, independent of whether the task's current trigger can still
+        project a run's occurrence_ms (a series whose schedule was edited
+        still lists every past run). Retention-bounded (day-partitioned
+        sweep with a keep-newest-day floor); full result strings. Read-only;
+        no state change. Rate-limited by the same dedicated taskReadLimiter
+        (240 requests/min) as GET /tasks/occurrences.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Array of run records, newest first. Empty array when the task has no runs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TaskRun'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+    post:
+      operationId: runTaskNow
+      summary: Start a task run now ("Run now")
+      description: >
+        Opens a new run for the task and dispatches it immediately (ADR-050
+        RD7 / task-run-history-spec §3.4). With `occurrence_ms`, runs that
+        specific recurring occurrence (materialize-on-demand); without it,
+        re-runs a normal/once task as a fresh run (prior runs are preserved).
+        Idempotent per (task, occurrence_ms) against a concurrent scheduler
+        fire. Returns 202 — the run executes asynchronously; observe progress
+        via the task_run_status WS frame or GET /tasks/{id}/runs.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunNowRequest'
+      responses:
+        '202':
+          description: Run accepted and dispatched asynchronously.
+        '400':
+          description: Invalid task ID or request body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '503':
+          description: Task executor unavailable (gateway degraded).
   /mcp-servers:
     get:
       operationId: listMcpServers

@@ -1465,6 +1465,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		retentionToolResultSweepFn = runningServices.toolStore.retentionSweep
 	}
 
+	// Per-task run-history prune + stuck-run reaper (ADR-050 RD9/RD10) runs
+	// alongside the transcript sweep on the same retention window/cadence —
+	// see pkg/gateway/retention_task_runs.go. GetTaskStore returns nil only
+	// when the task store failed to initialize; the tick no-ops via the nil
+	// check in executeSweepTick when that happens.
+	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
+		retentionTaskRunSweepFn = func(cutoff time.Time) (int, error) {
+			return pruneAllTaskRuns(tStore, cutoff)
+		}
+	}
+
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.
 	// Iterates all agents and calls SweepRetros per MemoryStore.
 	startRetentionRetroSweepLoop(ctx, agentLoop, agentLoop.GetConfig, 24*time.Hour)

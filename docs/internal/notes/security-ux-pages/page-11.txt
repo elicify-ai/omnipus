@@ -1,0 +1,20 @@
+| God mode (alone) | Disable all safety limits (god mode) |
+| enable_deny_patterns | Block dangerous shell patterns |
+
+### 9 — Keep vault & spend primary; audit one click away
+
+Vault + daily spend stay top-level (good today). Audit is “What did agents do?”—arguably primary, not Advanced-only.
+
+---
+
+## 5. Suggested target IA
+
+```
+Security & privacy
+├── Posture summary + preset [Safe | Balanced | Power | Unrestricted]
+├── Spending limit (progress)
+├── Credential vault
+├── Skill sources trust
+├── [If god mode on] Full-width danger banner → disable
+│
+└── Customize protection ▾

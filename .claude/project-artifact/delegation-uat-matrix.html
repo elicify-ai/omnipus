@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Delegation UAT Matrix — Omnipus hotfix/v0.1.1</title>
+<style>
+  :root { --fg:#1a1a1a; --bg:#fdfdfd; --accent:#0a7d4a; --warn:#b45309; --red:#b91c1c; --muted:#666; --border:#ddd; --code-bg:#f5f5f5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e4e4e4; --bg:#1a1a1a; --accent:#4ade80; --warn:#fbbf24; --red:#f87171; --muted:#999; --border:#333; --code-bg:#262626; }
+  }
+  * { box-sizing:border-box; }
+  body { font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--fg); background:var(--bg); max-width:1100px; margin:1.5em auto; padding:0 1.5em 3em; }
+  h1,h2,h3,h4 { font-weight:600; margin-top:1.6em; line-height:1.3; }
+  h1 { font-size:1.7em; margin-bottom:.2em; }
+  h2 { font-size:1.35em; border-bottom:1px solid var(--border); padding-bottom:.2em; }
+  h3 { font-size:1.1em; }
+  a { color:var(--accent); }
+  code { background:var(--code-bg); padding:.15em .35em; border-radius:3px; font-size:.92em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-word; }
+  pre { background:var(--code-bg); padding:1em 1.2em; border-radius:6px; overflow-x:auto; font-size:.87em; line-height:1.5; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  pre code { background:none; padding:0; }
+  .scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:.8em 0; }
+  table { border-collapse:collapse; width:100%; margin:.8em 0; font-size:.9em; min-width:640px; }
+  th,td { border:1px solid var(--border); padding:.4em .6em; vertical-align:top; text-align:left; }
+  th { font-weight:600; background:var(--code-bg); white-space:nowrap; }
+  td.id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.88em; white-space:nowrap; }
+  ul { padding-left:1.4em; } li { margin:.25em 0; }
+  details { margin:.5em 0; } details > summary { cursor:pointer; font-weight:600; padding:.4em 0; }
+  hr { border:none; border-top:1px solid var(--border); margin:2em 0; }
+  .meta { color:var(--muted); font-size:.85em; }
+  .sub { color:var(--muted); font-size:.95em; margin-top:.3em; }
+  .status { background:color-mix(in srgb, var(--accent) 12%, var(--bg)); border:1px solid var(--accent); border-radius:8px; padding:.9em 1.2em; margin:1.2em 0; }
+  .status .badge { display:inline-block; background:var(--accent); color:var(--bg); padding:.1em .6em; border-radius:4px; font-size:.78em; font-weight:600; letter-spacing:.02em; }
+  .status p { margin:.5em 0 0; font-size:.92em; }
+  .next { border:1px solid var(--warn); border-left:4px solid var(--warn); border-radius:8px; padding:.8em 1.2em; margin:1.2em 0; background:color-mix(in srgb, var(--warn) 8%, var(--bg)); }
+  .next > summary { cursor:pointer; font-weight:600; font-size:1.02em; padding:0; }
+  .next > summary .meta { font-weight:400; }
+  .next ol { margin:.5em 0 .1em 1.3em; padding:0; }
+  .next ol li { margin:.3em 0; }
+  .next .who { font-weight:600; }
+  .next p.none { margin:.5em 0 .1em; font-size:.93em; }
+  .pill { display:inline-block; font-size:.78em; padding:.1em .55em; border-radius:10px; background:var(--code-bg); color:var(--muted); margin-left:.25em; vertical-align:1px; }
+  .pill.done { background:var(--accent); color:var(--bg); }
+  .pill.now  { background:var(--warn);   color:var(--bg); }
+  .pill.next { background:var(--code-bg); color:var(--fg); border:1px solid var(--border); }
+  .pill.warn { background:var(--red);    color:var(--bg); }
+  .callout { border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:4px; padding:.7em 1em; margin:1em 0; font-size:.93em; background:color-mix(in srgb, var(--accent) 5%, var(--bg)); }
+  .tabbar { display:flex; flex-wrap:wrap; gap:.2em; border-bottom:2px solid var(--border); margin:1.2em 0 1.5em; }
+  .tabbar .tab { padding:.55em 1em; cursor:pointer; border:1px solid transparent; border-bottom:none; border-radius:6px 6px 0 0; font:inherit; font-weight:500; font-size:.95em; color:var(--muted); background:none; margin-bottom:-2px; }
+  .tabbar .tab:hover { color:var(--fg); }
+  .tabbar .tab.active { color:var(--fg); border-color:var(--border); border-bottom:2px solid var(--bg); background:var(--bg); font-weight:600; }
+  .pane { display:none; } .pane.active { display:block; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:1em; }
+  @media (max-width:720px) { .grid2 { grid-template-columns:1fr; } }
+  .sev-p0 { color:var(--red); font-weight:600; }
+  .sev-p1 { color:var(--warn); font-weight:600; }
+  .sev-p2 { color:var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Delegation UAT Matrix</h1>
+  <div class="sub">
+    End-to-end product UAT for subagents, tasks, parallel fan-out &amp; nested chains on <code>hotfix/v0.1.1</code>
+    &middot; <span class="meta">Source matrix:</span> <code>docs/internal/uat/uat-matrix-delegation-subagent-tasks-2026-07-13.md</code>
+  </div>
+</header>
+
+<div class="status">
+  <span class="badge">REVIEW DRAFT v2 · DELEGATION + BROWSER</span>
+  <span class="meta" style="float:right">As of 2026-07-13</span>
+  <p>
+    v2 extends browser control UAT (overlay / pinned / pop-out) · ~180 rows ·
+    6 del + 3 browser groups · CI/fixes on sibling instance (do not block review)
+  </p>
+</div>
+
+<details class="next" open>
+  <summary>Next steps <span class="meta">· 4 items</span></summary>
+  <ol>
+    <li><span class="who">Operator (Daniel)</span> — Review this page + source markdown; decide <strong>RUN / REVISE / DEFER</strong> and which rows are in-scope (especially <code>X-*</code> external CLI if binaries absent) <span class="meta">— unblocks scheduling G-Del-1…6</span></li>
+    <li><span class="who">Operator</span> — Confirm P0 ship gate (all P0 rows PASS or tracked deferral) and model choice (default <code>z-ai/glm-5.2</code>) <span class="meta">— unblocks force-tool prompt kit execution</span></li>
+    <li><span class="who">Lead agent (after CI green)</span> — Fan out G-Del-1…6 + <strong>G-Br-1…3</strong> (one Chromium/gateway); fill Result columns; write del + browser reports <span class="meta">— ship/no-ship for both subsystems</span></li>
+    <li><span class="who">Operator</span> — Confirm browser P0 gates (pop-out typing BK-08, target=_blank BT-01/03, take-over one-click BC-03) <span class="meta">— unblocks G-Br scope</span></li>
+  </ol>
+</details>
+
+<div class="tabbar">
+  <button class="tab active" data-pane="over">1 · Overview</button>
+  <button class="tab" data-pane="work">2 · Workstreams</button>
+  <button class="tab" data-pane="matrix">3 · Matrix</button>
+  <button class="tab" data-pane="browser">4 · Browser matrix</button>
+  <button class="tab" data-pane="att">5 · Attention</button>
+  <button class="tab" data-pane="bg">6 · Background</button>
+  <button class="tab" data-pane="plan">7 · Plan</button>
+  <button class="tab" data-pane="risk">8 · Risks</button>
+  <button class="tab" data-pane="faq">9 · FAQ</button>
+</div>
+
+<main>
+
+  <!-- OVERVIEW -->
+  <section class="pane active" id="over">
+    <div class="callout">
+      Prove end-to-end that <strong>delegation</strong> and the <strong>live browser control surface</strong> (overlay · pinned · pop-out) work on <code>hotfix/v0.1.1</code>.
+      Audience: operator sign-off before parallel UAT. See tab <strong>4 · Browser matrix</strong>.
+    </div>
+
+    <h2>What “done” means</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Pattern family</th><th>Done means</th></tr>
+      <tr><td>Direct sub-turn (<code>delegate</code>)</td><td>Await + background + status poll; identity = target; result visible correctly</td></tr>
+      <tr><td>Task-mode assignment</td><td><code>create_task</code> / reassignment; board lifecycle; pickup</td></tr>
+      <tr><td>Parallel / fan-out</td><td>Concurrent background delegates + concurrency cap behaviour</td></tr>
+      <tr><td>Nested / multi-hop</td><td>Configurable depth (global + per-edge); not the old one-hop hard block</td></tr>
+      <tr><td>Trust graph (workspace)</td><td>Deny-by-default edges; Team tab is the only operator surface</td></tr>
+      <tr><td>External CLI (<code>subagent_3p</code>)</td><td>Target identity + <code>work/</code> rooting + non-stalling dispatch</td></tr>
+      <tr><td>Handoff</td><td>Session switch open / not gated by delegation edges</td></tr>
+      <tr><td>Approvals inheritance</td><td>Parent Always-Allow → child <code>ask</code> only; never overrides <code>deny</code></td></tr>
+      <tr><td>Cross-workspace tasks</td><td>Same gate as in-workspace task tools</td></tr>
+    </table>
+    </div>
+
+    <h2>Success criteria (ship gates)</h2>
+    <div class="scroll">
+    <table>
+      <tr><th style="width:160px">Criterion</th><th>Statement</th><th>Check</th><th style="width:100px">Status</th></tr>
+      <tr><td>P0 clean</td><td>All P0 matrix rows PASS (or deferred with tracked issue + operator ACK)</td><td>Report tally of P0 PASS/FAIL</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>No trust theatre</td><td>Global <code>/agents/trust</code> gone; Team tab is sole editor</td><td>G-10 PASS</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>No silent async loss</td><td>Multi-tool background children deliver final answers</td><td>D-04, D-12, P-01 PASS</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>No identity inheritance</td><td>Child = target (model, tools, policy, workspace)</td><td>I-01, I-02, X-05 PASS</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>Nested real</td><td>ADR-040 multi-hop live (not one-hop registry block)</td><td>N-01 PASS</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>Depth honest</td><td>Per-edge depth not silently capped at 3 when global unset</td><td>N-04 PASS (#477 class)</td><td><span class="pill next">not yet</span></td></tr>
+    </table>
+    </div>
+
+    <h2>Out of scope</h2>
+    <ul>
+      <li>Marketplace agent packs / remote-a2a agent refs</li>
+      <li>Browser live-panel interaction (except optional extension if a delegate opens a browser)</li>
+      <li>Replacing CI unit/integration tests — this is product E2E only</li>
+      <li>Merging <code>hotfix/v0.1.1</code> → <code>main</code> (sibling track)</li>
+    </ul>
+
+    <h2>Counts at a glance</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Family</th><th>IDs</th><th>~Rows</th><th>P0-heavy?</th></tr>
+      <tr><td>Direct <code>delegate</code></td><td>D-01…D-17</td><td>17</td><td>Yes</td></tr>
+      <tr><td>Task mode</td><td>T-01…T-12</td><td>12</td><td>Yes</td></tr>
+      <tr><td>Parallel</td><td>P-01…P-07</td><td>7</td><td>Yes</td></tr>
+      <tr><td>Nested</td><td>N-01…N-08</td><td>8</td><td>Yes</td></tr>
+      <tr><td>Graph / Team</td><td>G-01…G-12</td><td>12</td><td>Yes</td></tr>
+      <tr><td>Identity</td><td>I-01…I-05</td><td>5</td><td>Yes</td></tr>
+      <tr><td>External 3p</td><td>X-01…X-07</td><td>7</td><td>Conditional</td></tr>
+      <tr><td>Approvals</td><td>A-01…A-05</td><td>5</td><td>Partial</td></tr>
+      <tr><td>Handoff</td><td>H-01…H-05</td><td>5</td><td>Yes</td></tr>
+      <tr><td>UX</td><td>U-01…U-08</td><td>8</td><td>No</td></tr>
+      <tr><td>Chaos</td><td>E-01…E-07</td><td>7</td><td>Partial</td></tr>
+    </table>
+    </div>
+  </section>
+
+  <!-- WORKSTREAMS -->
+  <section class="pane" id="work">
+    <h2>Status — UAT execution workstreams</h2>
+    <p class="meta">Execution has not started. Rows are the planned parallel groups after operator sign-off + CI green.</p>
+    <div class="scroll">
+    <table>
+      <tr><th>ID</th><th>What</th><th>Owner</th><th>Depends on</th><th>Status</th></tr>
+      <tr><td>0</td><td>Matrix artefact + review page (this)</td><td>Lead agent</td><td>—</td><td><span class="pill done">done</span></td></tr>
+      <tr><td>R</td><td>Operator review / scope decisions</td><td>Daniel</td><td>after 0</td><td><span class="pill now">in progress</span></td></tr>
+      <tr><td>CI</td><td>Sibling instance CI + potential fixes</td><td>Other instance</td><td>—</td><td><span class="pill now">in progress</span></td></tr>
+      <tr><td>G1</td><td>G-Del-1 Orchestrator (D-01…12, U-01, U-03)</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G2</td><td>G-Del-2 Trust enforcer (D-13…17, G-*, T-02…03)</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G3</td><td>G-Del-3 Task board (T-*, P-07, U-05…06)</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G4</td><td>G-Del-4 Parallel scout (P-01…06, N-01…02)</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G5</td><td>G-Del-5 Nest &amp; depth (N-03…08, A-*, U-08)</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G6</td><td>G-Del-6 External + chaos (X-*, I-*, H-*, E-*, T-09…10)</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G-Br-1</td><td>Browser surfaces ×3 + keyboard + URL</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G-Br-2</td><td>Browser agent drive + multi-tab (target=_blank)</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>G-Br-3</td><td>Browser take-control + annotate + chaos</td><td>UAT agent</td><td>after R + CI</td><td><span class="pill next">next</span></td></tr>
+      <tr><td>S</td><td>Lead synthesis → del + browser reports</td><td>Lead agent</td><td>after G-Del + G-Br</td><td><span class="pill next">next</span></td></tr>
+    </table>
+    </div>
+
+    <hr>
+    <h2>0 · Matrix artefact <span class="pill done">done</span></h2>
+    <h3>Done so far</h3>
+    <ul>
+      <li>Grounded matrix against live code: <code>delegate</code>, workspace graph, ADR-032/036/037/040</li>
+      <li>Markdown source at <code>docs/internal/uat/uat-matrix-delegation-subagent-tasks-2026-07-13.md</code></li>
+      <li>This project-artifact status page for review</li>
+    </ul>
+    <h3>How it was verified</h3>
+    <p>Code + ADR read of <code>pkg/tools/delegate.go</code>, <code>pkg/workspace/delegation.go</code>, seed edges in <code>coreagent</code>, prior UAT reports for historical defects to re-check. Not yet executed against a live gateway.</p>
+
+    <h2>R · Operator review <span class="pill now">in progress</span></h2>
+    <ul>
+      <li>Sign-off checklist lives on the <strong>Attention</strong> tab</li>
+      <li>Key fork: include/exclude <code>X-*</code> if claude/codex/opencode not installed in the UAT env</li>
+    </ul>
+
+    <h2>G1–G6 · Parallel UAT groups <span class="pill next">next</span></h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Group</th><th>Persona</th><th>Case IDs</th><th>LLM</th><th>Ports (example)</th></tr>
+      <tr><td>G-Del-1</td><td>Sam — orchestrator</td><td>D-01–D-12, U-01, U-03</td><td>Y</td><td>6081 / 6181</td></tr>
+      <tr><td>G-Del-2</td><td>Priya — trust enforcer</td><td>D-13–D-17, G-01–G-12, T-02–T-03</td><td>Y/N</td><td>6082 / 6182</td></tr>
+      <tr><td>G-Del-3</td><td>Lee — task board</td><td>T-01, T-04–T-08, T-11–T-12, P-07, U-05–U-06</td><td>Y</td><td>6083 / 6183</td></tr>
+      <tr><td>G-Del-4</td><td>Ray — parallel scout</td><td>P-01–P-06, N-01–N-02</td><td>Y</td><td>6084 / 6184</td></tr>
+      <tr><td>G-Del-5</td><td>Nest — depth</td><td>N-03–N-08, U-08, A-01–A-05</td><td>Y</td><td>6085 / 6185</td></tr>
+      <tr><td>G-Del-6</td><td>Ext — 3p + chaos</td><td>X-01–X-07, I-01–I-05, H-01–H-05, E-01–E-07, T-09–T-10</td><td>Y</td><td>6086 / 6186</td></tr>
+    </table>
+    </div>
+    <p>Each group: isolated <code>OMNIPUS_HOME</code> + gateway + screenshot dir under <code>docs/internal/uat/screenshots/delegation-matrix-&lt;runid&gt;/</code>.</p>
+  </section>
+
+  <!-- MATRIX (primary review content) -->
+  <section class="pane" id="matrix">
+    <div class="callout">
+      Condensed executable matrix. Full stimulus/expect text is in the markdown source.
+      Severity: <span class="sev-p0">P0</span> ship-blocker · <span class="sev-p1">P1</span> major · <span class="sev-p2">P2</span> polish.
+      Pass rule: backend <strong>and</strong> UX must both hold.
+    </div>
+
+    <h2>A · Direct <code>delegate</code></h2>
+    <div class="scroll">
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>LLM</th><th>Result</th></tr>
+      <tr><td class="id">D-01</td><td>Self-delegation, background (default)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-02</td><td>Self-delegation, await</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-03</td><td>Targeted await Jim→Worker</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-04</td><td>Targeted background Jim→Ava (+ Critical)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-05</td><td>Targeted background Jim→Ray</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-06</td><td>Status poll happy path (same map as async)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-07</td><td>Status list (no task_id)</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-08</td><td>Status cross-session isolation</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-09</td><td>Untargeted vs targeted identity</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-10</td><td>Label surface</td><td class="sev-p2">P2</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-11</td><td>Cancel mid await → interrupted on reload</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-12</td><td>Cancel mid background → child continues</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-13</td><td>Denied target (no edge)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-14</td><td>Mode mismatch — edge task-only, async direct</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-15</td><td>Mode allow — edge direct-only</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-16</td><td>Empty / invalid args</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">D-17</td><td>Worker as chat target blocked</td><td class="sev-p1">P1</td><td>N</td><td></td></tr>
+    </table>
+    </div>
+
+    <h2>B · Task mode</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>LLM</th><th>Result</th></tr>
+      <tr><td class="id">T-01</td><td>create_task allowed Jim→Worker</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-02</td><td>create_task denied (no edge)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-03</td><td>create_task mode deny</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-04</td><td>update_task reassignment allow</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-05</td><td>update_task reassignment deny</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-06</td><td>Task lifecycle human-visible</td><td class="sev-p0">P0</td><td>Y/N</td><td></td></tr>
+      <tr><td class="id">T-07</td><td>Task DAG / blocked_by</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-08</td><td>Create &amp; Run UI (if present)</td><td class="sev-p2">P2</td><td>N</td><td></td></tr>
+      <tr><td class="id">T-09</td><td>Cross-WS create_task_in_workspace</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-10</td><td>Cross-WS update_task_in_workspace</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-11</td><td>Task depth / nested task spawn</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">T-12</td><td>Worker cannot create_task without edge</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+    </table>
+    </div>
+
+    <h2>C · Parallel / fan-out</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>LLM</th><th>Result</th></tr>
+      <tr><td class="id">P-01</td><td>Dual background fan-out</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">P-02</td><td>Triple fan-out (Ray research style)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">P-03</td><td>Max-parallel queue</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">P-04</td><td>Same-target concurrent external serialization</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">P-05</td><td>Mixed await + background</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">P-06</td><td>Status under fan-out</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">P-07</td><td>Parallel task creates</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+    </table>
+    </div>
+
+    <h2>D · Nested / multi-hop (ADR-040)</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>LLM</th><th>Result</th></tr>
+      <tr><td class="id">N-01</td><td>2-hop chain allowed (Jim→Ray→Researcher)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">N-02</td><td>3-hop at default cap; 4th denied</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">N-03</td><td>Per-edge depth=1</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">N-04</td><td>Per-edge depth=10 vs unset global (not hard-stop at 3)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">N-05</td><td>Tighter-of-two (edge vs global)</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">N-06</td><td>Nested child cannot hand_off</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">N-07</td><td>Nested grant inheritance transitive</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">N-08</td><td>load_tool honesty for delegate in child</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+    </table>
+    </div>
+
+    <h2>E · Graph / Team tab</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>LLM</th><th>Result</th></tr>
+      <tr><td class="id">G-01</td><td>Seed graph render matches seed matrix</td><td class="sev-p0">P0</td><td>N</td><td></td></tr>
+      <tr><td class="id">G-02</td><td>Add edge + Save persists + runtime allows</td><td class="sev-p0">P0</td><td>N</td><td></td></tr>
+      <tr><td class="id">G-03</td><td>Remove edge → immediate deny</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">G-04</td><td>Edit modes only</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">G-05</td><td>Edit depth</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">G-06</td><td>Self-edge rejected</td><td class="sev-p1">P1</td><td>N</td><td></td></tr>
+      <tr><td class="id">G-07</td><td>Off-team endpoint rejected</td><td class="sev-p1">P1</td><td>N</td><td></td></tr>
+      <tr><td class="id">G-08</td><td>Cycle detection</td><td class="sev-p2">P2</td><td>N</td><td></td></tr>
+      <tr><td class="id">G-09</td><td>Per-workspace isolation</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">G-10</td><td>Retired global <code>/agents/trust</code></td><td class="sev-p0">P0</td><td>N</td><td></td></tr>
+      <tr><td class="id">G-11</td><td>PUT agent <code>delegation_policy</code> → 400</td><td class="sev-p1">P1</td><td>N</td><td></td></tr>
+      <tr><td class="id">G-12</td><td>Legacy await/background → direct migration</td><td class="sev-p1">P1</td><td>N</td><td></td></tr>
+    </table>
+    </div>
+
+    <h2>F–K · Identity, External, Approvals, Handoff, UX, Chaos</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>LLM</th><th>Result</th></tr>
+      <tr><td class="id">I-01</td><td>Native target model ≠ parent</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">I-02</td><td>Native target tool policy</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">I-03</td><td>CoreTeam work/ root (not AGENT.md)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">I-04</td><td>load_tool vs execute policy split-brain gone</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">I-05</td><td>Token / agent_id attribution</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">X-01</td><td>subagent_3p claude-code happy path</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">X-02</td><td>codex path (if installed)</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">X-03</td><td>opencode path (if installed)</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">X-04</td><td>Missing CLI → clear fail</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">X-05</td><td>Wrong identity regression (target executor)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">X-06</td><td>Concurrent same workspace (see P-04)</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">X-07</td><td>Task-mode to external</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">A-01</td><td>Inherit grant into ask</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">A-02</td><td>Deny not overridden by grant</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">A-03</td><td>Allow path independent</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">A-04</td><td>Copy-at-spawn not live</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">A-05</td><td>Transitive (see N-07)</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">H-01</td><td>Handoff open despite no edge</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">H-02</td><td>Handoff ≠ delegate</td><td class="sev-p1">P1</td><td>Y</td><td></td></tr>
+      <tr><td class="id">H-03</td><td>Handoff to worker rejected</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">H-04</td><td>Nested handoff blocked</td><td class="sev-p0">P0</td><td>Y</td><td></td></tr>
+      <tr><td class="id">H-05</td><td>Attribution stable after switch</td><td class="sev-p0">P0</td><td>N</td><td></td></tr>
+      <tr><td class="id">U-01…08</td><td>SubagentBlock, activity bar, verbose, graph, depth ad</td><td class="sev-p1">P1–P2</td><td>mix</td><td></td></tr>
+      <tr><td class="id">E-01…07</td><td>Restart, provider fail, isolation, depth 0, god mode</td><td class="sev-p0">P0–P2</td><td>mix</td><td></td></tr>
+    </table>
+    </div>
+
+    <h2>Historical defects to re-verify</h2>
+    <ul>
+      <li>check_spawn_status disconnected → <code>D-06</code></li>
+      <li>Global trust Saved-but-inert → <code>G-10</code></li>
+      <li>One-hop hard block → <code>N-01</code></li>
+      <li>Silent depth=3 override → <code>N-04</code></li>
+      <li>Async child killed with parent → <code>D-12</code></li>
+      <li>Raw child voice orphan bubble → <code>D-01</code>, <code>D-04</code></li>
+      <li>Interrupted shown as failed on reload → <code>D-11</code></li>
+      <li>Parent/child tool-policy split-brain → <code>I-04</code></li>
+      <li>Attribution rewrite on agent switch → <code>H-05</code></li>
+      <li>Denial only on expand (G17) → <code>U-02</code></li>
+    </ul>
+  </section>
+
+
+  <!-- BROWSER MATRIX -->
+  <section class="pane" id="browser">
+    <div class="callout">
+      <strong>Three hosts required:</strong> (1) overlay sidebar Sheet · (2) pinned docked sidebar · (3) pop-out <code>/browser-live</code> tab.
+      Rows marked ×3 must pass on all three. Prior bugs to re-verify: <em>pop-out typing</em>, <em>target=_blank agent lost</em>, blank annotate crop, 2-click take-over, close-active-tab false death.
+    </div>
+
+    <h2>Hosts</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Host</th><th>Enter</th><th>Annotate</th><th>Pop-out btn</th><th>Chat</th></tr>
+      <tr><td><code>H-overlay</code></td><td>Open browser / Watch live</td><td>Yes</td><td>Yes</td><td>Behind (modal=false)</td></tr>
+      <tr><td><code>H-pinned</code></td><td>Pin from overlay</td><td>Yes</td><td><strong>No</strong></td><td>Side-by-side</td></tr>
+      <tr><td><code>H-popout</code></td><td>Pop out → new tab</td><td><strong>No</strong></td><td>n/a</td><td>Only original tab</td></tr>
+    </table>
+    </div>
+
+    <h2>Ship gates (browser)</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Gate</th><th>Cases</th><th>Status</th></tr>
+      <tr><td>Three hosts agent drive</td><td>BH-07, BH-08, BH-09</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>Pop-out typing</td><td>BK-08 + BK-01–05 on pop-out</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>Take over one-click</td><td>BC-03 ×3</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>No blank annotate crop</td><td>BN-02</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>target=_blank not lost</td><td>BT-01 + BT-03</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>Close active tab no false death</td><td>BT-07</td><td><span class="pill next">not yet</span></td></tr>
+      <tr><td>Shared session user↔agent</td><td>BA-05, BA-06</td><td><span class="pill next">not yet</span></td></tr>
+    </table>
+    </div>
+
+    <h2>L · Hosts (BH)</h2>
+    <div class="scroll"><table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>×3</th><th>Result</th></tr>
+      <tr><td class="id">BH-01</td><td>Open overlay launcher</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BH-02</td><td>Watch live on tool call</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BH-03</td><td>Pin → docked aside</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BH-04</td><td>Unpin back to overlay</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BH-05</td><td>Pop-out new browser tab</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BH-06</td><td>Pop-out keyboard focus types into page</td><td class="sev-p0">P0</td><td>pop</td><td></td></tr>
+      <tr><td class="id">BH-07</td><td>Agent drives — overlay</td><td class="sev-p0">P0</td><td>H-o</td><td></td></tr>
+      <tr><td class="id">BH-08</td><td>Agent drives — pinned</td><td class="sev-p0">P0</td><td>H-p</td><td></td></tr>
+      <tr><td class="id">BH-09</td><td>Agent drives — pop-out</td><td class="sev-p0">P0</td><td>H-x</td><td></td></tr>
+      <tr><td class="id">BH-11</td><td>Take-over session-scoped (not wrong chat)</td><td class="sev-p0">P0</td><td>pin</td><td></td></tr>
+      <tr><td class="id">BH-14</td><td>Screencast rebind after tab switch</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BH-16</td><td>Watch live on finalized tool card</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BH-17</td><td>Two windows controlled_by_other</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BH-10/12/13/15/18</td><td>Close/session/pop-out absent when pinned / races / narrow</td><td class="sev-p1">P1–P2</td><td>mix</td><td></td></tr>
+    </table></div>
+
+    <h2>M · Agent job (BA)</h2>
+    <div class="scroll"><table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>×3</th><th>Result</th></tr>
+      <tr><td class="id">BA-01</td><td>Screenshot Current page URL header</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BA-02</td><td>Multi-step navigate→click→get_text</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BA-03</td><td>Text selector click</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BA-04</td><td>Wait/get_text fail-fast (not 30s hang)</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BA-05</td><td>Agent sees page after user omnibox</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BA-06</td><td>Agent sees user-typed form state</td><td class="sev-p0">P0</td><td>pin</td><td></td></tr>
+      <tr><td class="id">BA-07</td><td>Soft deny while user controlling</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BA-08</td><td>Resume after user releases</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BA-10</td><td>browser_open_tab same browser</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+    </table></div>
+
+    <h2>N · Take control (BC)</h2>
+    <div class="scroll"><table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>×3</th><th>Result</th></tr>
+      <tr><td class="id">BC-01</td><td>Click-to-drive when idle</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BC-02</td><td>Watch-only while agent streaming</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BC-03</td><td><strong>Take over one-click</strong> (not two)</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BC-05–07</td><td>Click / scroll / type inject</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BC-09</td><td>controlled_by_other blocks steal</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BC-13</td><td>Pen mode not accidental drive</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+    </table></div>
+
+    <h2>O · Annotate (BN)</h2>
+    <div class="scroll"><table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>Result</th></tr>
+      <tr><td class="id">BN-01</td><td>Enter Pen mode</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BN-02</td><td><strong>Crop non-blank</strong> on wide viewport</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BN-04</td><td>Send crop+comment to chat</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BN-05</td><td>Vision describes crop (vision model)</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BN-06</td><td>Pen hidden in pop-out</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BN-11–12</td><td>Mutual exclusion + correct session target</td><td class="sev-p0">P0</td><td></td></tr>
+    </table></div>
+
+    <h2>P · Multi-tab / target=_blank (BT) — agent got lost</h2>
+    <div class="scroll"><table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>×3</th><th>Result</th></tr>
+      <tr><td class="id">BT-01</td><td>Click target=_blank <strong>adopts</strong> same browser</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BT-02</td><td>window.open adopts</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BT-03</td><td>Agent continues on <strong>new</strong> tab (not stuck on opener)</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BT-04–06</td><td>list / switch / close background</td><td class="sev-p0">P0</td><td>mix</td><td></td></tr>
+      <tr><td class="id">BT-07</td><td>Close <strong>active</strong> tab — no false session death</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BT-09</td><td>browser_open_tab</td><td class="sev-p0">P0</td><td>—</td><td></td></tr>
+      <tr><td class="id">BT-14</td><td>Live booking/calendar blank regression</td><td class="sev-p0">P0</td><td>pin</td><td></td></tr>
+    </table></div>
+
+    <h2>Q · Keyboard (BK) — pop-out typing bug</h2>
+    <div class="scroll"><table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>×3</th><th>Result</th></tr>
+      <tr><td class="id">BK-01</td><td>Plain typing abc</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BK-02</td><td>Backspace/Delete</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BK-03</td><td>Enter</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BK-04</td><td>Tab focus</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BK-05</td><td>Arrows</td><td class="sev-p0">P0</td><td>×3</td><td></td></tr>
+      <tr><td class="id">BK-08</td><td><strong>Pop-out: click field then type works</strong></td><td class="sev-p0">P0</td><td>pop</td><td></td></tr>
+      <tr><td class="id">BK-09</td><td>Pop-out: keys not stolen by SPA hotkeys</td><td class="sev-p0">P0</td><td>pop</td><td></td></tr>
+    </table></div>
+
+    <h2>R · URL / SSRF (BU) · S · Chaos (BE)</h2>
+    <div class="scroll"><table>
+      <tr><th>ID</th><th>Pattern</th><th>Sev</th><th>Result</th></tr>
+      <tr><td class="id">BU-01</td><td>Omnibox valid navigate</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BU-03</td><td>SSRF block → security message</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BU-04</td><td>DNS fail → unreachable (not security)</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BU-07</td><td>Open browser before any agent tool</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BE-01</td><td>Kill Chromium mid-session</td><td class="sev-p0">P0</td><td></td></tr>
+      <tr><td class="id">BE-02</td><td>9223 contention</td><td class="sev-p0">P0</td><td></td></tr>
+    </table></div>
+
+    <h2>Browser UAT groups</h2>
+    <div class="scroll"><table>
+      <tr><th>Group</th><th>Focus</th><th>IDs</th></tr>
+      <tr><td>G-Br-1</td><td>Surfaces ×3 + keyboard + URL</td><td>BH-*, BU-*, BK-*, BC-01–02, BN-06</td></tr>
+      <tr><td>G-Br-2</td><td>Agent driver + multi-tab</td><td>BA-*, BT-01–05, BT-14, BC-02–03</td></tr>
+      <tr><td>G-Br-3</td><td>Control + annotate + chaos</td><td>BC-*, BN-* (vision), BK-08–09, BE-*</td></tr>
+    </table></div>
+    <p class="meta">One Chromium (CDP 9223) per gateway — do not parallelize two browser groups on one process. Prefer Ray/Jim. Vision model for BN-05.</p>
+  </section>
+
+  <!-- ATTENTION -->
+  <section class="pane" id="att">
+    <h2>Waiting on Operator (Daniel)</h2>
+    <ol>
+      <li><strong>Decision: RUN / REVISE / DEFER</strong> — reply with that word. Unblocks execution scheduling.</li>
+      <li><strong>Scope X-*</strong> — include external CLI rows only if binaries exist in UAT env; otherwise mark BLOCKED/skip with note.</li>
+      <li><strong>Confirm P0 gate</strong> — accept the ship gates on Overview, or list P0 rows to demote.</li>
+      <li><strong>Model</strong> — confirm <code>z-ai/glm-5.2</code> (or alternative tool-capable model).</li>
+      <li><strong>Any add-ons?</strong> — e.g. channel-bound workspace + Telegram delegate (not in matrix yet).</li>
+      <li><strong>Browser P0 must-pass:</strong> pop-out typing (BK-08), target=_blank adopt (BT-01/03), take-over one-click (BC-03), three-host agent drive (BH-07–09).</li>
+    </ol>
+    <h2>Automatic once those land</h2>
+    <ul>
+      <li>Lead fans out G-Del-1…6 on isolated gateways (after sibling CI is green enough to trust the tip)</li>
+      <li>Screenshots + per-ID results → synthesis report</li>
+      <li>This artifact refresh with PASS/FAIL pills (delta, not re-narrative)</li>
+    </ul>
+    <h2>Waiting on others</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Who</th><th>What</th><th>Item</th><th>Where</th></tr>
+      <tr><td>Sibling Claude instance</td><td>CI green + potential fixes on hotfix tip</td><td>Workstream CI</td><td>Same branch <code>hotfix/v0.1.1</code></td></tr>
+    </table>
+    </div>
+  </section>
+
+  <!-- BACKGROUND -->
+  <section class="pane" id="bg">
+    <div class="callout">If you only read one conceptual tab, read this — the live model the matrix tests against.</div>
+
+    <h2>Ground truth (do not UAT retired surfaces)</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Topic</th><th>Live behaviour</th><th>Authority</th></tr>
+      <tr><td>Single tool</td><td><code>delegate</code> only (<code>action: run|status</code>, <code>async</code> default <strong>true</strong>)</td><td>ADR-036</td></tr>
+      <tr><td>Trust</td><td>Per-workspace <code>Delegation[]</code> only; deny-by-default</td><td>ADR-037</td></tr>
+      <tr><td>Edge modes</td><td><code>direct</code> | <code>task</code> (legacy await/background → direct)</td><td>workspace.DelegationMode</td></tr>
+      <tr><td>Call modes</td><td>await / background / task → mapped via EdgeModeCategory</td><td>loop.go</td></tr>
+      <tr><td>Nested</td><td>Allowed; depth-governed (FR-H-006 reversed)</td><td>ADR-040</td></tr>
+      <tr><td>Identity</td><td>Child = target; parent contributes prompt + auth only</td><td>ADR-032</td></tr>
+      <tr><td>Operator UI</td><td>Workspace <strong>Team</strong> tab only</td><td>ADR-037</td></tr>
+      <tr><td>Handoff</td><td><code>hand_off</code> not gated by trust graph</td><td>handoff.go</td></tr>
+    </table>
+    </div>
+
+    <h2>Seed trust matrix (fresh workspace)</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>From</th><th>To</th><th>Modes (tool → edge)</th><th>Depth</th></tr>
+      <tr><td>Jim</td><td>Ava, Ray, Worker</td><td>task+bg+await → [task, direct]</td><td>inherit</td></tr>
+      <tr><td>Mia / Ava</td><td>Worker</td><td>task+bg → [task, direct]</td><td>inherit</td></tr>
+      <tr><td>Ray</td><td>Worker, Researcher</td><td>task+bg+await → [task, direct]</td><td>inherit</td></tr>
+      <tr><td>Planner</td><td>Explorer, Researcher</td><td>await+task → [direct, task]</td><td><strong>2</strong></td></tr>
+      <tr><td>Worker / Explorer / Researcher</td><td>—</td><td>no outward seed</td><td>n/a</td></tr>
+    </table>
+    </div>
+    <p>Default global depth backstop: <code>defaultMaxSubTurnDepth = 3</code> when <code>SubTurn.MaxDepth</code> unset.</p>
+
+    <h2>Why this matrix now</h2>
+    <p>
+      Prior UAT plans still mention <code>/agents/trust</code>, global <code>delegation_policy</code>, and separate
+      <code>spawn</code> / <code>run_subagent</code> / <code>check_spawn_status</code> tools. Those are stale.
+      Browser is already on hotfix; sibling instance is cleaning CI. This matrix is the review gate
+      before a focused delegation UAT pass.
+    </p>
+  </section>
+
+  <!-- PLAN -->
+  <section class="pane" id="plan">
+    <h2>Approach</h2>
+    <p>
+      Pre-flight one binary tip → six isolated gateways → force-tool prompts for LLM cases →
+      screenshot every step → lead synthesis. Prefer force-tool prompts with glm-5.2 over open-ended
+      “orchestrate something”.
+    </p>
+
+    <h2>Phases</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Phase</th><th>Goal</th><th>Depends on</th></tr>
+      <tr><td>0 Review</td><td>Operator RUN/REVISE + scope</td><td>—</td></tr>
+      <tr><td>1 Pre-flight</td><td>Build tip, seed check G-01, no /agents/trust</td><td>after 0; CI trust</td></tr>
+      <tr><td>2 Fan-out</td><td>G-Del-1…6 in parallel</td><td>after 1</td></tr>
+      <tr><td>3 Synthesis</td><td>Report + refresh this artifact with results</td><td>after 2</td></tr>
+      <tr><td>4 Fix loop</td><td>P0 fails → fix → retest affected IDs only</td><td>after 3 if needed</td></tr>
+    </table>
+    </div>
+
+    <h2>Force-tool prompt kit (samples)</h2>
+<pre><code>D-AWAIT-WORKER:
+Call the tool `delegate` exactly once with:
+  agent_id: "worker"
+  async: false
+  label: "uat-d03"
+  task: "Reply with exactly the single word PONG and no other text or tools."
+Do not call any other tools.
+
+D-ASYNC-AVA:
+Call `delegate` once with agent_id "ava", async true, label "uat-d04",
+task "Create a one-line file notes/uat-pong.txt with content PONG then stop."
+Then call `delegate` with action "status" and the returned task_id until completed.
+
+D-DENY-AVA-AS-MIA:
+You are Mia. Call `delegate` with agent_id "ava", async false,
+task "say hi". If denied, explain the denial text.
+
+N-CHAIN:
+Call `delegate` async false agent_id "ray" with task:
+"You MUST call delegate async=false agent_id researcher with task 'Reply PONG2' and return their answer."</code></pre>
+
+    <h2>Pre-flight checklist</h2>
+    <ul>
+      <li>P0 Build binary from tip of <code>hotfix/v0.1.1</code> (SPA embed if UI touched)</li>
+      <li>P1 Fresh <code>OMNIPUS_HOME</code> + onboarding</li>
+      <li>P2 Tool-capable model on Jim / Ray / Planner</li>
+      <li>P3 Team tab seed edges match Background tab</li>
+      <li>P4 No live <code>/agents/trust</code></li>
+      <li>P5 Verbose chat understood</li>
+      <li>P6 Screenshot dir ready</li>
+    </ul>
+  </section>
+
+  <!-- RISKS -->
+  <section class="pane" id="risk">
+    <h2>Risks</h2>
+    <div class="scroll">
+    <table>
+      <tr><th>Risk</th><th>L / I</th><th>Mitigation</th><th>Owner</th></tr>
+      <tr><td>glm-5.2 refuses tools / wanders</td><td>Med / High</td><td>Force-tool prompt kit; small tasks; retry with stricter wording</td><td>UAT lead</td></tr>
+      <tr><td>Sibling CI tip moves under us</td><td>Med / Med</td><td>Pin SHA at UAT start; re-run P0 only if tip moves</td><td>Operator</td></tr>
+      <tr><td>External CLIs missing in pod</td><td>High / Med</td><td>Scope-out X-* at review; don’t fail whole matrix</td><td>Operator</td></tr>
+      <tr><td>Resource pressure (6 gateways)</td><td>Med / High</td><td>Run 3+3 if RAM tight; unique ports</td><td>UAT lead</td></tr>
+      <tr><td>False confidence from unit tests</td><td>Med / High</td><td>Matrix requires SPA + real LLM for Y rows</td><td>UAT lead</td></tr>
+      <tr><td>U-02 denial-only-on-expand still true</td><td>Low / Low</td><td>Document as known P2; don’t block ship if structured expand works</td><td>Operator</td></tr>
+    </table>
+    </div>
+    <h4 style="color:var(--red)">⚠ The honest caveat</h4>
+    <p>
+      This page is a <strong>review draft of a plan</strong>, not evidence the product works.
+      Historical UAT already found identity, async delivery, and trust-theatre bugs that unit
+      tests missed — expect the matrix to find more once executed.
+    </p>
+    <h2>Open questions</h2>
+    <ul>
+      <li>Include channel-originated delegation (Telegram/Discord) in v1 of this UAT, or SPA-only?</li>
+      <li>Is global <code>SubTurn.MaxDepth</code> Settings UI still missing (ADR-040 follow-up) — test via config only?</li>
+      <li>Should P-03 (max parallel) be P0 if Settings UI is hard to find?</li>
+    </ul>
+  </section>
+
+  <!-- FAQ -->
+  <section class="pane" id="faq">
+    <h3>Why not just re-run the old agent-features UAT?</h3>
+    <p>
+      That plan still describes <code>/agents/trust</code>, pre-merge tool names, and pre-ADR-040 one-hop
+      assumptions. This matrix is rewritten for the live model so failures map to real code paths.
+    </p>
+    <h3>Why a project artifact instead of only markdown?</h3>
+    <p>
+      Shareable, tabbed status page for multi-workstream review; refresh later with PASS/FAIL
+      deltas without re-narrating the whole plan. Markdown remains the detailed source of truth
+      for stimuli/expect columns.
+    </p>
+    <h3>What does “done” look like for this UAT?</h3>
+    <p>
+      All P0 rows PASS (or deferred with issue + ACK); report filed; this artifact refreshed with
+      result pills; operator has a clear ship/no-ship call for the <strong>delegation subsystem</strong>
+      on hotfix tip.
+    </p>
+    <h3>Where is the full matrix text?</h3>
+    <p>
+      Repo: <code>docs/internal/uat/uat-matrix-delegation-subagent-tasks-2026-07-13.md</code>
+      (stimulus, backend expect, UX expect per row).
+    </p>
+    <h3>Branch / tip?</h3>
+    <p>
+      <code>hotfix/v0.1.1</code> (includes browser ADR-038→041). No open PR to main yet; ~827 commits ahead of main as of matrix draft.
+    </p>
+  </section>
+
+</main>
+
+<script type="application/json" id="artifact-state">
+{"as_of":"2026-07-13T14:00:00Z","phase":"review-draft-v2","branch":"hotfix/v0.1.1","source_md":"docs/internal/uat/uat-matrix-delegation-subagent-tasks-2026-07-13.md","workstreams":[{"id":"0","status":"done","owner":"lead","what":"matrix artefact v2 browser"},{"id":"R","status":"in_progress","owner":"Daniel","what":"operator review"},{"id":"CI","status":"in_progress","owner":"sibling","what":"CI and fixes"},{"id":"G1","status":"next","owner":"uat","what":"G-Del-1"},{"id":"G2","status":"next","owner":"uat","what":"G-Del-2"},{"id":"G3","status":"next","owner":"uat","what":"G-Del-3"},{"id":"G4","status":"next","owner":"uat","what":"G-Del-4"},{"id":"G5","status":"next","owner":"uat","what":"G-Del-5"},{"id":"G6","status":"next","owner":"uat","what":"G-Del-6"},{"id":"G-Br-1","status":"next","owner":"uat","what":"browser surfaces"},{"id":"G-Br-2","status":"next","owner":"uat","what":"browser agent multitab"},{"id":"G-Br-3","status":"next","owner":"uat","what":"browser control annotate"},{"id":"S","status":"next","owner":"lead","what":"synthesis reports"}],"counts":{"families":19,"approx_rows":180,"p0_gates_del":6,"p0_gates_browser":8}}
+</script>
+
+<script>
+function goTab(id){
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.pane === id));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === id));
+}
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => goTab(t.dataset.pane)));
+</script>
+
+</body>
+</html>

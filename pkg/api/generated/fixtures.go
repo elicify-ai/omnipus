@@ -1005,6 +1005,21 @@ func FixtureTaskTrigger_Edge() TaskTrigger {
 	return tr
 }
 
+// FixtureTaskTrigger_Rrule — a recurring RFC 5545 RRULE trigger, exercising
+// the rrule/dtstart_ms/tz wire keys (Calendar Recurrence Redesign,
+// contracts/components/schemas/TaskTrigger.yaml's `recurring` variant with
+// `rrule` rather than the legacy `cron_expr`).
+func FixtureTaskTrigger_Rrule() TaskTrigger {
+	rrule := "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10"
+	dtstartMs := int64(1784624400000)
+	tz := "Europe/Berlin"
+	tr := TaskTrigger{Type: TaskTriggerType("recurring")}
+	tr.Config.Rrule = &rrule
+	tr.Config.DtstartMs = &dtstartMs
+	tr.Config.Tz = &tz
+	return tr
+}
+
 // FixtureTodo_Populated — a checklist item.
 func FixtureTodo_Populated() Todo {
 	return Todo{Text: "Draft the summary section", Status: TodoStatusPending}
@@ -2621,4 +2636,267 @@ func FixtureSlashCommand_WithAliasesAndStreaming() SlashCommand {
 // delivery="" is not in enum [client, agent].
 func FixtureSlashCommand_ZeroValue() SlashCommand {
 	return SlashCommand{}
+}
+
+// ── TaskOccurrenceSet ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskOccurrenceSet.yaml,
+// contracts/components/schemas/DayBucket.yaml
+// Regression guard: occurrences_ms/day_buckets are both `required`,
+// non-nullable array fields (TaskOccurrenceSet.yaml) with no `omitempty` on
+// the generated struct — a bare nil Go slice marshals to JSON null, which
+// fails schema validation (see
+// TestContract_TaskOccurrenceSet_NilOccurrencesMsRejected /
+// TestContract_TaskOccurrenceSet_NilDayBucketsRejected below). Every fixture
+// here is deliberately built with a literal `[]int64{...}` / composite
+// literal rather than a nil var, so each constructor is itself schema-valid
+// — mirroring the fix in pkg/gateway/task_occurrences.go's
+// buildOneOccurrenceSet, which normalizes both fields to non-nil before
+// constructing the real response.
+
+// FixtureTaskOccurrenceSet_Populated — both occurrences_ms and day_buckets
+// non-empty: a legal wire shape per the schema (occurrences_ms carries the
+// <=3/day raw days, day_buckets the >3/day aggregated days of the SAME
+// task's response).
+func FixtureTaskOccurrenceSet_Populated() TaskOccurrenceSet {
+	interval := int64(1800000)
+	return TaskOccurrenceSet{
+		TaskId:        "550e8400-e29b-41d4-a716-446655440000",
+		OccurrencesMs: []int64{1784620800000, 1785225600000},
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+			RunCounts  *struct {
+				Done       int32 `json:"done"`
+				Failed     int32 `json:"failed"`
+				InProgress int32 `json:"in_progress"`
+				Scheduled  int32 `json:"scheduled"`
+			} `json:"run_counts,omitempty"`
+		}{
+			{Count: 48, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval},
+		},
+		Truncated: false,
+	}
+}
+
+// FixtureTaskOccurrenceSet_BucketsOnly — the "dense overview" edge shape:
+// day_buckets populated, occurrences_ms empty-but-NON-NIL (the
+// buildOverview "every day is dense enough to bucket" case — was the
+// occurrences_ms:null bug's exact shape before the fix).
+func FixtureTaskOccurrenceSet_BucketsOnly() TaskOccurrenceSet {
+	interval := int64(60000)
+	return TaskOccurrenceSet{
+		TaskId:        "550e8400-e29b-41d4-a716-446655440001",
+		OccurrencesMs: []int64{},
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+			RunCounts  *struct {
+				Done       int32 `json:"done"`
+				Failed     int32 `json:"failed"`
+				InProgress int32 `json:"in_progress"`
+				Scheduled  int32 `json:"scheduled"`
+			} `json:"run_counts,omitempty"`
+		}{
+			{Count: 1440, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784592000000, IntervalMs: &interval},
+		},
+		Truncated: false,
+	}
+}
+
+// FixtureTaskOccurrenceSet_OccurrencesOnly — the "detail mode" edge shape:
+// occurrences_ms populated, day_buckets empty-but-NON-NIL (detail mode never
+// buckets — was the day_buckets:null bug's exact shape before the fix).
+func FixtureTaskOccurrenceSet_OccurrencesOnly() TaskOccurrenceSet {
+	return TaskOccurrenceSet{
+		TaskId:        "550e8400-e29b-41d4-a716-446655440002",
+		OccurrencesMs: []int64{1784620800000, 1784624400000, 1784628000000},
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+			RunCounts  *struct {
+				Done       int32 `json:"done"`
+				Failed     int32 `json:"failed"`
+				InProgress int32 `json:"in_progress"`
+				Scheduled  int32 `json:"scheduled"`
+			} `json:"run_counts,omitempty"`
+		}{},
+		Truncated: false,
+	}
+}
+
+// FixtureTaskOccurrenceSet_WithRunOverlay — the ADR-050 run-overlay shape
+// (task-run-history-spec.md §3.7): occurrence_runs populated for the
+// individual instants AND day_buckets[].run_counts populated for the
+// aggregated day, exercising both additive overlay fields in the SAME
+// response (previously ZERO coverage — M2/H5).
+func FixtureTaskOccurrenceSet_WithRunOverlay() TaskOccurrenceSet {
+	interval := int64(1800000)
+	return TaskOccurrenceSet{
+		TaskId:        "550e8400-e29b-41d4-a716-446655440003",
+		OccurrencesMs: []int64{1784620800000, 1784624400000},
+		DayBuckets: []struct {
+			Count      int32  `json:"count"`
+			DayEndMs   int64  `json:"day_end_ms"`
+			DayStartMs int64  `json:"day_start_ms"`
+			FirstMs    int64  `json:"first_ms"`
+			IntervalMs *int64 `json:"interval_ms"`
+			RunCounts  *struct {
+				Done       int32 `json:"done"`
+				Failed     int32 `json:"failed"`
+				InProgress int32 `json:"in_progress"`
+				Scheduled  int32 `json:"scheduled"`
+			} `json:"run_counts,omitempty"`
+		}{
+			{
+				Count: 48, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval,
+				RunCounts: &struct {
+					Done       int32 `json:"done"`
+					Failed     int32 `json:"failed"`
+					InProgress int32 `json:"in_progress"`
+					Scheduled  int32 `json:"scheduled"`
+				}{Done: 12, Failed: 2, InProgress: 0, Scheduled: 26},
+			},
+		},
+		OccurrenceRuns: &[]struct {
+			HasResult    bool                                  `json:"has_result"`
+			OccurrenceMs int64                                 `json:"occurrence_ms"`
+			RunId        string                                `json:"run_id"`
+			SessionId    string                                `json:"session_id"`
+			Status       TaskOccurrenceSetOccurrenceRunsStatus `json:"status"`
+		}{
+			{HasResult: true, OccurrenceMs: 1784620800000, RunId: "01J8Z3K2R9G4S6M0N1P2Q3R4S5", SessionId: "session-uuid-1", Status: "done"},
+			{HasResult: false, OccurrenceMs: 1784624400000, RunId: "01J8Z3K2R9G4S6M0N1P2Q3R4S6", SessionId: "session-uuid-2", Status: "failed"},
+		},
+		Truncated: false,
+	}
+}
+
+// ── TaskRun ──────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskRun.yaml (ADR-050 / task-run-
+// history-spec.md §2.1). Previously ZERO contract coverage (M2/H5).
+
+// FixtureTaskRun_Populated — a closed (done) scheduled recurring-occurrence
+// run: every field set, including the terminal result and ended_at.
+func FixtureTaskRun_Populated() TaskRun {
+	occMs := int64(1784620800000)
+	result := "Found 3 anomalies in the gateway logs."
+	endedAt := time.Date(2026, 7, 20, 9, 5, 30, 0, time.UTC)
+	return TaskRun{
+		RunId:        "01J8Z3K2R9G4S6M0N1P2Q3R4S5",
+		TaskId:       "550e8400-e29b-41d4-a716-446655440000",
+		OccurrenceMs: &occMs,
+		Status:       TaskRunStatus("done"),
+		Result:       &result,
+		SessionId:    "session-uuid-1",
+		Kind:         TaskRunKind("scheduled"),
+		StartedAt:    time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC),
+		EndedAt:      &endedAt,
+	}
+}
+
+// FixtureTaskRun_ZeroValue — Go zero values. Expected to FAIL schema
+// validation: kind="" and status="" are not members of their respective
+// enums ([scheduled, manual] / [in_progress, done, failed]).
+func FixtureTaskRun_ZeroValue() TaskRun {
+	return TaskRun{}
+}
+
+// FixtureTaskRun_Edge — a closed (failed) MANUAL ad-hoc run at the
+// epoch-ms boundary: occurrence_ms=0 (Unix epoch, a legal minimal int64
+// value — distinct from Populated's large value), ended_at equal to
+// started_at (zero-duration run), unicode result text.
+//
+// NOTE: this fixture deliberately does NOT set occurrence_ms/ended_at to an
+// actual nil (JSON null), even though TaskRun.yaml declares both
+// `required` + `nullable: true` and Go's *int64/*time.Time nil is the
+// documented "ad-hoc run" / "still in_progress" wire shape (spec §2.1). The
+// standalone-file jsonschema/v6 compiler wired up in contract_test.go's
+// initSchemas() (plain jsonschema.NewCompiler(), no OpenAPI dialect) does
+// not implement the OpenAPI `nullable` extension keyword, so a literal null
+// on a `required` field currently fails validation here even though it is
+// spec-legal — a pre-existing gap in the shared test harness (also latent,
+// unexercised, on DayBucket.interval_ms), outside this fixture's/this
+// task's file scope (contracts/components/schemas/*.yaml, the jsonschema
+// loader setup) to fix. Flagged for follow-up rather than silently masked.
+func FixtureTaskRun_Edge() TaskRun {
+	occMs := int64(0)
+	result := "失败：远程服务在 30 秒后超时 (⚠ retry exhausted)"
+	startedAt := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	endedAt := startedAt
+	return TaskRun{
+		RunId:        "01J8Z3K2R9G4S6M0N1P2Q3R4S6",
+		TaskId:       "550e8400-e29b-41d4-a716-446655440001",
+		OccurrenceMs: &occMs,
+		Status:       TaskRunStatus("failed"),
+		Result:       &result,
+		SessionId:    "session-uuid-2",
+		Kind:         TaskRunKind("manual"),
+		StartedAt:    startedAt,
+		EndedAt:      &endedAt,
+	}
+}
+
+// ── RunNowRequest ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RunNowRequest.yaml (ADR-050 RD7).
+// Previously ZERO contract coverage (M2/H5).
+
+// FixtureRunNowRequest_Populated — Run-now for a specific recurring
+// occurrence (materialize-on-demand).
+func FixtureRunNowRequest_Populated() RunNowRequest {
+	occMs := int64(1784620800000)
+	return RunNowRequest{OccurrenceMs: &occMs}
+}
+
+// FixtureRunNowRequest_Empty — the empty body: occurrence_ms omitted. This is
+// NOT a failure case (unlike other _ZeroValue fixtures) — the whole request
+// body is optional and an empty body legitimately means "re-run a
+// normal/once task as a fresh run" per RunNowRequest.yaml.
+func FixtureRunNowRequest_Empty() RunNowRequest {
+	return RunNowRequest{}
+}
+
+// ── TaskRunStatusFrame ───────────────────────────────────────────────────────
+// Traces to: contracts/asyncapi.yaml components.schemas.TaskRunStatusFrame
+// (ADR-050 §3.8). Previously ZERO contract coverage (M2/H5). Also the
+// regression-fixture pair for the AsyncAPI int64 codegen drift fix
+// (scripts/gen-asyncapi-go/main.go): OccurrenceMs is now *int64, not *int —
+// see TestContract_TaskRunStatusFrame_OccurrenceMsIsInt64Type in
+// contract_test.go.
+
+// FixtureTaskRunStatusFrame_Populated — a closed scheduled-occurrence run.
+func FixtureTaskRunStatusFrame_Populated() TaskRunStatusFrame {
+	occMs := int64(1784620800000)
+	return TaskRunStatusFrame{
+		Type:         "task_run_status",
+		TaskId:       "550e8400-e29b-41d4-a716-446655440000",
+		RunId:        "01J8Z3K2R9G4S6M0N1P2Q3R4S5",
+		OccurrenceMs: &occMs,
+		Status:       "done",
+	}
+}
+
+// FixtureTaskRunStatusFrame_ZeroValue — Go zero values.
+func FixtureTaskRunStatusFrame_ZeroValue() TaskRunStatusFrame {
+	return TaskRunStatusFrame{}
+}
+
+// FixtureTaskRunStatusFrame_ManualRun — occurrence_ms omitted: the legal
+// ad-hoc/once/manual-run shape (occurrence_ms is optional in this frame,
+// unlike TaskRun.occurrence_ms which is required-but-nullable).
+func FixtureTaskRunStatusFrame_ManualRun() TaskRunStatusFrame {
+	return TaskRunStatusFrame{
+		Type:   "task_run_status",
+		TaskId: "550e8400-e29b-41d4-a716-446655440001",
+		RunId:  "01J8Z3K2R9G4S6M0N1P2Q3R4S6",
+		Status: "in_progress",
+	}
 }

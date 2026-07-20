@@ -66,11 +66,11 @@ interface FormState {
   priority: number
   milestoneId: string
   agentId: string
-  // Trigger
+  // Trigger — FR-011/D3: the generic create form offers only manual/once;
+  // recurring triggers (every/recurring) are calendar-only and built
+  // exclusively via the calendar's event slide-over.
   triggerKind: TriggerKind
   triggerAt: string // datetime-local value (once)
-  triggerEveryMinutes: string // minutes (every)
-  triggerCron: string // cron expr (recurring)
   // Dependencies
   blockedBy: string[]
   // Due
@@ -87,8 +87,6 @@ const INITIAL_FORM: FormState = {
   agentId: '__none__',
   triggerKind: 'manual',
   triggerAt: '',
-  triggerEveryMinutes: '60',
-  triggerCron: '0 9 * * MON',
   blockedBy: [],
   due: '',
   todos: [],
@@ -195,14 +193,6 @@ export function CreateTaskSlideOver({
       const at = datetimeLocalToMs(form.triggerAt)
       return buildTrigger('once', { at_ms: at ?? undefined })
     }
-    if (form.triggerKind === 'every') {
-      const minutes = parseInt(form.triggerEveryMinutes, 10)
-      const everyMs = Number.isFinite(minutes) ? minutes * 60_000 : undefined
-      return buildTrigger('every', { every_ms: everyMs })
-    }
-    if (form.triggerKind === 'recurring') {
-      return buildTrigger('recurring', { cron_expr: form.triggerCron.trim() })
-    }
     return buildTrigger('manual', {})
   }
 
@@ -219,13 +209,6 @@ export function CreateTaskSlideOver({
       if (!form.triggerAt) return 'Pick a date and time for the one-time trigger.'
       const at = datetimeLocalToMs(form.triggerAt)
       if (at == null) return 'Invalid trigger date/time.'
-    }
-    if (form.triggerKind === 'every') {
-      const minutes = parseInt(form.triggerEveryMinutes, 10)
-      if (!Number.isFinite(minutes) || minutes < 1) return 'Interval must be at least 1 minute.'
-    }
-    if (form.triggerKind === 'recurring') {
-      if (!form.triggerCron.trim()) return 'Enter a cron expression for the recurring trigger.'
     }
     return ''
   }
@@ -460,8 +443,6 @@ export function CreateTaskSlideOver({
               <SelectContent>
                 <SelectItem value="manual" className="text-xs">None (manual)</SelectItem>
                 <SelectItem value="once" className="text-xs">Once (at a time)</SelectItem>
-                <SelectItem value="every" className="text-xs">Every (interval)</SelectItem>
-                <SelectItem value="recurring" className="text-xs">Recurring (cron)</SelectItem>
               </SelectContent>
             </Select>
 
@@ -474,28 +455,6 @@ export function CreateTaskSlideOver({
                   setTriggerError('')
                 }}
                 className="mt-1"
-              />
-            )}
-            {form.triggerKind === 'every' && (
-              <div className="mt-1 flex items-center gap-2">
-                <Input
-                  aria-label="Interval in minutes"
-                  type="number"
-                  min={1}
-                  value={form.triggerEveryMinutes}
-                  onChange={(e) => { setForm((s) => ({ ...s, triggerEveryMinutes: e.target.value })); setTriggerError('') }}
-                  className="text-xs w-28"
-                />
-                <span className="text-xs text-[var(--color-muted)]">minutes</span>
-              </div>
-            )}
-            {form.triggerKind === 'recurring' && (
-              <Input
-                aria-label="Cron expression"
-                value={form.triggerCron}
-                onChange={(e) => { setForm((s) => ({ ...s, triggerCron: e.target.value })); setTriggerError('') }}
-                placeholder="0 9 * * MON"
-                className="mt-1 text-xs font-mono"
               />
             )}
             {triggerError && (

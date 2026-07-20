@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
@@ -572,6 +573,105 @@ func TestEventForwarder_FiltersByChatID(t *testing.T) {
 		t.Fatalf("unexpected frame on sendCh — eventForwarder must filter by chatID, got: %s", string(raw))
 	case <-time.After(150 * time.Millisecond):
 		// Correct — no frame should arrive for a non-matching chatID.
+	}
+
+	eb.Unsubscribe(sub.ID)
+	select {
+	case <-eventDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("eventForwarder goroutine did not exit after subscription closed")
+	}
+}
+
+// TestEventForwarder_ForwardsTaskRunStatus verifies that an
+// agent.EventKindTaskRunStatus event (ADR-050 §3.8, task-run-history-spec.md
+// §3.8) is forwarded as an exact task_run_status frame, carrying
+// occurrence_ms as a correctly-typed, non-truncated int64 value. This is the
+// WS-side regression guard for the AsyncAPI int64 codegen drift fix
+// (scripts/gen-asyncapi-go/main.go — `format: int64` now maps to Go int64,
+// not int — see pkg/api/generated/asyncapi_types.gen.go's
+// TaskRunStatusFrame.OccurrenceMs and pkg/gateway/websocket.go's
+// eventForwarder, case agent.EventKindTaskRunStatus, which now assigns
+// *p.OccurrenceMs directly with no narrowing cast).
+//
+// Unlike ToolExecStart (chatID-scoped), EventKindTaskRunStatus is broadcast
+// unconditionally to every connection — mirroring EventKindTaskStatusChanged
+// immediately above it in eventForwarder's switch — so this test does not
+// need a matching chatID (the frame arrives regardless).
+//
+// BDD: Given an eventForwarder goroutine subscribed to an EventBus,
+// When a TaskRunStatusPayload event carrying a ms-epoch OccurrenceMs
+// (already > math.MaxInt32 for any date after 1970-01-25) is emitted,
+// Then a task_run_status frame with the exact field values — including
+// occurrence_ms round-tripping with no precision loss — appears on sendCh.
+// Traces to: pkg/gateway/websocket.go — WSHandler.eventForwarder,
+// case agent.EventKindTaskRunStatus.
+func TestEventForwarder_ForwardsTaskRunStatus(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	wc := makeTestConn()
+	chatID := "chat-1"
+
+	eb := agent.NewEventBus()
+	t.Cleanup(eb.Close)
+
+	sub := eb.Subscribe(16)
+	eventDone := make(chan struct{})
+
+	go handler.eventForwarder(wc, chatID, sub, eventDone)
+
+	// Deliberately > math.MaxInt32 (2147483647) — any real epoch-ms value for
+	// a post-1970-01-25 date already is. Before the codegen fix, this would
+	// have silently wrapped when narrowed into the (bugged) *int field on a
+	// 32-bit target, or been truncated by the hand-written
+	// `int(*p.OccurrenceMs)` cast this test also guards the removal of.
+	occMs := int64(1_784_620_800_000)
+	eb.Emit(agent.Event{
+		Kind: agent.EventKindTaskRunStatus,
+		Payload: agent.TaskRunStatusPayload{
+			TaskID:       "task-abc",
+			RunID:        "run-xyz",
+			OccurrenceMs: &occMs,
+			Status:       "done",
+		},
+	})
+
+	select {
+	case raw := <-wc.sendCh:
+		// Assert the exact frame shape via a generic map first — proves the
+		// wire bytes themselves, not just Go-side decoding, carry the right
+		// values (and nothing extra).
+		var frame map[string]any
+		require.NoError(t, json.Unmarshal(raw, &frame), "sendCh frame must be valid JSON")
+		assert.Equal(t, "task_run_status", frame["type"])
+		assert.Equal(t, "task-abc", frame["task_id"])
+		assert.Equal(t, "run-xyz", frame["run_id"])
+		assert.Equal(t, "done", frame["status"])
+		require.Contains(t, frame, "occurrence_ms")
+		// encoding/json decodes a JSON number into map[string]any as float64;
+		// float64 has 53 bits of mantissa, comfortably exact for a ms-epoch
+		// value, so an exact match here still catches a truncation bug (which
+		// would produce a small/wrapped/negative value) while confirming the
+		// real wire value round-trips correctly.
+		occFloat, ok := frame["occurrence_ms"].(float64)
+		require.True(t, ok, "occurrence_ms must be a JSON number, not null/string")
+		assert.Equal(t, float64(occMs), occFloat,
+			"occurrence_ms must equal the emitted value exactly — no truncation")
+
+		// Decode into the generated wire type directly: this is the type-level
+		// regression guard — TaskRunStatusFrame.OccurrenceMs is *int64 (see
+		// TestContract_TaskRunStatusFrame_OccurrenceMsIsInt64Type in
+		// pkg/api/generated/contract_test.go for the reflect-based pin of the
+		// same fact), so this line would fail to compile if the codegen ever
+		// regressed back to *int.
+		var typed generated.TaskRunStatusFrame
+		require.NoError(t, json.Unmarshal(raw, &typed))
+		require.NotNil(t, typed.OccurrenceMs, "OccurrenceMs must not be nil")
+		assert.Equal(t, occMs, *typed.OccurrenceMs,
+			"occurrence_ms must round-trip exactly through *int64 — no 32-bit truncation")
+	case <-time.After(2 * time.Second):
+		t.Fatal("no frame received on sendCh within 2s — eventForwarder did not forward the task_run_status event")
 	}
 
 	eb.Unsubscribe(sub.ID)

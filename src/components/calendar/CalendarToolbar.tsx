@@ -29,7 +29,15 @@
 import { CaretLeft, CaretRight, CalendarBlank, Plus } from '@phosphor-icons/react'
 import type { CalendarApi } from '@fullcalendar/core'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { AGENT_FILTER_ALL, AGENT_FILTER_UNASSIGNED } from './calendarAgentFilter'
 import {
   CALENDAR_VIEWS,
   CALENDAR_VIEW_LABELS,
@@ -49,6 +57,10 @@ export function CalendarToolbar({
   title,
   onViewChange,
   onNewTask,
+  agentFilter,
+  onAgentFilterChange,
+  agentOptions,
+  agentRosterError,
 }: CalendarToolbarProps) {
   // ── FC API helpers ────────────────────────────────────────────────────────
   const getApi = () => calendarRef.current?.getApi()
@@ -264,6 +276,52 @@ export function CalendarToolbar({
             )
           })}
         </div>
+
+        {/* Agent filter (FR-015 / US-4) — client-side, no refetch (SC-004).
+            Rendered only when the host wires `onAgentFilterChange` (real
+            usage: CalendarScreen); every other/legacy caller renders exactly
+            as before. */}
+        {onAgentFilterChange && (
+          <div className="flex flex-col gap-0.5 shrink-0">
+            <Select
+              value={agentFilter ?? AGENT_FILTER_ALL}
+              onValueChange={onAgentFilterChange}
+            >
+              <SelectTrigger
+                data-testid="calendar-agent-filter"
+                aria-label="Filter by agent"
+                className={cn(
+                  'h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)]',
+                  'text-[var(--color-secondary)] w-auto min-w-[8rem]',
+                  touchTarget,
+                )}
+              >
+                <SelectValue placeholder="All agents" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AGENT_FILTER_ALL} className="text-xs">
+                  All agents
+                </SelectItem>
+                <SelectItem value={AGENT_FILTER_UNASSIGNED} className="text-xs">
+                  Unassigned
+                </SelectItem>
+                {(agentOptions ?? []).map((a) => (
+                  <SelectItem key={a.value} value={a.value} className="text-xs">
+                    {a.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* Degrade notice (Edge Cases) — reuses the existing wording from
+                CreateTaskSlideOver/TaskDetailPanel's team-roster fallback so
+                the same failure reads identically everywhere in the app. */}
+            {agentRosterError && (
+              <p className="text-[10px] text-[var(--color-muted)] whitespace-nowrap">
+                Team list unavailable — showing all agents
+              </p>
+            )}
+          </div>
+        )}
 
         {/* New task — primary CTA, Forge Gold */}
         <Button

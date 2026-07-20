@@ -353,6 +353,14 @@ function make204Response(): Response {
   return new Response(null, { status: 204 })
 }
 
+// make202Response models the real gateway response for POST /tasks/{id}/runs
+// ("Run now", ADR-050 RD7): 202 Accepted, no body — the run is dispatched
+// asynchronously (observe progress via the task_run_status WS frame or a
+// GET /tasks/{id}/runs refetch, never this response).
+function make202Response(): Response {
+  return new Response(null, { status: 202 })
+}
+
 describe('Security API helpers', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
 
@@ -546,6 +554,121 @@ describe('Security API helpers', () => {
 
       const { deleteTask } = await import('./api')
       await expect(deleteTask('task-1')).rejects.toThrow('400')
+    })
+  })
+
+  // ── Task run history (ADR-050 / task-run-history-spec §4.1) ────────────────
+
+  describe('fetchTaskRuns', () => {
+    it('GET /api/v1/tasks/{id}/runs — returns the TaskRun array', async () => {
+      const runs = [
+        {
+          run_id: 'run-2',
+          task_id: 'task-1',
+          occurrence_ms: null,
+          status: 'done',
+          result: 'Finished.',
+          session_id: 'sess-2',
+          kind: 'manual',
+          started_at: '2026-07-20T09:00:00Z',
+          ended_at: '2026-07-20T09:05:00Z',
+        },
+        {
+          run_id: 'run-1',
+          task_id: 'task-1',
+          occurrence_ms: 1784620800000,
+          status: 'failed',
+          result: 'Boom.',
+          session_id: 'sess-1',
+          kind: 'scheduled',
+          started_at: '2026-07-19T09:00:00Z',
+          ended_at: '2026-07-19T09:05:00Z',
+        },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(runs))
+
+      const { fetchTaskRuns } = await import('./api')
+      const result = await fetchTaskRuns('task-1')
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/tasks/task-1/runs')
+      expect((init.method ?? 'GET').toUpperCase()).toBe('GET')
+      expect(result).toEqual(runs)
+    })
+
+    it('throws ApiSchemaError when a run fails TaskRun schema validation', async () => {
+      // Missing required `session_id` — schema-invalid.
+      fetchSpy.mockResolvedValueOnce(makeOkResponse([{
+        run_id: 'run-1',
+        task_id: 'task-1',
+        occurrence_ms: null,
+        status: 'done',
+        kind: 'manual',
+        started_at: '2026-07-20T09:00:00Z',
+        ended_at: '2026-07-20T09:05:00Z',
+      }]))
+
+      const { fetchTaskRuns, ApiSchemaError: ApiSchemaErrorCtor } = await import('./api')
+      await expect(fetchTaskRuns('task-1')).rejects.toBeInstanceOf(ApiSchemaErrorCtor)
+    })
+
+    it('propagates a typed error on 404 (unknown task)', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('not found', { status: 404 }))
+
+      const { fetchTaskRuns } = await import('./api')
+      await expect(fetchTaskRuns('missing-task')).rejects.toThrow('404')
+    })
+  })
+
+  describe('runTaskNow', () => {
+    it('POST /api/v1/tasks/{id}/runs — sends {occurrence_ms} when provided and resolves on 202', async () => {
+      fetchSpy.mockResolvedValueOnce(make202Response())
+
+      const { runTaskNow } = await import('./api')
+      await expect(runTaskNow('task-1', 1784620800000)).resolves.toBeUndefined()
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/tasks/task-1/runs')
+      expect((init.method ?? '').toUpperCase()).toBe('POST')
+      expect(JSON.parse(init.body as string)).toEqual({ occurrence_ms: 1784620800000 })
+      const headers = new Headers(init.headers as HeadersInit)
+      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
+    })
+
+    it('sends {occurrence_ms: null} when explicitly passed null (re-run signal, not omission)', async () => {
+      fetchSpy.mockResolvedValueOnce(make202Response())
+
+      const { runTaskNow } = await import('./api')
+      await runTaskNow('task-1', null)
+
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(init.body as string)).toEqual({ occurrence_ms: null })
+    })
+
+    it('sends an empty body when occurrenceMs is omitted (re-run a normal/once task)', async () => {
+      fetchSpy.mockResolvedValueOnce(make202Response())
+
+      const { runTaskNow } = await import('./api')
+      await runTaskNow('task-1')
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/tasks/task-1/runs')
+      expect((init.method ?? '').toUpperCase()).toBe('POST')
+      expect(init.body).toBeUndefined()
+    })
+
+    it('throws a typed error on 404 (unknown task)', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('not found', { status: 404 }))
+
+      const { runTaskNow } = await import('./api')
+      await expect(runTaskNow('missing-task')).rejects.toThrow('404')
+    })
+
+    it('throws a typed error on 503 (executor unavailable)', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('gateway degraded', { status: 503 }))
+
+      const { runTaskNow } = await import('./api')
+      await expect(runTaskNow('task-1')).rejects.toThrow('503')
     })
   })
 

@@ -140,7 +140,7 @@ func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "native success marker")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestTaskCompletionContract_Native_FailureMarker_FailedWithAgentWords(t *tes
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "native failure marker")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone(t *testi
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "native no marker")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -231,11 +231,24 @@ func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing
 	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
 	tk := newCompletionContractTask(t, al, "native-agent", "empty output task")
 
-	al.taskExecutor.finishTaskRun(tk, "", "", nil, "")
+	// ADR-050 RD5 coverage (task-run-history-spec.md §3.3, operator decision
+	// 2026-07-20 — there is no stuck-run reaper): finishTaskRun must close a
+	// REAL open run on this fail-closed path too, not just the success path.
+	// Seed one directly via the store (mirroring how runTask/
+	// runTaskFromInProgress would have opened it before reaching this call)
+	// rather than passing nil, so this test proves actual closure instead of
+	// exercising closeRun's nil-run no-op.
+	seeded, created, err := al.taskStore.OpenRun(tk.ID, nil, task.RunKindScheduled, "")
+	if err != nil || !created {
+		t.Fatalf("seed OpenRun: created=%v err=%v", created, err)
+	}
+	run := &activeRun{runID: seeded.RunID, occurrenceMs: seeded.OccurrenceMs}
 
-	final, err := al.taskStore.Get(tk.ID)
-	if err != nil {
-		t.Fatalf("get task: %v", err)
+	al.taskExecutor.finishTaskRun(tk, "", "", nil, "", run)
+
+	final, gerr := al.taskStore.Get(tk.ID)
+	if gerr != nil {
+		t.Fatalf("get task: %v", gerr)
 	}
 	if final.Status != task.StatusFailed {
 		t.Fatalf("status = %q, want %q — empty output must fail closed, not auto-complete to done "+
@@ -246,6 +259,28 @@ func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing
 	}
 	if !strings.Contains(final.Result, "completion signal") {
 		t.Errorf("result = %q, want it to explain the missing completion signal", final.Result)
+	}
+
+	runs, lerr := al.taskStore.ListRuns(tk.ID)
+	if lerr != nil {
+		t.Fatalf("ListRuns: %v", lerr)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected exactly 1 run, got %d: %+v", len(runs), runs)
+	}
+	gotRun := runs[0]
+	if gotRun.RunID != seeded.RunID {
+		t.Errorf("run_id = %q, want the seeded run's id %q", gotRun.RunID, seeded.RunID)
+	}
+	if gotRun.Status != task.StatusFailed {
+		t.Errorf("run status = %q, want failed", gotRun.Status)
+	}
+	if gotRun.EndedAt == nil || *gotRun.EndedAt == "" {
+		t.Error("run ended_at must be set — finishTaskRun's no-marker fail-closed path must close a " +
+			"real open run, not leave it stranded in_progress (no reaper backstop)")
+	}
+	if gotRun.Result != final.Result {
+		t.Errorf("run result = %q, want the same result written to the task mirror %q", gotRun.Result, final.Result)
 	}
 }
 
@@ -274,7 +309,7 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 	}()
 
 	tk := newCompletionContractTask(t, al, "ext-agent", "external failure marker")
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -312,7 +347,7 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 	}()
 
 	tk := newCompletionContractTask(t, al, "ext-agent", "external no marker")
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -421,7 +456,7 @@ func TestTaskCompletionContract_BlockedDependent_StaysBlockedOnFailedBlocker(t *
 		t.Fatalf("create dependent task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), blocker.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), blocker.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask(blocker): %v", err)
 	}
 
@@ -498,7 +533,7 @@ func TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse(
 		},
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -526,7 +561,7 @@ func TestTaskCompletionContract_SessionArchivedOnCompletion(t *testing.T) {
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "session archival check")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 

@@ -4,7 +4,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
-import { TaskDetailPanel } from '@/components/command-center/TaskDetailPanel'
+import { TaskDetailPanel } from './TaskDetailPanel'
 import type { Task } from '@/lib/api'
 
 interface TaskDetailSlideOverProps {

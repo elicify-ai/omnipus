@@ -982,8 +982,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // UploadButton moved to the shared UploadMdButton in AgentFormFields.tsx
   // (create/edit parity, P3 2026-07-03) — one implementation for both dialogs.
 
-  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation. Mirrors the
-  // pattern from SchedulesList (`doDelete`): the mutation invalidates
+  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation: the mutation invalidates
   // the list cache on success, surfaces the API error inline on failure,
   // and closes the slide-over only on success (so a network blip keeps
   // the operator on the same page). The button itself is hidden for
@@ -2502,8 +2501,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         )}
       </div>
 
-      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog. Mirrors the
-          SchedulesList pattern (`AlertDialog` + `AlertDialogAction`) so the
+      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog
+          (`AlertDialog` + `AlertDialogAction`) so the
           destructive-confirm flow is identical across the app. The confirm
           fires the deleteAgentMutation; on success the slide-over closes
           and the agent is removed from the list cache. */}

@@ -4692,6 +4692,23 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 		a.withAuth(withRateLimit(cliValidateLimiter, a.HandleSystemCliValidate)),
 	)
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
+	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence
+	// expansion endpoint (FR-008, contracts/openapi.yaml operationId
+	// listTaskOccurrences). Registered as an EXACT pattern, independent of
+	// registration order relative to the "/api/v1/tasks/" prefix route
+	// below: dynamicServeMux.ServeHTTP (pkg/channels/dynamic_mux.go) always
+	// checks its handlers map for an exact path match FIRST, falling back
+	// to the longest trailing-slash PREFIX match only when no exact match
+	// exists — so this exact "occurrences" registration always wins over
+	// HandleTasks' ID-parsing branch (which would otherwise 404 it as
+	// task-not-found, per the spec's "Routing note"). Wrapped in the
+	// DEDICATED taskReadLimiter (240/min, rest_auth.go) — NOT configLimiter
+	// and NOT plain withAuth like the task CRUD routes immediately below
+	// (which carry no limiter).
+	cm.RegisterHTTPHandler(
+		"/api/v1/tasks/occurrences",
+		a.withAuth(withRateLimit(taskReadLimiter, a.HandleTaskOccurrences)),
+	)
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/workspaces", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))

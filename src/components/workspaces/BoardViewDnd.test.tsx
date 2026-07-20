@@ -20,6 +20,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { BoardView, canDropTransition, buildBoardAnnouncements } from './BoardView'
+import { isRecurringTrigger } from './taskFormFields'
 import type { Task, Milestone } from '@/lib/api'
 import { STATUS_ORDER } from '@/lib/statusColors'
 import type {
@@ -121,6 +122,28 @@ describe('canDropTransition — backend-mirrored guard', () => {
     for (const s of STATUS_ORDER) {
       expect(canDropTransition(s, s).ok).toBe(true)
     }
+  })
+
+  // Regression: dragging a FAILED REPEATING task to In Progress used to issue
+  // a raw PATCH status=in_progress, which the backend now rejects with 400
+  // ("cannot re-run a repeating task via PATCH status; use POST
+  // /api/v1/tasks/{id}/runs instead" — pkg/gateway/rest_tasks.go's
+  // IsTerminal(status) && Trigger.IsRepeating() guard). The client must block
+  // this drop before it ever reaches the network.
+  it('blocks a FAILED REPEATING task from dropping on in_progress (backend requires POST /runs)', () => {
+    const v = canDropTransition('failed', 'in_progress', true)
+    expect(v.ok).toBe(false)
+    expect(v.reason).toMatch(/repeating|run now/i)
+  })
+
+  it('does not block a FAILED REPEATING task from other legal transitions (only →in_progress is special)', () => {
+    expect(canDropTransition('failed', 'next', true).ok).toBe(true)
+    expect(canDropTransition('failed', 'planning', true).ok).toBe(true)
+  })
+
+  it('still allows a FAILED NON-repeating task to move to in_progress (default isRepeating=false)', () => {
+    expect(canDropTransition('failed', 'in_progress').ok).toBe(true)
+    expect(canDropTransition('failed', 'in_progress', false).ok).toBe(true)
   })
 })
 
@@ -267,5 +290,41 @@ describe('BoardView — move decision', () => {
     decide('next', 'blocked')
     expect(onMoveRejected).toHaveBeenCalledTimes(1)
     expect(onTaskMove).toHaveBeenCalledTimes(1) // unchanged — blocked rejected
+  })
+
+  // Regression coverage for the dragged Task's `trigger` actually reaching
+  // canDropTransition — mirrors handleDragEnd's real
+  // `canDropTransition(dragged.status, targetStatus, isRecurringTrigger(dragged.trigger))`
+  // call (BoardView.tsx), not just the guard function in isolation above.
+  it('a FAILED task with an `every`/`recurring` trigger is rejected on drop to in_progress; a plain FAILED task is not', () => {
+    const onTaskMove = vi.fn()
+    const onMoveRejected = vi.fn()
+
+    function decide(dragged: Task, to: Task['status']) {
+      if (dragged.status === to) return
+      const v = canDropTransition(dragged.status, to, isRecurringTrigger(dragged.trigger))
+      if (!v.ok) {
+        if (v.reason) onMoveRejected(v.reason)
+        return
+      }
+      onTaskMove(to)
+    }
+
+    const failedRepeating = baseTask({ status: 'failed', trigger: { type: 'every', config: { every_ms: 3_600_000 } } })
+    decide(failedRepeating, 'in_progress')
+    expect(onMoveRejected).toHaveBeenCalledTimes(1)
+    expect(onMoveRejected.mock.calls[0][0]).toMatch(/repeating|run now/i)
+    expect(onTaskMove).not.toHaveBeenCalled()
+
+    const failedRrule = baseTask({ status: 'failed', trigger: { type: 'recurring', config: { rrule: 'FREQ=DAILY' } } })
+    decide(failedRrule, 'in_progress')
+    expect(onMoveRejected).toHaveBeenCalledTimes(2)
+    expect(onTaskMove).not.toHaveBeenCalled()
+
+    // A plain (non-repeating) failed task must still transition normally.
+    const failedOnce = baseTask({ status: 'failed', trigger: undefined })
+    decide(failedOnce, 'in_progress')
+    expect(onTaskMove).toHaveBeenCalledWith('in_progress')
+    expect(onMoveRejected).toHaveBeenCalledTimes(2) // unchanged
   })
 })

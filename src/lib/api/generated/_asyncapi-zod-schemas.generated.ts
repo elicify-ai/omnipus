@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
 
 export const AuthFrame = z
   .object({
@@ -208,6 +208,16 @@ export const TaskStatusChangedFrame = z
     task_id: z.string().min(1),
     status: z.enum(["inbox", "next", "planning", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
+  })
+  .strict();
+
+export const TaskRunStatusFrame = z
+  .object({
+    type: z.literal("task_run_status"),
+    task_id: z.string().min(1),
+    run_id: z.string().min(1),
+    occurrence_ms: z.number().int().optional(),
+    status: z.enum(["in_progress", "done", "failed"]),
   })
   .strict();
 
@@ -581,6 +591,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   SubagentStartFrame,
   SubagentEndFrame,
   TaskStatusChangedFrame,
+  TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
   RateLimitFrame,
