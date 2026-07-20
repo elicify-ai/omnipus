@@ -1,10 +1,10 @@
 /**
  * WorkspaceTasksTab.test.tsx
  *
- * Mutation wiring for the plan-lane ⋯ menu actions surfaced through the
- * REAL component tree (WorkspaceTasksTab → BoardView → PlanLaneHeader), not
- * just PlanLaneHeader's own callback props (see PlanLaneHeader.test.tsx for
- * that layer). Covers:
+ * Mutation wiring for the plan card ⋯ menu actions surfaced through the
+ * REAL component tree (WorkspaceTasksTab → BoardView → PlanCard), not just
+ * PlanCard's own callback props (see PlanCard.test.tsx for that layer).
+ * Covers:
  *   - Approve calls `approvePlan(planId)` and toasts on success.
  *   - A 400 from Approve with a per-task payload surfaces the per-task
  *     "needs acceptance criteria" reasons via toast (review-gate fix #2) —
@@ -134,7 +134,7 @@ describe('WorkspaceTasksTab — plan lane Approve', () => {
     vi.mocked(approvePlan).mockResolvedValue({ ...plan, state: 'approved' })
 
     renderTab()
-    await screen.findByTestId('plan-lane-header-plan-a')
+    await screen.findByTestId('plan-card-plan-a')
 
     await user.click(screen.getByRole('button', { name: 'Approve' }))
 
@@ -156,7 +156,7 @@ describe('WorkspaceTasksTab — plan lane Approve', () => {
     vi.mocked(approvePlan).mockRejectedValue(new ApiError(400, 'Bad request', { body }))
 
     renderTab()
-    await screen.findByTestId('plan-lane-header-plan-a')
+    await screen.findByTestId('plan-card-plan-a')
 
     await user.click(screen.getByRole('button', { name: 'Approve' }))
 
@@ -181,7 +181,7 @@ describe('WorkspaceTasksTab — plan lane Approve', () => {
     vi.mocked(approvePlan).mockRejectedValue(new Error('network down'))
 
     renderTab()
-    await screen.findByTestId('plan-lane-header-plan-a')
+    await screen.findByTestId('plan-card-plan-a')
     await user.click(screen.getByRole('button', { name: 'Approve' }))
 
     await waitFor(() =>
@@ -202,7 +202,7 @@ describe('WorkspaceTasksTab — plan lane Stop', () => {
     vi.mocked(stopPlan).mockResolvedValue({ ...plan, state: 'done' })
 
     renderTab()
-    await screen.findByTestId('plan-lane-header-plan-a')
+    await screen.findByTestId('plan-card-plan-a')
     await user.click(screen.getByRole('button', { name: 'Stop' }))
 
     const dialog = screen.getByRole('alertdialog')
@@ -223,7 +223,7 @@ describe('WorkspaceTasksTab — plan lane Stop', () => {
     vi.mocked(stopPlan).mockRejectedValue(new Error('boom'))
 
     renderTab()
-    await screen.findByTestId('plan-lane-header-plan-a')
+    await screen.findByTestId('plan-card-plan-a')
     await user.click(screen.getByRole('button', { name: 'Stop' }))
 
     const dialog = screen.getByRole('alertdialog')
@@ -247,7 +247,7 @@ describe('WorkspaceTasksTab — plan lane Clear', () => {
     vi.mocked(deletePlan).mockResolvedValue(undefined)
 
     renderTab()
-    await screen.findByTestId('plan-lane-header-plan-a')
+    await screen.findByTestId('plan-card-plan-a')
     await user.click(screen.getByRole('button', { name: 'Clear' }))
 
     const dialog = screen.getByRole('alertdialog')
@@ -268,7 +268,7 @@ describe('WorkspaceTasksTab — plan lane Clear', () => {
     vi.mocked(deletePlan).mockRejectedValue(new Error('plan is running'))
 
     renderTab()
-    await screen.findByTestId('plan-lane-header-plan-a')
+    await screen.findByTestId('plan-card-plan-a')
     await user.click(screen.getByRole('button', { name: 'Clear' }))
 
     const dialog = screen.getByRole('alertdialog')

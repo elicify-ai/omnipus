@@ -28,19 +28,20 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 
 interface WorkspaceTasksTabProps {
   workspaceId: string
-  /** 'board' = kanban by 7-state lifecycle, grouped into plan swimlanes; 'list' = flat filterable table. */
+  /** 'board' = kanban by 7-state lifecycle (Hierarchical Drill-Down board); 'list' = flat filterable table. */
   mode: 'board' | 'list'
 }
 
 /**
- * Shared task-tab body for the Board and List views. Board mode groups tasks
- * into per-plan swimlane bands (Plan Swimlane redesign) via BoardView.tsx's
- * `PlanLaneHeader` rows; `TagFilterBar` provides the toolbar's tag filter.
- * Owns the create task/plan slide-overs; only the inner Board/List view
- * differs.
+ * Shared task-tab body for the Board and List views. Board mode drives
+ * BoardView.tsx's Hierarchical Drill-Down board off the shared
+ * `activePlanId` store field (Board⇄Graph): top level shows plan cards +
+ * loose tasks together, drilling into a plan shows its own task board.
+ * `TagFilterBar` provides the toolbar's tag filter. Owns the create
+ * task/plan slide-overs; only the inner Board/List view differs.
  */
 export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps) {
-  const { activeTagFilter, setActiveTagFilter, boardAltitude, setBoardAltitude } = useWorkspacesStore()
+  const { activeTagFilter, setActiveTagFilter, boardAltitude, setBoardAltitude, activePlanId } = useWorkspacesStore()
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
@@ -112,7 +113,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
     },
     onError: (err) => {
       // The backend rejects deleting a `running` plan (400) — surface that
-      // real reason rather than a generic message (PlanLaneHeader already
+      // real reason rather than a generic message (PlanCard already
       // disables Clear while running, but the state can flip mid-flight).
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to clear plan'
       addToast({ message: msg, variant: 'error' })
@@ -207,6 +208,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
           plans={plans}
           agents={agents}
           workspaceId={workspaceId}
+          activePlanId={activePlanId}
           activeTagFilter={activeTagFilter}
           altitude={boardAltitude}
           onTaskClick={(task) => setSelectedTaskId(task.id)}

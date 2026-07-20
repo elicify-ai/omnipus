@@ -11,9 +11,9 @@ interface TagFilterBarProps {
 }
 
 /**
- * Board toolbar tag filter (Plan Swimlane redesign) — plan pills are
- * superseded entirely by the swimlane bands themselves (BoardView.tsx's
- * `PlanLaneHeader` rows), so this keeps just the tag filter. Uses
+ * Board toolbar tag filter (Hierarchical Drill-Down board redesign) — plan
+ * pills are superseded entirely by the top-level board's plan cards
+ * (BoardView.tsx's `PlanCard`), so this keeps just the tag filter. Uses
  * `planFilter.ts`'s `PLAN_FILTER_UNTAGGED` sentinel plus a
  * `role=group`/`aria-pressed` a11y grammar.
  */
