@@ -96,7 +96,6 @@ function renderBoard(props: Partial<React.ComponentProps<typeof BoardView>> = {}
         activeTagFilter={null}
         altitude="top-level"
         onTaskClick={vi.fn()}
-        onNewTask={vi.fn()}
         onTaskMove={vi.fn()}
         onMoveRejected={vi.fn()}
         {...props}

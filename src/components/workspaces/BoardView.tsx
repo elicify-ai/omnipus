@@ -14,7 +14,7 @@ import {
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { Plus, CaretDown, CaretRight, LinkBreak } from '@phosphor-icons/react'
+import { CaretDown, CaretRight, LinkBreak } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { PlanLaneHeader } from './PlanLaneHeader'
 import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
@@ -143,7 +143,6 @@ interface BoardViewProps {
   activeTagFilter: string | null
   altitude: BoardAltitude
   onTaskClick: (task: Task) => void
-  onNewTask: (status?: TaskStatus) => void
   /** Persist a drag-to-column status change. Required for kanban DnD. */
   onTaskMove?: (task: Task, newStatus: TaskStatus) => void
   /** Surface a rejected drop (e.g. dropping into `blocked`). */
@@ -178,7 +177,6 @@ export function BoardView({
   activeTagFilter,
   altitude,
   onTaskClick,
-  onNewTask,
   onTaskMove,
   onMoveRejected,
   onApprovePlan,
@@ -267,30 +265,19 @@ export function BoardView({
           {COLUMNS.map((col) => {
             const count = renderedTasksVisible.filter((t) => t.status === col.status).length
             return (
+              // Compact status header (~40% of the old height): a thin label +
+              // count strip. The per-column "+" quick-add buttons were removed
+              // — new tasks are created from the toolbar's "New task" button.
               <div
                 key={col.status}
-                className="flex-1 min-w-[162px] flex items-center justify-between gap-2 px-3 py-2.5"
+                className="flex-1 min-w-[162px] flex items-center gap-2 px-3 h-[15px]"
               >
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold" style={{ color: col.headerColor }}>
-                    {col.label}
-                  </span>
-                  <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-muted)]">
-                    {count}
-                  </span>
-                </div>
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => onNewTask(col.status)}
-                  // The parent (WorkspaceTasksTab) always opens a generic,
-                  // unscoped create flow regardless of which column this
-                  // button lives in — the label must not promise a status
-                  // the created task won't actually land in.
-                  aria-label="New task"
-                  className="inline-flex items-center justify-center p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-                >
-                  <Plus size={12} />
-                </button>
+                <span className="text-[11px] font-semibold leading-none" style={{ color: col.headerColor }}>
+                  {col.label}
+                </span>
+                <span className="rounded-full bg-[var(--color-surface-2)] px-1 text-[9px] font-semibold leading-none text-[var(--color-muted)]">
+                  {count}
+                </span>
               </div>
             )
           })}
