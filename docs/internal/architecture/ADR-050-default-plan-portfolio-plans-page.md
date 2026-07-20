@@ -1,6 +1,8 @@
 # ADR-050 — Default Plan, Plan-Scoped Task Board & Portfolio Plans Page
 
-- **Status:** Accepted (interview-ratified 2026-07-20). Documentation ADR — no full plan-spec (operator direction; medium change, most infra already exists).
+- **Status:** **REJECTED / SUPERSEDED (2026-07-20)** — reverted the same day it was drafted. The operator changed direction: **keep the existing data model** (plans optional; tasks may be plan-less; no required default plan, no per-Planner backlogs, no "tasks always in a plan" invariant) and only **re-present** it. The chosen direction is a single **"Tasks"** screen with a **plans overview band that FILTERS** a workspace-wide task board (Board/List/Graph combined on one page), plan tiles carrying an edit affordance; selecting a tile filters the board below to that plan. See the successor decision note at the bottom. Everything below is retained for provenance only and is NOT to be implemented.
+- ~~**Status:** Accepted (interview-ratified 2026-07-20). Documentation ADR — no full plan-spec (operator direction; medium change, most infra already exists).~~
+- **Successor:** [ADR-051 — Tasks screen: plans-as-filter over a combined task board](ADR-051-tasks-screen-plans-as-filter.md).
 - **Supersedes (in intent):** the "mixed drill-down board" from the plan-swimlane / drill-down iterations (plans and tasks shared one board). That mixing is the problem this ADR removes.
 - **Phase:** treat as v0.3-adjacent (touches the Plan data model), but built on `feature/plan-swimlane-board` since the Plan entity + REST + contracts already live there (ADR-049).
 
