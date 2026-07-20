@@ -104,10 +104,10 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-function renderTab(workspaceId = 'ws-1') {
+function renderTab(workspaceId = 'ws-1', mode: 'board' | 'list' = 'board') {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <WorkspaceTasksTab workspaceId={workspaceId} mode="board" />
+      <WorkspaceTasksTab workspaceId={workspaceId} mode={mode} />
     </QueryClientProvider>,
   )
 }
@@ -279,5 +279,25 @@ describe('WorkspaceTasksTab — plan lane Clear', () => {
         expect.objectContaining({ variant: 'error', message: 'plan is running' }),
       ),
     )
+  })
+})
+
+// ── Toolbar altitude toggle placement ────────────────────────────────────────
+
+describe('WorkspaceTasksTab — altitude toggle in the single toolbar row', () => {
+  it('renders the Top-level / Show all toggle in the toolbar in board mode', async () => {
+    renderTab('ws-1', 'board')
+    // AltitudeToggle renders two radios — it now lives in this toolbar row, not
+    // a second row inside BoardView.
+    expect(await screen.findByRole('radio', { name: /top-level/i })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /show all/i })).toBeInTheDocument()
+  })
+
+  it('does NOT render the altitude toggle in list mode (board-only control)', async () => {
+    renderTab('ws-1', 'list')
+    // Wait for the toolbar to render (New task is always present).
+    await screen.findByRole('button', { name: /new task/i })
+    expect(screen.queryByRole('radio', { name: /show all/i })).toBeNull()
+    expect(screen.queryByRole('radio', { name: /top-level/i })).toBeNull()
   })
 })

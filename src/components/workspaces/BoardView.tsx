@@ -16,7 +16,6 @@ import {
 } from '@dnd-kit/core'
 import { Plus, CaretDown, CaretRight, LinkBreak } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
-import { AltitudeToggle } from './AltitudeToggle'
 import { PlanLaneHeader } from './PlanLaneHeader'
 import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import type { Task, Agent, Plan } from '@/lib/api'
@@ -143,7 +142,6 @@ interface BoardViewProps {
   /** The active tag filter (`null` = none). */
   activeTagFilter: string | null
   altitude: BoardAltitude
-  onAltitudeChange: (next: BoardAltitude) => void
   onTaskClick: (task: Task) => void
   onNewTask: (status?: TaskStatus) => void
   /** Persist a drag-to-column status change. Required for kanban DnD. */
@@ -179,7 +177,6 @@ export function BoardView({
   workspaceId,
   activeTagFilter,
   altitude,
-  onAltitudeChange,
   onTaskClick,
   onNewTask,
   onTaskMove,
@@ -251,11 +248,6 @@ export function BoardView({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-      {/* Board toolbar: altitude toggle */}
-      <div className="flex items-center justify-end px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] flex-shrink-0">
-        <AltitudeToggle value={altitude} onChange={onAltitudeChange} />
-      </div>
-
       <div className="flex-1 min-h-0 overflow-auto">
         {/* min-w-max wrapper — floors ALL rows (header + every band) at ONE
             shared content width so their backgrounds and border lines span the
