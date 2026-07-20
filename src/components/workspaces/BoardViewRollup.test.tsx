@@ -104,6 +104,7 @@ function renderBoard(
       <BoardView
         tasks={tasks}
         plans={plans}
+        activePlanId={null}
         activeTagFilter={null}
         agents={agents}
         workspaceId="ws-1"
@@ -194,6 +195,7 @@ describe('BoardView delegation roll-up', () => {
         <BoardView
           tasks={[parent]}
           plans={plans}
+          activePlanId={null}
           activeTagFilter={null}
           agents={[]}
           workspaceId="ws-1"

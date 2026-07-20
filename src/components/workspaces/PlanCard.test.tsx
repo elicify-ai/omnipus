@@ -1,25 +1,28 @@
 /**
- * PlanLaneHeader.test.tsx
+ * PlanCard.test.tsx
  *
- * Plan Swimlane board redesign — the plan-lane header rendered at the left
- * of each swimlane band on the Board. Covers:
+ * Hierarchical Drill-Down board redesign — the plan card rendered at the
+ * Board's top level (replaces PlanLaneHeader.test.tsx's per-lane band
+ * header coverage). Covers:
  *   1. The state badge always pairs an icon WITH visible text (a11y — never
  *      color-alone).
  *   2. Progress (done/total member tasks) renders as visible text and an
  *      accessible label.
- *   3. Collapse/expand: aria-expanded reflects `collapsed`, clicking calls
- *      `onToggleCollapse`.
- *   4. The ⑂ "view graph" button is disabled below 2 member tasks (a DAG
- *      needs at least 2 tasks) and otherwise scopes the Graph tab
- *      (`setActivePlanId`) then navigates there.
- *   5. The ⋯ menu's Approve (draft-only) / Stop (running/approved) / Edit /
+ *   3. Owner chip.
+ *   4. Body click (not on a control) opens the plan's edit slide-over via
+ *      `onEdit`; clicking a nested control never ALSO fires `onEdit`
+ *      (stopPropagation).
+ *   5. The ⤢ drill-in control sets the shared Board⇄Graph plan scope.
+ *   6. The ⑂ "view graph" control is disabled below 2 member tasks and
+ *      otherwise scopes + opens the Graph tab.
+ *   7. The ⋯ menu's Approve (draft-only) / Stop (running/approved) / Edit /
  *      Clear actions, including the Stop/Clear confirm dialogs.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { PlanLaneHeader } from './PlanLaneHeader'
+import { PlanCard } from './PlanCard'
 import type { Agent, Plan } from '@/lib/api'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -42,13 +45,13 @@ vi.mock('@/store/workspacesStore', async (importOriginal) => {
 })
 
 // Minimal stub so the ⋯ trigger renders its content without Radix portal
-// internals (mirrors -WorkspaceTabBar.test.tsx's DropdownMenu stub).
+// internals (mirrors the retired PlanLaneHeader.test.tsx's dropdown stub).
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
     asChild ? <>{children}</> : <div>{children}</div>,
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="plan-lane-menu">{children}</div>
+    <div data-testid="plan-card-menu">{children}</div>
   ),
   DropdownMenuItem: ({
     children,
@@ -86,8 +89,7 @@ function makePlan(overrides: Partial<Plan> = {}): Plan {
   }
 }
 
-function renderHeader(overrides: Partial<React.ComponentProps<typeof PlanLaneHeader>> = {}) {
-  const onToggleCollapse = vi.fn()
+function renderCard(overrides: Partial<React.ComponentProps<typeof PlanCard>> = {}) {
   const onEdit = vi.fn()
   const onApprove = vi.fn()
   const onStop = vi.fn()
@@ -98,16 +100,14 @@ function renderHeader(overrides: Partial<React.ComponentProps<typeof PlanLaneHea
     agents: [] as Agent[],
     memberTotal: 4,
     memberDone: 2,
-    collapsed: false,
-    onToggleCollapse,
     onEdit,
     onApprove,
     onStop,
     onClear,
     ...overrides,
   }
-  const utils = render(<PlanLaneHeader {...props} />)
-  return { onToggleCollapse, onEdit, onApprove, onStop, onClear, ...utils }
+  const utils = render(<PlanCard {...props} />)
+  return { onEdit, onApprove, onStop, onClear, ...utils }
 }
 
 beforeEach(() => {
@@ -117,7 +117,7 @@ beforeEach(() => {
 
 // ── State badge (icon + text) ───────────────────────────────────────────────
 
-describe('PlanLaneHeader — state badge (icon + text, a11y)', () => {
+describe('PlanCard — state badge (icon + text, a11y)', () => {
   it.each([
     ['draft', 'Draft'],
     ['approved', 'Approved'],
@@ -125,71 +125,99 @@ describe('PlanLaneHeader — state badge (icon + text, a11y)', () => {
     ['done', 'Done'],
     ['failed', 'Failed'],
   ] as const)('renders the %s state with a visible text label (not color-alone)', (state, label) => {
-    renderHeader({ plan: makePlan({ state }) })
+    renderCard({ plan: makePlan({ state }) })
     expect(screen.getByText(label)).toBeInTheDocument()
   })
 })
 
 // ── Progress ─────────────────────────────────────────────────────────────────
 
-describe('PlanLaneHeader — progress', () => {
+describe('PlanCard — progress', () => {
   it('renders the done/total member-task count as text', () => {
-    renderHeader({ memberTotal: 5, memberDone: 3 })
+    renderCard({ memberTotal: 5, memberDone: 3 })
     expect(screen.getByText('3/5')).toBeInTheDocument()
   })
 
   it('exposes progress via an accessible label', () => {
-    renderHeader({ memberTotal: 5, memberDone: 3 })
+    renderCard({ memberTotal: 5, memberDone: 3 })
     expect(screen.getByLabelText('Progress: 3 of 5 tasks done')).toBeInTheDocument()
   })
 
   it('renders 0/0 without dividing by zero when the plan has no member tasks', () => {
-    renderHeader({ memberTotal: 0, memberDone: 0 })
+    renderCard({ memberTotal: 0, memberDone: 0 })
     expect(screen.getByText('0/0')).toBeInTheDocument()
   })
 })
 
 // ── Owner ────────────────────────────────────────────────────────────────────
 
-describe('PlanLaneHeader — owner', () => {
+describe('PlanCard — owner', () => {
   it("renders the owning agent's name when it resolves", () => {
-    renderHeader({ agents: [{ id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50 }] })
+    renderCard({
+      agents: [
+        { id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50 },
+      ],
+    })
     expect(screen.getByText('Jim')).toBeInTheDocument()
   })
 
   it('omits the owner chip when no agent matches owner_agent_id', () => {
-    renderHeader({ agents: [] })
+    renderCard({ agents: [] })
     expect(screen.queryByText('jim')).not.toBeInTheDocument()
   })
 })
 
-// ── Collapse toggle ──────────────────────────────────────────────────────────
+// ── Body click → edit ────────────────────────────────────────────────────────
 
-describe('PlanLaneHeader — collapse toggle', () => {
-  it('carries aria-expanded=true and a Collapse label when expanded', () => {
-    renderHeader({ collapsed: false })
-    expect(screen.getByRole('button', { name: /collapse launch lane/i })).toHaveAttribute('aria-expanded', 'true')
-  })
-
-  it('carries aria-expanded=false and an Expand label when collapsed', () => {
-    renderHeader({ collapsed: true })
-    expect(screen.getByRole('button', { name: /expand launch lane/i })).toHaveAttribute('aria-expanded', 'false')
-  })
-
-  it('clicking the lane toggle calls onToggleCollapse', async () => {
+describe('PlanCard — body click opens the edit slide-over', () => {
+  it('clicking the card body calls onEdit', async () => {
     const user = userEvent.setup()
-    const { onToggleCollapse } = renderHeader()
-    await user.click(screen.getByRole('button', { name: /collapse launch lane/i }))
-    expect(onToggleCollapse).toHaveBeenCalledTimes(1)
+    const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x', title: 'Launch' }) })
+    await user.click(screen.getByTestId('plan-card-plan-x'))
+    expect(onEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('pressing Enter on the focused card calls onEdit', async () => {
+    const user = userEvent.setup()
+    const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x' }) })
+    screen.getByTestId('plan-card-plan-x').focus()
+    await user.keyboard('{Enter}')
+    expect(onEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('clicking the drill-in control does not also fire onEdit', async () => {
+    const user = userEvent.setup()
+    const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x' }) })
+    await user.click(screen.getByRole('button', { name: 'Open plan board' }))
+    expect(onEdit).not.toHaveBeenCalled()
+  })
+
+  it('clicking the ⋯ Edit menu item calls onEdit exactly once (not twice via bubbling)', async () => {
+    const user = userEvent.setup()
+    const { onEdit } = renderCard({ plan: makePlan({ id: 'plan-x' }) })
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(onEdit).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── Drill-in (⤢) ─────────────────────────────────────────────────────────────
+
+describe('PlanCard — drill-in (⤢)', () => {
+  it('clicking Open plan board sets activePlanId to this plan and does not navigate', async () => {
+    const user = userEvent.setup()
+    renderCard({ plan: makePlan({ id: 'plan-9' }) })
+    await user.click(screen.getByRole('button', { name: 'Open plan board' }))
+    expect(mockSetActivePlanId).toHaveBeenCalledWith('plan-9')
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 })
 
 // ── View graph (⑂) ───────────────────────────────────────────────────────────
 
-describe('PlanLaneHeader — view plan graph (⑂)', () => {
+describe('PlanCard — view plan graph (⑂)', () => {
   it('is enabled with ≥2 member tasks, and clicking scopes the Graph tab then navigates', async () => {
     const user = userEvent.setup()
-    renderHeader({ memberTotal: 2, plan: makePlan({ id: 'plan-9' }), workspaceId: 'ws-9' })
+    renderCard({ memberTotal: 2, plan: makePlan({ id: 'plan-9' }), workspaceId: 'ws-9' })
     const btn = screen.getByRole('button', { name: 'View plan graph' })
     expect(btn).not.toBeDisabled()
 
@@ -204,7 +232,7 @@ describe('PlanLaneHeader — view plan graph (⑂)', () => {
 
   it('is disabled (greyed) with exactly 1 member task — no DAG possible', async () => {
     const user = userEvent.setup()
-    renderHeader({ memberTotal: 1 })
+    renderCard({ memberTotal: 1 })
     const btn = screen.getByRole('button', { name: 'View plan graph' })
     expect(btn).toBeDisabled()
 
@@ -214,17 +242,17 @@ describe('PlanLaneHeader — view plan graph (⑂)', () => {
   })
 
   it('is disabled with zero member tasks', () => {
-    renderHeader({ memberTotal: 0 })
+    renderCard({ memberTotal: 0 })
     expect(screen.getByRole('button', { name: 'View plan graph' })).toBeDisabled()
   })
 })
 
 // ── ⋯ menu actions ───────────────────────────────────────────────────────────
 
-describe('PlanLaneHeader — ⋯ menu: Approve (draft-only)', () => {
+describe('PlanCard — ⋯ menu: Approve (draft-only)', () => {
   it('shows Approve for a draft plan and calls onApprove when clicked', async () => {
     const user = userEvent.setup()
-    const { onApprove } = renderHeader({ plan: makePlan({ state: 'draft' }) })
+    const { onApprove } = renderCard({ plan: makePlan({ state: 'draft' }) })
     await user.click(screen.getByRole('button', { name: 'Approve' }))
     expect(onApprove).toHaveBeenCalledTimes(1)
   })
@@ -232,16 +260,16 @@ describe('PlanLaneHeader — ⋯ menu: Approve (draft-only)', () => {
   it.each(['approved', 'running', 'done', 'failed'] as const)(
     'does not show Approve for a %s plan',
     (state) => {
-      renderHeader({ plan: makePlan({ state }) })
+      renderCard({ plan: makePlan({ state }) })
       expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
     },
   )
 })
 
-describe('PlanLaneHeader — ⋯ menu: Stop (running/approved)', () => {
+describe('PlanCard — ⋯ menu: Stop (running/approved)', () => {
   it('shows Stop for a running plan; confirming calls onStop', async () => {
     const user = userEvent.setup()
-    const { onStop } = renderHeader({ plan: makePlan({ state: 'running' }) })
+    const { onStop } = renderCard({ plan: makePlan({ state: 'running' }) })
     await user.click(screen.getByRole('button', { name: 'Stop' }))
 
     const dialog = screen.getByRole('alertdialog')
@@ -251,18 +279,18 @@ describe('PlanLaneHeader — ⋯ menu: Stop (running/approved)', () => {
   })
 
   it('shows Stop for an approved (cap-waiting) plan too', () => {
-    renderHeader({ plan: makePlan({ state: 'approved' }) })
+    renderCard({ plan: makePlan({ state: 'approved' }) })
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
   })
 
   it('does not show Stop for a draft plan', () => {
-    renderHeader({ plan: makePlan({ state: 'draft' }) })
+    renderCard({ plan: makePlan({ state: 'draft' }) })
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
   })
 
   it('Cancel dismisses the Stop confirm dialog without calling onStop', async () => {
     const user = userEvent.setup()
-    const { onStop } = renderHeader({ plan: makePlan({ state: 'running' }) })
+    const { onStop } = renderCard({ plan: makePlan({ state: 'running' }) })
     await user.click(screen.getByRole('button', { name: 'Stop' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
@@ -270,22 +298,10 @@ describe('PlanLaneHeader — ⋯ menu: Stop (running/approved)', () => {
   })
 })
 
-describe('PlanLaneHeader — ⋯ menu: Edit (always available, no confirm)', () => {
-  it.each(['draft', 'approved', 'running', 'done', 'failed'] as const)(
-    'calls onEdit immediately for a %s plan',
-    async (state) => {
-      const user = userEvent.setup()
-      const { onEdit } = renderHeader({ plan: makePlan({ state }) })
-      await user.click(screen.getByRole('button', { name: 'Edit' }))
-      expect(onEdit).toHaveBeenCalledTimes(1)
-    },
-  )
-})
-
-describe('PlanLaneHeader — ⋯ menu: Clear', () => {
+describe('PlanCard — ⋯ menu: Clear', () => {
   it('opens a confirm dialog naming the plan; confirming calls onClear', async () => {
     const user = userEvent.setup()
-    const { onClear } = renderHeader({ plan: makePlan({ state: 'draft', title: 'Old plan' }) })
+    const { onClear } = renderCard({ plan: makePlan({ state: 'draft', title: 'Old plan' }) })
     await user.click(screen.getByRole('button', { name: 'Clear' }))
 
     const dialog = screen.getByRole('alertdialog')
@@ -297,19 +313,19 @@ describe('PlanLaneHeader — ⋯ menu: Clear', () => {
   })
 
   it('is disabled while the plan is running (backend rejects delete-while-running)', () => {
-    renderHeader({ plan: makePlan({ state: 'running' }) })
+    renderCard({ plan: makePlan({ state: 'running' }) })
     expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
   })
 
   it('is enabled for a non-running plan', () => {
-    renderHeader({ plan: makePlan({ state: 'draft' }) })
+    renderCard({ plan: makePlan({ state: 'draft' }) })
     expect(screen.getByRole('button', { name: 'Clear' })).not.toBeDisabled()
   })
 })
 
-describe('PlanLaneHeader — ⋯ trigger a11y', () => {
+describe('PlanCard — ⋯ trigger a11y', () => {
   it('names the trigger button after the plan', () => {
-    renderHeader({ plan: makePlan({ title: 'Nightly sync' }) })
+    renderCard({ plan: makePlan({ title: 'Nightly sync' }) })
     expect(screen.getByRole('button', { name: 'Plan actions for Nightly sync' })).toBeInTheDocument()
   })
 })

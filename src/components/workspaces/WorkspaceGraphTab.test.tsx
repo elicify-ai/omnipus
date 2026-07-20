@@ -126,7 +126,7 @@ describe('WorkspaceGraphTab — active-plan header', () => {
 
     expect(await screen.findByText('Running')).toBeInTheDocument()
     expect(screen.getByText('Ship v1')).toBeInTheDocument()
-    expect(screen.getByText('50%')).toBeInTheDocument()
+    expect(screen.getByText(/50% done/)).toBeInTheDocument()
   })
 
   it('does not render the active-plan header when activePlanId does not resolve to a loaded plan', async () => {

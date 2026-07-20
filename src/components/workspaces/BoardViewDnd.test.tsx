@@ -67,6 +67,7 @@ function renderBoard(props: Partial<React.ComponentProps<typeof BoardView>> = {}
       plans={plans}
       agents={[]}
       workspaceId="ws-1"
+      activePlanId={null}
       activeTagFilter={null}
       altitude="top-level"
       onTaskClick={vi.fn()}
