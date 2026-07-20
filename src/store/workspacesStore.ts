@@ -21,10 +21,12 @@ interface WorkspacesState {
   activePlanId: string | null
   setActivePlanId: (id: string | null) => void
   /**
-   * The currently-selected tag filters (ADR-051 — the toolbar tag filter is a
-   * multiselect). Empty = no tag filter; a task matches if it has ANY selected
-   * tag. See `PLAN_FILTER_UNTAGGED` (`src/lib/planFilter.ts`) for the "no tags
-   * at all" sentinel.
+   * The currently-selected tag filters for the BOARD toolbar (ADR-051 addendum
+   * D7 — a multiselect). Empty = no tag filter; a task matches if it has ANY
+   * selected tag. See `PLAN_FILTER_UNTAGGED` (`src/lib/planFilter.ts`) for the
+   * "no tags at all" sentinel. Board-only: the List owns its own per-column tag
+   * filter and the Graph honors the plan scope alone, so `WorkspaceTasksTab`
+   * resets this on leaving Board (no hidden-and-unapplied filter across views).
    */
   activeTags: string[]
   setActiveTags: (tags: string[]) => void

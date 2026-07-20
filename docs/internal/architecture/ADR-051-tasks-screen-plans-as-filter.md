@@ -35,6 +35,15 @@ With plans first-class, the **`planning` task status is redundant and removed**.
 The board toolbar's **Agent dropdown** (labeled e.g. "Owner: All") filters by owning agent and **stacks with the plan filter** (plan AND owner). Active filters read as a breadcrumb above the board ("Payments revamp · Owner: Jim"). ＋ New Task lives on the board toolbar.
 - **Confidence: Medium.** Basis: flexibility; low cost (client-side). Could ship after D1–D5 if scope needs trimming.
 
+### D7 — Per-view filter affordances over one shared plan scope (addendum, operator request)
+The three views share exactly **one** cross-view scope — `activePlanId` (the plans band, in the store) — honored by Board, List, and Graph alike. On top of that shared scope each view carries its **own** filter affordance, because a graph has no columns and a board toolbar is a poor host for four independent multiselects:
+- **Board** — the toolbar **Agent** + **Tags** filters (the D6 model), stacked on the plan scope.
+- **List** — **Excel-style per-column filters** in the table headers: every header is a dropdown offering sort (ascending/descending) and, for columns with discrete values, a checkbox value-filter — **Pri / Status / Tags (+ Untagged) / Agent (+ Unassigned)**; Title/Updated are sort-only, Tags is filter-only. Filters are column-local (AND across columns, OR within a column) and reset on view-switch, like sort. The List receives the **plan-scoped** set only (not the toolbar Agent/Tags), so its dropdowns always list the full value set in scope.
+- **Graph** — the plan scope alone (no per-view affordance).
+
+Because Agent/Tags are **Board-only affordances**, they are **reset when leaving Board** — a filter never survives hidden-and-unapplied to reappear on switch-back (avoids the "invisible retained state" / Visibility-of-System-Status regression D2 guards against). The plan band remains the single durable cross-view scope; per-view filters are ephemeral.
+- **Confidence: High.** Basis: explicit operator request ("make all columns of the table like Excel, order and filterable"); the shared-scope-vs-per-view-affordance seam keeps Board/List/Graph in scope-sync without a divergent filter path. Client-side only, no contract change.
+
 ## Contract surface (Constraint #8)
 
 | Type | Change |

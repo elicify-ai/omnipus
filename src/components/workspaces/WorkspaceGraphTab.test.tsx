@@ -76,10 +76,10 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
-function renderTab(workspaceId = 'ws-1') {
+function renderTab(workspaceId = 'ws-1', opts: { hidePlanSelector?: boolean } = {}) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <WorkspaceGraphTab workspaceId={workspaceId} />
+      <WorkspaceGraphTab workspaceId={workspaceId} hidePlanSelector={opts.hidePlanSelector} />
     </QueryClientProvider>,
   )
 }
@@ -88,6 +88,31 @@ beforeEach(() => {
   graphViewCalls.length = 0
   useWorkspacesStore.setState({ activePlanId: null })
   vi.mocked(fetchPlans).mockReset().mockResolvedValue([])
+})
+
+// ── Embedded toolbar (hidePlanSelector) ──────────────────────────────────────
+
+describe('WorkspaceGraphTab — embedded toolbar (hidePlanSelector)', () => {
+  it('skips the toolbar row entirely when embedded with no active plan (no stray line above the canvas)', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch' })])
+    renderTab('ws-1', { hidePlanSelector: true })
+    await screen.findByTestId('graph-view-stub')
+    // Plan selector is hidden and there's no active plan → the whole toolbar row
+    // is skipped, so neither the "By plan" label nor the Select renders.
+    expect(screen.queryByText('By plan')).toBeNull()
+    expect(screen.queryByLabelText(/filter the graph by plan/i)).toBeNull()
+  })
+
+  it('still shows the active-plan header (goal/progress) when embedded WITH a resolvable active plan', async () => {
+    useWorkspacesStore.setState({ activePlanId: 'plan-1' })
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch', goal: 'Ship it' })])
+    renderTab('ws-1', { hidePlanSelector: true })
+    await screen.findByTestId('graph-view-stub')
+    // The plan selector stays hidden, but the toolbar renders because a plan is
+    // active — its goal/progress must still show.
+    expect(screen.queryByText('By plan')).toBeNull()
+    await waitFor(() => expect(screen.getByText('Ship it')).toBeInTheDocument())
+  })
 })
 
 // ── Plan switcher ────────────────────────────────────────────────────────────

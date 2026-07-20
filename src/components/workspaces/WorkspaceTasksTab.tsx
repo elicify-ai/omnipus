@@ -204,6 +204,20 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     }
   }, [ownerAgentId, agents])
 
+  // Agent/Tag are BOARD-only affordances (the List owns per-column filtering;
+  // the Graph honors the plan scope alone). Reset them when leaving Board so a
+  // filter can't survive hidden-and-unapplied and then silently reappear on the
+  // way back — the "invisible retained state" the architecture review flagged.
+  // Switch-back to Board is a clean slate, matching "agent/tag are ephemeral
+  // Board affordances; the plan band is the durable cross-view scope."
+  useEffect(() => {
+    if (view !== 'board') {
+      setOwnerAgentId(null)
+      if (activeTags.length > 0) setActiveTags([])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on view change only
+  }, [view])
+
   // Plan + owner + tag filters AND together (ADR-051 D2/D6) — the one
   // filtered task set every view below renders (Graph excepted; it scopes
   // itself off the shared activePlanId store field, see the header comment).
