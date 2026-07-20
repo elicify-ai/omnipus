@@ -122,16 +122,21 @@ describe('mapToCalendarEvents — occurrence instants (test 17)', () => {
 describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
   it('sub-daily task aggregates to one bucketed chip per day, labeled from interval_ms', () => {
     // "Sub-daily task aggregates to one bucketed chip per day in Month view" —
-    // "Poll inbox" every 30 min: count 48, interval_ms 1_800_000.
+    // "Poll inbox" every 30 min: count 48, interval_ms 1_800_000. `nowMs`
+    // pinned BEFORE dayStart (ADR-050 RD6 — no run_counts overlay here, so
+    // this resolves via the day-vs-now split, same as an individual instant;
+    // see eventMapping.runOverlay.test.ts for dedicated run-overlay coverage,
+    // this test is about chip MECHANICS: id/title/allDay/editable/label).
     const task = makeTask({ id: 'task-2', title: 'Poll inbox', status: 'in_progress' })
     const dayStart = new Date(2026, 5, 1, 0, 0, 0).getTime()
     const firstMs = new Date(2026, 5, 1, 0, 0, 0).getTime()
+    const nowMs = new Date(2026, 4, 1).getTime() // before dayStart
     const set = makeOccurrenceSet({
       task_id: 'task-2',
       day_buckets: [{ day_start_ms: dayStart, count: 48, first_ms: firstMs, interval_ms: 1_800_000 }],
     })
 
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
 
     expect(events).toHaveLength(1)
     const ev = events[0]
@@ -142,7 +147,7 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
     expect(ev.editable).toBe(false)
     expect(ev.extendedProps?.kind).toBe('task-occurrence-agg')
     expect(ev.extendedProps?.taskId).toBe('task-2')
-    expect(ev.extendedProps?.status).toBe('in_progress')
+    expect(ev.extendedProps?.status).toBe('scheduled') // NOT task.status='in_progress' (ADR-050 RD6)
     if (ev.extendedProps?.kind === 'task-occurrence-agg') {
       expect(ev.extendedProps.tooltip).toBe('first at 00:00')
     }
@@ -153,12 +158,13 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
     const task = makeTask({ id: 'task-3', title: 'Check dashboards' })
     const dayStart = new Date(2026, 5, 1, 0, 0, 0).getTime()
     const firstMs = new Date(2026, 5, 1, 9, 0, 0).getTime()
+    const nowMs = new Date(2026, 4, 1).getTime() // before dayStart — keeps the "first at" tooltip branch
     const set = makeOccurrenceSet({
       task_id: 'task-3',
       day_buckets: [{ day_start_ms: dayStart, count: 4, first_ms: firstMs, interval_ms: null }],
     })
 
-    const events = mapToCalendarEvents([task], [], [set])
+    const events = mapToCalendarEvents([task], [], [set], nowMs, nowMs)
 
     expect(events).toHaveLength(1)
     expect(events[0].title).toBe('Check dashboards · 4×/day')

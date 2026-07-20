@@ -106,13 +106,17 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 			}
 			a.handleTaskDependencies(w, r, id)
 		case "runs":
-			// GET /api/v1/tasks/{id}/runs (ADR-050, task-run-history-spec
-			// §3.6; handler in rest_task_runs.go). Wrapped in the SAME
-			// dedicated taskReadLimiter /tasks/occurrences uses
-			// (rest_auth.go) — applied here rather than at top-level
-			// registration since this "/api/v1/tasks/" prefix route
-			// (registerAdditionalEndpoints, rest.go) carries no limiter of
-			// its own and a dynamic {id} segment cannot be its own
+			// GET /api/v1/tasks/{id}/runs (history list) AND POST
+			// /api/v1/tasks/{id}/runs (Run-now) BOTH land here — a single
+			// dispatch point, handleTaskRuns (rest_task_runs.go), which
+			// itself switches on r.Method (GET falls through to the
+			// history-list body; POST delegates to handleTaskRunNow; any
+			// other method is 405). ADR-050 RD8/RD7, task-run-history-spec.md
+			// §3.6/§3.4. Wrapped in the SAME dedicated taskReadLimiter
+			// /tasks/occurrences uses (rest_auth.go) — applied here rather
+			// than at top-level registration since this "/api/v1/tasks/"
+			// prefix route (registerAdditionalEndpoints, rest.go) carries no
+			// limiter of its own and a dynamic {id} segment cannot be its own
 			// registered pattern (see rest_task_runs.go's doc comment).
 			withRateLimit(taskReadLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleTaskRuns(w, r, id)
@@ -244,9 +248,14 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 		return sched.NextRunAtMSForTask(taskID)
 	}
 
-	// ADR-050 / task-run-history-spec §3.7: the occurrence-run overlay is
-	// wired in via the SAME trailing-variadic dependency-injection pattern
-	// as everyAnchor above, sourced from the live store.
+	// ADR-050 RD6, task-run-history-spec.md §3.7: the occurrence-run overlay
+	// dependency is wired in here, sourced from the live store. Unlike
+	// everyAnchor above — a required, non-variadic func(taskID string)
+	// (int64, bool) parameter — runsInRange is buildOccurrenceSets' own
+	// trailing VARIADIC parameter (see its doc comment, task_occurrences.go);
+	// that is what lets this single positional call add the dependency
+	// without breaking the pre-existing task_occurrences_test.go call sites
+	// that predate this feature and pass none.
 	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor, a.taskStore.RunsInRange)
 	if err != nil {
 		// Range/tz were already validated above, so a non-nil error here
@@ -962,55 +971,45 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 
 	// Capture the pre-update status to detect the in_progress transition below.
 	var preUpdateStatus task.Status
-	// freshRunReset, when true, records that this PATCH performed the
-	// fresh-run reset below (a "Run now" on a done/failed REPEATING task) and
-	// origSessionID/origResult/origArtifacts/origCompletedAt/origFollowedUp
-	// hold the PRE-reset values. The launch-failure revert branches further
-	// down restore these when freshRunReset is set, so a FAILED "Run now"
-	// leaves the task exactly as it was before the click rather than
-	// permanently discarding the prior (completed) run's session link,
-	// result text, artifacts, and completion timestamp.
-	var freshRunReset bool
-	var origSessionID, origResult, origCompletedAt string
-	var origArtifacts []string
-	var origFollowedUp bool
 	if req.Status != nil {
 		// Read the current status before applying the patch so we can detect
 		// transitions rather than just the new state. We need the original status
 		// to distinguish "was already in_progress" from "just moved to in_progress".
 		if existing, gErr := a.taskStore.Get(id); gErr == nil {
 			preUpdateStatus = existing.Status
-			// "Run now" on a done/failed REPEATING task is a FRESH run, not a
-			// resume: clear the stale session_id + result + artifacts +
-			// completed_at + followed_up from the prior run so (a) the
-			// in_progress launch guard below (which requires updated.SessionID
-			// == "") fires and StartTaskNow mints a new session, and (b) the
-			// panel doesn't carry the old run's result/artifacts into the new
-			// one. Mirrors SpawnReset's fresh-run reset on a scheduled fire
-			// field-for-field (SpawnReset clears session_id, result,
-			// artifacts, started_at, completed_at, followed_up). StartedAt is
-			// deliberately NOT cleared here — the in_progress transition below
-			// (updateLocked's own auto-stamp) re-stamps it to this new run's
-			// start, which is exactly the value SpawnReset's own StartedAt
-			// clear is making room for. Scoped to repeating triggers so a
-			// one-shot/manual resume is unaffected.
+			// ADR-050 RD7, task-run-history-spec.md §3.4 ("the ADR-049
+			// fresh-run reset is superseded by this in the same change...do
+			// not keep both paths"): a "Run now" on a done/failed REPEATING
+			// task must go through the run-aware POST
+			// /api/v1/tasks/{id}/runs entry point (handleTaskRunNow ->
+			// TaskExecutor.StartOccurrenceRun -> Store.SpawnReset +
+			// Store.OpenRun, rest_task_runs.go), not this PATCH-status
+			// endpoint. This PATCH path's in_progress launch (below) goes
+			// through StartTaskNow -> runTaskFromInProgress, which passes
+			// nil for ADR-050's *activeRun and therefore never opens/closes
+			// a TaskRun record (see runTaskFromInProgress's own doc comment
+			// in pkg/agent/task_executor.go) — a repeating task re-run
+			// through this path would be invisible to the calendar
+			// occurrence overlay and the run-history list.
+			//
+			// This used to be handled by a field-clearing "fresh-run reset"
+			// (session_id/result/artifacts/completed_at/followed_up wiped
+			// pre-emptively so the launch guard below, which requires
+			// updated.SessionID == "", would fire). That reset existed ONLY
+			// to force this untracked path to launch at all; deleting it
+			// with no replacement would leave a PATCH like this silently
+			// flip the task to in_progress with the PRIOR run's stale
+			// session_id still attached (the guard below never fires since
+			// SessionID != ""), so the task never re-launches and sits
+			// permanently "in progress" with a dead session. Reject instead,
+			// before any store write, and point the caller at the run-aware
+			// endpoint.
 			if patch.Status != nil && *patch.Status == task.StatusInProgress &&
 				task.IsTerminal(existing.Status) &&
 				existing.Trigger.IsRepeating() {
-				freshRunReset = true
-				origSessionID = existing.SessionID
-				origResult = existing.Result
-				origArtifacts = existing.Artifacts
-				origCompletedAt = existing.CompletedAt
-				origFollowedUp = existing.FollowedUp
-				empty := ""
-				emptyArtifacts := []string{}
-				falseVal := false
-				patch.SessionID = &empty
-				patch.Result = &empty
-				patch.Artifacts = &emptyArtifacts
-				patch.CompletedAt = &empty
-				patch.FollowedUp = &falseVal
+				jsonErr(w, http.StatusBadRequest,
+					"cannot re-run a repeating task via PATCH status; use POST /api/v1/tasks/"+id+"/runs instead")
+				return
 			}
 		}
 	}
@@ -1056,16 +1055,6 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// from an attempt that never actually ran, until the next real in_progress
 	// transition happens to overwrite it.
 	//
-	// When freshRunReset fired above (a "Run now" fresh-run reset on a
-	// done/failed REPEATING task), the revert ALSO restores the pre-reset
-	// session_id/result/artifacts/completed_at/followed_up: those were wiped
-	// pre-emptively so the launch guard below and StartTaskNow could mint a
-	// fresh run, but if the launch itself never succeeds, the task must land
-	// back exactly where it was before the click — not lose the completed
-	// prior run's result and chat link. Without this, a retryable 409
-	// (dispatch cap) or a 503 (nil executor) would silently and permanently
-	// discard that data.
-	//
 	// Guard: only fire when the client explicitly set status=in_progress in this
 	// PATCH (req.Status != nil). A PATCH with no status field must never enter
 	// the launch path even if the task happens to already be in_progress —
@@ -1082,15 +1071,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		buildLaunchRevertPatch := func() task.Patch {
 			revertStatus := preUpdateStatus
 			revertStartedAt := ""
-			p := task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
-			if freshRunReset {
-				p.SessionID = &origSessionID
-				p.Result = &origResult
-				p.Artifacts = &origArtifacts
-				p.CompletedAt = &origCompletedAt
-				p.FollowedUp = &origFollowedUp
-			}
-			return p
+			return task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
 		}
 		if a.taskExecutor == nil {
 			// Revert the task to its prior status so it is not left stranded.

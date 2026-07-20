@@ -4,9 +4,9 @@
  * Unit coverage for the result field extracted out of TaskDetailPanel — self
  * gates to (status done|failed) AND a non-empty result, identical to
  * TaskDetailPanel's `showResult` (see CalendarEventSlideOver.test.tsx for the
- * calendar-side integration coverage). Also covers the run-aware `run` prop
- * (ADR-050 RD8): when provided, the RUN's status/result gate and render
- * instead of the task's.
+ * calendar-side integration coverage). Also covers the run-aware `occurrence`
+ * prop (ADR-050 RD8, folded `{ms, run}` — M7 fix): when provided, the RUN's
+ * status/result gate and render instead of the task's.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -110,36 +110,43 @@ describe('TaskResultField — copy', () => {
   })
 })
 
-describe('TaskResultField — run-aware (`run` prop, ADR-050 RD8)', () => {
-  it('with a resolved `run`, renders the RUN result, not task.result', () => {
+describe('TaskResultField — run-aware (`occurrence` prop, ADR-050 RD8 / M7)', () => {
+  it('with a resolved run, renders the RUN result, not task.result', () => {
     // Task mirror shows an unrelated (e.g. more recent) result — the RUN's
-    // own result must win when `run` is provided.
+    // own result must win when `occurrence.run` is provided.
     const task = makeTask({ status: 'done', result: 'Task-level (latest fire) result.' })
     const run = makeRun({ status: 'done', result: 'This occurrence’s own result.' })
-    render(<TaskResultField task={task} run={run} />)
+    render(<TaskResultField task={task} occurrence={{ ms: run.occurrence_ms as number, run }} />)
 
     expect(screen.getByText('This occurrence’s own result.')).toBeInTheDocument()
     expect(screen.queryByText('Task-level (latest fire) result.')).not.toBeInTheDocument()
   })
 
-  it('with a resolved `run`, gates on the RUN status — renders nothing for an in-progress run even if task.status is done', () => {
+  it('with a resolved run, gates on the RUN status — renders nothing for an in-progress run even if task.status is done', () => {
     const task = makeTask({ status: 'done', result: 'Stale task-level result.' })
     const run = makeRun({ status: 'in_progress', result: undefined })
-    const { container } = render(<TaskResultField task={task} run={run} />)
+    const { container } = render(<TaskResultField task={task} occurrence={{ ms: run.occurrence_ms as number, run }} />)
 
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('with a resolved failed `run`, shows that run’s failure result', () => {
+  it('with a resolved failed run, shows that run’s failure result', () => {
     const task = makeTask({ status: 'done', result: 'Task says done.' })
     const run = makeRun({ status: 'failed', result: 'This occurrence failed.' })
-    render(<TaskResultField task={task} run={run} />)
+    render(<TaskResultField task={task} occurrence={{ ms: run.occurrence_ms as number, run }} />)
 
     expect(screen.getByText('This occurrence failed.')).toBeInTheDocument()
   })
 
-  it('without `run`, behaviour is unchanged (reads task.result)', () => {
+  it('without `occurrence`, behaviour is unchanged (reads task.result)', () => {
     render(<TaskResultField task={makeTask({ status: 'done', result: 'Plain task result.' })} />)
     expect(screen.getByText('Plain task result.')).toBeInTheDocument()
+  })
+
+  it('with `occurrence` present but no resolved `run`, falls back to task.result (the component itself does not suppress on occurrence-context-without-a-run — the slide-over gates whether to render this component at all via its own `showResultAndChat` check)', () => {
+    const task = makeTask({ status: 'done', result: 'Task-level fallback result.' })
+    render(<TaskResultField task={task} occurrence={{ ms: 1_800_000_000_000 }} />)
+
+    expect(screen.getByText('Task-level fallback result.')).toBeInTheDocument()
   })
 })

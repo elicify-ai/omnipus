@@ -92,7 +92,7 @@ const (
 )
 
 // wireRunCounts mirrors the gen.TaskOccurrenceSet.DayBuckets[].RunCounts
-// inline type (ADR-050 / task-run-history-spec §3.7) — a per-day run-status
+// inline type (ADR-050 RD6, task-run-history-spec.md §3.7) — a per-day run-status
 // tally computed by scanning that day's actual TaskRun records (see
 // populateBucketRunCounts), NOT by enumerating RRULE members.
 // not-wire-format: local alias for the generated inline struct; see
@@ -114,7 +114,7 @@ type wireRunCounts = struct {
 // gen.TaskOccurrenceSet.DayBuckets / contracts/components/schemas/DayBucket.yaml
 // for the authoritative shape.
 //
-// RunCounts (ADR-050 / task-run-history-spec §3.7) is an additive field on
+// RunCounts (ADR-050 RD6, task-run-history-spec.md §3.7) is an additive field on
 // the wire schema, populated by populateBucketRunCounts (called from
 // buildOneOccurrenceSet via populateRunOverlay) — nil/absent when no
 // runsInRange dependency was supplied or no run fell in that day.
@@ -127,7 +127,7 @@ type wireDayBucket = struct {
 }
 
 // wireOccurrenceRun mirrors the element type of
-// gen.TaskOccurrenceSet.OccurrenceRuns (ADR-050 / task-run-history-spec
+// gen.TaskOccurrenceSet.OccurrenceRuns (ADR-050 RD6, task-run-history-spec.md
 // §3.7) — oapi-codegen inlines the object schema there rather than emitting
 // a named type, so a local alias with the IDENTICAL field order/names/
 // types/json-tags is required for direct assignability (same technique as
@@ -166,8 +166,8 @@ type wireOccurrenceRun = struct {
 // production this only ever returns a nil error; the check is retained here
 // so the function is independently correct for tests 7/8 that call it
 // directly without going through the REST validation.
-// runsInRangeFn is the occurrence-run overlay's store dependency (ADR-050 /
-// task-run-history-spec §3.7): folds a task's runs whose occurrence_ms falls
+// runsInRangeFn is the occurrence-run overlay's store dependency (ADR-050
+// RD6, task-run-history-spec.md §3.7): folds a task's runs whose occurrence_ms falls
 // in [fromMs, toMs). Satisfied in production by task.Store.RunsInRange.
 type runsInRangeFn = func(taskID string, fromMs, toMs int64) ([]task.TaskRun, error)
 
@@ -214,8 +214,8 @@ func buildOccurrenceSets(
 // (defensive — creation-time validation should already prevent this), or it
 // produces zero occurrences in range (spec: zero-occurrence tasks are
 // omitted from the response entirely). When ok=true and runsInRange is
-// non-nil, the returned set is additionally enriched with the ADR-050 /
-// task-run-history-spec §3.7 occurrence-run overlay (populateRunOverlay).
+// non-nil, the returned set is additionally enriched with the ADR-050 RD6,
+// task-run-history-spec.md §3.7 occurrence-run overlay (populateRunOverlay).
 func buildOneOccurrenceSet(
 	t *task.Task,
 	fromMs, toMs int64,
@@ -361,11 +361,11 @@ func buildOneOccurrenceSet(
 		DayBuckets:    buckets,
 		Truncated:     truncated,
 	}
-	populateRunOverlay(&set, t.ID, fromMs, toMs, runsInRange)
+	populateRunOverlay(&set, t.ID, fromMs, toMs, loc, runsInRange)
 	return set, true
 }
 
-// --- occurrence-run overlay (ADR-050 RD6 / task-run-history-spec §3.7) -----
+// --- occurrence-run overlay (ADR-050 RD6, task-run-history-spec.md §3.7) --
 
 // populateRunOverlay enriches an already-fully-built set (occMs/buckets/
 // truncated are final) with:
@@ -383,7 +383,7 @@ func buildOneOccurrenceSet(
 // absent until populated") when runsInRange is nil (a caller/test that
 // doesn't exercise the overlay), the call errors, or it returns zero runs
 // for this task's [fromMs, toMs) window.
-func populateRunOverlay(set *gen.TaskOccurrenceSet, taskID string, fromMs, toMs int64, runsInRange runsInRangeFn) {
+func populateRunOverlay(set *gen.TaskOccurrenceSet, taskID string, fromMs, toMs int64, loc *time.Location, runsInRange runsInRangeFn) {
 	if runsInRange == nil {
 		return
 	}
@@ -398,7 +398,29 @@ func populateRunOverlay(set *gen.TaskOccurrenceSet, taskID string, fromMs, toMs 
 	}
 
 	populateOccurrenceRunEntries(set, runs)
-	populateBucketRunCounts(set, runs)
+	populateBucketRunCounts(set, runs, loc)
+}
+
+// latestRunPerOccurrence folds runs into a map keyed by occurrence_ms,
+// latest-STARTED-wins per key (runIsNewer) — the SINGLE dedup used by both
+// the per-instant occurrence_runs overlay (populateOccurrenceRunEntries) and
+// the per-bucket run_counts tally (populateBucketRunCounts), so a re-run
+// occurrence (a scheduled fire that failed, later manually re-run to done)
+// is counted/rendered exactly ONCE, as its current/definitive attempt — not
+// once per raw run record. Runs with a nil OccurrenceMs (ad-hoc/manual,
+// non-recurring runs) are excluded — they have no occurrence key to fold on.
+func latestRunPerOccurrence(runs []task.TaskRun) map[int64]task.TaskRun {
+	byOccurrence := make(map[int64]task.TaskRun, len(runs))
+	for _, run := range runs {
+		if run.OccurrenceMs == nil {
+			continue // defensive: RunsInRange never returns these, but don't trust blindly
+		}
+		key := *run.OccurrenceMs
+		if cur, ok := byOccurrence[key]; !ok || runIsNewer(run, cur) {
+			byOccurrence[key] = run
+		}
+	}
+	return byOccurrence
 }
 
 // populateOccurrenceRunEntries matches each of set.OccurrencesMs against
@@ -412,16 +434,7 @@ func populateOccurrenceRunEntries(set *gen.TaskOccurrenceSet, runs []task.TaskRu
 	if len(set.OccurrencesMs) == 0 {
 		return
 	}
-	byOccurrence := make(map[int64]task.TaskRun, len(runs))
-	for _, run := range runs {
-		if run.OccurrenceMs == nil {
-			continue // defensive: RunsInRange never returns these, but don't trust blindly
-		}
-		key := *run.OccurrenceMs
-		if cur, ok := byOccurrence[key]; !ok || runIsNewer(run, cur) {
-			byOccurrence[key] = run
-		}
-	}
+	byOccurrence := latestRunPerOccurrence(runs)
 	if len(byOccurrence) == 0 {
 		return
 	}
@@ -431,12 +444,23 @@ func populateOccurrenceRunEntries(set *gen.TaskOccurrenceSet, runs []task.TaskRu
 		if !ok {
 			continue
 		}
+		// H4: validate the enum on encode rather than trusting a bare Go type
+		// conversion — a corrupt/foreign stored status must not become a
+		// schema-invalid value on the wire. Mirrors foldRunsLocked's own
+		// malformed-record skip (pkg/task/run_store.go): log at Warn and drop
+		// just this entry, not the whole overlay.
+		status := gen.TaskOccurrenceSetOccurrenceRunsStatus(run.Status)
+		if !status.Valid() {
+			slog.Warn("task_occurrences: run has invalid status, dropping occurrence-run entry",
+				"task_id", run.TaskID, "run_id", run.RunID, "occurrence_ms", ms, "status", run.Status)
+			continue
+		}
 		entries = append(entries, wireOccurrenceRun{
 			HasResult:    run.Result != "",
 			OccurrenceMs: ms,
 			RunId:        run.RunID,
 			SessionId:    run.SessionID,
-			Status:       gen.TaskOccurrenceSetOccurrenceRunsStatus(run.Status),
+			Status:       status,
 		})
 	}
 	if len(entries) > 0 {
@@ -444,30 +468,44 @@ func populateOccurrenceRunEntries(set *gen.TaskOccurrenceSet, runs []task.TaskRu
 	}
 }
 
-// populateBucketRunCounts tallies each of set.DayBuckets against runs whose
-// occurrence_ms falls in that bucket's [day_start_ms, day_start_ms+24h)
-// fixed-width window (a literal 24h span, not calendar-day/DST-aware
-// arithmetic — the spec states this exact formula, and it is consistent
-// with ADR-050's already-accepted single-DST-transition occurrence_ms join
-// imprecision elsewhere). scheduled is derived as bucket.Count minus the
-// three observed statuses, clamped at 0 — a day whose bucket count reflects
-// occurrences whose runs were later pruned (retention) could otherwise go
-// negative.
-func populateBucketRunCounts(set *gen.TaskOccurrenceSet, runs []task.TaskRun) {
+// populateBucketRunCounts tallies each of set.DayBuckets against the SAME
+// latest-wins-per-occurrence fold populateOccurrenceRunEntries uses
+// (latestRunPerOccurrence) — H1 fix: this previously scanned the raw `runs`
+// slice with no dedup, so a re-run occurrence (e.g. a scheduled fire that
+// failed, later manually re-run to done) was tallied into BOTH its stale
+// `failed` count and its current `done` count for the same occurrence,
+// double-counting it and disagreeing with the per-instant overlay (which
+// already deduped to the single current attempt). Folding once here keeps
+// the two overlay fields consistent.
+//
+// Each bucket's window is [day_start_ms, next civil day's midnight in loc)
+// via civilDayNext — H2-DST fix: a literal dayFrom+24h fixed-width span
+// mis-buckets a boundary-hour run on a 23h/25h DST-transition day, because
+// DayStartMs itself is already the DST-aware civilDayStart output (see
+// buildOverview) — the window's far edge must be computed the same
+// calendar-arithmetic way, not as a fixed-duration offset. (ADR-050's
+// separately-accepted single-DST-transition occurrence_ms JOIN imprecision —
+// NextOccurrenceAfter vs ExpandRRULE naming different valid minutes inside a
+// spring-forward gap — is a different, already-documented edge case and does
+// not excuse this bucket WINDOW from being DST-aware too.)
+//
+// scheduled is derived as bucket.Count minus the three observed statuses,
+// clamped at 0 — a day whose bucket count reflects occurrences whose runs
+// were later pruned (retention) could otherwise go negative.
+func populateBucketRunCounts(set *gen.TaskOccurrenceSet, runs []task.TaskRun, loc *time.Location) {
 	if len(set.DayBuckets) == 0 {
 		return
 	}
-	const dayMs = int64(24 * time.Hour / time.Millisecond)
+	byOccurrence := latestRunPerOccurrence(runs)
+	if len(byOccurrence) == 0 {
+		return
+	}
 	for i := range set.DayBuckets {
 		b := &set.DayBuckets[i]
 		dayFrom := b.DayStartMs
-		dayTo := dayFrom + dayMs
+		dayTo := civilDayNext(dayFrom, loc)
 		var inProgress, done, failed int32
-		for _, run := range runs {
-			if run.OccurrenceMs == nil {
-				continue
-			}
-			ms := *run.OccurrenceMs
+		for ms, run := range byOccurrence {
 			if ms < dayFrom || ms >= dayTo {
 				continue
 			}

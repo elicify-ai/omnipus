@@ -24,16 +24,39 @@ import type { Task } from '@/lib/api'
 export type TaskStatus = Task['status']
 
 /**
- * Occurrence chip render states beyond the raw 7-member `TaskStatus` union
- * (ADR-050 RD6, docs/internal/specs/task-run-history-spec.md §4.2's
- * four-state rule). `'scheduled'` = no matching run yet, occurrence instant
- * still in the future ("today's Clock chip", now deliberately decoupled from
- * `task.status` — see `SCHEDULED_STYLE`). `'no_record'` = no matching run,
- * occurrence instant already in the past (pruned by retention or the
- * schedule was edited since it fired) — must never be confused with a future
- * `'scheduled'` fire.
+ * `task-occurrence-agg` (aggregated day bucket) chip status domain (ADR-050
+ * RD6, docs/internal/specs/task-run-history-spec.md §4.2's four-state rule).
+ * `'scheduled'` = no matching run yet, occurrence instant still in the future
+ * ("today's Clock chip", now deliberately decoupled from `task.status` — see
+ * `SCHEDULED_STYLE`). `'no_record'` = no matching run, occurrence instant
+ * already in the past (pruned by retention or the schedule was edited since
+ * it fired) — must never be confused with a future `'scheduled'` fire.
+ *
+ * Kept as the full `TaskStatus | 'scheduled' | 'no_record'` union (9 members)
+ * ONLY for `task-occurrence-agg`'s legacy-fallback branch (`resolveBucketChip`
+ * in eventMapping.ts) — bucket chips have carried a raw `TaskStatus` value
+ * historically and this type stays wide enough to keep doing so if that
+ * fallback is ever revisited. An INDIVIDUAL `task-occurrence` chip's status
+ * never comes from `task.status` at all (see `RunDerivedChipStatus`) — the
+ * two variants have different real domains, which is why they get different
+ * types (M6).
  */
 export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record'
+
+/**
+ * `task-occurrence` (individual instant) chip status domain (ADR-050 RD6,
+ * task-run-history-spec.md §4.2). An individual occurrence's chip status
+ * comes from exactly one of two sources — never `task.status`:
+ *   - a matched `TaskRun`'s own status: `'done' | 'in_progress' | 'failed'`
+ *     (`TaskRun.status`'s wire enum — no `blocked`/`inbox`/`next`/`planning`
+ *     member exists on a run).
+ *   - the day-vs-now synthetic states when no run matched: `'scheduled'`
+ *     (future) / `'no_record'` (past).
+ * Narrower than `OccurrenceChipStatus` (which stays the full `TaskStatus`
+ * union for `task-occurrence-agg`'s legacy fallback) precisely because this
+ * variant's domain excludes the other four `TaskStatus` members entirely.
+ */
+export type RunDerivedChipStatus = 'done' | 'in_progress' | 'failed' | 'scheduled' | 'no_record'
 
 /** The four views offered by the toolbar (FR-006). */
 export type CalendarViewName =
@@ -98,8 +121,9 @@ export type StatusIconKey =
  * Per-occurrence run overlay (ADR-050 RD6, docs/internal/specs/task-run-history-spec.md
  * §4.1/§4.2) widens `task-occurrence`/`task-occurrence-agg` further: those two
  * kinds stop reading `task.status` for their color/glyph entirely — see
- * `OccurrenceChipStatus` and the four-state rule implemented in
- * `eventMapping.ts`'s `resolveOccurrenceChipState`/`resolveBucketChip`.
+ * `RunDerivedChipStatus` (individual instants) / `OccurrenceChipStatus`
+ * (buckets) and the four-state rule implemented in `eventMapping.ts`'s
+ * `resolveOccurrenceChipState`/`resolveBucketChip`.
  * `task-occurrence` carries `occurrenceMs` (the join key threaded to
  * `CalendarScreen.handleEventClick` → `CalendarEventSlideOver`'s
  * `selectedOccurrenceMs`) plus the matched run's `runId`/`sessionId`/
@@ -113,7 +137,7 @@ export type CalendarEventExtProps =
   | {
       kind: 'task-occurrence'
       taskId: string
-      status: OccurrenceChipStatus
+      status: RunDerivedChipStatus
       icon: StatusIconKey
       /** The raw occurrence instant (ms) this chip renders — the calendar-overlay join key. */
       occurrenceMs: number

@@ -6,18 +6,22 @@
 // recurring task's current run status and manually trigger a run without
 // reinventing TaskDetailPanel's "Start" mutation.
 //
-// Run-aware (ADR-050 RD8 / task-run-history-spec §4.3): an optional `run`
-// prop lets the calendar's occurrence slide-over re-point this at a SPECIFIC
-// occurrence's run (status + timestamp) instead of the task's aggregate
-// status. An optional `occurrenceMs` threads the clicked occurrence through
-// to "Run now" so it re-runs/materializes THAT occurrence
-// (POST /tasks/{id}/runs with occurrence_ms, ADR-050 RD7) instead of a
-// generic fresh run. When `occurrenceMs` is set but no `run` has resolved
-// yet (e.g. a future occurrence with no run, or the resolving query still in
-// flight), the badge is hidden entirely and only "Run now" renders (spec
-// §4.3 — "future occurrence, no run → only Run now, no status badge, no
-// result"). Both props absent → EXACT existing behaviour (task.status-driven
+// Run-aware (ADR-050 RD8 / task-run-history-spec §4.3): an optional
+// `occurrence` prop (folded `{ms, run}` — M7 fix) lets the calendar's
+// occurrence slide-over re-point this at a SPECIFIC occurrence's run (status
+// + timestamp) instead of the task's aggregate status, and thread that
+// occurrence through to "Run now" (POST /tasks/{id}/runs with occurrence_ms,
+// ADR-050 RD7) so it re-runs/materializes THAT occurrence instead of a
+// generic fresh run. Omitted → EXACT existing behaviour (task.status-driven
 // badge, runTaskNow(task.id) with no occurrence).
+//
+// D1 (operator decision 2026-07-20): "Run now" is NEVER offered for a FUTURE
+// occurrence (`occurrence.ms > now`) — running it early would double-execute
+// the naturally-scheduled fire. A future occurrence with no run shows its
+// scheduled status instead, with no Run-now button at all. A past/current
+// occurrence (`occurrence.ms <= now`) keeps Run-now, whether or not a run has
+// resolved for it yet. `now` is an injected prop (never a bare `Date.now()`
+// read inline) so this gate is deterministically testable.
 //
 // "Run now" calls runTaskNow (POST /tasks/{id}/runs, ADR-050 RD7) — this
 // opens/re-opens a TaskRun record. There is no dedicated /start endpoint;
@@ -35,52 +39,52 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { runTaskNow, isApiError, tasksQueryKeys } from '@/lib/api'
-import type { Task, TaskRun } from '@/lib/api'
+import type { Task } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
 import { canDropTransition } from '@/components/workspaces/BoardView'
 import { STATUS_BADGE, statusLabel } from '@/components/workspaces/taskStatusConfig'
+import { formatDateTime } from '@/lib/dateFormat'
+import type { TaskRunOccurrenceContext } from '@/lib/taskRuns'
 import { Play } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
 export interface TaskRunStatusFieldProps {
   task: Task
   /**
-   * A specific occurrence's resolved run (ADR-050 RD8). When provided, the
-   * badge reflects THIS run's status/timestamp instead of task.status —
-   * used by the calendar's occurrence slide-over. Absent → falls back to
-   * task.status (unchanged existing behaviour).
+   * The calendar occurrence this field is scoped to, folded with its
+   * resolved run (M7 fix — see file header). Omit for the existing
+   * task-level behaviour.
    */
-  run?: TaskRun
+  occurrence?: TaskRunOccurrenceContext
   /**
-   * The occurrence instant this field is scoped to, when opened from a
-   * calendar occurrence chip. When set, "Run now" re-runs/materializes THAT
-   * occurrence via runTaskNow(task.id, occurrenceMs) instead of a generic
-   * fresh run. Omit for the existing task-level behaviour.
+   * Injected "now" (epoch ms) for the D1 future-occurrence Run-now gate.
+   * Defaults to real "now"; tests pin it for determinism.
    */
-  occurrenceMs?: number | null
+  now?: number
 }
 
-function formatDate(iso?: string): string {
-  if (!iso) return '—'
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
-}
-
-export function TaskRunStatusField({ task, run, occurrenceMs }: TaskRunStatusFieldProps) {
+export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskRunStatusFieldProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const hasOccurrenceContext = occurrenceMs !== undefined && occurrenceMs !== null
-  // Only-Run-now state (spec §4.3): an occurrence is selected but no run has
-  // resolved for it yet (future fire, or the resolving query still in
-  // flight/erred) — there is nothing occurrence-specific to badge.
-  const runNowOnly = hasOccurrenceContext && !run
+  const run = occurrence?.run
+  const occurrenceMs = occurrence?.ms
+  const hasOccurrenceContext = occurrence !== undefined
+  // D1 (operator decision 2026-07-20): a future occurrence never offers
+  // Run-now, whether or not a run has already resolved for it.
+  const isFutureOccurrence = hasOccurrenceContext && occurrenceMs! > now
+  // A resolved run always renders its own badge. Absent a run, the
+  // task-level fallback badge renders ONLY when there's no occurrence
+  // context at all — an occurrence with no run yet shows a text state
+  // instead (scheduled, or "not yet run"), never the unrelated task-level
+  // badge (spec §4.3).
+  const showBadge = !!run || !hasOccurrenceContext
 
   // "Run now" = POST /tasks/{id}/runs (ADR-050 RD7). With occurrenceMs set,
   // this re-runs/materializes that SPECIFIC occurrence; omitted, it re-runs
-  // the task as a fresh run (existing task-level behaviour) — mirrors
-  // runTaskNow's own occurrenceMs-omitted-vs-set contract.
+  // the task as a fresh run (existing task-level behaviour).
   const { mutate: doRunNow, isPending: isStarting } = useMutation({
     mutationFn: () => runTaskNow(task.id, occurrenceMs),
     onSuccess: () => {
@@ -108,7 +112,7 @@ export function TaskRunStatusField({ task, run, occurrenceMs }: TaskRunStatusFie
   // "Run now" starts a fresh run. Without this, canDropTransition('done',…)
   // ("Done is final") would hide Run now on exactly the recurring tasks the
   // calendar edit slide-over exists to manage. This TASK-LEVEL gate only
-  // applies to the fallback (no run resolved) path below.
+  // applies to the fallback (no occurrence context) path below.
   const isRepeating = task.trigger?.type === 'every' || task.trigger?.type === 'recurring'
   // Already running, or a transition into in_progress is disallowed (done is
   // terminal for a one-shot task; blocked clears automatically) — otherwise
@@ -118,19 +122,19 @@ export function TaskRunStatusField({ task, run, occurrenceMs }: TaskRunStatusFie
     task.status !== 'in_progress' &&
     (canDropTransition(task.status, 'in_progress').ok || (task.status === 'done' && isRepeating))
 
-  // Run-level gate: any resolved run can be re-run unless it's currently in
-  // flight. Occurrence-selected-but-unresolved (runNowOnly): always
-  // actionable — there is no run yet to gate against (spec §4.3).
-  const canRunNow = run ? run.status !== 'in_progress' : runNowOnly ? true : taskLevelCanRunNow
+  // Run-now gate: task-level (no occurrence context) uses the existing
+  // status-transition gate, unaffected by D1. Occurrence-scoped: never for a
+  // future occurrence (D1); otherwise any resolved run can be re-run unless
+  // it's currently in flight, and an unresolved (no-run) past/current
+  // occurrence is always actionable — there's nothing to gate against yet.
+  const canRunNow = hasOccurrenceContext
+    ? !isFutureOccurrence && (run ? run.status !== 'in_progress' : true)
+    : taskLevelCanRunNow
 
   return (
     <div className="space-y-1.5">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Run status</p>
-      {runNowOnly ? (
-        <p className="text-xs text-[var(--color-muted)]" data-testid="occurrence-run-now-only">
-          Not yet run.
-        </p>
-      ) : (
+      {showBadge ? (
         <div className="flex items-center gap-2">
           <Badge
             data-testid="task-run-status-badge"
@@ -138,8 +142,18 @@ export function TaskRunStatusField({ task, run, occurrenceMs }: TaskRunStatusFie
           >
             {statusLabel(badgeStatus)}
           </Badge>
-          <span className="text-xs text-[var(--color-muted)]">Last updated {formatDate(lastUpdatedIso)}</span>
+          <span className="text-xs text-[var(--color-muted)]">Last updated {formatDateTime(lastUpdatedIso)}</span>
         </div>
+      ) : isFutureOccurrence ? (
+        // D1: a future occurrence with no run shows its scheduled status —
+        // never "Not yet run" (which implied Run-now was on offer).
+        <p className="text-xs text-[var(--color-muted)]" data-testid="occurrence-scheduled">
+          Scheduled.
+        </p>
+      ) : (
+        <p className="text-xs text-[var(--color-muted)]" data-testid="occurrence-run-now-only">
+          Not yet run.
+        </p>
       )}
       {canRunNow && (
         <Button

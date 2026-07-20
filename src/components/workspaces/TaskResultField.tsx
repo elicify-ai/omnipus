@@ -4,33 +4,35 @@
 // Board/List, US-3 — the calendar slide-over is their only surface).
 //
 // Self-gates: renders nothing unless the resolved status is done/failed AND
-// carries a result — identical gate to TaskDetailPanel's `showResult`.
+// carries a result (`hasVisibleResult`, shared with TaskRunsList — Q3 dedup).
 //
-// Run-aware (ADR-050 RD8 / task-run-history-spec §4.3): an optional `run`
-// prop lets the calendar's occurrence slide-over show THAT run's result
-// instead of task.result — a series whose latest fire failed but whose
-// clicked occurrence succeeded (or vice versa) must show ITS OWN result, not
-// the task-level mirror. Absent → falls back to task.status/task.result
-// (unchanged existing behaviour).
+// Run-aware (ADR-050 RD8 / task-run-history-spec §4.3): an optional
+// `occurrence` prop (folded `{ms, run}` — M7 fix) lets the calendar's
+// occurrence slide-over show THAT run's result instead of task.result — a
+// series whose latest fire failed but whose clicked occurrence succeeded (or
+// vice versa) must show ITS OWN result, not the task-level mirror. Absent →
+// falls back to task.status/task.result (unchanged existing behaviour).
 
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/store/ui'
 import { Copy } from '@phosphor-icons/react'
-import type { Task, TaskRun } from '@/lib/api'
+import type { Task } from '@/lib/api'
+import { hasVisibleResult, type TaskRunOccurrenceContext } from '@/lib/taskRuns'
 
 export interface TaskResultFieldProps {
   task: Task
   /** A specific occurrence's resolved run (ADR-050 RD8). See file header. */
-  run?: TaskRun
+  occurrence?: TaskRunOccurrenceContext
 }
 
-export function TaskResultField({ task, run }: TaskResultFieldProps) {
+export function TaskResultField({ task, occurrence }: TaskResultFieldProps) {
   const { addToast } = useUiStore()
 
+  const run = occurrence?.run
   const status = run ? run.status : task.status
   const result = run ? run.result : task.result
   const isFailed = status === 'failed'
-  const showResult = (status === 'done' || status === 'failed') && !!result
+  const showResult = hasVisibleResult(status, result)
 
   async function handleCopyResult() {
     if (!result) return

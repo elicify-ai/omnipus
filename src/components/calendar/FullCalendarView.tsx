@@ -56,6 +56,37 @@ const ICON_MAP: Record<StatusIconKey, IconComponent> = {
   Flag,
 }
 
+/**
+ * Accessible-name status text for an occurrence chip (H3 fix). `statusLabel`
+ * (from `@/lib/statusColors`) only knows the canonical 7-member `TaskStatus`
+ * enum and silently falls back to `STATUS_LABELS.inbox` ("Inbox") for
+ * anything outside it — including the two ADR-050 run-overlay synthetic
+ * states `'scheduled'`/`'no_record'`, which are NOT `TaskStatus` members (its
+ * own `status: string | undefined` signature let this compile without tsc
+ * ever catching it). Exported for direct unit coverage — jsdom cannot lay out
+ * FullCalendar itself (see CalendarScreen tests), so this mapping needs to be
+ * testable independent of rendering.
+ */
+export function occurrenceStatusLabel(status: string): string {
+  if (status === 'scheduled') return 'Scheduled'
+  if (status === 'no_record') return 'No record'
+  return statusLabel(status)
+}
+
+/**
+ * The chip's tooltip text (L3 fix) — `ext.tooltip` when the extendedProps
+ * variant carries one (`task-occurrence`/`-agg`/`-more`), else `undefined`.
+ * `eventMapping.ts` has populated `tooltip` (the no-record explanation, the
+ * bucket worst-wins breakdown, "first at HH:MM") since the run-overlay
+ * landed, but nothing here ever read it, so it was invisible (BDD #9). A
+ * plain `'tooltip' in ext` narrow rather than a `kind` switch since it's the
+ * FIELD, not the kind, that varies (`task-due`/`task-fire` carry no tooltip
+ * at all).
+ */
+export function extTooltip(ext: CalendarEventExtProps): string | undefined {
+  return 'tooltip' in ext ? ext.tooltip : undefined
+}
+
 // ---------------------------------------------------------------------------
 // eventContent renderer — chip with icon + title (+ time for timed events)
 // ---------------------------------------------------------------------------
@@ -67,6 +98,7 @@ function EventChip({ arg }: { arg: EventContentArg }) {
   const bg = arg.event.backgroundColor || 'transparent'
   const isAllDay = arg.event.allDay
   const timeText = !isAllDay ? arg.timeText : undefined
+  const tooltip = extTooltip(ext)
 
   // A11y choice (audit fix, option b — do NOT add tabIndex/role="button" here):
   // FullCalendar's own event harness (the `<a>` wrapping this eventContent,
@@ -87,13 +119,14 @@ function EventChip({ arg }: { arg: EventContentArg }) {
   // for FC's wrapping `<a>` per the accname spec, so it becomes what gets
   // announced on focus — title + status + time, meaningfully, with zero
   // duplicate stops.
-  const statusText = ext.kind === 'milestone' ? 'Milestone' : statusLabel(ext.status)
+  const statusText = ext.kind === 'milestone' ? 'Milestone' : occurrenceStatusLabel(ext.status)
   const chipLabel = [arg.event.title, statusText, timeText].filter(Boolean).join(', ')
 
   return (
     <div
       className="fc-sovereign-chip"
       aria-label={chipLabel}
+      title={tooltip}
       style={{
         backgroundColor: bg,
         color: CHIP_TEXT_COLOR,

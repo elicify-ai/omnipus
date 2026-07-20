@@ -4,9 +4,13 @@
 
 // run_store_test.go exercises the append-only, day-partitioned TaskRun store
 // (ADR-050 / docs/internal/specs/task-run-history-spec.md): OpenRun
-// idempotency, CloseRun fold semantics, ListRuns/RunsInRange fold-last-wins
-// across multiple day files, day-partition assignment, PruneRuns age +
-// floor-of-one + the stuck-run reaper, and OpenRun's concurrency guarantee.
+// idempotency, CloseRun fold semantics (including H9's truncate-not-reject
+// oversized-result behavior), ListRuns/RunsInRange fold-last-wins across
+// multiple day files, day-partition assignment, PruneRuns age +
+// floor-of-one retention, and OpenRun's concurrency guarantee. There is no
+// stuck-run reaper (operator decision 2026-07-20, superseding ADR-050
+// RD10's original design) — a run stays in_progress until its own execution
+// closes it, so no reaper tests exist here.
 //
 // Reuses newStore/ptr/mustCreate helpers already defined in store_test.go /
 // coverage_test.go (same package).
@@ -18,6 +22,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -196,6 +201,51 @@ func TestCloseRun_RejectsNonTerminalStatus(t *testing.T) {
 	assert.Error(t, err, "CloseRun must reject a non-terminal status")
 }
 
+// TestCloseRun_TruncatesOversizedResult verifies H9: a result over the
+// 50000-character contract cap is TRUNCATED (with a clear marker appended),
+// never rejected. With no stuck-run reaper, a rejected close would strand
+// the run in_progress forever with no path to a terminal state — the close
+// must always succeed.
+func TestCloseRun_TruncatesOversizedResult(t *testing.T) {
+	s := newStore(t)
+	taskID := "task-1"
+	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s")
+	require.NoError(t, err)
+
+	oversized := strings.Repeat("x", maxRunResultChars+12345)
+	require.NoError(t, s.CloseRun(taskID, run.RunID, StatusDone, oversized),
+		"CloseRun must ALWAYS succeed on a terminal status, even with an oversized result")
+
+	runs, err := s.ListRuns(taskID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	closed := runs[0]
+	assert.Equal(t, StatusDone, closed.Status)
+	assert.LessOrEqual(t, len(closed.Result), maxRunResultChars,
+		"stored result must be truncated to the contract cap")
+	assert.Contains(t, closed.Result, "truncated", "a truncated result must carry a clear marker")
+	assert.True(t, strings.HasPrefix(oversized, closed.Result[:100]),
+		"the retained prefix must be the ORIGINAL content, not something else")
+}
+
+// TestCloseRun_ResultAtExactCapIsNotTruncated verifies the truncation only
+// engages strictly ABOVE maxRunResultChars — a result exactly at the cap is
+// stored verbatim, with no marker appended.
+func TestCloseRun_ResultAtExactCapIsNotTruncated(t *testing.T) {
+	s := newStore(t)
+	taskID := "task-1"
+	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s")
+	require.NoError(t, err)
+
+	exact := strings.Repeat("y", maxRunResultChars)
+	require.NoError(t, s.CloseRun(taskID, run.RunID, StatusDone, exact))
+
+	runs, err := s.ListRuns(taskID)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, exact, runs[0].Result, "a result exactly at the cap must be stored unmodified")
+}
+
 // ---- Day-partition assignment -----------------------------------------------
 
 func TestOpenRun_DayPartitionAssignment(t *testing.T) {
@@ -356,7 +406,7 @@ func TestRunsInRange_FoldsAcrossMultipleDayFilesAndFiltersByOccurrence(t *testin
 	assert.Equal(t, StatusDone, got[0].Status, "must reflect the folded (closed) state")
 }
 
-// ---- PruneRuns: age + floor-of-one + reaper ---------------------------------
+// ---- PruneRuns: age + floor-of-one -------------------------------------------
 
 func TestPruneRuns_AgeCutoffDeletesOldFiles(t *testing.T) {
 	s := newStore(t)
@@ -389,7 +439,7 @@ func TestPruneRuns_AgeCutoffDeletesOldFiles(t *testing.T) {
 	chtimes(t, filepath.Join(dir, recent.Format("2006-01-02")+".jsonl"), recent)
 
 	cutoff := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, s.PruneRuns(taskID, cutoff, 365*24*time.Hour))
+	require.NoError(t, s.PruneRuns(taskID, cutoff))
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
@@ -426,7 +476,7 @@ func TestPruneRuns_FloorOfOneOverridesCutoff(t *testing.T) {
 
 	// cutoff is "now" — both files are ancient, both would normally be
 	// deleted, but the floor-of-one must always retain the newest.
-	require.NoError(t, s.PruneRuns(taskID, time.Now(), 100*365*24*time.Hour))
+	require.NoError(t, s.PruneRuns(taskID, time.Now()))
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
@@ -436,111 +486,44 @@ func TestPruneRuns_FloorOfOneOverridesCutoff(t *testing.T) {
 
 func TestPruneRuns_NoRunsDirIsNoop(t *testing.T) {
 	s := newStore(t)
-	err := s.PruneRuns("task-never-ran", time.Now(), time.Hour)
+	err := s.PruneRuns("task-never-ran", time.Now())
 	assert.NoError(t, err)
 }
 
-func TestPruneRuns_ReaperClosesStaleOpenRun(t *testing.T) {
+// TestPruneRuns_OpenRunSurvivesAgeCutoff verifies the operator's 2026-07-20
+// no-reaper decision at the store level: an in_progress run's day file is
+// NOT specially protected by PruneRuns beyond the ordinary floor-of-one —
+// but critically, PruneRuns never closes, mutates, or otherwise touches an
+// open run's record. A run may legitimately stay in_progress for days ("a
+// run could even go over days"), and only its own execution's CloseRun call
+// ever terminates it.
+func TestPruneRuns_OpenRunSurvivesAgeCutoff(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
 
-	staleStart := time.Now().Add(-48 * time.Hour)
-	staleRun := TaskRun{
-		RunID:     "stale-run",
+	oldStart := time.Now().Add(-48 * time.Hour)
+	openRun := TaskRun{
+		RunID:     "still-open-run",
 		TaskID:    taskID,
 		Status:    StatusInProgress,
-		SessionID: "s-stale",
+		SessionID: "s-open",
 		Kind:      RunKindScheduled,
-		StartedAt: staleStart.Format(time.RFC3339),
+		StartedAt: oldStart.Format(time.RFC3339),
 	}
-	writeRunRecordAt(t, s, taskID, staleRun, staleStart)
+	writeRunRecordAt(t, s, taskID, openRun, oldStart)
 
-	// A fresh open run, well within staleAfter, must NOT be touched.
-	freshRun, _, err := s.OpenRun(taskID, ptr(int64(1)), RunKindManual, "s-fresh")
-	require.NoError(t, err)
-
-	require.NoError(t, s.PruneRuns(taskID, time.Now().Add(-100*365*24*time.Hour), time.Hour))
+	// A cutoff far in the future would normally delete every file were it
+	// not for the floor-of-one AND the fact that PruneRuns performs no
+	// reaping — there is only ever one day file here, so the floor-of-one
+	// alone already protects it, but the point under test is Status: no
+	// reaper logic runs to flip it to failed.
+	require.NoError(t, s.PruneRuns(taskID, time.Now().Add(24*time.Hour)))
 
 	runs, err := s.ListRuns(taskID)
 	require.NoError(t, err)
-	byID := map[string]TaskRun{}
-	for _, r := range runs {
-		byID[r.RunID] = r
-	}
-
-	gotStale := byID["stale-run"]
-	assert.Equal(t, StatusFailed, gotStale.Status, "reaper must close a stale in_progress run to failed")
-	require.NotNil(t, gotStale.EndedAt)
-	assert.NotEmpty(t, gotStale.Result)
-
-	gotFresh := byID[freshRun.RunID]
-	assert.Equal(t, StatusInProgress, gotFresh.Status, "a fresh open run must not be touched by the reaper")
-	assert.Nil(t, gotFresh.EndedAt)
-}
-
-func TestPruneRuns_ReaperRunsBeforeDeletionSoIdentitySurvives(t *testing.T) {
-	s := newStore(t)
-	taskID := "task-1"
-	dir := filepath.Join(s.Dir(), taskID, "runs")
-
-	// A stale open run whose OWN day file is old enough to be pruned by the
-	// retention sweep in the SAME PruneRuns call. The reaper must close it
-	// (writing to today's file) before the sweep deletes its origin file, so
-	// the run's identity/result survive even though its original open-record
-	// day file is gone afterward.
-	oldDay := time.Now().Add(-500 * 24 * time.Hour)
-	staleRun := TaskRun{
-		RunID:        "ancient-stale-run",
-		TaskID:       taskID,
-		OccurrenceMs: ptr(int64(77)),
-		Status:       StatusInProgress,
-		SessionID:    "s-ancient",
-		Kind:         RunKindScheduled,
-		StartedAt:    oldDay.Format(time.RFC3339),
-	}
-	writeRunRecordAt(t, s, taskID, staleRun, oldDay)
-	oldFilePath := filepath.Join(dir, oldDay.UTC().Format("2006-01-02")+".jsonl")
-	chtimes(t, oldFilePath, oldDay)
-
-	// A second, unrelated older day file to ensure there's more than one file
-	// (so the deletion path actually runs) and it also predates cutoff.
-	otherOldDay := oldDay.Add(-24 * time.Hour)
-	other := TaskRun{
-		RunID:     "other-old-run",
-		TaskID:    taskID,
-		Status:    StatusDone,
-		SessionID: "s-other",
-		Kind:      RunKindManual,
-		StartedAt: otherOldDay.Format(time.RFC3339),
-	}
-	endedAt := otherOldDay.Format(time.RFC3339)
-	other.EndedAt = &endedAt
-	writeRunRecordAt(t, s, taskID, other, otherOldDay)
-	otherFilePath := filepath.Join(dir, otherOldDay.UTC().Format("2006-01-02")+".jsonl")
-	chtimes(t, otherFilePath, otherOldDay)
-
-	cutoff := time.Now().Add(-30 * 24 * time.Hour) // both old files predate this
-	staleAfter := time.Hour                        // well under 500 days -> reaper fires
-
-	require.NoError(t, s.PruneRuns(taskID, cutoff, staleAfter))
-
-	// The original day file for the stale run should now be gone (it predates
-	// cutoff and is not the newest file, since a close record was appended to
-	// today's file during the same call).
-	_, statErr := os.Stat(oldFilePath)
-	assert.True(t, os.IsNotExist(statErr), "the stale run's original day file must be pruned")
-
-	runs, err := s.ListRuns(taskID)
-	require.NoError(t, err)
-	byID := map[string]TaskRun{}
-	for _, r := range runs {
-		byID[r.RunID] = r
-	}
-	closed, ok := byID["ancient-stale-run"]
-	require.True(t, ok, "the run's identity must survive even though its origin day file was pruned")
-	assert.Equal(t, StatusFailed, closed.Status)
-	require.NotNil(t, closed.OccurrenceMs)
-	assert.Equal(t, int64(77), *closed.OccurrenceMs)
+	require.Len(t, runs, 1)
+	assert.Equal(t, StatusInProgress, runs[0].Status, "PruneRuns must never close an open run")
+	assert.Nil(t, runs[0].EndedAt)
 }
 
 // ---- Concurrency -------------------------------------------------------------

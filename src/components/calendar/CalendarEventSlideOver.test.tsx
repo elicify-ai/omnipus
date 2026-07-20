@@ -176,6 +176,7 @@ function renderSlideOver(
     task: Task | null
     initialDate: Date
     selectedOccurrenceMs: number | null
+    selectedBucketDayRange: { startMs: number; endMs: number } | null
   }> = {},
 ) {
   const defaults = {
@@ -195,6 +196,7 @@ function renderSlideOver(
         task={merged.task}
         initialDate={merged.initialDate}
         selectedOccurrenceMs={merged.selectedOccurrenceMs}
+        selectedBucketDayRange={merged.selectedBucketDayRange}
       />
     </QueryClientProvider>,
   )
@@ -799,6 +801,13 @@ describe('CalendarEventSlideOver — task-lifecycle sections', () => {
 // three states from spec §4.3.
 describe('CalendarEventSlideOver — occurrence run resolution (selectedOccurrenceMs, ADR-050 RD8 / spec §4.3)', () => {
   const OCC_MS = 1_800_000_000_000
+  // D1 (operator decision 2026-07-20): Run-now is never offered for a FUTURE
+  // occurrence. These two constants are pinned far enough from "now" (real
+  // wall-clock time, whenever the suite actually runs) that they stay
+  // definitively past/future regardless of test-run date — no Date.now()
+  // mocking needed.
+  const PAST_OCC_MS = new Date(2020, 0, 1).getTime()
+  const FUTURE_OCC_MS = new Date(2099, 0, 1).getTime()
 
   it('resolves the matching run by occurrence_ms and shows ITS status/result/Open-in-Chat (not the task-level mirror)', async () => {
     // Task-level mirror deliberately disagrees (in_progress / no session) so
@@ -855,47 +864,56 @@ describe('CalendarEventSlideOver — occurrence run resolution (selectedOccurren
     expect(await screen.findByTestId('task-result-text')).toHaveTextContent('Retried and succeeded.')
   })
 
-  it('a future occurrence with no resolved run shows ONLY "Run now" — no badge, no result, no chat link', async () => {
+  it('D1 — a future occurrence with no resolved run shows a "Scheduled" state — no badge, no result, no chat link, and NO "Run now"', async () => {
+    // Operator decision 2026-07-20: Run-now must never be offered for a
+    // FUTURE occurrence (running it early would double-execute the
+    // naturally-scheduled fire) — this REPLACES the earlier "future
+    // occurrence shows only Run now" behaviour.
     const task = makeTask({ id: 'task-occ-future', status: 'done', result: 'Unrelated task-level result.' })
     vi.mocked(fetchTaskRuns).mockResolvedValue([]) // no run yet for this occurrence
-    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+    renderSlideOver({ task, selectedOccurrenceMs: FUTURE_OCC_MS })
 
     // Settle the shared fetchTaskRuns query (TaskRunsList renders its own
     // empty state once it resolves) before asserting the negative states,
     // so this isn't just catching the transient pre-fetch render.
     expect(await screen.findByTestId('task-runs-empty')).toBeInTheDocument()
 
-    expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
+    expect(await screen.findByTestId('occurrence-scheduled')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /run now/i })).not.toBeInTheDocument()
     expect(screen.queryByTestId('task-run-status-badge')).not.toBeInTheDocument()
     expect(screen.queryByText('Unrelated task-level result.')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /open in chat/i })).not.toBeInTheDocument()
   })
 
-  it('"Run now" for a WITH-run occurrence calls runTaskNow(task.id, selectedOccurrenceMs)', async () => {
+  it('"Run now" for a WITH-run occurrence (past) calls runTaskNow(task.id, selectedOccurrenceMs)', async () => {
     const task = makeTask({ id: 'task-occ-runnow-with' })
-    const run = makeRun({ occurrence_ms: OCC_MS, status: 'done' })
+    const run = makeRun({ occurrence_ms: PAST_OCC_MS, status: 'done' })
     vi.mocked(fetchTaskRuns).mockResolvedValue([run])
-    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+    renderSlideOver({ task, selectedOccurrenceMs: PAST_OCC_MS })
 
     fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
 
-    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-runnow-with', OCC_MS))
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-runnow-with', PAST_OCC_MS))
   })
 
-  it('"Run now" for a FUTURE (no-run) occurrence also calls runTaskNow(task.id, selectedOccurrenceMs)', async () => {
-    const task = makeTask({ id: 'task-occ-runnow-future' })
+  it('D1 — "Run now" for a PAST (no-run) occurrence still calls runTaskNow(task.id, selectedOccurrenceMs)', async () => {
+    // Past/current occurrences KEEP Run-now (D1 only removes it for future
+    // ones) — a past fire with no run (e.g. retention-pruned, or never
+    // materialized) is still manually runnable.
+    const task = makeTask({ id: 'task-occ-runnow-past' })
     vi.mocked(fetchTaskRuns).mockResolvedValue([])
-    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+    renderSlideOver({ task, selectedOccurrenceMs: PAST_OCC_MS })
 
-    fireEvent.click(await screen.findByRole('button', { name: /run now/i }))
+    expect(await screen.findByTestId('occurrence-run-now-only')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /run now/i }))
 
-    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-runnow-future', OCC_MS))
+    await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-occ-runnow-past', PAST_OCC_MS))
   })
 
-  it('shows an inline error when the occurrence-run resolution query fails, but "Run now" remains available', async () => {
+  it('shows an inline error when the occurrence-run resolution query fails, but "Run now" remains available for a past occurrence', async () => {
     const task = makeTask({ id: 'task-occ-error' })
     vi.mocked(fetchTaskRuns).mockRejectedValue(new Error('network down'))
-    renderSlideOver({ task, selectedOccurrenceMs: OCC_MS })
+    renderSlideOver({ task, selectedOccurrenceMs: PAST_OCC_MS })
 
     expect(await screen.findByTestId('occurrence-run-resolve-error')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
@@ -914,5 +932,81 @@ describe('CalendarEventSlideOver — occurrence run resolution (selectedOccurren
     expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Done')
     expect(await screen.findByText('Series-level result.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /open in chat/i })).toBeInTheDocument()
+  })
+})
+
+// ── Bucket drill-in (selectedBucketDayRange, H2 fix) ────────────────────────
+//
+// A click on an aggregated `task-occurrence-agg` bucket chip opens this
+// slide-over with `selectedBucketDayRange` (not `selectedOccurrenceMs`) —
+// there is no single occurrence to resolve a run for. The task-level status/
+// result/chat sections would otherwise silently fall back to task.status/
+// task.result/task.session_id (the most recent fire OVERALL, possibly from a
+// different day than the bucket clicked) — spec §4.3 wants THAT DAY's runs
+// instead.
+describe('CalendarEventSlideOver — bucket drill-in (selectedBucketDayRange, H2)', () => {
+  const DAY_START = new Date(2026, 6, 20, 0, 0, 0).getTime()
+  const DAY_END = new Date(2026, 6, 21, 0, 0, 0).getTime()
+
+  it('suppresses the task-level status/result/chat sections and shows a day-scoped run list instead', async () => {
+    const task = makeTask({
+      id: 'task-bucket-a',
+      status: 'done',
+      result: 'A DIFFERENT day’s task-level mirror result — must not leak into the bucket view.',
+      session_id: 'sess-other-day',
+    })
+    const dayRun = makeRun({
+      run_id: 'run-day',
+      occurrence_ms: DAY_START + 9 * 60 * 60 * 1000,
+      started_at: '2026-07-20T09:00:00Z',
+      status: 'done',
+      result: 'This day’s run result.',
+    })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([dayRun])
+    renderSlideOver({ task, selectedBucketDayRange: { startMs: DAY_START, endMs: DAY_END } })
+
+    expect(await screen.findByText('This day’s run result.')).toBeInTheDocument()
+    expect(screen.queryByTestId('task-run-status-badge')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('occurrence-scheduled')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('occurrence-run-now-only')).not.toBeInTheDocument()
+    expect(screen.queryByText(/must not leak/)).not.toBeInTheDocument()
+
+    // Only ONE run-history list renders (the day-scoped one) — its own row
+    // carries an Open-in-Chat button, but the SEPARATE top-level
+    // OpenInChatButton (task-level mirror) is suppressed.
+    expect(screen.getAllByText(/run history/i)).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: /open in chat/i })).toHaveLength(1)
+  })
+
+  it('filters the run list to the requested day — a run from a different day does not appear', async () => {
+    const task = makeTask({ id: 'task-bucket-b' })
+    const inDay = makeRun({ run_id: 'run-in', started_at: '2026-07-20T12:00:00Z', result: 'In the bucket day.' })
+    const otherDay = makeRun({ run_id: 'run-other', started_at: '2026-07-15T12:00:00Z', result: 'A different day entirely.' })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([inDay, otherDay])
+    renderSlideOver({ task, selectedBucketDayRange: { startMs: DAY_START, endMs: DAY_END } })
+
+    expect(await screen.findByText('In the bucket day.')).toBeInTheDocument()
+    expect(screen.queryByText('A different day entirely.')).not.toBeInTheDocument()
+  })
+
+  it('still offers the checklist in bucket mode (task-scoped, not occurrence/day-scoped)', async () => {
+    const task = makeTask({ id: 'task-bucket-checklist', todos: [{ text: 'Bucket-mode todo', status: 'pending' as const }] })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([])
+    renderSlideOver({ task, selectedBucketDayRange: { startMs: DAY_START, endMs: DAY_END } })
+
+    expect(await screen.findByText('Bucket-mode todo')).toBeInTheDocument()
+  })
+
+  it('without selectedBucketDayRange, the non-bucket (individual-occurrence / series-edit) case is unaffected', async () => {
+    const task = makeTask({
+      id: 'task-no-bucket',
+      status: 'done',
+      result: 'Series-level result.',
+      session_id: 'sess-series',
+    })
+    renderSlideOver({ task })
+
+    expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Done')
+    expect(await screen.findByText('Series-level result.')).toBeInTheDocument()
   })
 })

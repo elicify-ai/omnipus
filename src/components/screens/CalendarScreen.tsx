@@ -53,6 +53,14 @@ function formatShort(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+/**
+ * A day bucket's fixed-width span in ms — the SAME literal 24h window the
+ * server's `populateBucketRunCounts` (pkg/gateway/task_occurrences.go) uses
+ * to tally a bucket's runs, not a timezone-aware "civil next day" the client
+ * would have to recompute (Explicit Non-Behaviors: no client RRULE/day math).
+ */
+const BUCKET_DAY_SPAN_MS = 24 * 60 * 60 * 1000
+
 /** Same calendar day as `d`, with the time-of-day set to `hour`:00 local. Used
  *  to give an all-day day-cell click a sensible default event time (US-1). */
 function withDefaultHour(d: Date, hour: number): Date {
@@ -201,6 +209,21 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // match a real run's occurrence_ms — passing it here would silently hide
   // the Result/Open-in-Chat sections instead of the day's run mini-list.
   const [selectedOccurrenceMs, setSelectedOccurrenceMs] = useState<number | undefined>(undefined)
+  // The clicked bucket's own day span (ADR-050 RD8 / task-run-history-spec.md
+  // §4.1/§4.3), threaded to CalendarEventSlideOver's `selectedBucketDayRange`
+  // so it can day-scope the slide-over's run mini-list to just that bucket's
+  // day instead of the task's entire run history. Only ever set from a
+  // `task-occurrence-agg` (bucket) chip click — an individual `task-occurrence`
+  // click leaves this `null`, the mirror image of how `selectedOccurrenceMs`
+  // is only set from an individual instant click (see above). `endMs` is
+  // `startMs` plus a literal 24h span — the SAME fixed-width window the
+  // server's `populateBucketRunCounts` uses to tally a bucket's runs
+  // (pkg/gateway/task_occurrences.go), not a client-recomputed civil-day
+  // boundary (Explicit Non-Behaviors: no client-side RRULE/day math).
+  const [selectedBucketDayRange, setSelectedBucketDayRange] = useState<{
+    startMs: number
+    endMs: number
+  } | null>(null)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [milestoneTarget, setMilestoneTarget] = useState<MilestoneTarget | null>(null)
 
@@ -404,6 +427,15 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
             // a real occurrence instant and would never match a run (see the
             // state declaration above for why passing it here would be wrong).
             setSelectedOccurrenceMs(ext.kind === 'task-occurrence' ? ext.occurrenceMs : undefined)
+            // Mirror image: a bucket click threads its day span so the
+            // slide-over can day-scope its run mini-list; an individual
+            // instant click leaves this null (it re-points at ONE run, not a
+            // day's worth).
+            setSelectedBucketDayRange(
+              ext.kind === 'task-occurrence-agg'
+                ? { startMs: ext.dayStartMs, endMs: ext.dayStartMs + BUCKET_DAY_SPAN_MS }
+                : null,
+            )
             setEventSlideOverOpen(true)
           } else {
             console.warn('[calendar] occurrence event has no backing task', ext)
@@ -435,6 +467,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
       (target?.closest('[tabindex]') as HTMLElement | null) ?? target ?? null
     setEventSlideOverTask(null)
     setSelectedOccurrenceMs(undefined)
+    setSelectedBucketDayRange(null)
     setEventSlideOverInitialDate(allDay ? withDefaultHour(date, 9) : date)
     setEventSlideOverOpen(true)
   }, [])
@@ -459,6 +492,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     triggerElRef.current = null
     setEventSlideOverTask(null)
     setSelectedOccurrenceMs(undefined)
+    setSelectedBucketDayRange(null)
     setEventSlideOverInitialDate(date ? withDefaultHour(date, 9) : undefined)
     setEventSlideOverOpen(true)
   }, [])
@@ -500,6 +534,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           if (!open) {
             setEventSlideOverTask(null)
             setSelectedOccurrenceMs(undefined)
+            setSelectedBucketDayRange(null)
             invalidate()
             restoreFocus()
           }
@@ -508,6 +543,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         task={eventSlideOverTask}
         initialDate={eventSlideOverInitialDate}
         selectedOccurrenceMs={selectedOccurrenceMs}
+        selectedBucketDayRange={selectedBucketDayRange}
       />
 
       <TaskDetailSlideOver

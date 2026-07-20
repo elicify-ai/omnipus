@@ -16,9 +16,11 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -493,5 +495,169 @@ func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *tes
 	}
 	if run.EndedAt == nil {
 		t.Error("ended_at must be set on a closed run")
+	}
+}
+
+// waitForRunClosed polls ListRuns until taskID has exactly one run whose
+// EndedAt is set, or fails the test after timeout. Used instead of
+// waitForCompletionContractTerminal/waitTaskTerminal for the M1/M5/L5
+// coverage below: those helpers proxy run-closure via Task.status or session
+// archival, but finishTaskRun's error branch sets session status to
+// Interrupted (not Archived), and Task.status can go terminal (failTask)
+// slightly BEFORE the run's own closeRun call lands — so polling the run
+// store directly is the only way to deterministically observe the actual
+// guarantee under test: that the run itself closes, with no reaper backstop
+// to catch it later if it doesn't.
+func waitForRunClosed(t *testing.T, al *AgentLoop, taskID string, timeout time.Duration) task.TaskRun {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		runs, err := al.taskStore.ListRuns(taskID)
+		if err != nil {
+			t.Fatalf("ListRuns: %v", err)
+		}
+		if len(runs) == 1 && runs[0].EndedAt != nil && *runs[0].EndedAt != "" {
+			return runs[0]
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("run for task %s did not close within %s", taskID, timeout)
+	return task.TaskRun{}
+}
+
+// TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed is M1 coverage
+// (task-run-history-spec.md §3.3): finishTaskRun's hard "agent execution
+// error" branch (err != nil, e.g. a fatal external-CLI driver error) must
+// close the open run as failed with a non-nil ended_at and the failure's own
+// Result — this branch already closed the run before this change (it is the
+// SIBLING branch M1 compares against), so this test is the regression lock
+// pinning that it still does, now that the OTHER exit paths have been fixed
+// to match it. There is no reaper backstop (operator decision 2026-07-20).
+func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
+	provider := &countingProvider{}
+	al, _ := newExternalCLITaskTestLoop(t, provider)
+
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	go func() {
+		fr.InjectEvent(runner.RunEvent{
+			Kind: runner.EventKindError,
+			Err:  &runner.ErrorEvent{Message: "external CLI crashed for run-history test", Fatal: true},
+		})
+		fr.Cancel()
+	}()
+
+	tk := &task.Task{
+		Title:       "run history execution error",
+		Prompt:      "do the failing task",
+		Action:      task.ActionLLM,
+		AgentID:     "ext-agent",
+		Priority:    3,
+		WorkspaceID: "default",
+		Status:      task.StatusNext,
+	}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
+		t.Fatalf("ExecuteTask: %v", err)
+	}
+
+	run := waitForRunClosed(t, al, tk.ID, asyncTaskPollTimeout)
+	if run.Status != task.StatusFailed {
+		t.Errorf("run status = %q, want failed", run.Status)
+	}
+	if !strings.Contains(run.Result, "external CLI crashed for run-history test") {
+		t.Errorf("run result = %q, want it to mention the underlying driver failure", run.Result)
+	}
+
+	final, err := al.taskStore.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if final.Status != task.StatusFailed {
+		t.Errorf("task status = %q, want failed (regression: the mirror must still cycle too)", final.Status)
+	}
+}
+
+// TestTaskRunHistory_NoMarkerFailClosedBranch_ClosesRunAsFailed is M1/M5
+// coverage for finishTaskRun's OTHER fail-closed branch
+// (task-run-history-spec.md §3.3): a clean native response with no
+// TASK_STATUS marker routes through completeTaskWithResult's fail-closed
+// path (the store-update-succeeds branch) — the run must close as failed
+// there too, with the same fail-closed Result text as the Task mirror.
+func TestTaskRunHistory_NoMarkerFailClosedBranch_ClosesRunAsFailed(t *testing.T) {
+	provider := &scriptedProvider{
+		responseBody: "I looked into this and made some progress, but didn't finish.",
+	}
+	al := newNativeTaskCompletionTestLoop(t, provider)
+	tk := newCompletionContractTask(t, al, "native-agent", "run history no marker")
+
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
+		t.Fatalf("ExecuteTask: %v", err)
+	}
+
+	final := waitForCompletionContractTerminal(t, al, tk.ID)
+	if final.Status != task.StatusFailed {
+		t.Fatalf("status = %q, want failed (result: %s)", final.Status, final.Result)
+	}
+
+	run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
+	if run.Status != task.StatusFailed {
+		t.Errorf("run status = %q, want failed", run.Status)
+	}
+	if run.Result != final.Result {
+		t.Errorf("run result = %q, want the same fail-closed result written to the task mirror %q",
+			run.Result, final.Result)
+	}
+	if !strings.Contains(run.Result, "completion signal") {
+		t.Errorf("run result = %q, want it to explain the missing completion signal", run.Result)
+	}
+}
+
+// TestTaskRunHistory_StartTaskNow_OpensAndClosesManualRun is BLK-3 coverage
+// (task-run-history-spec.md §3.2/3.4, operator decision 2026-07-20): the
+// gateway's "Start Task"/"Create & Run now" UI both
+// PATCH→in_progress→StartTaskNow→runTaskFromInProgress — the most common
+// launch path in practice — must now open and close a TaskRun exactly like
+// the ClaimForRun-guarded ExecuteTask path does: kind=RunKindManual,
+// occurrence_ms=nil (no recurring-fire context).
+func TestTaskRunHistory_StartTaskNow_OpensAndClosesManualRun(t *testing.T) {
+	provider := &scriptedProvider{
+		responseBody: "Done.\nTASK_STATUS: success\nTASK_SUMMARY: start task now run history.",
+	}
+	al := newNativeTaskCompletionTestLoop(t, provider)
+	tk := newCompletionContractTask(t, al, "native-agent", "start task now run history")
+
+	sessionID, err := al.taskExecutor.StartTaskNow(context.Background(), tk.ID)
+	if err != nil {
+		t.Fatalf("StartTaskNow: %v", err)
+	}
+	if sessionID == "" {
+		t.Fatal("StartTaskNow returned an empty session id")
+	}
+
+	run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
+	if run.Kind != task.RunKindManual {
+		t.Errorf("kind = %q, want %q — StartTaskNow is a user-initiated launch", run.Kind, task.RunKindManual)
+	}
+	if run.OccurrenceMs != nil {
+		t.Errorf("occurrence_ms = %v, want nil — StartTaskNow has no recurring-fire context", *run.OccurrenceMs)
+	}
+	if run.Status != task.StatusDone {
+		t.Errorf("run status = %q, want done", run.Status)
+	}
+	if run.SessionID != sessionID {
+		t.Errorf("run session_id = %q, want the session StartTaskNow returned %q", run.SessionID, sessionID)
+	}
+
+	final, gerr := al.taskStore.Get(tk.ID)
+	if gerr != nil {
+		t.Fatalf("get task: %v", gerr)
+	}
+	if final.Status != task.StatusDone {
+		t.Errorf("task status = %q, want done (regression: the mirror must still cycle too)", final.Status)
 	}
 }

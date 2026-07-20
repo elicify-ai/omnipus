@@ -3370,7 +3370,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				Title:            p.Title,
 				Severity:         p.Severity,
 				Read:             p.Read,
-				CreatedAtMs:      int(p.CreatedAtMs),
+				CreatedAtMs:      p.CreatedAtMs,
 			}
 			if p.Body != "" {
 				body := p.Body
@@ -3424,7 +3424,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				Status: p.Status,
 			}
 			if p.OccurrenceMs != nil {
-				ms := int(*p.OccurrenceMs)
+				ms := *p.OccurrenceMs
 				runF.OccurrenceMs = &ms
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)

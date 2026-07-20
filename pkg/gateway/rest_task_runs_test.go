@@ -15,10 +15,13 @@ package gateway
 // just handleTaskRuns in isolation.
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,5 +159,121 @@ func TestTaskRunsEndpoint(t *testing.T) {
 		r.URL.Path = "/api/v1/tasks/" + tsk.Id + "/runs"
 		api.HandleTasks(w, r)
 		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body=%s", w.Body.String())
+	})
+}
+
+// TestTaskRunNow_LiveExecutor_ViaRealServer is the regression guard for the
+// StartOccurrenceRun context-detach fix (pkg/agent/task_executor.go): the
+// caller-supplied request context is intentionally NOT threaded through as
+// the dispatch parent, because net/http.Server cancels the request context
+// the instant the handler returns after WriteHeader(202) flushes — which
+// would otherwise abort the just-launched background run almost immediately
+// with a spurious "context canceled" failure.
+//
+// httptest.NewRequest deliberately does NOT reproduce this: it builds a
+// *http.Request whose context is a bare context.Background() that is never
+// canceled by anything, since no real connection/handler-return machinery is
+// involved. A test built on httptest.NewRequest would pass whether or not
+// the context-detach fix is present — it cannot exercise the bug at all.
+// Only a real net/http.Server (httptest.NewServer) actually cancels the
+// request's context on handler return, which is why this test drives the
+// POST through one.
+//
+// Covers both call shapes from task-run-history-spec.md §3.4: a recurring
+// occurrence Run-now ({"occurrence_ms":N}) and a normal/once re-run (empty
+// body). Both must return 202, and — the actual regression assertion — the
+// dispatched run must round-trip via GET /tasks/{id}/runs and reach a
+// TERMINAL status (done/failed), proving the execution was not silently
+// canceled by the request's context tearing down when the handler returned.
+func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
+	api := newTestRestAPIAlignedStores(t)
+	wsID := ensureTestWorkspace(t, api)
+	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
+
+	tsk := createTaskViaAPI(t, api, "RunNowLiveServerTask", wsID)
+	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"main"}`)
+	require.Equal(t, http.StatusOK, wAssign.Code,
+		"assigning agent_id=main must succeed; body=%s", wAssign.Body.String())
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/tasks/", api.HandleTasks)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	t.Run("occurrence run: POST {occurrence_ms:N} returns 202 and reaches a terminal status", func(t *testing.T) {
+		occMs := int64(1_784_620_800_000)
+		reqBody, err := json.Marshal(map[string]any{"occurrence_ms": occMs})
+		require.NoError(t, err)
+
+		resp, err := http.Post(srv.URL+"/api/v1/tasks/"+tsk.Id+"/runs", "application/json", bytes.NewReader(reqBody))
+		require.NoError(t, err, "POST /tasks/{id}/runs over the real server must succeed")
+		respBody, readErr := io.ReadAll(resp.Body)
+		require.NoError(t, readErr)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, http.StatusAccepted, resp.StatusCode, "body=%s", string(respBody))
+
+		// The run row is opened asynchronously inside the dispatched goroutine
+		// (handleTaskRunNow's own doc comment) — poll GET /tasks/{id}/runs
+		// until this occurrence's run appears AND reaches done/failed. A
+		// spurious context-cancel would strand it in_progress forever (no
+		// reaper backstop, per pkg/agent/task_executor.go's runTask comment),
+		// so this Eventually is the actual regression assertion.
+		var matched gen.TaskRun
+		require.Eventually(t, func() bool {
+			w := getTaskRuns(t, api, tsk.Id)
+			if w.Code != http.StatusOK {
+				return false
+			}
+			var runs []gen.TaskRun
+			if err := json.Unmarshal(w.Body.Bytes(), &runs); err != nil {
+				return false
+			}
+			for _, run := range runs {
+				if run.OccurrenceMs != nil && *run.OccurrenceMs == occMs &&
+					(run.Status == gen.TaskRunStatusDone || run.Status == gen.TaskRunStatusFailed) {
+					matched = run
+					return true
+				}
+			}
+			return false
+		}, 10*time.Second, 20*time.Millisecond,
+			"the occurrence run must round-trip via GET /tasks/{id}/runs and reach a terminal status — "+
+				"a spurious request-context cancel would strand it in_progress forever")
+
+		assert.Equal(t, tsk.Id, matched.TaskId)
+		assert.Equal(t, gen.TaskRunKindManual, matched.Kind, "Run-now always opens a manual-kind run")
+		require.NotNil(t, matched.EndedAt, "a terminal run must carry ended_at")
+	})
+
+	t.Run("normal re-run: POST with empty body returns 202 and reaches a terminal status", func(t *testing.T) {
+		// The prior subtest's run mirrored the task to a terminal status, so
+		// SpawnReset (called inside StartOccurrenceRun) is free to reset it
+		// to `next` again — mirrors BDD scenario 3 ("re-run a failed
+		// once-task") from task-run-history-spec.md §5.
+		resp, err := http.Post(srv.URL+"/api/v1/tasks/"+tsk.Id+"/runs", "application/json", http.NoBody)
+		require.NoError(t, err, "POST /tasks/{id}/runs with an empty body over the real server must succeed")
+		respBody, readErr := io.ReadAll(resp.Body)
+		require.NoError(t, readErr)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, http.StatusAccepted, resp.StatusCode, "body=%s", string(respBody))
+
+		require.Eventually(t, func() bool {
+			w := getTaskRuns(t, api, tsk.Id)
+			if w.Code != http.StatusOK {
+				return false
+			}
+			var runs []gen.TaskRun
+			if err := json.Unmarshal(w.Body.Bytes(), &runs); err != nil {
+				return false
+			}
+			for _, run := range runs {
+				if run.OccurrenceMs == nil &&
+					(run.Status == gen.TaskRunStatusDone || run.Status == gen.TaskRunStatusFailed) {
+					return true
+				}
+			}
+			return false
+		}, 10*time.Second, 20*time.Millisecond,
+			"the ad-hoc re-run (empty body) must round-trip via GET /tasks/{id}/runs and reach a terminal status")
 	})
 }

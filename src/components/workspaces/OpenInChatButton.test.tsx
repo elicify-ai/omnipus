@@ -5,8 +5,9 @@
  * (see CalendarEventSlideOver.test.tsx for the calendar-side integration
  * coverage, and TaskDetailPanel.test.tsx's "#250 regression" describe block
  * for the full-panel re-verification proving the refactor is behavior
- * preserving). Also covers the run-aware `run` prop (ADR-050 RD8): when
- * provided, it opens THAT run's session instead of task.session_id.
+ * preserving). Also covers the run-aware `occurrence` prop (ADR-050 RD8,
+ * folded `{ms, run}` — M7 fix): when provided, it opens THAT run's session
+ * instead of task.session_id.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -93,11 +94,11 @@ describe('OpenInChatButton — navigation', () => {
   })
 })
 
-describe('OpenInChatButton — run-aware (`run` prop, ADR-050 RD8)', () => {
-  it('with a resolved `run`, navigates to the RUN session, not task.session_id', async () => {
+describe('OpenInChatButton — run-aware (`occurrence` prop, ADR-050 RD8 / M7)', () => {
+  it('with a resolved run, navigates to the RUN session, not task.session_id', async () => {
     const task = makeTask({ session_id: 'sess-task-latest' })
     const run = makeRun({ session_id: 'sess-run-own-occurrence' })
-    render(<OpenInChatButton task={task} run={run} />)
+    render(<OpenInChatButton task={task} occurrence={{ ms: run.occurrence_ms as number, run }} />)
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /open in chat/i }))
@@ -108,15 +109,22 @@ describe('OpenInChatButton — run-aware (`run` prop, ADR-050 RD8)', () => {
     )
   })
 
-  it('renders when `run.session_id` is set even if task.session_id is unset', () => {
+  it('renders when `occurrence.run.session_id` is set even if task.session_id is unset', () => {
     const task = makeTask({ session_id: undefined })
     const run = makeRun({ session_id: 'sess-run-only' })
-    render(<OpenInChatButton task={task} run={run} />)
+    render(<OpenInChatButton task={task} occurrence={{ ms: run.occurrence_ms as number, run }} />)
 
     expect(screen.getByRole('button', { name: /open in chat/i })).toBeInTheDocument()
   })
 
-  it('without `run`, behaviour is unchanged (reads task.session_id)', async () => {
+  it('with `occurrence` present but no resolved `run`, falls back to task.session_id', () => {
+    const task = makeTask({ session_id: 'sess-task-fallback' })
+    render(<OpenInChatButton task={task} occurrence={{ ms: 1_800_000_000_000 }} />)
+
+    expect(screen.getByRole('button', { name: /open in chat/i })).toBeInTheDocument()
+  })
+
+  it('without `occurrence`, behaviour is unchanged (reads task.session_id)', async () => {
     render(<OpenInChatButton task={makeTask({ session_id: 'sess-plain' })} />)
 
     await act(async () => {

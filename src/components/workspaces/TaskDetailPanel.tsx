@@ -51,6 +51,7 @@ import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
 import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
 import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+import { formatDateTime } from '@/lib/dateFormat'
 import {
   Play,
   Copy,
@@ -409,11 +410,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     } catch {
       addToast({ message: 'Failed to copy path.', variant: 'error' })
     }
-  }
-
-  function formatDate(iso?: string) {
-    if (!iso) return '—'
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
   }
 
   if (!task) return null
@@ -855,10 +851,10 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Metadata */}
       <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
         {task.created_by && <MetaRow label="Created by" value={task.created_by} />}
-        <MetaRow label="Created" value={formatDate(task.created_at)} />
-        <MetaRow label="Updated" value={formatDate(task.updated_at)} />
-        <MetaRow label="Started" value={formatDate(task.started_at)} />
-        <MetaRow label="Completed" value={formatDate(task.completed_at)} />
+        <MetaRow label="Created" value={formatDateTime(task.created_at)} />
+        <MetaRow label="Updated" value={formatDateTime(task.updated_at)} />
+        <MetaRow label="Started" value={formatDateTime(task.started_at)} />
+        <MetaRow label="Completed" value={formatDateTime(task.completed_at)} />
       </div>
 
       {/* Delete button (danger zone) — confirmed via AlertDialog (was firing

@@ -20,7 +20,7 @@
 
 import type { EventInput } from '@fullcalendar/core'
 import type { Task, Milestone } from '@/lib/api'
-import type { TaskOccurrenceSet, DayBucket } from '@/lib/api/generated/openapi-types'
+import type { TaskOccurrenceSet, DayBucket, TaskRun } from '@/lib/api/generated/openapi-types'
 import {
   CHIP_TEXT_COLOR,
   STATUS_STYLE,
@@ -31,6 +31,7 @@ import {
   type CalendarEventExtProps,
   type ChipStyle,
   type OccurrenceChipStatus,
+  type RunDerivedChipStatus,
 } from '@/components/calendar/types'
 
 /** One entry of `TaskOccurrenceSet.occurrence_runs[]` — the per-instant run overlay. */
@@ -224,7 +225,7 @@ function resolveOccurrenceChipState(
   run: OccurrenceRunEntry | undefined,
   nowMs: number,
 ): {
-  status: OccurrenceChipStatus
+  status: RunDerivedChipStatus
   style: ChipStyle
   runId?: string
   sessionId?: string
@@ -248,6 +249,48 @@ function resolveOccurrenceChipState(
     style: NO_RECORD_STYLE,
     tooltip: 'Run history unavailable — retention expired or the schedule changed since this ran.',
   }
+}
+
+/**
+ * Whether run `a` should be preferred over run `b` when both are candidates
+ * for the SAME `occurrence_ms` — byte-for-byte the same tie-break as the
+ * server's `runIsNewer` (`pkg/gateway/task_occurrences.go`): the most
+ * recently STARTED run wins; an exact `started_at` tie is broken by the
+ * lexically-greater `run_id` (ULIDs are themselves time-ordered, so this is
+ * also "most recent" on a tie). `started_at` is a fixed-width RFC 3339 UTC
+ * string, which sorts lexically identically to chronological order — no
+ * `Date` parsing needed (and comparing `Date` objects, as an earlier version
+ * of this logic did in `CalendarEventSlideOver.tsx`, silently loses the
+ * tie-break: `new Date(a) > new Date(b)` is `false` on an exact timestamp
+ * match, so the FIRST-iterated run wins instead of the server's
+ * greater-`run_id` rule).
+ */
+function isRunNewer(a: TaskRun, b: TaskRun): boolean {
+  if (a.started_at !== b.started_at) return a.started_at > b.started_at
+  return a.run_id > b.run_id
+}
+
+/**
+ * Resolve the definitive `TaskRun` for a given occurrence instant out of a
+ * task's full run list — latest-started-wins, server-tie-break-compatible
+ * (`isRunNewer`, mirrors `runIsNewer`). More than one run can legitimately
+ * share an `occurrence_ms`: a scheduled fire followed by a later manual
+ * re-run of the SAME occurrence (ADR-050 RD7 — `OpenRun`'s idempotency guard
+ * only prevents a duplicate CONCURRENTLY-OPEN run for a key, not a later
+ * fresh run opened after the first one already closed). Pure, no fetch, no
+ * React — the calendar slide-over (`CalendarEventSlideOver.tsx`) imports this
+ * instead of re-implementing its own (previously non-server-matching)
+ * reduce. `undefined` when no run in `runs` matches `occurrenceMs`.
+ */
+export function resolveRunForOccurrence(runs: TaskRun[], occurrenceMs: number): TaskRun | undefined {
+  let best: TaskRun | undefined
+  for (const run of runs) {
+    if (run.occurrence_ms !== occurrenceMs) continue
+    if (!best || isRunNewer(run, best)) {
+      best = run
+    }
+  }
+  return best
 }
 
 /**
@@ -281,22 +324,37 @@ function resolveBucketWorstWins(counts: RunCounts): { status: OccurrenceChipStat
 /**
  * Resolve a `task-occurrence-agg` bucket chip's render state. When the
  * overlay populated `run_counts`, renders the worst-wins glyph plus a
- * breakdown tooltip (never a single clean status). When absent (overlay not
- * populated for this bucket), falls back to today's pre-overlay rendering —
- * `task.status`-colored background, Clock icon, "first at HH:MM" tooltip —
- * byte-for-byte unchanged (spec §4.2, "If `run_counts` absent... fall back to
- * today's rendering").
+ * breakdown tooltip (never a single clean status).
+ *
+ * When `run_counts` is absent — the overlay handler never populated it for
+ * this bucket, which happens precisely when NONE of that day's occurrences
+ * have a recorded run yet (a bucket that has fired at least once always gets
+ * a populated `run_counts`, see `populateBucketRunCounts` server-side) —
+ * resolving to `task.status` would repaint every future bucket with the
+ * SERIES' stale terminal status the moment occurrence #1 anywhere in the
+ * series completes: exactly the bug ADR-050 exists to kill (BLOCKER). There
+ * is no "fall back to today's rendering" clause in the spec to lean on here
+ * — instead this resolves the SAME day-vs-now split individual instants use
+ * (`resolveOccurrenceChipState`): the bucket's day >= `nowMs` → `'scheduled'`
+ * (neutral, a future day nobody has run yet); day < `nowMs` → `'no_record'`
+ * (a past day whose runs were pruned, or the schedule changed since).
  */
 function resolveBucketChip(
   bucket: DayBucket,
-  fallbackStatus: Task['status'],
-  fallbackBg: string,
+  nowMs: number,
 ): { status: OccurrenceChipStatus; style: ChipStyle; tooltip: string } {
   if (!bucket.run_counts) {
+    if (bucket.day_start_ms >= nowMs) {
+      return {
+        status: 'scheduled',
+        style: SCHEDULED_STYLE,
+        tooltip: `first at ${formatTimeOfDay(bucket.first_ms)}`,
+      }
+    }
     return {
-      status: fallbackStatus,
-      style: { bg: fallbackBg, icon: 'Clock' },
-      tooltip: `first at ${formatTimeOfDay(bucket.first_ms)}`,
+      status: 'no_record',
+      style: NO_RECORD_STYLE,
+      tooltip: 'Run history unavailable — retention expired or the schedule changed since this ran.',
     }
   }
   const worst = resolveBucketWorstWins(bucket.run_counts)
@@ -334,7 +392,8 @@ function resolveBucketChip(
  *    `day_start_ms`, titled `"{task title} {label}"` where `label` is derived
  *    from `interval_ms` (`formatBucketLabel` — never recomputed client-side);
  *    colored/glyphed by the worst-wins `run_counts` rule when present, else
- *    a `"first at HH:MM"` tooltip from `first_ms` (`resolveBucketChip`).
+ *    the same day-vs-now scheduled/no_record split individual instants use
+ *    — NEVER `task.status` (`resolveBucketChip`).
  *  - `truncated: true` → one all-day `task-occurrence-more` marker on the
  *    last covered day (`lastCoveredOccurrenceDayMs`) — never a silently
  *    emptier calendar beyond it.
@@ -465,7 +524,7 @@ export function mapToCalendarEvents(
       for (const bucket of set.day_buckets) {
         const dayStart = parseMs(bucket.day_start_ms)
         if (dayStart === null) continue
-        const chip = resolveBucketChip(bucket, task.status, style.bg)
+        const chip = resolveBucketChip(bucket, nowMs)
         events.push(
           makeEvent(
             `task:${task.id}:occurrence-agg:${bucket.day_start_ms}`,

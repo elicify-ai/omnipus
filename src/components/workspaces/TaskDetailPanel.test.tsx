@@ -347,15 +347,25 @@ describe('TaskDetailPanel — Runs section (ADR-050 §4.4)', () => {
     expect(vi.mocked(runTaskNow).mock.calls[0]).toEqual(['task-retry-1'])
   })
 
-  it('a failed task keeps showing its prior run in the Runs list after Retry is clicked (re-run does not overwrite history)', async () => {
+  it('a failed task keeps showing its prior run in the Runs list after Retry is clicked, AND the new run appears (re-run does not overwrite history)', async () => {
     // BDD: Given a failed task whose Runs list already contains the failed
     //      attempt, When the user clicks Retry (which calls runTaskNow),
-    //      Then the prior failed run is still listed afterward — the fresh
-    //      run is additive, not a replacement (ADR-050 Acceptance Scenario 3).
+    //      Then the prior failed run is still listed afterward AND a new run
+    //      appears — the fresh run is additive, not a replacement (ADR-050
+    //      Acceptance Scenario 3).
+    //
+    // Q4 (de-tautologize): a STATEFUL mock — the fetch AFTER Retry's
+    // onSuccess `invalidateQueries` refetch returns a DIFFERENT (longer)
+    // list. A static `mockResolvedValue` here would pass this test even if
+    // Retry silently did nothing (the assertion "still 1 row" is trivially
+    // true against a mock that never changes) — this version fails unless
+    // the refetch actually happens and actually reflects a new run.
     const { fetchTaskRuns, runTaskNow } = await import('@/lib/api')
-    vi.mocked(fetchTaskRuns).mockResolvedValue([
-      makeRun({ run_id: 'run-failed-1', status: 'failed', result: 'It broke.', session_id: 'sess-failed-1' }),
-    ])
+    const failedRun = makeRun({ run_id: 'run-failed-1', status: 'failed', result: 'It broke.', session_id: 'sess-failed-1' })
+    const freshRun = makeRun({ run_id: 'run-fresh-1', status: 'in_progress', result: undefined, session_id: 'sess-fresh-1' })
+    vi.mocked(fetchTaskRuns)
+      .mockResolvedValueOnce([failedRun])
+      .mockResolvedValue([failedRun, freshRun])
     vi.mocked(runTaskNow).mockResolvedValue(undefined)
 
     renderPanel(makeTask({ id: 'task-retry-2', status: 'failed' }))
@@ -368,9 +378,11 @@ describe('TaskDetailPanel — Runs section (ADR-050 §4.4)', () => {
 
     await waitFor(() => expect(vi.mocked(runTaskNow)).toHaveBeenCalledWith('task-retry-2'))
 
-    // The prior failed run is still in the list — re-running did not clear it.
+    // The prior failed run is STILL listed, and the fresh run now appears
+    // too — proving Retry's invalidateQueries actually drove a refetch that
+    // surfaced a genuinely new run row, not just an unchanged static mock.
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(2))
     expect(screen.getByText('It broke.')).toBeInTheDocument()
-    expect(screen.getAllByTestId('task-run-row')).toHaveLength(1)
   })
 
   it('surfaces a Retry/re-run failure via toast instead of failing silently', async () => {

@@ -4,14 +4,16 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// retention_task_runs_test.go tests the ADR-050 RD9/RD10 retention WIRING
-// added in retention_task_runs.go / retention_goroutine.go: that
-// pruneAllTaskRuns visits every task known to the store with the configured
-// cutoff/staleAfter, and that executeSweepTick invokes it on the same tick
-// and retention window as the session-transcript sweep. The underlying
-// per-task primitive — (*task.Store).PruneRuns' age-cutoff, floor-of-one,
-// and stuck-run reaper behavior — is already fully unit-tested in
-// pkg/task/run_store_test.go and is deliberately NOT re-tested here.
+// retention_task_runs_test.go tests the ADR-050 RD9 retention WIRING added
+// in retention_task_runs.go / retention_goroutine.go: that pruneAllTaskRuns
+// visits every task known to the store with the configured cutoff, and that
+// executeSweepTick invokes it on the same tick and retention window as the
+// session-transcript sweep. The underlying per-task primitive —
+// (*task.Store).PruneRuns' age-cutoff and floor-of-one behavior — is
+// already fully unit-tested in pkg/task/run_store_test.go and is
+// deliberately NOT re-tested here. There is no stuck-run reaper (operator
+// decision 2026-07-20) — a run stays in_progress until its own execution
+// closes it, so no staleAfter plumbing exists to test.
 
 package gateway
 
@@ -54,10 +56,10 @@ func mustCreateTestTask(t *testing.T, store *task.Store, title string) string {
 // <dir>/<taskID>/runs/<day>.jsonl containing a single already-CLOSED
 // (terminal) TaskRun record, in the exact on-disk shape
 // (*task.Store).appendRunRecord produces, then backdates the file's mtime
-// to mtimeAt. A closed record is used so PruneRuns' stuck-run reaper (which
-// only ever touches OPEN runs) never has a reason to rewrite this file
-// before the cutoff-based deletion pass runs — isolating each test to the
-// single behavior it's asserting.
+// to mtimeAt. A closed record isolates each test to the single
+// cutoff-based-deletion behavior it's asserting (PruneRuns never mutates
+// file contents — only deletes whole day files past cutoff, keeping the
+// floor-of-one).
 func writeClosedRunDayFile(t *testing.T, dir, taskID string, day, mtimeAt time.Time) string {
 	t.Helper()
 	runsDir := filepath.Join(dir, taskID, "runs")
@@ -119,9 +121,8 @@ func TestPruneAllTaskRuns_VisitsEveryTaskWithConfiguredCutoff(t *testing.T) {
 	recentPathB := writeClosedRunDayFile(t, dir, taskB, recentDay, recentDay)
 
 	cutoff := now.AddDate(0, 0, -30) // 30-day retention window: the 100-day-old files are well past it.
-	staleAfter := 24 * time.Hour
 
-	visited, err := pruneAllTaskRuns(store, cutoff, staleAfter)
+	visited, err := pruneAllTaskRuns(store, cutoff)
 	if err != nil {
 		t.Fatalf("pruneAllTaskRuns: %v", err)
 	}
@@ -149,7 +150,7 @@ func TestPruneAllTaskRuns_VisitsEveryTaskWithConfiguredCutoff(t *testing.T) {
 func TestPruneAllTaskRuns_EmptyStoreIsNoop(t *testing.T) {
 	store, _ := newTestTaskStore(t)
 
-	visited, err := pruneAllTaskRuns(store, time.Now().AddDate(0, 0, -30), time.Hour)
+	visited, err := pruneAllTaskRuns(store, time.Now().AddDate(0, 0, -30))
 	if err != nil {
 		t.Fatalf("pruneAllTaskRuns on empty store: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestPruneAllTaskRuns_PrunesUnreadableTaskFileRuns(t *testing.T) {
 	recentPath := writeClosedRunDayFile(t, dir, corruptID, recentDay, recentDay)
 
 	cutoff := now.AddDate(0, 0, -30)
-	visited, err := pruneAllTaskRuns(store, cutoff, time.Hour)
+	visited, err := pruneAllTaskRuns(store, cutoff)
 	if err != nil {
 		t.Fatalf("pruneAllTaskRuns: %v", err)
 	}
@@ -195,43 +196,14 @@ func TestPruneAllTaskRuns_PrunesUnreadableTaskFileRuns(t *testing.T) {
 	}
 }
 
-// ---- taskRunStaleAfter -------------------------------------------------------
-
-// TestRetentionTaskRunStaleAfter_DerivesFromScheduleTimeout verifies the
-// staleAfter formula: taskRunStaleAfterMultiplier (12) times
-// cfg.Schedules.RunTimeoutSeconds, with the SchedulesConfig default (300s)
-// applied when unset/invalid — mirroring ApplyDefaults' own <= 0 fallback
-// rule so a zero-value config resolves exactly like a real boot would.
-func TestRetentionTaskRunStaleAfter_DerivesFromScheduleTimeout(t *testing.T) {
-	defaultStale := time.Duration(config.DefaultSchedulesRunTimeoutSeconds) * time.Second * taskRunStaleAfterMultiplier
-	cases := []struct {
-		name           string
-		runTimeoutSecs int
-		want           time.Duration
-	}{
-		{"explicit timeout", 100, 100 * time.Second * taskRunStaleAfterMultiplier},
-		{"zero falls back to schedules default", 0, defaultStale},
-		{"negative falls back to schedules default", -5, defaultStale},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := &config.Config{}
-			cfg.Schedules.RunTimeoutSeconds = tc.runTimeoutSecs
-			got := taskRunStaleAfter(cfg)
-			if got != tc.want {
-				t.Errorf("taskRunStaleAfter() = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
 // ---- executeSweepTick wiring: task-run pass rides the session-sweep tick ---
 
 // TestRetentionSweep_InvokesTaskRunPruneWithSessionCutoff verifies
 // executeSweepTick calls retentionTaskRunSweepFn exactly once per tick, with
 // a cutoff derived from the SAME retention-days config the session sweep
-// uses (RD9: "reuse the session-retention sweep cadence") and a staleAfter
-// derived from cfg.Schedules.RunTimeoutSeconds via taskRunStaleAfter.
+// uses (RD9: "reuse the session-retention sweep cadence"). There is no
+// staleAfter parameter — the stuck-run reaper was removed (operator decision
+// 2026-07-20).
 func TestRetentionSweep_InvokesTaskRunPruneWithSessionCutoff(t *testing.T) {
 	store := newTestStore(t) // *session.UnifiedStore helper from retention_goroutine_test.go, same package.
 
@@ -243,23 +215,19 @@ func TestRetentionSweep_InvokesTaskRunPruneWithSessionCutoff(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
 	var gotCutoff time.Time
-	var gotStaleAfter time.Duration
-	retentionTaskRunSweepFn = func(cutoff time.Time, staleAfter time.Duration) (int, error) {
+	retentionTaskRunSweepFn = func(cutoff time.Time) (int, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		gotCutoff = cutoff
-		gotStaleAfter = staleAfter
 		return 3, nil
 	}
 	t.Cleanup(func() { retentionTaskRunSweepFn = origTaskRunSweep })
 
 	const days = 30
-	const runTimeoutSecs = 120
 	cfgFn := func() *config.Config {
 		cfg := &config.Config{}
 		cfg.Storage.Retention = config.OmnipusRetentionConfig{SessionDays: days, Disabled: false}
-		cfg.Schedules.RunTimeoutSeconds = runTimeoutSecs
 		return cfg
 	}
 
@@ -272,11 +240,6 @@ func TestRetentionSweep_InvokesTaskRunPruneWithSessionCutoff(t *testing.T) {
 
 	if calls != 1 {
 		t.Fatalf("retentionTaskRunSweepFn called %d times, want 1", calls)
-	}
-
-	wantStaleAfter := time.Duration(runTimeoutSecs) * time.Second * taskRunStaleAfterMultiplier
-	if gotStaleAfter != wantStaleAfter {
-		t.Errorf("staleAfter = %s, want %s", gotStaleAfter, wantStaleAfter)
 	}
 
 	minCutoff := before.Add(-time.Duration(days) * 24 * time.Hour)

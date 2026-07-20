@@ -88,6 +88,7 @@ type schema struct {
 	title           string
 	description     string
 	schemaType      string // "object", "string", "integer", "number", "boolean", "array", ""
+	format          string // e.g. "int64", "date-time" — refines schemaType
 	properties      map[string]*schema
 	propertyOrder   []string // preserves YAML key order
 	required        map[string]bool
@@ -143,6 +144,9 @@ func parseSchema(name string, raw any) (*schema, error) {
 	}
 	if v, ok := m["type"].(string); ok {
 		s.schemaType = v
+	}
+	if v, ok := m["format"].(string); ok {
+		s.format = v
 	}
 	if v, ok := m["const"].(string); ok {
 		s.constValue = v
@@ -446,6 +450,16 @@ func resolveGoType(ps *schema, propName string, isRequired bool, allSchemas map[
 		return "*string", nil
 
 	case "integer":
+		// format: int64 must map to Go int64 — plain "int" is 32-bit on
+		// mipsle/arm targets (shipped, see CLAUDE.md Tech Stack), so an
+		// epoch-millisecond value wraps. Mirrors oapi-codegen's own
+		// int64-format handling on the OpenAPI side (openapi_types.gen.go).
+		if ps.format == "int64" {
+			if isRequired {
+				return "int64", nil
+			}
+			return "*int64", nil
+		}
 		if isRequired {
 			return "int", nil
 		}

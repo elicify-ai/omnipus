@@ -59,10 +59,16 @@ vi.mock('@/components/calendar/CalendarToolbar', () => ({
 
 // ── 2. Mock slide-overs / popover with testid stubs ─────────────────────────
 
-const capturedEventSlideOver: { open: boolean; taskId: string; selectedOccurrenceMs: number | undefined } = {
+const capturedEventSlideOver: {
+  open: boolean
+  taskId: string
+  selectedOccurrenceMs: number | undefined
+  selectedBucketDayRange: { startMs: number; endMs: number } | null | undefined
+} = {
   open: false,
   taskId: '',
   selectedOccurrenceMs: undefined,
+  selectedBucketDayRange: undefined,
 }
 
 vi.mock('@/components/calendar/CalendarEventSlideOver', () => ({
@@ -70,14 +76,17 @@ vi.mock('@/components/calendar/CalendarEventSlideOver', () => ({
     open,
     task,
     selectedOccurrenceMs,
+    selectedBucketDayRange,
   }: {
     open: boolean
     task: { id: string } | null
     selectedOccurrenceMs?: number
+    selectedBucketDayRange?: { startMs: number; endMs: number } | null
   }) => {
     capturedEventSlideOver.open = open
     capturedEventSlideOver.taskId = task?.id ?? ''
     capturedEventSlideOver.selectedOccurrenceMs = selectedOccurrenceMs
+    capturedEventSlideOver.selectedBucketDayRange = selectedBucketDayRange
     return <div data-testid="calendar-event-slideover" data-open={String(open)} data-task-id={task?.id ?? ''} />
   },
 }))
@@ -181,6 +190,7 @@ beforeEach(() => {
   capturedEventSlideOver.open = false
   capturedEventSlideOver.taskId = ''
   capturedEventSlideOver.selectedOccurrenceMs = undefined
+  capturedEventSlideOver.selectedBucketDayRange = undefined
   capturedTaskDetailSlideOver.taskId = ''
 
   vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
@@ -268,25 +278,31 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
     // ADR-050 RD8 / task-run-history-spec.md §4.1: the individual instant's
     // own occurrenceMs is threaded through as selectedOccurrenceMs.
     expect(capturedEventSlideOver.selectedOccurrenceMs).toBe(occurrenceMs)
+    // Mirror image (H2 seam): an individual-instant click leaves the bucket
+    // day range unset — it re-points at ONE run, not a day's worth.
+    expect(capturedEventSlideOver.selectedBucketDayRange).toBeNull()
   })
 
-  it('clicking an aggregated bucket chip opens the slide-over WITHOUT a selectedOccurrenceMs', async () => {
+  it('clicking an aggregated bucket chip opens the slide-over WITHOUT a selectedOccurrenceMs, WITH a selectedBucketDayRange', async () => {
     // A bucket's day_start_ms is not a real occurrence instant and would
     // never exact-match a run's occurrence_ms in the slide-over — passing it
     // as selectedOccurrenceMs would silently hide the Result/Open-in-Chat
-    // sections instead of falling back to task-level behaviour.
+    // sections instead of falling back to task-level behaviour. Instead
+    // (H2 seam) it threads a `selectedBucketDayRange` so the slide-over can
+    // day-scope its run mini-list to just that bucket's day.
     mockUseOccurrences.mockReturnValue({ data: [], isError: false, isLoading: false })
     renderCalendarScreen()
 
     await waitFor(() => expect(capturedProps.events.length).toBeGreaterThan(0))
 
+    const dayStartMs = 1_784_592_000_000
     const ext: CalendarEventExtProps = {
       kind: 'task-occurrence-agg',
       taskId: 'task-1',
       status: 'done',
       icon: 'CheckCircle',
       tooltip: '3 done',
-      dayStartMs: 1_784_592_000_000,
+      dayStartMs,
     }
     await act(async () => {
       capturedProps.onEventClick!({
@@ -298,6 +314,10 @@ describe('CalendarScreen — occurrence chip-click routing (FR-001/FR-012)', () 
     await waitFor(() => expect(capturedEventSlideOver.open).toBe(true))
     expect(capturedEventSlideOver.taskId).toBe('task-1')
     expect(capturedEventSlideOver.selectedOccurrenceMs).toBeUndefined()
+    expect(capturedEventSlideOver.selectedBucketDayRange).toEqual({
+      startMs: dayStartMs,
+      endMs: dayStartMs + 24 * 60 * 60 * 1000,
+    })
   })
 
   it('clicking a due chip still opens the existing task detail panel, not the event slide-over', async () => {

@@ -81,6 +81,9 @@ import {
 } from '@/components/calendar/RecurrenceEditor'
 import { useOccurrences } from '@/lib/calendar/useOccurrences'
 import type { TaskOccurrenceSet } from '@/lib/api/generated/openapi-types'
+import { resolveRunForOccurrence } from '@/lib/calendar/eventMapping'
+import { formatDateTime } from '@/lib/dateFormat'
+import type { TaskRunOccurrenceContext } from '@/lib/taskRuns'
 import { TaskRunStatusField } from '@/components/workspaces/TaskRunStatusField'
 import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
 import { TaskResultField } from '@/components/workspaces/TaskResultField'
@@ -105,6 +108,22 @@ export interface CalendarEventSlideOverProps {
    * behaviour.
    */
   selectedOccurrenceMs?: number | null
+  /**
+   * The day-window `[startMs, endMs)` of a clicked aggregated bucket chip
+   * (`task-occurrence-agg`), when this slide-over was opened from a bucket
+   * instead of an individual occurrence (H2 fix, task-run-history-spec
+   * §4.3 — "a bucket click opens a mini-list of that day's runs"). When
+   * set, the task-level status/result/chat sections are SUPPRESSED — left
+   * alone they would silently fall back to task.status/task.result/
+   * task.session_id, i.e. the most recent fire OVERALL, which may be from a
+   * different day than the bucket clicked — and a day-scoped run list
+   * (`TaskRunsList`'s `dayRange`) renders in their place. `null`/omitted
+   * for the individual-occurrence and series-config-edit cases, which keep
+   * their existing behaviour. Mutually exclusive with `selectedOccurrenceMs`
+   * in practice (a click resolves to one or the other); if both were
+   * somehow set, the bucket view takes precedence.
+   */
+  selectedBucketDayRange?: { startMs: number; endMs: number } | null
 }
 
 // ── Trigger classification (local — no client cron/RRULE math) ─────────────
@@ -138,10 +157,6 @@ function upcomingInstants(set: TaskOccurrenceSet, limit: number): number[] {
   return setInstants(set).sort((a, b) => a - b).slice(0, limit)
 }
 
-function formatFullDateTime(ms: number): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ms))
-}
-
 const PREVIEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000 // 30 days — short enough to stay well within useOccurrences' own caps
 
 /** Save button label — a small named helper instead of a nested ternary (F6). */
@@ -157,6 +172,7 @@ export function CalendarEventSlideOver({
   task,
   initialDate,
   selectedOccurrenceMs,
+  selectedBucketDayRange,
 }: CalendarEventSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -164,6 +180,9 @@ export function CalendarEventSlideOver({
   const isEdit = task != null
   const isLegacy = isEdit && isLegacyTrigger(task.trigger)
   const isEditingExistingRrule = isEdit && isRruleTrigger(task.trigger)
+  // H2 fix — see the prop doc comment. Bucket takes precedence if somehow
+  // both were set.
+  const hasBucketContext = isEdit && selectedBucketDayRange != null
 
   const [title, setTitle] = useState('')
   const [agentId, setAgentId] = useState('')
@@ -259,20 +278,26 @@ export function CalendarEventSlideOver({
     queryFn: () => fetchTaskRuns(task!.id),
     enabled: open && hasOccurrenceContext,
   })
+  // Resolution itself (newest-run tie-break, server-matching) lives in
+  // `resolveRunForOccurrence` (eventMapping.ts) — imported, not
+  // reimplemented, so the slide-over can never drift from the calendar
+  // chip's own occurrence→run join logic.
   const resolvedRun = useMemo<TaskRun | undefined>(() => {
-    if (!hasOccurrenceContext || !runsForOccurrenceQuery.data) return undefined
-    const matches = runsForOccurrenceQuery.data.filter((r) => r.occurrence_ms === selectedOccurrenceMs)
-    if (matches.length === 0) return undefined
-    // Newest by started_at wins when a scheduler fire and a manual Run-now
-    // race for the same instant (ADR-050 RD7 idempotency still guarantees at
-    // most one run per key in the common case; this is the tie-break if the
-    // list ever carries more than one).
-    return matches.reduce((newest, r) => (new Date(r.started_at) > new Date(newest.started_at) ? r : newest))
+    if (!hasOccurrenceContext || !runsForOccurrenceQuery.data || selectedOccurrenceMs == null) return undefined
+    return resolveRunForOccurrence(runsForOccurrenceQuery.data, selectedOccurrenceMs)
   }, [hasOccurrenceContext, runsForOccurrenceQuery.data, selectedOccurrenceMs])
   // A resolved-run section is shown only when there's no occurrence context
   // (task-level fallback) OR a run was actually found — a future occurrence
   // with no run yet shows ONLY TaskRunStatusField's "Run now" (spec §4.3).
   const showResultAndChat = !hasOccurrenceContext || !!resolvedRun
+  // M7 fix — fold the occurrence instant + its resolved run into ONE object,
+  // built here once and passed identically to TaskRunStatusField/
+  // TaskResultField/OpenInChatButton so the three siblings can never
+  // disagree about which occurrence a `run` belongs to.
+  const occurrenceContext = useMemo<TaskRunOccurrenceContext | undefined>(
+    () => (hasOccurrenceContext && selectedOccurrenceMs != null ? { ms: selectedOccurrenceMs, run: resolvedRun } : undefined),
+    [hasOccurrenceContext, selectedOccurrenceMs, resolvedRun],
+  )
 
   // ── Trigger construction (FR-024) ───────────────────────────────────────────
   function buildTriggerForSave(): TaskTrigger {
@@ -524,7 +549,7 @@ export function CalendarEventSlideOver({
                 {previewError
                   ? "Couldn't load upcoming run times."
                   : nextRunMs != null
-                    ? `Next run: ${formatFullDateTime(nextRunMs)}`
+                    ? `Next run: ${formatDateTime(nextRunMs)}`
                     : 'Next run time unavailable.'}
               </p>
               <p className="text-[var(--color-muted)]">
@@ -564,7 +589,7 @@ export function CalendarEventSlideOver({
               </span>
               <ul className="text-xs text-[var(--color-secondary)] space-y-0.5">
                 {upcomingPreview.map((ms) => (
-                  <li key={ms}>{formatFullDateTime(ms)}</li>
+                  <li key={ms}>{formatDateTime(ms)}</li>
                 ))}
               </ul>
             </div>
@@ -581,28 +606,43 @@ export function CalendarEventSlideOver({
               checklist is offered in CREATE too (buffered, persisted on Save). */}
           {isEdit && task ? (
             <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">
-              {hasOccurrenceContext && runsForOccurrenceQuery.isError && (
-                <p
-                  className="text-xs text-[color:var(--color-error)]"
-                  data-testid="occurrence-run-resolve-error"
-                >
-                  Couldn't load this occurrence's run status.
-                </p>
+              {hasBucketContext ? (
+                <>
+                  {/* H2 fix — a bucket click shows THAT DAY's runs, never the
+                      task-level status/result/chat mirror (which reflects the
+                      most recent fire OVERALL and may be from a different
+                      day). TaskChecklistField stays — it's task-scoped, not
+                      occurrence/day-scoped. */}
+                  <TaskChecklistField task={task} />
+                  <TaskRunsList
+                    taskId={task.id}
+                    dayRange={selectedBucketDayRange!}
+                    onNavigate={() => onOpenChange(false)}
+                  />
+                </>
+              ) : (
+                <>
+                  {hasOccurrenceContext && runsForOccurrenceQuery.isError && (
+                    <p
+                      className="text-xs text-[color:var(--color-error)]"
+                      data-testid="occurrence-run-resolve-error"
+                    >
+                      Couldn't load this occurrence's run status.
+                    </p>
+                  )}
+                  <TaskRunStatusField task={task} occurrence={occurrenceContext} />
+                  <TaskChecklistField task={task} />
+                  {showResultAndChat && <TaskResultField task={task} occurrence={occurrenceContext} />}
+                  {showResultAndChat && (
+                    <OpenInChatButton task={task} occurrence={occurrenceContext} onNavigate={() => onOpenChange(false)} />
+                  )}
+                  {/* RD8 — always embed run history so it survives a schedule
+                      edit, independent of whether the current trigger can
+                      still project a given run's occurrence_ms (spec
+                      §4.3/§3.6). */}
+                  <TaskRunsList taskId={task.id} onNavigate={() => onOpenChange(false)} />
+                </>
               )}
-              <TaskRunStatusField
-                task={task}
-                run={resolvedRun}
-                occurrenceMs={hasOccurrenceContext ? selectedOccurrenceMs : undefined}
-              />
-              <TaskChecklistField task={task} />
-              {showResultAndChat && <TaskResultField task={task} run={resolvedRun} />}
-              {showResultAndChat && (
-                <OpenInChatButton task={task} run={resolvedRun} onNavigate={() => onOpenChange(false)} />
-              )}
-              {/* RD8 — always embed run history so it survives a schedule edit,
-                  independent of whether the current trigger can still project
-                  a given run's occurrence_ms (spec §4.3/§3.6). */}
-              <TaskRunsList taskId={task.id} onNavigate={() => onOpenChange(false)} />
             </div>
           ) : (
             <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">

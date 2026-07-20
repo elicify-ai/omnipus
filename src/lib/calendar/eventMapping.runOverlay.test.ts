@@ -17,9 +17,9 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { mapToCalendarEvents, buildRunCountsTooltip } from './eventMapping'
+import { mapToCalendarEvents, buildRunCountsTooltip, resolveRunForOccurrence } from './eventMapping'
 import type { Task } from '@/lib/api'
-import type { TaskOccurrenceSet } from '@/lib/api/generated/openapi-types'
+import type { TaskOccurrenceSet, TaskRun } from '@/lib/api/generated/openapi-types'
 
 // ─── Factories (mirrors eventMapping.occurrences.test.ts) ─────────────────────
 
@@ -323,12 +323,19 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
   })
 })
 
-// ─── State 4b: bucket with no run_counts — fallback to today's rendering ──────
+// ─── State 4b/4c: bucket with no run_counts — day-vs-now split, NEVER task.status ──
+//
+// BLOCKER regression coverage: `run_counts` is absent for EVERY future
+// not-yet-fired dense bucket, so a naive `task.status` fallback would paint
+// every future bucket with the series' stale terminal status the moment ONE
+// occurrence anywhere in the series completes — the exact defect ADR-050
+// exists to kill. `resolveBucketChip` must resolve the SAME day-vs-now split
+// individual instants use instead.
 
 describe('four-state chip rule — bucket fallback when run_counts is absent', () => {
-  it('falls back to task.status-colored Clock chip + "first at HH:MM" tooltip, unchanged', () => {
-    const task = makeTask({ status: 'in_progress' })
-    const dayStart = new Date(2026, 6, 25).getTime()
+  it('future bucket day (>= now), no run_counts → "scheduled", decoupled from task.status', () => {
+    const task = makeTask({ status: 'failed' }) // deliberately mismatched — must NOT leak through
+    const dayStart = new Date(2026, 6, 25).getTime() // after NOW (2026-07-15)
     const firstMs = new Date(2026, 6, 25, 9, 0, 0).getTime()
     const set = makeOccurrenceSet({
       day_buckets: [{ day_start_ms: dayStart, count: 48, first_ms: firstMs, interval_ms: 1_800_000 }],
@@ -336,12 +343,109 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
 
     const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
     const ext = events[0].extendedProps
-    expect(ext?.status).toBe('in_progress')
+    expect(ext?.status).toBe('scheduled') // NOT 'failed' (task.status)
     expect(ext?.icon).toBe('Clock')
-    expect(events[0].backgroundColor).toBe('#60A5FA') // STATUS_STYLE.in_progress.bg
+    expect(events[0].backgroundColor).toBe('#94A3B8') // SCHEDULED_STYLE.bg, NOT task.status=failed's red
+    expect(events[0].backgroundColor).not.toBe('#F87171')
     if (ext?.kind === 'task-occurrence-agg') {
       expect(ext.tooltip).toBe('first at 09:00')
     }
+  })
+
+  it('a bucket day exactly equal to now is treated as scheduled (>= boundary)', () => {
+    const task = makeTask()
+    const set = makeOccurrenceSet({
+      day_buckets: [{ day_start_ms: NOW, count: 5, first_ms: NOW, interval_ms: null }],
+    })
+    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    expect(events[0].extendedProps?.status).toBe('scheduled')
+  })
+
+  it('past bucket day (< now), no run_counts → "no_record", NEVER task.status and NEVER "scheduled"', () => {
+    const task = makeTask({ status: 'done' }) // deliberately mismatched — must NOT leak through
+    const dayStart = new Date(2026, 6, 10).getTime() // before NOW (2026-07-15)
+    const firstMs = new Date(2026, 6, 10, 9, 0, 0).getTime()
+    const set = makeOccurrenceSet({
+      day_buckets: [{ day_start_ms: dayStart, count: 12, first_ms: firstMs, interval_ms: null }],
+    })
+
+    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const ext = events[0].extendedProps
+    expect(ext?.status).toBe('no_record') // NOT 'done' (task.status), NOT 'scheduled'
+    expect(ext?.icon).toBe('Circle')
+    expect(ext?.icon).not.toBe('Clock')
+    expect(events[0].backgroundColor).not.toBe('#34D399') // not task.status=done's green
+    if (ext?.kind === 'task-occurrence-agg') {
+      expect(ext.tooltip).toBe(
+        'Run history unavailable — retention expired or the schedule changed since this ran.',
+      )
+    }
+  })
+})
+
+// ─── resolveRunForOccurrence (dedup extraction) ────────────────────────────────
+//
+// Server-tie-break-compatible latest-wins-by-started_at resolution, extracted
+// so `CalendarEventSlideOver.tsx` can import a single implementation instead
+// of re-deriving its own (an earlier version there compared `Date` objects
+// and silently lost ties instead of breaking them by `run_id`, unlike the
+// server's `runIsNewer`, pkg/gateway/task_occurrences.go).
+
+function makeRun(overrides: Partial<TaskRun> = {}): TaskRun {
+  return {
+    run_id: 'run-1',
+    task_id: 'task-1',
+    occurrence_ms: NOW,
+    status: 'done',
+    session_id: 'session-1',
+    kind: 'scheduled',
+    started_at: '2026-07-15T09:00:00Z',
+    ended_at: '2026-07-15T09:05:00Z',
+    ...overrides,
+  }
+}
+
+describe('resolveRunForOccurrence', () => {
+  it('returns undefined when no run matches the occurrence_ms', () => {
+    const runs = [makeRun({ occurrence_ms: NOW }), makeRun({ occurrence_ms: NOW + 1000 })]
+    expect(resolveRunForOccurrence(runs, NOW + 9999)).toBeUndefined()
+  })
+
+  it('returns the single matching run', () => {
+    const run = makeRun({ occurrence_ms: NOW, run_id: 'run-only' })
+    expect(resolveRunForOccurrence([run], NOW)?.run_id).toBe('run-only')
+  })
+
+  it('latest-started-wins when a scheduler fire and a later manual re-run share an occurrence_ms', () => {
+    const earlier = makeRun({
+      run_id: 'run-early',
+      occurrence_ms: NOW,
+      started_at: '2026-07-15T09:00:00Z',
+      status: 'failed',
+    })
+    const later = makeRun({
+      run_id: 'run-late',
+      occurrence_ms: NOW,
+      started_at: '2026-07-15T10:00:00Z',
+      status: 'done',
+    })
+    // Order-independent — try both array orderings.
+    expect(resolveRunForOccurrence([earlier, later], NOW)?.run_id).toBe('run-late')
+    expect(resolveRunForOccurrence([later, earlier], NOW)?.run_id).toBe('run-late')
+  })
+
+  it('an exact started_at tie is broken by the lexically-greater run_id (matches server runIsNewer)', () => {
+    const a = makeRun({ run_id: 'run-aaa', occurrence_ms: NOW, started_at: '2026-07-15T09:00:00Z' })
+    const b = makeRun({ run_id: 'run-bbb', occurrence_ms: NOW, started_at: '2026-07-15T09:00:00Z' })
+    // 'run-bbb' > 'run-aaa' lexically — must win regardless of array order.
+    expect(resolveRunForOccurrence([a, b], NOW)?.run_id).toBe('run-bbb')
+    expect(resolveRunForOccurrence([b, a], NOW)?.run_id).toBe('run-bbb')
+  })
+
+  it('ignores runs for other occurrence_ms values', () => {
+    const target = makeRun({ run_id: 'run-target', occurrence_ms: NOW })
+    const other = makeRun({ run_id: 'run-other', occurrence_ms: NOW + 60_000 })
+    expect(resolveRunForOccurrence([other, target], NOW)?.run_id).toBe('run-target')
   })
 })
 

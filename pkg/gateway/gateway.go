@@ -1453,8 +1453,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// when the task store failed to initialize; the tick no-ops via the nil
 	// check in executeSweepTick when that happens.
 	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
-		retentionTaskRunSweepFn = func(cutoff time.Time, staleAfter time.Duration) (int, error) {
-			return pruneAllTaskRuns(tStore, cutoff, staleAfter)
+		retentionTaskRunSweepFn = func(cutoff time.Time) (int, error) {
+			return pruneAllTaskRuns(tStore, cutoff)
 		}
 	}
 

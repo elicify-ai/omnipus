@@ -4,20 +4,24 @@
 // session_id (which keep their exact existing behaviour) — see
 // docs/internal/specs/task-run-history-spec.md §2.1. This is the SINGLE
 // run-history list used by BOTH the calendar occurrence slide-over (§4.3 —
-// "Always show the run-history list … so history survives a schedule edit")
-// and TaskDetailPanel's Runs section (§4.4, Board/List normal-task re-run
-// flow). Do not fork/duplicate this component — extend it in place.
+// "Always show the run-history list … so history survives a schedule edit"
+// for the individual-occurrence/series-edit case, and the bucket-drill-in
+// day-scoped list for the aggregated-bucket case — H2 fix, see `dayRange`
+// below) and TaskDetailPanel's Runs section (§4.4, Board/List normal-task
+// re-run flow). Do not fork/duplicate this component — extend it in place.
 //
 // Each run renders: a status badge sharing taskStatusConfig's STATUS_BADGE/
 // statusLabel vocabulary (TaskRun.status is a strict subset of Task['status'] —
 // in_progress | done | failed — so the two surfaces never disagree on colors/
 // labels), how it started (scheduled fire vs manual Run-now), when it ended,
-// its terminal result (mirrors TaskResultField's compact display idiom), and
-// an Open-in-Chat action when it produced a session (mirrors
-// OpenInChatButton's navigation — a TaskRun always carries session_id from
-// open time onward, unlike Task.session_id, but the render is still
-// defensively gated on a truthy value).
+// its terminal result (mirrors TaskResultField's compact display idiom via
+// the shared `hasVisibleResult` gate — Q3 dedup), and an Open-in-Chat action
+// when it produced a session (mirrors OpenInChatButton's navigation — a
+// TaskRun always carries session_id from open time onward, unlike
+// Task.session_id, but the render is still defensively gated on a truthy
+// value).
 
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { ChatCircle, ClockCounterClockwise, Warning } from '@phosphor-icons/react'
@@ -26,6 +30,8 @@ import type { TaskRun } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { STATUS_BADGE, statusLabel } from '@/components/workspaces/taskStatusConfig'
+import { formatDateTime } from '@/lib/dateFormat'
+import { hasVisibleResult } from '@/lib/taskRuns'
 import { cn } from '@/lib/utils'
 
 export interface TaskRunsListProps {
@@ -33,14 +39,21 @@ export interface TaskRunsListProps {
   /** Called after an Open-in-Chat navigation fires — e.g. close the host slide-over/panel. */
   onNavigate?: () => void
   className?: string
+  /**
+   * Client-side filter to a single calendar day's runs (H2 fix, ADR-050 /
+   * task-run-history-spec §4.3 "a bucket click opens a mini-list of that
+   * day's runs") — when set, only runs whose `started_at` falls within
+   * `[startMs, endMs)` are rendered. The underlying `GET /tasks/{id}/runs`
+   * fetch is unchanged (task-scoped, retention-bounded); this filters the
+   * already-fetched list, so it composes with the loading/error/empty states
+   * below without a second network round-trip. Omitted → unfiltered
+   * (existing behaviour, both the always-embedded history list and
+   * TaskDetailPanel's Runs section).
+   */
+  dayRange?: { startMs: number; endMs: number }
 }
 
-function formatDate(iso?: string | null): string {
-  if (!iso) return '—'
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso))
-}
-
-export function TaskRunsList({ taskId, onNavigate, className }: TaskRunsListProps) {
+export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRunsListProps) {
   const navigate = useNavigate()
 
   const {
@@ -55,6 +68,14 @@ export function TaskRunsList({ taskId, onNavigate, className }: TaskRunsListProp
     queryFn: () => fetchTaskRuns(taskId),
     enabled: Boolean(taskId),
   })
+
+  const visibleRuns = useMemo(() => {
+    if (!dayRange) return runs
+    return runs.filter((r) => {
+      const startedMs = new Date(r.started_at).getTime()
+      return !isNaN(startedMs) && startedMs >= dayRange.startMs && startedMs < dayRange.endMs
+    })
+  }, [runs, dayRange])
 
   function openRunInChat(run: TaskRun) {
     void navigate({ to: '/sessions/$sessionId', params: { sessionId: run.session_id } })
@@ -89,7 +110,7 @@ export function TaskRunsList({ taskId, onNavigate, className }: TaskRunsListProp
             {isFetching ? 'Retrying…' : 'Retry'}
           </Button>
         </div>
-      ) : runs.length === 0 ? (
+      ) : visibleRuns.length === 0 ? (
         <div
           data-testid="task-runs-empty"
           className="flex items-center gap-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-xs text-[var(--color-muted)]"
@@ -99,7 +120,7 @@ export function TaskRunsList({ taskId, onNavigate, className }: TaskRunsListProp
         </div>
       ) : (
         <ul className="space-y-2">
-          {runs.map((run) => (
+          {visibleRuns.map((run) => (
             <TaskRunRow key={run.run_id} run={run} onOpenInChat={() => openRunInChat(run)} />
           ))}
         </ul>
@@ -111,7 +132,7 @@ export function TaskRunsList({ taskId, onNavigate, className }: TaskRunsListProp
 function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => void }) {
   const badgeClass = STATUS_BADGE[run.status] ?? STATUS_BADGE.inbox
   const isFailed = run.status === 'failed'
-  const showResult = (run.status === 'done' || run.status === 'failed') && Boolean(run.result)
+  const showResult = hasVisibleResult(run.status, run.result)
 
   return (
     <li
@@ -130,7 +151,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
             {run.kind === 'manual' ? 'Run now' : 'Scheduled'}
           </span>
         </div>
-        <span className="text-[11px] text-[var(--color-muted)]">{formatDate(run.ended_at)}</span>
+        <span className="text-[11px] text-[var(--color-muted)]">{formatDateTime(run.ended_at)}</span>
       </div>
 
       {showResult ? (

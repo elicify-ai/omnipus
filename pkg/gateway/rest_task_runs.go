@@ -85,21 +85,33 @@ func (a *restAPI) handleTaskRuns(w http.ResponseWriter, r *http.Request, id stri
 
 	// ListRuns already returns newest-first (started_at desc); preserve
 	// that order end to end — the wire array is `TaskRun[]` with no
-	// re-sorting contract.
+	// re-sorting contract. toWireTaskRun's ok=false (H4: an invalid stored
+	// status) drops just that record, mirroring foldRunsLocked's own
+	// malformed-record skip rather than propagating a schema-invalid entry.
 	out := make([]gen.TaskRun, 0, len(runs))
 	for _, run := range runs {
-		out = append(out, toWireTaskRun(run))
+		if wire, ok := toWireTaskRun(run); ok {
+			out = append(out, wire)
+		}
 	}
 	jsonOK(w, out)
 }
 
-// handleTaskRunNow handles POST /api/v1/tasks/{id}/runs ("Run now", ADR-050 RD7
-// / task-run-history-spec §3.4). With occurrence_ms it runs that specific
-// recurring occurrence (materialize-on-demand); without it, re-runs a
-// normal/once task as a fresh run (prior runs preserved). Dispatch is async —
-// StartOccurrenceRun opens the run (idempotent per (task, occurrence_ms) vs a
-// concurrent scheduler fire) and returns; the client observes progress via the
-// task_run_status WS frame or GET /tasks/{id}/runs. Returns 202.
+// handleTaskRunNow handles POST /api/v1/tasks/{id}/runs ("Run now", ADR-050
+// RD7, task-run-history-spec.md §3.4). With occurrence_ms it runs that
+// specific recurring occurrence (materialize-on-demand); without it, re-runs
+// a normal/once task as a fresh run (prior runs preserved). Dispatch is
+// async: StartOccurrenceRun (pkg/agent/task_executor.go) synchronously claims
+// the task (SpawnReset, then the same ClaimForRun exactly-once dispatch guard
+// scheduled fires use) and launches execution in a background goroutine —
+// the actual run-open (task.Store.OpenRun, idempotent per (task,
+// occurrence_ms) vs a concurrent scheduler fire landing on the same
+// occurrence) happens inside that goroutine, NOT before this handler
+// returns. So the run row may not exist yet at the moment this 202 is
+// written; a client that immediately calls GET /tasks/{id}/runs can race the
+// open and see nothing for this attempt yet. The client observes progress
+// via the task_run_status WS frame, or by polling GET /tasks/{id}/runs.
+// Returns 202.
 func (a *restAPI) handleTaskRunNow(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
@@ -137,8 +149,19 @@ func (a *restAPI) handleTaskRunNow(w http.ResponseWriter, r *http.Request, id st
 }
 
 // toWireTaskRun converts an internal task.TaskRun (pkg/task/run_store.go) to
-// the generated wire type (contracts/components/schemas/TaskRun.yaml).
-func toWireTaskRun(r task.TaskRun) gen.TaskRun {
+// the generated wire type (contracts/components/schemas/TaskRun.yaml). ok is
+// false when r.Status is not one of the three valid TaskRun statuses
+// (in_progress/done/failed) — H4: validated via task.IsValidRunStatus rather
+// than trusting the bare gen.TaskRunStatus(r.Status) conversion, so a
+// corrupt/foreign stored status is dropped (logged at Warn, mirroring
+// foldRunsLocked's own malformed-record skip, pkg/task/run_store.go) instead
+// of being emitted as a schema-invalid value the SPA's zod edge would reject.
+func toWireTaskRun(r task.TaskRun) (gen.TaskRun, bool) {
+	if !task.IsValidRunStatus(r.Status) {
+		slog.Warn("rest: task run has invalid status, dropping from run-history response",
+			"task_id", r.TaskID, "run_id", r.RunID, "status", r.Status)
+		return gen.TaskRun{}, false
+	}
 	out := gen.TaskRun{
 		RunId:     r.RunID,
 		TaskId:    r.TaskID,
@@ -160,9 +183,21 @@ func toWireTaskRun(r task.TaskRun) gen.TaskRun {
 	if r.EndedAt != nil {
 		if ts, err := time.Parse(time.RFC3339, *r.EndedAt); err == nil {
 			out.EndedAt = &ts
+		} else if out.Status == gen.TaskRunStatusDone || out.Status == gen.TaskRunStatusFailed {
+			// Corrupt-ended_at honesty fix: a TERMINAL run (status already
+			// validated above) with an unparseable ended_at must not render
+			// as "done, but no finish time" — nil EndedAt paired with a
+			// terminal Status is exactly that, and the client has no other
+			// field to fall back to. Degrade honestly to the run's own
+			// started_at (already parsed into out.StartedAt above) rather
+			// than silently omitting EndedAt.
+			slog.Warn("rest: task run has corrupt ended_at on a terminal run, falling back to started_at",
+				"task_id", r.TaskID, "run_id", r.RunID, "value", *r.EndedAt)
+			startedAt := out.StartedAt
+			out.EndedAt = &startedAt
 		} else {
-			slog.Warn("rest: task run has corrupt ended_at, omitting", "run_id", r.RunID, "value", *r.EndedAt)
+			slog.Warn("rest: task run has corrupt ended_at, omitting", "task_id", r.TaskID, "run_id", r.RunID, "value", *r.EndedAt)
 		}
 	}
-	return out
+	return out, true
 }

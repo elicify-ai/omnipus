@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 
@@ -48,11 +49,48 @@ func IsValidRunKind(k RunKind) bool {
 // IsValidRunStatus reports whether s is one of the three statuses a TaskRun
 // may carry (in_progress, done, failed) — a narrower subset of the 7-state
 // Task Status vocabulary. ADR-050 RD10 deliberately excludes `canceled`/
-// `queued` from v1: no cancel producer exists anywhere in the codebase today,
-// and a stuck-run reaper (PruneRuns) closes abandoned runs to `failed`
-// instead of introducing a new terminal value.
+// `queued` from v1: no cancel producer exists anywhere in the codebase today.
+// Consumed by CloseRun as a belt-and-suspenders guard alongside IsTerminal
+// (H4): IsTerminal is the broader Task-status terminal set (done/failed
+// today), while IsValidRunStatus is the TaskRun-specific vocabulary — should
+// Task ever grow a new terminal status IsTerminal would accept but v1
+// TaskRun does not (e.g. a future `canceled`), CloseRun must still reject it
+// here rather than silently widening what a run can close to.
 func IsValidRunStatus(s Status) bool {
 	return s == StatusInProgress || s == StatusDone || s == StatusFailed
+}
+
+// maxRunResultChars is the TaskRun.result contract cap (TaskRun.yaml,
+// task-run-history-spec.md §2.1). CloseRun truncates rather than rejects a
+// result over this cap (H9) — with no stuck-run reaper, a rejected close
+// would strand the run in_progress forever with no path to a terminal state.
+const maxRunResultChars = 50000
+
+// runResultTruncationMarker is appended to a truncated CloseRun result so
+// readers (run-history list, calendar slide-over) can tell the stored result
+// is not the full original output.
+const runResultTruncationMarker = "\n\n[... result truncated: exceeded the 50000-character run-history cap ...]"
+
+// truncateRunResult trims result to fit within maxRunResultChars (including
+// runResultTruncationMarker), cutting on a valid UTF-8 boundary so a
+// multi-byte rune straddling the cut point is dropped whole rather than
+// corrupted into invalid UTF-8.
+func truncateRunResult(result string) string {
+	if len(result) <= maxRunResultChars {
+		return result
+	}
+	limit := maxRunResultChars - len(runResultTruncationMarker)
+	if limit < 0 {
+		limit = 0
+	}
+	if limit > len(result) {
+		limit = len(result)
+	}
+	truncated := result[:limit]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + runResultTruncationMarker
 }
 
 // ErrRunNotFound is returned by CloseRun when runID does not match any
@@ -141,8 +179,23 @@ func newRunID() (string, error) {
 }
 
 // foldRunsLocked reads every day file under taskID's runs directory and folds
-// records by RunID, last record wins. os.ReadDir returns entries sorted by
-// filename ascending — day files are named YYYY-MM-DD.jsonl, so this is also
+// records by RunID, last record wins. Callers that need the task's FULL run
+// history for correctness (ListRuns, CloseRun — a run's open record can live
+// in an arbitrarily old day file, e.g. the one floor-of-one guarantees
+// survival of) must use this, not foldRunsLockedFrom's filtered variant.
+//
+// Caller must hold the per-task lock (s.lock.Get(taskID)).
+func (s *Store) foldRunsLocked(taskID string) (map[string]TaskRun, error) {
+	return s.foldRunsLockedFrom(taskID, "")
+}
+
+// foldRunsLockedFrom reads day files under taskID's runs directory whose
+// filename (YYYY-MM-DD.jsonl) is >= minDay (lexical string compare ==
+// chronological compare for this fixed-width ISO date format), folding
+// records by RunID, last record wins. minDay == "" means no lower bound —
+// every day file is read (equivalent to foldRunsLocked).
+//
+// os.ReadDir returns entries sorted by filename ascending, so this is also
 // chronological order; within a file, lines are read top-to-bottom in append
 // order. A single forward pass where each record overwrites any prior
 // same-RunID entry therefore yields "last (most recent) record wins" with no
@@ -152,8 +205,14 @@ func newRunID() (string, error) {
 // folds to an empty map. Unreadable files and malformed lines are logged at
 // Warn and skipped (mirrors Store.ListWithUnreadable / session.readPartition).
 //
+// L1 perf fix (spec §3.5): RunsInRange uses a non-empty minDay to skip
+// parsing day files that provably cannot contain a match — see RunsInRange's
+// own doc comment for the "StartedAt's calendar day is never before the
+// realized occurrence's calendar day" argument this depends on, and the
+// accepted edge case it does not cover.
+//
 // Caller must hold the per-task lock (s.lock.Get(taskID)).
-func (s *Store) foldRunsLocked(taskID string) (map[string]TaskRun, error) {
+func (s *Store) foldRunsLockedFrom(taskID, minDay string) (map[string]TaskRun, error) {
 	dir := s.runsDir(taskID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -163,9 +222,17 @@ func (s *Store) foldRunsLocked(taskID string) (map[string]TaskRun, error) {
 		return nil, fmt.Errorf("task: list runs dir %q: %w", dir, err)
 	}
 
+	var minName string
+	if minDay != "" {
+		minName = minDay + ".jsonl"
+	}
+
 	folded := make(map[string]TaskRun)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		if minName != "" && e.Name() < minName {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
@@ -188,6 +255,84 @@ func (s *Store) foldRunsLocked(taskID string) (map[string]TaskRun, error) {
 		}
 	}
 	return folded, nil
+}
+
+// findOpenRunLocked scans taskID's day files NEWEST-FIRST looking for a
+// currently-open (EndedAt == nil) run matching occurrenceMs, returning as
+// soon as one is found (L1 perf fix, spec §3.5). OpenRun's idempotency guard
+// (RD7) exists to catch a near-simultaneous DUPLICATE dispatch for a run
+// that was just opened — exactly the case this finds without reading the
+// task's entire history, since the match sits in the newest (typically
+// today's) file.
+//
+// When no match is found, every day file must still be read to conclusively
+// answer "no open run exists for this key" — a run may, per the operator's
+// 2026-07-20 no-reaper decision, legitimately stay in_progress for days, so
+// an older file can never be assumed irrelevant just because it is old. This
+// path is therefore no worse than the previous full-fold-then-scan
+// implementation; only the found/duplicate-dispatch path gets faster.
+//
+// Newest-first correctness argument: a CloseRun record's day file is never
+// older than its OpenRun record's day file (a run cannot be closed before it
+// is opened), so walking files newest-to-oldest and keeping only the FIRST
+// (i.e. newest) record seen per run_id yields each run's true latest state —
+// equivalent to foldRunsLocked's ascending "last record wins", walked in the
+// opposite direction so a fresh match can be found without visiting any
+// older file at all. Within a single file, lines are folded exactly like
+// foldRunsLockedFrom (last line in the file wins) before being merged into
+// the cross-file "first (newest) file wins" resolution.
+//
+// Caller must hold the per-task lock (s.lock.Get(taskID)).
+func (s *Store) findOpenRunLocked(taskID string, occurrenceMs *int64) (*TaskRun, error) {
+	dir := s.runsDir(taskID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("task: list runs dir %q: %w", dir, err)
+	}
+	var dayFiles []os.DirEntry
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+			dayFiles = append(dayFiles, e)
+		}
+	}
+
+	resolved := make(map[string]bool) // run_id -> final state already known from a newer file
+	for i := len(dayFiles) - 1; i >= 0; i-- {
+		name := dayFiles[i].Name()
+		path := filepath.Join(dir, name)
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			slog.Warn("task: skip unreadable run day file", "task_id", taskID, "file", path, "error", readErr)
+			continue
+		}
+		perFile := make(map[string]TaskRun)
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			var rec TaskRun
+			if unmarshalErr := json.Unmarshal(line, &rec); unmarshalErr != nil {
+				slog.Warn("task: skip malformed run record", "task_id", taskID, "file", path, "error", unmarshalErr)
+				continue
+			}
+			perFile[rec.RunID] = rec // last line in THIS file wins
+		}
+		for runID, rec := range perFile {
+			if resolved[runID] {
+				continue // a newer file already determined this run's final state
+			}
+			resolved[runID] = true
+			if rec.IsOpen() && sameOccurrence(rec.OccurrenceMs, occurrenceMs) {
+				recCopy := rec
+				return &recCopy, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // appendRunRecord appends rec as one JSONL line to taskID's run day file for
@@ -243,6 +388,13 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 // once-task re-run via Run-now always opens a genuinely new run, and the
 // prior failed run is preserved (RD7's "normal / once task re-run"
 // behavior).
+//
+// sessionID is expected to always be non-empty (TaskRun.yaml's contract
+// doc), but is not rejected when empty — the executor's session-creation
+// degrade path (pkg/agent/task_executor.go's openRun) intentionally still
+// records a run with a best-effort blank session_id rather than losing run
+// history entirely; a distinct Warn log makes that anomaly visible instead
+// of silently persisting.
 func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessionID string) (*TaskRun, bool, error) {
 	if err := validateID(taskID); err != nil {
 		return nil, false, err
@@ -250,20 +402,25 @@ func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessio
 	if !IsValidRunKind(kind) {
 		return nil, false, fmt.Errorf("task: invalid run kind %q", kind)
 	}
+	if sessionID == "" {
+		occLog := "nil"
+		if occurrenceMs != nil {
+			occLog = fmt.Sprintf("%d", *occurrenceMs)
+		}
+		slog.Warn("task: OpenRun called with empty session_id — TaskRun.session_id is documented as always non-empty; recording the run anyway rather than losing run history",
+			"task_id", taskID, "occurrence_ms", occLog, "kind", string(kind))
+	}
 
 	mu := s.lock.Get(taskID)
 	mu.Lock()
 	defer mu.Unlock()
 
-	folded, err := s.foldRunsLocked(taskID)
+	existing, err := s.findOpenRunLocked(taskID, occurrenceMs)
 	if err != nil {
 		return nil, false, err
 	}
-	for _, existing := range folded {
-		if existing.IsOpen() && sameOccurrence(existing.OccurrenceMs, occurrenceMs) {
-			existingCopy := existing
-			return &existingCopy, false, nil
-		}
+	if existing != nil {
+		return existing, false, nil
 	}
 
 	runID, err := newRunID()
@@ -293,12 +450,18 @@ func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessio
 }
 
 // CloseRun appends the terminal record for runID: the SAME RunID with status
-// (must be StatusDone or StatusFailed — IsTerminal), result, and EndedAt
-// stamped to now. The close record is a full copy of the run's current
-// folded state (TaskID/OccurrenceMs/Kind/StartedAt/SessionID all carried
-// forward) so that later folding needs no field-level merge and the run's
-// identity survives even if the original open record's day file is pruned
-// later (RD9).
+// (must be StatusDone or StatusFailed — IsTerminal and IsValidRunStatus,
+// H4), result, and EndedAt stamped to now. The close record is a full copy
+// of the run's current folded state (TaskID/OccurrenceMs/Kind/StartedAt/
+// SessionID all carried forward) so that later folding needs no field-level
+// merge and the run's identity survives even if the original open record's
+// day file is pruned later (RD9).
+//
+// A result over maxRunResultChars is TRUNCATED, not rejected (H9): with no
+// stuck-run reaper (operator decision 2026-07-20), a rejected close would
+// strand the run in_progress forever — a terminal close must always
+// succeed. The full untruncated length is logged at Warn so the anomaly is
+// visible.
 //
 // Returns ErrRunNotFound when runID has no known record for taskID, and
 // ErrRunAlreadyClosed when the run's current folded state is already
@@ -310,11 +473,17 @@ func (s *Store) CloseRun(taskID, runID string, status Status, result string) err
 	if runID == "" {
 		return fmt.Errorf("task: run id must not be empty")
 	}
+	if !IsValidRunStatus(status) {
+		return fmt.Errorf("task: CloseRun status %q is not a valid run status", status)
+	}
 	if !IsTerminal(status) {
 		return fmt.Errorf("task: CloseRun status %q must be a terminal status (done or failed)", status)
 	}
-	if len(result) > 50000 {
-		return fmt.Errorf("task: run result must be 50000 characters or fewer")
+	if len(result) > maxRunResultChars {
+		originalLen := len(result)
+		result = truncateRunResult(result)
+		slog.Warn("task: run result exceeded the retention cap, truncated so the run still closes",
+			"task_id", taskID, "run_id", runID, "original_len", originalLen, "cap", maxRunResultChars)
 	}
 
 	mu := s.lock.Get(taskID)
@@ -340,22 +509,6 @@ func (s *Store) CloseRun(taskID, runID string, status Status, result string) err
 	closeRec.Result = result
 	closeRec.EndedAt = &endedAt
 	return s.appendRunRecord(taskID, closeRec, now)
-}
-
-// closeStaleRunLocked is PruneRuns' reaper counterpart to CloseRun: it closes
-// an already-known-open, already-known-stale run to StatusFailed with an
-// explanatory result. Caller must hold the per-task lock and have already
-// verified run.IsOpen().
-func (s *Store) closeStaleRunLocked(taskID string, run TaskRun, staleAfter time.Duration) error {
-	now := time.Now().UTC()
-	endedAt := now.Format(time.RFC3339)
-	run.Status = StatusFailed
-	run.Result = fmt.Sprintf(
-		"run abandoned: no completion recorded within %s of starting (closed by the stuck-run reaper)",
-		staleAfter,
-	)
-	run.EndedAt = &endedAt
-	return s.appendRunRecord(taskID, run, now)
 }
 
 // parseRunTime parses an RFC 3339 timestamp, falling back to the zero time on
@@ -398,13 +551,33 @@ func (s *Store) ListRuns(taskID string) ([]TaskRun, error) {
 	return runs, nil
 }
 
-// RunsInRange folds every run recorded for taskID and returns those with a
+// RunsInRange folds runs recorded for taskID and returns those with a
 // non-nil OccurrenceMs in the half-open range [fromMs, toMs) — matching the
 // half-open convention GET /tasks/occurrences already uses — ascending by
 // OccurrenceMs. This is the calendar occurrence-overlay join (RD6): the
 // caller matches each returned run to the occurrence instant it realizes.
 // Ad-hoc/manual runs (OccurrenceMs == nil) are never returned — they have no
 // occurrence to join to.
+//
+// L1 perf fix (spec §3.5): day files named strictly before fromMs's UTC
+// calendar day (minus one day of slack for boundary safety) are skipped
+// without being parsed, via foldRunsLockedFrom. This is sound because a run
+// is never dispatched (StartedAt) before the occurrence instant it realizes
+// — the earliest a day file relevant to occurrence_ms >= fromMs can be named
+// is fromMs's own calendar day — and a CloseRun record's day is never older
+// than its OpenRun record's day, so no file that could hold either an open
+// or a close record for an in-range occurrence is excluded. No upper-bound
+// filter is applied: a past occurrence can legitimately be re-run (RD7) an
+// arbitrary number of days after it fired, so today's file must always stay
+// in scope regardless of toMs.
+//
+// Accepted edge case: RD8 documents that a FUTURE occurrence can be
+// Run-now'd ahead of its schedule. If that manual dispatch starts more than
+// one day before the occurrence's own calendar day, its record lands in a
+// day file older than this filter's floor and would be missed by a query
+// whose fromMs sits at or after that occurrence's instant — mirroring
+// ADR-050's own accepted DST-join-precision limitation, this is an accepted,
+// documented limitation rather than a full scan on every call.
 func (s *Store) RunsInRange(taskID string, fromMs, toMs int64) ([]TaskRun, error) {
 	if err := validateID(taskID); err != nil {
 		return nil, err
@@ -413,7 +586,11 @@ func (s *Store) RunsInRange(taskID string, fromMs, toMs int64) ([]TaskRun, error
 	mu.Lock()
 	defer mu.Unlock()
 
-	folded, err := s.foldRunsLocked(taskID)
+	var minDay string
+	if fromMs > 0 {
+		minDay = time.UnixMilli(fromMs).UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	}
+	folded, err := s.foldRunsLockedFrom(taskID, minDay)
 	if err != nil {
 		return nil, err
 	}
@@ -436,26 +613,18 @@ func (s *Store) RunsInRange(taskID string, fromMs, toMs int64) ([]TaskRun, error
 	return runs, nil
 }
 
-// PruneRuns enforces the run-history retention window for taskID (RD9) and
-// closes long-abandoned open runs (RD10's stuck-run reaper):
+// PruneRuns enforces the run-history retention window for taskID (RD9):
+// every day file under taskID's runs directory whose mtime is strictly
+// before cutoff is deleted — EXCEPT the single most-recently-named file,
+// which is always retained (the floor-of-one: a long-idle task never loses
+// its last run).
 //
-//  1. Reaper: any currently-open (EndedAt == nil) run whose StartedAt is
-//     older than staleAfter (relative to now) is closed to StatusFailed via
-//     closeStaleRunLocked — writing its close record to TODAY's day file, so
-//     the run's identity survives even if step 2 below deletes the day file
-//     its open record originally lived in. The reaper runs BEFORE the
-//     retention sweep so a stale run's terminal record always lands before
-//     its origin file might be removed.
-//  2. Retention sweep: every day file under taskID's runs directory whose
-//     mtime is strictly before cutoff is deleted — EXCEPT the single
-//     most-recently-named file, which is always retained (the floor-of-one:
-//     a long-idle task never loses its last run). Because step 1 may have
-//     just written to today's file, today's file is always the
-//     most-recently-named file and is therefore always protected by the
-//     floor, independent of cutoff.
+// No stuck-run reaper: a run stays in_progress until its own execution
+// closes it (operator decision 2026-07-20). A liveness-aware reaper is a
+// planned follow-up requiring careful design (ADR-050 follow-up).
 //
 // A missing runs directory (a task with zero runs) is a no-op success.
-func (s *Store) PruneRuns(taskID string, cutoff time.Time, staleAfter time.Duration) error {
+func (s *Store) PruneRuns(taskID string, cutoff time.Time) error {
 	if err := validateID(taskID); err != nil {
 		return err
 	}
@@ -463,25 +632,7 @@ func (s *Store) PruneRuns(taskID string, cutoff time.Time, staleAfter time.Durat
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Step 1: reaper — close stale in_progress runs before any file deletion.
-	staleCutoff := time.Now().Add(-staleAfter)
-	folded, err := s.foldRunsLocked(taskID)
-	if err != nil {
-		return err
-	}
-	for _, run := range folded {
-		if !run.IsOpen() {
-			continue
-		}
-		if parseRunTime(run.StartedAt).After(staleCutoff) {
-			continue // still fresh
-		}
-		if closeErr := s.closeStaleRunLocked(taskID, run, staleAfter); closeErr != nil {
-			return fmt.Errorf("task: reaper: close stale run %q: %w", run.RunID, closeErr)
-		}
-	}
-
-	// Step 2: day-file retention sweep with a keep-newest-day floor.
+	// Day-file retention sweep with a keep-newest-day floor.
 	dir := s.runsDir(taskID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {

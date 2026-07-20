@@ -51,10 +51,14 @@ function makeClient() {
   })
 }
 
-function renderList(taskId = 'task-1', onNavigate?: () => void) {
+function renderList(
+  taskId = 'task-1',
+  onNavigate?: () => void,
+  dayRange?: { startMs: number; endMs: number },
+) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <TaskRunsList taskId={taskId} onNavigate={onNavigate} />
+      <TaskRunsList taskId={taskId} onNavigate={onNavigate} dayRange={dayRange} />
     </QueryClientProvider>,
   )
 }
@@ -144,6 +148,49 @@ describe('TaskRunsList — populated', () => {
 
     await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(1))
     expect(screen.queryByRole('button', { name: /open in chat/i })).not.toBeInTheDocument()
+  })
+})
+
+// ── dayRange (H2 fix — bucket drill-in, task-run-history-spec §4.3) ─────────
+// A bucket click passes `dayRange` so the calendar slide-over's day-scoped
+// list shows only THAT day's runs, client-side filtered from the same
+// task-scoped fetch (no second network round-trip).
+describe('TaskRunsList — dayRange filter (H2)', () => {
+  const DAY_START = new Date(2026, 6, 20, 0, 0, 0).getTime()
+  const DAY_END = new Date(2026, 6, 21, 0, 0, 0).getTime()
+
+  it('renders only runs whose started_at falls within [startMs, endMs)', async () => {
+    const inDay = makeRun({ run_id: 'run-in-day', started_at: '2026-07-20T14:00:00Z', result: 'In day.' })
+    const beforeDay = makeRun({ run_id: 'run-before', started_at: '2026-07-19T23:00:00Z', result: 'Before.' })
+    const afterDay = makeRun({ run_id: 'run-after', started_at: '2026-07-21T01:00:00Z', result: 'After.' })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([beforeDay, inDay, afterDay])
+
+    renderList('task-1', undefined, { startMs: DAY_START, endMs: DAY_END })
+
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(1))
+    expect(screen.getByText('In day.')).toBeInTheDocument()
+    expect(screen.queryByText('Before.')).not.toBeInTheDocument()
+    expect(screen.queryByText('After.')).not.toBeInTheDocument()
+  })
+
+  it('shows the empty state when the task has runs, but none fall inside the requested day', async () => {
+    const otherDay = makeRun({ run_id: 'run-other-day', started_at: '2026-06-01T09:00:00Z' })
+    vi.mocked(fetchTaskRuns).mockResolvedValue([otherDay])
+
+    renderList('task-1', undefined, { startMs: DAY_START, endMs: DAY_END })
+
+    await waitFor(() => expect(screen.getByTestId('task-runs-empty')).toBeInTheDocument())
+  })
+
+  it('without dayRange, behaviour is unchanged (all runs render)', async () => {
+    vi.mocked(fetchTaskRuns).mockResolvedValue([
+      makeRun({ run_id: 'run-a', started_at: '2026-01-01T00:00:00Z' }),
+      makeRun({ run_id: 'run-b', started_at: '2026-12-31T00:00:00Z' }),
+    ])
+
+    renderList()
+
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(2))
   })
 })
 

@@ -162,8 +162,7 @@ func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config)
 	taskRunsVisited := 0
 	if retentionTaskRunSweepFn != nil {
 		taskRunCutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
-		staleAfter := taskRunStaleAfter(cfg)
-		if n, terr := retentionTaskRunSweepFn(taskRunCutoff, staleAfter); terr != nil {
+		if n, terr := retentionTaskRunSweepFn(taskRunCutoff); terr != nil {
 			slog.Warn("retention_sweep: task_runs sweep failed",
 				"event", "retention_sweep_task_runs_failed",
 				"error", terr,
