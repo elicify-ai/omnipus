@@ -251,7 +251,7 @@ describe('BoardView — drilling into a plan', () => {
     const user = userEvent.setup()
     const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
     renderBoard({ plans: [plan], tasks: [] })
-    await user.click(screen.getByRole('button', { name: 'Open plan board' }))
+    await user.click(screen.getByRole('button', { name: 'Plan A' }))
     expect(useWorkspacesStore.getState().activePlanId).toBe('plan-a')
     expect(mockNavigate).not.toHaveBeenCalled()
   })
@@ -263,7 +263,7 @@ describe('BoardView — drilling into a plan', () => {
     const t2 = makeTask({ id: 't2', plan_id: 'plan-a' })
     renderBoard({ plans: [plan], tasks: [t1, t2], workspaceId: 'ws-7' })
 
-    const btn = screen.getByRole('button', { name: 'View plan graph' })
+    const btn = screen.getByRole('button', { name: 'View graph' })
     expect(btn).not.toBeDisabled()
     await user.click(btn)
 
@@ -278,7 +278,7 @@ describe('BoardView — drilling into a plan', () => {
     const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
     const t1 = makeTask({ id: 't1', plan_id: 'plan-a' })
     renderBoard({ plans: [plan], tasks: [t1] })
-    expect(screen.getByRole('button', { name: 'View plan graph' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'View graph' })).toBeDisabled()
   })
 
   it('also disables the breadcrumb graph control below 2 member tasks while drilled in', () => {
@@ -316,7 +316,7 @@ describe('BoardView — drilling into a plan', () => {
     const onEditPlan = vi.fn()
     const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
     renderBoard({ plans: [plan], tasks: [], onEditPlan })
-    await user.click(screen.getByRole('button', { name: 'Open plan board' }))
+    await user.click(screen.getByRole('button', { name: 'Plan A' }))
     expect(onEditPlan).not.toHaveBeenCalled()
   })
 })
