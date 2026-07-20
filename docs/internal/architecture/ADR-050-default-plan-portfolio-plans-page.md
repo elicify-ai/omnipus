@@ -63,3 +63,17 @@ Regenerate `pkg/api/generated/` + `src/lib/api/generated/` via `scripts/gen-cont
 3. UI: **Plans portfolio grid** (new) + **plan detail** (header + Board/List/Graph switcher, plan-scoped, column dividers restored); retire the mixed drill-down top level.
 4. UI: `CreateTaskSlideOver` Plan selector + "＋ New Plan" + smart default.
 5. Tests (unit + the create-flow + default-plan seeding/guard) + live UAT.
+
+## Addendum — interview refinements (2026-07-20)
+
+These SUPERSEDE parts of D1–D5; originals kept above for provenance.
+
+- **Terminology: "owner" → "Planner".** The main agent responsible for a plan/task is its **Planner** (UI label; the wire field stays `owner_agent_id` to avoid a breaking rename across contracts/backend/tests). Only **main agents** — the core roster (Mia/Jim/Ava/Ray) + `Main`-type custom agents that are on this workspace's team; **NOT** delegation-only workers/`Subagent`/`subagent_3p`, **NOT** the Judge/system — may be Planners. Owner/Planner is validated against this set.
+- **No single default plan → per-Planner Backlogs** (revises D2). Instead of one "Task Backlog" per workspace, **each Planner-capable agent gets its own default plan, "{Agent} Backlog"** (non-deletable, Planner fixed to that agent). A task not filed under a user-plan lands in **its Planner's** backlog. `Plan.Default = true` now marks a *backlog*; a workspace has one per Planner, each with a distinct `owner_agent_id`. Seed a backlog when an owner-capable agent joins the workspace team.
+- **Grouped by Planner, not assignee.** A task a Planner owns but delegates to another agent to execute stays in the owner-Planner's backlog (accountability ≠ execution).
+- **Plans page = two sections** (revises D3): **top = user-created Plans**; **bottom = Planner Backlogs** (one card per main agent on the team). Both use the same unified plan card; both open a plan-scoped Board/List/Graph.
+- **A task lives in exactly one place** — its user-plan if filed, else its Planner's backlog (no duplication).
+- **Plans page gains ＋ New task** (quick create) alongside ＋ New plan. Create-flow (revises D5): a **Plan** dropdown = all plans + backlogs + "＋ New Plan", pre-selected to the **default agent's backlog** at the Plans level, or the current plan when created inside a plan.
+- **Default task Planner** = the workspace's default agent (Mia ⭐); changeable in the create slide-out.
+- **Calendar / scheduled tasks: out of scope** for this change (the Calendar tab stays; its content is deferred).
+- **Workspace menu**: 6 tabs → **Chat · Plans · Calendar · Team**. Board/List/Graph stop being top-level tabs — they become the plan-scoped view switcher *inside* a plan.
