@@ -2,15 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { SmartSelect } from '@/components/ui/smart-select'
 import { TagFilterBar } from './TagFilterBar'
-import { AltitudeToggle } from './AltitudeToggle'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { PlansFilterBand } from './PlansFilterBand'
 import { BoardView } from './BoardView'
@@ -22,6 +15,7 @@ import {
   fetchTasks,
   fetchPlans,
   fetchAgents,
+  buildTaskAssigneeItems,
   updateTask,
   approvePlan,
   stopPlan,
@@ -32,7 +26,7 @@ import {
   plansQueryKeys,
   workspacesQueryKeys,
 } from '@/lib/api'
-import type { Plan, Task } from '@/lib/api'
+import type { Agent, Plan, Task } from '@/lib/api'
 import { filterByTag } from '@/lib/planFilter'
 import { filterTasks } from '@/lib/taskFilters'
 import { useUiStore } from '@/store/ui'
@@ -60,7 +54,7 @@ const OWNER_ALL = '__all__'
  * filtered list.
  */
 export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
-  const { activeTagFilter, setActiveTagFilter, boardAltitude, setBoardAltitude, activePlanId, setActivePlanId } =
+  const { activeTagFilter, setActiveTagFilter, activePlanId, setActivePlanId } =
     useWorkspacesStore()
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -279,14 +273,10 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         <ViewSwitcher value={view} onChange={setView} />
         {/* Tag + Owner filters only apply to Board/List — the Graph view honors
             the plan filter alone, so these never render for a filter Graph
-            doesn't actually claim to apply (AltitudeToggle is likewise
-            board-only). */}
+            doesn't actually claim to apply. */}
         <div className="ml-auto flex items-center gap-3 flex-shrink-0 flex-wrap">
           {view !== 'graph' && (
             <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
-          )}
-          {view === 'board' && (
-            <AltitudeToggle value={boardAltitude} onChange={setBoardAltitude} />
           )}
           {view !== 'graph' && (
             <OwnerFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
@@ -341,7 +331,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             tasks={filteredTasks}
             plans={plans}
             agents={agents}
-            altitude={boardAltitude}
+            altitude="top-level"
             hasActiveFilter={hasActiveFilter}
             onTaskClick={(task) => setSelectedTaskId(task.id)}
             onTaskMove={(task, status) => moveMutation.mutate({ task, status })}
@@ -457,33 +447,39 @@ function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: 
 // ── Owner filter dropdown ───────────────────────────────────────────────────
 
 interface OwnerFilterDropdownProps {
-  agents: { id: string; name: string }[]
+  agents: Agent[]
   value: string | null
   onChange: (agentId: string | null) => void
 }
 
-/** Owner ANDs with the plan filter (ADR-051 D6) — filters the board by `Task.agent_id`. */
+/**
+ * Owner filter (ANDs with the plan filter, ADR-051 D6 — filters the board by
+ * `Task.agent_id`). Uses the SAME shared agent-selector as task assignment
+ * everywhere else — `SmartSelect` fed by `buildTaskAssigneeItems` — so the
+ * roster (agent names, "· Worker" suffix, styling) reads identically to the
+ * assignee picker in CreateTaskSlideOver / TaskDetailPanel. `unscoped` because
+ * a filter should offer every agent that could own a task (no backend gate —
+ * the filtering is purely client-side); `currentAssigneeId` keeps an already-
+ * selected owner visible even if it's not in the current roster.
+ */
 function OwnerFilterDropdown({ agents, value, onChange }: OwnerFilterDropdownProps) {
   return (
-    <Select value={value ?? OWNER_ALL} onValueChange={(v) => onChange(v === OWNER_ALL ? null : v)}>
-      <SelectTrigger
-        className="h-7 w-auto min-w-[8rem] text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
-        aria-label="Filter by owner"
-        data-testid="tasks-owner-filter"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={OWNER_ALL} className="text-xs">
-          Owner: All
-        </SelectItem>
-        {agents.map((a) => (
-          <SelectItem key={a.id} value={a.id} className="text-xs">
-            Owner: {a.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div data-testid="tasks-owner-filter">
+      <SmartSelect
+        value={value ?? OWNER_ALL}
+        onValueChange={(v) => onChange(v === OWNER_ALL ? null : v)}
+        placeholder="All owners"
+        triggerClassName="h-8 min-w-[8rem] text-xs"
+        ariaLabel="Filter by owner"
+        items={[
+          { value: OWNER_ALL, label: 'All owners', className: 'text-xs' },
+          ...buildTaskAssigneeItems(agents, {
+            teamScope: { kind: 'unscoped' },
+            currentAssigneeId: value,
+          }),
+        ]}
+      />
+    </div>
   )
 }
 

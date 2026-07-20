@@ -221,14 +221,6 @@ describe('WorkspaceTasksTab — view switcher', () => {
     expect(screen.getByText('Updated ↓')).toBeInTheDocument()
   })
 
-  it('the altitude toggle only shows in Board view', async () => {
-    renderTab()
-    expect(await screen.findByRole('radio', { name: /top-level/i })).toBeInTheDocument()
-
-    const user = userEvent.setup()
-    await user.click(screen.getByTestId('tasks-view-list'))
-    expect(screen.queryByRole('radio', { name: /top-level/i })).toBeNull()
-  })
 })
 
 // ── Dynamic heading ──────────────────────────────────────────────────────────
@@ -257,11 +249,12 @@ describe('WorkspaceTasksTab — dynamic heading', () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'ray', name: 'Ray' })])
     renderTab()
 
-    // Radix Select interaction — click the trigger, then the option by its
-    // role=option (mirrors ListView.filters.test.tsx's selectOption helper).
+    // Shared agent selector (SmartSelect + buildTaskAssigneeItems) — with a
+    // small roster it renders as a Radix Select: click the trigger, then the
+    // agent option by name (the shared item label is the agent's name).
     const trigger = await screen.findByRole('combobox', { name: /filter by owner/i })
     fireEvent.click(trigger)
-    const option = await screen.findByRole('option', { name: 'Owner: Ray' })
+    const option = await screen.findByRole('option', { name: 'Ray' })
     fireEvent.click(option)
 
     const heading = await screen.findByTestId('tasks-heading')
@@ -421,7 +414,7 @@ describe('WorkspaceTasksTab — end-to-end filter behavior (Board actually filte
 
     const trigger = screen.getByRole('combobox', { name: /filter by owner/i })
     fireEvent.click(trigger)
-    const option = await screen.findByRole('option', { name: 'Owner: Ray' })
+    const option = await screen.findByRole('option', { name: 'Ray' })
     fireEvent.click(option)
 
     await waitFor(() => expect(screen.queryByText("Jim's task")).toBeNull())
