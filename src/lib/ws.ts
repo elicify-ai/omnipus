@@ -954,9 +954,19 @@ export class WsConnection {
               `[ws] ${this.missedPingCount} consecutive pings with no server response — forcing reconnect`
             )
             try {
-              this.ws.close(1006, 'ping timeout')
+              // 4000 is an application-defined close code in the RFC 6455
+              // 3000-4999 range. 1006 (abnormal closure) is RESERVED — it may
+              // only ever be *reported* by the browser (e.g. as event.code
+              // when the connection drops without a close frame), never
+              // passed to WebSocket.close(), which throws InvalidAccessError
+              // for any code outside 1000 or 3000-4999. 4000 is valid, so
+              // close() succeeds and onclose fires normally, driving the
+              // reconnect via _scheduleReconnect below.
+              this.ws.close(4000, 'ping timeout')
             } catch {
-              // ignore — onclose will fire regardless
+              // ignore — close() with a valid code should not throw, but
+              // guard defensively; if it somehow does, onclose won't fire
+              // and we rely on the next liveness check / user action.
             }
             return
           }
