@@ -270,7 +270,7 @@ export function BoardView({
             wider task card grows past the header and they misalign again. */}
         <div className="min-w-max">
         {/* Sticky status-column header row — spans every swimlane band below it. */}
-        <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
+        <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]/50">
           <div className="w-[224px] shrink-0 sticky left-0 z-20 bg-[var(--color-surface-1)]" aria-hidden="true" />
           {COLUMNS.map((col) => {
             const count = renderedTasksVisible.filter((t) => t.status === col.status).length
@@ -311,8 +311,8 @@ export function BoardView({
           const laneTasks = laneTasksByPlanId.get(plan.id) ?? []
           const collapsed = effectiveCollapsed(plan.id, isTerminalPlanState(plan.state))
           return (
-            <div key={plan.id} className="flex border-b border-[var(--color-border)]" data-testid={`swimlane-band-${plan.id}`}>
-              <div className="w-[224px] shrink-0 sticky left-0 z-10 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
+            <div key={plan.id} className="flex border-b border-[var(--color-border)]/50" data-testid={`swimlane-band-${plan.id}`}>
+              <div className="w-[224px] shrink-0 sticky left-0 z-10 border-r border-[var(--color-border)]/25 bg-[var(--color-surface-1)]">
                 <PlanLaneHeader
                   plan={plan}
                   workspaceId={workspaceId}
@@ -330,7 +330,9 @@ export function BoardView({
                   isClearing={clearingPlanId === plan.id}
                 />
               </div>
-              {!collapsed && (
+              {collapsed ? (
+                <CollapsedLaneColumns />
+              ) : (
                 <LaneStatusRow
                   laneLabel={plan.title}
                   tasks={laneTasks}
@@ -350,7 +352,7 @@ export function BoardView({
             when empty), so a plan-less workspace behaves exactly like the
             pre-swimlane flat board. */}
         <div className="flex" data-testid="swimlane-band-loose">
-          <div className="w-[224px] shrink-0 sticky left-0 z-10 border-r border-[var(--color-border)] bg-[var(--color-surface-1)]">
+          <div className="w-[224px] shrink-0 sticky left-0 z-10 border-r border-[var(--color-border)]/25 bg-[var(--color-surface-1)]">
             <div className="flex items-center gap-1.5 px-2.5 py-2 w-full min-w-0" data-testid="plan-lane-header-loose">
               <button tabIndex={0}
                 type="button"
@@ -368,7 +370,9 @@ export function BoardView({
               </span>
             </div>
           </div>
-          {!looseCollapsed && (
+          {looseCollapsed ? (
+            <CollapsedLaneColumns />
+          ) : (
             <LaneStatusRow
               laneLabel={LOOSE_LANE_LABEL}
               tasks={looseTasksVisible}
@@ -383,6 +387,27 @@ export function BoardView({
         </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Faint column dividers drawn across a COLLAPSED band. A collapsed lane renders
+ * no status cells (just its title-line header), which would otherwise leave the
+ * board's vertical grid broken over that row — this keeps the column lines
+ * continuous through collapsed lanes. Purely decorative: no tasks, no
+ * droppables, aria-hidden. Column count/width + border weight mirror the real
+ * `LaneStatusCell` so the lines align exactly with the expanded bands above and
+ * below it. */
+function CollapsedLaneColumns() {
+  return (
+    <div className="flex flex-1" aria-hidden="true">
+      {COLUMNS.map((col) => (
+        <div
+          key={col.status}
+          className="flex-1 min-w-[162px] border-r border-[var(--color-border)]/25 last:border-r-0"
+        />
+      ))}
     </div>
   )
 }
@@ -532,7 +557,7 @@ function LaneStatusCell({
       role="group"
       aria-label={`${laneLabel} ${config.label} column`}
       className={cn(
-        'flex flex-col flex-1 min-w-[162px] min-h-[56px] gap-2 p-2 border-r border-[var(--color-border)] last:border-r-0 transition-colors',
+        'flex flex-col flex-1 min-w-[162px] min-h-[56px] gap-2 p-2 border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
         isOver && !canAccept && 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40',
       )}
