@@ -140,7 +140,7 @@ func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "native success marker")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestTaskCompletionContract_Native_FailureMarker_FailedWithAgentWords(t *tes
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "native failure marker")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone(t *testi
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "native no marker")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -231,7 +231,7 @@ func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing
 	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
 	tk := newCompletionContractTask(t, al, "native-agent", "empty output task")
 
-	al.taskExecutor.finishTaskRun(tk, "", "", nil, "")
+	al.taskExecutor.finishTaskRun(tk, "", "", nil, "", nil)
 
 	final, err := al.taskStore.Get(tk.ID)
 	if err != nil {
@@ -274,7 +274,7 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 	}()
 
 	tk := newCompletionContractTask(t, al, "ext-agent", "external failure marker")
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -312,7 +312,7 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 	}()
 
 	tk := newCompletionContractTask(t, al, "ext-agent", "external no marker")
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -421,7 +421,7 @@ func TestTaskCompletionContract_BlockedDependent_StaysBlockedOnFailedBlocker(t *
 		t.Fatalf("create dependent task: %v", err)
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), blocker.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), blocker.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask(blocker): %v", err)
 	}
 
@@ -498,7 +498,7 @@ func TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse(
 		},
 	}
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
@@ -526,7 +526,7 @@ func TestTaskCompletionContract_SessionArchivedOnCompletion(t *testing.T) {
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newCompletionContractTask(t, al, "native-agent", "session archival check")
 
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 

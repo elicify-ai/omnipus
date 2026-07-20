@@ -1967,7 +1967,11 @@ export interface paths {
          */
         get: operations["listTaskRuns"];
         put?: never;
-        post?: never;
+        /**
+         * Start a task run now ("Run now")
+         * @description Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With `occurrence_ms`, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs.
+         */
+        post: operations["runTaskNow"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6896,6 +6900,14 @@ export interface components {
              * @example 2026-07-20T09:05:30Z
              */
             ended_at: string | null;
+        };
+        /** @description Body for POST /tasks/{id}/runs ("Run now", ADR-050 RD7). Optional — an empty body re-runs a normal/once task. */
+        RunNowRequest: {
+            /**
+             * Format: int64
+             * @description The scheduled RRULE occurrence instant to run (materialize-on-demand for a recurring series). Omit or null to re-run a normal/once task as a fresh run.
+             */
+            occurrence_ms?: number | null;
         };
         /**
          * ProviderUpdateRequest
@@ -12076,6 +12088,48 @@ export interface operations {
             429: components["responses"]["429TooManyRequests"];
         };
     };
+    runTaskNow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RunNowRequest"];
+            };
+        };
+        responses: {
+            /** @description Run accepted and dispatched asynchronously. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid task ID or request body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            /** @description Task executor unavailable (gateway degraded). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listMcpServers: {
         parameters: {
             query?: never;
@@ -13235,6 +13289,7 @@ export type TaskTrigger = components["schemas"]["TaskTrigger"];
 export type TaskOccurrenceSet = components["schemas"]["TaskOccurrenceSet"];
 export type DayBucket = components["schemas"]["DayBucket"];
 export type TaskRun = components["schemas"]["TaskRun"];
+export type RunNowRequest = components["schemas"]["RunNowRequest"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];

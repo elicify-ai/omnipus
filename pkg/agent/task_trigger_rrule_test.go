@@ -156,8 +156,8 @@ func TestTriggerScheduler_RruleRearmAllPaths(t *testing.T) {
 		// success by the cron engine (RunScheduled returns nil, no retry
 		// backoff): the re-armed job's AtMS is the natural next occurrence, not
 		// shifted by any backoff offset.
-		sched.dispatch = func(ctx context.Context, taskID string) error {
-			_ = rec.dispatch(ctx, taskID)
+		sched.dispatch = func(ctx context.Context, taskID string, occurrenceMs *int64) error {
+			_ = rec.dispatch(ctx, taskID, occurrenceMs)
 			return errors.New("boom: simulated dispatch failure")
 		}
 
@@ -358,7 +358,7 @@ func TestTriggerScheduler_RruleRearmAllPaths(t *testing.T) {
 		dispatchStarted := make(chan struct{})
 		dispatchProceed := make(chan struct{})
 		var startOnce sync.Once
-		sched.dispatch = func(ctx context.Context, taskID string) error {
+		sched.dispatch = func(ctx context.Context, taskID string, occurrenceMs *int64) error {
 			startOnce.Do(func() { close(dispatchStarted) })
 			<-dispatchProceed
 			return nil

@@ -1817,7 +1817,6 @@ components:
         - type
         - task_id
         - run_id
-        - occurrence_ms
         - status
       additionalProperties: false
       properties:

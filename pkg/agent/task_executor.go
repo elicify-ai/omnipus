@@ -86,7 +86,28 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 // atomically claims the task (next→in_progress via ClaimForRun) and dispatches
 // it to the agent in a goroutine, gated by per-agent and global concurrency
 // controls.
-func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
+//
+// occurrenceMs is the calendar join key for a per-execution TaskRun record
+// (ADR-050 §3.2, docs/internal/specs/task-run-history-spec.md §3.2): the
+// specific RRULE instant this dispatch realizes. Non-nil only when the
+// caller is a recurring trigger's fire (SpawnTriggeredRun, sourced from
+// RunScheduled); every other caller — blocked-dependent auto-advance
+// (advanceBlockedTasks), the heartbeat queue check (CheckQueuedTasks) — has
+// no occurrence context and passes nil.
+func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	return te.executeTaskWithKind(ctx, taskID, occurrenceMs, task.RunKindScheduled)
+}
+
+// executeTaskWithKind is ExecuteTask's implementation, additionally
+// parameterized by the TaskRun kind (ADR-050 RD5/RD7) the eventual run-open
+// (inside runTask, once the claim below succeeds) should record:
+// task.RunKindScheduled for every ExecuteTask-facing caller (none of them are
+// a user-initiated Run-now), and task.RunKindManual exclusively from
+// StartOccurrenceRun. Kept unexported so ExecuteTask's own public signature
+// stays exactly the shape TaskTriggerScheduler.dispatch requires.
+func (te *TaskExecutor) executeTaskWithKind(
+	ctx context.Context, taskID string, occurrenceMs *int64, kind task.RunKind,
+) error {
 	t, err := te.store.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("task_executor: get task %q: %w", taskID, err)
@@ -156,12 +177,20 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
 
-	go te.runTask(taskCtx, t, cancel, release)
+	go te.runTask(taskCtx, t, cancel, release, occurrenceMs, kind)
 	return nil
 }
 
 // runTask executes the agent prompt and updates the task on completion.
-func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel context.CancelFunc, release func()) {
+//
+// occurrenceMs/kind are ADR-050's run-history parameters (§3.2/RD5): after
+// the task session below is created, runTask opens a TaskRun record keyed on
+// (t.ID, occurrenceMs) and threads the resulting *activeRun into
+// finishTaskRun so completion can close it (§3.3/RD5).
+func (te *TaskExecutor) runTask(
+	ctx context.Context, t *task.Task, cancel context.CancelFunc, release func(),
+	occurrenceMs *int64, kind task.RunKind,
+) {
 	defer release()
 	defer cancel()
 	defer func() {
@@ -213,6 +242,13 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 		}
 	}
 
+	// ADR-050 run-open (§3.2/RD5): now that taskSessionID is settled (created
+	// successfully, or left empty on a session-store failure), open this
+	// execution's TaskRun record using the session the dispatch actually
+	// minted — see openRun's own doc comment for why run-open cannot happen
+	// any earlier than this point.
+	run := te.openRun(t.ID, occurrenceMs, kind, taskSessionID)
+
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
 		taskCtx = tools.WithWorkspaceID(taskCtx, t.WorkspaceID)
@@ -232,7 +268,7 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	te.finishTaskRun(t, taskSessionID, resp, err, "")
+	te.finishTaskRun(t, taskSessionID, resp, err, "", run)
 }
 
 // finishTaskRun handles the shared post-execution logic for both runTask and
@@ -247,7 +283,20 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 // Do NOT merge the pre-execution session-setup blocks of runTask and
 // runTaskFromInProgress: runTask logs-and-continues on NewSession failure while
 // runTaskFromInProgress aborts; that divergence is intentional and load-bearing.
-func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, err error, logSuffix string) {
+//
+// run is ADR-050's run-history handle (§3.3/RD5) — the *activeRun runTask
+// opened, or nil for a dispatch path that does not participate in run
+// tracking (runTaskFromInProgress/StartTaskNow — see runTaskFromInProgress's
+// own doc comment). finishTaskRun closes it via closeRun at EVERY one of its
+// three completion branches (execution error, the agent already having
+// called update_task, and the marker/no-signal path routed through
+// completeTaskWithResult) — the same three branches that already observe
+// completion for BOTH the marker path and the update_task-tool path, so
+// run-close is additive to the existing Task.status/result mirror write in
+// each, never a second source of truth for it.
+func (te *TaskExecutor) finishTaskRun(
+	t *task.Task, taskSessionID, resp string, err error, logSuffix string, run *activeRun,
+) {
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 
 	if err != nil {
@@ -274,6 +323,7 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 		failedTask := *t
 		failedTask.Status = task.StatusFailed
 		failedTask.Result = fmt.Sprintf("execution error: %v", err)
+		te.closeRun(t.ID, run, task.StatusFailed, failedTask.Result)
 		te.notifySourceChannel(&failedTask)
 		return
 	}
@@ -305,6 +355,11 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
+		// The agent already called update_task — its tool call is the mirror
+		// write; run-close here is purely additive to it (ADR-050 §3.3/RD5),
+		// which is exactly why update_task/update_task_in_workspace need no
+		// change of their own.
+		te.closeRun(t.ID, run, current.Status, current.Result)
 		te.notifySourceChannel(current)
 		return
 	}
@@ -336,11 +391,11 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 				"transcript and re-run; raw output follows:\n\n%s",
 			rawOutput,
 		)
-		te.completeTaskWithResult(t, taskSessionID, false, reason)
+		te.completeTaskWithResult(t, taskSessionID, false, reason, run)
 		return
 	}
 
-	te.completeTaskWithResult(t, taskSessionID, signal.Status() == task.StatusDone, signal.Result)
+	te.completeTaskWithResult(t, taskSessionID, signal.Status() == task.StatusDone, signal.Result, run)
 }
 
 // completeTaskWithResult marks task t terminal — Done when success is true,
@@ -358,7 +413,14 @@ func (te *TaskExecutor) finishTaskRun(t *task.Task, taskSessionID, resp string, 
 // completeTaskWithResult only ever writes one of the two terminal statuses,
 // so narrowing the signature to "success or not" makes writing a non-terminal
 // status here a compile error instead of a reviewable-but-possible mistake.
-func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID string, success bool, result string) {
+//
+// run is ADR-050's run-history handle (§3.3/RD5, may be nil) — closed via
+// closeRun immediately after the Task.status/result mirror write below
+// succeeds, so run-history strictly observes the same completion signal
+// rather than becoming a second source of truth for it.
+func (te *TaskExecutor) completeTaskWithResult(
+	t *task.Task, taskSessionID string, success bool, result string, run *activeRun,
+) {
 	status := task.StatusDone
 	if !success {
 		status = task.StatusFailed
@@ -391,6 +453,7 @@ func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID strin
 				map[string]any{"task_id": t.ID, "error": setErr.Error()})
 		}
 	}
+	te.closeRun(t.ID, run, status, result)
 	te.onTaskComplete(final)
 	te.notifySourceChannel(final)
 }
@@ -641,7 +704,8 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 // now satisfied by the completion of completedTaskID.
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
-		if err := te.ExecuteTask(ctx, taskID); err != nil {
+		// Auto-advance has no occurrence context (ADR-050 §3.2) — nil.
+		if err := te.ExecuteTask(ctx, taskID, nil); err != nil {
 			logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
 				map[string]any{"task_id": taskID, "error": err.Error()})
 		} else {
@@ -680,6 +744,90 @@ func (te *TaskExecutor) emitStatusChanged(t *task.Task, status task.Status) {
 		Status:    string(status),
 		SessionID: sessionID,
 		AgentID:   t.AgentID,
+	})
+}
+
+// activeRun carries the identity of an open TaskRun record (ADR-050, an
+// additive record layer — docs/internal/specs/task-run-history-spec.md
+// §3.2/3.3) from the point it is opened in runTask (right after the task's
+// session is created — see openRun's own doc comment for why run-open cannot
+// happen any earlier) through to the point it is closed in finishTaskRun /
+// completeTaskWithResult.
+//
+// nil means "no run is being tracked for this execution": either openRun's
+// own call to Store.OpenRun failed (openRun degrades to nil rather than
+// aborting the dispatch) or the execution came from a dispatch path that
+// does not participate in run-history (runTaskFromInProgress/StartTaskNow —
+// see runTaskFromInProgress's doc comment). Task.status/result/session_id
+// keep their exact existing behavior regardless of whether a run is being
+// tracked (RD2) — activeRun only ever ADDS a parallel record, never gates or
+// alters the mirror.
+type activeRun struct {
+	runID        string
+	occurrenceMs *int64
+}
+
+// openRun best-effort opens (or, per Store.OpenRun's own idempotency,
+// transparently reuses) the TaskRun record for (taskID, occurrenceMs) —
+// ADR-050 RD5/RD7. Called from runTask AFTER the task's session has been
+// created so the run's session_id is the session the dispatch actually
+// minted (task-run-history-spec.md §3.2: "the run's session_id is the one
+// the dispatch already mints"). Run-open cannot happen any earlier than that
+// point without either duplicating session creation or leaving the run's
+// session_id permanently empty: Store.OpenRun's signature requires a
+// session_id at open time (a close record cannot amend it later — see
+// TaskRun's own doc comment on why folding is last-record-wins with no
+// field-level merge), and pkg/session.UnifiedStore.NewSession always
+// self-mints its own ID — there is no way to pre-select one from outside
+// pkg/session.
+//
+// A run-store failure here is logged and degrades to nil (no run tracked
+// for this execution) rather than failing the task dispatch — TaskRun is a
+// purely additive record layer (RD2); a run-history I/O problem must never
+// prevent or fail a real agent execution.
+func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string) *activeRun {
+	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID)
+	if err != nil {
+		logger.WarnCF("task_executor", "Could not open task run record",
+			map[string]any{"task_id": taskID, "kind": string(kind), "error": err.Error()})
+		return nil
+	}
+	te.emitRunStatus(taskID, run.RunID, run.OccurrenceMs, task.StatusInProgress)
+	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs}
+}
+
+// closeRun best-effort closes run's TaskRun record with the given terminal
+// status/result (ADR-050 RD5) — a no-op when run is nil (openRun degraded,
+// or this execution never opened one). Called from finishTaskRun and
+// completeTaskWithResult always AFTER the existing Task.status/result mirror
+// write those functions already perform, so run-history strictly observes
+// the SAME completion signal, never a second source of truth for it.
+func (te *TaskExecutor) closeRun(taskID string, run *activeRun, status task.Status, result string) {
+	if run == nil || run.runID == "" {
+		return
+	}
+	if err := te.store.CloseRun(taskID, run.runID, status, result); err != nil {
+		logger.WarnCF("task_executor", "Could not close task run record",
+			map[string]any{"task_id": taskID, "run_id": run.runID, "error": err.Error()})
+		return
+	}
+	te.emitRunStatus(taskID, run.runID, run.occurrenceMs, status)
+}
+
+// emitRunStatus publishes a TaskRun open/close transition (ADR-050 §3.8) onto
+// the agent event bus via AgentLoop.EmitTaskRunStatus — the same
+// emitEvent-based mechanism emitStatusChanged above uses for Task.status
+// transitions. Best-effort; a nil agentLoop (test seams that construct a
+// bare TaskExecutor) is silently skipped.
+func (te *TaskExecutor) emitRunStatus(taskID, runID string, occurrenceMs *int64, status task.Status) {
+	if te.agentLoop == nil {
+		return
+	}
+	te.agentLoop.EmitTaskRunStatus(TaskRunStatusPayload{
+		TaskID:       taskID,
+		RunID:        runID,
+		OccurrenceMs: occurrenceMs,
+		Status:       string(status),
 	})
 }
 
@@ -850,6 +998,14 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 // StartTaskNow. The session has already been created and the session_id
 // persisted; it skips the session-creation block that runTask performs and
 // goes straight to execution, reusing the shared completion logic.
+//
+// It does NOT open an ADR-050 TaskRun record (passes nil to finishTaskRun) —
+// StartTaskNow requires the caller to have already transitioned the task to
+// in_progress via a raw PATCH (its own doc comment), which is a distinct
+// entry point from the ClaimForRun/SpawnReset-guarded paths §3.2 scopes
+// run-open to; wiring StartTaskNow's callers (the gateway's existing PATCH-
+// based Run-now handler) onto run-history is out of scope for this change —
+// StartOccurrenceRun below is the new, run-aware entry point for that.
 func (te *TaskExecutor) runTaskFromInProgress(
 	ctx context.Context,
 	t *task.Task,
@@ -890,15 +1046,55 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		taskChatID = "task:" + t.ID
 	}
 	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	te.finishTaskRun(t, taskSessionID, resp, err, " (StartTaskNow path)")
+	te.finishTaskRun(t, taskSessionID, resp, err, " (StartTaskNow path)", nil)
 }
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
 // fired. The task has already been reset to `next` by Store.SpawnReset; this
 // claims and dispatches it via the normal ExecuteTask path. ExecuteTask already
 // guards status==next and concurrency, so no additional gate is needed here.
-func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string) error {
-	return te.ExecuteTask(ctx, taskID)
+// occurrenceMs is threaded straight through to ExecuteTask/runTask for the
+// ADR-050 run-open (§3.2) — TaskTriggerScheduler.RunScheduled is the sole
+// caller and computes it (nil for a non-recurring trigger).
+func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	return te.ExecuteTask(ctx, taskID, occurrenceMs)
+}
+
+// StartOccurrenceRun is the ADR-050 run-aware Run-now entry point (§3.4/RD7):
+// a recurring occurrence's manual Run-now (occurrenceMs != nil, the clicked
+// calendar instant) or a normal/once task's fresh re-run after failure
+// (occurrenceMs == nil). The gateway calls exactly this signature — see the
+// spec's §3.4 for the two call shapes; keep it stable.
+//
+// It resets taskID to `next` via Store.SpawnReset — the SAME primitive
+// RunScheduled already uses for a trigger re-fire (clears the prior run's
+// session_id/result/artifacts/started_at/completed_at/followed_up and moves
+// the task to `next`, or returns task.ErrAlreadyRunning if the task is
+// currently in_progress — the overlap guard). This is what makes Run-now
+// valid on a terminal (done/failed) task at all, and is the change that
+// supersedes the ad-hoc "fresh-run reset" the gateway's PATCH handler
+// performs today (task-run-history-spec.md §3.4: "the ADR-049 fresh-run
+// reset is superseded by this in the same change").
+//
+// It then dispatches through executeTaskWithKind with
+// task.RunKindManual — literally the SAME ClaimForRun→runTask path
+// SpawnTriggeredRun/ExecuteTask use, just with a different TaskRun kind — so
+// the eventual run-open inside runTask (openRun) records this as a
+// user-initiated run. Because ClaimForRun (task-level next→in_progress) is
+// exactly-once regardless of caller, at most one of {this call, a
+// concurrently-firing scheduler re-fire for the same task} ever reaches its
+// own openRun call for a given claim cycle; Store.OpenRun's own
+// (task_id, occurrence_ms)-keyed idempotency is the defense-in-depth backstop
+// for the narrower race the spec calls out (a scheduler fire and a Run-now
+// landing on the SAME occurrence at effectively the same instant) — whichever
+// side's openRun call reaches the store first is the one recorded, and the
+// other transparently reuses it (created=false) rather than opening a
+// second row for that occurrence.
+func (te *TaskExecutor) StartOccurrenceRun(ctx context.Context, taskID string, occurrenceMs *int64) error {
+	if _, err := te.store.SpawnReset(taskID); err != nil {
+		return fmt.Errorf("task_executor: StartOccurrenceRun: spawn reset task %q: %w", taskID, err)
+	}
+	return te.executeTaskWithKind(ctx, taskID, occurrenceMs, task.RunKindManual)
 }
 
 // ResizeDispatchSema updates the global dispatch semaphore capacity.
@@ -962,7 +1158,8 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 			continue
 		}
 
-		if err := te.ExecuteTask(ctx, t.ID); err != nil {
+		// The heartbeat queue check has no occurrence context (ADR-050 §3.2) — nil.
+		if err := te.ExecuteTask(ctx, t.ID, nil); err != nil {
 			logger.WarnCF("task_executor", "Heartbeat: could not start task",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
 		}

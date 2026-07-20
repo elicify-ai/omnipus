@@ -155,10 +155,29 @@ func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config)
 		}
 	}
 
+	// Prune per-task run history (ADR-050 RD9) and reap stuck in_progress
+	// runs (RD10) on the same tick and retention window as the transcript
+	// sweep above — see retention_task_runs.go. When the gateway didn't wire
+	// the hook (task store failed to initialize, or tests), this is a no-op.
+	taskRunsVisited := 0
+	if retentionTaskRunSweepFn != nil {
+		taskRunCutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+		staleAfter := taskRunStaleAfter(cfg)
+		if n, terr := retentionTaskRunSweepFn(taskRunCutoff, staleAfter); terr != nil {
+			slog.Warn("retention_sweep: task_runs sweep failed",
+				"event", "retention_sweep_task_runs_failed",
+				"error", terr,
+			)
+		} else {
+			taskRunsVisited = n
+		}
+	}
+
 	slog.Info("retention_sweep: completed",
 		"event", "retention_sweep",
 		"removed", removed,
 		"tool_result_removed", toolResultRemoved,
+		"task_runs_visited", taskRunsVisited,
 		"duration_ms", durationMs,
 	)
 }

@@ -6239,6 +6239,12 @@ type RotateTokenResponse struct {
 	Token string `json:"token"`
 }
 
+// RunNowRequest Body for POST /tasks/{id}/runs ("Run now", ADR-050 RD7). Optional — an empty body re-runs a normal/once task.
+type RunNowRequest struct {
+	// OccurrenceMs The scheduled RRULE occurrence instant to run (materialize-on-demand for a recurring series). Omit or null to re-run a normal/once task as a fresh run.
+	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
+}
+
 // RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
 type RunnerTestResponse struct {
 	// Cli The external CLI name that was tested (the agent's executor.cli value).
@@ -8616,6 +8622,9 @@ type UpdateTaskJSONRequestBody = TaskUpdateRequest
 
 // SetTaskDependenciesJSONRequestBody defines body for SetTaskDependencies for application/json ContentType.
 type SetTaskDependenciesJSONRequestBody = SetTaskDependenciesJSONBody
+
+// RunTaskNowJSONRequestBody defines body for RunTaskNow for application/json ContentType.
+type RunTaskNowJSONRequestBody = RunNowRequest
 
 // SetTaskTodosJSONRequestBody defines body for SetTaskTodos for application/json ContentType.
 type SetTaskTodosJSONRequestBody = SetTaskTodosJSONBody

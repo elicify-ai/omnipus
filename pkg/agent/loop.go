@@ -3452,6 +3452,17 @@ func (al *AgentLoop) EmitTaskStatusChanged(p TaskStatusChangedPayload) {
 	al.emitEvent(EventKindTaskStatusChanged, EventMeta{AgentID: p.AgentID, Source: "task_executor"}, p)
 }
 
+// EmitTaskRunStatus publishes a per-execution TaskRun open/close transition
+// (ADR-050 §3.8) onto the event bus so every connected SPA WebSocket client
+// receives a task_run_status frame — additive alongside EmitTaskStatusChanged
+// (see EventKindTaskRunStatus's own doc comment for why a separate event is
+// needed: a recurring occurrence's run transitions do not move Task.status
+// between distinct values). Safe to call from any goroutine — the bus drops
+// to a full subscriber rather than blocking.
+func (al *AgentLoop) EmitTaskRunStatus(p TaskRunStatusPayload) {
+	al.emitEvent(EventKindTaskRunStatus, EventMeta{Source: "task_executor"}, p)
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil

@@ -453,7 +453,7 @@ type SystemOverloadFrame struct {
 // TaskRunStatusFrame — Server → client task RUN status updated (open or close). Additive alongside TaskStatusChangedFrame (ADR-050 / task-run-history-spec §3.8) — emitted at run open and close so the calendar's per-occurrence chip can update live without a full refetch.
 type TaskRunStatusFrame struct {
 	// The scheduled RRULE instant this run realizes (the calendar join key). Null for an ad-hoc/once/manual run.
-	OccurrenceMs int    `json:"occurrence_ms"`
+	OccurrenceMs *int   `json:"occurrence_ms,omitempty"`
 	RunId        string `json:"run_id"`
 	Status       string `json:"status"`
 	TaskId       string `json:"task_id"`

@@ -94,9 +94,15 @@ func (systemClock) Now() time.Time { return time.Now() }
 // It implements cron.ScheduledRunner — the cron engine calls RunScheduled for
 // each due job, and RunScheduled extracts the task ID from the job payload.
 type TaskTriggerScheduler struct {
-	cs       *cron.CronService
-	store    *task.Store
-	dispatch func(ctx context.Context, taskID string) error
+	cs    *cron.CronService
+	store *task.Store
+	// dispatch fires taskID's fresh run. occurrenceMs is the calendar join
+	// key for a per-execution TaskRun record (ADR-050 §3.2,
+	// docs/internal/specs/task-run-history-spec.md §3.2): the specific RRULE
+	// instant this fire realizes, or nil for a non-recurring (once/every/
+	// legacy cron_expr) trigger. RunScheduled is the sole production caller
+	// and computes it — see its own doc comment.
+	dispatch func(ctx context.Context, taskID string, occurrenceMs *int64) error
 
 	mu        sync.Mutex
 	taskToJob map[string]trackedTrigger // taskID → {cronJobID, trigger generation}
@@ -602,6 +608,23 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 		fireGen = triggerGeneration(t.Trigger)
 	}
 
+	// occurrenceMs is the calendar join key for a per-execution TaskRun
+	// record (ADR-050 §3.2/RD3, task-run-history-spec.md §3.2): the specific
+	// RRULE instant this fire realizes. job.Schedule.AtMS holds that instant
+	// on the RRULE branch (triggerToCronSchedule's TriggerRecurring+rrule
+	// case maps to a single "at" job stamped with the next occurrence) — but
+	// a plain `once` trigger ALSO produces an "at" job with AtMS set, and
+	// that is a single ad-hoc fire, not a recurring calendar occurrence, so
+	// it must stay nil (TaskRun.OccurrenceMs's own contract: "null for an
+	// ad-hoc/once/manual run"). Scoped to isRrule for exactly that reason —
+	// legacy (once/every/cron_expr) triggers always dispatch with nil,
+	// unchanged from before this field existed.
+	var occurrenceMs *int64
+	if isRrule && job.Schedule.AtMS != nil {
+		v := *job.Schedule.AtMS
+		occurrenceMs = &v
+	}
+
 	// Test seam (F5 determinism, TestTriggerScheduler_SpawnResetTaskNotFound_NoReArm):
 	// fires immediately before SpawnReset so a test can force the task to be
 	// deleted in the exact window this fix closes — after the store.Get
@@ -658,7 +681,7 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 		return "", nil
 	}
 
-	if err := s.dispatch(ctx, fresh.ID); err != nil {
+	if err := s.dispatch(ctx, fresh.ID, occurrenceMs); err != nil {
 		if isRrule {
 			slog.Warn("task_trigger: dispatch failed for rrule task, re-arming next occurrence (no retry backoff)",
 				"task_id", taskID, "job_id", job.ID, "error", err)

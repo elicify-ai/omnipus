@@ -2165,6 +2165,9 @@ export const TaskRun = z.object({
   started_at: z.string().datetime({ offset: true }),
   ended_at: z.string().datetime({ offset: true }).nullable(),
 });
+export const RunNowRequest = z
+  .object({ occurrence_ms: z.number().int().nullable() })
+  .partial();
 export const McpServer = z
   .object({
     id: z.string(),
@@ -6260,6 +6263,57 @@ Polled by the SPA StatusBar every 15 seconds.
     ],
   },
   {
+    method: "post",
+    path: "/tasks/:id/runs",
+    alias: "runTaskNow",
+    description: `Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With &#x60;occurrence_ms&#x60;, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z
+          .object({ occurrence_ms: z.number().int().nullable() })
+          .partial()
+          .optional(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Invalid task ID or request body.`,
+        schema: z.void(),
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Task executor unavailable (gateway degraded).`,
+        schema: z.void(),
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/tasks/:id/subtasks",
     alias: "listSubtasks",
@@ -7498,7 +7552,7 @@ export const TaskRunStatusFrame = z
     type: z.literal("task_run_status"),
     task_id: z.string().min(1),
     run_id: z.string().min(1),
-    occurrence_ms: z.number().int(),
+    occurrence_ms: z.number().int().optional(),
     status: z.enum(["in_progress", "done", "failed"]),
   })
   .strict();

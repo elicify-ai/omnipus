@@ -47,15 +47,27 @@ func (c *triggerFakeClock) Advance(d time.Duration) {
 
 // dispatchRecorder is a test-seam dispatch function that records task IDs fired.
 type dispatchRecorder struct {
-	mu      sync.Mutex
-	taskIDs []string
+	mu           sync.Mutex
+	taskIDs      []string
+	occurrenceMs []*int64
 }
 
-func (r *dispatchRecorder) dispatch(_ context.Context, taskID string) error {
+func (r *dispatchRecorder) dispatch(_ context.Context, taskID string, occurrenceMs *int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.taskIDs = append(r.taskIDs, taskID)
+	r.occurrenceMs = append(r.occurrenceMs, occurrenceMs)
 	return nil
+}
+
+// occurrences returns a copy of the occurrenceMs values recorded so far, in
+// call order (parallel to calls()).
+func (r *dispatchRecorder) occurrences() []*int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*int64, len(r.occurrenceMs))
+	copy(out, r.occurrenceMs)
+	return out
 }
 
 func (r *dispatchRecorder) calls() []string {
@@ -379,7 +391,7 @@ func TestTriggerReconcile_RegistersExistingTasks(t *testing.T) {
 
 	sched := NewTaskTriggerScheduler(storePath, store, nil)
 	var count atomic.Int64
-	sched.dispatch = func(_ context.Context, _ string) error {
+	sched.dispatch = func(_ context.Context, _ string, _ *int64) error {
 		count.Add(1)
 		return nil
 	}

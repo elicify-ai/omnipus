@@ -78,6 +78,14 @@ const (
 	// status (queued→running→completed/failed). The WS forwarder turns it into a
 	// task_status_changed frame so the SPA can invalidate its tasks cache.
 	EventKindTaskStatusChanged
+	// EventKindTaskRunStatus is emitted when a per-task-execution TaskRun
+	// record (ADR-050, docs/internal/specs/task-run-history-spec.md §3.8 —
+	// additive alongside Task.status/EventKindTaskStatusChanged) opens or
+	// closes. A recurring occurrence's queued→in_progress→done transition
+	// does not move Task.status between distinct values the calendar reads
+	// (RD2), so the WS forwarder turns THIS event into a task_run_status
+	// frame the calendar's per-occurrence chip can key off instead.
+	EventKindTaskRunStatus
 
 	eventKindCount
 )
@@ -113,6 +121,7 @@ var eventKindNames = [...]string{
 	"whatsapp_pairing",
 	"notification",
 	"task_status_changed",
+	"task_run_status",
 }
 
 // String returns the stable string form of an EventKind.
@@ -556,4 +565,24 @@ type TaskStatusChangedPayload struct {
 	Status    string `json:"status"`
 	SessionID string `json:"session_id"`
 	AgentID   string `json:"agent_id,omitempty"`
+}
+
+// TaskRunStatusPayload carries a per-execution TaskRun open/close transition
+// (ADR-050 §3.8, docs/internal/specs/task-run-history-spec.md §3.8) for the
+// SPA. The WS forwarder turns this into a task_run_status frame
+// (generated.TaskRunStatusFrame) so the calendar's per-occurrence chip can
+// update live without a full occurrences refetch — additive alongside
+// TaskStatusChangedPayload, never a replacement for it (RD2: Task.status
+// keeps its exact existing behavior and event).
+//
+// OccurrenceMs mirrors task.TaskRun.OccurrenceMs's own nullability: nil for
+// an ad-hoc/once/manual run, non-nil for the RRULE instant a recurring fire
+// realizes. Status is one of task.StatusInProgress/StatusDone/StatusFailed
+// (task.IsValidRunStatus) — the narrower 3-state TaskRun vocabulary, not the
+// full 7-state Task one.
+type TaskRunStatusPayload struct {
+	TaskID       string `json:"task_id"`
+	RunID        string `json:"run_id"`
+	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
+	Status       string `json:"status"`
 }

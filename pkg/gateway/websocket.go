@@ -3409,6 +3409,25 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				taskF.AgentId = &aid
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskStatusChanged), taskF)
+		case agent.EventKindTaskRunStatus:
+			// A per-execution run opened or closed (ADR-050). Broadcast so the
+			// calendar's per-occurrence chip updates live without a full refetch.
+			// occurrence_ms is nil for an ad-hoc/once/manual run.
+			p, ok := evt.Payload.(agent.TaskRunStatusPayload)
+			if !ok {
+				continue
+			}
+			runF := generated.TaskRunStatusFrame{
+				Type:   string(generated.WsFrameTypeTaskRunStatus),
+				TaskId: p.TaskID,
+				RunId:  p.RunID,
+				Status: p.Status,
+			}
+			if p.OccurrenceMs != nil {
+				ms := int(*p.OccurrenceMs)
+				runF.OccurrenceMs = &ms
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)
 		}
 	}
 }

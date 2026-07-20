@@ -225,7 +225,7 @@ export interface TaskRunStatusFrame {
   type: "task_run_status";
   task_id: string;
   run_id: string;
-  occurrence_ms: number;
+  occurrence_ms?: number;
   status: "in_progress" | "done" | "failed";
 }
 

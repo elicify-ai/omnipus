@@ -456,6 +456,8 @@ components:
       $ref: ./components/schemas/DayBucket.yaml
     TaskRun:
       $ref: ./components/schemas/TaskRun.yaml
+    RunNowRequest:
+      $ref: ./components/schemas/RunNowRequest.yaml
     ProviderUpdateRequest:
       $ref: ./components/schemas/ProviderUpdateRequest.yaml
     ProviderValidation:
@@ -4720,6 +4722,47 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '429':
           $ref: '#/components/responses/429TooManyRequests'
+    post:
+      operationId: runTaskNow
+      summary: Start a task run now ("Run now")
+      description: >
+        Opens a new run for the task and dispatches it immediately (ADR-050
+        RD7 / task-run-history-spec §3.4). With `occurrence_ms`, runs that
+        specific recurring occurrence (materialize-on-demand); without it,
+        re-runs a normal/once task as a fresh run (prior runs are preserved).
+        Idempotent per (task, occurrence_ms) against a concurrent scheduler
+        fire. Returns 202 — the run executes asynchronously; observe progress
+        via the task_run_status WS frame or GET /tasks/{id}/runs.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunNowRequest'
+      responses:
+        '202':
+          description: Run accepted and dispatched asynchronously.
+        '400':
+          description: Invalid task ID or request body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '503':
+          description: Task executor unavailable (gateway degraded).
   /mcp-servers:
     get:
       operationId: listMcpServers

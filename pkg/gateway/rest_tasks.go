@@ -105,6 +105,18 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.handleTaskDependencies(w, r, id)
+		case "runs":
+			// GET /api/v1/tasks/{id}/runs (ADR-050, task-run-history-spec
+			// §3.6; handler in rest_task_runs.go). Wrapped in the SAME
+			// dedicated taskReadLimiter /tasks/occurrences uses
+			// (rest_auth.go) — applied here rather than at top-level
+			// registration since this "/api/v1/tasks/" prefix route
+			// (registerAdditionalEndpoints, rest.go) carries no limiter of
+			// its own and a dynamic {id} segment cannot be its own
+			// registered pattern (see rest_task_runs.go's doc comment).
+			withRateLimit(taskReadLimiter, func(w http.ResponseWriter, r *http.Request) {
+				a.handleTaskRuns(w, r, id)
+			})(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -232,7 +244,10 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 		return sched.NextRunAtMSForTask(taskID)
 	}
 
-	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor)
+	// ADR-050 / task-run-history-spec §3.7: the occurrence-run overlay is
+	// wired in via the SAME trailing-variadic dependency-injection pattern
+	// as everyAnchor above, sourced from the live store.
+	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor, a.taskStore.RunsInRange)
 	if err != nil {
 		// Range/tz were already validated above, so a non-nil error here
 		// indicates a genuine internal failure rather than bad input.
