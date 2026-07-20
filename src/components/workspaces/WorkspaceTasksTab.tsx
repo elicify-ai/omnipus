@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon } from '@phosphor-icons/react'
+import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon, CaretDown, UsersThree, Tag } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
-import { SmartSelect } from '@/components/ui/smart-select'
-import { TagFilterBar } from './TagFilterBar'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
+import { IconRenderer } from '@/components/shared/IconRenderer'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { PlansFilterBand } from './PlansFilterBand'
 import { BoardView } from './BoardView'
@@ -15,7 +23,6 @@ import {
   fetchTasks,
   fetchPlans,
   fetchAgents,
-  buildTaskAssigneeItems,
   updateTask,
   approvePlan,
   stopPlan,
@@ -27,19 +34,17 @@ import {
   workspacesQueryKeys,
 } from '@/lib/api'
 import type { Agent, Plan, Task } from '@/lib/api'
-import { filterByTag } from '@/lib/planFilter'
+import { filterByTags, distinctTags, PLAN_FILTER_UNTAGGED } from '@/lib/planFilter'
 import { filterTasks } from '@/lib/taskFilters'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 
 interface WorkspaceTasksTabProps {
   workspaceId: string
 }
 
 type TasksView = 'board' | 'list' | 'graph'
-
-const OWNER_ALL = '__all__'
 
 /**
  * The combined "Tasks" screen (ADR-051 D1/D2/D4/D6) — Board, List, and Graph
@@ -54,7 +59,7 @@ const OWNER_ALL = '__all__'
  * filtered list.
  */
 export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
-  const { activeTagFilter, setActiveTagFilter, activePlanId, setActivePlanId } =
+  const { activeTags, setActiveTags, activePlanId, setActivePlanId } =
     useWorkspacesStore()
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -208,12 +213,12 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   // so a stale id (e.g. mid-Clear, or before `plans` has loaded) never blanks
   // the board to zero matches with no active tile and no signal why.
   const filteredTasks = useMemo(() => {
-    const tagFiltered = filterByTag(tasks, activeTagFilter)
+    const tagFiltered = filterByTags(tasks, activeTags)
     return filterTasks(tagFiltered, { planId: selectedPlan ? activePlanId : null, ownerAgentId })
-  }, [tasks, activeTagFilter, activePlanId, selectedPlan, ownerAgentId])
+  }, [tasks, activeTags, activePlanId, selectedPlan, ownerAgentId])
 
   // Drives BoardView's empty-state copy ("no tasks match" vs "no tasks yet").
-  const hasActiveFilter = selectedPlan != null || ownerAgentId != null || activeTagFilter != null
+  const hasActiveFilter = selectedPlan != null || ownerAgentId != null || activeTags.length > 0
 
   const selectedTask =
     selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
@@ -261,26 +266,35 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           replaces "Team Task Backlog" when a plan filter is active — ADR-051
           D2, Visibility of System Status) + the Board/List/Graph switcher +
           filters + a minimalist "+ New Task" link, over a thin separator. */}
-      <div className="flex items-center gap-5 px-6 pt-6 pb-3 flex-shrink-0 flex-wrap">
-        <div className="flex items-center gap-1" data-testid="tasks-heading">
-          <h2 className="font-headline text-base font-bold text-[var(--color-secondary)]">
-            {heading}
-          </h2>
-          {view !== 'graph' && ownerAgent && (
-            <span className="text-xs text-[var(--color-muted)]">· Owner: {ownerAgent.name}</span>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-6 pt-6 pb-3 flex-shrink-0">
+        {/* Left: dynamic heading + the flat Board/List/Graph view switcher. */}
+        <div className="flex min-w-0 items-center gap-5">
+          <div className="flex min-w-0 items-center gap-1" data-testid="tasks-heading">
+            <h2 className="font-headline text-base font-bold text-[var(--color-secondary)] truncate">
+              {heading}
+            </h2>
+            {view !== 'graph' && ownerAgent && (
+              <span className="whitespace-nowrap text-xs text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>
+            )}
+          </div>
+          <ViewSwitcher value={view} onChange={setView} />
+        </div>
+
+        {/* Center: Agent + Tag filters, centered over the board. Both flat
+            (borderless, chat-composer style). Board/List only — the Graph view
+            honors the plan filter alone, so these don't render for a filter it
+            doesn't actually apply. */}
+        <div className="flex items-center justify-center gap-2">
+          {view !== 'graph' && (
+            <AgentFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
+          )}
+          {view !== 'graph' && (
+            <TagFilterMultiSelect tasks={tasks} value={activeTags} onChange={setActiveTags} />
           )}
         </div>
-        <ViewSwitcher value={view} onChange={setView} />
-        {/* Tag + Owner filters only apply to Board/List — the Graph view honors
-            the plan filter alone, so these never render for a filter Graph
-            doesn't actually claim to apply. */}
-        <div className="ml-auto flex items-center gap-3 flex-shrink-0 flex-wrap">
-          {view !== 'graph' && (
-            <TagFilterBar tasks={tasks} activeTagFilter={activeTagFilter} onSelectTag={setActiveTagFilter} />
-          )}
-          {view !== 'graph' && (
-            <OwnerFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
-          )}
+
+        {/* Right: New Task on its own. */}
+        <div className="flex items-center justify-end">
           <button tabIndex={0}
             type="button"
             onClick={() => setCreateTaskOpen(true)}
@@ -409,7 +423,7 @@ function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: 
 
   return (
     <div
-      className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-0.5 gap-0.5 flex-shrink-0"
+      className="flex items-center gap-4 flex-shrink-0"
       role="radiogroup"
       aria-label="Task view"
     >
@@ -428,14 +442,16 @@ function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: 
             data-testid={`tasks-view-${opt.value}`}
             onClick={() => onChange(opt.value)}
             onKeyDown={handleKeyDown}
+            // Flat like the workspace header tabs — no border, background or
+            // shadow; just an icon + label on the header, gold when active.
             className={cn(
-              'flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors',
+              'flex items-center gap-1.5 text-sm font-medium transition-colors',
               checked
-                ? 'bg-[var(--color-surface-1)] text-[var(--color-accent)] shadow-sm'
+                ? 'text-[var(--color-accent)]'
                 : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
             )}
           >
-            <opt.Icon size={13} weight={checked ? 'fill' : 'regular'} />
+            <opt.Icon size={15} weight={checked ? 'fill' : 'regular'} />
             {opt.label}
           </button>
         )
@@ -444,41 +460,164 @@ function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: 
   )
 }
 
-// ── Owner filter dropdown ───────────────────────────────────────────────────
+// ── Agent filter dropdown ───────────────────────────────────────────────────
 
-interface OwnerFilterDropdownProps {
+interface AgentFilterDropdownProps {
   agents: Agent[]
   value: string | null
   onChange: (agentId: string | null) => void
 }
 
-/**
- * Owner filter (ANDs with the plan filter, ADR-051 D6 — filters the board by
- * `Task.agent_id`). Uses the SAME shared agent-selector as task assignment
- * everywhere else — `SmartSelect` fed by `buildTaskAssigneeItems` — so the
- * roster (agent names, "· Worker" suffix, styling) reads identically to the
- * assignee picker in CreateTaskSlideOver / TaskDetailPanel. `unscoped` because
- * a filter should offer every agent that could own a task (no backend gate —
- * the filtering is purely client-side); `currentAssigneeId` keeps an already-
- * selected owner visible even if it's not in the current roster.
- */
-function OwnerFilterDropdown({ agents, value, onChange }: OwnerFilterDropdownProps) {
+/** Small round agent avatar — the agent's icon (or name initial) on its colour
+ * dot. Mirrors the chat composer's AgentPicker so the roster reads identically. */
+function AgentAvatar({ agent }: { agent: Agent }) {
   return (
-    <div data-testid="tasks-owner-filter">
-      <SmartSelect
-        value={value ?? OWNER_ALL}
-        onValueChange={(v) => onChange(v === OWNER_ALL ? null : v)}
-        placeholder="All owners"
-        triggerClassName="h-8 min-w-[8rem] text-xs"
-        ariaLabel="Filter by owner"
-        items={[
-          { value: OWNER_ALL, label: 'All owners', className: 'text-xs' },
-          ...buildTaskAssigneeItems(agents, {
-            teamScope: { kind: 'unscoped' },
-            currentAssigneeId: value,
-          }),
-        ]}
-      />
+    <div
+      aria-hidden="true"
+      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold"
+      style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
+    >
+      {agent.icon ? <IconRenderer icon={agent.icon} size={11} /> : initialOf(agent.name)}
+    </div>
+  )
+}
+
+/**
+ * Agent filter — filters the board by each task's ASSIGNED agent (`Task.agent_id`),
+ * ANDed with the plan filter. Reuses the chat composer's AgentPicker visual
+ * pattern (a `DropdownMenu` with an `IconRenderer` avatar dot in the agent's
+ * colour + name), so it reads like the agent selector used elsewhere — with
+ * icons — rather than a plain text dropdown. Default "All agents" clears it.
+ */
+function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownProps) {
+  const selected = value ? (agents.find((a) => a.id === value) ?? null) : null
+  return (
+    <div data-testid="tasks-agent-filter">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Filter by agent (current: ${selected?.name ?? 'all agents'})`}
+            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-xs font-medium"
+          >
+            {selected ? (
+              <AgentAvatar agent={selected} />
+            ) : (
+              <div
+                aria-hidden="true"
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-[var(--color-muted)]"
+              >
+                <UsersThree size={11} />
+              </div>
+            )}
+            <span className="truncate">{selected ? selected.name : 'Agent'}</span>
+            <CaretDown size={11} className="shrink-0 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64">
+          <DropdownMenuItem onClick={() => onChange(null)} className="flex items-center gap-2">
+            <div
+              aria-hidden="true"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-[var(--color-muted)]"
+            >
+              <UsersThree size={11} />
+            </div>
+            <span className="truncate">All agents</span>
+            {value === null && (
+              <span className="ml-auto shrink-0 text-[10px] text-[var(--color-success)]">active</span>
+            )}
+          </DropdownMenuItem>
+          {agents.map((agent) => (
+            <DropdownMenuItem
+              key={agent.id}
+              onClick={() => onChange(agent.id)}
+              className="flex items-center gap-2"
+              title={agent.name}
+            >
+              <AgentAvatar agent={agent} />
+              <span className="truncate">{agent.name}</span>
+              {agent.id === value && (
+                <span className="ml-auto shrink-0 text-[10px] text-[var(--color-success)]">active</span>
+              )}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
+// ── Tag filter (flat multiselect) ────────────────────────────────────────────
+
+interface TagFilterMultiSelectProps {
+  tasks: Task[]
+  value: string[]
+  onChange: (tags: string[]) => void
+}
+
+/**
+ * Tag filter — a flat, borderless multiselect (chat-composer style): a ghost
+ * `DropdownMenu` trigger over checkable tag items. Selecting multiple tags is a
+ * union (a task matches ANY selected tag; see `filterByTags`). Includes an
+ * "Untagged" option (`PLAN_FILTER_UNTAGGED`). Menu stays open while toggling
+ * (DropdownMenuCheckboxItem), with a "Clear tags" action once any is set.
+ */
+function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectProps) {
+  const tags = distinctTags(tasks)
+  const toggle = (tag: string) =>
+    onChange(value.includes(tag) ? value.filter((t) => t !== tag) : [...value, tag])
+  const label = value.length === 0 ? 'Tags' : `${value.length} tag${value.length === 1 ? '' : 's'}`
+
+  return (
+    <div data-testid="tasks-tag-filter">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Filter by tags"
+            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-xs font-medium"
+          >
+            <Tag size={13} className="shrink-0 opacity-70" />
+            <span className="truncate">{label}</span>
+            <CaretDown size={11} className="shrink-0 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="center" className="w-52">
+          {/* onSelect preventDefault keeps the menu OPEN while toggling multiple
+              tags — Radix closes a checkbox item's menu on select by default,
+              which would break multiselect. */}
+          <DropdownMenuCheckboxItem
+            checked={value.includes(PLAN_FILTER_UNTAGGED)}
+            onCheckedChange={() => toggle(PLAN_FILTER_UNTAGGED)}
+            onSelect={(e) => e.preventDefault()}
+            className="text-xs"
+          >
+            Untagged
+          </DropdownMenuCheckboxItem>
+          {tags.length > 0 && <DropdownMenuSeparator />}
+          {tags.map((tag) => (
+            <DropdownMenuCheckboxItem
+              key={tag}
+              checked={value.includes(tag)}
+              onCheckedChange={() => toggle(tag)}
+              onSelect={(e) => e.preventDefault()}
+              className="text-xs"
+            >
+              {tag}
+            </DropdownMenuCheckboxItem>
+          ))}
+          {value.length > 0 && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onChange([])} className="text-xs text-[var(--color-muted)]">
+                Clear tags
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }
