@@ -332,8 +332,8 @@ function PlanFilterTile({
         className="flex h-full w-full flex-col items-start gap-2 pr-10 text-left"
       >
         <span
-          className="inline-flex flex-shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold leading-tight"
-          style={{ color: stateColor, backgroundColor: `${stateColor}1a`, borderColor: `${stateColor}4d` }}
+          className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight"
+          style={{ color: stateColor, backgroundColor: `${stateColor}1a` }}
         >
           <PlanStateGlyph state={plan.state} />
           {planStateLabel(plan.state)}

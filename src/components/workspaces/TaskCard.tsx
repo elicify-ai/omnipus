@@ -32,12 +32,13 @@ export function goalLoopStatusLabel(
 }
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
+// Flat priority pills — tint fill + colour, no outline (minimalist flat design).
 export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
-  1: { label: 'P1', className: 'bg-red-500/20 text-red-400 border-red-500/30' },
-  2: { label: 'P2', className: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
-  3: { label: 'P3', className: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
-  4: { label: 'P4', className: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-  5: { label: 'P5', className: 'bg-[var(--color-muted)]/20 text-[var(--color-muted)] border-[var(--color-muted)]/30' },
+  1: { label: 'P1', className: 'bg-red-500/20 text-red-400' },
+  2: { label: 'P2', className: 'bg-orange-500/20 text-orange-400' },
+  3: { label: 'P3', className: 'bg-yellow-500/20 text-yellow-400' },
+  4: { label: 'P4', className: 'bg-blue-500/20 text-blue-400' },
+  5: { label: 'P5', className: 'bg-[var(--color-muted)]/20 text-[var(--color-muted)]' },
 }
 
 /**
@@ -190,7 +191,7 @@ export function TaskCard({
       <div className="flex items-start gap-2">
         <span
           className={cn(
-            'flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold leading-tight mt-0.5',
+            'flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight mt-0.5',
             badge.className,
           )}
         >

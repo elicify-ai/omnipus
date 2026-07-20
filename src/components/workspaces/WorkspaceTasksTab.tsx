@@ -354,7 +354,6 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         ) : (
           <ListView
             tasks={filteredTasks}
-            plans={plans}
             agents={agents}
             onTaskClick={(task) => setSelectedTaskId(task.id)}
           />

@@ -1,179 +1,127 @@
 import { useState } from 'react'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { PRIORITY_BADGE } from './TaskCard'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
-import { STATUS_LABELS, statusColor, statusLabel } from '@/lib/statusColors'
-import type { Task, Plan } from '@/lib/api'
-import { PLAN_FILTER_UNTAGGED } from '@/lib/planFilter'
+import { STATUS_ORDER, statusColor, statusLabel } from '@/lib/statusColors'
+import type { Task } from '@/lib/api'
 
-type SortDir = 'desc' | 'asc'
+type SortKey = 'priority' | 'status' | 'updated'
+type SortDir = 'asc' | 'desc'
 
 interface ListViewProps {
+  /** Already filtered by the Tasks screen (plan / agent / tag). List just sorts + renders. */
   tasks: Task[]
-  /** Plans in this workspace (ADR-049) — powers the Plan filter, replacing the removed Milestone filter. */
-  plans: Plan[]
   agents: { id: string; name: string }[]
   onTaskClick: (task: Task) => void
 }
 
-export function ListView({ tasks, plans, agents, onTaskClick }: ListViewProps) {
-  const [filterStatus, setFilterStatus] = useState<string>('__all__')
-  const [filterPriority, setFilterPriority] = useState<string>('__all__')
-  const [filterPlan, setFilterPlan] = useState<string>('__all__')
-  const [filterTag, setFilterTag] = useState<string>('__all__')
-  const [filterAgent, setFilterAgent] = useState<string>('__all__')
+// Status sort rank derived from the canonical lifecycle order.
+const STATUS_RANK: Record<string, number> = Object.fromEntries(STATUS_ORDER.map((s, i) => [s, i]))
+
+/**
+ * Flat, minimalist task table. Filtering is owned by the Tasks screen toolbar
+ * (plan band + Agent + Tags) — this view has NO filter bar of its own (it used
+ * to duplicate them). It sorts by Priority / Status / Updated via clickable
+ * column headers, over a borderless table: no filled header slab, no row rules
+ * — rows separate by padding + hover only.
+ */
+export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
+  const [sortKey, setSortKey] = useState<SortKey>('updated')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
-  // Filter out heartbeat/non-user surface tasks from general list view
+  // Filter out heartbeat/non-user surface tasks from the general list view.
   const userTasks = tasks.filter((t) => t.surface === 'user' || t.surface === undefined)
 
-  // Distinct tags across the visible tasks — there is no fixed tag catalog
-  // (D1: free-form, workspace-scoped), so the Tag filter's option list is
-  // derived from what's actually present, not a fetched registry.
-  const allTags = Array.from(new Set(userTasks.flatMap((t) => t.tags ?? []))).sort()
+  const sorted = [...userTasks].sort((a, b) => {
+    let cmp = 0
+    if (sortKey === 'priority') cmp = (a.priority ?? 3) - (b.priority ?? 3)
+    else if (sortKey === 'status') cmp = (STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99)
+    else cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
+    return sortDir === 'asc' ? cmp : -cmp
+  })
 
-  const filtered = userTasks
-    .filter((t) => filterStatus === '__all__' || t.status === filterStatus)
-    .filter((t) => filterPriority === '__all__' || String(t.priority ?? 3) === filterPriority)
-    .filter((t) => filterPlan === '__all__' || (filterPlan === '__unassigned__' ? !t.plan_id : t.plan_id === filterPlan))
-    .filter((t) => filterTag === '__all__' || (filterTag === PLAN_FILTER_UNTAGGED ? !(t.tags && t.tags.length > 0) : (t.tags ?? []).includes(filterTag)))
-    .filter((t) => filterAgent === '__all__' || (filterAgent === '__unassigned__' ? !t.agent_id : t.agent_id === filterAgent))
-    .sort((a, b) => {
-      const diff = new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      return sortDir === 'desc' ? diff : -diff
-    })
-
-  function toggleSort() {
-    setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
+  function sortBy(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      // Natural default per column: newest-first for time, most-critical/earliest first otherwise.
+      setSortDir(key === 'updated' ? 'desc' : 'asc')
+    }
   }
 
-  return (
-    <div className="flex flex-col flex-1 overflow-hidden">
-      {/* Filters */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] flex-wrap flex-shrink-0">
-        <FilterSelect
-          label="Status"
-          value={filterStatus}
-          onValueChange={setFilterStatus}
-          options={[
-            { value: '__all__', label: 'All statuses' },
-            ...Object.entries(STATUS_LABELS).map(([v, l]) => ({ value: v, label: l })),
-          ]}
-        />
-        <FilterSelect
-          label="Priority"
-          value={filterPriority}
-          onValueChange={setFilterPriority}
-          options={[
-            { value: '__all__', label: 'All priorities' },
-            { value: '1', label: 'P1 — Critical' },
-            { value: '2', label: 'P2 — High' },
-            { value: '3', label: 'P3 — Medium' },
-            { value: '4', label: 'P4 — Low' },
-            { value: '5', label: 'P5 — Minimal' },
-          ]}
-        />
-        {plans.length > 0 && (
-          <FilterSelect
-            label="Plan"
-            value={filterPlan}
-            onValueChange={setFilterPlan}
-            options={[
-              { value: '__all__', label: 'All plans' },
-              { value: '__unassigned__', label: 'No plan' },
-              ...plans.map((p) => ({ value: p.id, label: p.title })),
-            ]}
-          />
-        )}
-        {allTags.length > 0 && (
-          <FilterSelect
-            label="Tag"
-            value={filterTag}
-            onValueChange={setFilterTag}
-            options={[
-              { value: '__all__', label: 'All tags' },
-              { value: PLAN_FILTER_UNTAGGED, label: 'Untagged' },
-              ...allTags.map((tag) => ({ value: tag, label: tag })),
-            ]}
-          />
-        )}
-        {agents.length > 0 && (
-          <FilterSelect
-            label="Agent"
-            value={filterAgent}
-            onValueChange={setFilterAgent}
-            options={[
-              { value: '__all__', label: 'All agents' },
-              { value: '__unassigned__', label: 'Unassigned' },
-              ...agents.map((a) => ({ value: a.id, label: a.name })),
-            ]}
-          />
-        )}
-      </div>
+  const arrow = (key: SortKey) => (sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')
+  const ariaSort = (key: SortKey): 'ascending' | 'descending' | 'none' =>
+    sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'
 
-      {/* Table */}
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]">
+          <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
-              <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-12">
-                Pri
+              <th className="w-12 px-4 py-2 text-left" aria-sort={ariaSort('priority')}>
+                <SortHeader label={`Pri${arrow('priority')}`} onClick={() => sortBy('priority')} />
               </th>
               <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Title
               </th>
-              <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-24">
-                Status
+              <th className="w-24 px-2 py-2 text-left" aria-sort={ariaSort('status')}>
+                <SortHeader label={`Status${arrow('status')}`} onClick={() => sortBy('status')} />
               </th>
-              <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-28">
+              <th className="w-28 px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Tags
               </th>
-              <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-24">
+              <th className="w-24 px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Agent
               </th>
-              <th
-                className="px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] w-28"
-                aria-sort={sortDir === 'desc' ? 'descending' : 'ascending'}
-              >
-                <button tabIndex={0}
-                  type="button"
-                  onClick={toggleSort}
-                  className="hover:text-[var(--color-secondary)] transition-colors"
-                  aria-label={`Sort by updated ${sortDir === 'desc' ? 'ascending' : 'descending'}`}
-                >
-                  Updated {sortDir === 'desc' ? '↓' : '↑'}
-                </button>
+              <th className="w-28 px-4 py-2 text-right" aria-sort={ariaSort('updated')}>
+                <SortHeader label={`Updated${arrow('updated')}`} onClick={() => sortBy('updated')} align="right" />
               </th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {sorted.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-xs text-[var(--color-muted)]">
-                  No tasks match the current filters
+                  No tasks to show
                 </td>
               </tr>
             ) : (
-              filtered.map((task) => (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  agents={agents}
-                  onClick={() => onTaskClick(task)}
-                />
+              sorted.map((task) => (
+                <TaskRow key={task.id} task={task} agents={agents} onClick={() => onTaskClick(task)} />
               ))
             )}
           </tbody>
         </table>
       </div>
     </div>
+  )
+}
+
+/** Clickable, muted column-header sort control (no chrome — text only). */
+function SortHeader({
+  label,
+  onClick,
+  align = 'left',
+}: {
+  label: string
+  onClick: () => void
+  align?: 'left' | 'right'
+}) {
+  return (
+    <button
+      tabIndex={0}
+      type="button"
+      onClick={onClick}
+      aria-label={`Sort by ${label.replace(/[↑↓]/g, '').trim()}`}
+      className={cn(
+        'text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]',
+        align === 'right' && 'ml-auto block',
+      )}
+    >
+      {label}
+    </button>
   )
 }
 
@@ -192,19 +140,15 @@ function TaskRow({
   const agentName = task.agent_name ?? (task.agent_id ? (agents.find((a) => a.id === task.agent_id)?.name ?? task.agent_id) : null)
 
   return (
-    // The row is still mouse-clickable for whole-row convenience, but a
-    // focusable/labelled <tr> (the previous shape: tabIndex + onKeyDown +
-    // aria-label directly on the row) is a phantom control to AT — a row's
-    // implicit role is "row", not "button", so screen readers announced it
-    // as focused but gave no indication anything was pressable. The REAL
-    // keyboard/AT entry point is the button below, wrapping the Title cell —
-    // one tab stop per row, now genuinely announced as actionable.
+    // The row is mouse-clickable for whole-row convenience; the REAL keyboard/AT
+    // entry point is the Title button below (one tab stop per row, announced as
+    // actionable). Borderless — separation is padding + hover, not a rule.
     <tr
       onClick={onClick}
-      className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-2)]/40 cursor-pointer transition-colors"
+      className="cursor-pointer transition-colors hover:bg-[var(--color-surface-2)]/40"
     >
       <td className="px-4 py-2.5">
-        <span className={cn('rounded border px-1.5 py-0.5 text-[10px] font-bold', badge.className)}>
+        <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-bold', badge.className)}>
           {badge.label}
         </span>
       </td>
@@ -212,9 +156,8 @@ function TaskRow({
         <button tabIndex={0}
           type="button"
           onClick={(e) => {
-            // The <tr> above ALSO has onClick={onClick} (mouse convenience,
-            // whole-row hit area) — without this, a click landing on the
-            // button would bubble and fire onClick twice.
+            // The <tr> also has onClick — stop the button's click bubbling so it
+            // doesn't fire onClick twice.
             e.stopPropagation()
             onClick()
           }}
@@ -237,7 +180,7 @@ function TaskRow({
       </td>
       <td className="px-2 py-2.5">
         {tags.length > 0 ? (
-          <div className="flex items-center gap-1 flex-wrap max-w-[7rem]">
+          <div className="flex max-w-[7rem] flex-wrap items-center gap-1">
             {tags.slice(0, 2).map((tag) => (
               <span
                 key={tag}
@@ -257,7 +200,7 @@ function TaskRow({
       </td>
       <td className="px-2 py-2.5">
         {agentName ? (
-          <span className="text-xs text-[var(--color-secondary)] truncate max-w-[5rem] block">
+          <span className="block max-w-[5rem] truncate text-xs text-[var(--color-secondary)]">
             {agentName}
           </span>
         ) : (
@@ -270,36 +213,6 @@ function TaskRow({
         </span>
       </td>
     </tr>
-  )
-}
-
-function FilterSelect({
-  label,
-  value,
-  onValueChange,
-  options,
-}: {
-  label: string
-  value: string
-  onValueChange: (v: string) => void
-  options: { value: string; label: string }[]
-}) {
-  return (
-    <Select value={value} onValueChange={onValueChange}>
-      <SelectTrigger
-        className="h-7 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] w-auto min-w-[7rem]"
-        aria-label={`Filter by ${label}`}
-      >
-        <SelectValue placeholder={label} />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value} className="text-xs">
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   )
 }
 
