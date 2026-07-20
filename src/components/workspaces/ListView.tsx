@@ -3,20 +3,28 @@ import { PRIORITY_BADGE } from './TaskCard'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusColor, statusLabel } from '@/lib/statusColors'
-import type { Task } from '@/lib/api'
+import type { Task, Agent } from '@/lib/api'
 
 type SortKey = 'priority' | 'status' | 'updated'
 type SortDir = 'asc' | 'desc'
 
+// The slice of an Agent the list needs to resolve a task's assignee name —
+// tied to the generated wire type so it can't drift, and assignable straight
+// from the caller's Agent[].
+type AgentRef = Pick<Agent, 'id' | 'name'>
+
 interface ListViewProps {
   /** Already filtered by the Tasks screen (plan / agent / tag). List just sorts + renders. */
   tasks: Task[]
-  agents: { id: string; name: string }[]
+  agents: AgentRef[]
   onTaskClick: (task: Task) => void
 }
 
-// Status sort rank derived from the canonical lifecycle order.
-const STATUS_RANK: Record<string, number> = Object.fromEntries(STATUS_ORDER.map((s, i) => [s, i]))
+// Status sort rank derived from the canonical lifecycle order. Keyed by the
+// Task status union so a typo'd literal is a compile error; the runtime `?? 99`
+// still guards an additively-widened wire enum (STATUS_ORDER can't prove
+// completeness as a non-tuple array).
+const STATUS_RANK = Object.fromEntries(STATUS_ORDER.map((s, i) => [s, i])) as Record<Task['status'], number>
 
 /**
  * Flat, minimalist task table. Filtering is owned by the Tasks screen toolbar
@@ -36,7 +44,14 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
     let cmp = 0
     if (sortKey === 'priority') cmp = (a.priority ?? 3) - (b.priority ?? 3)
     else if (sortKey === 'status') cmp = (STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99)
-    else cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
+    else {
+      // Guard NaN symmetrically with formatUpdated: an unparseable/missing date
+      // must not make the comparator non-transitive (Array.sort would then
+      // silently mis-order the whole table with zero signal).
+      const at = new Date(a.updated_at).getTime()
+      const bt = new Date(b.updated_at).getTime()
+      cmp = (Number.isNaN(at) ? 0 : at) - (Number.isNaN(bt) ? 0 : bt)
+    }
     return sortDir === 'asc' ? cmp : -cmp
   })
 
@@ -61,13 +76,13 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
               <th className="w-12 px-4 py-2 text-left" aria-sort={ariaSort('priority')}>
-                <SortHeader label={`Pri${arrow('priority')}`} onClick={() => sortBy('priority')} />
+                <SortHeader label="Pri" arrow={arrow('priority')} onClick={() => sortBy('priority')} />
               </th>
               <th className="px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Title
               </th>
               <th className="w-24 px-2 py-2 text-left" aria-sort={ariaSort('status')}>
-                <SortHeader label={`Status${arrow('status')}`} onClick={() => sortBy('status')} />
+                <SortHeader label="Status" arrow={arrow('status')} onClick={() => sortBy('status')} />
               </th>
               <th className="w-28 px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Tags
@@ -76,7 +91,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
                 Agent
               </th>
               <th className="w-28 px-4 py-2 text-right" aria-sort={ariaSort('updated')}>
-                <SortHeader label={`Updated${arrow('updated')}`} onClick={() => sortBy('updated')} align="right" />
+                <SortHeader label="Updated" arrow={arrow('updated')} onClick={() => sortBy('updated')} align="right" />
               </th>
             </tr>
           </thead>
@@ -102,25 +117,31 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
 /** Clickable, muted column-header sort control (no chrome — text only). */
 function SortHeader({
   label,
+  arrow,
   onClick,
   align = 'left',
 }: {
   label: string
+  /** Pre-spaced direction glyph (' ↑' / ' ↓' / '') for the active column. */
+  arrow: string
   onClick: () => void
   align?: 'left' | 'right'
 }) {
   return (
+    // tabIndex={0} is the repo WebKit-tabbability convention (Safari only Tabs
+    // to elements with an explicit tabindex) — required, not redundant. See
+    // src/lib/tabindex-convention.test.ts.
     <button
       tabIndex={0}
       type="button"
       onClick={onClick}
-      aria-label={`Sort by ${label.replace(/[↑↓]/g, '').trim()}`}
+      aria-label={`Sort by ${label}`}
       className={cn(
         'text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]',
         align === 'right' && 'ml-auto block',
       )}
     >
-      {label}
+      {`${label}${arrow}`}
     </button>
   )
 }
@@ -131,7 +152,7 @@ function TaskRow({
   onClick,
 }: {
   task: Task
-  agents: { id: string; name: string }[]
+  agents: AgentRef[]
   onClick: () => void
 }) {
   const priority = task.priority ?? 3
@@ -153,19 +174,18 @@ function TaskRow({
         </span>
       </td>
       <td className="px-2 py-2.5">
-        <button tabIndex={0}
+        <button
+          // tabIndex={0}: repo WebKit-tabbability convention (Safari only Tabs
+          // to elements with an explicit tabindex). See tabindex-convention.test.ts.
+          tabIndex={0}
           type="button"
           onClick={(e) => {
             // The <tr> also has onClick — stop the button's click bubbling so it
-            // doesn't fire onClick twice.
+            // doesn't fire onClick twice. A native <button> already activates on
+            // Enter (keydown) and Space (keyup), so no explicit onKeyDown is
+            // needed — the row stays a single tab stop via this button.
             e.stopPropagation()
             onClick()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              onClick()
-            }
           }}
           aria-label={`${task.title}, status ${statusLabel(task.status)}`}
           className="block w-full text-left text-sm text-[var(--color-secondary)] line-clamp-1"
@@ -216,7 +236,6 @@ function TaskRow({
   )
 }
 
-// not-wire-format
 function formatUpdated(iso: string): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return '—'
