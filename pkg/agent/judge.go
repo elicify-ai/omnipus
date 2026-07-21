@@ -151,19 +151,24 @@ type JudgeCriteriaInput struct {
 	// empty there — an unbound chat has no workspace).
 	//
 	// This is a product-blocker fix (fresh-install smoke test, 2026-07):
-	// runVerifierAdjudication threads it onto the verifier's own turn ctx
-	// (WithSystemAgentWorkspaceOverride, workspace_reroot.go) so
-	// resolveTurnWorkDirOrRefuse's System Agent exemption branch can root the
-	// Judge's turn at the ACTUAL workspace under review instead of its own
-	// private agent home. Without this, the Judge's seeded read-only tools
-	// (FR-012(c): read_file/list_directory) would be structurally unable to
-	// ever reach the artifacts they exist to inspect (ADR-052 FR-032's
-	// rubric-gated escalation) — see workspace_reroot.go's
-	// resolveSystemAgentTurnWorkDir doc comment for the full ADR-046 x
-	// ADR-052 grounding. Best-effort: an empty or unresolvable value falls
-	// back to the Judge's own agent home, never a hard failure — this field
-	// enriches WHERE the turn is rooted, it is not a correctness requirement
-	// for adjudication to proceed (mirrors ClaimText/ExtraContext's own
+	// System Agents (the Judge) are IMPLICIT members of EVERY workspace
+	// (operator decision — pkg/workspace's isImplicitMember,
+	// FindForAgent/FindForAgentPreferring), so this field is the
+	// "preferring" SELECTOR that picks WHICH one a given adjudication roots
+	// in — runVerifierAdjudication threads it onto the verifier's own turn
+	// ctx (WithSystemAgentWorkspaceOverride, workspace_reroot.go), merged
+	// there into the exact same optWorkspaceID selector every ordinary
+	// turn already carries. Without it, the Judge would still resolve to
+	// SOME workspace (implicit membership never refuses when at least one
+	// exists) but an arbitrary sorted-first one rather than the one under
+	// review — and its seeded read-only tools (FR-012(c):
+	// read_file/list_directory) would then be unable to reach the
+	// artifacts they exist to inspect (ADR-052 FR-032's rubric-gated
+	// escalation). Best-effort: an empty or unresolvable value falls back
+	// to FindForAgentPreferring's ordinary sorted-first pick among the
+	// Judge's (every) workspace, never a hard failure — this field enriches
+	// WHERE the turn is rooted, it is not a correctness requirement for
+	// adjudication to proceed (mirrors ClaimText/ExtraContext's own
 	// best-effort framing above). Deliberately NOT part of validate()'s
 	// scope-correlation exclusivity rule below — it is orthogonal enrichment,
 	// not a scope-correlating id.
