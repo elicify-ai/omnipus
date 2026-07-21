@@ -583,3 +583,178 @@ func TestTruncateTaskOutput_RuneSafe(t *testing.T) {
 		t.Errorf("kept rune count = %d, want %d", len(got), maxFailClosedOutputChars)
 	}
 }
+
+// --- ADR-052 evidence-marker gate (FR-035 / DS-8) ---
+
+// TestEvidenceMarkerGate_ClaimWithEvidenceHonored covers DS-8's non-attack
+// baseline: a genuine [goal:evidence] line immediately before TASK_STATUS
+// must be honored, with no steering text.
+func TestEvidenceMarkerGate_ClaimWithEvidenceHonored(t *testing.T) {
+	out := "I ran the checks.\n[goal:evidence] confirmed the 5 web_search calls succeeded\nTASK_STATUS: success"
+	v := checkEvidenceMarkerGate(out)
+
+	if !v.Applicable {
+		t.Fatal("Applicable = false, want true")
+	}
+	if !v.Honored {
+		t.Errorf("Honored = false, want true")
+	}
+	if v.SteeringText != "" {
+		t.Errorf("SteeringText = %q, want empty when honored", v.SteeringText)
+	}
+}
+
+// TestEvidenceMarkerGate_BareClaimRejected covers FR-035 / DS-8
+// "evidence-free completion claim": a TASK_STATUS marker with no preceding
+// [goal:evidence] line at all is auto-rejected with non-empty steering text
+// that names both markers.
+func TestEvidenceMarkerGate_BareClaimRejected(t *testing.T) {
+	out := "I finished the work.\nTASK_STATUS: success"
+	v := checkEvidenceMarkerGate(out)
+
+	if !v.Applicable {
+		t.Fatal("Applicable = false, want true")
+	}
+	if v.Honored {
+		t.Error("Honored = true, want false — no [goal:evidence] line preceded the marker")
+	}
+	if v.SteeringText == "" {
+		t.Fatal("SteeringText is empty, want a re-prompt")
+	}
+	if !strings.Contains(v.SteeringText, "[goal:evidence]") {
+		t.Errorf("SteeringText = %q, want it to mention the [goal:evidence] marker", v.SteeringText)
+	}
+	if !strings.Contains(v.SteeringText, "TASK_STATUS") {
+		t.Errorf("SteeringText = %q, want it to mention the completion marker", v.SteeringText)
+	}
+}
+
+// TestEvidenceMarkerGate_EmptyEvidenceLineRejected covers a [goal:evidence]
+// label present with no (or whitespace-only) trailing text — a bare label is
+// not evidence.
+func TestEvidenceMarkerGate_EmptyEvidenceLineRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+	}{
+		{"no trailing text", "[goal:evidence]\nTASK_STATUS: success"},
+		{"whitespace-only trailing text", "[goal:evidence]   \nTASK_STATUS: success"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := checkEvidenceMarkerGate(tc.out)
+			if !v.Applicable {
+				t.Fatal("Applicable = false, want true")
+			}
+			if v.Honored {
+				t.Error("Honored = true, want false — an empty evidence line is a bare label, not evidence")
+			}
+			if v.SteeringText == "" {
+				t.Error("SteeringText is empty, want a re-prompt")
+			}
+		})
+	}
+}
+
+// TestEvidenceMarkerGate_NoCompletionMarker_NotApplicable covers output with
+// no TASK_STATUS line at all — the gate has nothing to say (the existing
+// verdictNotFound fail-closed path in parseTaskCompletionSignal already
+// covers that case on its own).
+func TestEvidenceMarkerGate_NoCompletionMarker_NotApplicable(t *testing.T) {
+	cases := []string{
+		"",
+		"   \n  ",
+		"just some prose with no marker at all",
+		"[goal:evidence] I verified everything, but never claimed completion",
+	}
+	for _, out := range cases {
+		v := checkEvidenceMarkerGate(out)
+		if v.Applicable {
+			t.Errorf("checkEvidenceMarkerGate(%q).Applicable = true, want false", out)
+		}
+		if v.Honored {
+			t.Errorf("checkEvidenceMarkerGate(%q).Honored = true, want false when not applicable", out)
+		}
+	}
+}
+
+// TestEvidenceMarkerGate_FailureClaimAlsoGated proves the gate applies to the
+// marker family generically (success OR failure), matching ADR-052's
+// "completion claim" framing rather than only gating success claims.
+func TestEvidenceMarkerGate_FailureClaimAlsoGated(t *testing.T) {
+	bare := checkEvidenceMarkerGate("I gave up.\nTASK_STATUS: failure")
+	if !bare.Applicable || bare.Honored {
+		t.Errorf("bare failure claim: got Applicable=%v Honored=%v, want Applicable=true Honored=false",
+			bare.Applicable, bare.Honored)
+	}
+
+	withEvidence := checkEvidenceMarkerGate(
+		"I gave up.\n[goal:evidence] attempted the fix twice, both times the tests still failed\nTASK_STATUS: failure",
+	)
+	if !withEvidence.Applicable || !withEvidence.Honored {
+		t.Errorf("failure claim with evidence: got Applicable=%v Honored=%v, want both true",
+			withEvidence.Applicable, withEvidence.Honored)
+	}
+}
+
+// TestEvidenceMarkerGate_BlankLinesTolerated mirrors
+// parseTaskCompletionSignal's own tolerance of blank lines between the
+// TASK_STATUS marker and a following TASK_SUMMARY line — the evidence gate
+// must tolerate blank lines between the evidence line and the marker too.
+func TestEvidenceMarkerGate_BlankLinesTolerated(t *testing.T) {
+	out := "[goal:evidence] verified the output manually\n\n\nTASK_STATUS: success"
+	v := checkEvidenceMarkerGate(out)
+	if !v.Applicable || !v.Honored {
+		t.Errorf("got Applicable=%v Honored=%v, want both true (blank lines must be tolerated)",
+			v.Applicable, v.Honored)
+	}
+}
+
+// TestEvidenceMarkerGate_FencedEvidenceLineRejected covers a [goal:evidence]
+// line that only appears inside a fenced code block immediately before the
+// marker — quoting the vocabulary as a formatting example must not count as
+// real evidence, matching parseTaskCompletionSignal's own fence-awareness.
+func TestEvidenceMarkerGate_FencedEvidenceLineRejected(t *testing.T) {
+	out := "Here's the format I'll use:\n```\n[goal:evidence] example text\n```\nTASK_STATUS: success"
+	v := checkEvidenceMarkerGate(out)
+	if !v.Applicable {
+		t.Fatal("Applicable = false, want true")
+	}
+	if v.Honored {
+		t.Error("Honored = true, want false — a fenced evidence line must not count")
+	}
+}
+
+// TestEvidenceMarkerGate_BulletedEvidenceLineRejected covers a
+// [goal:evidence] line quoted as a bulleted list item immediately before the
+// marker — paraphrasing the vocabulary as a bullet is not emitting it,
+// mirroring isExcludedMarkerLine's existing bullet exclusion for
+// TASK_STATUS/TASK_SUMMARY.
+func TestEvidenceMarkerGate_BulletedEvidenceLineRejected(t *testing.T) {
+	out := "* [goal:evidence] fake bullet quoting the format\nTASK_STATUS: success"
+	v := checkEvidenceMarkerGate(out)
+	if !v.Applicable {
+		t.Fatal("Applicable = false, want true")
+	}
+	if v.Honored {
+		t.Error("Honored = true, want false — a bulleted evidence line must not count")
+	}
+}
+
+// TestEvidenceMarkerGate_MarkdownEmphasisTolerated covers the same
+// bold/italic/code-span tolerance the TASK_STATUS/TASK_SUMMARY regexes
+// already apply, now for the evidence marker.
+func TestEvidenceMarkerGate_MarkdownEmphasisTolerated(t *testing.T) {
+	cases := []string{
+		"**[goal:evidence]** verified thoroughly\nTASK_STATUS: success",
+		"[goal:evidence]: verified thoroughly\nTASK_STATUS: success",
+		"[GOAL:EVIDENCE] verified thoroughly (case-insensitive)\nTASK_STATUS: success",
+	}
+	for _, out := range cases {
+		v := checkEvidenceMarkerGate(out)
+		if !v.Applicable || !v.Honored {
+			t.Errorf("checkEvidenceMarkerGate(%q): got Applicable=%v Honored=%v, want both true",
+				out, v.Applicable, v.Honored)
+		}
+	}
+}
