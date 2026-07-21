@@ -6,6 +6,14 @@
 // (finishTaskRun/consumeAttemptOrExhaust/adjudicateClaim, task_executor.go)
 // end-to-end through real ExecuteTask dispatches: attempt-count boundaries,
 // the hard ceiling, and the Scratchpad exemption (FR-048).
+//
+// scriptedProvider fixtures below carry a "[goal:evidence] ..." line
+// immediately before every "TASK_STATUS: success" marker (ADR-052 FR-035,
+// wired in task_executor.go's finishTaskRun ahead of
+// parseTaskCompletionSignal) — without it, the evidence-marker gate would
+// intercept the claim BEFORE it ever reaches the judge/attempt-consuming
+// path these tests are pinning, inflating dispatch counts and desyncing
+// them from AttemptCount.
 
 package agent
 
@@ -45,7 +53,7 @@ func TestTaskExecutor_AttemptBoundaries(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			worker := &scriptedProvider{
-				responseBody: "did the work\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
+				responseBody: "did the work\n[goal:evidence] verified against the acceptance criterion\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
 			}
 			al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 			judgeInst.Provider = alwaysUnmetJudgeProvider()
@@ -91,7 +99,7 @@ func TestTaskExecutor_AttemptBoundaries(t *testing.T) {
 // dispatch rather than running away.
 func TestTaskExecutor_AttemptHardCeiling_StopsUnconditionally(t *testing.T) {
 	worker := &scriptedProvider{
-		responseBody: "did the work\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
+		responseBody: "did the work\n[goal:evidence] verified against the acceptance criterion\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
 	}
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 	judgeInst.Provider = alwaysUnmetJudgeProvider()
@@ -171,7 +179,7 @@ func TestTaskExecutor_ScratchpadExemptFromGoalLoop(t *testing.T) {
 // the dependent task advancing to in_progress).
 func TestTaskExecutor_JudgeMetVerdict_CompletesTaskDone(t *testing.T) {
 	worker := &scriptedProvider{
-		responseBody: "did the work\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
+		responseBody: "did the work\n[goal:evidence] verified against the acceptance criterion\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
 	}
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {

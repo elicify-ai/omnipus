@@ -134,6 +134,10 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Implemented the feature and ran the tests.\n" +
+			// ADR-052 FR-035: the evidence-marker gate (finishTaskRun, ahead of
+			// parseTaskCompletionSignal) requires this line immediately before
+			// TASK_STATUS or the claim is re-prompted instead of completing.
+			"[goal:evidence] ran the test suite, all green\n" +
 			"TASK_STATUS: success\n" +
 			"TASK_SUMMARY: Added the new export endpoint and its tests.",
 	}
@@ -161,6 +165,10 @@ func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.
 func TestTaskCompletionContract_Native_FailureMarker_FailedWithAgentWords(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Tried to reach the upstream service repeatedly.\n" +
+			// ADR-052 FR-035: the evidence-marker gate applies uniformly to a
+			// failure marker too (checkEvidenceMarkerGate: "success OR failure
+			// — the gate does not care which").
+			"[goal:evidence] retried the connection 5 times, all timed out\n" +
 			"TASK_STATUS: failure\n" +
 			"TASK_SUMMARY: Could not reach the upstream API (connection timeout).",
 	}
@@ -275,6 +283,9 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 			Kind: runner.EventKindOutput,
 			Output: &runner.OutputEvent{
 				Text: "Ran into a permissions error partway through.\n" +
+					// ADR-052 FR-035: evidence-marker gate applies to failure
+					// markers too — see the native-dispatch counterpart above.
+					"[goal:evidence] attempted the write, got a permissions error\n" +
 					"TASK_STATUS: failure\n" +
 					"TASK_SUMMARY: Blocked by missing write access to the target repo.",
 			},
@@ -541,6 +552,8 @@ func TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse(
 func TestTaskCompletionContract_SessionArchivedOnCompletion(t *testing.T) {
 	provider := &scriptedProvider{
 		responseBody: "Implemented the feature and ran the tests.\n" +
+			// ADR-052 FR-035: see the SuccessMarker test above.
+			"[goal:evidence] ran the test suite, all green\n" +
 			"TASK_STATUS: success\n" +
 			"TASK_SUMMARY: Added the new export endpoint and its tests.",
 	}
