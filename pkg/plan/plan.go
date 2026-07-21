@@ -33,6 +33,18 @@ var ErrValidation = errors.New("plan validation")
 // ErrValidation so the REST seam maps it to HTTP 400.
 var ErrIllegalPlanTransition = fmt.Errorf("%w: illegal plan state transition", ErrValidation)
 
+// ErrRestartNotPermitted is returned by ValidateRestartTransition (and,
+// transitively, Store.Update — see the restart-guard block there) when a
+// failed->approved RESTART is requested on a plan that is not, right now,
+// State==failed with FailedReason==stopped_by_user (ADR-052 §6.7, spec
+// FR-016/DS-1/FR-026). It wraps ErrIllegalPlanTransition (and therefore
+// ErrValidation), so any existing errors.Is(err, ErrValidation) 400-mapping
+// still holds unchanged; callers that need to distinguish "not restartable"
+// (spec FR-026: HTTP 409 — wrong state or wrong reason) from a malformed
+// request (400) should check errors.Is(err, ErrRestartNotPermitted)
+// specifically.
+var ErrRestartNotPermitted = fmt.Errorf("%w: restart (failed -> approved) is only permitted from failed(stopped_by_user)", ErrIllegalPlanTransition)
+
 // verr wraps a formatted message as a user-facing validation error (ErrValidation).
 func verr(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{ErrValidation}, args...)...)
@@ -102,6 +114,42 @@ func ValidateStateTransition(from, to State) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %q -> %q is not permitted", ErrIllegalPlanTransition, from, to)
+}
+
+// ValidateRestartTransition reports whether a RESTART transition
+// (failed -> approved, ADR-052 §6.7 "Restart = continuation", spec
+// FR-016/DS-1) is legal, given the plan's CURRENT state and FailedReason.
+//
+// This is a narrow, store-level, REASON-AWARE amendment layered ON TOP of
+// the canonical legalPlanTransitions matrix above — it does NOT widen that
+// matrix (grill M2/R3-4): legalPlanTransitions[StateFailed] still contains
+// only {StateFailed: true}, so ValidateStateTransition(failed, approved)
+// keeps returning illegal via the matrix, unconditionally, exactly as
+// before this function existed. Restart is legal ONLY when
+// from == StateFailed AND failedReason == FailedReasonStoppedByUser (a user
+// Stop, not a genuine failure). Genuine failures (judge_rounds_exhausted,
+// idle_expired) stay frozen — this guard rejects them exactly like the
+// matrix does for every other outbound edge off a terminal state.
+//
+// failed -> running is NEVER legal via this or any other path: a restart
+// re-enters the state machine at approved, and the ENGINE promotes
+// approved -> running under the global concurrency cap, exactly like a
+// first execute — restarting straight to running would skip cap admission
+// (the same hole class the PUT-lockdown, ADR-052 G2, closed for the
+// original approve path).
+//
+// The sole in-process caller is Store.Update's State-patch handling
+// (store.go); this is exported so the guard is independently
+// table-testable per spec DS-1 without going through a full Create+Update
+// round-trip for every case.
+func ValidateRestartTransition(from State, failedReason FailedReason) error {
+	if from != StateFailed {
+		return fmt.Errorf("%w: restart is only valid from state %q, got %q", ErrRestartNotPermitted, StateFailed, from)
+	}
+	if failedReason != FailedReasonStoppedByUser {
+		return fmt.Errorf("%w: got failed_reason %q, want %q", ErrRestartNotPermitted, failedReason, FailedReasonStoppedByUser)
+	}
+	return nil
 }
 
 // PlanPhase is the runtime-only sub-state of a State=running plan (R1 of the
