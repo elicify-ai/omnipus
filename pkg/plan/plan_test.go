@@ -186,6 +186,65 @@ func TestPlan_StateTransitions_FromRunningToFailed(t *testing.T) {
 	}
 }
 
+// TestPlan_ValidateRestartTransition table-drives the reason-aware RESTART
+// guard (ADR-052 §6.7, spec FR-016/DS-1) in isolation: legal ONLY from
+// State==failed with FailedReason==stopped_by_user; every other (state,
+// reason) pair — including the two genuine-failure reasons, which must stay
+// frozen — is rejected with ErrRestartNotPermitted (wrapping
+// ErrIllegalPlanTransition, wrapping ErrValidation).
+func TestPlan_ValidateRestartTransition(t *testing.T) {
+	cases := []struct {
+		name         string
+		from         State
+		failedReason FailedReason
+		wantLegal    bool
+	}{
+		{"failed_stopped_by_user_ok", StateFailed, FailedReasonStoppedByUser, true},
+		{"failed_judge_rounds_exhausted_rejected", StateFailed, FailedReasonJudgeRoundsExhausted, false},
+		{"failed_idle_expired_rejected", StateFailed, FailedReasonIdleExpired, false},
+		{"failed_no_reason_rejected", StateFailed, "", false},
+		{"draft_rejected", StateDraft, FailedReasonStoppedByUser, false},
+		{"approved_rejected", StateApproved, FailedReasonStoppedByUser, false},
+		{"running_rejected", StateRunning, FailedReasonStoppedByUser, false},
+		{"done_rejected_not_a_cancel", StateDone, FailedReasonStoppedByUser, false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateRestartTransition(c.from, c.failedReason)
+			if c.wantLegal {
+				if err != nil {
+					t.Fatalf("expected restart to be legal from %s reason %q, got error: %v", c.from, c.failedReason, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected restart to be rejected from %s reason %q, got nil", c.from, c.failedReason)
+			}
+			if !errors.Is(err, ErrRestartNotPermitted) {
+				t.Fatalf("expected ErrRestartNotPermitted, got %v", err)
+			}
+			if !errors.Is(err, ErrIllegalPlanTransition) {
+				t.Fatalf("expected ErrIllegalPlanTransition (wrapped), got %v", err)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("expected ErrValidation (wrapped), got %v", err)
+			}
+		})
+	}
+
+	// DS-1 "matrix" row: the canonical legalPlanTransitions matrix itself
+	// stays reason-free and rejects failed->approved AND failed->running
+	// unconditionally — proving ValidateRestartTransition is a layer ON TOP
+	// of the matrix, not a widening of it (grill M2/R3-4).
+	if err := ValidateStateTransition(StateFailed, StateApproved); !errors.Is(err, ErrIllegalPlanTransition) {
+		t.Fatalf("matrix: failed -> approved must still be illegal unconditionally, got %v", err)
+	}
+	if err := ValidateStateTransition(StateFailed, StateRunning); !errors.Is(err, ErrIllegalPlanTransition) {
+		t.Fatalf("matrix: failed -> running must still be illegal unconditionally, got %v", err)
+	}
+}
+
 // fakeTaskLister is a minimal TaskLister stub for ComputeProgress tests —
 // pkg/plan deliberately depends only on this interface, not a concrete
 // *task.Store, so this test proves that decoupling actually works (no import
