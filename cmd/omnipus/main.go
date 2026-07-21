@@ -26,8 +26,17 @@ import (
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/skills"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/status"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/version"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
+
+func init() {
+	// Install the redacting slog handler as the process-wide default so every
+	// runtime `slog.Warn/Info/...` call is redacted before output. Idempotent;
+	// failures here are silent (logging is best-effort). See ADR-adjacent and
+	// pkg/logger/redact_handler.go for the wrapper.
+	_, _ = logger.InstallSlogRedactor(nil)
+}
 
 func NewOmnipusCommand() *cobra.Command {
 	short := fmt.Sprintf("%s omnipus - Personal AI Assistant v%s\n\n", internal.Logo, config.GetVersion())

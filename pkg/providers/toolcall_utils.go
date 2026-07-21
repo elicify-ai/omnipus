@@ -12,7 +12,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // buildCLIToolsPrompt creates the tool definitions section for a CLI provider system prompt.
 func buildCLIToolsPrompt(tools []ToolDefinition) string {
 	var sb strings.Builder

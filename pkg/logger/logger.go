@@ -13,7 +13,6 @@ import (
 
 	"github.com/rs/zerolog"
 )
-
 type LogLevel = zerolog.Level
 
 const (

@@ -9,9 +9,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 )
@@ -197,7 +198,7 @@ func (t *RememberTool) logRateLimited(
 		},
 	}
 	if err := t.auditLogger.Log(entry); err != nil {
-		slog.Warn("memory: rate-limit audit log failed",
+		logger.SlogWarn("memory: rate-limit audit log failed",
 			"tool", "remember",
 			"agent_id", agentID,
 			"session_id", sessionID,
@@ -232,7 +233,7 @@ func (t *RememberTool) logAudit(agentID, sessionID, outcome, category, content s
 		// Audit failures never block tool execution (FR-012), but they must
 		// still be visible — a silently-dropped audit write hides real
 		// logger regressions.
-		slog.Warn("memory: remember audit log failed",
+		logger.SlogWarn("memory: remember audit log failed",
 			"tool", "remember",
 			"agent_id", agentID,
 			"session_id", sessionID,
@@ -453,7 +454,7 @@ func (t *RetrospectiveTool) logRateLimited(
 		},
 	}
 	if err := t.auditLogger.Log(entry); err != nil {
-		slog.Warn("memory: retrospective rate-limit audit log failed",
+		logger.SlogWarn("memory: retrospective rate-limit audit log failed",
 			"tool", "retrospective",
 			"agent_id", agentID,
 			"session_id", sessionID,
@@ -485,7 +486,7 @@ func (t *RetrospectiveTool) logAudit(agentID, sessionID, outcome string, r Memor
 		// Audit failures never block tool execution (FR-012), but they must
 		// still be visible — a silently-dropped audit write hides real
 		// logger regressions.
-		slog.Warn("memory: retrospective audit log failed",
+		logger.SlogWarn("memory: retrospective audit log failed",
 			"tool", "retrospective",
 			"agent_id", agentID,
 			"session_id", sessionID,

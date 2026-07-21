@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 )
 

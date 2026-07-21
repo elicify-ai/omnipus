@@ -16,6 +16,13 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/utils"
 )
 
+func init() {
+	// Install the redacting slog handler as the process default so every
+	// runtime `slog.Warn/Info/...` call is redacted before output.
+	// Idempotent; failures here are silent (logging is best-effort).
+	_, _ = logger.InstallSlogRedactor(nil)
+}
+
 func NewGatewayCommand() *cobra.Command {
 	var debug bool
 	var noTruncate bool

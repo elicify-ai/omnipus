@@ -10,7 +10,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // ExtractZipFile extracts a ZIP archive from disk to targetDir.
 // It reads entries one at a time from disk, keeping memory usage minimal.
 //

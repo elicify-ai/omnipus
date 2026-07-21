@@ -14,7 +14,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 const (
 	processHookJSONRPCVersion = "2.0"
 	processHookReadBufferSize = 1024 * 1024

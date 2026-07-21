@@ -22,10 +22,11 @@ package tools
 
 import (
 	"context"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 )
@@ -137,6 +138,6 @@ func emitPathAccessDenied(
 		},
 	}
 	if err := auditLog.Log(entry); err != nil {
-		slog.Error("path_audit: log write failed", "error", err, "session_id", entry.SessionID)
+		logger.SlogError("path_audit: log write failed", "error", err, "session_id", entry.SessionID)
 	}
 }

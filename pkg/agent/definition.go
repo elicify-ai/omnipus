@@ -11,7 +11,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // AgentDefinitionSource identifies which agent bootstrap file produced the definition.
 type AgentDefinitionSource string
 

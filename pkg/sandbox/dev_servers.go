@@ -28,12 +28,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // DevServerRegistration captures the per-instance state of a running Tier 3
@@ -205,7 +206,7 @@ func (r *DevServerRegistry) Register(
 		Command:      command,
 	}
 	r.entries[token] = reg
-	slog.Info("dev_servers: registered",
+	logger.SlogInfo("dev_servers: registered",
 		"agent_id", agentID,
 		"port", port,
 		"pid", pid,
@@ -295,7 +296,7 @@ func (r *DevServerRegistry) ReservePort(
 		CreatedAt:    now,
 		LastActivity: now,
 	}
-	slog.Info("dev_servers: reserved", "agent_id", agentID, "port", port)
+	logger.SlogInfo("dev_servers: reserved", "agent_id", agentID, "port", port)
 	return token, port, nil
 }
 
@@ -313,7 +314,7 @@ func (r *DevServerRegistry) ConfirmReservation(token string, pid int, command st
 		// process is at least visible. The caller (web_serve) only confirms a
 		// token it just reserved and has not released, so in practice this fires
 		// only on the rare expiry race.
-		slog.Warn("dev_servers: ConfirmReservation for unknown token; child PID is now untracked",
+		logger.SlogWarn("dev_servers: ConfirmReservation for unknown token; child PID is now untracked",
 			"pid", pid)
 		return
 	}
@@ -404,7 +405,7 @@ func (r *DevServerRegistry) Unregister(token string) bool {
 	// registry. Best-effort: if the process has already exited (PID
 	// recycled or never existed), the error is logged but not surfaced.
 	r.signalProcess(reg)
-	slog.Info("dev_servers: unregistered",
+	logger.SlogInfo("dev_servers: unregistered",
 		"agent_id", reg.AgentID,
 		"port", reg.Port,
 		"pid", reg.PID,
@@ -549,7 +550,7 @@ func (r *DevServerRegistry) signalProcess(reg *DevServerRegistration) {
 	}
 	proc, err := os.FindProcess(reg.PID)
 	if err != nil {
-		slog.Debug("dev_servers: FindProcess failed (may have exited)",
+		logger.SlogDebug("dev_servers: FindProcess failed (may have exited)",
 			"pid", reg.PID, "error", err)
 		return
 	}
@@ -562,10 +563,10 @@ func (r *DevServerRegistry) signalProcess(reg *DevServerRegistration) {
 		// failure means dev servers leak past their expiry, which is a
 		// resource issue operators must see.
 		if errors.Is(err, os.ErrProcessDone) {
-			slog.Debug("dev_servers: SIGTERM target already exited",
+			logger.SlogDebug("dev_servers: SIGTERM target already exited",
 				"pid", reg.PID, "error", err)
 		} else {
-			slog.Warn("dev_servers: SIGTERM failed",
+			logger.SlogWarn("dev_servers: SIGTERM failed",
 				"pid", reg.PID, "error", err)
 		}
 	}

@@ -10,9 +10,10 @@ package fileutil
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // WriteFileAtomic atomically writes data to a file using a temp file + rename pattern.
@@ -119,7 +120,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// This prevents the renamed file from disappearing after a crash.
 	if dirFile, err := os.Open(dir); err == nil {
 		if syncErr := dirFile.Sync(); syncErr != nil {
-			slog.Warn("fileutil: dir sync after write failed", "dir", dir, "error", syncErr)
+			logger.SlogWarn("fileutil: dir sync after write failed", "dir", dir, "error", syncErr)
 		}
 		dirFile.Close()
 	}

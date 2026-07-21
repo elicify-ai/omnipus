@@ -3,8 +3,9 @@ package routing
 import (
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // RouteInput contains the routing context from an inbound message.

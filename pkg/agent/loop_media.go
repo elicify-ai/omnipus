@@ -16,8 +16,9 @@ import (
 
 	"github.com/h2non/filetype"
 
-	"github.com/dapicom-ai/omnipus/pkg/docextract"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/docextract"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )

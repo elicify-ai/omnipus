@@ -10,16 +10,19 @@ package audit
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // Decision is the typed alias for audit decisions. The constants below are
@@ -310,7 +313,7 @@ func NewLogger(cfg LoggerConfig) (*Logger, error) {
 			return nil, &LoggerConstructionError{Dir: cfg.Dir, Err: err}
 		}
 		// Operator did not request audit — keep legacy degraded-mode behavior.
-		slog.Error("Audit log file cannot be opened. Operating in degraded mode.",
+		logger.SlogError("Audit log file cannot be opened. Operating in degraded mode.",
 			"error", err, "path", cfg.Dir)
 		l.degraded = true
 	}
@@ -349,7 +352,7 @@ func (l *Logger) Log(entry *Entry) error {
 	// the entry is intentionally NOT written.
 	if entry.Event == "" {
 		IncSkipped("empty_event", entry.Decision)
-		slog.Error("audit: refusing to emit entry with empty Event field",
+		logger.SlogError("audit: refusing to emit entry with empty Event field",
 			"decision", entry.Decision,
 			"agent_id", entry.AgentID,
 			"tool", entry.Tool,
@@ -363,7 +366,7 @@ func (l *Logger) Log(entry *Entry) error {
 	// data is worse than emitting one with an unfamiliar Decision string.
 	if entry.Decision != "" && !IsValidDecision(Decision(entry.Decision)) {
 		l.unknownDecisionWarn.Do(func() {
-			slog.Warn("audit: unknown Decision value (warn-once); please add to IsValidDecision or fix typo",
+			logger.SlogWarn("audit: unknown Decision value (warn-once); please add to IsValidDecision or fix typo",
 				"decision", entry.Decision,
 				"event", entry.Event,
 				"tool", entry.Tool)
@@ -371,7 +374,7 @@ func (l *Logger) Log(entry *Entry) error {
 	}
 	if !IsValidEventName(EventName(entry.Event)) {
 		l.unknownEventWarn.Do(func() {
-			slog.Warn("audit: unknown Event value (warn-once); please add to IsValidEventName or fix typo",
+			logger.SlogWarn("audit: unknown Event value (warn-once); please add to IsValidEventName or fix typo",
 				"event", entry.Event,
 				"decision", entry.Decision,
 				"tool", entry.Tool)
@@ -449,7 +452,13 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 	defer l.mu.Unlock()
 
 	if l.degraded || l.file == nil {
-		slog.Error("Audit log entry written in degraded mode", "entry", string(data))
+		// CodeQL go/clear-text-logging: the audit entry's Parameters/Details
+		// may carry API keys. Log only a fingerprint (16-char hex SHA-256
+		// prefix) so an operator can correlate the failure with the entry
+		// in the JSONL, but the secret-bearing payload never reaches the
+		// runtime log line.
+		logger.SlogError("Audit log entry written in degraded mode",
+			"entry_id", entryFingerprint(data), "entry_len", len(data))
 		return fmt.Errorf("audit: operating in degraded mode")
 	}
 
@@ -459,7 +468,7 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 			// CRIT-3: rotate() now propagates os.Rename errors and latches
 			// degraded=true itself, but we double-latch here defensively in case
 			// a future code path returns a different error class.
-			slog.Error("Audit: rotation failed, entering degraded mode", "error", rotateErr)
+			logger.SlogError("Audit: rotation failed, entering degraded mode", "error", rotateErr)
 			l.degraded = true
 			return fmt.Errorf("audit: rotation failed: %w", rotateErr)
 		}
@@ -473,8 +482,9 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 	// write to disk.
 	out, mac, hmacErr := embedHMAC(data, l.prevHMAC, l.chainKey)
 	if hmacErr != nil {
-		slog.Error("audit: HMAC chain embed failed; writing entry without chain link",
-			"error", hmacErr, "entry", string(data))
+		// See entryFingerprint comment above (CodeQL go/clear-text-logging).
+		logger.SlogError("audit: HMAC chain embed failed; writing entry without chain link",
+			"error", hmacErr, "entry_id", entryFingerprint(data), "entry_len", len(data))
 		// CRIT-1 (silent-failure-hunter): bump the skipped-counter so an
 		// operator monitoring `audit.skipped` sees chain-link drops without
 		// having to grep slog. Symmetric with the empty-event path which
@@ -490,7 +500,9 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 	n, err := l.writer.Write(line)
 	if err != nil {
 		l.degraded = true
-		slog.Error("Audit log write failed, entering degraded mode", "error", err, "entry", string(data))
+		// See entryFingerprint comment above (CodeQL go/clear-text-logging).
+		logger.SlogError("Audit log write failed, entering degraded mode",
+			"error", err, "entry_id", entryFingerprint(data), "entry_len", len(data))
 		return fmt.Errorf("audit: write failed: %w", err)
 	}
 	if err := l.writer.Flush(); err != nil {
@@ -509,8 +521,9 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 			// will reach disk if the kernel is still healthy. Do NOT latch
 			// degraded for a single Sync error: the next Write attempt will
 			// surface the underlying disk problem more reliably.
-			slog.Error("audit: fsync of critical entry failed (entry already buffered, continuing)",
-				"error", err, "entry", string(data))
+			// See entryFingerprint comment above (CodeQL go/clear-text-logging).
+			logger.SlogError("audit: fsync of critical entry failed (entry already buffered, continuing)",
+				"error", err, "entry_id", entryFingerprint(data), "entry_len", len(data))
 			return fmt.Errorf("audit: fsync failed: %w", err)
 		}
 	}
@@ -657,7 +670,7 @@ func (l *Logger) rotate() error {
 		return fmt.Errorf("audit: rotate rename %s -> %s: %w", src, dst, err)
 	}
 
-	slog.Info("Audit log rotated", "to", dst)
+	logger.SlogInfo("Audit log rotated", "to", dst)
 	if err := l.openCurrentFile(); err != nil {
 		return err
 	}
@@ -695,7 +708,7 @@ func (l *Logger) recoverCorruption() {
 		// File doesn't exist yet (fresh install) or unreadable — both fine.
 		// openCurrentFile will create it. We only log unexpected errors.
 		if !os.IsNotExist(err) {
-			slog.Warn("audit: could not open file for corruption recovery", "path", path, "error", err)
+			logger.SlogWarn("audit: could not open file for corruption recovery", "path", path, "error", err)
 		}
 		return
 	}
@@ -704,7 +717,7 @@ func (l *Logger) recoverCorruption() {
 	info, err := f.Stat()
 	if err != nil || info.Size() == 0 {
 		if err != nil {
-			slog.Warn("audit: could not stat file for corruption recovery", "path", path, "error", err)
+			logger.SlogWarn("audit: could not stat file for corruption recovery", "path", path, "error", err)
 		}
 		return
 	}
@@ -731,12 +744,12 @@ func (l *Logger) recoverCorruption() {
 		return
 	}
 
-	slog.Warn("Audit log: truncating malformed last line", "path", path, "truncate_at", lastLineStart)
+	logger.SlogWarn("Audit log: truncating malformed last line", "path", path, "truncate_at", lastLineStart)
 	if err := f.Truncate(lastLineStart); err != nil {
 		// Truncate failure is rare (read-only mount, EPERM). Log and move on
 		// — the malformed line stays, but the next write appends after it
 		// and the file remains usable. Better than a startup hard-fail.
-		slog.Error("audit: truncate of malformed last line failed",
+		logger.SlogError("audit: truncate of malformed last line failed",
 			"path", path, "truncate_at", lastLineStart, "error", err)
 	}
 }
@@ -767,14 +780,14 @@ func readLastLine(r io.ReadSeeker, size int64) (string, int64, bool) {
 	for {
 		offset := size - bufSize
 		if _, err := r.Seek(offset, io.SeekStart); err != nil {
-			slog.Warn("audit: seek failed during corruption recovery", "error", err, "offset", offset)
+			logger.SlogWarn("audit: seek failed during corruption recovery", "error", err, "offset", offset)
 			return "", size, false
 		}
 
 		buf := make([]byte, bufSize)
 		n, err := io.ReadFull(r, buf)
 		if err != nil && err != io.ErrUnexpectedEOF {
-			slog.Warn("audit: read failed during corruption recovery", "error", err)
+			logger.SlogWarn("audit: read failed during corruption recovery", "error", err)
 			return "", size, false
 		}
 		buf = buf[:n]
@@ -829,9 +842,9 @@ func (l *Logger) cleanupExpired() {
 		}
 		if info.ModTime().Before(cutoff) {
 			if err := os.Remove(path); err != nil {
-				slog.Error("Audit: failed to remove expired log", "path", path, "error", err)
+				logger.SlogError("Audit: failed to remove expired log", "path", path, "error", err)
 			} else {
-				slog.Info("Audit: removed expired log", "path", path)
+				logger.SlogInfo("Audit: removed expired log", "path", path)
 			}
 		}
 	}
@@ -842,10 +855,22 @@ func (l *Logger) redactEntry(entry *Entry) {
 		return
 	}
 	if entry.Parameters != nil {
-		entry.Parameters = l.redactor.redactMap(entry.Parameters)
+		entry.Parameters = l.redactor.RedactMap(entry.Parameters)
 	}
 	if entry.Details != nil {
-		entry.Details = l.redactor.redactMap(entry.Details)
+		entry.Details = l.redactor.RedactMap(entry.Details)
 	}
 	entry.Command = l.redactor.Redact(entry.Command)
+}
+
+// entryFingerprint returns a short, stable fingerprint of an audit entry's
+// marshalled JSON. Used in degraded-mode and write-failure log lines so an
+// operator can correlate a failure with the persisted entry without the
+// secret-bearing payload reaching the runtime log (CodeQL
+// go/clear-text-logging, SEC-16). The first 8 bytes of SHA-256 are
+// returned as 16 hex chars — enough to uniquely identify a row in normal
+// operation, not a security risk on its own.
+func entryFingerprint(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
 }

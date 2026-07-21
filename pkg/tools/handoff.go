@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
@@ -157,7 +158,7 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	transcript, err := t.sessionStore.ReadTranscript(sessionID)
 	if err != nil {
-		slog.Warn("handoff: could not read transcript for context transfer", "session", sessionID, "error", err)
+		logger.SlogWarn("handoff: could not read transcript for context transfer", "session", sessionID, "error", err)
 		// Proceed with empty context rather than failing the handoff.
 		transcript = nil
 	}
@@ -186,14 +187,14 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		Timestamp: time.Now().UTC(),
 	})
 	if appendErr != nil {
-		slog.Warn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
+		logger.SlogWarn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
 	}
 
 	// Step 8: Notify frontend (so the UI can update its active-agent indicator).
 	if t.onHandoff != nil {
 		chatID := ToolChatID(ctx)
 		if chatID == "" {
-			slog.Warn("handoff: empty chatID; UI agent_switched will not target a specific connection",
+			logger.SlogWarn("handoff: empty chatID; UI agent_switched will not target a specific connection",
 				"session_id", sessionID)
 		}
 		t.onHandoff(HandoffEvent{
@@ -362,14 +363,14 @@ func (t *ReturnToDefaultTool) Execute(ctx context.Context, args map[string]any) 
 		Timestamp: time.Now().UTC(),
 	})
 	if appendErr != nil {
-		slog.Warn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
+		logger.SlogWarn("handoff: could not write audit entry to transcript", "session", sessionID, "error", appendErr)
 	}
 
 	// Notify the frontend.
 	if t.onHandoff != nil {
 		chatID := ToolChatID(ctx)
 		if chatID == "" {
-			slog.Warn("return_to_default: empty chatID; UI agent_switched will not target a specific connection",
+			logger.SlogWarn("return_to_default: empty chatID; UI agent_switched will not target a specific connection",
 				"session_id", sessionID)
 		}
 		t.onHandoff(HandoffEvent{

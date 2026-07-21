@@ -24,9 +24,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/h2non/filetype"
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	basechannels "github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 )
 

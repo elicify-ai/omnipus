@@ -220,7 +220,7 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// operators can correlate with proxy denials and reachability issues.
 	rp.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 		slog.Warn("egress_proxy: upstream error",
-			"host", host, "error", err)
+			"host", strings.ReplaceAll(strings.ReplaceAll(host, "\n", ""), "\r", ""), "error", err)
 		if p.audit != nil {
 			// B1.2(c): emit a distinct event so audit consumers can
 			// distinguish "denied by allow-list" from "allowed but
@@ -279,7 +279,7 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	upstream, err := net.DialTimeout("tcp", hostPort, 10*time.Second)
 	if err != nil {
 		slog.Warn("egress_proxy: connect dial failed",
-			"host", host, "error", err)
+			"host", strings.ReplaceAll(strings.ReplaceAll(host, "\n", ""), "\r", ""), "error", err)
 		if p.audit != nil {
 			// B1.2(c): structured upstream-error audit for the CONNECT
 			// (HTTPS tunnel) path. Same shape as the plain-HTTP branch
@@ -355,7 +355,7 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 // reason}. Falls back to slog.Warn when no closure is wired so denials are
 // always visible in logs even in tests/development.
 func (p *EgressProxy) deny(w http.ResponseWriter, host string) {
-	slog.Info("egress_proxy: denied", "host", host, "allow_list", p.allowList)
+	slog.Info("egress_proxy: denied", "host", strings.ReplaceAll(strings.ReplaceAll(host, "\n", ""), "\r", ""), "allow_list", p.allowList)
 	if p.audit != nil {
 		p.audit(&audit.Entry{
 			Event:    "egress_denied",
@@ -368,7 +368,7 @@ func (p *EgressProxy) deny(w http.ResponseWriter, host string) {
 		})
 	} else {
 		slog.Warn("egress_proxy: deny without audit hook (audit logger unavailable)",
-			"host", host, "allow_list", p.allowList)
+			"host", strings.ReplaceAll(strings.ReplaceAll(host, "\n", ""), "\r", ""), "allow_list", p.allowList)
 	}
 	http.Error(w, fmt.Sprintf("egress_proxy: host %q not in allow-list", host), http.StatusForbidden)
 }

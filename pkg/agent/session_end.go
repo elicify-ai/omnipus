@@ -13,11 +13,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
@@ -66,7 +67,7 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("session_end: runRecap panic recovered",
+			logger.SlogError("session_end: runRecap panic recovered",
 				"session_id", sessionID,
 				"trigger", trigger,
 				"panic", r,
@@ -166,7 +167,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	resp, llmErr := agentInst.Provider.Chat(ctx, msgs, nil, recapModel, opts)
 
 	if llmErr != nil {
-		slog.Warn("session_end: llm call failed",
+		logger.SlogWarn("session_end: llm call failed",
 			"session_id", sessionID,
 			"agent_id", agentInst.ID,
 			"error", llmErr.Error(),
@@ -199,7 +200,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		// Model returned something that is not the expected JSON envelope.
 		// The raw body can still be useful for debugging recap-prompt regressions,
 		// so log a truncated preview before discarding it and falling back.
-		slog.Warn("session_end: recap JSON parse failed",
+		logger.SlogWarn("session_end: recap JSON parse failed",
 			"session_id", sessionID,
 			"agent_id", agentInst.ID,
 			"parse_error", parseErr.Error(),
@@ -231,7 +232,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	}
 
 	if err := memory.WriteLastSession(parsed.Recap); err != nil {
-		slog.Warn("session_end: failed to write LAST_SESSION.md",
+		logger.SlogWarn("session_end: failed to write LAST_SESSION.md",
 			"session_id", sessionID,
 			"agent_id", agentInst.ID,
 			"error", err,
@@ -247,7 +248,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		NeedsImprovement: parsed.NeedsImprovement,
 	}
 	if err := memory.AppendRetro(sessionID, retro); err != nil {
-		slog.Warn("session_end: failed to append retro",
+		logger.SlogWarn("session_end: failed to append retro",
 			"session_id", sessionID,
 			"agent_id", agentInst.ID,
 			"error", err,
@@ -259,7 +260,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// agentSessionHasRetro at the file level. Re-recap on a subsequent
 	// bootstrap pass will be blocked by the file check, not this map.
 
-	slog.Info("session_end: recap complete",
+	logger.SlogInfo("session_end: recap complete",
 		"session_id", sessionID,
 		"agent_id", agentInst.ID,
 		"trigger", trigger,
@@ -295,7 +296,7 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	agentInst *AgentInstance,
 	turnCount, toolCallCount int,
 ) {
-	slog.Warn("session_end: recap fallback",
+	logger.SlogWarn("session_end: recap fallback",
 		"session_id", sessionID,
 		"trigger", trigger,
 		"fallback_reason", fallbackReason,
@@ -317,7 +318,7 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 		sessionID, turnCount, toolCallCount, fallbackReason)
 
 	if err := memory.WriteLastSession(recap); err != nil {
-		slog.Warn("session_end: fallback: failed to write LAST_SESSION.md",
+		logger.SlogWarn("session_end: fallback: failed to write LAST_SESSION.md",
 			"session_id", sessionID,
 			"error", err,
 		)
@@ -331,7 +332,7 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 		Recap:          recap,
 	}
 	if err := memory.AppendRetro(sessionID, retro); err != nil {
-		slog.Warn("session_end: fallback: failed to append retro",
+		logger.SlogWarn("session_end: fallback: failed to append retro",
 			"session_id", sessionID,
 			"error", err,
 		)
@@ -359,7 +360,7 @@ func (al *AgentLoop) auditRecap(sessionID, agentID, trigger, outcome string) {
 			"trigger": trigger,
 		},
 	}); err != nil {
-		slog.Warn("session_end: failed to write audit entry",
+		logger.SlogWarn("session_end: failed to write audit entry",
 			"session_id", sessionID,
 			"error", err,
 		)
@@ -409,7 +410,7 @@ func classifyLLMError(err error) string {
 	case strings.Contains(msg, "unauthorized") || strings.Contains(msg, "401"):
 		return "llm_unauthorized"
 	default:
-		slog.Warn("session_end: unclassified llm error",
+		logger.SlogWarn("session_end: unclassified llm error",
 			"error", err.Error(),
 		)
 		return "llm_error"
@@ -430,13 +431,13 @@ func classifyLLMError(err error) string {
 func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("session_end: BootstrapRecapPass panic recovered", "panic", r)
+			logger.SlogError("session_end: BootstrapRecapPass panic recovered", "panic", r)
 		}
 	}()
 
 	defaults := &al.cfg.Agents.Defaults
 	if !defaults.AutoRecapEnabled || !defaults.BootstrapRecapEnabled {
-		slog.Info("session_end: bootstrap recap skipped",
+		logger.SlogInfo("session_end: bootstrap recap skipped",
 			"BootstrapRecapEnabled", defaults.BootstrapRecapEnabled,
 			"AutoRecapEnabled", defaults.AutoRecapEnabled,
 		)
@@ -444,7 +445,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 	}
 
 	if al.sharedSessionStore == nil {
-		slog.Warn("session_end: bootstrap recap: no shared session store")
+		logger.SlogWarn("session_end: bootstrap recap: no shared session store")
 		return
 	}
 
@@ -469,7 +470,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 	sessionsBaseDir := al.sharedSessionStore.BaseDir()
 	entries, err := os.ReadDir(sessionsBaseDir)
 	if err != nil {
-		slog.Warn("session_end: bootstrap_recap: cannot read sessions dir",
+		logger.SlogWarn("session_end: bootstrap_recap: cannot read sessions dir",
 			"dir", sessionsBaseDir,
 			"error", err,
 		)
@@ -478,7 +479,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 
 	for _, entry := range entries {
 		if ctx.Err() != nil {
-			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
+			logger.SlogInfo("session_end: bootstrap recap pass complete (context canceled)",
 				"processed", processed,
 				"skipped_budget", skippedBudget,
 				"errored", errored,
@@ -525,7 +526,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 		if accumulatedCostUSD+costPerRecapUSD > budgetUSD {
 			al.auditRecap(sessionID, agentInst.ID, "bootstrap", "skipped_budget_exceeded")
 			skippedBudget++
-			slog.Info("session_end: bootstrap recap: budget exceeded",
+			logger.SlogInfo("session_end: bootstrap recap: budget exceeded",
 				"accumulated_usd", accumulatedCostUSD,
 				"budget_usd", budgetUSD,
 			)
@@ -535,7 +536,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 
 		select {
 		case <-ctx.Done():
-			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
+			logger.SlogInfo("session_end: bootstrap recap pass complete (context canceled)",
 				"processed", processed,
 				"skipped_budget", skippedBudget,
 				"errored", errored,
@@ -550,7 +551,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 	}
 
 	// SF2: emit a single summary so operators can audit the pass at a glance.
-	slog.Info("session_end: bootstrap recap pass complete",
+	logger.SlogInfo("session_end: bootstrap recap pass complete",
 		"processed", processed,
 		"skipped_budget", skippedBudget,
 		"errored", errored,
@@ -569,7 +570,7 @@ func (al *AgentLoop) agentSessionHasRetro(agentInst *AgentInstance, sessionID st
 	dateDirs, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Warn("session_end: read retro dir failed",
+			logger.SlogWarn("session_end: read retro dir failed",
 				"dir", sessionsDir,
 				"agent_id", agentInst.ID,
 				"error", err,
@@ -598,7 +599,7 @@ func (al *AgentLoop) newestTranscriptTimestamp(sessionDir string) (time.Time, bo
 	data, err := os.ReadFile(transcriptPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Warn("session_end: cannot read transcript",
+			logger.SlogWarn("session_end: cannot read transcript",
 				"path", transcriptPath,
 				"error", err,
 			)

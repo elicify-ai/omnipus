@@ -8,7 +8,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // ErrBusClosed is returned when publishing to a closed MessageBus.
 var ErrBusClosed = errors.New("message bus closed")
 

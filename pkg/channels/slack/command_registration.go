@@ -4,8 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/commands"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/commands"
 )
 
 // slackCommandManifestNote is the guidance logged at startup so operators know

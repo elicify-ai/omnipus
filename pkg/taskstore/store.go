@@ -14,8 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
 
 // ErrNotFound is returned when a task ID does not exist on disk.

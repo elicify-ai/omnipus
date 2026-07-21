@@ -6,7 +6,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // botGoLogger preserves useful SDK info logs while demoting noisy heartbeat
 // traffic to DEBUG so long-running QQ sessions do not spam the console.
 type botGoLogger struct {

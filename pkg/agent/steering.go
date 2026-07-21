@@ -6,8 +6,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/routing"
 	"github.com/dapicom-ai/omnipus/pkg/tools"

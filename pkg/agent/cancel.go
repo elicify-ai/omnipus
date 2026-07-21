@@ -15,9 +15,11 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"runtime/debug"
+	"strings"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/session"
@@ -156,10 +158,13 @@ func (al *AgentLoop) RequestCancel(
 	})
 
 	if !wasFired {
-		slog.Debug("agent: RequestCancel — no active turn or already canceled",
+		// scope.Channel and scope.ChatID are user-controlled (inbound cancel
+		// request). Sanitize for log injection (CodeQL go/log-injection): the
+		// inline strings.ReplaceAll on "\n"/"\r" is the recognized sanitizer.
+		logger.SlogDebug("agent: RequestCancel — no active turn or already canceled",
 			"session_id", sessionID,
-			"channel", scope.Channel,
-			"chat_id", scope.ChatID,
+			"channel", strings.ReplaceAll(strings.ReplaceAll(scope.Channel, "\n", ""), "\r", ""),
+			"chat_id", strings.ReplaceAll(strings.ReplaceAll(scope.ChatID, "\n", ""), "\r", ""),
 		)
 		return CancelOutcome{Fired: false}, nil
 	}
@@ -184,7 +189,7 @@ func (al *AgentLoop) RequestCancel(
 		// Mark the last transcript entry as truncated.
 		if store != nil {
 			if err := store.MarkLastEntryTruncated(sessionID, turnID); err != nil {
-				slog.Warn("agent: RequestCancel: MarkLastEntryTruncated failed",
+				logger.SlogWarn("agent: RequestCancel: MarkLastEntryTruncated failed",
 					"session_id", sessionID, "turn_id", turnID, "error", err)
 			}
 			// Append a turn_canceled entry to the transcript.
@@ -199,7 +204,7 @@ func (al *AgentLoop) RequestCancel(
 				Timestamp:            time.Now().UTC(),
 			})
 			if appendErr != nil {
-				slog.Warn("agent: RequestCancel: could not append turn_canceled transcript entry",
+				logger.SlogWarn("agent: RequestCancel: could not append turn_canceled transcript entry",
 					"session_id", sessionID, "error", appendErr)
 			}
 		}
@@ -226,7 +231,7 @@ func (al *AgentLoop) RequestCancel(
 	// in the narrow window between collectDescendantTurnIDs and InterruptSession —
 	// this should never happen in practice but is worth a WARN if it does.
 	if len(interrupted) != len(descendants) {
-		slog.Warn("agent: RequestCancel: descendants list mismatch — turn added/removed between collect and interrupt",
+		logger.SlogWarn("agent: RequestCancel: descendants list mismatch — turn added/removed between collect and interrupt",
 			"session_id", sessionID,
 			"pre_collected", descendants,
 			"interrupted", interrupted,
@@ -247,7 +252,7 @@ func (al *AgentLoop) RequestCancel(
 		// Default implementation when no hook is supplied (CLI / Tier A / Tier B).
 		status := session.StatusInterrupted
 		if err := store.SetMeta(sessionID, session.MetaPatch{Status: &status}); err != nil {
-			slog.Warn("agent: RequestCancel: could not mark session interrupted",
+			logger.SlogWarn("agent: RequestCancel: could not mark session interrupted",
 				"session_id", sessionID, "error", err)
 		}
 	}
@@ -256,7 +261,7 @@ func (al *AgentLoop) RequestCancel(
 	time.AfterFunc(3*time.Second, func() {
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("agent: RequestCancel: timer panic",
+				logger.SlogError("agent: RequestCancel: timer panic",
 					"stage", "hard",
 					"session_id", sessionID,
 					"panic", r,
@@ -268,7 +273,7 @@ func (al *AgentLoop) RequestCancel(
 			return // already finished
 		}
 		if _, err := al.InterruptSessionHard(sessionID, hint); err != nil {
-			slog.Warn("agent: RequestCancel: hard abort failed",
+			logger.SlogWarn("agent: RequestCancel: hard abort failed",
 				"session_id", sessionID, "error", err)
 		}
 		if hooks.SendStageFrame != nil {
@@ -280,7 +285,7 @@ func (al *AgentLoop) RequestCancel(
 		time.AfterFunc(5*time.Second, func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("agent: RequestCancel: timer panic",
+					logger.SlogError("agent: RequestCancel: timer panic",
 						"stage", "detached",
 						"session_id", sessionID,
 						"panic", r,

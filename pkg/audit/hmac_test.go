@@ -27,6 +27,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 )
 

@@ -4,8 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/bus"
 )
 
 // CancelInterceptor is the subset of the agent loop that Tier B channels need

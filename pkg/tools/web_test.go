@@ -14,7 +14,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 const (
 	testFetchLimit = int64(10 * 1024 * 1024)
 	format         = "plaintext"
