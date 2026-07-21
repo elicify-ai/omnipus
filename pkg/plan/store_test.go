@@ -247,6 +247,207 @@ func TestPlan_CountersPersistAndReload(t *testing.T) {
 	}
 }
 
+// driveToFailed pushes plan id through draft->approved->running->failed
+// (reason), optionally stamping a non-zero JudgeRounds and a PausedReason
+// before the failing transition so the restart tests below have real,
+// non-zero state to assert gets cleared (JudgeRounds) or left alone
+// (PausedReason — orthogonal, ADR-052 §6.7).
+func driveToFailed(t *testing.T, s *Store, id string, reason FailedReason, judgeRounds int, pausedReason string) *Plan {
+	t.Helper()
+	approved, running, failed := StateApproved, StateRunning, StateFailed
+	if _, err := s.Update(id, Patch{State: &approved}); err != nil {
+		t.Fatalf("draft->approved: %v", err)
+	}
+	if _, err := s.Update(id, Patch{State: &running}); err != nil {
+		t.Fatalf("approved->running: %v", err)
+	}
+	if judgeRounds > 0 {
+		rounds := judgeRounds
+		if _, err := s.Update(id, Patch{JudgeRounds: &rounds}); err != nil {
+			t.Fatalf("set judge_rounds: %v", err)
+		}
+	}
+	if pausedReason != "" {
+		pr := pausedReason
+		if _, err := s.Update(id, Patch{PausedReason: &pr}); err != nil {
+			t.Fatalf("set paused_reason: %v", err)
+		}
+	}
+	updated, err := s.Update(id, Patch{State: &failed, FailedReason: &reason})
+	if err != nil {
+		t.Fatalf("running->failed(%s): %v", reason, err)
+	}
+	return updated
+}
+
+// TestPlan_RestartTransition_ViaStoreUpdate exercises the store-level
+// reason-aware RESTART guard (ADR-052 §6.7, spec FR-016/FR-017/DS-1)
+// end-to-end through the SAME Store.Update(id, Patch{State: &approved}) call
+// shape already used at every other approve/stop call site
+// (pkg/gateway/rest_plans.go, pkg/agent/plan_engine.go) — no new exported
+// entry point, per the task's "explicit guarded path in the store's
+// Update/validation flow" instruction.
+func TestPlan_RestartTransition_ViaStoreUpdate(t *testing.T) {
+	t.Run("stopped_by_user restart succeeds, clears reason, resets judge_rounds, leaves paused_reason alone", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Restartable Plan", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		failedPlan := driveToFailed(t, s, p.ID, FailedReasonStoppedByUser, 2, "owner paused mid-run")
+		if failedPlan.FailedReason != FailedReasonStoppedByUser || failedPlan.JudgeRounds != 2 {
+			t.Fatalf("setup: unexpected pre-restart state: %+v", failedPlan)
+		}
+
+		approved := StateApproved
+		restarted, err := s.Update(p.ID, Patch{State: &approved})
+		if err != nil {
+			t.Fatalf("restart transition failed[stopped_by_user]->approved: %v", err)
+		}
+		if restarted.State != StateApproved {
+			t.Fatalf("restart: state = %q, want approved (engine promotes to running separately)", restarted.State)
+		}
+		if restarted.FailedReason != "" {
+			t.Fatalf("restart must clear failed_reason, got %q", restarted.FailedReason)
+		}
+		if restarted.JudgeRounds != 0 {
+			t.Fatalf("restart must reset judge_rounds to 0, got %d", restarted.JudgeRounds)
+		}
+		// ApprovedAt is re-stamped by the StateApproved case in the same
+		// lifecycle-timestamp switch every other approve transition uses
+		// (store.go); RFC3339 is second-resolution so a same-second re-stamp
+		// cannot be distinguished from the original by string inequality —
+		// non-empty is the assertion this test can make reliably.
+		if restarted.ApprovedAt == "" {
+			t.Fatalf("restart must stamp ApprovedAt, got empty")
+		}
+		if restarted.PausedReason != "owner paused mid-run" {
+			t.Fatalf("restart must NOT touch paused_reason (orthogonal), got %q", restarted.PausedReason)
+		}
+
+		// Persistence proof: reload from a brand-new Store instance over the
+		// same directory.
+		reloaded, err := New(s.Dir()).Get(p.ID)
+		if err != nil {
+			t.Fatalf("Get after restart: %v", err)
+		}
+		if reloaded.State != StateApproved || reloaded.FailedReason != "" || reloaded.JudgeRounds != 0 {
+			t.Fatalf("restart did not survive reload: %+v", reloaded)
+		}
+	})
+
+	t.Run("genuine failures stay frozen — restart rejected", func(t *testing.T) {
+		for _, reason := range []FailedReason{FailedReasonJudgeRoundsExhausted, FailedReasonIdleExpired} {
+			reason := reason
+			t.Run(string(reason), func(t *testing.T) {
+				s := newStore(t)
+				p := mkPlan("Frozen Plan", "ws-1", "agent-a")
+				if err := s.Create(p); err != nil {
+					t.Fatalf("Create: %v", err)
+				}
+				driveToFailed(t, s, p.ID, reason, 3, "")
+
+				approved := StateApproved
+				if _, err := s.Update(p.ID, Patch{State: &approved}); !errors.Is(err, ErrRestartNotPermitted) {
+					t.Fatalf("restart from failed(%s) must be rejected with ErrRestartNotPermitted, got %v", reason, err)
+				}
+
+				// The rejected restart must NOT mutate the plan on disk.
+				reloaded, err := s.Get(p.ID)
+				if err != nil {
+					t.Fatalf("Get after rejected restart: %v", err)
+				}
+				if reloaded.State != StateFailed || reloaded.FailedReason != reason || reloaded.JudgeRounds != 3 {
+					t.Fatalf("plan mutated by rejected restart: %+v", reloaded)
+				}
+			})
+		}
+	})
+
+	t.Run("failed to running stays illegal even with stopped_by_user reason", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("No Direct Running Plan", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		driveToFailed(t, s, p.ID, FailedReasonStoppedByUser, 1, "")
+
+		running := StateRunning
+		if _, err := s.Update(p.ID, Patch{State: &running}); !errors.Is(err, ErrIllegalPlanTransition) {
+			t.Fatalf("failed[stopped_by_user]->running must stay illegal, got %v", err)
+		}
+		reloaded, err := s.Get(p.ID)
+		if err != nil {
+			t.Fatalf("Get after rejected failed->running: %v", err)
+		}
+		if reloaded.State != StateFailed || reloaded.JudgeRounds != 1 {
+			t.Fatalf("plan mutated by rejected failed->running, got %+v", reloaded)
+		}
+	})
+
+	t.Run("done is not a cancel — cannot restart to approved", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Done Plan", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		approved, running, done := StateApproved, StateRunning, StateDone
+		if _, err := s.Update(p.ID, Patch{State: &approved}); err != nil {
+			t.Fatalf("draft->approved: %v", err)
+		}
+		if _, err := s.Update(p.ID, Patch{State: &running}); err != nil {
+			t.Fatalf("approved->running: %v", err)
+		}
+		if _, err := s.Update(p.ID, Patch{State: &done}); err != nil {
+			t.Fatalf("running->done: %v", err)
+		}
+		reapprove := StateApproved
+		if _, err := s.Update(p.ID, Patch{State: &reapprove}); !errors.Is(err, ErrIllegalPlanTransition) {
+			t.Fatalf("done->approved must be rejected, got %v", err)
+		}
+	})
+
+	t.Run("restart lands at approved, never running (engine promotes under the cap separately)", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Cap Deferred Plan", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		driveToFailed(t, s, p.ID, FailedReasonStoppedByUser, 0, "")
+		approved := StateApproved
+		restarted, err := s.Update(p.ID, Patch{State: &approved})
+		if err != nil {
+			t.Fatalf("restart: %v", err)
+		}
+		if restarted.State != StateApproved {
+			t.Fatalf("restart must land at approved (never running directly), got %q", restarted.State)
+		}
+	})
+
+	t.Run("restart wins even if the same patch also carries an explicit failed_reason/judge_rounds", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Explicit Patch Plan", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		driveToFailed(t, s, p.ID, FailedReasonStoppedByUser, 5, "")
+
+		approved := StateApproved
+		conflictingReason := FailedReasonStoppedByUser // still a valid enum value, just should be cleared anyway
+		conflictingRounds := 7
+		restarted, err := s.Update(p.ID, Patch{State: &approved, FailedReason: &conflictingReason, JudgeRounds: &conflictingRounds})
+		if err != nil {
+			t.Fatalf("restart with same-patch explicit fields: %v", err)
+		}
+		if restarted.FailedReason != "" {
+			t.Fatalf("restart must clear failed_reason even if the same patch set it, got %q", restarted.FailedReason)
+		}
+		if restarted.JudgeRounds != 0 {
+			t.Fatalf("restart must reset judge_rounds to 0 even if the same patch set it, got %d", restarted.JudgeRounds)
+		}
+	})
+}
+
 func TestPlan_Delete(t *testing.T) {
 	s := newStore(t)
 
