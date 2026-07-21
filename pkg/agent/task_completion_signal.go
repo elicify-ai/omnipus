@@ -371,3 +371,133 @@ func truncateRunes(s string, maxRunes int) string {
 	}
 	return string(runes[:maxRunes]) + "\n... (truncated, output continues)"
 }
+
+// --- ADR-052 evidence-marker gate (FR-035 / R3-13) ---
+//
+// This EXTENDS the ADR-043 marker family defined above (TASK_STATUS /
+// TASK_SUMMARY) with a second marker in the SAME family — `[goal:evidence]`
+// — rather than inventing a second, parallel completion-signal protocol
+// (grill finding R3-13, explicitly called out in ADR-052's "Evidence-marker
+// gate" paragraph, adapted from the opencode `willytop8/OpenCode-goal-plugin`
+// prior art cited there). A completion claim (a found TASK_STATUS marker
+// line, success OR failure — the gate does not care which) is only HONORED
+// when a non-empty `[goal:evidence] <what was verified>` line immediately
+// precedes it. A bare claim — no evidence line, or an evidence line whose
+// text is empty/whitespace-only — is REJECTED: callers must re-prompt the
+// worker with SteeringText BEFORE any verifier dispatch (spec US-13
+// Acceptance 5 / DS-8 "evidence-free completion claim").
+//
+// checkEvidenceMarkerGate deliberately does NOT reuse or mutate
+// parseTaskCompletionSignal's return value or internals — it re-locates the
+// completion marker line itself (via the same shared, already-hardened
+// primitives: computeFencedLines, isExcludedMarkerLine, taskStatusLineRe) so
+// the two functions can never disagree about fencing/exclusion semantics,
+// while keeping parseTaskCompletionSignal's existing behavior and the 27
+// pre-existing tests around it completely unchanged. Wiring this gate into
+// TaskExecutor's dispatch path (task_executor.go) — calling it before
+// parseTaskCompletionSignal and re-prompting on !Honored — is a separate,
+// later change; this file only supplies the primitive.
+
+// goalEvidenceLabel is the ADR-052 evidence-marker token. Case-insensitive at
+// match time (goalEvidenceLineRe), like the rest of the ADR-043 vocabulary.
+const goalEvidenceLabel = "[goal:evidence]"
+
+// goalEvidenceLineRe matches a `[goal:evidence] <text>` line, tolerant of the
+// same markdown-emphasis wrapping taskStatusLineRe/taskSummaryLineRe
+// tolerate (bold, italic, or code-span around the label; an optional colon
+// after the bracket). The captured group is the trailing text, which the
+// caller must still trim and check for emptiness — a `[goal:evidence]` line
+// with no (or whitespace-only) trailing text is a bare label, not evidence.
+var goalEvidenceLineRe = regexp.MustCompile(
+	"(?i)^[*`_\\s]*\\[goal:evidence\\][*`_\\s]*:?[*`_\\s]*(.*)$",
+)
+
+// evidenceGateVerdict is the result of checkEvidenceMarkerGate.
+type evidenceGateVerdict struct {
+	// Applicable is false when the output contains no completion marker at
+	// all (parseTaskCompletionSignal's own verdictNotFound fail-closed path
+	// already handles that case on its own terms — the evidence gate has
+	// nothing additional to say when there is no claim to gate).
+	Applicable bool
+	// Honored is only meaningful when Applicable is true: true when a
+	// genuine (non-fenced, non-excluded), non-empty [goal:evidence] line
+	// immediately precedes the completion marker line.
+	Honored bool
+	// SteeringText is the re-prompt text to feed back to the worker when
+	// Applicable && !Honored. Empty otherwise.
+	SteeringText string
+}
+
+// evidenceGateSteeringText is the FR-035 re-prompt: verify first, then place
+// the evidence marker immediately before the completion marker, before
+// restating it.
+const evidenceGateSteeringText = "completion claim rejected: no \"" + goalEvidenceLabel +
+	" <what you verified>\" line was found immediately before the completion marker (" +
+	taskStatusLabel + "). Verify your work first, then put \"" + goalEvidenceLabel +
+	" <what you verified>\" immediately before the completion marker, then restate " +
+	taskStatusLabel + "."
+
+// checkEvidenceMarkerGate scans output for the LAST valid (non-fenced,
+// non-excluded) TASK_STATUS completion marker line — the same "last
+// occurrence wins" rule parseTaskCompletionSignal applies — and reports
+// whether a genuine [goal:evidence] line immediately precedes it (ADR-052
+// FR-035).
+//
+// "Immediately precedes" tolerates intervening BLANK lines (mirroring
+// parseTaskCompletionSignal's own tolerance of blank lines between the
+// TASK_STATUS marker and a following TASK_SUMMARY line) but nothing else:
+// the nearest non-blank line above the marker must itself be a non-fenced,
+// non-excluded [goal:evidence] line with non-empty trailing text. A fenced
+// (quoted-as-example) or excluded (bulleted/code-indented — see
+// isExcludedMarkerLine) candidate line does not count as evidence, exactly
+// as fenced/excluded lines never count as a genuine TASK_STATUS/TASK_SUMMARY
+// line either — quoting the vocabulary is not emitting it.
+func checkEvidenceMarkerGate(output string) evidenceGateVerdict {
+	if strings.TrimSpace(output) == "" {
+		return evidenceGateVerdict{Applicable: false}
+	}
+
+	lines := strings.Split(output, "\n")
+	fenced := computeFencedLines(lines)
+
+	statusIdx := -1
+	for i, line := range lines {
+		if fenced[i] {
+			continue
+		}
+		trimmedR := strings.TrimRight(line, "\r")
+		if isExcludedMarkerLine(trimmedR) {
+			continue
+		}
+		if taskStatusLineRe.MatchString(trimmedR) {
+			statusIdx = i // last non-fenced, non-excluded match wins
+		}
+	}
+	if statusIdx == -1 {
+		return evidenceGateVerdict{Applicable: false}
+	}
+
+	for j := statusIdx - 1; j >= 0; j-- {
+		trimmedR := strings.TrimRight(lines[j], "\r")
+		if strings.TrimSpace(trimmedR) == "" {
+			continue // blank lines are tolerated between evidence and marker
+		}
+		if fenced[j] || isExcludedMarkerLine(trimmedR) {
+			return evidenceGateVerdict{
+				Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText,
+			}
+		}
+		m := goalEvidenceLineRe.FindStringSubmatch(trimmedR)
+		if m == nil || strings.TrimSpace(m[1]) == "" {
+			return evidenceGateVerdict{
+				Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText,
+			}
+		}
+		return evidenceGateVerdict{Applicable: true, Honored: true}
+	}
+
+	// No non-blank line at all before the marker (it's the first line of
+	// output, or everything above it was blank) — nothing to have been
+	// evidence, so the claim is bare.
+	return evidenceGateVerdict{Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText}
+}
