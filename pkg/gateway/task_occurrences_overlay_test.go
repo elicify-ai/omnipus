@@ -258,7 +258,12 @@ func TestOccurrenceOverlay(t *testing.T) {
 		assert.Equal(t, int32(0), b0.RunCounts.Failed)
 		assert.Equal(t, int32(0), b0.RunCounts.InProgress)
 		assert.Equal(t, int32(3), b0.RunCounts.Skipped)
-		assert.Equal(t, int32(17), b0.RunCounts.Scheduled, "24 - (4 done + 3 skipped) = 17, skipped must NOT be double-counted as scheduled")
+		assert.Equal(
+			t,
+			int32(17),
+			b0.RunCounts.Scheduled,
+			"24 - (4 done + 3 skipped) = 17, skipped must NOT be double-counted as scheduled",
+		)
 
 		for i := 1; i < len(set.DayBuckets); i++ {
 			assert.Nil(t, set.DayBuckets[i].RunCounts, "day %d has no runs, run_counts must stay unset", i)

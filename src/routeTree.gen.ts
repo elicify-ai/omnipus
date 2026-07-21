@@ -9,43 +9,37 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as OnboardingRouteImport } from './routes/onboarding'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as LandingRouteImport } from './routes/landing'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as LandingRouteImport } from './routes/landing'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
-import { Route as AppUsageRouteImport } from './routes/_app/usage'
-import { Route as AppTasksRouteImport } from './routes/_app/tasks'
-import { Route as AppSkillsRouteImport } from './routes/_app/skills'
-import { Route as AppSettingsRouteImport } from './routes/_app/settings'
-import { Route as AppProfileRouteImport } from './routes/_app/profile'
-import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
-import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
-import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
-import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
-import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
+import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
+import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
+import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
+import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
+import { Route as AppProfileRouteImport } from './routes/_app/profile'
+import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppSkillsRouteImport } from './routes/_app/skills'
+import { Route as AppTasksRouteImport } from './routes/_app/tasks'
+import { Route as AppUsageRouteImport } from './routes/_app/usage'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
-import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
-import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
+import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
+import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
+import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppWorkspacesWorkspaceIdIndexRouteImport } from './routes/_app/workspaces.$workspaceId.index'
-import { Route as AppWorkspacesWorkspaceIdTeamRouteImport } from './routes/_app/workspaces.$workspaceId.team'
-import { Route as AppWorkspacesWorkspaceIdSettingsRouteImport } from './routes/_app/workspaces.$workspaceId.settings'
-import { Route as AppWorkspacesWorkspaceIdListRouteImport } from './routes/_app/workspaces.$workspaceId.list'
-import { Route as AppWorkspacesWorkspaceIdGraphRouteImport } from './routes/_app/workspaces.$workspaceId.graph'
-import { Route as AppWorkspacesWorkspaceIdChatRouteImport } from './routes/_app/workspaces.$workspaceId.chat'
-import { Route as AppWorkspacesWorkspaceIdCalendarRouteImport } from './routes/_app/workspaces.$workspaceId.calendar'
 import { Route as AppWorkspacesWorkspaceIdBoardRouteImport } from './routes/_app/workspaces.$workspaceId.board'
+import { Route as AppWorkspacesWorkspaceIdCalendarRouteImport } from './routes/_app/workspaces.$workspaceId.calendar'
+import { Route as AppWorkspacesWorkspaceIdChatRouteImport } from './routes/_app/workspaces.$workspaceId.chat'
+import { Route as AppWorkspacesWorkspaceIdGraphRouteImport } from './routes/_app/workspaces.$workspaceId.graph'
+import { Route as AppWorkspacesWorkspaceIdListRouteImport } from './routes/_app/workspaces.$workspaceId.list'
+import { Route as AppWorkspacesWorkspaceIdSettingsRouteImport } from './routes/_app/workspaces.$workspaceId.settings'
+import { Route as AppWorkspacesWorkspaceIdTeamRouteImport } from './routes/_app/workspaces.$workspaceId.team'
 
-const OnboardingRoute = OnboardingRouteImport.update({
-  id: '/onboarding',
-  path: '/onboarding',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LandingRoute = LandingRouteImport.update({
@@ -53,8 +47,14 @@ const LandingRoute = LandingRouteImport.update({
   path: '/landing',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppRoute = AppRouteImport.update({
-  id: '/_app',
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -62,44 +62,9 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppUsageRoute = AppUsageRouteImport.update({
-  id: '/usage',
-  path: '/usage',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppTasksRoute = AppTasksRouteImport.update({
-  id: '/tasks',
-  path: '/tasks',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSkillsRoute = AppSkillsRouteImport.update({
-  id: '/skills',
-  path: '/skills',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSettingsRoute = AppSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppProfileRoute = AppProfileRouteImport.update({
-  id: '/profile',
-  path: '/profile',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppPoliciesRoute = AppPoliciesRouteImport.update({
-  id: '/policies',
-  path: '/policies',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppConnectorsRoute = AppConnectorsRouteImport.update({
-  id: '/connectors',
-  path: '/connectors',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppBrowserLiveRoute = AppBrowserLiveRouteImport.update({
-  id: '/browser-live',
-  path: '/browser-live',
+const AppAgentsRoute = AppAgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAutomationsRoute = AppAutomationsRouteImport.update({
@@ -107,14 +72,44 @@ const AppAutomationsRoute = AppAutomationsRouteImport.update({
   path: '/automations',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAgentsRoute = AppAgentsRouteImport.update({
-  id: '/agents',
-  path: '/agents',
+const AppBrowserLiveRoute = AppBrowserLiveRouteImport.update({
+  id: '/browser-live',
+  path: '/browser-live',
   getParentRoute: () => AppRoute,
 } as any)
-const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
-  id: '/workspaces/',
-  path: '/workspaces/',
+const AppConnectorsRoute = AppConnectorsRouteImport.update({
+  id: '/connectors',
+  path: '/connectors',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPoliciesRoute = AppPoliciesRouteImport.update({
+  id: '/policies',
+  path: '/policies',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProfileRoute = AppProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSkillsRoute = AppSkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTasksRoute = AppTasksRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUsageRoute = AppUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
@@ -122,56 +117,37 @@ const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppAgentsRoute,
 } as any)
+const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
+  id: '/$agentId',
+  path: '/$agentId',
+  getParentRoute: () => AppAgentsRoute,
+} as any)
+const AppSessionsSessionIdRoute = AppSessionsSessionIdRouteImport.update({
+  id: '/sessions/$sessionId',
+  path: '/sessions/$sessionId',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
+  id: '/workspaces/',
+  path: '/workspaces/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppWorkspacesWorkspaceIdRoute =
   AppWorkspacesWorkspaceIdRouteImport.update({
     id: '/workspaces/$workspaceId',
     path: '/workspaces/$workspaceId',
     getParentRoute: () => AppRoute,
   } as any)
-const AppSessionsSessionIdRoute = AppSessionsSessionIdRouteImport.update({
-  id: '/sessions/$sessionId',
-  path: '/sessions/$sessionId',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
-  id: '/$agentId',
-  path: '/$agentId',
-  getParentRoute: () => AppAgentsRoute,
-} as any)
 const AppWorkspacesWorkspaceIdIndexRoute =
   AppWorkspacesWorkspaceIdIndexRouteImport.update({
     id: '/',
     path: '/',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
-const AppWorkspacesWorkspaceIdTeamRoute =
-  AppWorkspacesWorkspaceIdTeamRouteImport.update({
-    id: '/team',
-    path: '/team',
-    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
-  } as any)
-const AppWorkspacesWorkspaceIdSettingsRoute =
-  AppWorkspacesWorkspaceIdSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
-  } as any)
-const AppWorkspacesWorkspaceIdListRoute =
-  AppWorkspacesWorkspaceIdListRouteImport.update({
-    id: '/list',
-    path: '/list',
-    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
-  } as any)
-const AppWorkspacesWorkspaceIdGraphRoute =
-  AppWorkspacesWorkspaceIdGraphRouteImport.update({
-    id: '/graph',
-    path: '/graph',
-    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
-  } as any)
-const AppWorkspacesWorkspaceIdChatRoute =
-  AppWorkspacesWorkspaceIdChatRouteImport.update({
-    id: '/chat',
-    path: '/chat',
+const AppWorkspacesWorkspaceIdBoardRoute =
+  AppWorkspacesWorkspaceIdBoardRouteImport.update({
+    id: '/board',
+    path: '/board',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
 const AppWorkspacesWorkspaceIdCalendarRoute =
@@ -180,10 +156,34 @@ const AppWorkspacesWorkspaceIdCalendarRoute =
     path: '/calendar',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
-const AppWorkspacesWorkspaceIdBoardRoute =
-  AppWorkspacesWorkspaceIdBoardRouteImport.update({
-    id: '/board',
-    path: '/board',
+const AppWorkspacesWorkspaceIdChatRoute =
+  AppWorkspacesWorkspaceIdChatRouteImport.update({
+    id: '/chat',
+    path: '/chat',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdGraphRoute =
+  AppWorkspacesWorkspaceIdGraphRouteImport.update({
+    id: '/graph',
+    path: '/graph',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdListRoute =
+  AppWorkspacesWorkspaceIdListRouteImport.update({
+    id: '/list',
+    path: '/list',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdSettingsRoute =
+  AppWorkspacesWorkspaceIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdTeamRoute =
+  AppWorkspacesWorkspaceIdTeamRouteImport.update({
+    id: '/team',
+    path: '/team',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
 
@@ -372,18 +372,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/onboarding': {
-      id: '/onboarding'
-      path: '/onboarding'
-      fullPath: '/onboarding'
-      preLoaderRoute: typeof OnboardingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/landing': {
@@ -393,11 +386,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LandingRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app': {
-      id: '/_app'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof AppRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/': {
@@ -407,60 +407,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/usage': {
-      id: '/_app/usage'
-      path: '/usage'
-      fullPath: '/usage'
-      preLoaderRoute: typeof AppUsageRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/tasks': {
-      id: '/_app/tasks'
-      path: '/tasks'
-      fullPath: '/tasks'
-      preLoaderRoute: typeof AppTasksRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/skills': {
-      id: '/_app/skills'
-      path: '/skills'
-      fullPath: '/skills'
-      preLoaderRoute: typeof AppSkillsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/settings': {
-      id: '/_app/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AppSettingsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/profile': {
-      id: '/_app/profile'
-      path: '/profile'
-      fullPath: '/profile'
-      preLoaderRoute: typeof AppProfileRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/policies': {
-      id: '/_app/policies'
-      path: '/policies'
-      fullPath: '/policies'
-      preLoaderRoute: typeof AppPoliciesRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/connectors': {
-      id: '/_app/connectors'
-      path: '/connectors'
-      fullPath: '/connectors'
-      preLoaderRoute: typeof AppConnectorsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/browser-live': {
-      id: '/_app/browser-live'
-      path: '/browser-live'
-      fullPath: '/browser-live'
-      preLoaderRoute: typeof AppBrowserLiveRouteImport
+    '/_app/agents': {
+      id: '/_app/agents'
+      path: '/agents'
+      fullPath: '/agents'
+      preLoaderRoute: typeof AppAgentsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/automations': {
@@ -470,18 +421,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAutomationsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/agents': {
-      id: '/_app/agents'
-      path: '/agents'
-      fullPath: '/agents'
-      preLoaderRoute: typeof AppAgentsRouteImport
+    '/_app/browser-live': {
+      id: '/_app/browser-live'
+      path: '/browser-live'
+      fullPath: '/browser-live'
+      preLoaderRoute: typeof AppBrowserLiveRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/workspaces/': {
-      id: '/_app/workspaces/'
-      path: '/workspaces'
-      fullPath: '/workspaces/'
-      preLoaderRoute: typeof AppWorkspacesIndexRouteImport
+    '/_app/connectors': {
+      id: '/_app/connectors'
+      path: '/connectors'
+      fullPath: '/connectors'
+      preLoaderRoute: typeof AppConnectorsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/policies': {
+      id: '/_app/policies'
+      path: '/policies'
+      fullPath: '/policies'
+      preLoaderRoute: typeof AppPoliciesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/profile': {
+      id: '/_app/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AppProfileRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/skills': {
+      id: '/_app/skills'
+      path: '/skills'
+      fullPath: '/skills'
+      preLoaderRoute: typeof AppSkillsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/tasks': {
+      id: '/_app/tasks'
+      path: '/tasks'
+      fullPath: '/tasks'
+      preLoaderRoute: typeof AppTasksRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/usage': {
+      id: '/_app/usage'
+      path: '/usage'
+      fullPath: '/usage'
+      preLoaderRoute: typeof AppUsageRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agents/': {
@@ -491,12 +484,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsIndexRouteImport
       parentRoute: typeof AppAgentsRoute
     }
-    '/_app/workspaces/$workspaceId': {
-      id: '/_app/workspaces/$workspaceId'
-      path: '/workspaces/$workspaceId'
-      fullPath: '/workspaces/$workspaceId'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRouteImport
-      parentRoute: typeof AppRoute
+    '/_app/agents/$agentId': {
+      id: '/_app/agents/$agentId'
+      path: '/$agentId'
+      fullPath: '/agents/$agentId'
+      preLoaderRoute: typeof AppAgentsAgentIdRouteImport
+      parentRoute: typeof AppAgentsRoute
     }
     '/_app/sessions/$sessionId': {
       id: '/_app/sessions/$sessionId'
@@ -505,12 +498,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSessionsSessionIdRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/agents/$agentId': {
-      id: '/_app/agents/$agentId'
-      path: '/$agentId'
-      fullPath: '/agents/$agentId'
-      preLoaderRoute: typeof AppAgentsAgentIdRouteImport
-      parentRoute: typeof AppAgentsRoute
+    '/_app/workspaces/': {
+      id: '/_app/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof AppWorkspacesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/workspaces/$workspaceId': {
+      id: '/_app/workspaces/$workspaceId'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/workspaces/$workspaceId/': {
       id: '/_app/workspaces/$workspaceId/'
@@ -519,39 +519,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesWorkspaceIdIndexRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
-    '/_app/workspaces/$workspaceId/team': {
-      id: '/_app/workspaces/$workspaceId/team'
-      path: '/team'
-      fullPath: '/workspaces/$workspaceId/team'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdTeamRouteImport
-      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
-    }
-    '/_app/workspaces/$workspaceId/settings': {
-      id: '/_app/workspaces/$workspaceId/settings'
-      path: '/settings'
-      fullPath: '/workspaces/$workspaceId/settings'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdSettingsRouteImport
-      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
-    }
-    '/_app/workspaces/$workspaceId/list': {
-      id: '/_app/workspaces/$workspaceId/list'
-      path: '/list'
-      fullPath: '/workspaces/$workspaceId/list'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdListRouteImport
-      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
-    }
-    '/_app/workspaces/$workspaceId/graph': {
-      id: '/_app/workspaces/$workspaceId/graph'
-      path: '/graph'
-      fullPath: '/workspaces/$workspaceId/graph'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdGraphRouteImport
-      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
-    }
-    '/_app/workspaces/$workspaceId/chat': {
-      id: '/_app/workspaces/$workspaceId/chat'
-      path: '/chat'
-      fullPath: '/workspaces/$workspaceId/chat'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdChatRouteImport
+    '/_app/workspaces/$workspaceId/board': {
+      id: '/_app/workspaces/$workspaceId/board'
+      path: '/board'
+      fullPath: '/workspaces/$workspaceId/board'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdBoardRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
     '/_app/workspaces/$workspaceId/calendar': {
@@ -561,11 +533,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesWorkspaceIdCalendarRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
-    '/_app/workspaces/$workspaceId/board': {
-      id: '/_app/workspaces/$workspaceId/board'
-      path: '/board'
-      fullPath: '/workspaces/$workspaceId/board'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdBoardRouteImport
+    '/_app/workspaces/$workspaceId/chat': {
+      id: '/_app/workspaces/$workspaceId/chat'
+      path: '/chat'
+      fullPath: '/workspaces/$workspaceId/chat'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdChatRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/graph': {
+      id: '/_app/workspaces/$workspaceId/graph'
+      path: '/graph'
+      fullPath: '/workspaces/$workspaceId/graph'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdGraphRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/list': {
+      id: '/_app/workspaces/$workspaceId/list'
+      path: '/list'
+      fullPath: '/workspaces/$workspaceId/list'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdListRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/settings': {
+      id: '/_app/workspaces/$workspaceId/settings'
+      path: '/settings'
+      fullPath: '/workspaces/$workspaceId/settings'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdSettingsRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
+    '/_app/workspaces/$workspaceId/team': {
+      id: '/_app/workspaces/$workspaceId/team'
+      path: '/team'
+      fullPath: '/workspaces/$workspaceId/team'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdTeamRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
   }
