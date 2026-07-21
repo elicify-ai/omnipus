@@ -810,14 +810,16 @@ type AgentConfig struct {
 	// icon, prompt). Used by core agents to keep their identity stable.
 	// Users CAN still change model, remove tools, and set heartbeat.
 	Locked bool `json:"locked,omitempty"`
-	// Rubric is the System Agent's system prompt / judging rubric (ADR-049 D3).
-	// It is the persisted home of the "rubric" wire field: for a type:system
-	// agent (e.g. the seeded Judge) the rubric IS the agent's system prompt and
-	// is the ONE prompt-equivalent field a locked System Agent may edit (soul is
-	// rejected on locked agents). Empty for every non-system agent. The Judge
-	// engine (Wave 2) reads this field together with Model/Provider to make its
-	// no-tools structured judging call.
-	Rubric string `json:"rubric,omitempty"`
+	// MemoryEnabled gates whether this agent's ContextBuilder injects its
+	// episodic "# Memory" section into the system prompt (ADR-052 FR-039,
+	// Judge/Verifier architecture). Pointer so nil means "inherit the
+	// default" — true — distinguishing an operator who never set this field
+	// from one who explicitly re-enabled it. A verifier-role agent (e.g. the
+	// seeded Judge) is seeded false: its verdicts must be reproducible and
+	// impartial (same evidence -> same verdict) rather than drifting with
+	// accumulated episodic memory across adjudications. Every other agent
+	// defaults to true (unchanged behavior). See MemoryEnabledEffective.
+	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
@@ -831,6 +833,14 @@ type AgentConfig struct {
 	// is a struct type and always serializes (writing "0001-01-01T00:00:00Z"
 	// for agents that were never PUT-updated), defeating omitempty.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// MemoryEnabledEffective resolves the memory-injection flag (ADR-052
+// FR-039): a non-nil MemoryEnabled wins; nil (the field was never set)
+// resolves to true, preserving pre-FR-039 behavior for every agent that
+// doesn't opt out.
+func (a AgentConfig) MemoryEnabledEffective() bool {
+	return a.MemoryEnabled == nil || *a.MemoryEnabled
 }
 
 // AgentType classifies an agent for scope-based tool visibility filtering.
