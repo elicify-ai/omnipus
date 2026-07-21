@@ -74,6 +74,17 @@ func newTestRestAPIWithPlans(t *testing.T) *restAPI {
 		taskLock:      task.TaskFileLock,
 		planStore:     plan.New(tmpDir + "/plans"),
 	}
+	// Wire a real PlanEngine (mirrors gateway.go's boot wiring: planStore and
+	// PlanEngine are always present together in production) so
+	// handlePlanStop/handleTaskStop's delegation to PlanEngine.StopPlan/
+	// StopTask (ADR-052) is reachable from every test using this helper,
+	// without each one having to wire it individually (see
+	// TestDeleteAgent_OwningActivePlan_Rejected for a case that also wires
+	// its own local instance to hold onto the *PlanEngine handle — a second,
+	// harmless SetPlanEngine call, not a conflict; both share the same
+	// planStore/taskStore pointers). Not Start()ed — StopPlan/StopTask are
+	// synchronous store operations, not background-loop-dependent.
+	api.agentLoop.SetPlanEngine(agent.NewPlanEngine(al, api.planStore, api.taskStore, api.taskExecutor))
 	t.Cleanup(func() { api.agentLoop.WaitForActiveRequests() })
 	return api
 }
@@ -308,9 +319,11 @@ func TestPlanStop_RequiresRunning(t *testing.T) {
 
 	// approved -> running (legal transition; the engine would normally do
 	// this on its next tick, but this test drives the transition directly
-	// via PUT to isolate the stop endpoint).
-	wRun := putPlan(t, api, p.Id, `{"state":"running"}`)
-	require.Equal(t, http.StatusOK, wRun.Code, "body=%s", wRun.Body.String())
+	// via the store to isolate the stop endpoint — PUT can no longer set
+	// state at all, ADR-052 FR-007/A1, see TestPlanPut_RejectsAnyStateField).
+	running := plan.StateRunning
+	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
+	require.NoError(t, rerr)
 
 	wStop := postPlanAction(t, api, p.Id, "stop")
 	require.Equal(t, http.StatusOK, wStop.Code, "body=%s", wStop.Body.String())
@@ -378,7 +391,11 @@ func TestDeleteAgent_OwningActivePlan_Rejected(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 
 	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
-	require.Equal(t, http.StatusOK, putPlan(t, api, p.Id, `{"state":"running"}`).Code)
+	// PUT can no longer set state at all (ADR-052 FR-007/A1) — drive the
+	// approved->running transition directly via the store instead.
+	running := plan.StateRunning
+	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
+	require.NoError(t, rerr)
 
 	assert.True(t, pe.HasActivePlansOwnedBy(testPlansAgentID))
 

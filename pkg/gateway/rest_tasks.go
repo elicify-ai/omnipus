@@ -54,6 +54,7 @@ func decodeTaskJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 //	GET    /tasks/{id}/evidence       list judge-check evidence (ADR-049 D2)
 //	GET    /tasks/{id}/verdicts       list judge verdicts (ADR-049 D2)
 //	POST   /tasks/{id}/stop           stop the task's running goal-loop (ADR-049)
+//	POST   /tasks/{id}/restart        restart a user-stopped standalone task (ADR-052 FR-026)
 func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/tasks")
@@ -112,6 +113,12 @@ func (a *restAPI) HandleTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.handleTaskStop(w, r, id)
+		case "restart":
+			if r.Method != http.MethodPost {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleTaskRestart(w, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -224,6 +231,10 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	}
 	if t.Result != "" {
 		out.Result = ptr(t.Result)
+	}
+	if t.CancelReason != "" {
+		cr := gen.TaskCancelReason(t.CancelReason)
+		out.CancelReason = &cr
 	}
 	if len(t.Artifacts) > 0 {
 		arts := append([]string{}, t.Artifacts...)
@@ -1452,14 +1463,21 @@ func (a *restAPI) handleTaskVerdicts(w http.ResponseWriter, id string) {
 	jsonOK(w, out)
 }
 
-// handleTaskStop handles POST /api/v1/tasks/{id}/stop. Cancels the task's
-// in-flight worker turn (if any, via the same RequestCancelForSession
-// primitive Tier A /cancel uses — a safe no-op when no turn is active) and
-// transitions the task to failed with a "stopped by user" result. Rejected
-// 400 when the task is already terminal or blocked (nothing running to
-// stop — blocked is also a derived side-state task.Store rejects a direct
-// external write into/out of, so attempting the transition would 400 anyway;
-// this checks up front for a clearer error message).
+// handleTaskStop handles POST /api/v1/tasks/{id}/stop (ADR-052 US-7/FR-025).
+// Delegates to PlanEngine.StopTask, which cancels the task's own worker
+// session AND its registered verifier session (if adjudication is in
+// flight — via the same RequestCancelForSession primitive Tier A /cancel
+// uses, a safe no-op when no turn is active) and marks the task
+// failed+cancel_reason=stopped_by_user. Works identically for a standalone
+// task or a SINGLE in-plan member (member-Stop, A5) — StopTask deliberately
+// does not touch the task's plan; the plan's other independent members keep
+// running (the engine's own reactive dispatch loop evaluates FR-041 "no
+// further progress possible" on its next pass, triggered by the
+// task_status_changed event StopTask's cancelMemberLocked already emits).
+// Rejected 400 when the task is not currently in_progress (nothing running
+// to stop — StopTask's own precondition; checked here first for a clearer
+// error message and to avoid engaging the engine for an obviously-invalid
+// call).
 func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
@@ -1475,41 +1493,88 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 		jsonErr(w, http.StatusInternalServerError, "could not read task")
 		return
 	}
-	if task.IsTerminal(t.Status) {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("task is already %q; nothing to stop", t.Status))
-		return
-	}
-	if t.Status == task.StatusBlocked {
-		jsonErr(w, http.StatusBadRequest, "task is blocked; nothing running to stop")
+	if t.Status != task.StatusInProgress {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("task is %q; only an in-progress task can be stopped", t.Status))
 		return
 	}
 
-	if t.SessionID != "" && a.agentLoop != nil {
-		c := a.callerIdentity(r)
-		if _, cerr := a.agentLoop.RequestCancelForSession(r.Context(), t.SessionID, c.Username, "system"); cerr != nil {
-			slog.Warn("rest: task stop: cancel in-flight turn failed",
-				"id", id, "session_id", t.SessionID, "error", cerr)
-		}
+	pe := agent.GetPlanEngine(a.agentLoop)
+	if pe == nil {
+		jsonErr(w, http.StatusServiceUnavailable, "plan engine is not available")
+		return
 	}
-
-	failed := task.StatusFailed
-	result := "stopped by user request"
-	now := time.Now().UTC().Format(time.RFC3339)
-	updated, uerr := a.taskStore.Update(id, task.Patch{
-		Status:      &failed,
-		Result:      &result,
-		CompletedAt: &now,
-	})
-	if uerr != nil {
-		if isTaskValidationErr(uerr) {
-			jsonErr(w, http.StatusBadRequest, uerr.Error())
+	c := a.callerIdentity(r)
+	updated, serr := pe.StopTask(r.Context(), id, c.Username, "system")
+	if serr != nil {
+		if errors.Is(serr, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
 			return
 		}
-		slog.Error("rest: task stop: update failed", "id", id, "error", uerr)
+		slog.Error("rest: task stop: engine stop failed", "id", id, "error", serr)
 		jsonErr(w, http.StatusInternalServerError, "could not stop task")
 		return
 	}
+	// StopTask's own cancelMemberLocked already emits task_status_changed —
+	// do not double-emit here. Audit logging remains a REST-layer concern
+	// (the engine package writes no audit entries).
 	a.auditTask("task.stop", id)
+	jsonOK(w, a.toWireTask(*updated))
+}
+
+// handleTaskRestart handles POST /api/v1/tasks/{id}/restart (ADR-052
+// FR-026, the ▶ Play route for a standalone task previously stopped by the
+// user). Per contracts/openapi.yaml's restartTask: rejected 409 when the
+// task belongs to a plan (restart the plan instead, via
+// POST /plans/{id}/restart, which re-runs its non-done members — G4) or is
+// not in a restartable state — `failed` with cancel_reason
+// stopped_by_user, specifically. Unlike a plan restart's member reset (which
+// un-freezes failed->next for ANY reason, FR-016/DS-5), this standalone-task
+// endpoint is reason-gated the same way the plan-level restart guard is: a
+// genuinely-failed standalone task (attempts exhausted) is not restartable
+// here — same "author fresh" posture as a genuinely-failed plan.
+func (a *restAPI) handleTaskRestart(w http.ResponseWriter, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	t, err := a.taskStore.Get(id)
+	if err != nil {
+		if errors.Is(err, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		slog.Error("rest: task restart: get failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read task")
+		return
+	}
+	if t.PlanID != "" {
+		jsonErr(w, http.StatusConflict,
+			"task is a plan member; restart the plan instead via POST /plans/{id}/restart")
+		return
+	}
+	if t.Status != task.StatusFailed || t.CancelReason != task.CancelReasonStoppedByUser {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf(
+			"task is %q (cancel_reason=%q); only a task stopped by the user "+
+				"(status=failed, cancel_reason=stopped_by_user) can be restarted",
+			t.Status, t.CancelReason))
+		return
+	}
+
+	updated, rerr := a.taskStore.RestartReset(id)
+	if rerr != nil {
+		if errors.Is(rerr, task.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "task not found")
+			return
+		}
+		if errors.Is(rerr, task.ErrNotRestartable) {
+			jsonErr(w, http.StatusConflict, rerr.Error())
+			return
+		}
+		slog.Error("rest: task restart: reset failed", "id", id, "error", rerr)
+		jsonErr(w, http.StatusInternalServerError, "could not restart task")
+		return
+	}
+	a.auditTask("task.restart", id)
 	a.emitTaskStatus(updated)
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(updated)
