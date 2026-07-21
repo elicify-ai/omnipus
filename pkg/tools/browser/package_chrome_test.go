@@ -292,7 +292,7 @@ func TestShaVerifyCache_HitsOnSecondCall(t *testing.T) {
 // when the manifest's mtime changes — the natural key invalidation
 // (PERF-001/004: "don't bother with explicit invalidation; rely on
 // mtime"). When EnsureChromiumBuild re-extracts a binary, the manifest
-// gets a fresh mtime and the next verifyChromeSHA256 must re-hash.
+// gets a fresh mtime and the next shared verifier call must re-hash.
 func TestShaVerifyCache_NaturalInvalidation(t *testing.T) {
 	root := t.TempDir()
 	binPath, shaPath := seedPackageChrome(t, root, true)
