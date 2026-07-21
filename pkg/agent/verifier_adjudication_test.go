@@ -169,8 +169,25 @@ func TestRunVerifierAdjudication_RegistersSessionBeforeDispatch(t *testing.T) {
 	if spy.registerCalls[0].sessionID == "" {
 		t.Error("registered sessionID must not be empty")
 	}
-	if !strings.Contains(spy.registerCalls[0].sessionID, "agent:judge:verify:") {
-		t.Errorf("sessionID = %q, want it to carry the agent:judge:verify: prefix", spy.registerCalls[0].sessionID)
+	// The registered id is the turn's transcriptSessionID — the pre-created
+	// verifier session's meta.ID — because that is the only identifier
+	// RequestCancelForSession matches on (the cancel-key contract; the
+	// retired "agent:judge:verify:" sessionKey shape is exactly the value
+	// cancel could never reach). With the Judge registered in this harness,
+	// it must resolve to a real, verifier-typed session in the Judge's store.
+	if strings.Contains(spy.registerCalls[0].sessionID, "agent:judge:verify:") {
+		t.Errorf("sessionID = %q carries the retired sessionKey shape — cancel cannot match it", spy.registerCalls[0].sessionID)
+	}
+	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	if judgeStore == nil {
+		t.Fatal("judge session store not available")
+	}
+	meta, err := judgeStore.GetMeta(spy.registerCalls[0].sessionID)
+	if err != nil {
+		t.Fatalf("registered sessionID %q does not resolve to a real session: %v", spy.registerCalls[0].sessionID, err)
+	}
+	if meta.Type != session.SessionTypeVerifier {
+		t.Errorf("registered session Type = %q, want %q", meta.Type, session.SessionTypeVerifier)
 	}
 	if len(spy.unregisterCalls) != 1 || spy.unregisterCalls[0] != "task:t-registry" {
 		t.Errorf("Unregister calls = %v, want exactly one for task:t-registry", spy.unregisterCalls)
