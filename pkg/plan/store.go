@@ -363,10 +363,27 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		if !IsValidState(*patch.State) {
 			return nil, verr("invalid state %q", *patch.State)
 		}
-		if err := ValidateStateTransition(p.State, *patch.State); err != nil {
+		from, to := p.State, *patch.State
+
+		// restarting recognizes the ADR-052 §6.7 / spec FR-016/DS-1 RESTART
+		// transition (failed -> approved, gated to FailedReason ==
+		// stopped_by_user). The canonical legalPlanTransitions matrix
+		// (plan.go) stays reason-free and unconditionally rejects
+		// failed->approved (grill M2/R3-4: it is NEVER widened) — this
+		// store-level guard is evaluated ONLY for this specific (from, to)
+		// pair, via ValidateRestartTransition rather than
+		// ValidateStateTransition. failed->running is never routed through
+		// here (to != StateApproved), so it always falls to the normal
+		// matrix check below and stays illegal.
+		restarting := from == StateFailed && to == StateApproved
+		if restarting {
+			if err := ValidateRestartTransition(from, p.FailedReason); err != nil {
+				return nil, err
+			}
+		} else if err := ValidateStateTransition(from, to); err != nil {
 			return nil, err
 		}
-		from, to := p.State, *patch.State
+
 		if from != to {
 			now := time.Now().UTC().Format(time.RFC3339)
 			switch to {
@@ -382,6 +399,26 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			}
 		}
 		p.State = to
+
+		if restarting {
+			// ADR-052 §6.7 / spec FR-016-FR-017 (A4): a restart is a clean
+			// slate at the plan level — clear the discriminator reason (a
+			// restarted plan is no longer "stopped by user"; a later
+			// genuine failure records its own reason) and reset the
+			// plan-level JudgeRounds counter to 0 (otherwise a plan
+			// restarted near its judge-round cap would fail immediately).
+			// This applies unconditionally, even if the same Patch also
+			// carried an explicit FailedReason/JudgeRounds value earlier in
+			// this function — restart wins. PausedReason is deliberately
+			// NOT touched here: it is orthogonal (a running+paused plan is
+			// not in State==failed at all, so it can never reach this
+			// branch). Per-member Task.attempt_count reset (FR-017) is the
+			// restart HANDLER's job over pkg/task's store — out of this
+			// package's ownership (pkg/plan never imports pkg/task's
+			// Store, only its types/Filter via the TaskLister interface).
+			p.FailedReason = ""
+			p.JudgeRounds = 0
+		}
 	}
 	// ActiveLoop is applied AFTER the State-transition stamping above so an
 	// explicit caller-supplied value in the same patch wins over the
