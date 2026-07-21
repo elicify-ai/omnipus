@@ -355,6 +355,12 @@ describe('WorkspaceTasksTab — end-to-end filter behavior (Board actually filte
 
     await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
 
+    // Selecting a plan tile also switches the view to Graph (operator UX
+    // fix — see "plan-select switches to Graph view" below), which swaps
+    // Board out entirely. Switch back to Board to assert the actual
+    // `filteredTasks` payload this test verifies.
+    await user.click(screen.getByTestId('tasks-view-board'))
+
     // The plan-less task must actually disappear — not just the heading
     // changing while the board silently keeps rendering everything.
     await waitFor(() => expect(screen.queryByText('Loose task')).toBeNull())
@@ -432,5 +438,119 @@ describe('WorkspaceTasksTab — Graph view switch', () => {
     // Board-only filter controls are gone in Graph view.
     expect(screen.queryByTestId('tasks-agent-filter')).toBeNull()
     expect(screen.queryByTestId('tasks-tag-filter')).toBeNull()
+  })
+})
+
+// ── Plan-select switches to Graph view (operator UX fix) ───────────────────
+//
+// Operator-reported: clicking a plan tile only scoped the filter; the
+// section below should ALSO switch to the Graph view. Selecting a plan tile
+// (a real, non-null id reaching onSelectPlan) switches `view` to 'graph'.
+// DESELECTING (onSelectPlan(null) — re-clicking the active tile, or the "All
+// tasks" tile) must NOT force a view change. Manual view switching keeps
+// working afterwards — picking a different plan tile switches to Graph
+// again, by design.
+
+describe('WorkspaceTasksTab — plan-select switches to Graph view (operator UX fix)', () => {
+  it('selecting a plan tile switches the view to Graph', async () => {
+    const user = userEvent.setup()
+    const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+    renderTab()
+
+    // Starts on Board (default).
+    expect(await screen.findByTestId('tasks-view-board')).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('tasks-view-graph')).toHaveAttribute('aria-checked', 'true'),
+    )
+    expect(await screen.findByTestId('graph-tab-sentinel')).toBeInTheDocument()
+  })
+
+  it('deselecting a plan (the "All tasks" tile / re-clicking the active tile, onSelectPlan(null)) does NOT force a view change', async () => {
+    const user = userEvent.setup()
+    const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+    renderTab()
+
+    await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('tasks-view-graph')).toHaveAttribute('aria-checked', 'true'),
+    )
+
+    // Manually switch to List first — proves the deselect step below isn't
+    // just "happening to already be on Graph".
+    await user.click(screen.getByTestId('tasks-view-list'))
+    expect(screen.getByTestId('tasks-view-list')).toHaveAttribute('aria-checked', 'true')
+
+    // Deselect via the stub's "select-all" button — mirrors both the real
+    // "All tasks" tile and re-clicking the already-active plan tile, both of
+    // which call onSelectPlan(null) (see PlansFilterBand.test.tsx).
+    await user.click(screen.getByRole('button', { name: 'select-all' }))
+
+    // View must stay on List — a deselect never forces a view change.
+    expect(screen.getByTestId('tasks-view-list')).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('selecting a different plan tile switches to Graph again, even after a manual switch away', async () => {
+    const user = userEvent.setup()
+    const planA = makePlan({ id: 'plan-a', title: 'Plan A' })
+    const planB = makePlan({ id: 'plan-b', title: 'Plan B' })
+    vi.mocked(fetchPlans).mockResolvedValue([planA, planB])
+    renderTab()
+
+    await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('tasks-view-graph')).toHaveAttribute('aria-checked', 'true'),
+    )
+
+    // Manually switch back to Board.
+    await user.click(screen.getByTestId('tasks-view-board'))
+    expect(screen.getByTestId('tasks-view-board')).toHaveAttribute('aria-checked', 'true')
+
+    // Selecting a DIFFERENT plan tile switches to Graph again — expected,
+    // per the ticket ("manual view switching afterwards must keep working").
+    await user.click(await screen.findByRole('button', { name: 'select-plan-b' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('tasks-view-graph')).toHaveAttribute('aria-checked', 'true'),
+    )
+  })
+
+  // PlansFilterBand.test.tsx already proves the REAL band's pencil/⋯/▶/■
+  // controls never call onSelectPlan at all — they're structural siblings of
+  // the select button, isolated via stopPropagation/Radix portals. These two
+  // prove WorkspaceTasksTab's OWN wiring doesn't separately trip the view
+  // switch from the onEditPlan/onClearPlan callbacks either (both are wired
+  // independently of handleSelectPlan). Split into two tests — not
+  // sequential clicks in one — because the Edit slide-over stays open
+  // (Radix marks the rest of the page `aria-hidden` while it is), which
+  // would make the Clear button inaccessible for a follow-up click.
+  it("the plan tile's Edit control never triggers the view change", async () => {
+    const user = userEvent.setup()
+    const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+    renderTab()
+
+    expect(await screen.findByTestId('tasks-view-board')).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(await screen.findByRole('button', { name: 'edit-plan-a' }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('tasks-view-board')).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it("the plan tile's Clear control never triggers the view change", async () => {
+    const user = userEvent.setup()
+    const plan = makePlan({ id: 'plan-a', title: 'Plan A' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+    vi.mocked(deletePlan).mockResolvedValue(undefined)
+    renderTab()
+
+    expect(await screen.findByTestId('tasks-view-board')).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(await screen.findByRole('button', { name: 'clear-plan-a' }))
+    await waitFor(() => expect(deletePlan).toHaveBeenCalledWith('plan-a'))
+    expect(screen.getByTestId('tasks-view-board')).toHaveAttribute('aria-checked', 'true')
   })
 })

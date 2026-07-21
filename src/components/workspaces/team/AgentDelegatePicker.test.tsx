@@ -59,6 +59,7 @@ function node(id: string, over: Partial<TeamNodeModel> = {}): TeamNodeModel {
     isDefault: false,
     isWorker: false,
     isGhost: false,
+    isImplicit: false,
     position: { x: 0, y: 0 },
     ...over,
   }
