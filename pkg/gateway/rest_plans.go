@@ -12,10 +12,18 @@ package gateway
 //
 //	GET/POST /workspaces/{id}/plans   list/create (workspace-nested, mirrors
 //	                                   the removed Milestone shape)
-//	GET/PUT/DELETE /plans/{id}        get/update/delete
+//	GET/PUT/DELETE /plans/{id}        get/update/delete (PUT never sets state,
+//	                                  ADR-052 FR-007/A1 — every plan state
+//	                                  transition goes through a dedicated
+//	                                  endpoint below)
 //	POST /plans/{id}/approve          tiered-DoD + unconditional member-
 //	                                  criteria gated draft->approved
-//	POST /plans/{id}/stop             running->failed(stopped_by_user)
+//	POST /plans/{id}/stop             running->failed(stopped_by_user);
+//	                                  delegates to PlanEngine.StopPlan
+//	                                  (ADR-052 FR-009/010)
+//	POST /plans/{id}/restart          failed(stopped_by_user)->approved,
+//	                                  resets non-done members (ADR-052
+//	                                  FR-016/017/026)
 //
 // The GET/POST /workspaces/{id}/plans paths are dispatched from
 // HandleWorkspaces (rest_workspaces.go) via a "/plans" suffix branch, exactly
@@ -25,15 +33,18 @@ package gateway
 // successful Create/Update — this file never emits frames directly.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -590,7 +601,13 @@ func (a *restAPI) HandlePlans(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			a.handlePlanStop(w, id)
+			a.handlePlanStop(w, r, id)
+		case "restart":
+			if r.Method != http.MethodPost {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handlePlanRestart(w, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -629,14 +646,42 @@ func (a *restAPI) handlePlanGet(w http.ResponseWriter, id string) {
 	jsonOK(w, a.toWirePlan(*p))
 }
 
-// handlePlanPut handles PUT /api/v1/plans/{id}. Plain field/state-transition
-// update — no DoD/criteria gating (use POST /plans/{id}/approve for the
-// gated draft->approved transition).
+// handlePlanPut handles PUT /api/v1/plans/{id}. Plain field update — NEVER a
+// state transition (ADR-052 FR-007/US-5, A1): every plan state change goes
+// through a dedicated endpoint (POST /approve, POST /stop, POST /restart, or
+// the engine's own cap-gated promotion). `[FACT]` before this guard, PUT set
+// patch.State directly and skipped BOTH the FR-084 criteria gate (only
+// enforced in handlePlanApprove) and the engine's cap admission (Admit lives
+// only in tryStartApprovedPlan) — a client could `PUT {"state":"running"}`
+// and bypass both safety nets (ADR-052 G2/§3). gen.PlanUpdateRequest still
+// carries a State field on the wire (existing generated type, unchanged by
+// this feature — Constraint #8 does not require touching it since the fix is
+// behavioral, not shape-level), so the guard cannot rely on Go's decode
+// silently dropping an unrecognized field the way the sandbox_profile/
+// delegation_policy precedent (rest.go's PUT /agents/{id}) does; it must
+// reject the presence of ANY "state" key at the raw-JSON level instead,
+// mirroring that same raw-body-sniff pattern (ADR-035 precedent) one level
+// up: a present-but-absent-effect field is still a request that named a
+// forbidden transition and must 400, not silently no-op.
 func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
 		return
 	}
+
+	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if readErr != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+	if bytes.Contains(rawBody, []byte(`"state"`)) {
+		jsonErr(w, http.StatusBadRequest,
+			`state cannot be set via PUT — use POST /plans/{id}/approve, POST /plans/{id}/stop, or `+
+				`POST /plans/{id}/restart; every plan state transition goes through a dedicated endpoint`)
+		return
+	}
+
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.PlanUpdateRequest
 	if !decodeAndValidate(w, r, "PlanUpdateRequest", &req, validateEnabled) {
@@ -710,10 +755,10 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		}
 		patch.Bounds = &b
 	}
-	if req.State != nil {
-		st := plan.State(*req.State)
-		patch.State = &st
-	}
+	// req.State is intentionally never read here (FR-007/A1): the raw-body
+	// sniff above already 400s any request whose body contains a "state" key,
+	// so this decoded field is unreachable non-nil at this point — patch.State
+	// stays permanently unset on the PUT path.
 
 	updated, err := a.planStore.Update(id, patch)
 	if err != nil {
@@ -863,9 +908,17 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 	jsonOK(w, a.toWirePlan(*updated))
 }
 
-// handlePlanStop handles POST /api/v1/plans/{id}/stop. Transitions a running
-// plan to failed(stopped_by_user); rejected 400 when not currently running.
-func (a *restAPI) handlePlanStop(w http.ResponseWriter, id string) {
+// handlePlanStop handles POST /api/v1/plans/{id}/stop (ADR-052 US-6/FR-009/
+// FR-010, spec DS-4). Delegates the actual fan-out to PlanEngine.StopPlan,
+// which — under planDecisionMu, so a concurrently-dispatched member cannot
+// escape (grill F3) — issues RequestCancelForSession (the SAME chat cancel
+// every other surface uses, A2) over {each in_progress member session} +
+// {each registered verifier session, member- and plan-level}, marks every
+// in_progress member failed+cancelled, and transitions the plan itself to
+// failed(stopped_by_user). This handler no longer touches a.planStore
+// directly — the precondition check (only a running plan can be stopped) and
+// the state write both live in the engine now.
+func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
 		return
@@ -885,18 +938,134 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, id string) {
 		return
 	}
 
-	failed := plan.StateFailed
-	reason := plan.FailedReasonStoppedByUser
-	updated, uerr := a.planStore.Update(id, plan.Patch{State: &failed, FailedReason: &reason})
+	pe := agent.GetPlanEngine(a.agentLoop)
+	if pe == nil {
+		jsonErr(w, http.StatusServiceUnavailable, "plan engine is not available")
+		return
+	}
+	c := a.callerIdentity(r)
+	updated, serr := pe.StopPlan(r.Context(), id, c.Username, "system")
+	if serr != nil {
+		if updated == nil {
+			if errors.Is(serr, plan.ErrNotFound) {
+				jsonErr(w, http.StatusNotFound, "plan not found")
+				return
+			}
+			slog.Error("rest: plan stop: engine stop failed", "id", id, "error", serr)
+			jsonErr(w, http.StatusInternalServerError, "could not stop plan")
+			return
+		}
+		// Partial fan-out failure (ADR-052 §6.4 Item 5 / aggregateMemberCancelErrors):
+		// the plan itself DID transition to failed(stopped_by_user) — updated
+		// reflects that, and the audit entry below records it happened — but
+		// >=1 member task's own cancel-write failed and may remain
+		// in_progress. Map this honestly as a server error rather than an
+		// unqualified 200: the caller must know to re-check member state
+		// instead of assuming a fully clean stop.
+		slog.Error("rest: plan stop: partial fan-out failure", "id", id, "error", serr)
+		a.auditPlan("plan.stop", id)
+		jsonErr(w, http.StatusInternalServerError, serr.Error())
+		return
+	}
+	a.auditPlan("plan.stop", id)
+	jsonOK(w, a.toWirePlan(*updated))
+}
+
+// handlePlanRestart handles POST /api/v1/plans/{id}/restart (ADR-052 §6.7,
+// FR-016/017/026, US-9 — the ▶ Play route). Resets every non-done member
+// task via task.Store.RestartReset — any-reason failed->next un-freeze
+// (FR-016/DS-5: a genuinely-failed member inside an otherwise user-cancelled
+// plan is reset too, "re-run all its non-done members") — then transitions
+// the plan itself failed[stopped_by_user] -> approved via the store-level
+// reason-aware guard (plan.ValidateRestartTransition / plan.Store.Update's
+// restarting branch), NEVER straight to running: the engine promotes
+// approved->running under the global cap on its next tick, exactly like a
+// first execute (restarting straight to running would skip cap admission,
+// the same hole class the PUT-lockdown, FR-007, closed for approve).
+// Store.Update's restart branch also clears FailedReason and resets
+// JudgeRounds to 0 (A4) — this handler does not set either directly.
+//
+// Member resets happen BEFORE the plan's own state write: while the plan is
+// still `failed`, the engine's tick loop and event loop both ignore it
+// (they only act on `approved`/`running`), so there is no lock-free race
+// with dispatch here the way Stop has (grill F3 does not apply — restart's
+// own state write is the single point where the engine can react, and it
+// runs last).
+func (a *restAPI) handlePlanRestart(w http.ResponseWriter, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
+		return
+	}
+	p, err := a.planStore.Get(id)
+	if err != nil {
+		if errors.Is(err, plan.ErrNotFound) {
+			jsonErr(w, http.StatusNotFound, "plan not found")
+			return
+		}
+		slog.Error("rest: plan restart: get failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read plan")
+		return
+	}
+	// Fail fast with a specific 409 before touching any member task.
+	// plan.Store.Update re-validates against the FRESH on-disk state at write
+	// time regardless (fix-wave finding #4's onDiskFailedReason capture), so
+	// this early check is a targeted error message, not the sole guard.
+	if rerr := plan.ValidateRestartTransition(p.State, p.FailedReason); rerr != nil {
+		jsonErr(w, http.StatusConflict, rerr.Error())
+		return
+	}
+
+	if a.taskStore == nil {
+		jsonErr(w, http.StatusServiceUnavailable, "task store is not available")
+		return
+	}
+	members, lerr := a.taskStore.List(task.Filter{PlanID: id})
+	if lerr != nil {
+		slog.Error("rest: plan restart: list member tasks failed", "id", id, "error", lerr)
+		jsonErr(w, http.StatusInternalServerError, "could not list member tasks")
+		return
+	}
+	var resetFailures []string
+	for i := range members {
+		m := &members[i]
+		if m.Status != task.StatusFailed {
+			// done members are preserved untouched (FR-017); next/blocked
+			// members never ran and are already sitting in a fresh
+			// pre-run state — RestartReset only ever applies to `failed`
+			// (ErrNotRestartable otherwise), so only failed members need it.
+			continue
+		}
+		reset, rrerr := a.taskStore.RestartReset(m.ID)
+		if rrerr != nil {
+			slog.Error("rest: plan restart: member reset failed", "plan_id", id, "task_id", m.ID, "error", rrerr)
+			resetFailures = append(resetFailures, m.ID)
+			continue
+		}
+		a.emitTaskStatus(reset)
+		if a.agentLoop != nil {
+			a.agentLoop.NotifyTaskUpserted(reset)
+		}
+	}
+	if len(resetFailures) > 0 {
+		slog.Error("rest: plan restart: some member resets failed; proceeding with plan transition anyway",
+			"plan_id", id, "task_ids", resetFailures)
+	}
+
+	approved := plan.StateApproved
+	updated, uerr := a.planStore.Update(id, plan.Patch{State: &approved})
 	if uerr != nil {
+		if errors.Is(uerr, plan.ErrRestartNotPermitted) {
+			jsonErr(w, http.StatusConflict, uerr.Error())
+			return
+		}
 		if isPlanValidationErr(uerr) {
 			jsonErr(w, http.StatusBadRequest, uerr.Error())
 			return
 		}
-		slog.Error("rest: plan stop: update failed", "id", id, "error", uerr)
-		jsonErr(w, http.StatusInternalServerError, "could not stop plan")
+		slog.Error("rest: plan restart: update failed", "id", id, "error", uerr)
+		jsonErr(w, http.StatusInternalServerError, "could not restart plan")
 		return
 	}
-	a.auditPlan("plan.stop", id)
+	a.auditPlan("plan.restart", id)
 	jsonOK(w, a.toWirePlan(*updated))
 }
