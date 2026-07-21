@@ -3479,9 +3479,13 @@ function friendlyConflictError(err: unknown, message: string): unknown {
 //
 // Endpoints:
 //   GET    /workspaces/{id}/plans → PlanListResponse
-//   POST   /plans                → Plan   (top-level create, NOT nested under
-//                                           a workspace path — workspace_id is
-//                                           a body field)
+//   POST   /workspaces/{id}/plans → Plan   (createWorkspacePlan — the ONLY
+//                                           create route; bare POST /plans
+//                                           deliberately 405s [rest_plans.go]
+//                                           since creation/listing are
+//                                           workspace-nested. `workspace_id`
+//                                           is ALSO required in the body and
+//                                           validated to match the path.)
 //   PUT    /plans/{id}           → Plan   (partial update — title/goal/
 //                                           description/owner/dod/bounds
 //                                           ONLY. ADR-052 G2/FR-007: the SPA
@@ -3527,8 +3531,18 @@ export function fetchPlan(id: string): Promise<Plan> {
   return request<Plan>(`/plans/${encodeURIComponent(id)}`, undefined, PlanSchema as ZodType<Plan>)
 }
 
+/**
+ * Create a plan — POST /workspaces/{id}/plans (createWorkspacePlan). Bare
+ * POST /plans 405s (`rest_plans.go` HandlePlans: "Bare /plans has no
+ * GET/POST"); creation is workspace-nested, mirroring `fetchPlans`.
+ * `body.workspace_id` drives the path (also required/validated in the body).
+ */
 export function createPlan(body: PlanCreateRequest): Promise<Plan> {
-  return request<Plan>('/plans', { method: 'POST', body: JSON.stringify(body) }, PlanSchema as ZodType<Plan>)
+  return request<Plan>(
+    `/workspaces/${encodeURIComponent(body.workspace_id)}/plans`,
+    { method: 'POST', body: JSON.stringify(body) },
+    PlanSchema as ZodType<Plan>,
+  )
 }
 
 /**

@@ -36,6 +36,14 @@
       ]
     },
     {
+      "group": "llm-verifier-eval",
+      "key_slot": "a",
+      "port": 6066,
+      "specs": [
+        "tests/e2e/verifier-eval.spec.ts"
+      ]
+    },
+    {
       "group": "ui",
       "key_slot": "c",
       "port": 6063,

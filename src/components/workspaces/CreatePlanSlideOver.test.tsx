@@ -109,6 +109,24 @@ describe('CreatePlanSlideOver — create', () => {
     expect(body.goal).toBe('Ship it')
     expect(body.workspace_id).toBe('ws-1')
   })
+
+  it('shows an error toast (and does not close) when Create fails — e.g. the workspace-route 405', async () => {
+    const onOpenChange = vi.fn()
+    vi.mocked(createPlan).mockRejectedValueOnce(
+      new ApiError(405, 'method not allowed', { body: JSON.stringify({ error: 'method not allowed' }) }),
+    )
+    renderSlideOver({ onOpenChange })
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await waitFor(() =>
+      expect(mockAddToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'error', message: expect.stringMatching(/method not allowed/i) }),
+      ),
+    )
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
 })
 
 describe('CreatePlanSlideOver — Approve (SD-C4 confirm-on-success)', () => {

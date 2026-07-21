@@ -1744,7 +1744,16 @@ describe('AgentProfile — updated_at staleness guard', () => {
     vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   })
 
-  it('warns via console.warn + logDiagnostic when it rejects a background refetch snapshot that is not strictly newer', async () => {
+  it('Wave-3 hotfix: an EQUAL incoming updated_at (already-incorporated echo) is a silent no-op — no rejected-hydration telemetry', async () => {
+    // Regression for the bogus telemetry finding: the guard used to treat
+    // `incoming <= incorporated` as one "reject + warn" branch, so a
+    // same-timestamp echo (the normal, expected shape of an
+    // `invalidateQueries` background refetch landing right after a save
+    // already applied that exact snapshot via `setQueryData`) fired
+    // `agentProfileUpdatedAtGuardRejectedHydration` on every profile open
+    // AND after every successful autosave — a false positive with no real
+    // conflict. Equal must still SKIP re-hydrating (nothing changed) but
+    // must NOT log anything.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t0 = '2026-02-01T00:00:00.000Z'
 
@@ -1765,14 +1774,50 @@ describe('AgentProfile — updated_at staleness guard', () => {
       expect(vi.mocked(updateAgent)).toHaveBeenCalled()
     }, { timeout: 5000 })
 
-    // The save's own success handler seeds the cache with a same-`updated_at`
-    // response, and `invalidateQueries` fires a background refetch that
-    // resolves with the same static (not-newer) snapshot — both are
-    // rejected by the guard. Wait for at least one rejection warning.
+    // Give the save-success `setQueryData` patch and the `invalidateQueries`
+    // background refetch (both landing at the same t0) a moment to run
+    // through the hydration effect, then assert the rejected-hydration
+    // telemetry event never fired.
+    await waitFor(() => {
+      expect(screen.getAllByTestId('agent-name-input')[0]).toHaveValue('Edited Name')
+    }, { timeout: 6000 })
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      'agentProfile.updatedAtGuardRejectedHydration',
+      expect.anything(),
+    )
+  })
+
+  it('a genuinely STALE incoming updated_at (strictly older than incorporated) still warns via console.warn + logDiagnostic', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const tOld = '2026-02-01T00:00:00.000Z'
+    const tNew = '2026-02-01T00:05:00.000Z' // strictly newer
+
+    // Every fetchAgent call — the initial load AND the invalidateQueries
+    // background refetch fired after the save below — resolves with the
+    // OLDER timestamp, simulating a stale/lagging refetch race (network
+    // reordering, read-replica lag). The save's own PUT response carries
+    // the NEWER timestamp, so `lastIncorporatedUpdatedAtRef.current` is
+    // advanced to tNew directly by the save-success handler before the
+    // stale background refetch's snapshot (tOld) lands.
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, updated_at: tOld })
+    vi.mocked(updateAgent).mockResolvedValue({ ...mockCoreAgent, name: 'Edited Name', updated_at: tNew })
+
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+
+    fireEvent.change(screen.getAllByTestId('agent-name-input')[0], { target: { value: 'Edited Name' } })
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled()
+    }, { timeout: 5000 })
+
+    // The invalidateQueries background refetch resolves with the STALE
+    // (tOld < tNew) snapshot — a genuine conflict, still rejected with a
+    // telemetry breadcrumb.
     await waitFor(() => {
       expect(warnSpy).toHaveBeenCalledWith(
         'agentProfile.updatedAtGuardRejectedHydration',
-        expect.objectContaining({ agentId: 'general-assistant' }),
+        expect.objectContaining({ agentId: 'general-assistant', incoming: tOld, incorporated: tNew }),
       )
     }, { timeout: 6000 })
   })

@@ -134,6 +134,47 @@ describe('executePlan (the G2 repoint)', () => {
   })
 })
 
+// ── createPlan (Wave-3 hotfix — bare POST /plans 405s; creation is
+// workspace-nested per rest_plans.go's HandlePlans) ─────────────────────────
+
+describe('createPlan', () => {
+  it('calls POST /api/v1/workspaces/{workspace_id}/plans — NOT bare /plans — and returns the created Plan', async () => {
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(makePlanResponse({ id: 'plan-9' }), 201))
+
+    const { createPlan } = await import('./api')
+    const result = await createPlan({
+      workspace_id: 'ws-1',
+      title: 'Launch',
+      owner_agent_id: 'jim',
+    })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/workspaces/ws-1/plans')
+    expect(url).not.toMatch(/\/api\/v1\/plans$/)
+    expect(init.method).toBe('POST')
+    const sentBody = JSON.parse(init.body as string)
+    expect(sentBody).toEqual({ workspace_id: 'ws-1', title: 'Launch', owner_agent_id: 'jim' })
+
+    expect(result.id).toBe('plan-9')
+  })
+
+  it('a bare-route 405 (the pre-fix regression) surfaces via ApiError with a readable message', async () => {
+    fetchSpy.mockResolvedValueOnce(makeErrorResponse({ error: 'method not allowed' }, 405))
+
+    const { createPlan, isApiError } = await import('./api')
+
+    await expect(
+      createPlan({ workspace_id: 'ws-1', title: 'Launch', owner_agent_id: 'jim' }),
+    ).rejects.toSatisfy((err: unknown) => {
+      expect(isApiError(err)).toBe(true)
+      if (!isApiError(err)) return false
+      expect(err.status).toBe(405)
+      return true
+    })
+  })
+})
+
 describe('approvePlan (deprecated alias)', () => {
   it('is the same function as executePlan — POSTs /approve, does not PUT', async () => {
     const { executePlan, approvePlan } = await import('./api')

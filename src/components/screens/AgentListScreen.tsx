@@ -127,8 +127,14 @@ interface AgentsLibraryViewProps {
   cliDetectFailed: boolean
   externalMenuOpen: boolean
   setExternalMenuOpen: (open: boolean) => void
-  builtInOpen: string | undefined
-  setBuiltInOpen: (v: string | undefined) => void
+  // Wave-3 hotfix: always a defined string (never `undefined`) — the Radix
+  // Accordion primitive infers controlled-vs-uncontrolled from whether
+  // `value` is `undefined` on the FIRST render; passing `undefined` then
+  // later a real string flips it from uncontrolled to controlled mid-life
+  // and triggers React's "changing from uncontrolled to controlled"
+  // warning. `''` is the defined "nothing open" sentinel instead.
+  builtInOpen: string
+  setBuiltInOpen: (v: string) => void
 }
 
 function AgentsLibraryView({
@@ -147,8 +153,10 @@ function AgentsLibraryView({
   const [filterMenuOpen, setFilterMenuOpen] = useState(false)
   // System section disclosure — collapsed by default (unlike the Built-in
   // roster's load-dependent adaptive expand, this niche admin section has no
-  // "roster is otherwise empty" case to auto-open for).
-  const [systemOpen, setSystemOpen] = useState<string | undefined>(undefined)
+  // "roster is otherwise empty" case to auto-open for). Wave-3 hotfix:
+  // `''` (not `undefined`) so the Accordion below is controlled from its
+  // very first render — see `builtInOpen`'s doc comment on the prop type.
+  const [systemOpen, setSystemOpen] = useState<string>('')
 
   // Resolve the workspace object for the current filter (for label display).
   const activeWorkspace = workspaces.find((ws) => ws.id === workspaceFilter)
@@ -552,14 +560,19 @@ export function AgentListScreen() {
   const isLoading = agentsLoading
   const isError = agentsError
 
-  // Built-in roster disclosure state — O2 adaptive expand.
-  const [builtInOpen, setBuiltInOpen] = useState<string | undefined>(undefined)
+  // Built-in roster disclosure state — O2 adaptive expand. Wave-3 hotfix:
+  // `''` (not `undefined`) so the Accordion is controlled from its very
+  // first render — Radix's controllable-state hook infers controlled-vs-
+  // uncontrolled from whether `value` is `undefined` on mount, so a later
+  // transition to a defined string (here, on load) triggered React's
+  // "changing from uncontrolled to controlled" warning.
+  const [builtInOpen, setBuiltInOpen] = useState<string>('')
   const initialOpenApplied = useRef(false)
   useEffect(() => {
     if (isLoading || initialOpenApplied.current) return
     initialOpenApplied.current = true
     const hasCustom = agents.some((a) => !isWorker(a) && !(a.type === 'core' && a.locked) && a.type !== 'system')
-    setBuiltInOpen(hasCustom ? undefined : 'built-in')
+    setBuiltInOpen(hasCustom ? '' : 'built-in')
   }, [isLoading, agents])
 
   // Host-CLI detection — W4 of agent-form-requirements.
