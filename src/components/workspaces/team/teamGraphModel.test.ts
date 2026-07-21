@@ -189,6 +189,71 @@ describe('buildTeamGraphModel', () => {
       expect(typeof n.position.y).toBe('number')
     }
   })
+
+  it('marks every real/ghost node isImplicit: false', () => {
+    const { nodes } = buildTeamGraphModel(s, AGENTS)
+    expect(nodes.every((n) => n.isImplicit === false)).toBe(true)
+  })
+})
+
+// ── buildTeamGraphModel — implicit System agent nodes (the Judge, ADR-049 D3,
+// operator-reported: "Judge invisible in workspace Teams") ───────────────────
+//
+// Backend model: pkg/workspace/find_for_agent.go's isImplicitMember treats
+// every System agent as an implicit member of EVERY workspace — it can never
+// be added to or removed from core_team (the gateway 400s that attempt), so
+// membership is resolved implicitly everywhere. Without this, the node set
+// here is built entirely from TeamEditState (members ∪ edge endpoints), so a
+// System agent that is never in `state` was simply never rendered — it
+// "looked absent" even though it always verifies work on this workspace.
+
+describe('buildTeamGraphModel — implicit System agent nodes (Judge, ADR-049 D3)', () => {
+  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#888', icon: 'Scales' })
+  const AGENTS_WITH_JUDGE = [...AGENTS, JUDGE]
+
+  it('renders the System agent as an implicit node even though it is never in state.members', () => {
+    const s2 = state({ members: ['mia', 'jim'], edges: [] })
+    const { nodes } = buildTeamGraphModel(s2, AGENTS_WITH_JUDGE)
+    const judgeNode = nodes.find((n) => n.id === 'judge')
+    expect(judgeNode).toBeDefined()
+    expect(judgeNode!.isImplicit).toBe(true)
+    expect(judgeNode!.type).toBe('system')
+    expect(judgeNode!.name).toBe('Judge')
+  })
+
+  it('renders the implicit node even for a workspace with ZERO real members', () => {
+    const s2 = state({ members: [], edges: [] })
+    const { nodes } = buildTeamGraphModel(s2, AGENTS_WITH_JUDGE)
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0]).toMatchObject({ id: 'judge', isImplicit: true })
+  })
+
+  it('does not duplicate a System agent that already appears in state.members (defensive)', () => {
+    const s2 = state({ members: ['mia', 'judge'], edges: [] })
+    const { nodes } = buildTeamGraphModel(s2, AGENTS_WITH_JUDGE)
+    expect(nodes.filter((n) => n.id === 'judge')).toHaveLength(1)
+  })
+
+  it('is render-only: the implicit node never leaks into the save payload (buildSaveEdges / state.members)', () => {
+    const s2 = state({
+      members: ['mia', 'jim'],
+      edges: [{ from: 'mia', to: 'jim', modes: ['direct'], depth: 2 }],
+    })
+    buildTeamGraphModel(s2, AGENTS_WITH_JUDGE) // renders the Judge node
+    // The ACTUAL save payloads (WorkspaceTeamTab.saveFn: updateWorkspace's
+    // core_team from state.members, updateWorkspaceDelegation's edges from
+    // buildSaveEdges(state)) only ever read `state` — which was never
+    // mutated by building the render model above.
+    expect(s2.members).not.toContain('judge')
+    const saved = buildSaveEdges(s2)
+    expect(saved.every((e) => e.from_agent !== 'judge' && e.to_agent !== 'judge')).toBe(true)
+  })
+
+  it('a roster with no System agent synthesises no implicit node (no regression for the common case)', () => {
+    const s2 = state({ members: ['mia', 'jim', 'planner'], edges: [] })
+    const { nodes } = buildTeamGraphModel(s2, AGENTS)
+    expect(nodes.every((n) => !n.isImplicit)).toBe(true)
+  })
 })
 
 // ── buildTeamGraphModel — node tab order (position-sorted, not fetch order) ──

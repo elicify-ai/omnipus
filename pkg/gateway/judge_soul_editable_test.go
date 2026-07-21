@@ -46,6 +46,15 @@ func newSeededJudgeAPI(t *testing.T) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
+	// seedJudgeEagerSoul below calls agent.ResolveAgentHome, which resolves
+	// the Judge's per-agent workspace via $OMNIPUS_HOME (the SAME
+	// resolution AgentInstance.Home uses at runtime) — NOT via the
+	// tmpDir/homePath value threaded explicitly through this helper. Pin
+	// OMNIPUS_HOME to tmpDir so that env-based resolution and this test's
+	// own tmpDir/homePath-based resolution (agentWorkspacePath, used by
+	// getAgent/updateAgent) agree on one directory, and so the eager seed
+	// never touches the real machine's home directory.
+	t.Setenv("OMNIPUS_HOME", tmpDir)
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
@@ -54,6 +63,13 @@ func newSeededJudgeAPI(t *testing.T) *restAPI {
 		},
 	}
 	coreagent.SeedConfig(cfg)
+	// Mirror the real boot sequence (RunContextWithOptions, gateway.go):
+	// seedJudgeEagerSoul runs right after coreagent.SeedConfig on every real
+	// boot so the Judge's SOUL.md is backfilled with its default rubric
+	// immediately, not only lazily on first verifier dispatch. Calling the
+	// exact same production function here (not a re-implementation) is what
+	// lets TestSeedJudgeEagerSoul_* below prove the fresh-install fix works.
+	seedJudgeEagerSoul(cfg)
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
@@ -206,6 +222,18 @@ func TestUpdateAgent_JudgeSoulSurvivesReseed(t *testing.T) {
 	assert.Equal(t, editedSoul, string(after),
 		"a re-seed cycle (coreagent.SeedConfig/seedSystemAgents) must NOT overwrite an operator-edited Judge soul")
 
+	// The real boot sequence (gateway.go's RunContextWithOptions) also runs
+	// seedJudgeEagerSoul immediately after coreagent.SeedConfig on EVERY
+	// boot, not just the first — it must respect the same backfill-only
+	// rule as the config-mutation re-seed above, or every subsequent
+	// restart would clobber an operator's edited Judge soul back to the
+	// compiled default.
+	seedJudgeEagerSoul(cfg)
+	afterEager, readErr := os.ReadFile(soulPath)
+	require.NoError(t, readErr, "SOUL.md must still exist after the eager boot-time re-seed")
+	assert.Equal(t, editedSoul, string(afterEager),
+		"seedJudgeEagerSoul must NOT overwrite an operator-edited Judge soul on a restart either")
+
 	// Confirm re-enforcement still ran (Locked/Type/etc. repaired if needed)
 	// without touching soul — GET must still reflect the edited content.
 	wGet := httptest.NewRecorder()
@@ -215,4 +243,83 @@ func TestUpdateAgent_JudgeSoulSurvivesReseed(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &getResp))
 	assert.Equal(t, editedSoul, getResp.Soul, "GET after re-seed must still reflect the operator-edited soul")
 	assert.True(t, getResp.Locked, "the Judge must still be locked after re-seed")
+}
+
+// TestSeedJudgeEagerSoul_FreshInstallSoulVisibleViaGetAgent is the direct
+// regression test for the operator-reported UX gap this change fixes: on a
+// fresh install, the Judge's profile must show its default judging rubric
+// immediately — not an empty soul that only fills in after the first real
+// verifier dispatch. newSeededJudgeAPI now runs the exact production boot
+// sequence (coreagent.SeedConfig then seedJudgeEagerSoul), so this proves
+// both the on-disk SOUL.md and the GET /api/v1/agents/judge response carry
+// the default rubric without any prior PUT or verifier dispatch.
+func TestSeedJudgeEagerSoul_FreshInstallSoulVisibleViaGetAgent(t *testing.T) {
+	api := newSeededJudgeAPI(t)
+
+	workspace, wsErr := agentWorkspacePath(api.agentLoop.GetConfig(), "judge", "", api.homePath)
+	require.NoError(t, wsErr)
+	onDisk, readErr := os.ReadFile(filepath.Join(workspace, "SOUL.md"))
+	require.NoError(t, readErr, "SOUL.md must exist immediately after boot-time seeding, before any PUT/dispatch")
+	assert.Equal(t, coreagent.JudgeDefaultRubric, string(onDisk),
+		"a fresh install's SOUL.md must contain the default judging rubric, not be absent/empty")
+
+	wGet := httptest.NewRecorder()
+	api.getAgent(wGet, "judge")
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var getResp gen.Agent
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &getResp))
+	assert.Equal(t, coreagent.JudgeDefaultRubric, getResp.Soul,
+		"GET /api/v1/agents/judge on a fresh install must show the default rubric, not an empty soul")
+	assert.True(t, getResp.Locked, "the Judge must still report locked:true")
+	assert.Equal(t, gen.AgentTypeSystem, getResp.Type, "the Judge must still report type:system")
+
+	// listAgents must render the same non-empty soul for the Judge entry.
+	wList := httptest.NewRecorder()
+	api.listAgents(wList)
+	require.Equal(t, http.StatusOK, wList.Code)
+	var listResp []gen.Agent
+	require.NoError(t, json.Unmarshal(wList.Body.Bytes(), &listResp))
+	found := false
+	for _, ag := range listResp {
+		if ag.Id == "judge" {
+			found = true
+			assert.Equal(t, coreagent.JudgeDefaultRubric, ag.Soul,
+				"listAgents on a fresh install must show the Judge's default rubric, not an empty soul")
+		}
+	}
+	assert.True(t, found, "the Judge must appear in listAgents")
+}
+
+// TestSeedJudgeEagerSoul_ZeroByteSoulFileIsBackfilled proves
+// seedJudgeEagerSoul treats a 0-byte SOUL.md (e.g. left behind by an
+// interrupted write, or a hand-created empty file) the same as a missing
+// one — it backfills the default rubric rather than leaving the operator
+// with a blank profile.
+func TestSeedJudgeEagerSoul_ZeroByteSoulFileIsBackfilled(t *testing.T) {
+	tmpDir := t.TempDir()
+	// See newSeededJudgeAPI's matching t.Setenv for why this is required:
+	// seedJudgeEagerSoul resolves the Judge's workspace via $OMNIPUS_HOME
+	// (agent.ResolveAgentHome), not via the tmpDir passed to
+	// agentWorkspacePath below — pin them to the same directory.
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	coreagent.SeedConfig(cfg)
+
+	workspace, wsErr := agentWorkspacePath(cfg, "judge", "", tmpDir)
+	require.NoError(t, wsErr)
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	require.NoError(t, os.WriteFile(soulPath, []byte{}, 0o644), "seed a 0-byte SOUL.md before eager seeding runs")
+
+	seedJudgeEagerSoul(cfg)
+
+	got, readErr := os.ReadFile(soulPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, coreagent.JudgeDefaultRubric, string(got),
+		"a 0-byte SOUL.md must be treated as missing and backfilled by seedJudgeEagerSoul")
 }

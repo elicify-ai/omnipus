@@ -857,16 +857,23 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 // test suite (none of which sets OMNIPUS_HOME), as a PURE config-struct
 // mutation with zero filesystem side effects, so introducing a disk write
 // here would silently start touching the real machine's home directory on
-// every `go test ./pkg/coreagent/...` run. Instead, pkg/agent's
-// ensureVerifierSoul (verifier_adjudication.go) lazily materializes this
-// constant into the Judge's SOUL.md on first real verifier dispatch —
-// mirroring how NewAgentInstance itself lazily MkdirAlls an agent's
-// workspace at construction time rather than at config-seed time — and
-// never overwrites an operator's own edit (the same "backfill only when
-// empty" rule the old Rubric field used). The Judge engine renders this
-// together with the criteria/evidence/worker-summary and requires a strict
-// per-criterion {met, reason} JSON verdict; absence of evidence for a
-// criterion is scored unmet (fail-closed, NFR-2).
+// every `go test ./pkg/coreagent/...` run. Two other places materialize
+// this constant into the Judge's actual SOUL.md instead, both via
+// pkg/agent's shared agent.SeedJudgeSoulFile so their write semantics never
+// diverge: (a) pkg/gateway's boot sequence (gateway.go's
+// seedJudgeEagerSoul, called right after coreagent.SeedConfig on every real
+// boot) backfills it EAGERLY, so a fresh install's Judge profile shows the
+// default standards immediately instead of staying blank until the first
+// judgment; (b) pkg/agent's ensureVerifierSoul (verifier_adjudication.go)
+// remains a LAZY backstop — mirroring how NewAgentInstance itself lazily
+// MkdirAlls an agent's workspace at construction time — for any path
+// (e.g. pkg/agent's own test harnesses) that constructs an AgentInstance
+// without ever running gateway boot. Neither path overwrites an operator's
+// own edit (the same "backfill only when empty/missing" rule the old
+// Rubric field used). The Judge engine renders this together with the
+// criteria/evidence/worker-summary and requires a strict per-criterion
+// {met, reason} JSON verdict; absence of evidence for a criterion is scored
+// unmet (fail-closed, NFR-2).
 const JudgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine.
 
 You receive: a unit's acceptance criteria (machine-check evidence records and prose criteria), the relevant file diffs, and the worker's own last completion summary. The worker's summary is a CLAIM, never a verdict — judge only against the criteria and the real evidence.
@@ -1271,10 +1278,13 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			// deny; see systemAgentSeed). No Rubric field to seed anymore
 			// (ADR-052 FR-038, R3-1 CLOSED: the field was deleted) — the
 			// Judge's soul (its default judging standards,
-			// JudgeDefaultRubric) is lazily materialized into SOUL.md by
-			// pkg/agent's ensureVerifierSoul on first real verifier
-			// dispatch, not here (SeedConfig stays a pure config-struct
-			// mutation with zero filesystem side effects).
+			// JudgeDefaultRubric) is materialized into SOUL.md by
+			// pkg/gateway's eager boot-time seed (gateway.go's
+			// seedJudgeEagerSoul, right after this SeedConfig call returns)
+			// and, as a lazy backstop, by pkg/agent's ensureVerifierSoul on
+			// first real verifier dispatch — not here (SeedConfig stays a
+			// pure config-struct mutation with zero filesystem side
+			// effects; see JudgeDefaultRubric's doc comment above).
 			cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
 				ID:          string(sa.ID),
 				Name:        sa.Name,
@@ -1371,9 +1381,12 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			// No Rubric field left to backfill (ADR-052 FR-038 deleted it —
 			// see the fresh-seed branch above and JudgeDefaultRubric's doc
 			// comment). Model/Provider are likewise left untouched here;
-			// the Judge's soul-file backfill-when-empty now happens lazily
-			// in pkg/agent's ensureVerifierSoul, not on this config-mutation
-			// path.
+			// the Judge's soul-file backfill-when-missing/empty happens
+			// eagerly at gateway boot (seedJudgeEagerSoul) and, as a lazy
+			// backstop, in pkg/agent's ensureVerifierSoul — never on this
+			// config-mutation path, and never for a soul that already has
+			// real (operator-edited) content, which this re-seed cycle must
+			// not touch.
 			break
 		}
 	}

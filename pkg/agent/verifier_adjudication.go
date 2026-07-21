@@ -160,23 +160,36 @@ func verifierUnitID(in JudgeCriteriaInput) string {
 // — so this is where the compiled default becomes the Judge's actual,
 // operator-editable prompt.
 //
+// This is no longer the ONLY seed path: pkg/gateway's boot sequence
+// (gateway.go's seedJudgeEagerSoul, called right after coreagent.SeedConfig)
+// now also backfills the same file EAGERLY on every boot, so the Judge's
+// profile shows its default standards immediately on a fresh install
+// instead of staying blank until the first real judgment (operator-reported
+// UX gap: now that the Judge's soul is operator-editable in the SPA, an
+// empty soul hides the very standards the operator would be overriding).
+// ensureVerifierSoul remains as the LAZY BACKSTOP for any path that
+// constructs an AgentInstance without going through gateway boot — e.g.
+// pkg/agent's own test harnesses (newGoalLoopTestLoop and friends), which
+// build an AgentLoop directly and never call gateway.RunContextWithOptions.
+//
 // Deliberately NOT done in coreagent.SeedConfig: that function is
 // documented, and relied on by its own test suite (none of which sets
 // OMNIPUS_HOME), as a PURE config-struct mutation with zero filesystem side
 // effects. Writing a file there would start silently touching the real
 // machine's home directory on every `go test ./pkg/coreagent/...` run.
-// Materializing here instead — at the moment the Judge is actually about to
-// run a verifier turn — mirrors how NewAgentInstance itself lazily
-// MkdirAlls an agent's workspace at construction time rather than at
-// config-seed time, and is naturally sandboxed by every pkg/agent test's
-// own isolated Home/workspace (see judge_seed_test.go's replacement,
-// verifier_adjudication_test.go, for the pattern).
+// pkg/coreagent also cannot cleanly resolve the Judge's REAL workspace path
+// itself: that resolution (OMNIPUS_HOME lookup, "main"-sentinel handling,
+// ID sanitization/traversal guard) lives in resolveAgentHome/ResolveAgentHome
+// below, and pkg/coreagent cannot import pkg/agent to reach it (pkg/agent
+// already imports pkg/coreagent) — reimplementing that logic a second time
+// in pkg/coreagent would be a second source of truth that could silently
+// drift from the path AgentInstance.Home actually resolves to at runtime.
+// gateway boot, which already imports both packages, is the cleanest place
+// that can call the real ResolveAgentHome and get an identical path.
 //
-// Never overwrites existing non-empty content — an operator's own soul edit
-// (or a custom verifier's own SOUL.md) is preserved exactly like the
-// deleted Rubric field's old "backfill only when empty" rule. Only ever
-// writes for the seeded Judge itself; a custom verifier's SOUL.md is
-// entirely the operator's own and is never backfilled.
+// The actual write — mkdir + backfill-only-when-missing/empty + atomic
+// write — is centralized in SeedJudgeSoulFile below so neither call site
+// duplicates it.
 func ensureVerifierSoul(agentInst *AgentInstance) {
 	if agentInst == nil || agentInst.ID != string(coreagent.IDJudge) {
 		return
@@ -188,16 +201,44 @@ func ensureVerifierSoul(agentInst *AgentInstance) {
 	if workspace == "" {
 		return
 	}
-	if mkErr := os.MkdirAll(workspace, 0o755); mkErr != nil {
-		logger.WarnCF("agent", "verifier: could not create workspace for default soul seed",
-			map[string]any{"agent_id": agentInst.ID, "workspace": workspace, "error": mkErr.Error()})
-		return
-	}
-	soulPath := filepath.Join(workspace, "SOUL.md")
-	if err := fileutil.WriteFileAtomic(soulPath, []byte(coreagent.JudgeDefaultRubric), 0o644); err != nil {
+	if err := SeedJudgeSoulFile(workspace); err != nil {
 		logger.WarnCF("agent", "verifier: could not seed default SOUL.md",
 			map[string]any{"agent_id": agentInst.ID, "error": err.Error()})
 	}
+}
+
+// SeedJudgeSoulFile backfills the Judge System Agent's SOUL.md at workspace
+// with coreagent.JudgeDefaultRubric — but ONLY when the file is missing or
+// contains no real content (absent, or present but empty/whitespace-only,
+// e.g. a 0-byte file from an interrupted write). It NEVER overwrites
+// existing non-empty content: an operator's own soul edit (or a custom
+// verifier's own SOUL.md) is preserved exactly like the deleted Rubric
+// field's old "backfill only when empty" rule.
+//
+// Exported so both ensureVerifierSoul (the lazy backstop above, called from
+// an *AgentInstance with a resolved Home) and pkg/gateway's eager boot-time
+// seed (which has only a workspace path, no AgentInstance yet) share the
+// exact same write semantics instead of each hand-rolling it.
+func SeedJudgeSoulFile(workspace string) error {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return fmt.Errorf("verifier: empty workspace for Judge soul seed")
+	}
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if existing, err := os.ReadFile(soulPath); err == nil {
+		if strings.TrimSpace(string(existing)) != "" {
+			return nil // operator (or a prior seed) already put real content here
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("verifier: read existing Judge soul %q: %w", soulPath, err)
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return fmt.Errorf("verifier: create Judge workspace %q: %w", workspace, err)
+	}
+	if err := fileutil.WriteFileAtomic(soulPath, []byte(coreagent.JudgeDefaultRubric), 0o644); err != nil {
+		return fmt.Errorf("verifier: write default Judge SOUL.md %q: %w", soulPath, err)
+	}
+	return nil
 }
 
 // --- Window feed (ADR-052 FR-032) -------------------------------------------

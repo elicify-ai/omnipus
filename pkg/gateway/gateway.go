@@ -841,6 +841,60 @@ func pluralSuffix(n int) string {
 	return "ies"
 }
 
+// seedJudgeEagerSoul eagerly backfills the Judge System Agent's SOUL.md with
+// its default judging rubric (coreagent.JudgeDefaultRubric) at gateway boot,
+// right after coreagent.SeedConfig has ensured the Judge's AgentConfig
+// entry exists. Fixes an operator-reported UX gap: the Judge's soul used to
+// materialize ONLY lazily, on its first real verifier dispatch
+// (pkg/agent's ensureVerifierSoul) — but the soul is now operator-editable
+// in the SPA (judge_soul_editable_test.go), so a fresh install's Judge
+// profile must show the default standards immediately, not stay blank
+// until the operator has already triggered a judgment.
+//
+// This call site — pkg/gateway's boot sequence — was chosen over folding
+// the write into coreagent.SeedConfig/seedSystemAgents themselves for two
+// independent reasons, both already true of the pre-existing lazy seed
+// (see ensureVerifierSoul's doc comment, verifier_adjudication.go):
+//
+//  1. coreagent.SeedConfig is documented, and relied on by its own test
+//     suite (none of which sets OMNIPUS_HOME), as a PURE config-struct
+//     mutation with zero filesystem side effects. Adding a disk write there
+//     would start silently touching the real machine's home directory on
+//     every `go test ./pkg/coreagent/...` run.
+//  2. pkg/coreagent cannot cleanly resolve the Judge's REAL workspace path
+//     itself — that resolution (OMNIPUS_HOME lookup, the "main"-sentinel
+//     special case, ID sanitization/traversal guarding) lives in
+//     agent.ResolveAgentHome, and pkg/coreagent cannot import pkg/agent
+//     (pkg/agent already imports pkg/coreagent — that direction would be a
+//     cycle). Reimplementing the resolution a second time in pkg/coreagent
+//     would be a second source of truth that could silently drift from the
+//     path the Judge's real AgentInstance.Home resolves to at runtime.
+//
+// pkg/gateway already imports both pkg/agent and pkg/coreagent, so it is
+// the cleanest place that can call the real, single-source-of-truth
+// agent.ResolveAgentHome and land the seed at EXACTLY the directory the
+// Judge's own AgentInstance will later use — then delegates the actual
+// write (mkdir + backfill-only-when-missing/empty + atomic write) to
+// agent.SeedJudgeSoulFile, the same helper ensureVerifierSoul uses, so the
+// two call sites can never diverge on write semantics. Non-fatal: a
+// failure here is logged at WARN and boot continues — an empty Judge soul
+// is a UX gap, not a boot-blocking condition, and ensureVerifierSoul
+// remains the lazy backstop for any path (e.g. pkg/agent's own test
+// harnesses) that never runs this boot sequence at all.
+func seedJudgeEagerSoul(cfg *config.Config) {
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID != string(coreagent.IDJudge) {
+			continue
+		}
+		judgeHome := agent.ResolveAgentHome(&cfg.Agents.List[i], &cfg.Agents.Defaults)
+		if err := agent.SeedJudgeSoulFile(judgeHome); err != nil {
+			slog.Warn("gateway: could not eagerly seed Judge default soul",
+				"error", err, "workspace", judgeHome)
+		}
+		return
+	}
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
@@ -962,6 +1016,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			return fmt.Errorf("gateway: failed to persist seeded core agents: %w", saveErr)
 		}
 	}
+
+	// Eagerly seed the Judge System Agent's SOUL.md right after SeedConfig.
+	// Operator-reported UX gap: the Judge's soul only materialized lazily on
+	// its FIRST real verifier dispatch (pkg/agent's ensureVerifierSoul), so a
+	// fresh install's Judge profile showed an empty soul in the SPA — but
+	// the soul is now operator-editable there, so the operator must be able
+	// to see the default judging standards they'd be overriding before ever
+	// running a judgment. seedJudgeEagerSoul writes only to SOUL.md (plain
+	// file I/O, not config.json) so it needs no safeUpdateConfigJSON/configMu
+	// involvement at all. See seedJudgeEagerSoul's doc comment for why this
+	// call site — not coreagent.SeedConfig itself — is where it lives.
+	seedJudgeEagerSoul(cfg)
 
 	msgBus := bus.NewMessageBus()
 	var agentLoop *agent.AgentLoop

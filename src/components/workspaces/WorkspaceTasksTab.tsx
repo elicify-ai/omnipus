@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon, CaretDown, UsersThree, Tag } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -101,6 +101,24 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       addToast({ message: msg, variant: 'error' })
     },
   })
+
+  // Operator UX fix: selecting a plan tile (the tile-select action — NOT the
+  // pencil/⋯/▶/■ controls, which are click-isolated siblings of the select
+  // button in PlansFilterBand and never call onSelectPlan at all, see
+  // PlansFilterBand.test.tsx) also switches the view below to Graph, so the
+  // operator lands directly on the plan's dependency graph instead of just a
+  // re-scoped Board. DESELECTING a plan — re-clicking the already-active
+  // tile, or the "All tasks" tile, both of which call onSelectPlan(null) —
+  // must NOT force a view change; it only clears the filter. Manual view
+  // switching keeps working afterwards (picking a different plan tile
+  // switches to Graph again, by design — see the ticket).
+  const handleSelectPlan = useCallback(
+    (planId: string | null) => {
+      setActivePlanId(planId)
+      if (planId !== null) setView('graph')
+    },
+    [setActivePlanId],
+  )
 
   const pendingAction: { planId: string; action: 'clear' } | null =
     clearPlanMutation.isPending && clearPlanMutation.variables
@@ -232,7 +250,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         tasks={tasks}
         agents={agents}
         selectedPlanId={activePlanId}
-        onSelectPlan={setActivePlanId}
+        onSelectPlan={handleSelectPlan}
         onNewPlan={() => setPlanSlideOver({ open: true, plan: null })}
         onEditPlan={(plan) => setPlanSlideOver({ open: true, plan })}
         onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)}

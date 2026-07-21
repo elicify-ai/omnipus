@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -559,6 +560,109 @@ func TestVerifierSoul_EnsureVerifierSoul_OnlyAppliesToTheSeededJudge(t *testing.
 func TestJudgeRubricFromConfig_NilAgentReturnsEmpty(t *testing.T) {
 	if got := judgeRubricFromConfig(nil); got != "" {
 		t.Errorf("nil agent must resolve to \"\", got %q", got)
+	}
+}
+
+// --- SeedJudgeSoulFile (shared write helper, gateway eager seed + this
+// package's lazy backstop both call it) -------------------------------------
+
+func TestSeedJudgeSoulFile_SeedsWhenMissing(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "judge")
+
+	if err := SeedJudgeSoulFile(workspace); err != nil {
+		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(workspace, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != coreagent.JudgeDefaultRubric {
+		t.Errorf("SeedJudgeSoulFile must write coreagent.JudgeDefaultRubric for a missing file, got %q", string(got))
+	}
+}
+
+// TestSeedJudgeSoulFile_TreatsZeroByteFileAsMissing proves a 0-byte SOUL.md
+// (e.g. left behind by an interrupted write, or a workspace dir created
+// without ever populating the file) is backfilled exactly like an absent
+// file — not mistaken for "operator already put content here".
+func TestSeedJudgeSoulFile_TreatsZeroByteFileAsMissing(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "judge")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte{}, 0o644); err != nil {
+		t.Fatalf("WriteFile (0-byte seed): %v", err)
+	}
+
+	if err := SeedJudgeSoulFile(workspace); err != nil {
+		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	}
+
+	got, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != coreagent.JudgeDefaultRubric {
+		t.Errorf("a 0-byte SOUL.md must be treated as missing and backfilled, got %q", string(got))
+	}
+}
+
+// TestSeedJudgeSoulFile_WhitespaceOnlyFileIsTreatedAsMissing mirrors
+// ensureVerifierSoul's own TrimSpace-based emptiness check (judgeRubricFromConfig
+// callers use the same rule) so the two "is this soul really empty" checks
+// never disagree.
+func TestSeedJudgeSoulFile_WhitespaceOnlyFileIsTreatedAsMissing(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "judge")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte("   \n\t  "), 0o644); err != nil {
+		t.Fatalf("WriteFile (whitespace-only seed): %v", err)
+	}
+
+	if err := SeedJudgeSoulFile(workspace); err != nil {
+		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	}
+
+	got, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != coreagent.JudgeDefaultRubric {
+		t.Errorf("a whitespace-only SOUL.md must be treated as missing and backfilled, got %q", string(got))
+	}
+}
+
+func TestSeedJudgeSoulFile_NeverOverwritesExistingContent(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "judge")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	const operatorEdit = "operator-customized verification standards"
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if err := os.WriteFile(soulPath, []byte(operatorEdit), 0o644); err != nil {
+		t.Fatalf("WriteFile (operator edit seed): %v", err)
+	}
+
+	if err := SeedJudgeSoulFile(workspace); err != nil {
+		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	}
+
+	got, err := os.ReadFile(soulPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != operatorEdit {
+		t.Errorf("SeedJudgeSoulFile must never overwrite existing non-empty content, got %q", string(got))
+	}
+}
+
+func TestSeedJudgeSoulFile_EmptyWorkspaceErrors(t *testing.T) {
+	if err := SeedJudgeSoulFile("   "); err == nil {
+		t.Error("SeedJudgeSoulFile(\"   \") must return an error, got nil")
 	}
 }
 

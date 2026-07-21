@@ -71,6 +71,12 @@ const AGENTS: Agent[] = [
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('ray', { name: 'Ray' }), // not on the team — should appear in the picker
+  // System agent (the Judge, ADR-049 D3) — implicit member of EVERY
+  // workspace (pkg/workspace/find_for_agent.go's isImplicitMember). Present
+  // in every test in this file via the shared `fetchAgents` mock so the
+  // "Judge invisible in workspace Teams" fix is exercised across the whole
+  // suite, not just its own describe block below.
+  agent('judge', { name: 'Judge', type: 'system' }),
 ]
 
 const DELEGATION: WorkspaceDelegation = {
@@ -590,5 +596,96 @@ describe('WorkspaceTeamTab', () => {
     expect(
       jimNode.querySelector('[aria-label="Remove Jim from team"]'),
     ).not.toBeNull()
+  })
+})
+
+// ── Implicit Judge row (operator-reported: "Judge invisible in workspace
+// Teams") ─────────────────────────────────────────────────────────────────
+//
+// Backend model (operator-directed, pkg/workspace/find_for_agent.go's
+// isImplicitMember): System agents (the Judge) are IMPLICIT members of
+// EVERY workspace — they cannot be added to core_team rosters (the gateway
+// 400s that), and membership is resolved implicitly everywhere. Before this
+// fix the Team tab only ever rendered the literal core_team ∪ edge-endpoint
+// node set, so the Judge looked absent even though it always verifies work
+// on every workspace.
+describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
+  it('shows the Judge row with the "Verifier — implicit member" badge for a normal workspace', async () => {
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByTestId('team-node-judge')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Judge')).toBeInTheDocument()
+    expect(screen.getByTestId('team-node-implicit-badge-judge')).toHaveTextContent(
+      'Verifier — implicit member of every workspace',
+    )
+  })
+
+  it('a workspace with ZERO real members still shows the Judge row', async () => {
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-1',
+      team: [],
+      edges: [],
+      default_depth: 3,
+    } as WorkspaceDelegation)
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByTestId('team-node-judge')).toBeInTheDocument()
+    })
+  })
+
+  it('the [+ Add agent] picker never offers the Judge — System agents are not team-addable', async () => {
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('team-add-agent-option-judge')).toBeNull()
+  })
+
+  it('saving the team (adding a real member + drawing an edge) never includes the Judge in either PUT payload', async () => {
+    vi.mocked(updateWorkspace).mockResolvedValue({
+      ...WORKSPACE,
+      core_team: ['mia', 'jim', 'planner', 'ray'],
+    })
+    vi.mocked(updateWorkspaceDelegation).mockResolvedValue({
+      workspace_id: 'ws-1',
+      team: ['mia', 'jim', 'planner', 'ray'],
+      edges: [
+        ...(DELEGATION.edges ?? []),
+        { from_agent: 'jim', to_agent: 'ray', modes: ['direct', 'task'] },
+      ],
+      default_depth: 3,
+    })
+
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+    // The Judge row is present throughout — proving it renders alongside a
+    // normal, in-flight edit session, not just a pristine/empty one.
+    await waitFor(() => expect(screen.getByTestId('team-node-judge')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+    const coreTeamArg = vi.mocked(updateWorkspace).mock.calls[0]?.[1] as { core_team?: string[] }
+    expect(coreTeamArg?.core_team).not.toContain('judge')
+
+    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), { timeout: 3000 })
+    const edgesArg = vi.mocked(updateWorkspaceDelegation).mock.calls[0]?.[1] as Array<{
+      from_agent: string
+      to_agent: string
+    }>
+    expect(edgesArg.every((e) => e.from_agent !== 'judge' && e.to_agent !== 'judge')).toBe(true)
   })
 })
