@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // behavior_scan.go implements the ADR-052 rung-2 ("transcript / behavioral")
@@ -26,58 +27,44 @@ import (
 // it never invokes the verifier and never reads outside the entries it is
 // handed.
 
-// BehaviorScope selects which portion of a session's tool-call log a
-// BehaviorCriterion is evaluated against (FR-034 payload field `scope`).
-type BehaviorScope string
+// BehaviorScope, its two values, and the criterion payload are canonically
+// defined in pkg/task (criterion.go — the same package that owns
+// KindBehavior; ADR-052 FR-034). This scanner aliases them so its API reads
+// naturally in pkg/agent while there is exactly ONE definition of the shape.
+type BehaviorScope = task.BehaviorScope
 
 const (
 	// BehaviorScopeAttempt restricts counting to tool calls recorded at or
 	// after the current attempt's start marker (see ScanBehaviorCriterionEntries's
 	// attemptStart parameter) — a retried task's earlier, exhausted attempts
 	// do not count toward the current one.
-	BehaviorScopeAttempt BehaviorScope = "attempt"
+	BehaviorScopeAttempt = task.BehaviorScopeAttempt
 	// BehaviorScopeTaskSession counts every tool call recorded anywhere in
 	// the session, across all attempts. This is the FR-034 payload default.
-	BehaviorScopeTaskSession BehaviorScope = "task_session"
+	BehaviorScopeTaskSession = task.BehaviorScopeTaskSession
 )
 
 // IsValidBehaviorScope reports whether s is a known behavior criterion scope.
 func IsValidBehaviorScope(s BehaviorScope) bool {
-	return s == BehaviorScopeAttempt || s == BehaviorScopeTaskSession
+	return task.IsValidBehaviorScope(s)
 }
 
 // BehaviorCriterion is the payload shape of a `behavior`-kind acceptance
 // criterion (ADR-052 rung 2 / FR-034): {tool, min_count, max_count?, scope}.
-//
-// WAVE-MERGE: use task.BehaviorCriterion — a sibling Wave 1 agent is adding
-// task.KindBehavior + the matching payload struct to pkg/task/criterion.go
-// (mirroring task.CriterionCheck's shape for task.KindCheck). This type is
-// intentionally a local, dependency-free mirror of that same shape so this
-// scanner can be implemented and tested in isolation; reconcile the two at
-// merge (replace this type's use-sites with task.BehaviorCriterion, keep the
-// scanning logic below).
-type BehaviorCriterion struct {
-	// Tool is the exact tool name the criterion counts calls of (required).
-	Tool string
-	// MinCount is the minimum number of SUCCESSFUL calls required to meet
-	// the criterion. FR-034 payload default is 1; MinCount == 0 combined
-	// with a non-nil MaxCount == 0 expresses "never call this tool".
-	MinCount int
-	// MaxCount, when non-nil, is the maximum number of successful calls
-	// allowed before the criterion is violated (exceeding it is unmet, not
-	// an error).
-	MaxCount *int
-	// Scope selects attempt-only or whole-task-session counting. FR-034
-	// payload default is BehaviorScopeTaskSession.
-	Scope BehaviorScope
-}
+// Canonically task.CriterionBehavior (pkg/task/criterion.go, next to
+// KindBehavior) — aliased here so the scanner's API keeps its natural local
+// name with exactly ONE definition of the shape.
+type BehaviorCriterion = task.CriterionBehavior
 
-// Validate reports a non-nil error when c's shape violates the FR-034
-// payload contract: tool required; min_count >= 0; max_count (when set) >=
-// min_count; scope one of the two known values. ScanBehaviorCriterionEntries
-// calls this itself and fails the criterion closed (unmet) rather than
-// panicking or silently misinterpreting a malformed criterion.
-func (c BehaviorCriterion) Validate() error {
+// validateBehaviorCriterion reports a non-nil error when c's shape violates
+// the FR-034 payload contract: tool required; min_count >= 0; max_count
+// (when set) >= min_count; scope one of the two known values.
+// ScanBehaviorCriterionEntries calls this itself and fails the criterion
+// closed (unmet) rather than panicking or silently misinterpreting a
+// malformed criterion. (pkg/task enforces the same contract at decode/store
+// time; re-checking here keeps the scanner fail-closed even for callers that
+// construct payloads directly.)
+func validateBehaviorCriterion(c BehaviorCriterion) error {
 	if strings.TrimSpace(c.Tool) == "" {
 		return fmt.Errorf("behavior criterion: tool is required")
 	}
@@ -142,7 +129,7 @@ type BehaviorScanResult struct {
 func ScanBehaviorCriterionEntries(
 	entries []session.TranscriptEntry, criterion BehaviorCriterion, attemptStart time.Time,
 ) BehaviorScanResult {
-	if err := criterion.Validate(); err != nil {
+	if err := validateBehaviorCriterion(criterion); err != nil {
 		return BehaviorScanResult{
 			Met:    false,
 			Reason: fmt.Sprintf("behavior criterion invalid, fail-closed unmet: %s", err),
@@ -179,6 +166,65 @@ func ScanBehaviorCriterionEntries(
 	}
 
 	return BehaviorScanResult{Met: met, Observed: observed, UnknownTool: unknownTool, Reason: reason}
+}
+
+// runBehaviorScan is JudgeCriteria's rung-2 dispatcher (ADR-052 FR-034): it
+// resolves which session's tool-call log the criterion is scanned against —
+// task scope: the task's own session (attempt cutoff = Task.StartedAt);
+// chat /goal scope: GoalSessionID (whole session; goal rounds have no
+// per-attempt cutoff) — reads the transcript, and runs the pure scanner.
+// Plan-scope behavior criteria have no single session to scan and fail
+// CLOSED with an explicit reason (a plan's DoD should express behavioral
+// requirements on its member tasks instead).
+func (al *AgentLoop) runBehaviorScan(in JudgeCriteriaInput, c task.AcceptanceCriterion) task.CriterionVerdict {
+	failClosed := func(reason string) task.CriterionVerdict {
+		return task.CriterionVerdict{CriterionID: c.ID, Met: false, Reason: reason}
+	}
+	if c.Behavior == nil {
+		return failClosed("behavior criterion missing payload (fail-closed)")
+	}
+	var sessionID string
+	var attemptStart time.Time
+	switch {
+	case in.TaskID != "":
+		ts := GetTaskStore(al)
+		if ts == nil {
+			return failClosed("behavior criterion: no task store available (fail-closed)")
+		}
+		t, err := ts.Get(in.TaskID)
+		if err != nil || t == nil {
+			return failClosed("behavior criterion: task not readable (fail-closed)")
+		}
+		sessionID = t.SessionID
+		if criterionScopeIsAttempt(*c.Behavior) && t.StartedAt != "" {
+			if cutoff, perr := time.Parse(time.RFC3339, t.StartedAt); perr == nil {
+				attemptStart = cutoff
+			}
+		}
+	case in.GoalSessionID != "":
+		sessionID = in.GoalSessionID
+	default:
+		return failClosed("behavior criterion has no session scope to scan — plan-level behavior criteria are not scannable; attach them to member tasks (fail-closed)")
+	}
+	if sessionID == "" || in.AssigneeAgentID == "" {
+		return failClosed("behavior criterion: no session recorded to scan (fail-closed)")
+	}
+	store := al.GetAgentStore(in.AssigneeAgentID)
+	if store == nil {
+		return failClosed("behavior criterion: no session store for assignee (fail-closed)")
+	}
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		return failClosed(fmt.Sprintf("behavior criterion: could not read session transcript (fail-closed): %s", err))
+	}
+	res := ScanBehaviorCriterionEntries(entries, *c.Behavior, attemptStart)
+	return task.CriterionVerdict{CriterionID: c.ID, Met: res.Met, Reason: res.Reason}
+}
+
+// criterionScopeIsAttempt reports whether the payload requests attempt-only
+// counting (the non-default scope).
+func criterionScopeIsAttempt(c BehaviorCriterion) bool {
+	return c.Scope == BehaviorScopeAttempt
 }
 
 // behaviorScanReason renders the human-readable verdict explanation shared by

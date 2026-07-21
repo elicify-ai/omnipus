@@ -108,14 +108,15 @@ Jim adds tasks to a plan with dependencies via `create_task`'s new optional `pla
   2. **Given** `plan_id` names a plan in a **different** workspace, **When** the task is created, **Then** it is rejected (same-workspace FK, `rest_tasks.go:549`).
   3. **Given** `blocked_by` forms a cycle, **When** created, **Then** rejected (`ErrBlockedByCycle`).
 
-### US-3 — Agent executes a plan, no human approval (P0)
-Jim calls `execute_plan(P)`; the plan runs autonomously with no human click.
+### US-3 — Agent executes a plan, no approval GATE (P0)
+Jim calls `execute_plan(P)` and the plan executes end-to-end — there is **no approval gate concept**; authorization is tool policy. Runtime resolution is **strictest-wins** (`deny > ask > allow`, `[FACT]` `pkg/tools/compositor.go`), so with the default seeds (ceiling `ask`) the **resolved posture is an approval prompt (`ask`) for ALL agents — including Jim**: every plan execution on a fresh install raises an operator-approval prompt. **Full autonomy is a pure seed-edit** (operator decision 2026-07-21): raise the global ceiling entry to `allow` → Jim (already per-agent `allow`) resolves autonomous, while all other seeded agents (explicit per-agent `ask`) still prompt. No code special-case.
 - **Why P0:** core objective.
-- **Independent test:** `execute_plan(P)` on a criteria-complete plan → plan reaches `running`, members dispatch.
+- **Independent test:** default install: `execute_plan(P)` raises the approval prompt; approve → plan reaches `running`. Ceiling=`allow` install: `execute_plan(P)` runs with no prompt.
 - **Acceptance:**
-  1. **Given** every member of P has ≥1 acceptance criterion and Jim holds `execute_plan`, **When** he calls `execute_plan(P)`, **Then** P goes `draft→approved` and the engine promotes it to `running` under the cap; the tool returns immediately.
-  2. **Given** a member of P has **zero** criteria, **When** `execute_plan(P)`, **Then** rejected with `task_errors:[{task_id,title,reason:"task has no acceptance criteria"}]`; P stays `draft`.
-  3. **Given** the global cap (16) is full, **When** `execute_plan(P)`, **Then** P stays `approved` and the tool reports `queued behind cap`; the engine promotes it when a slot frees.
+  1. **(default posture)** **Given** the default seeds (ceiling `ask`) and a criteria-complete P, **When** Jim calls `execute_plan(P)`, **Then** the existing tool-approval prompt is raised; **When** the operator approves, **Then** P goes `draft→approved` through the gated approve and the engine promotes it under the cap; the tool returns after dispatch of the gated call.
+  2. **(autonomous posture)** **Given** an install whose ceiling entry for `execute_plan` is raised to `allow`, **When** Jim calls `execute_plan(P)`, **Then** it proceeds with **no prompt** (resolved allow) — while any other agent still prompts (per-agent `ask` is stricter).
+  3. **Given** a member of P has **zero** criteria, **When** `execute_plan(P)` (after any approval), **Then** rejected with `task_errors:[{task_id,title,reason:"task has no acceptance criteria"}]`; P stays `draft`.
+  4. **Given** the global cap (16) is full, **When** `execute_plan(P)` (after any approval), **Then** P stays `approved` and the tool reports `queued behind cap`; the engine promotes it when a slot frees.
 
 ### US-4 — Tool policy is the only gate (P0)
 Only Jim is seeded `allow` for `execute_plan`/`create_plan`/`run_task`; every other seeded agent — including the global ceiling — is explicit **`ask`** (operator-approval prompt on attempt; interview 2026-07-21); boot's backfill-to-deny + the seeds guarantee full explicit coverage (GS-03).
@@ -223,7 +224,7 @@ Adjudication runs through a real agent in a **verifier role** in its **own sessi
 ---
 
 ## Behavioral Contract
-- When Jim (holding the tools) authors a plan and calls `execute_plan`, the plan runs autonomously with no human approval.
+- When Jim authors a plan and calls `execute_plan`, there is no approval GATE — tool policy authorizes it. Under the default resolved posture (`ask` for everyone, incl. Jim — strictest-wins) the call raises the **existing tool-approval flow, surfacing in Jim's chat turn (no new approval UI)**; with the ceiling raised to `allow`, Jim executes with no prompt (one seed knob = full autonomy).
 - When an agent lacks the tool grant, plan create/execute is denied before any state change.
 - When any member lacks ≥1 criterion, `execute_plan` rejects and the plan stays `draft`.
 - When `PUT /plans/{id}` sets `approved`/`running`, the system returns 400.
@@ -240,6 +241,7 @@ Adjudication runs through a real agent in a **verifier role** in its **own sessi
 - The verifier must **never mutate anything** — no writes, no task-state changes, no delegation, no commits; its tool set is read-only by seeded policy (Constraint #6).
 - `inspect_session` must **never read outside its engine-set target scope** (task → that task's session; plan → that plan's member sessions) — the lock is ctx-enforced, not policy-expressible.
 - The verifier must **not** receive the work-under-review as instructions — input-as-data only (prompt-injection guard).
+- The system must **not** introduce a new approval UI for the `ask` posture — the prompt is the **existing tool-approval flow** surfacing in the calling agent's chat turn.
 - The system must **not** implement pause/resume in v1 — deferred; Stop is a hard cancel only.
 - The system must **not** add a 7th board column or a new status enum value for `cancelled` — reuse `failed`+reason (operator decision).
 - The system must **not** offer restart for genuinely-failed plans (judge-exhausted/idle-expired) — they are terminal.
@@ -260,15 +262,22 @@ Adjudication runs through a real agent in a **verifier role** in its **own sessi
 ```gherkin
 Feature: Agent plan authoring & execution (tool-policy gated)
 
-  Scenario: Jim authors and launches a plan with no human approval
+  Scenario: default posture — Jim's execute_plan raises the approval prompt, approve proceeds
     Traces to: US-3, Acceptance 1
-    Given agent "Jim" holds tools "create_plan" and "execute_plan"
-    And a plan "P" whose every member has at least one acceptance criterion
+    Given the DEFAULT seeds (global ceiling "ask") and a plan "P" whose every member has a criterion
     When Jim calls "execute_plan" with plan "P"
-    Then plan "P" transitions "draft" -> "approved" through the gated approve
+    Then the existing tool-approval prompt surfaces in Jim's chat turn (strictest-wins: ceiling ask beats Jim's allow)
+    And when the operator approves, plan "P" transitions "draft" -> "approved" through the gated approve
     And the engine promotes "P" to "running" under the global cap
-    And the tool returns without waiting for completion
     # Happy Path
+
+  Scenario: autonomous posture — ceiling raised to allow, Jim executes with no prompt
+    Traces to: US-3, Acceptance 2
+    Given an install whose global ceiling entry for "execute_plan" is raised to "allow"
+    When Jim calls "execute_plan" with a criteria-complete plan "P"
+    Then no prompt is raised (Jim resolves allow) and "P" proceeds draft -> approved -> running
+    And when agent "Ray" (per-agent "ask") calls "execute_plan" a prompt is still raised
+    # Alternate Path
 
   Scenario: execute_plan rejects a plan with an uncriteria'd member
     Traces to: US-3, Acceptance 2
@@ -606,6 +615,8 @@ Feature: Agent plan authoring & execution (tool-policy gated)
 | any agent with MISSING entry | backfilled deny | backfilled deny | backfilled deny | **boots (WARN); no implicit allow** |
 | Judge (seeded set) | deny | deny | deny | ok — allow only `read_file`/`list_directory`/`inspect_session` (R3-2) |
 | ask-path outcome | prompt → operator reject = denied, no state change; approve = proceeds via gated path | ″ | ″ | — |
+| **RESOLVED: Jim, default ceiling (`ask`)** | **resolved `ask`** (strictest-wins: ceiling ask > per-agent allow) → prompt | ″ | ″ | — |
+| **RESOLVED: Jim, ceiling raised to `allow`** | **resolved `allow`** → no prompt (autonomous); others still `ask` (per-agent) | ″ | ″ | — |
 
 
 **DS-7 — behavior criteria scanner (Test 22) — deterministic over the tool-call log (FR-034)**
@@ -647,7 +658,7 @@ New seam tests: the SPA `approvePlan` repoint from PUT→POST (WorkspaceTasksTab
 - **FR-002**: The **agent** task-create tools MUST expose the plan linkage: `create_task_in_workspace` `[FACT]` ALREADY exposes `blocked_by` (`pkg/sysagent/tools/task.go:144`) and needs only **`plan_id` added**; `create_task` (`pkg/tools/task.go`) needs **both** `plan_id` + `blocked_by`. Validated same-workspace (`rest_tasks.go:549`) and acyclic. `[FACT]` both fields ALREADY exist on the `TaskCreateRequest` wire type (`TaskCreateRequest.yaml:60,97`) — NOT a new wire type (M5); the gap is tool-surface only.
 - **FR-003**: The system MUST expose an `execute_plan` agent tool that runs the gated approve and returns immediately; the engine promotes `approved→running` under the cap.
 - **FR-004**: `execute_plan` MUST reject a plan with any member lacking ≥1 acceptance criterion (`task_errors`), leaving the plan `draft`.
-- **FR-005**: Tool policy MUST seed `execute_plan`/`create_plan`/**`run_task`** `allow` for Jim (R2-06 — consistent with his orchestrator role) and explicit **`ask`** (operator-approval prompt on attempt) for every other seeded agent AND the global ceiling (interview 2026-07-21 — replaces the deny-everywhere model; F5's explicitness holds: `ask` is explicit, never absent).
+- **FR-005**: Tool policy MUST seed `execute_plan`/`create_plan`/**`run_task`** `allow` for Jim (R2-06 — consistent with his orchestrator role) and explicit **`ask`** (operator-approval prompt on attempt) for every other seeded agent AND the global ceiling (interview 2026-07-21 — replaces the deny-everywhere model; F5's explicitness holds: `ask` is explicit, never absent). **Resolved outcome (strictest-wins, `deny > ask > allow` — `[FACT]` `pkg/tools/compositor.go`): the DEFAULT resolved posture is `ask` for EVERYONE — including Jim** (ceiling `ask` beats his per-agent `allow`); **full autonomy = the operator raises the ceiling entry to `allow`** (one seed knob) → Jim resolves `allow`, all others still `ask`. No code special-case.
 - **FR-006**: Tool-policy coverage for the new tools MUST be guaranteed at boot by the existing **backfill-to-explicit-deny** + the explicit seeded grants — `[FACT]` `repairAndValidateToolPolicyCoverage` (`gateway.go:735-748`) BACKFILLS gaps to explicit `deny` (WARN-logged) and boots; it does NOT abort (GS-03). The invariant: after boot, every agent×tool resolves explicitly — Jim's `allow` grants survive, other seeded agents + the ceiling resolve `ask` (interview 2026-07-21), and any unseeded gap is backfilled `deny`; never an implicit allow.
 - **FR-007**: `PUT /plans/{id}` MUST reject **any** `state` field with 400 (A1). Every plan state transition goes through a dedicated path (`POST /approve`, `POST /stop`, restart, the engine); PUT mutates only non-state fields (title, goal, DoD, …).
 - **FR-008**: The only paths to `approved`/`running` MUST be the gated POST approve + the engine's cap admission.
@@ -663,13 +674,13 @@ New seam tests: the SPA `approvePlan` repoint from PUT→POST (WorkspaceTasksTab
 - **FR-018**: Genuine plan failures (`judge_rounds_exhausted`/`idle_expired`) MUST NOT be restartable (the reason-guard rejects them; no Play).
 - **FR-019**: `run_task` (standalone tasks only) MUST drive the **full attempt loop** (run → judge → retry to the attempt limit), identical to plan-member execution (A3). The **in-plan rejection MUST be enforced at the TOOL boundary**, not in `ExecuteTask` (which the engine shares — minor).
 - **FR-020**: The UI MUST implement the ADR §6.8 button matrix across Board/List/Graph, with confirm modals on ▶ and ■; the ▶ Play button MUST call the restart route (FR-026), never PUT.
-- **FR-021**: Granting `execute_plan` in the tool-policy UI MUST require a **confirmation modal with explicit warning text** ("this agent will be able to launch autonomous multi-task execution without approval") — a concrete, testable affordance (modal presence), not merely styling.
+- **FR-021**: Any tool-policy edit that would make `execute_plan` **resolve to `allow`** for an agent (granting per-agent `allow`, or raising the global ceiling entry to `allow`) MUST require a **confirmation modal with explicit warning text** ("this enables autonomous multi-task execution without an approval prompt") — a concrete, testable affordance (modal presence), not merely styling.
 - **FR-022**: "Stop = clear the goal / Play = set the goal new" MUST apply uniformly: plan (fan-out over members + plan), task, and chat `/goal` (existing `/goal clear`; re-issue manually in v1 — G7). Plan/task set-new re-derives from persisted DoD/criteria.
 - **FR-023**: Contracts-first (Constraint #8) applies to what is genuinely new on the WIRE: **the restart routes (`POST /plans/{id}/restart`, `POST /tasks/{id}/restart`), the task cancel-reason field (FR-028), the `verifier` session-type value + list-API exclusion param (FR-036), the `behavior` criteria-kind enum value + payload (FR-034), and DROPPING `rubric` from `Agent.yaml` + `AgentUpdateRequest.yaml` (FR-038 soul unification — no back-compat, v0.1.1 line)**. NOT in scope (GS-10): agent-tool req/resp schemas are NOT wire types (M5) — `create_plan`/`execute_plan` tools need no contract schema; the REST side ALREADY exists (`[FACT]` `PlanCreateRequest.yaml` present); `plan_id`/`blocked_by` already in `TaskCreateRequest.yaml`.
 - **FR-024**: The retained guardrails (cap 16, attempts 3, idle-expiry 7d, criteria-required) MUST remain enforced.
 - **FR-025**: Member-level Stop MUST clear only that member's goal (`RequestCancelForSession(M.SessionID)` + set `cancelled`), MUST NOT auto-retry it; the engine continues the plan's other independent members and M's dependents stay `blocked` (re-run only via plan restart). Distinct from plan-Stop (A5).
 - **FR-026 (B2)**: The system MUST expose dedicated restart routes — **`POST /plans/{id}/restart`** (the ▶ Play route, sets `approved` per FR-016; responses: **200** updated plan | **404** | **409** not-restartable [wrong state/reason] | **400** bad request) and **`POST /tasks/{id}/restart`** (standalone-task re-run; responses: **200** updated task | **404** | **409** in-plan-or-wrong-state) — auth = the same `withAuth` as stop. The handler does the member-reset orchestration + guarded transition (FR-016/017). `[FACT]` no such route exists today (only `POST /approve`, `/stop`). The SPA Play fn MUST call it. Approve / stop / restart are the ONLY plan-state routes (PUT stays state-locked, FR-007).
-- **FR-027 (M4/R3-2)**: `create_plan`, `execute_plan`, `run_task`, `inspect_session` MUST be registered in `allStaticToolNames` (`coreagent/core.go:279` — a seeded-override referencing an unregistered name **panics boot** via `validateOverrideKeys`, which is exactly why the seeded verifier set uses the REAL catalog names `read_file`/`list_directory`, GS-01), in `buildKnownBuiltinToolNames` (`[FACT]` `gateway.go:693`), and given explicit **`ask`** entries at the `defaults.go` global ceiling for the three plan tools (sparse Worker map inherits; interview 2026-07-21) — `inspect_session` stays ceiling-`deny` (verifier-role only). Coverage is then guaranteed by backfill-to-deny + the seeds (FR-006). The `seedSystemAgents` invariant is **redefined** (R3-2): from "all-deny re-enforced every boot" to **"exactly the seeded tool set re-enforced every boot"** — the Judge's seeded set = `read_file`, `list_directory`, `inspect_session` allow, everything else deny (`core.go:1226-1233`).
+- **FR-027 (M4/R3-2)**: `create_plan`, `execute_plan`, `run_task`, `inspect_session` MUST be registered in `allStaticToolNames` (`coreagent/core.go:279` — a seeded-override referencing an unregistered name **panics boot** via `validateOverrideKeys`, which is exactly why the seeded verifier set uses the REAL catalog names `read_file`/`list_directory`, GS-01), in `buildKnownBuiltinToolNames` (`[FACT]` `gateway.go:693`), and given explicit **`ask`** entries at the `defaults.go` global ceiling for the three plan tools (sparse Worker map inherits; interview 2026-07-21) — `inspect_session` stays ceiling-`deny` (verifier-role only). **Resolved posture note:** under strictest-wins the ceiling `ask` governs everyone by default (incl. Jim); raising it to `allow` is the single autonomy knob (FR-005). Coverage is then guaranteed by backfill-to-deny + the seeds (FR-006). The `seedSystemAgents` invariant is **redefined** (R3-2): from "all-deny re-enforced every boot" to **"exactly the seeded tool set re-enforced every boot"** — the Judge's seeded set = `read_file`, `list_directory`, `inspect_session` allow, everything else deny (`core.go:1226-1233`).
 - **FR-028 (M6)**: A task-level cancelled discriminator (e.g. `Task.cancel_reason`, mirroring `Plan.FailedReason`) MUST be added to `Task.yaml` (Constraint #8) — `handleTaskStop` writes `stopped_by_user`; the orange marker (FR-015) reads it. **Restart MUST clear it** (mirror of FR-016's `FailedReason` clear — a re-run task is no longer "stopped by user"). `[FACT]` `handleTaskStop` currently writes only free-text `Result` (`rest_tasks.go:1372`, cancel at `:1398`).
 - **FR-029 (M1)**: A member's `SessionID` MUST be assigned + persisted **synchronously before dispatch** (before it leaves `next`) — `[FACT]` today it is set async inside the dispatch goroutine (`task_executor.go:220`), so the `planDecisionMu` fan-out alone cannot address a just-dispatched member. This closes the concurrent-dispatch race so SC-005 is achievable.
 - **FR-030 (minor)**: `execute_plan` on an **empty** plan (0 members) MUST be rejected at the tool/gate — the reused approve gate would vacuously approve a member-less plan.
@@ -706,9 +717,9 @@ New seam tests: the SPA `approvePlan` repoint from PUT→POST (WorkspaceTasksTab
 |-------------|-----------|------------------|---------|
 | FR-001 | US-1 | Jim authors a plan; no-DoD rejected | Test 27 |
 | FR-002 | US-2 | authoring a plan DAG; cross-workspace rejected | Test 3 |
-| FR-003 | US-3 | Jim authors and launches | Test 4, 5 |
+| FR-003 | US-3 | default posture prompt→approve; autonomous posture (ceiling=allow) | Test 4, 5 |
 | FR-004 | US-3 | execute_plan rejects uncriteria'd | Test 4 |
-| FR-005 | US-4 | agent without grant; (seed) | Test 2 |
+| FR-005 | US-4 | ask-prompt path; resolved-posture rows (DS-6) | Test 2 |
 | FR-006 | US-4 | coverage gap backfilled to deny | Test 2 |
 | FR-007 | US-5 | PUT cannot set runnable states | Test 6 |
 | FR-008 | US-5 | PUT outline; execute via approve | Test 4, 6 |
@@ -783,7 +794,7 @@ All A1–A5 audit items + the re-grill B1/B2 blockers resolved; decisions folded
 **Zero open questions remain.**
 
 ## Holdout Evaluation Scenarios (post-implementation — NOT in traceability)
-- **H1 (happy):** As Jim in chat, ask for a 4-step goal with dependencies; observe a plan authored + executed to `done` with no human click; verify done members carry evidence.
+- **H1 (happy):** On an install with the ceiling raised to `allow`, as Jim in chat, ask for a 4-step goal with dependencies; observe a plan authored + executed to `done` with no prompt; verify done members carry evidence. On a DEFAULT install, verify the same request first surfaces the tool-approval prompt in Jim's turn.
 - **H2 (happy):** Grant `execute_plan` to a second agent via the UI; confirm the grant shows a security affordance and that agent can then launch a plan.
 - **H3 (happy):** Restart a cancelled 5-member plan (3 done) from the board; confirm only 2 re-run and the 3 done are untouched.
 - **H4 (error):** Attempt `PUT /plans/{id}` `state:"running"` with curl; confirm 400 and unchanged state.

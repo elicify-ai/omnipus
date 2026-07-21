@@ -217,6 +217,12 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 		Id   string                `json:"id"`
 		Kind gen.PlanDodAuthorKind `json:"kind"`
 	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                      `json:"max_count,omitempty"`
+		MinCount *int                      `json:"min_count,omitempty"`
+		Scope    *gen.PlanDodBehaviorScope `json:"scope,omitempty"`
+		Tool     string                    `json:"tool"`
+	} `json:"behavior,omitempty"`
 	Check *struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
@@ -231,6 +237,12 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 			Id   string                `json:"id"`
 			Kind gen.PlanDodAuthorKind `json:"kind"`
 		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int                      `json:"max_count,omitempty"`
+			MinCount *int                      `json:"min_count,omitempty"`
+			Scope    *gen.PlanDodBehaviorScope `json:"scope,omitempty"`
+			Tool     string                    `json:"tool"`
+		} `json:"behavior,omitempty"`
 		Check *struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
@@ -246,6 +258,12 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 				Id   string                `json:"id"`
 				Kind gen.PlanDodAuthorKind `json:"kind"`
 			} `json:"author"`
+			Behavior *struct {
+				MaxCount *int                      `json:"max_count,omitempty"`
+				MinCount *int                      `json:"min_count,omitempty"`
+				Scope    *gen.PlanDodBehaviorScope `json:"scope,omitempty"`
+				Tool     string                    `json:"tool"`
+			} `json:"behavior,omitempty"`
 			Check *struct {
 				Command          string `json:"command"`
 				ExpectedExitCode int    `json:"expected_exit_code"`
@@ -270,6 +288,23 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 				ExpectedExitCode int    `json:"expected_exit_code"`
 			}{Command: c.Check.Command, ExpectedExitCode: c.Check.ExpectedExitCode}
 		}
+		if c.Behavior != nil {
+			beh := &struct {
+				MaxCount *int                      `json:"max_count,omitempty"`
+				MinCount *int                      `json:"min_count,omitempty"`
+				Scope    *gen.PlanDodBehaviorScope `json:"scope,omitempty"`
+				Tool     string                    `json:"tool"`
+			}{
+				Tool:     c.Behavior.Tool,
+				MinCount: ptr(c.Behavior.MinCount),
+				MaxCount: c.Behavior.MaxCount,
+			}
+			if c.Behavior.Scope != "" {
+				s := gen.PlanDodBehaviorScope(c.Behavior.Scope)
+				beh.Scope = &s
+			}
+			item.Behavior = beh
+		}
 		out = append(out, item)
 	}
 	return &out
@@ -282,6 +317,12 @@ func planDoDFromCreateWire(items []struct {
 		Id   string                             `json:"id"`
 		Kind gen.PlanCreateRequestDodAuthorKind `json:"kind"`
 	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                                   `json:"max_count,omitempty"`
+		MinCount *int                                   `json:"min_count,omitempty"`
+		Scope    *gen.PlanCreateRequestDodBehaviorScope `json:"scope,omitempty"`
+		Tool     string                                 `json:"tool"`
+	} `json:"behavior,omitempty"`
 	Check *struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
@@ -305,6 +346,18 @@ func planDoDFromCreateWire(items []struct {
 		if it.Check != nil {
 			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
 		}
+		if it.Behavior != nil {
+			beh := &task.CriterionBehavior{Tool: it.Behavior.Tool, MaxCount: it.Behavior.MaxCount}
+			if it.Behavior.MinCount != nil {
+				beh.MinCount = *it.Behavior.MinCount
+			} else {
+				beh.MinCount = 1
+			}
+			if it.Behavior.Scope != nil {
+				beh.Scope = task.BehaviorScope(*it.Behavior.Scope)
+			}
+			c.Behavior = beh
+		}
 		out = append(out, c)
 	}
 	return out
@@ -317,6 +370,12 @@ func planDoDFromUpdateWire(items []struct {
 		Id   string                             `json:"id"`
 		Kind gen.PlanUpdateRequestDodAuthorKind `json:"kind"`
 	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                                   `json:"max_count,omitempty"`
+		MinCount *int                                   `json:"min_count,omitempty"`
+		Scope    *gen.PlanUpdateRequestDodBehaviorScope `json:"scope,omitempty"`
+		Tool     string                                 `json:"tool"`
+	} `json:"behavior,omitempty"`
 	Check *struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
@@ -339,6 +398,18 @@ func planDoDFromUpdateWire(items []struct {
 		}
 		if it.Check != nil {
 			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
+		}
+		if it.Behavior != nil {
+			beh := &task.CriterionBehavior{Tool: it.Behavior.Tool, MaxCount: it.Behavior.MaxCount}
+			if it.Behavior.MinCount != nil {
+				beh.MinCount = *it.Behavior.MinCount
+			} else {
+				beh.MinCount = 1
+			}
+			if it.Behavior.Scope != nil {
+				beh.Scope = task.BehaviorScope(*it.Behavior.Scope)
+			}
+			c.Behavior = beh
 		}
 		out = append(out, c)
 	}

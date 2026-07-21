@@ -40,24 +40,25 @@ import (
 )
 
 // verifierWindowTokensDefault is ADR-052 FR-032's confirmed default transcript
-// window size (operator interview 2026-07-21: "N=20000"). // WAVE-MERGE:
-// pkg/config.PlanningConfig.VerifierWindowTokens is being added by a
-// parallel wave and does not exist in this worktree yet. Once it lands,
-// effectiveVerifierWindowTokens should read cfg.Planning.VerifierWindowTokens
-// (falling back to this const when <= 0) instead of returning this const
-// unconditionally — see that function's own doc comment.
+// window size (operator interview 2026-07-21: "N=20000"). It is the fallback
+// when no config is reachable; the operator-tunable source of truth is
+// config.PlanningConfig.VerifierWindowTokens (resolved via
+// EffectiveVerifierWindowTokens, zero-backfilled at boot).
 const verifierWindowTokensDefault = 20000
 
 // effectiveVerifierWindowTokens resolves the transcript-window token budget
-// (FR-032). Currently always the confirmed default; see the WAVE-MERGE note
-// on verifierWindowTokensDefault for the pending per-install override.
+// (FR-032) from PlanningConfig, falling back to the compiled default when no
+// config is reachable (test scaffolding without a full config).
 func (al *AgentLoop) effectiveVerifierWindowTokens() int {
+	if cfg := al.GetConfig(); cfg != nil {
+		return cfg.Planning.EffectiveVerifierWindowTokens()
+	}
 	return verifierWindowTokensDefault
 }
 
 // --- Verifier-session registry (ADR-052 FR-037) -----------------------------
 
-// VerifierSessionRegistry is the minimal seam runVerifierAdjudication uses to
+// VerifierSessionPublisher is the minimal seam runVerifierAdjudication uses to
 // publish which verifier session is currently live for a given adjudication
 // unit (a task id, plan id, or — until goal_loop.go is updated to pass a
 // session identifier through JudgeCriteriaInput — an interim per-agent key
@@ -71,7 +72,7 @@ func (al *AgentLoop) effectiveVerifierWindowTokens() int {
 // satisfying this same interface, e.g. one the Stop fan-out can also
 // enumerate/query — via SetVerifierSessionRegistry at PlanEngine
 // construction time; the lead reconciles the exact type at merge.
-type VerifierSessionRegistry interface {
+type VerifierSessionPublisher interface {
 	// Register records that unitID currently has a live verifier session
 	// sessionID in flight. MUST be called BEFORE the verifier turn is
 	// dispatched (mirrors ADR-052's M1 synchronous-assignment rule for
@@ -83,44 +84,17 @@ type VerifierSessionRegistry interface {
 	Unregister(unitID string)
 }
 
-// defaultVerifierSessionRegistry is a minimal, safe, in-memory
-// VerifierSessionRegistry used until the plan-engine wave wires a richer
-// one. Safe for concurrent use.
-type defaultVerifierSessionRegistry struct {
-	mu       sync.Mutex
-	sessions map[string]string
-}
-
-func newDefaultVerifierSessionRegistry() *defaultVerifierSessionRegistry {
-	return &defaultVerifierSessionRegistry{sessions: make(map[string]string)}
-}
-
-func (r *defaultVerifierSessionRegistry) Register(unitID, sessionID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.sessions[unitID] = sessionID
-}
-
-func (r *defaultVerifierSessionRegistry) Unregister(unitID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.sessions, unitID)
-}
-
-// Lookup returns the live verifier session id for unitID, if any. Exposed
-// for tests and for a Stop fan-out that has not yet wired its own registry
-// via SetVerifierSessionRegistry.
-func (r *defaultVerifierSessionRegistry) Lookup(unitID string) (string, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	s, ok := r.sessions[unitID]
-	return s, ok
-}
+// The canonical registry implementation lives in verifier_registry.go
+// (VerifierSessionRegistry + NewVerifierSessionRegistry): PlanEngine owns
+// the process-wide instance and NewPlanEngine points this package seam at
+// it, so the Stop fan-out enumerates (SessionsFor) the very same entries
+// runVerifierAdjudication publishes here. Tests may still override the seam
+// with a 2-method spy.
 
 var (
 	verifierSessionRegistryMu sync.RWMutex
 	//nolint:gochecknoglobals // package-wide seam, see SetVerifierSessionRegistry's doc comment.
-	verifierSessionRegistry VerifierSessionRegistry = newDefaultVerifierSessionRegistry()
+	verifierPublisherSeam VerifierSessionPublisher = NewVerifierSessionRegistry()
 )
 
 // SetVerifierSessionRegistry overrides the package-wide verifier-session
@@ -129,21 +103,21 @@ var (
 // queryable registry; tests may also call this to inject a spy. Passing nil
 // restores a fresh safe default (never leaves the package with no
 // registry).
-func SetVerifierSessionRegistry(r VerifierSessionRegistry) {
+func SetVerifierSessionRegistry(r VerifierSessionPublisher) {
 	verifierSessionRegistryMu.Lock()
 	defer verifierSessionRegistryMu.Unlock()
 	if r == nil {
-		r = newDefaultVerifierSessionRegistry()
+		r = NewVerifierSessionRegistry()
 	}
-	verifierSessionRegistry = r
+	verifierPublisherSeam = r
 }
 
 // currentVerifierSessionRegistry returns the active registry under its own
 // lock so a concurrent SetVerifierSessionRegistry call never races a reader.
-func currentVerifierSessionRegistry() VerifierSessionRegistry {
+func currentVerifierSessionRegistry() VerifierSessionPublisher {
 	verifierSessionRegistryMu.RLock()
 	defer verifierSessionRegistryMu.RUnlock()
-	return verifierSessionRegistry
+	return verifierPublisherSeam
 }
 
 // verifierUnitID resolves the registry key a Stop fan-out will look up a
@@ -155,12 +129,15 @@ func verifierUnitID(in JudgeCriteriaInput) string {
 	if in.PlanID != "" {
 		return "plan:" + in.PlanID
 	}
-	// WAVE-MERGE: goal_loop.go:292 (task.VerdictScopeGoal caller) does not
-	// yet pass a chat-session identifier through JudgeCriteriaInput — the
-	// third FR-037 unitID kind — and that file is out of this wave's
-	// ownership. Fall back to a per-agent key so a /goal verifier still gets
-	// SOME registry entry; once goal_loop.go passes the session id, key off
-	// that instead (it is the correct, collision-free unitID for /goal).
+	if in.GoalSessionID != "" {
+		// The collision-free /goal unit key (FR-037): the chat session that
+		// carries the goal condition. /goal clear looks this up to cancel an
+		// in-flight goal verifier.
+		return "goal:" + in.GoalSessionID
+	}
+	// Defensive fallback for a goal-scope caller that somehow passed no
+	// session id — a per-agent key so the verifier still gets SOME registry
+	// entry rather than none.
 	return "goal-agent:" + in.AssigneeAgentID
 }
 
@@ -239,13 +216,10 @@ func (al *AgentLoop) resolveVerifierWindowText(in JudgeCriteriaInput) string {
 	case task.VerdictScopePlan:
 		return ""
 	case task.VerdictScopeGoal:
-		// WAVE-MERGE: goal_loop.go:292 does not yet pass the chat session id
-		// through JudgeCriteriaInput (out of this wave's ownership — see
-		// verifierUnitID's identical note). Until it does, a /goal verifier
-		// still judges correctly from criteria + claim alone; it simply
-		// lacks the session-window evidence channel FR-032 describes for
-		// /goal specifically.
-		return ""
+		// FR-032 for /goal: the window source is the chat session carrying
+		// the goal condition (GoalSessionID, passed by goal_loop.go), read
+		// from the goal agent's own session store.
+		return al.goalSessionWindowText(in.GoalSessionID, in.AssigneeAgentID)
 	default:
 		return ""
 	}
@@ -255,6 +229,26 @@ func (al *AgentLoop) resolveVerifierWindowText(in JudgeCriteriaInput) string {
 // tail. Returns "" (never an error) on any missing/unresolvable input —
 // window evidence is a best-effort enrichment, never a hard requirement for
 // adjudication to proceed.
+// goalSessionWindowText renders the transcript window for a chat /goal
+// verification (FR-032): the last N tokens of the session carrying the goal
+// condition, read from the goal agent's own session store.
+func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string {
+	if goalSessionID == "" || agentID == "" {
+		return ""
+	}
+	store := al.GetAgentStore(agentID)
+	if store == nil {
+		return ""
+	}
+	entries, err := store.ReadTranscript(goalSessionID)
+	if err != nil {
+		logger.WarnCF("agent", "verifier: could not read goal session for window feed",
+			map[string]any{"session_id": goalSessionID, "error": err.Error()})
+		return ""
+	}
+	return renderVerifierWindowText(entries, al.effectiveVerifierWindowTokens())
+}
+
 func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) string {
 	if taskID == "" || assigneeAgentID == "" {
 		return ""

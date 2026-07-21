@@ -295,12 +295,12 @@ func TestBehaviorScan_InvalidCriterion(t *testing.T) {
 // for the FR-034 payload constraints.
 func TestBehaviorCriterionValidate(t *testing.T) {
 	valid := BehaviorCriterion{Tool: "web_search", MinCount: 1, Scope: BehaviorScopeTaskSession}
-	if err := valid.Validate(); err != nil {
+	if err := validateBehaviorCriterion(valid); err != nil {
 		t.Errorf("Validate() = %v, want nil for a well-formed criterion", err)
 	}
 
 	neverCallX := BehaviorCriterion{Tool: "x", MinCount: 0, MaxCount: intPtr(0), Scope: BehaviorScopeAttempt}
-	if err := neverCallX.Validate(); err != nil {
+	if err := validateBehaviorCriterion(neverCallX); err != nil {
 		t.Errorf("Validate() = %v, want nil — min_count=0+max_count=0 is a valid ('never call X') shape", err)
 	}
 }

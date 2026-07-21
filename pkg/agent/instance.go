@@ -188,6 +188,10 @@ func NewAgentInstance(
 		// agent declares no allowlist → unrestricted; a non-nil list restricts
 		// resolution and progressive disclosure to exactly those skills.
 		contextBuilder.WithSkillAllowlist(agentCfg.Skills)
+		// ADR-052 FR-039: per-agent memory gate (nil = enabled). The Judge
+		// verifier runs memoryless for impartial, reproducible verdicts —
+		// its seed leaves MemoryEnabled=false; every other agent defaults on.
+		contextBuilder.WithMemoryEnabled(agentCfg.MemoryEnabledEffective())
 	}
 
 	// Memory tools (FR-016, FR-017): register remember, recall_memory, and

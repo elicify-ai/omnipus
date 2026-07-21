@@ -295,6 +295,10 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		Criteria:        []task.AcceptanceCriterion{criterion},
 		Attempt:         attempt,
 		ClaimText:       result.finalContent,
+		// ADR-052 FR-032/FR-037: the goal's own chat session — keys the
+		// verifier registry (so /goal clear can cancel an in-flight goal
+		// verifier) and sources the transcript window the verifier is fed.
+		GoalSessionID: sessionID,
 	})
 
 	if jr.Unavailable {

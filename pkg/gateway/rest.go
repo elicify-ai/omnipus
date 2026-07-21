@@ -1683,17 +1683,6 @@ func (a *restAPI) readChannelConfigRaw(channelID string) (map[string]any, error)
 	return chCfg, nil
 }
 
-// setAgentRubric populates the response's rubric field for a System Agent
-// (ADR-049 D3). The rubric is the System Agent's editable system prompt; it is
-// empty (field omitted) for every non-system agent. Takes ac by value and copies
-// the string so the returned pointer never aliases a loop variable.
-func setAgentRubric(ag *gen.Agent, ac config.AgentConfig) {
-	if ac.IsSystem() && strings.TrimSpace(ac.Rubric) != "" {
-		r := ac.Rubric
-		ag.Rubric = &r
-	}
-}
-
 func (a *restAPI) listAgents(w http.ResponseWriter) {
 	cfg := a.agentLoop.GetConfig()
 	agents := make([]gen.Agent, 0, len(cfg.Agents.List))
@@ -1734,7 +1723,6 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		applyAgentOverrides(&ag, &ac)
 		ag.Model = &model
 		setAgentModelProvider(&ag, ac.Model)
-		setAgentRubric(&ag, ac)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		ag.Default = boolPtr(ac.Default)
@@ -1790,7 +1778,6 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			applyAgentOverrides(&ag, &ac)
 			ag.Model = &model
 			setAgentModelProvider(&ag, ac.Model)
-			setAgentRubric(&ag, ac)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
 			ag.Default = boolPtr(ac.Default)
@@ -2911,16 +2898,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	foundAgent := cfg.Agents.List[foundIdx]
 	// ADR-049 D3 — System Agent (Judge) guards.
 	//
-	// (1) rubric is editable ONLY on a type:system agent. Any other agent type
-	//     sending "rubric" is rejected 400 (mirrors the contract: rubric is the
-	//     one prompt-equivalent field a locked System Agent accepts, and is empty
-	//     for every other agent). Checked before the locked-identity guard so a
-	//     non-system client gets the precise rubric message.
-	if req.Rubric != nil && !foundAgent.IsSystem() {
-		jsonErr(w, http.StatusBadRequest, "rubric is only editable for System Agents (type: system)")
-		return
-	}
-	// (2) The Judge cannot be disabled — disabling would stall every goal/plan
+	// The Judge cannot be disabled — disabling would stall every goal/plan
 	//     loop via the D7 judge-unavailability pause. AgentUpdateRequest carries
 	//     no enabled/disabled field, so a client can only smuggle one as an
 	//     unknown field; sniff the raw body (mirrors the sandbox_profile/
@@ -3231,18 +3209,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 							delete(agentMap, "description")
 						} else {
 							agentMap["description"] = trimmed
-						}
-					}
-					// ADR-049 D3: persist an edited rubric (System Agents only — the
-					// non-system rejection ran before this closure). An empty string
-					// clears it, which SeedConfig then re-backfills with the compiled
-					// default on the next boot (rubric is never left blank on a System
-					// Agent).
-					if req.Rubric != nil {
-						if strings.TrimSpace(*req.Rubric) == "" {
-							delete(agentMap, "rubric")
-						} else {
-							agentMap["rubric"] = *req.Rubric
 						}
 					}
 					if req.Model != nil {
@@ -3636,10 +3602,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			if ac.ID == agentID {
 				ag.Type = coreagent.ToWireType(ac)
 				ag.Default = boolPtr(ac.Default)
-				// ADR-049 D3: echo the (possibly just-edited) rubric on the PUT
-				// response for a System Agent, read from the live config after the
-				// write so a GET→edit→PUT round-trip reflects it.
-				setAgentRubric(&ag, ac)
 				if len(ac.Skills) > 0 {
 					skills := make([]string, len(ac.Skills))
 					copy(skills, ac.Skills)
