@@ -7,6 +7,12 @@
 // ExecuteTask ever returns — not asynchronously inside the run goroutine —
 // so a plan-engine Stop fan-out (planDecisionMu) issued the instant after
 // dispatch always has a cancel handle (SC-005).
+//
+// The scriptedProvider fixtures below carry a "[goal:evidence] ..." line
+// immediately before "TASK_STATUS: success" (ADR-052 FR-035's
+// evidence-marker gate, task_executor.go's finishTaskRun) — without it the
+// gate would re-prompt instead of letting the claim reach the (always-met)
+// judge these tests rely on for a deterministic single-attempt Done.
 
 package agent
 
@@ -37,7 +43,7 @@ func metJudgeProviderC1() *fakeJudgeProvider {
 // goroutine (task_executor.go's old runTask), so this exact assertion would
 // have been flaky-to-always-failing depending on goroutine scheduling.
 func TestExecuteTask_SessionIDAssignedSynchronouslyBeforeReturn(t *testing.T) {
-	worker := &scriptedProvider{responseBody: "doing it\nTASK_STATUS: success\nTASK_SUMMARY: done"}
+	worker := &scriptedProvider{responseBody: "doing it\n[goal:evidence] verified against c1\nTASK_STATUS: success\nTASK_SUMMARY: done"}
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 	judgeInst.Provider = metJudgeProviderC1()
 
@@ -83,7 +89,7 @@ func TestExecuteTask_SessionIDAssignedSynchronouslyBeforeReturn(t *testing.T) {
 // ExecuteTask itself (M1) must not change the actual dispatch/run/complete
 // behavior for the ordinary happy path.
 func TestExecuteTask_EndToEndStillCompletes_AfterM1Refactor(t *testing.T) {
-	worker := &scriptedProvider{responseBody: "doing it\nTASK_STATUS: success\nTASK_SUMMARY: done"}
+	worker := &scriptedProvider{responseBody: "doing it\n[goal:evidence] verified against c1\nTASK_STATUS: success\nTASK_SUMMARY: done"}
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 	judgeInst.Provider = metJudgeProviderC1()
 

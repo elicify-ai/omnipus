@@ -430,6 +430,64 @@ func (al *AgentLoop) resolveVerifierSessionScope(in JudgeCriteriaInput) []string
 	}
 }
 
+// --- Verifier session type stamp (ADR-052 FR-036 — this wave's narrow
+// slice only) -----------------------------------------------------------
+
+// newVerifierSessionChatID resolves the chatID/TranscriptSessionID
+// runVerifierAdjudication dispatches into. Wherever possible it PRE-CREATES
+// the verifier's UnifiedStore session explicitly (mirroring
+// createTaskSessionSync's exact pattern, task_executor.go) so its meta.json
+// is written with Type="verifier" from the moment it exists — UnifiedStore
+// has no post-creation "change type" seam (MetaPatch carries no Type field,
+// and writeMetaLocked/createSessionLocked are package-private to
+// pkg/session), so the type MUST be stamped at creation, not patched in
+// afterward.
+//
+// WAVE-MERGE: pkg/session/unified.go has no exported SessionTypeVerifier
+// constant yet (IsValidSessionType doesn't list "verifier" either) — that
+// is the "sessions-vis" Wave 2 agent's slice (default session-list
+// exclusion, Sidebar/SearchModal filtering, the exported constant itself,
+// FR-036). Per the Wave-2 plan, this function uses the literal
+// session.UnifiedSessionType("verifier") directly rather than block on
+// that constant landing first; reconcile this literal to the real exported
+// constant at merge once it exists — the STRING VALUE ("verifier") is the
+// stable contract between the two waves, not the Go symbol name.
+//
+// sessionKey/unitID are used only for the fallback ad hoc chatID (matching
+// Wave 1's exact original construction, byte for byte) and for a
+// debuggable session Title — they do NOT change the registry/cancel key
+// Wave 1 already wired (registry.Register(unitID, sessionKey) and
+// processOptions.SessionKey both still use the caller's own sessionKey
+// value, entirely untouched by this function).
+//
+// Falls back to the original ad hoc "verify:"+sessionKey string (Wave 1's
+// exact prior, unstamped behavior) when the Judge's session store isn't
+// resolvable yet (Judge not registered — the retry loop's own
+// judgeInst-not-configured check independently handles that as a D7 pause
+// regardless of what this returns) or session creation itself fails — a
+// missing type stamp must never block adjudication.
+func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string {
+	fallback := "verify:" + sessionKey
+
+	sessStore := al.GetAgentStore(string(coreagent.IDJudge))
+	if sessStore == nil {
+		return fallback
+	}
+	meta, err := sessStore.NewSession(session.UnifiedSessionType("verifier"), "system", string(coreagent.IDJudge))
+	if err != nil {
+		logger.WarnCF("agent",
+			"verifier: could not pre-create type-stamped session; falling back to an unstamped ad hoc session id",
+			map[string]any{"unit_id": unitID, "error": err.Error()})
+		return fallback
+	}
+	title := "Verifier: " + unitID
+	if setErr := sessStore.SetMeta(meta.ID, session.MetaPatch{Title: &title}); setErr != nil {
+		logger.WarnCF("agent", "verifier: could not set verifier session title",
+			map[string]any{"session_id": meta.ID, "error": setErr.Error()})
+	}
+	return meta.ID
+}
+
 // --- The verifier turn itself (ADR-052 FR-011) ------------------------------
 
 // runVerifierAdjudication adjudicates proseCriteria by running ONE real
@@ -470,7 +528,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 	unitID := verifierUnitID(in)
 	registry := currentVerifierSessionRegistry()
 	sessionKey := fmt.Sprintf("agent:%s:verify:%s", string(coreagent.IDJudge), uuid.New().String())
-	chatID := "verify:" + sessionKey
+	chatID := al.newVerifierSessionChatID(sessionKey, unitID)
 
 	registered := false
 	defer func() {
