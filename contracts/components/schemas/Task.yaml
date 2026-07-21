@@ -85,6 +85,21 @@ properties:
       ID of the agent assigned to this task. Optional — human-only tasks have
       none.
     example: "jim"
+  cancel_reason:
+    type: string
+    nullable: true
+    enum:
+      - stopped_by_user
+    description: >
+      Cancelled-task discriminator (ADR-052 FR-028), mirroring
+      `Plan.failed_reason`. Set only when `status == failed` AND the task was
+      terminated via POST /tasks/{id}/stop (distinguishes a user-cancelled
+      task, rendered with an orange "Cancelled" marker in the Failed column,
+      from a genuine failure, e.g. attempts exhausted, which leaves this
+      field null/absent). POST /tasks/{id}/restart clears it — a restarted
+      task is no longer "stopped by user"; a later genuine failure records
+      its own outcome via `result` with this field absent.
+    example: "stopped_by_user"
   agent_name:
     type: string
     description: >

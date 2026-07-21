@@ -44,7 +44,9 @@ properties:
       deletable, and excluded from chat-target/default-fallback/routing-
       binding/delegation-target/team-roster enumeration — visible only in
       the Agents screen "System" section. Only `model`/`provider` and
-      `rubric` are editable (the Judge additionally cannot be disabled).
+      `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the
+      Judge's soul IS its judging rubric, editable while the agent stays
+      otherwise locked; the Judge additionally cannot be disabled).
       Despite historically being described as privileged, `system` agents
       are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and
       remain subject to per-agent LLM rate limits and cost caps (SEC-26).
@@ -113,7 +115,10 @@ properties:
     description: >
       Contents of SOUL.md — the agent's system prompt. Empty string for locked
       core agents (prompt is compiled in, not exposed via API). Empty string for
-      draft agents (no SOUL.md written yet). Always present (never null).
+      draft agents (no SOUL.md written yet). Always present (never null). For
+      `type: system` agents (e.g. the Judge), this is ALSO the judging rubric —
+      one unified soul concept (ADR-052 FR-038, no separate `rubric` field);
+      the Judge's soul is editable while the agent stays otherwise locked.
     example: "You are Jim, a senior software engineer..."
   warning:
     type: string
@@ -196,12 +201,14 @@ properties:
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
-  rubric:
-    type: string
+  memory_enabled:
+    type: boolean
+    default: true
     description: >
-      System Agent rubric prompt (ADR-049 D3) — the System Agent's system
-      prompt / judging rubric, stored as the agent's soul/prompt-override
-      field (the rubric IS the judge's system prompt). Editable only for
-      `type: system` agents (e.g. the Judge); the only prompt-equivalent
-      field a locked System Agent accepts. Empty for non-system agents.
-    example: "You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone..."
+      Gates ContextBuilder memory injection for this agent (ADR-052 FR-039).
+      Defaults to true for ordinary agents. The seeded Judge (and, by
+      extension, any verifier-role agent) is seeded false — memory OFF
+      produces reproducible, impartial verdicts (same evidence -> same
+      verdict) since injected memory would otherwise vary the outcome
+      between runs.
+    example: true

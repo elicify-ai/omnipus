@@ -20,7 +20,9 @@ type ProviderValidation = {
 };
 type Session = {
   id: string;
-  type?: ("chat" | "task" | "channel" | "scheduled" | "heartbeat") | undefined;
+  type?:
+    | ("chat" | "task" | "channel" | "scheduled" | "heartbeat" | "verifier")
+    | undefined;
   protected?: boolean | undefined;
   agent_id: string;
   title: string;
@@ -159,7 +161,7 @@ type Agent = {
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
-  rubric?: string | undefined;
+  memory_enabled?: boolean | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: {
@@ -327,7 +329,7 @@ type AgentUpdateRequest = Partial<{
   skills: Array<string>;
   voice: string | null;
   executor: ExecutorConfig;
-  rubric: string;
+  memory_enabled: boolean;
 }>;
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -425,6 +427,7 @@ type Task = {
   action: "llm";
   status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id?: string | undefined;
+  cancel_reason?: ("stopped_by_user" | null) | undefined;
   agent_name?: string | undefined;
   priority?: number | undefined;
   blocked_by?: Array<string> | undefined;
@@ -470,12 +473,20 @@ type Todo = {
 };
 type AcceptanceCriterion = {
   id?: string | undefined;
-  kind: "check" | "prose";
+  kind: "check" | "prose" | "behavior";
   text: string;
   check?:
     | {
         command: string;
         expected_exit_code: number;
+      }
+    | undefined;
+  behavior?:
+    | {
+        tool: string;
+        min_count?: number | undefined;
+        max_count?: number | undefined;
+        scope?: ("attempt" | "task_session") | undefined;
       }
     | undefined;
   author: {
@@ -1106,7 +1117,7 @@ export const SessionStats: z.ZodType<SessionStats> = z
 export const Session: z.ZodType<Session> = z.object({
   id: z.string(),
   type: z
-    .enum(["chat", "task", "channel", "scheduled", "heartbeat"])
+    .enum(["chat", "task", "channel", "scheduled", "heartbeat", "verifier"])
     .optional(),
   protected: z.boolean().optional(),
   agent_id: z.string(),
@@ -1303,7 +1314,7 @@ export const Agent: z.ZodType<Agent> = z
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
-    rubric: z.string().optional(),
+    memory_enabled: z.boolean().optional().default(true),
   })
   .passthrough();
 export const AgentCreateRequestMain =
@@ -1462,7 +1473,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     skills: z.array(z.string()),
     voice: z.string().nullable(),
     executor: ExecutorConfig,
-    rubric: z.string(),
+    memory_enabled: z.boolean(),
   })
   .partial();
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
@@ -2090,12 +2101,23 @@ export const Todo: z.ZodType<Todo> = z.object({
 });
 export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
   id: z.string().optional(),
-  kind: z.enum(["check", "prose"]),
+  kind: z.enum(["check", "prose", "behavior"]),
   text: z.string().min(1).max(1000),
   check: z
     .object({
       command: z.string().min(1),
       expected_exit_code: z.number().int().gte(0).lte(255),
+    })
+    .optional(),
+  behavior: z
+    .object({
+      tool: z.string().min(1),
+      min_count: z.number().int().gte(0).optional().default(1),
+      max_count: z.number().int().gte(0).optional(),
+      scope: z
+        .enum(["attempt", "task_session"])
+        .optional()
+        .default("task_session"),
     })
     .optional(),
   author: z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1) }),
@@ -2128,6 +2150,7 @@ export const Task: z.ZodType<Task> = z
       "failed",
     ]),
     agent_id: z.string().optional(),
+    cancel_reason: z.literal("stopped_by_user").nullish(),
     agent_name: z.string().optional(),
     priority: z.number().int().gte(1).lte(5).optional().default(3),
     blocked_by: z.array(z.string()).optional(),
@@ -4746,6 +4769,44 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "post",
+    path: "/plans/:id/restart",
+    alias: "restartPlan",
+    description: `Restarts a plan previously stopped by the user (&#x60;state: failed&#x60;, &#x60;failed_reason: stopped_by_user&#x60;) — the Play route (ADR-052 FR-026). Resets every non-&#x60;done&#x60; member task to &#x60;next&#x60;/&#x60;blocked&#x60; with &#x60;attempt_count&#x60; reset to 0, resets the plan&#x27;s &#x60;judge_rounds&#x60; to 0, preserves &#x60;done&#x60; members and their evidence, clears &#x60;failed_reason&#x60;, and transitions the plan to &#x60;approved&#x60; (NOT directly to &#x60;running&#x60;) via a store-level reason-aware guard that permits only &#x60;failed[stopped_by_user] -&gt; approved&#x60; — the engine then promotes &#x60;approved -&gt; running&#x60; under the global active-loop cap on its next tick, exactly like a first execute (restarting straight to &#x60;running&#x60; would skip cap admission). Rejected 409 when the plan is not &#x60;failed&#x60;, or its &#x60;failed_reason&#x60; is not &#x60;stopped_by_user&#x60; (e.g. &#x60;judge_rounds_exhausted&#x60; or &#x60;idle_expired&#x60; are not restartable — no Play offered for those). Rejected 400 on a malformed request.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Plan,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/plans/:id/stop",
     alias: "stopPlan",
     description: `Transitions a &#x60;running&#x60; plan to &#x60;failed&#x60; with &#x60;failed_reason: stopped_by_user&#x60; (ADR-049 D4, SD-C5 — Stop/Clear may be optimistic client-side, as this cannot validation-fail). Rejected 400 when the plan is not currently &#x60;running&#x60;.
@@ -5623,7 +5684,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "get",
     path: "/sessions",
     alias: "listSessions",
-    description: `Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array.
+    description: `Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array. Verifier-role sessions (type &quot;verifier&quot;, ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier&#x3D;true is passed.
 `,
     requestFormat: "json",
     parameters: [
@@ -5635,7 +5696,14 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "type",
         type: "Query",
-        schema: z.enum(["chat", "task", "channel", "scheduled"]).optional(),
+        schema: z
+          .enum(["chat", "task", "channel", "scheduled", "verifier"])
+          .optional(),
+      },
+      {
+        name: "include_verifier",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
       },
     ],
     response: z.union([
@@ -6527,6 +6595,39 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/restart",
+    alias: "restartTask",
+    description: `Restarts a standalone (non-plan-member) task previously stopped by the user (&#x60;status: failed&#x60;, &#x60;cancel_reason: stopped_by_user&#x60;) — the Play route (ADR-052 FR-026). Resets &#x60;attempt_count&#x60; to 0, clears &#x60;cancel_reason&#x60;, and transitions the task to &#x60;next&#x60; so the goal loop picks it up again. Rejected 409 when the task belongs to a plan (restart the plan instead, via POST /plans/{id}/restart, which re-runs its non-done members) or is not in a restartable state (not &#x60;failed&#x60;, or &#x60;failed&#x60; for a reason other than &#x60;stopped_by_user&#x60;).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
     ],
