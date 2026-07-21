@@ -40,27 +40,16 @@ interface PlansFilterBandProps {
   onSelectPlan: (planId: string | null) => void
   onNewPlan: () => void
   onEditPlan: (plan: Plan) => void
-  /**
-   * @deprecated ADR-052 replaces the old PUT-based Approve affordance with a
-   * self-contained ▶ Execute button (`PlanActionButton`, calling the gated
-   * `executePlan`/POST-approve flow directly) — this callback is no longer
-   * invoked. Kept optional, unused, for compatibility with existing callers
-   * during the ADR-052 rollout.
-   */
-  onApprovePlan?: (plan: Plan) => void
-  /**
-   * @deprecated Stop is now handled by the self-contained `PlanActionButton`
-   * (calling `stopPlan` directly). Kept optional, unused, for compatibility.
-   */
-  onStopPlan?: (plan: Plan) => void
   onClearPlan: (plan: Plan) => void
   /**
-   * The plan (if any) with a Clear mutation currently in flight. (Execute/
-   * Stop/Play pending state is now owned internally by `PlanActionButton` —
-   * this prop only ever needs to carry `action: 'clear'`; the wider union is
-   * kept for compatibility with existing callers during the ADR-052 rollout.)
+   * The plan (if any) with a Clear mutation currently in flight — Execute/
+   * Stop/Play pending state is owned internally by `PlanActionButton`, so
+   * Clear is the only action this prop ever carries (Gate-2 finding #4: the
+   * old `onApprovePlan`/`onStopPlan` callback props and the `'approve' |
+   * 'stop'` members of this union were dead — WorkspaceTasksTab stopped
+   * wiring them once `PlanActionButton` became self-contained).
    */
-  pendingAction?: { planId: string; action: 'approve' | 'stop' | 'clear' } | null
+  pendingAction?: { planId: string; action: 'clear' } | null
   /** Render the trailing dashed "New plan" tile. Default true (standalone use);
    * the Tasks screen sets false because its "Plans" section header owns the
    * minimalist "+ New Plan" link, so the band isn't duplicated. */

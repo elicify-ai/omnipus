@@ -197,10 +197,11 @@ func TestValidateTransition_LegalTransitions(t *testing.T) {
 		{StatusNext, StatusInProgress},
 		{StatusInProgress, StatusDone},
 		{StatusInProgress, StatusFailed},
-		{StatusFailed, StatusInbox}, // retry path
-		{StatusFailed, StatusNext},  // retry path
-		{StatusInbox, StatusInbox},  // no-op
-		{StatusDone, StatusDone},    // no-op
+		{StatusFailed, StatusInbox},      // retry path
+		{StatusFailed, StatusNext},       // retry path
+		{StatusFailed, StatusInProgress}, // direct re-run path (SPA ▶ Run on a genuinely-failed task; ADR-052 §6.8)
+		{StatusInbox, StatusInbox},       // no-op
+		{StatusDone, StatusDone},         // no-op
 	}
 	for _, tc := range legal {
 		t.Run(fmt.Sprintf("%s→%s", tc.from, tc.to), func(t *testing.T) {
@@ -1773,4 +1774,47 @@ func TestRestartReset_NotFound(t *testing.T) {
 	_, err := s.RestartReset("does-not-exist")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+// TestValidateStandaloneRestart table-drives the standalone-task restart gate
+// (ADR-052 §6.7/§6.8, spec FR-026) in isolation — the pkg/task mirror of
+// plan.TestPlan_ValidateRestartTransition (pkg/plan/plan_test.go). Legal
+// ONLY from Status==failed with CancelReason==stopped_by_user; every other
+// (status, reason) pair is rejected with ErrStandaloneRestartNotPermitted
+// (wrapping ErrIllegalTransition, wrapping ErrValidation). This does NOT test
+// RestartReset itself (which stays reason-agnostic — see its doc comment) —
+// only the caller-side gate the REST handler (rest_tasks.go's
+// handleTaskRestart) applies in front of it.
+func TestValidateStandaloneRestart(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       Status
+		cancelReason CancelReason
+		wantLegal    bool
+	}{
+		{"failed_stopped_by_user_ok", StatusFailed, CancelReasonStoppedByUser, true},
+		{"failed_empty_reason_rejected", StatusFailed, "", false},
+		{"failed_other_reason_rejected", StatusFailed, CancelReason("attempts_exhausted"), false},
+		{"inbox_rejected", StatusInbox, CancelReasonStoppedByUser, false},
+		{"next_rejected", StatusNext, CancelReasonStoppedByUser, false},
+		{"in_progress_rejected", StatusInProgress, CancelReasonStoppedByUser, false},
+		{"blocked_rejected", StatusBlocked, CancelReasonStoppedByUser, false},
+		{"done_rejected_not_a_cancel", StatusDone, CancelReasonStoppedByUser, false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateStandaloneRestart(c.status, c.cancelReason)
+			if c.wantLegal {
+				if err != nil {
+					t.Fatalf("expected restart to be legal from %s reason %q, got error: %v", c.status, c.cancelReason, err)
+				}
+				return
+			}
+			require.Error(t, err, "expected restart to be rejected from %s reason %q", c.status, c.cancelReason)
+			assert.True(t, errors.Is(err, ErrStandaloneRestartNotPermitted), "must be ErrStandaloneRestartNotPermitted, got %v", err)
+			assert.True(t, errors.Is(err, ErrIllegalTransition), "must wrap ErrIllegalTransition, got %v", err)
+			assert.True(t, errors.Is(err, ErrValidation), "must wrap ErrValidation (400-mapping), got %v", err)
+		})
+	}
 }

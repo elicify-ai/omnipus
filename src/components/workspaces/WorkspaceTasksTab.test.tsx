@@ -6,8 +6,12 @@
  *   - The dynamic heading ("Tasks" / "{plan.title} — tasks", with an
  *     "· Agent: {name}" suffix when an agent filter is active).
  *   - "New task" is present and opens the create slide-over.
- *   - This screen's own plan-mutation WIRING (Approve/Stop/Clear/Edit/New
- *     Plan callbacks passed into PlansFilterBand fire the right mutation).
+ *   - This screen's own plan-mutation WIRING (Clear/Edit/New Plan callbacks
+ *     passed into PlansFilterBand fire the right mutation). Execute/Stop/Play
+ *     are owned entirely by the self-contained `PlanActionButton` now (ADR-052
+ *     §6.8, Gate-2 finding #4) — this screen no longer wires onApprovePlan/
+ *     onStopPlan into PlansFilterBand, so there is nothing to test here for
+ *     those actions; see PlanActionButton.test.tsx.
  *   - The altitude toggle only shows in Board view.
  *
  * PlansFilterBand and taskFilters.ts are owned by a parallel agent and may
@@ -25,7 +29,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Plan, Task, Agent } from '@/lib/api'
 import { WorkspaceTasksTab } from './WorkspaceTasksTab'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { ApiError } from '@/lib/api-error'
 
 // jsdom doesn't implement scrollIntoView; Radix Select calls it when opening
 // the listbox (repo-wide convention — see ChannelConfigPanel.test.tsx,
@@ -49,15 +52,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchPlans: vi.fn(),
     fetchAgents: vi.fn(),
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
-    // ADR-052 G2: the tab calls executePlan (POST /approve), not the
-    // deprecated approvePlan alias — mock the name it actually imports.
-    executePlan: vi.fn(),
-    stopPlan: vi.fn(),
     deletePlan: vi.fn(),
   }
 })
 
-import { fetchTasks, fetchPlans, fetchAgents, executePlan, stopPlan, deletePlan } from '@/lib/api'
+import { fetchTasks, fetchPlans, fetchAgents, deletePlan } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
@@ -87,15 +86,15 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 // Stub PlansFilterBand — owned by a parallel agent (may not exist on disk
 // yet). Exposes one plain button per callback prop so this file can verify
 // WorkspaceTasksTab's OWN wiring without depending on the real component's
-// internal markup.
+// internal markup. No onApprovePlan/onStopPlan stub buttons (Gate-2 finding
+// #4) — WorkspaceTasksTab no longer passes those props; Execute/Stop/Play
+// wiring is owned by the real (unmocked in its own test file) PlanActionButton.
 vi.mock('./PlansFilterBand', () => ({
   PlansFilterBand: (props: {
     plans: Plan[]
     onSelectPlan: (id: string | null) => void
     onNewPlan: () => void
     onEditPlan: (plan: Plan) => void
-    onApprovePlan: (plan: Plan) => void
-    onStopPlan: (plan: Plan) => void
     onClearPlan: (plan: Plan) => void
   }) => (
     <div data-testid="plans-filter-band-stub">
@@ -112,12 +111,6 @@ vi.mock('./PlansFilterBand', () => ({
           </button>
           <button type="button" onClick={() => props.onEditPlan(plan)}>
             edit-{plan.id}
-          </button>
-          <button type="button" onClick={() => props.onApprovePlan(plan)}>
-            approve-{plan.id}
-          </button>
-          <button type="button" onClick={() => props.onStopPlan(plan)}>
-            stop-{plan.id}
           </button>
           <button type="button" onClick={() => props.onClearPlan(plan)}>
             clear-{plan.id}
@@ -209,8 +202,6 @@ beforeEach(() => {
   vi.mocked(fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(fetchPlans).mockReset().mockResolvedValue([])
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([])
-  vi.mocked(executePlan).mockReset()
-  vi.mocked(stopPlan).mockReset()
   vi.mocked(deletePlan).mockReset()
 })
 
@@ -300,67 +291,14 @@ describe('WorkspaceTasksTab — New task', () => {
 })
 
 // ── Plan mutation wiring (through the callback props passed to the band) ────
+//
+// Only Clear and Edit remain screen-owned — Execute/Stop/Play moved entirely
+// into the self-contained `PlanActionButton` (ADR-052 §6.8, Gate-2 finding
+// #4). That per-state button matrix (including the 400 task_errors-surfacing
+// behavior Execute used to get from this screen's now-deleted
+// approvePlanMutation) is covered by PlanActionButton.test.tsx, not here.
 
 describe('WorkspaceTasksTab — plan mutation wiring', () => {
-  it('the band stub\'s approve button calls executePlan (POST /approve, ADR-052 G2) with the plan id and toasts on success', async () => {
-    const user = userEvent.setup()
-    const plan = makePlan({ state: 'draft' })
-    vi.mocked(fetchPlans).mockResolvedValue([plan])
-    vi.mocked(executePlan).mockResolvedValue({ ...plan, state: 'approved' })
-
-    renderTab()
-    await user.click(await screen.findByRole('button', { name: 'approve-plan-a' }))
-
-    await waitFor(() => expect(executePlan).toHaveBeenCalledWith('plan-a'))
-    await waitFor(() =>
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success', message: 'Plan approved' }),
-      ),
-    )
-  })
-
-  it('a 400 with a per-task payload surfaces the per-task reasons via toast', async () => {
-    const user = userEvent.setup()
-    const plan = makePlan({ state: 'draft' })
-    vi.mocked(fetchPlans).mockResolvedValue([plan])
-    const body = JSON.stringify({
-      task_errors: [{ task_id: 't1', title: 'Write report', reason: 'missing acceptance criteria' }],
-    })
-    vi.mocked(executePlan).mockRejectedValue(new ApiError(400, 'Bad request', { body }))
-
-    renderTab()
-    await user.click(await screen.findByRole('button', { name: 'approve-plan-a' }))
-
-    await waitFor(() =>
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({
-          variant: 'error',
-          message: expect.stringContaining('Write report: missing acceptance criteria'),
-        }),
-      ),
-    )
-    expect(mockAddToast).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'Failed to approve plan' }),
-    )
-  })
-
-  it('the band stub\'s stop button calls stopPlan with the plan id and toasts on success', async () => {
-    const user = userEvent.setup()
-    const plan = makePlan({ state: 'running' })
-    vi.mocked(fetchPlans).mockResolvedValue([plan])
-    vi.mocked(stopPlan).mockResolvedValue({ ...plan, state: 'done' })
-
-    renderTab()
-    await user.click(await screen.findByRole('button', { name: 'stop-plan-a' }))
-
-    await waitFor(() => expect(stopPlan).toHaveBeenCalledWith('plan-a'))
-    await waitFor(() =>
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success', message: 'Plan stopped' }),
-      ),
-    )
-  })
-
   it('the band stub\'s clear button calls deletePlan with the plan id and toasts on success', async () => {
     const user = userEvent.setup()
     const plan = makePlan({ state: 'draft' })

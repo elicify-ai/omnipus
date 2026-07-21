@@ -12,11 +12,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PlanActionButton, planActionFor } from './PlanActionButton'
 import type { Plan } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
 
 const executePlanMock = vi.fn()
 const stopPlanMock = vi.fn()
@@ -174,5 +175,49 @@ describe('PlanActionButton — confirm-modal gating (ADR-052 FR-020)', () => {
     const dialog = screen.getByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: 'Play' }))
     expect(restartPlanMock).toHaveBeenCalledWith('plan-1')
+  })
+})
+
+describe('PlanActionButton — click isolation (Gate-2 finding #2, parity with TaskActionButton)', () => {
+  it('a click on the action button never bubbles to an ancestor onClick', async () => {
+    const user = userEvent.setup()
+    const ancestorClick = vi.fn()
+    render(
+      <QueryClientProvider client={makeClient()}>
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
+        <div onClick={ancestorClick}>
+          <PlanActionButton plan={makePlan({ state: 'draft' })} />
+        </div>
+      </QueryClientProvider>,
+    )
+    await user.click(screen.getByRole('button', { name: 'Execute plan Launch' }))
+    expect(ancestorClick).not.toHaveBeenCalled()
+  })
+})
+
+describe('PlanActionButton — 400 task_errors surfacing (ADR-052 FR-005/FR-084, parity with the retired WorkspaceTasksTab approve wiring)', () => {
+  it('a 400 with a per-task payload surfaces the per-task reasons via toast on Execute', async () => {
+    const user = userEvent.setup()
+    const body = JSON.stringify({
+      task_errors: [{ task_id: 't1', title: 'Write report', reason: 'missing acceptance criteria' }],
+    })
+    executePlanMock.mockRejectedValueOnce(new ApiError(400, 'Bad request', { body }))
+
+    renderButton(makePlan({ state: 'draft', title: 'Launch' }))
+    await user.click(screen.getByRole('button', { name: 'Execute plan Launch' }))
+    const dialog = screen.getByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Execute' }))
+
+    await waitFor(() =>
+      expect(mockAddToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: 'error',
+          message: expect.stringContaining('Write report: missing acceptance criteria'),
+        }),
+      ),
+    )
+    expect(mockAddToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Failed to execute plan' }),
+    )
   })
 })

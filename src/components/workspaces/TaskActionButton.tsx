@@ -38,6 +38,13 @@ export function taskActionFor(task: Pick<Task, 'status' | 'plan_id' | 'cancel_re
   return null // blocked, done
 }
 
+/** Exhaustiveness guard for the `TaskAction` switch below — a compile error
+ * here (not a silent fallthrough) is exactly what should happen if a 4th
+ * `TaskAction` variant is ever added without updating the mutation dispatch. */
+function assertNever(x: never): never {
+  throw new Error(`Unhandled TaskAction: ${JSON.stringify(x)}`)
+}
+
 interface ActionCopy {
   icon: Icon
   label: string
@@ -105,9 +112,16 @@ export function TaskActionButton({ task, className }: TaskActionButtonProps) {
 
   const mutation = useMutation({
     mutationFn: (a: TaskAction) => {
-      if (a === 'run') return runTask(task.id)
-      if (a === 'restart') return restartTask(task.id)
-      return stopTask(task.id)
+      switch (a) {
+        case 'run':
+          return runTask(task.id)
+        case 'restart':
+          return restartTask(task.id)
+        case 'stop':
+          return stopTask(task.id)
+        default:
+          return assertNever(a)
+      }
     },
     onSuccess: (_data, a) => {
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })

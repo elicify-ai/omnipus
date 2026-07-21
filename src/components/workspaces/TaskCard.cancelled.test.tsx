@@ -14,6 +14,7 @@ import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskCard } from './TaskCard'
 import type { Task } from '@/lib/api'
+import { TASK_CANCELLED_COLOR, STATUS_COLORS, taskDisplayColor } from '@/lib/statusColors'
 
 const runTaskMock = vi.fn()
 const stopTaskMock = vi.fn()
@@ -103,6 +104,31 @@ describe('TaskCard — orange "Cancelled" vs red "Failed" marker (ADR-052 FR-015
     expect(cancelledColor).not.toBe(failedColor)
     expect(cancelledColor).not.toBe('')
     expect(failedColor).not.toBe('')
+  })
+
+  // Gate-2 finding #1 regression: TaskCard.tsx:236 builds the pill's tint
+  // fill as `` `${taskDisplayColor(task)}1a` `` — a bare string concat, not a
+  // CSS function call. If TASK_CANCELLED_COLOR were ever a `var(--x)`
+  // reference again, the result (`var(--color-warning)1a`) is not valid CSS
+  // (`var()` doesn't accept a trailing token), so the whole `backgroundColor`
+  // declaration would be silently dropped and the "Cancelled" pill would
+  // render with orange text but NO tint — inconsistent with the red "Failed"
+  // pill. jsdom won't reliably validate/reject that invalid CSS for us, so
+  // this asserts directly on the STRING the component builds, not on DOM
+  // style-parsing behavior.
+  it('TASK_CANCELLED_COLOR is a literal hex, not a var(...) reference (Gate-2 finding #1)', () => {
+    expect(TASK_CANCELLED_COLOR).not.toMatch(/^var\(/)
+    expect(TASK_CANCELLED_COLOR).toMatch(/^#[0-9a-fA-F]{6}$/)
+  })
+
+  it('both the cancelled and failed pill tints (`${displayColor}1a`) are valid 8-digit hex strings', () => {
+    const cancelledTint = `${taskDisplayColor({ status: 'failed', cancel_reason: 'stopped_by_user' })}1a`
+    const failedTint = `${taskDisplayColor({ status: 'failed' })}1a`
+    expect(cancelledTint).toMatch(/^#[0-9a-fA-F]{8}$/)
+    expect(failedTint).toMatch(/^#[0-9a-fA-F]{8}$/)
+    // And they share the exact literal-hex mechanism (STATUS_COLORS.failed is
+    // also a literal hex) — one consistent tint mechanism for both pills.
+    expect(STATUS_COLORS.failed).toMatch(/^#[0-9a-fA-F]{6}$/)
   })
 })
 

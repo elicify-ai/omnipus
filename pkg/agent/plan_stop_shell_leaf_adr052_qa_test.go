@@ -95,7 +95,35 @@ func TestStopReachesShellLeaf_RealBackgroundProcessGroupDies(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses POSIX process-group SIGKILL semantics (syscall.Kill(-pid, ...))")
 	}
-	t.Parallel()
+	// Deliberately NOT t.Parallel(). tools.GetSharedSessionManager() is a
+	// single process-wide singleton shared by every *AgentLoop any pkg/agent
+	// test constructs (see loop.go's AgentLoop.Close doc comment, "LOAD-
+	// BEARING PRECONDITION": that reaper's unconditional, process-wide
+	// SessionManager.KillAll() is only safe under a single-AgentLoop-per-
+	// process assumption that holds in production but NOT inside this
+	// package's own test binary). Under a full pkg/agent package run with
+	// this test parallel, ANOTHER, unrelated test's t.Cleanup(al.Close) can
+	// fire concurrently and its KillAll() can race THIS test's own
+	// PlanEngine.StopTask -> ... -> KillAllForSession cascade for the real
+	// background "sleep 60" ProcessSession this test owns — whichever call
+	// wins the ProcessSession's mutex first decided the final status. This
+	// was confirmed as the actual root cause of a CI-only flake (status
+	// ended up "done" instead of "canceled" only under full-package load,
+	// never when run alone): tools/session.go's KillAndRelabel now lets a
+	// specific status (canceled/killed/timeout) correct an already-set
+	// generic "done" written by such a racing caller within its OWN
+	// KillAndRelabel call (see statusPriority's doc comment and
+	// pkg/tools/session_status_priority_test.go), but that fix cannot help
+	// if the OTHER test's KillAll() strikes even earlier — anywhere between
+	// this test spawning the real background process and its own
+	// StopTask/KillAllForSession call ever reaching it (a window that
+	// includes real disk I/O for plan/task store setup below, not just a
+	// microsecond mutex race). Running this test non-parallel removes it
+	// from that shared singleton's blast radius entirely: per the Go testing
+	// package's scheduling contract, no t.Parallel() test's body can be
+	// actively executing while a sequential top-level test in the same
+	// package is running, so no other test's AgentLoop.Close()/KillAll() can
+	// fire during this test's execution window at all.
 
 	// newBashAsyncTestLoop (bash_async_completion_test.go, same package)
 	// wires a REAL *tools.ExecTool (GodMode=true, so no sandbox-hardening

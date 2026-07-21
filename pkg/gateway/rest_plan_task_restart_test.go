@@ -135,8 +135,13 @@ func TestPlanPut_RejectsAnyStateField(t *testing.T) {
 
 // TestPlanRestart_HappyPath_ResetsNonDoneMembersAndReenters covers DS-5: a
 // done member is preserved untouched, a cancelled member is reset to
-// next/attempt_count=0/cancel_reason cleared, and the plan itself re-enters
-// at approved (never running directly) with failed_reason cleared.
+// next/attempt_count=0/cancel_reason cleared, a GENUINELY failed member (no
+// cancel_reason — e.g. attempts exhausted, DS-5 row 2) resets the SAME way,
+// and the plan itself re-enters at approved (never running directly) with
+// failed_reason cleared. The genuinely-failed-member case locks in the
+// plan-restart(any-reason) vs. standalone-task-restart(reason-gated)
+// asymmetry: contrast with TestTaskRestart_WrongReasonRejected409, where the
+// identical no-cancel_reason shape is rejected 409 outside a plan.
 func TestPlanRestart_HappyPath_ResetsNonDoneMembersAndReenters(t *testing.T) {
 	api := newTestRestAPIWithPlans(t)
 	wsID := createTestWorkspace(t, api, "Restart Happy WS")
@@ -163,6 +168,20 @@ func TestPlanRestart_HappyPath_ResetsNonDoneMembersAndReenters(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Genuinely failed member (FR-017/DS-5 row 2): failed with NO
+	// cancel_reason at all — e.g. attempt_count exhausted its cap, not a
+	// user Stop. A plan restart resets it exactly like the cancelled member
+	// above ("re-run all its non-done members", any reason) — unlike the
+	// standalone-task restart route, which is reason-gated to stopped_by_user
+	// and would 409 on this identical shape.
+	genuineID := mustCreateTask(t, api, wsID, "genuinely failed", p.Id)
+	genuineAttempts := 3
+	_, err = api.taskStore.Update(genuineID, task.Patch{
+		Status:       &failedStatus,
+		AttemptCount: &genuineAttempts,
+	})
+	require.NoError(t, err)
+
 	drivePlanToFailed(t, api, p.Id, plan.FailedReasonStoppedByUser)
 
 	wRestart := postPlanAction(t, api, p.Id, "restart")
@@ -181,6 +200,12 @@ func TestPlanRestart_HappyPath_ResetsNonDoneMembersAndReenters(t *testing.T) {
 	assert.Equal(t, task.StatusNext, reloadedCancelled.Status, "a cancelled member resets to next")
 	assert.Equal(t, 0, reloadedCancelled.AttemptCount, "attempt_count resets to 0")
 	assert.Empty(t, reloadedCancelled.CancelReason, "cancel_reason clears on restart")
+
+	reloadedGenuine, gferr := api.taskStore.Get(genuineID)
+	require.NoError(t, gferr)
+	assert.Equal(t, task.StatusNext, reloadedGenuine.Status, "a genuinely-failed member (no cancel_reason) also resets to next — any-reason reset (FR-017/DS-5 row 2)")
+	assert.Equal(t, 0, reloadedGenuine.AttemptCount, "attempt_count resets to 0 for the genuinely-failed member too")
+	assert.Empty(t, reloadedGenuine.CancelReason, "cancel_reason stays empty (it never had one)")
 }
 
 // TestPlanRestart_RejectsGenuineFailure409 verifies the reason-guard: a plan
@@ -211,18 +236,46 @@ func TestPlanRestart_RejectsGenuineFailure409(t *testing.T) {
 }
 
 // TestPlanRestart_RejectsNonFailedState409 verifies a plan that is not
-// currently `failed` at all (e.g. still draft) cannot be restarted.
+// currently `failed` at all cannot be restarted — including, per the
+// gap-sweep fix-wave-2 addition below, a plan that is actively `running`:
+// restart's precondition check at the handler boundary (mirroring
+// TestPlanStop_RequiresRunning's own draft/running split) rejects 409
+// regardless of which non-failed state the plan is in, without ever
+// touching plan or member state.
 func TestPlanRestart_RejectsNonFailedState409(t *testing.T) {
-	api := newTestRestAPIWithPlans(t)
-	wsID := createTestWorkspace(t, api, "Restart Non-Failed WS")
-	wCreate := postPlan(t, api, wsID,
-		`{"workspace_id":"`+wsID+`","title":"Still draft","owner_agent_id":"`+testPlansAgentID+`"}`)
-	require.Equal(t, http.StatusCreated, wCreate.Code)
-	var p gen.Plan
-	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+	t.Run("draft", func(t *testing.T) {
+		api := newTestRestAPIWithPlans(t)
+		wsID := createTestWorkspace(t, api, "Restart Non-Failed WS")
+		wCreate := postPlan(t, api, wsID,
+			`{"workspace_id":"`+wsID+`","title":"Still draft","owner_agent_id":"`+testPlansAgentID+`"}`)
+		require.Equal(t, http.StatusCreated, wCreate.Code)
+		var p gen.Plan
+		require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 
-	wRestart := postPlanAction(t, api, p.Id, "restart")
-	assert.Equal(t, http.StatusConflict, wRestart.Code, "body=%s", wRestart.Body.String())
+		wRestart := postPlanAction(t, api, p.Id, "restart")
+		assert.Equal(t, http.StatusConflict, wRestart.Code, "body=%s", wRestart.Body.String())
+	})
+
+	// running: a plan mid-execution is not restartable — restart only makes
+	// sense from failed[stopped_by_user] (Stop it first, then restart).
+	t.Run("running", func(t *testing.T) {
+		api := newTestRestAPIWithPlans(t)
+		wsID := createTestWorkspace(t, api, "Restart Non-Failed Running WS")
+		wCreate := postPlan(t, api, wsID,
+			`{"workspace_id":"`+wsID+`","title":"Currently running","owner_agent_id":"`+testPlansAgentID+`"}`)
+		require.Equal(t, http.StatusCreated, wCreate.Code)
+		var p gen.Plan
+		require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+		drivePlanToRunning(t, api, p.Id)
+
+		wRestart := postPlanAction(t, api, p.Id, "restart")
+		assert.Equal(t, http.StatusConflict, wRestart.Code, "body=%s", wRestart.Body.String())
+
+		reloaded, gerr := api.planStore.Get(p.Id)
+		require.NoError(t, gerr)
+		assert.Equal(t, plan.StateRunning, reloaded.State, "a rejected restart must not touch plan state")
+	})
 }
 
 // TestPlanRestart_NotFound404 verifies restarting an unknown plan ID 404s.
@@ -350,13 +403,81 @@ func TestPlanStop_DelegatesToEngineFanOut(t *testing.T) {
 	}
 }
 
+// TestPlanStop_OnApprovedCapQueued_MembersUntouchedAndRestartable verifies
+// the ADR-052 spec's Edge Case "Stop wins" (gap-sweep fix-wave-2 finding
+// #1): the SPA ships a Stop button for a cap-queued `approved` plan exactly
+// like a running one, and the backend must honor it. Stop on an approved
+// plan (never dispatched — Admit/tryStartApprovedPlan hasn't fired) 200s,
+// the plan lands failed(stopped_by_user), and — since the fan-out is
+// naturally a no-op with nothing in_progress and no verifier session
+// registered pre-dispatch — its member task is left COMPLETELY untouched
+// (not just "not cancelled": same status, same cancel_reason, same
+// attempt_count as before the call). The stopped plan is then restartable
+// back to approved, exactly like a stop-while-running.
+func TestPlanStop_OnApprovedCapQueued_MembersUntouchedAndRestartable(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Stop On Approved WS")
+	wCreate := postPlan(t, api, wsID,
+		`{"workspace_id":"`+wsID+`","title":"Cap-queued","owner_agent_id":"`+testPlansAgentID+`"}`)
+	require.Equal(t, http.StatusCreated, wCreate.Code)
+	var p gen.Plan
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	m1 := mustCreateTask(t, api, wsID, "never dispatched member", p.Id)
+	// FR-084's unconditional member-criteria gate must be satisfied for
+	// approve to succeed at all.
+	criteria := []task.AcceptanceCriterion{{
+		Kind:   task.KindProse,
+		Text:   "looks right",
+		Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "tester"},
+	}}
+	_, cerr := api.taskStore.Update(m1, task.Patch{Criteria: &criteria})
+	require.NoError(t, cerr)
+
+	wApprove := postPlanAction(t, api, p.Id, "approve")
+	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
+	var approved gen.Plan
+	require.NoError(t, json.Unmarshal(wApprove.Body.Bytes(), &approved))
+	require.Equal(t, gen.PlanStateApproved, approved.State, "precondition: cap-queued approved, never admitted/dispatched")
+
+	memberBefore, gerr := api.taskStore.Get(m1)
+	require.NoError(t, gerr)
+
+	wStop := postPlanAction(t, api, p.Id, "stop")
+	require.Equal(t, http.StatusOK, wStop.Code, "body=%s", wStop.Body.String())
+	var stopped gen.Plan
+	require.NoError(t, json.Unmarshal(wStop.Body.Bytes(), &stopped))
+	assert.Equal(t, gen.PlanStateFailed, stopped.State)
+	require.NotNil(t, stopped.FailedReason)
+	assert.Equal(t, gen.PlanFailedReasonStoppedByUser, *stopped.FailedReason)
+
+	memberAfter, gerr2 := api.taskStore.Get(m1)
+	require.NoError(t, gerr2)
+	assert.Equal(t, memberBefore.Status, memberAfter.Status,
+		"member status must be completely untouched by a stop on a never-dispatched approved plan")
+	assert.Equal(t, memberBefore.CancelReason, memberAfter.CancelReason, "member cancel_reason must be untouched")
+	assert.Equal(t, memberBefore.AttemptCount, memberAfter.AttemptCount, "member attempt_count must be untouched")
+
+	wRestart := postPlanAction(t, api, p.Id, "restart")
+	require.Equal(t, http.StatusOK, wRestart.Code, "body=%s", wRestart.Body.String())
+	var restarted gen.Plan
+	require.NoError(t, json.Unmarshal(wRestart.Body.Bytes(), &restarted))
+	assert.Equal(t, gen.PlanStateApproved, restarted.State, "a stopped approved plan is restartable back to approved")
+	assert.Nil(t, restarted.FailedReason, "failed_reason must be cleared on restart")
+}
+
 // TestPlanStop_PartialFailureSurfacesAsServerError verifies ADR-052 §6.4 Item
 // 5 / the task directive's "map the partial-stop aggregate error honestly":
 // when a member's own cancel-write fails, the handler must NOT report an
 // unqualified 200 — even though the plan's own state transition (a
-// DIFFERENT store/directory) succeeds. Forces the member write to fail by
-// stripping write permission on the tasks directory for the duration of the
-// call (a real store-level I/O failure, not a mock).
+// DIFFERENT store/directory) succeeds. Forces the member write to fail via
+// blockNewFilesInDir on the tasks directory (rest_plan_stop_immutable_
+// {linux,other}_test.go — see that helper's doc comment for the two prior
+// approaches tried and rejected: a chmod-only block, defeated by
+// CAP_DAC_OVERRIDE when the CI worker runs as root; and a directory-
+// substitution mock, which broke taskStore.List/ListIDs enumeration and
+// caused the doomed member to silently vanish from StopPlan's own fan-out,
+// masking the partial-failure path entirely).
 func TestPlanStop_PartialFailureSurfacesAsServerError(t *testing.T) {
 	api := newTestRestAPIWithPlans(t)
 	wsID := createTestWorkspace(t, api, "Stop Partial Failure WS")
@@ -373,15 +494,22 @@ func TestPlanStop_PartialFailureSurfacesAsServerError(t *testing.T) {
 
 	drivePlanToRunning(t, api, p.Id)
 
-	tasksDir := api.taskStore.Dir()
-	require.NoError(t, os.Chmod(tasksDir, 0o500)) // strip write: new temp files can no longer be created
-	t.Cleanup(func() { _ = os.Chmod(tasksDir, 0o700) })
+	restoreDir := blockNewFilesInDir(t, api.taskStore.Dir())
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
+		restoreDir()
+	}
+	t.Cleanup(restore) // backstop before t.TempDir()'s own cleanup
 
 	wStop := postPlanAction(t, api, p.Id, "stop")
 	assert.Equal(t, http.StatusInternalServerError, wStop.Code,
 		"a partial fan-out failure must NOT report an unqualified 200; body=%s", wStop.Body.String())
 
-	require.NoError(t, os.Chmod(tasksDir, 0o700)) // restore before further reads/cleanup
+	restore() // restore before further reads/cleanup
 
 	// The plan's OWN state transition lives in a different directory and
 	// must have succeeded regardless of the member write failure.

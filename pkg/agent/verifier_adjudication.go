@@ -448,12 +448,24 @@ func (al *AgentLoop) resolveVerifierSessionScope(in JudgeCriteriaInput) []string
 // spoof-prevention rationale: REST createSession deliberately cannot
 // request type="verifier").
 //
-// sessionKey/unitID are used only for the fallback ad hoc chatID (matching
-// Wave 1's exact original construction, byte for byte) and for a
-// debuggable session Title — they do NOT change the registry/cancel key
-// Wave 1 already wired (registry.Register(unitID, sessionKey) and
-// processOptions.SessionKey both still use the caller's own sessionKey
-// value, entirely untouched by this function).
+// sessionKey/unitID are used to build the fallback ad hoc chatID (matching
+// Wave 1's exact original construction, byte for byte) and a debuggable
+// session Title. processOptions.SessionKey — the activeTurnStates MAP
+// STORAGE key (registerActiveTurn stores under ts.sessionKey, turn.go) — is
+// unaffected by this function and still carries the caller's own sessionKey
+// value verbatim.
+//
+// This function's RETURN VALUE, chatID, is the CANCEL-MATCH key: it becomes
+// processOptions.TranscriptSessionID, which newTurnState stamps onto
+// ts.transcriptSessionID (turn.go) — the field GetActiveTurnHookForSession/
+// RequestCancelForSession actually range-match on, never the map storage
+// key. The caller (runVerifierAdjudication) registers unitID -> chatID in
+// the verifier-session registry for exactly this reason. A prior version of
+// this code (and this comment) registered unitID -> sessionKey instead —
+// a value RequestCancelForSession can never match, since it is never
+// compared against ts.transcriptSessionID — silently defeating Stop/`/goal
+// clear` cancellation of an in-flight verifier turn (7-reviewer gate
+// BLOCKER, FR-037/G1/G8).
 //
 // Falls back to the original ad hoc "verify:"+sessionKey string (Wave 1's
 // exact prior, unstamped behavior) when the Judge's session store isn't
@@ -493,16 +505,24 @@ func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string 
 // conversion.
 //
 // Per adjudication (ADR-052 FR-011 / GS-02):
-//  1. Creates a FRESH verifier session id (fresh-eyes impartiality —
-//     session reuse/resume is a noted future direction only).
-//  2. Registers it in the verifier-session registry BEFORE dispatch
-//     (FR-037), so a Stop landing in the creation window cannot miss it.
+//  1. Creates a FRESH, type-stamped verifier session id (fresh-eyes
+//     impartiality — session reuse/resume is a noted future direction only)
+//     — lazily, only once the ctx/Judge-registered/SEC-26 gates below have
+//     all passed, NOT eagerly at function entry, so an early bail on a
+//     retried attempt never orphans an empty on-disk verifier session
+//     (7-reviewer gate item 3).
+//  2. Registers THAT session id (chatID, not sessionKey — see the BLOCKER
+//     fix noted on newVerifierSessionChatID's own doc comment) in the
+//     verifier-session registry BEFORE dispatch (FR-037), so a Stop landing
+//     in the creation window cannot miss it.
 //  3. Runs ONE agent turn synchronously in that session via
 //     al.processTaskDirect — the SAME synchronous turn primitive task runs
-//     use (processTaskDirect wraps runAgentLoop/runTurn, which registers in
-//     al.activeTurnStates under the session key, so
-//     RequestCancelForSession(sessionKey) reaches it exactly like any other
-//     session).
+//     use. processTaskDirect wraps runAgentLoop/runTurn, which stores the
+//     turnState in al.activeTurnStates keyed by sessionKey (map storage key
+//     only) but stamps ts.transcriptSessionID = chatID — the field
+//     GetActiveTurnHookForSession/RequestCancelForSession actually
+//     range-match on — so it is RequestCancelForSession(chatID), never
+//     RequestCancelForSession(sessionKey), that reaches this turn.
 //  4. Extracts the verdict from the turn's final message via the REQUIRED
 //     structured verdict block (parseJudgeResponse, judge.go — the same
 //     per-criterion JSON contract the old shortcut used), parsed
@@ -523,7 +543,11 @@ func (al *AgentLoop) runVerifierAdjudication(
 	unitID := verifierUnitID(in)
 	registry := currentVerifierSessionRegistry()
 	sessionKey := fmt.Sprintf("agent:%s:verify:%s", string(coreagent.IDJudge), uuid.New().String())
-	chatID := al.newVerifierSessionChatID(sessionKey, unitID)
+	// chatID is created lazily, immediately before its first use below (item
+	// 3, 7-reviewer gate) — NOT here — so a bail on ctx.Err()/Judge-not-
+	// registered/SEC-26-denied never pre-creates an on-disk verifier session
+	// that is then abandoned.
+	var chatID string
 
 	registered := false
 	defer func() {
@@ -568,7 +592,14 @@ func (al *AgentLoop) runVerifierAdjudication(
 		}
 
 		if !registered {
-			registry.Register(unitID, sessionKey)
+			// Create the type-stamped verifier session now — right before it
+			// is first needed — and register ITS id (chatID), not sessionKey
+			// (BLOCKER fix, FR-037/G1/G8): sessionKey is only the
+			// activeTurnStates map storage key; chatID becomes
+			// ts.transcriptSessionID, the value Stop/`/goal clear`'s
+			// RequestCancelForSession actually matches turns on.
+			chatID = al.newVerifierSessionChatID(sessionKey, unitID)
+			registry.Register(unitID, chatID)
 			registered = true
 		}
 

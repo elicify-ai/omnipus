@@ -1322,25 +1322,63 @@ describe('AgentProfile — ADR-052 soul unification + memory toggle (FR-038/FR-0
     // but stripped from the PUT payload) is how that's enforced.
   })
 
-  it('renders the System-agent banner naming model/provider as editable and soul as locked (matches the live backend, not the wire-contract aspiration)', async () => {
+  it('renders the System-agent banner naming identity as locked and soul (with model/provider) as editable (ADR-052 Fix-Wave-2 carve-out)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
     renderProfile('judge')
     await screen.findByText('Judge')
     const banner = screen.getByTestId('locked-banner')
     expect(banner).toHaveTextContent(/system agent/i)
-    expect(banner).toHaveTextContent(/model and provider are editable/i)
+    expect(banner).toHaveTextContent(/identity/i)
+    expect(banner).toHaveTextContent(/is locked/i)
+    expect(banner).toHaveTextContent(/soul/i)
+    expect(banner).toHaveTextContent(/editable/i)
     expect(banner).not.toHaveTextContent(/rubric/i)
+    // The old "soul editing isn't available yet" copy must be gone — the
+    // backend now genuinely accepts it (updateAgent's IsSystem() carve-out).
+    expect(banner).not.toHaveTextContent(/isn.t available yet/i)
   })
 
-  it('renders the Judge soul textarea read-only, not a "rubric" field', async () => {
+  it('renders the Judge soul textarea EDITABLE (ADR-052 Fix-Wave-2 carve-out) — identity stays locked, soul does not', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
     renderProfile('judge')
     await screen.findByText('Judge')
     switchTab('tab-personality')
     const soulTextarea = await screen.findByTestId('agent-soul')
-    expect((soulTextarea as HTMLTextAreaElement).disabled).toBe(true)
+    expect((soulTextarea as HTMLTextAreaElement).disabled).toBe(false)
+    expect((soulTextarea as HTMLTextAreaElement).readOnly).toBe(false)
     expect((soulTextarea as HTMLTextAreaElement).value).toBe(mockJudgeAgent.soul)
     expect(screen.queryByText(/rubric/i)).toBeNull()
+  })
+
+  it('persists a Judge soul edit through updateAgent (System Agent soul carve-out, backend PUT allows it)', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockJudgeAgent)
+    const editedSoul = 'You are the Judge. Operator-edited: require a green CI run before PASS.'
+    vi.mocked(updateAgent).mockReset().mockResolvedValue({ ...mockJudgeAgent, soul: editedSoul })
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+
+    vi.useFakeTimers()
+    fireEvent.change(soulTextarea, { target: { value: editedSoul } })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    vi.useRealTimers()
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalledWith(
+        'judge',
+        expect.objectContaining({ soul: editedSoul }),
+      )
+    }, { timeout: 6000 })
+    // The still-locked identity fields must never ride along on this save —
+    // only soul (plus whatever else the autosave payload already includes
+    // for every agent, e.g. model) is exempted for a System Agent.
+    const [, payload] = vi.mocked(updateAgent).mock.calls[0]
+    expect(payload).not.toHaveProperty('name')
+    expect(payload).not.toHaveProperty('description')
+    expect(payload).not.toHaveProperty('color')
+    expect(payload).not.toHaveProperty('icon')
+    expect(payload).not.toHaveProperty('skills')
   })
 
   it('shows the Memory toggle OFF and disabled for the Judge (System agent)', async () => {

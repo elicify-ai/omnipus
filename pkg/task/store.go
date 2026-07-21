@@ -905,6 +905,58 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	return t, nil
 }
 
+// ErrStandaloneRestartNotPermitted is returned by ValidateStandaloneRestart
+// when a standalone-task restart (POST /tasks/{id}/restart, ADR-052 §6.7/
+// §6.8, spec FR-026) is requested on a task that is not, right now,
+// Status==failed with CancelReason==stopped_by_user. It wraps
+// ErrIllegalTransition (and therefore ErrValidation), mirroring the shape of
+// plan.ErrRestartNotPermitted (pkg/plan/plan.go), so any existing
+// errors.Is(err, ErrValidation) 400-mapping still holds; callers that need to
+// distinguish "not restartable" (spec FR-026: HTTP 409 — wrong status or
+// wrong reason) from a malformed request (400) should check
+// errors.Is(err, ErrStandaloneRestartNotPermitted) specifically.
+var ErrStandaloneRestartNotPermitted = fmt.Errorf(
+	"%w: restart (failed -> next) is only permitted from failed(stopped_by_user)",
+	ErrIllegalTransition,
+)
+
+// ValidateStandaloneRestart reports whether a STANDALONE-task RESTART
+// (POST /tasks/{id}/restart -> RestartReset, ADR-052 FR-026, the ▶ Play
+// route for a task the user previously Stopped) is legal, given the task's
+// CURRENT status and cancel reason. This is the pkg/task mirror of
+// plan.ValidateRestartTransition (pkg/plan/plan.go) — a single, independently
+// table-testable source of truth for the gate, replacing the equivalent
+// inline check that previously lived only in the REST handler
+// (rest_tasks.go's handleTaskRestart).
+//
+// Restart is legal ONLY when status == StatusFailed AND
+// cancelReason == CancelReasonStoppedByUser (a user Stop, not a genuine
+// failure). This is DELIBERATELY narrower than RestartReset itself, which
+// stays reason-agnostic on purpose: RestartReset is also the reset primitive
+// the PLAN-member restart path uses (FR-016/FR-017), and that path
+// un-freezes a failed member for ANY failure reason. This gate applies ONLY
+// to the standalone-task restart route — it is a caller-side precondition on
+// RestartReset, not a change to RestartReset's own contract.
+//
+// The sole caller today is handleTaskRestart (rest_tasks.go), which
+// continues to own the specific, actionable 409 message returned to the
+// client; this helper's error is available via errors.Is for that mapping.
+func ValidateStandaloneRestart(status Status, cancelReason CancelReason) error {
+	if status != StatusFailed {
+		return fmt.Errorf(
+			"%w: restart is only valid from status %q, got %q",
+			ErrStandaloneRestartNotPermitted, StatusFailed, status,
+		)
+	}
+	if cancelReason != CancelReasonStoppedByUser {
+		return fmt.Errorf(
+			"%w: got cancel_reason %q, want %q",
+			ErrStandaloneRestartNotPermitted, cancelReason, CancelReasonStoppedByUser,
+		)
+	}
+	return nil
+}
+
 // Delete removes the task file for id and cascade-cleans inbound blocked_by
 // edges (every other task that depended on id loses that edge). It returns the
 // IDs of tasks that became fully unblocked (their blocked_by list emptied).

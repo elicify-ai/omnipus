@@ -1723,8 +1723,11 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		// M2: listAgents only needs SOUL.md to determine draft status — avoid reading
 		// HEARTBEAT.md and AGENT.md unnecessarily in the list endpoint.
 		// Core agents have compiled prompts — do not expose them via SOUL.md.
+		// ADR-052 FR-038: System Agents (the Judge) are the carve-out — their soul
+		// IS their (operator-editable) verifier rubric, not a compiled prompt, so
+		// it must render like any custom agent's soul despite Locked==true.
 		var soul string
-		if !ac.Locked {
+		if !ac.Locked || ac.IsSystem() {
 			soul = readSoulMD(workspace)
 		}
 		ag := defaults
@@ -1779,7 +1782,9 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			}
 			soul, _ := readAgentFiles(workspace)
 			// Core agents have compiled prompts — do not expose them.
-			if ac.Locked {
+			// ADR-052 FR-038: System Agents (the Judge) are exempted — their soul
+			// is their operator-editable verifier rubric, not a compiled prompt.
+			if ac.Locked && !ac.IsSystem() {
 				soul = ""
 			}
 			ag := defaults
@@ -2995,8 +3000,19 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		// color, icon, and skills are identity/capability fields — reject on locked agents.
 		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
 		// sets; allowing runtime skill assignment would silently override that invariant.
+		//
+		// ADR-052 FR-038 (soul/rubric unification, R3-1 CLOSED): AgentConfig.Rubric
+		// was deleted — a System Agent's (e.g. the Judge) verification standards ARE
+		// its soul, and the ADR is explicit that "the Judge's soul is editable while
+		// the agent stays otherwise locked (core agents keep their souls locked)".
+		// So req.Soul is exempted from the reject-set for System Agents ONLY —
+		// every other identity field (name/description/color/icon/skills) stays
+		// locked even for a System Agent, and core agents (Mia/Jim/Ava/Ray) keep
+		// the full reject-set including soul: their souls are product identity,
+		// not a verifier rubric.
+		soulLocked := req.Soul != nil && !foundAgent.IsSystem()
 		if req.Name != nil || req.Description != nil ||
-			req.Soul != nil ||
+			soulLocked ||
 			req.Color != nil || req.Icon != nil || req.Skills != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
 			return
@@ -3616,7 +3632,10 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	ag.Status = gen.AgentStatus(computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked))
 	// Hide compiled prompts for locked (core) agents.
-	if foundAgent.Locked {
+	// ADR-052 FR-038: System Agents (the Judge) are exempted — the PUT response
+	// must echo back what was just persisted to SOUL.md, or a client's next
+	// edit (built on a blank round-trip) would clobber the just-saved content.
+	if foundAgent.Locked && !foundAgent.IsSystem() {
 		soul = ""
 	}
 	ag.Soul = soul

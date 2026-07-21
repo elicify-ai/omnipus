@@ -1552,11 +1552,16 @@ func (a *restAPI) handleTaskRestart(w http.ResponseWriter, id string) {
 			"task is a plan member; restart the plan instead via POST /plans/{id}/restart")
 		return
 	}
-	if t.Status != task.StatusFailed || t.CancelReason != task.CancelReasonStoppedByUser {
+	// Gate delegated to task.ValidateStandaloneRestart (pkg/task/store.go) —
+	// single source of truth mirroring plan.ValidateRestartTransition,
+	// rather than an inline reason check hardcoded here. The handler keeps
+	// its own specific, actionable 409 message; the helper's error is
+	// wrapped rather than surfaced verbatim.
+	if verr := task.ValidateStandaloneRestart(t.Status, t.CancelReason); verr != nil {
 		jsonErr(w, http.StatusConflict, fmt.Sprintf(
 			"task is %q (cancel_reason=%q); only a task stopped by the user "+
-				"(status=failed, cancel_reason=stopped_by_user) can be restarted",
-			t.Status, t.CancelReason))
+				"(status=failed, cancel_reason=stopped_by_user) can be restarted: %s",
+			t.Status, t.CancelReason, verr))
 		return
 	}
 

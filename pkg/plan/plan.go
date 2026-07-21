@@ -88,9 +88,18 @@ func IsTerminal(s State) bool { return s == StateDone || s == StateFailed }
 // "State machine" table). Unlike task.Status's permissive-except-two-
 // invariants policy, Plan's matrix is a closed allow-list: any (from, to)
 // pair not listed here is illegal.
+//
+// approved -> failed (ADR-052 spec, Edge Case "Stop wins"): a cap-queued
+// `approved` plan is non-terminal and the SPA offers Stop on it exactly like
+// a running one — Stop must be able to fail it (stopped_by_user) before the
+// engine ever admits/dispatches it. This does NOT touch the frozen-failed
+// invariant: failed stays terminal (legalPlanTransitions[StateFailed] is
+// still {StateFailed: true} only), and it does not widen approved's OTHER
+// edges — approved->running still goes exclusively through the engine's cap
+// admission (tryStartApprovedPlan), never through this matrix directly.
 var legalPlanTransitions = map[State]map[State]bool{ //nolint:gochecknoglobals
 	StateDraft:    {StateDraft: true, StateApproved: true},
-	StateApproved: {StateDraft: true, StateApproved: true, StateRunning: true},
+	StateApproved: {StateDraft: true, StateApproved: true, StateRunning: true, StateFailed: true},
 	StateRunning:  {StateRunning: true, StateDone: true, StateFailed: true},
 	StateDone:     {StateDone: true},
 	StateFailed:   {StateFailed: true},

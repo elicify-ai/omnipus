@@ -356,9 +356,10 @@ export function SearchModal() {
   }, [open, mode])
 
   // ADR-052 FR-036: verifier-role sessions stay excluded by default — do not
-  // pass include_verifier here (fetchSessions has no such argument today, so
-  // this call is the excluded default by construction; see Sidebar.tsx for
-  // the matching note and UsageScreen.tsx for the surface that DOES want them).
+  // pass includeVerifier here (fetchSessions's 3rd opts arg exists, but is
+  // intentionally omitted, so this call is the excluded default by
+  // construction; see Sidebar.tsx for the matching note and UsageScreen.tsx
+  // for the surface that DOES want them).
   const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), enabled: open })
   const { data: workspaces = [], isLoading: wLoading, isError: workspacesError } = useQuery({ queryKey: workspacesQueryKeys.list({ status: 'active' }), queryFn: () => fetchWorkspaces({ status: 'active' }), enabled: open })
   const { data: agents = [], isError: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, enabled: open })

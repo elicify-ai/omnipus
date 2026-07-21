@@ -754,11 +754,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // nothing ever persisted.
       // Note: tools_cfg is no longer in formData (it has its own re-auth-gated
       // endpoint via ToolsAndPermissions) so it does not need stripping here.
+      //
+      // ADR-052 FR-038 (soul/rubric unification): `soul` is EXEMPT from this
+      // strip for a System Agent (the Judge) — the backend's updateAgent
+      // carve-out (`foundAgent.IsSystem()`, pkg/gateway/rest.go) now accepts
+      // `soul` for a locked System Agent while every other identity field
+      // stays rejected. Stripping it here unconditionally for every locked
+      // agent (the pre-Fix-Wave-2 behaviour) would silently drop the exact
+      // edit the now-editable soul textarea invites the operator to make —
+      // the same "dead interaction" class this strip exists to prevent in
+      // the other direction.
+      const stripSoulToo = !(agent && agentKindFlags(agent).isSystem)
       const stripped = agent?.locked
         ? (({
-            name: _n, description: _d, soul: _s, color: _c, icon: _i,
+            name: _n, description: _d, soul: soulField, color: _c, icon: _i,
             skills: _sk, executor: _ex, ...rest
-          }) => rest)(data as Record<string, unknown>)
+          }) => (stripSoulToo ? rest : { ...rest, soul: soulField }))(data as Record<string, unknown>)
         : data
       // W6-contracts: include updated_at from the last GET response so the
       // backend can reject stale writes with 409 Conflict.
@@ -1612,7 +1623,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               checked={memoryEnabled}
               disabled={isSystemAgent}
               onCheckedChange={isSystemAgent ? undefined : (v) => { markDirty(); setMemoryEnabled(v) }}
-              aria-label={memoryEnabled ? 'Turn memory off' : 'Turn memory on'}
+              aria-label={
+                isSystemAgent
+                  // Static, truthful label: this switch is permanently
+                  // disabled for verifier agents (re-enforced every boot,
+                  // see the note above), not a live toggle that merely
+                  // happens to read "off" right now — the previous
+                  // conditional label ('Turn memory on') falsely implied
+                  // an interactive control the operator could act on.
+                  ? 'Memory — locked off for verifier agents'
+                  : memoryEnabled ? 'Turn memory off' : 'Turn memory on'
+              }
             />
           </div>
 
@@ -1623,14 +1644,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             voice={voice}
             setVoice={(v) => { markDirty(); setVoice(v) }}
             renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
-            // ADR-052 FR-038: soul is read-only for every LOCKED agent
-            // (core + system) — the backend's updateAgent handler rejects
-            // `soul` unconditionally when `locked: true`, with no
-            // `IsSystem()` carve-out on the write path yet (confirmed by
-            // reading pkg/gateway/rest.go), so an interactive textarea for
-            // the Judge would silently never persist. See the System-agent
-            // banner below for the operator-facing explanation.
-            soulReadOnly={isLocked}
+            // ADR-052 FR-038 (soul/rubric unification): soul is read-only
+            // for locked CORE agents (Mia/Jim/Ava/Ray) — their souls are
+            // product identity, not a verifier rubric, and the backend's
+            // updateAgent handler still rejects `soul` unconditionally for
+            // them. System Agents (the Judge) are the carve-out: the
+            // backend now allows `soul` for a locked agent when
+            // `IsSystem()` is true (pkg/gateway/rest.go), because the
+            // Judge's soul IS its operator-editable verification rubric —
+            // identity (name/description/color/icon/skills) stays locked,
+            // soul does not. See the System-agent banner below.
+            soulReadOnly={isLocked && !isSystemAgent}
           />
 
           {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
@@ -2348,16 +2372,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           caveat before editing"). Hidden for non-locked agents.
           ADR-049 SD-C18 / ADR-052 FR-038: extended to System agents (the
           Judge) too, with copy naming what IS still editable (model,
-          provider) rather than the core banner's blanket "most fields are
-          read-only". Soul/rubric unification (FR-038) means there is no
-          longer a separate "rubric" field — the Judge's soul IS its
-          judging rubric, and the wire contract describes it as
+          provider, soul) rather than the core banner's blanket "most
+          fields are read-only". Soul/rubric unification (FR-038) means
+          there is no longer a separate "rubric" field — the Judge's soul
+          IS its judging rubric, and the wire contract describes it as
           "editable while locked". Verified against the live backend
-          (pkg/gateway/rest.go's updateAgent, 2026-07): the locked-identity
-          reject-set still rejects `soul` unconditionally for ANY locked
-          agent, with no `IsSystem()` exception on the write path — so this
-          copy says the honest thing (soul is locked today, not "editable")
-          rather than promising something that would 403 on save. */}
+          (pkg/gateway/rest.go's updateAgent, Fix-Wave-2): the
+          locked-identity reject-set now carves soul out for
+          `IsSystem()` agents specifically — identity
+          (name/description/color/icon/skills) stays locked, soul does
+          not — so this copy states the true, current behaviour. */}
       {agent.type === 'core' && agent.locked && (
         <div
           role="alert"
@@ -2383,9 +2407,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <div className="text-sm">
             <div className="font-semibold text-[var(--color-error)]">System agent</div>
             <div className="text-[var(--color-muted)] mt-1">
-              Model and provider are editable. Its soul (below, in Personality)
-              defines its verification standards — soul editing for System
-              Agents isn&apos;t available yet; identity stays locked.
+              Identity (name, description, color, icon, skills) is locked.
+              Model, provider, and its soul (below, in Personality) are
+              editable — the soul defines this agent&apos;s verification
+              standards and drives the next verification it runs.
             </div>
           </div>
         </div>

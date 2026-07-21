@@ -66,12 +66,25 @@ export function planStateLabel(state: PlanState | string | undefined): string {
 // "Cancelled" marker, visually distinct from a genuine red "Failed"
 // (judge_rounds_exhausted / idle_expired), while staying in the same Failed
 // bucket everywhere a plan's state badge is drawn (PlansFilterBand tiles,
-// WorkspaceGraphTab's plan info strip). Reuses the existing warning-orange
-// token (`--color-warning`, already the "blocked"/paused accent) rather than
-// a new hardcoded hex — dark-first tokens, single source of truth.
+// WorkspaceGraphTab's plan info strip). Matches the existing warning-orange
+// token's VALUE (`--color-warning: #EAB308` in globals.css, already the
+// "blocked"/paused accent) rather than inventing a new hex — dark-first
+// tokens, single source of truth.
 
-/** Orange accent for a user-cancelled plan — distinct from `PLAN_STATE_COLORS.failed` (red). */
-export const PLAN_CANCELLED_COLOR = 'var(--color-warning)'
+/**
+ * Orange accent for a user-cancelled plan — distinct from `PLAN_STATE_COLORS.failed`
+ * (red). A LITERAL hex, not a `var(--color-warning)` CSS custom-property
+ * reference (Gate-2 finding #1): every consumer (PlansFilterBand,
+ * WorkspaceGraphTab) builds its badge tint by string-concatenating an alpha
+ * suffix onto this value (`` `${color}1a` ``) — `var(--color-warning)1a` is not
+ * valid CSS (`var()` doesn't accept a trailing token), so that declaration was
+ * silently dropped and the "Cancelled" badge rendered with NO background tint,
+ * unlike the red "Failed" badge built from the literal-hex `PLAN_STATE_COLORS.failed`.
+ * A literal 6-digit hex keeps the concat producing a valid 8-digit `#RRGGBBAA`.
+ * Kept in sync by hand with `statusColors.ts`'s `TASK_CANCELLED_COLOR` — see
+ * that module's header comment for why the two aren't a shared symbol.
+ */
+export const PLAN_CANCELLED_COLOR = '#EAB308'
 
 /** True when this plan is `failed` specifically because the user Stopped it (not a genuine failure). */
 export function isPlanCancelled(plan: Pick<Plan, 'state' | 'failed_reason'>): boolean {

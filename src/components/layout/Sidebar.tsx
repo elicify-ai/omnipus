@@ -163,9 +163,10 @@ export function Sidebar() {
   // ADR-052 FR-036: verifier-role adjudication sessions (type "verifier")
   // MUST stay hidden from this list — GET /sessions defaults to excluding
   // them (include_verifier=false) unless the caller explicitly opts in.
-  // fetchSessions() below is called with NO include_verifier argument
-  // (its signature does not even expose one), so this is the excluded
-  // default by construction — do not add one here.
+  // fetchSessions() below is called with NO 3rd (opts) argument — the
+  // includeVerifier opt-in exists on the signature (UsageScreen uses it)
+  // but is intentionally omitted here, so this stays the excluded default
+  // by construction — do not add it.
   const { data: allSessions = [], isError: sessionsError } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),

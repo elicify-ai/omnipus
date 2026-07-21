@@ -18,7 +18,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -393,6 +392,14 @@ func TestPlanEngine_FR041_BlockedBehindCancelledMember_PlanFailsImmediately(t *t
 // Before the F1 fix, runVerifierAdjudication registered under "plan:"+id
 // while StopPlan enumerated the raw id, so this fan-out would find nothing
 // to cancel at all.
+//
+// The cancelled id is asserted EQUAL to what the registry actually publishes
+// for the plan unit (captured while the turn is in flight) — never a
+// hard-coded id shape: since the cancel-key fix, the registry stores the
+// verifier turn's transcriptSessionID (the pre-created verifier session's
+// meta.ID), which is what RequestCancelForSession matches on; the retired
+// "agent:<judge>:verify:" sessionKey shape it once stored is exactly the
+// value cancel could never reach.
 func TestPlanEngine_StopPlan_SeamCrossing_ReachesRealVerifierSession(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
@@ -432,6 +439,10 @@ func TestPlanEngine_StopPlan_SeamCrossing_ReachesRealVerifierSession(t *testing.
 	}()
 
 	<-registered
+	published := pe.registry().SessionsFor(verifierUnitForPlan("p1"))
+	if len(published) != 1 {
+		t.Fatalf("expected exactly one registered verifier session for plan:p1 while the turn is in flight, got %v", published)
+	}
 	if _, err := pe.StopPlan(context.Background(), "p1", "tester", "web"); err != nil {
 		t.Fatalf("StopPlan: %v", err)
 	}
@@ -448,12 +459,12 @@ func TestPlanEngine_StopPlan_SeamCrossing_ReachesRealVerifierSession(t *testing.
 	}
 	found := false
 	for _, sess := range calls {
-		if strings.HasPrefix(sess, "agent:"+string(coreagent.IDJudge)+":verify:") {
+		if sess == published[0] {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected the fan-out to cancel the real verifier session, got calls=%v", calls)
+		t.Fatalf("expected the fan-out to cancel the registry-published verifier session %q, got calls=%v", published[0], calls)
 	}
 }
 
