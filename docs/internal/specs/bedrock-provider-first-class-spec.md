@@ -2,7 +2,7 @@
 
 **Created**: 2026-07-21
 **Status**: Draft (revision 3 — addresses grill review pass 2, `bedrock-provider-first-class-spec-review.md`, verdict BLOCK)
-**Input**: Operator directives — "i would like to support bedrock as an llm provider"; "make sure the provider ui can support bedrock"; *"list models is the right way we need it anyway for the model selector"* + *"make it to match `ValidateKey`"*; and the dependency decision (2026-07-21): **add Bedrock's control-plane SDK module + bump the AWS SDK to latest**, to enable a live model list. Grounded in [ADR-051](../architecture/ADR-051-bedrock-provider-first-class.md) (Status: Proposed, Option C).
+**Input**: Operator directives — "i would like to support bedrock as an llm provider"; "make sure the provider ui can support bedrock"; *"list models is the right way we need it anyway for the model selector"* + *"make it to match `ValidateKey`"*; and the dependency decision (2026-07-21): **add Bedrock's control-plane SDK module + bump the AWS SDK to latest**, to enable a live model list. Grounded in [ADR-053](../architecture/ADR-053-bedrock-provider-first-class.md) (Status: Proposed, Option C).
 
 ---
 
@@ -601,7 +601,7 @@ All six prior ambiguities are **resolved** (see revision map). The dependency de
 ## Assumptions
 - Operator AWS credentials are provisioned out-of-band; Omnipus never manages them.
 - CI has no AWS account; automated Bedrock tests use a simulated twin (fake control-plane + runtime clients). SC-006 covers real-AWS manually.
-- ADR-051 is **Proposed**; this spec assumes Option C ratified.
+- ADR-053 is **Proposed**; this spec assumes Option C ratified.
 - `ChatStream` out of scope.
 - The existing `case "bedrock":` in `factory_provider.go` is correct and unchanged.
 - The control-plane `bedrock` module is pure-Go and AWS-maintained, same security profile as `bedrockruntime`; adding it is consistent with Hard Constraints #1/#2 (single pure-Go binary).

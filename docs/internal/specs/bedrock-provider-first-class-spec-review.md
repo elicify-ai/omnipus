@@ -339,7 +339,7 @@ these direct answers:
 - **Description**: `Makefile:21-24` documents three discretionary tags, including `bedrock`
   ("compiles in the real AWS Bedrock provider (stub without it)"). FR-011 removes the tag and
   makes the stub inert. The Makefile documentation line is now wrong and will mislead the next
-  reader — the exact "looks like dead code" hazard ADR-051 was written to prevent. The spec's
+  reader — the exact "looks like dead code" hazard ADR-053 was written to prevent. The spec's
   Symbols table doesn't list the Makefile; FR-011 doesn't mention updating it.
 - **Recommendation**: Add to FR-011: *"Makefile:24's `bedrock` tag documentation line MUST be
   deleted (or replaced with `# bedrock — inert, kept for stale-CLI compatibility; the provider

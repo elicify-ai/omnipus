@@ -3,7 +3,7 @@
 - **Status:** **Proposed — 2026-07-21** (revision 2 — addresses grill pass 1, verdict BLOCK; operator: Daniel Piatkowski — ratified the direction + the four-phase sequencing across the 2026-07-21 deliberation; awaits formal sign-off).
 - **Deciders:** Daniel Piatkowski (operator); architect (this record).
 - **Evidence level:** 1 — codebase facts + in-session measurements, with tagged OS-level facts where noted.
-- **Amends / relates to:** **ADR-047 §13** (platform support — this ADR funds the work that makes §13's "untested, not impossible" macOS row actually tested, and fixes the Windows blocker §13 names); **ADR-044 §6.0.1 item 4** (the superseded "Linux-only" rationale this ADR retires for good); **ADR-051** (Bedrock lite-build decision — carried forward here as D5; in one line: AWS Bedrock compiles into the lite build via the `bedrock` tag without pulling heavy deps, so lite stays lean).
+- **Amends / relates to:** **ADR-047 §13** (platform support — this ADR funds the work that makes §13's "untested, not impossible" macOS row actually tested, and fixes the Windows blocker §13 names); **ADR-044 §6.0.1 item 4** (the superseded "Linux-only" rationale this ADR retires for good); **ADR-053** (Bedrock lite-build decision — carried forward here as D5; in one line: AWS Bedrock compiles into the lite build via the `bedrock` tag without pulling heavy deps, so lite stays lean).
 - **Supersedes for this decision:** the standing assumption that the browser is "downloaded on first use or found on `$PATH`" as the *only* guaranteed path — the package-bundled Chrome becomes the guaranteed-available floor.
 
 > **Revision 2 changelog (grill pass 1):** C1 — Windows work reframed as **allocator**, not dialer. C2 — "no host prerequisite" corrected: a bundled Chrome needs host shared libs on minimal Linux (and MSVC runtime on Windows Server Core). C3 — macOS `.app` notarization promoted from open-item to a named decision. M1 — resolution order keeps `$PATH` above the package Chrome (operator autonomy + this session's classifier fix preserved); adds a `prefer_packaged` toggle. M2 — bundled-Chrome integrity verification added. M3/M6 — the linux-only video gate is relaxed **only after** per-OS audio verification, not before. M4 — service-registration & privileges subsection added. M5 — package root computed at runtime via `os.Executable()`, no ldflag/per-package variant.
@@ -198,8 +198,8 @@ credential management per ADR-004 and kernel sandboxing):
 
 ### D5 — Lite build: binary stays lean, Chrome is package-level
 
-The `lite` variant excludes compiled-in capabilities (whatsmeow, WebRTC per ADR-051; Bedrock stays in
-lite per ADR-051). Chrome bundling is package-level, so the lite binary stays lean and lite-vs-full is
+The `lite` variant excludes compiled-in capabilities (whatsmeow, WebRTC per ADR-053; Bedrock stays in
+lite per ADR-053). Chrome bundling is package-level, so the lite binary stays lean and lite-vs-full is
 orthogonal to Chrome-bundled-package-vs-bare-binary. A bare `make build` binary (no package) falls
 through to the runtime-download fallback (resolution step 4) — the lean-binary story is preserved.
 
@@ -267,7 +267,7 @@ not inside one:
   (Phase 3) and fixes the Windows blocker §13 names (Phase 4).
 - **ADR-044 §6.0.1 item 4:** the superseded "Linux-only" rationale is retired for good once the gate is
   relaxed per-OS *after* verification (D3, Phase 3/4) — no vestige of the dead premise remains.
-- **ADR-051:** D5 carries its lite-build decision (Bedrock stays in lite) forward, orthogonal to Chrome bundling.
+- **ADR-053:** D5 carries its lite-build decision (Bedrock stays in lite) forward, orthogonal to Chrome bundling.
 
 ---
 

@@ -1,4 +1,4 @@
-# ADR-051: Should AWS Bedrock stop being build-tag-gated and become a first-class provider?
+# ADR-053: Should AWS Bedrock stop being build-tag-gated and become a first-class provider?
 
 - **Status:** **Proposed — 2026-07-21.** Not ratified. The operator has made no
   decision; nothing in this ADR is licence to change code.
