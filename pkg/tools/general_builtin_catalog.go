@@ -104,6 +104,18 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewTaskDeleteTool(nil))
 	out = append(out, NewAgentListTool(nil))
 
+	// --- Plan tools (CategoryTasks) — ADR-052 autonomous agent plan
+	// authoring & execution. Seeded allow for Jim (Orchestrator) only; every
+	// other seeded agent and the global ceiling resolve explicit `ask`
+	// (Constraint #6) — that policy resolution happens entirely outside this
+	// metadata catalog, at the per-agent tool-dispatch gate. ---
+	out = append(out, NewPlanCreateTool(nil))
+	out = append(out, NewPlanExecuteTool(nil, nil))
+	out = append(out, NewTaskRunTool(nil))
+	// inspect_session: verifier-role-only (ceiling-deny for every ordinary
+	// agent); listed here purely as a capability-reference entry.
+	out = append(out, NewInspectSessionTool(nil))
+
 	// --- Memory tools (CategoryMemory) ---
 	out = append(out, NewRememberTool(nil, nil))
 	out = append(out, NewRecallMemoryTool(nil))
