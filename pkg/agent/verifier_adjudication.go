@@ -443,15 +443,10 @@ func (al *AgentLoop) resolveVerifierSessionScope(in JudgeCriteriaInput) []string
 // pkg/session), so the type MUST be stamped at creation, not patched in
 // afterward.
 //
-// WAVE-MERGE: pkg/session/unified.go has no exported SessionTypeVerifier
-// constant yet (IsValidSessionType doesn't list "verifier" either) — that
-// is the "sessions-vis" Wave 2 agent's slice (default session-list
-// exclusion, Sidebar/SearchModal filtering, the exported constant itself,
-// FR-036). Per the Wave-2 plan, this function uses the literal
-// session.UnifiedSessionType("verifier") directly rather than block on
-// that constant landing first; reconcile this literal to the real exported
-// constant at merge once it exists — the STRING VALUE ("verifier") is the
-// stable contract between the two waves, not the Go symbol name.
+// Creation goes through session.NewVerifierSession — the ONLY sanctioned
+// way to mint a verifier-typed session (its doc comment carries the
+// spoof-prevention rationale: REST createSession deliberately cannot
+// request type="verifier").
 //
 // sessionKey/unitID are used only for the fallback ad hoc chatID (matching
 // Wave 1's exact original construction, byte for byte) and for a
@@ -473,7 +468,7 @@ func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string 
 	if sessStore == nil {
 		return fallback
 	}
-	meta, err := sessStore.NewSession(session.UnifiedSessionType("verifier"), "system", string(coreagent.IDJudge))
+	meta, err := sessStore.NewVerifierSession(string(coreagent.IDJudge))
 	if err != nil {
 		logger.WarnCF("agent",
 			"verifier: could not pre-create type-stamped session; falling back to an unstamped ad hoc session id",
