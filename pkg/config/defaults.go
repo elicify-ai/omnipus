@@ -382,15 +382,32 @@ func DefaultConfig() *Config {
 				// resolution needs a call-site exemption from the global
 				// ceiling for these three tools is a cross-cutting resolution
 				// question outside pkg/config's ownership.
-				// inspect_session is verifier-role-only, not ask-able: ceiling
-				// stays explicit "deny" (only the Judge's own seeded "allow"
-				// grants it — same strictest-wins caveat does not apply here
-				// since Judge's own entry is the only non-empty side for
-				// every other agent).
+				// inspect_session is verifier-role-only (fix-wave finding #2,
+				// architect F2 half 1). The runtime global x agent merge is
+				// strictest-wins (deny > ask > allow,
+				// pkg/tools/compositor.go:resolveEffectivePolicyWith), so a
+				// ceiling "deny" here would have OVERRULED the Judge's own
+				// seeded "allow" and resolved the Judge to deny — exactly
+				// the landed defect this seed inverts. The ceiling therefore
+				// seeds "allow" (raising the CEILING an agent's own policy
+				// can be granted UP TO, same as every other non-destructive
+				// tool — it does not, by itself, grant the tool to anyone);
+				// EVERY seeded non-Judge agent carries an explicit per-agent
+				// "deny" for inspect_session (pkg/coreagent/core.go's
+				// coreAgentSeed/systemAgentSeed — denyAllThenOverride's
+				// fully-enumerated deny-by-default already covers every
+				// core/subagent-tier agent; the Worker's sparse
+				// tightenGlobalCeiling map now carries an explicit override
+				// too, since it would otherwise silently inherit this
+				// ceiling's "allow"), so the strictest-wins merge still
+				// resolves deny for everyone except the Judge, whose own
+				// "allow" now merges cleanly against an "allow" ceiling.
+				// Custom/unlisted agents are covered by the existing
+				// backfill-to-explicit-deny coverage repair.
 				"create_plan":     "ask",
 				"execute_plan":    "ask",
 				"run_task":        "ask",
-				"inspect_session": "deny",
+				"inspect_session": "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds

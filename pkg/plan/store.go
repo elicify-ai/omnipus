@@ -282,6 +282,18 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		return nil, err
 	}
 
+	// Fix-wave finding #4 (restart-guard ordering / crafted-patch attack):
+	// capture the ON-DISK FailedReason BEFORE any patch field is applied.
+	// patch.FailedReason is applied to p.FailedReason further down (the
+	// per-field block below), which runs BEFORE the State-transition block
+	// evaluates the restart guard — if that guard read p.FailedReason at
+	// that point, a crafted Patch{State: approved, FailedReason:
+	// "stopped_by_user"} could restart a plan whose REAL on-disk reason was
+	// e.g. judge_rounds_exhausted (never restartable) by supplying a forged
+	// reason in the same patch. The restart guard below is validated against
+	// this captured pre-patch value, never the patch-mutated one.
+	onDiskFailedReason := p.FailedReason
+
 	if patch.Title != nil {
 		if *patch.Title == "" {
 			return nil, verr("title must not be empty")
@@ -377,7 +389,26 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		// matrix check below and stays illegal.
 		restarting := from == StateFailed && to == StateApproved
 		if restarting {
-			if err := ValidateRestartTransition(from, p.FailedReason); err != nil {
+			// Fix-wave finding #4: reject an explicit FailedReason/
+			// JudgeRounds supplied alongside a restart transition in the
+			// SAME patch, rather than silently overwriting/ignoring it.
+			// Restart is always a clean-slate reset (FailedReason cleared,
+			// JudgeRounds zeroed below) — a caller has no legitimate reason
+			// to also set either field in the same patch, and allowing it
+			// is exactly the shape of the crafted-patch attack this guard
+			// closes (see onDiskFailedReason's doc comment above).
+			if patch.FailedReason != nil {
+				return nil, verr("failed_reason must not be set alongside a restart (failed[stopped_by_user] -> approved) transition")
+			}
+			if patch.JudgeRounds != nil {
+				return nil, verr("judge_rounds must not be set alongside a restart (failed[stopped_by_user] -> approved) transition")
+			}
+			// Validate against the CAPTURED on-disk reason — never
+			// p.FailedReason at this point, which (for a legitimate
+			// non-restart caller that combines State+FailedReason in one
+			// patch, e.g. running->failed) may already reflect THIS same
+			// patch's own FailedReason field.
+			if err := ValidateRestartTransition(from, onDiskFailedReason); err != nil {
 				return nil, err
 			}
 		} else if err := ValidateStateTransition(from, to); err != nil {
@@ -407,9 +438,12 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			// genuine failure records its own reason) and reset the
 			// plan-level JudgeRounds counter to 0 (otherwise a plan
 			// restarted near its judge-round cap would fail immediately).
-			// This applies unconditionally, even if the same Patch also
-			// carried an explicit FailedReason/JudgeRounds value earlier in
-			// this function — restart wins. PausedReason is deliberately
+			// Fix-wave finding #4 tightened this: the same Patch is no
+			// longer PERMITTED to also carry an explicit FailedReason/
+			// JudgeRounds value at all (rejected above, before this point
+			// is ever reached) — this reset therefore always starts from a
+			// patch that touched neither field, never from "restart
+			// overwriting a conflicting explicit value". PausedReason is deliberately
 			// NOT touched here: it is orthogonal (a running+paused plan is
 			// not in State==failed at all, so it can never reach this
 			// branch). Per-member Task.attempt_count reset (FR-017) is the

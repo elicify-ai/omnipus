@@ -289,14 +289,23 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 			}{Command: c.Check.Command, ExpectedExitCode: c.Check.ExpectedExitCode}
 		}
 		if c.Behavior != nil {
-			beh := &struct {
+			beh := &struct { // not-wire-format: intermediate value built to match gen.Plan.Dod's oapi-codegen anonymous element type, not a parallel wire type
 				MaxCount *int                      `json:"max_count,omitempty"`
 				MinCount *int                      `json:"min_count,omitempty"`
 				Scope    *gen.PlanDodBehaviorScope `json:"scope,omitempty"`
 				Tool     string                    `json:"tool"`
 			}{
+				// MinCount/MaxCount are passed straight through — both are
+				// already *int on task.CriterionBehavior (fix-wave finding
+				// #5), so no ptr()-wrap is needed (or type-correct: wrapping
+				// an already-*int value would produce **int). This also
+				// preserves the nil/0 distinction on read: an
+				// explicitly-zero MinCount round-trips as 0, not defaulted —
+				// the wire's own `default: 1` (schema) is authoritative only
+				// for an ABSENT create/update request field, never for what
+				// GET echoes back (fix-wave finding #6).
 				Tool:     c.Behavior.Tool,
-				MinCount: ptr(c.Behavior.MinCount),
+				MinCount: c.Behavior.MinCount,
 				MaxCount: c.Behavior.MaxCount,
 			}
 			if c.Behavior.Scope != "" {
@@ -347,16 +356,7 @@ func planDoDFromCreateWire(items []struct {
 			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
 		}
 		if it.Behavior != nil {
-			beh := &task.CriterionBehavior{Tool: it.Behavior.Tool, MaxCount: it.Behavior.MaxCount}
-			if it.Behavior.MinCount != nil {
-				beh.MinCount = *it.Behavior.MinCount
-			} else {
-				beh.MinCount = 1
-			}
-			if it.Behavior.Scope != nil {
-				beh.Scope = task.BehaviorScope(*it.Behavior.Scope)
-			}
-			c.Behavior = beh
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
 		}
 		out = append(out, c)
 	}
@@ -400,16 +400,7 @@ func planDoDFromUpdateWire(items []struct {
 			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
 		}
 		if it.Behavior != nil {
-			beh := &task.CriterionBehavior{Tool: it.Behavior.Tool, MaxCount: it.Behavior.MaxCount}
-			if it.Behavior.MinCount != nil {
-				beh.MinCount = *it.Behavior.MinCount
-			} else {
-				beh.MinCount = 1
-			}
-			if it.Behavior.Scope != nil {
-				beh.Scope = task.BehaviorScope(*it.Behavior.Scope)
-			}
-			c.Behavior = beh
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
 		}
 		out = append(out, c)
 	}

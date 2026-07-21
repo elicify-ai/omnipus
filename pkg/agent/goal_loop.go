@@ -162,9 +162,35 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 	}
 	if pe := GetPlanEngine(al); pe != nil {
 		pe.Release("goal") // paired with the Admit("goal") call at set time
+		al.cancelGoalVerifierIfAny(pe, sessionID)
 	}
 	al.emitGoalStatusFrame(sessionID, "", 0, 0, "", "cleared")
 	return "Goal cleared (" + note + ")."
+}
+
+// cancelGoalVerifierIfAny implements ADR-052 FR-037's `/goal clear` cancel
+// half (7-reviewer gate item 2): looks up the goal unit's registered
+// verifier session (verifierUnitForGoal(sessionID)) — set BEFORE dispatch by
+// the SAME runVerifierAdjudication (verifier_adjudication.go) plan-Stop's
+// fan-out reads — and, if adjudication is currently in flight for this
+// session, cancels it via the SAME RequestCancelForSession chat-cancel
+// primitive every other Stop surface uses (A2, precedent: plan_engine.go's
+// StopPlan/StopTask) — no new cancel machinery — then unregisters the entry.
+// A no-op when no verifier is currently registered for this goal (the common
+// case: most /goal clears land between rounds, with nothing in flight).
+func (al *AgentLoop) cancelGoalVerifierIfAny(pe *PlanEngine, sessionID string) {
+	unit := verifierUnitForGoal(sessionID)
+	verifierSessionID, ok := pe.VerifierRegistry().Lookup(unit)
+	if !ok || verifierSessionID == "" {
+		return
+	}
+	cancelCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := al.RequestCancelForSession(cancelCtx, verifierSessionID, "", ""); err != nil {
+		logger.WarnCF("agent", "goal: could not cancel in-flight goal verifier session",
+			map[string]any{"session_id": sessionID, "verifier_session_id": verifierSessionID, "error": err.Error()})
+	}
+	pe.VerifierRegistry().Unregister(unit)
 }
 
 // isGoalClearVerb reports whether args (the text after "/goal ") is one of

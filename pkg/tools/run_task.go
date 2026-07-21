@@ -129,8 +129,8 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	if t.startTaskNow == nil {
-		slog.Error("run_task: no StartTaskNow dispatcher installed — cannot run task", "task_id", taskID)
-		return ErrorResult("run_task failed: the task executor is not available")
+		slog.Error("run_task: no StartTaskNow dispatcher installed — denying by default", "task_id", taskID)
+		return ErrorResult("run_task failed: task executor not wired — denying by default")
 	}
 
 	// Already in flight: startTaskNow's own idempotency guard (a live

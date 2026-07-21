@@ -380,8 +380,17 @@ func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 				Scope    *gen.TaskCriteriaBehaviorScope `json:"scope,omitempty"`
 				Tool     string                         `json:"tool"`
 			}{
+				// MinCount/MaxCount are passed straight through — both are
+				// already *int on task.CriterionBehavior (fix-wave finding
+				// #5), so no ptr()-wrap is needed (or type-correct: wrapping
+				// an already-*int value would produce **int). This also
+				// preserves the nil/0 distinction on read: an
+				// explicitly-zero MinCount round-trips as 0, not defaulted —
+				// the wire's own `default: 1` (schema) is authoritative only
+				// for an ABSENT create/update request field, never for what
+				// GET echoes back (fix-wave finding #6).
 				Tool:     c.Behavior.Tool,
-				MinCount: ptr(c.Behavior.MinCount),
+				MinCount: c.Behavior.MinCount,
 				MaxCount: c.Behavior.MaxCount,
 			}
 			if c.Behavior.Scope != "" {
@@ -432,16 +441,7 @@ func criteriaFromCreateWire(items []struct {
 			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
 		}
 		if it.Behavior != nil {
-			beh := &task.CriterionBehavior{Tool: it.Behavior.Tool, MaxCount: it.Behavior.MaxCount}
-			if it.Behavior.MinCount != nil {
-				beh.MinCount = *it.Behavior.MinCount
-			} else {
-				beh.MinCount = 1
-			}
-			if it.Behavior.Scope != nil {
-				beh.Scope = task.BehaviorScope(*it.Behavior.Scope)
-			}
-			c.Behavior = beh
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
 		}
 		out = append(out, c)
 	}
@@ -485,16 +485,7 @@ func criteriaFromUpdateWire(items []struct {
 			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
 		}
 		if it.Behavior != nil {
-			beh := &task.CriterionBehavior{Tool: it.Behavior.Tool, MaxCount: it.Behavior.MaxCount}
-			if it.Behavior.MinCount != nil {
-				beh.MinCount = *it.Behavior.MinCount
-			} else {
-				beh.MinCount = 1
-			}
-			if it.Behavior.Scope != nil {
-				beh.Scope = task.BehaviorScope(*it.Behavior.Scope)
-			}
-			c.Behavior = beh
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
 		}
 		out = append(out, c)
 	}
@@ -652,6 +643,35 @@ func (a *restAPI) resolveAgentName(agentID string) string {
 
 // ptr returns a pointer to v.
 func ptr[T any](v T) *T { return &v }
+
+// behaviorFromWire converts a `kind: behavior` criterion's inline wire
+// fields to task.CriterionBehavior. Collapses the four byte-identical
+// FROM-wire behavior blocks (planDoDFromCreateWire/planDoDFromUpdateWire in
+// rest_plans.go, criteriaFromCreateWire/criteriaFromUpdateWire in
+// rest_tasks.go) that previously duplicated this same conversion once per
+// generated wire-request variant — S is the per-variant generated Scope enum
+// type (gen.PlanCreateRequestDodBehaviorScope, gen.TaskCriteriaBehaviorScope,
+// etc.), always ~string so a direct conversion to task.BehaviorScope works.
+//
+// minCount is passed straight through as a pointer — NO default-1
+// materialization here. task.CriterionBehavior.MinCount is itself *int
+// (fix-wave finding #5): an omitted min_count stays nil on the wire and
+// task.validateCriterionBehavior (pkg/task/criterion.go) — via
+// EffectiveMinCount() at read time — owns defaulting nil to 1. Duplicating
+// that default here would be a second source of truth for the same rule.
+//
+// The TO-wire direction (toWireCriteria/toWirePlanDoD's anonymous-struct
+// literals) is intentionally NOT collapsed here — oapi-codegen generates a
+// DISTINCT anonymous struct type per response context, so those literals
+// cannot share one helper without reintroducing the wire-shape duplication
+// Constraint #8 exists to prevent (see each call site's own comment).
+func behaviorFromWire[S ~string](tool string, minCount, maxCount *int, scope *S) *task.CriterionBehavior {
+	beh := &task.CriterionBehavior{Tool: tool, MinCount: minCount, MaxCount: maxCount}
+	if scope != nil {
+		beh.Scope = task.BehaviorScope(*scope)
+	}
+	return beh
+}
 
 // parseTimeOrNow parses an RFC 3339 timestamp, falling back to now on error.
 // Fix #5: logs a Warn when a non-empty string fails to parse (empty is normal

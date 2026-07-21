@@ -12,14 +12,30 @@
 // an in-flight goal verifier the same way (FR-037).
 //
 // Ownership / wiring: PlanEngine constructs and owns the single process-wide
-// instance (NewPlanEngine); every adjudication caller reaches it via
-// GetPlanEngine(al).VerifierRegistry() — judge.go's runVerifierAdjudication
-// (FR-011) registers the real verifier session id it creates BEFORE
-// dispatching that session's first turn (the same synchronous-assignment
-// rule M1 applies to a member task's own SessionID), and unregisters once
-// the verdict resolves or the adjudication is abandoned. Chat `/goal`'s
-// verifier (goal_loop.go, a sibling wave) follows the same contract, keyed
-// by its own goal-session id.
+// instance (NewPlanEngine), and points the package-wide publisher seam
+// (verifier_adjudication.go's SetVerifierSessionRegistry) at that SAME
+// instance at construction time — NOT via a direct
+// GetPlanEngine(al).VerifierRegistry() call from the registration side.
+// runVerifierAdjudication (verifier_adjudication.go, FR-011) reaches it
+// through currentVerifierSessionRegistry() (the package seam) and registers
+// the real verifier session id it creates BEFORE dispatching that session's
+// first turn (the same synchronous-assignment rule M1 applies to a member
+// task's own SessionID), unregistering once the verdict resolves or the
+// adjudication is abandoned. The Stop fan-out (plan_engine.go's
+// StopPlan/StopTask) reaches the SAME instance via PlanEngine.VerifierRegistry
+// (the pe.registry() accessor). Chat `/goal`'s verifier (goal_loop.go)
+// follows the same contract, keyed by its own goal-session id.
+//
+// Key scheme (ADR-052 FR-037, F1 fix): both the registration side and the
+// Stop-fan-out lookup side MUST derive their keys from the SAME helpers —
+// verifierUnitForPlan/verifierUnitForTask/verifierUnitForGoal below (which
+// verifierUnitID, verifier_adjudication.go, and plan_engine.go's
+// StopPlan/StopTask/beginPlanJudgeRound/processPlan all call) — never a raw
+// id or an ad hoc prefix construction. A previous version of this wave had
+// runVerifierAdjudication registering under "plan:"+id/"task:"+id/"goal:"+id
+// while the Stop fan-out enumerated the RAW id, so Stop never found a live
+// verifier session at all; these helpers are the single source of truth that
+// closes that gap.
 //
 // PlanEngine's own plan-level judge round (beginPlanJudgeRound /
 // runPlanJudgeRound in plan_engine.go) additionally uses Register/Unregister
@@ -37,6 +53,18 @@
 package agent
 
 import "sync"
+
+// verifierUnitForPlan, verifierUnitForTask, and verifierUnitForGoal are the
+// single source of truth for the verifier-session registry's key scheme
+// (ADR-052 FR-037). Every caller that registers OR looks up an adjudication
+// unit's entry — verifierUnitID (verifier_adjudication.go), and
+// plan_engine.go's StopPlan/StopTask/beginPlanJudgeRound/runPlanJudgeRound/
+// processPlan — MUST derive its key through these, never by concatenating
+// the prefix ad hoc. See this file's package doc for the F1 regression this
+// closes.
+func verifierUnitForPlan(planID string) string        { return "plan:" + planID }
+func verifierUnitForTask(taskID string) string        { return "task:" + taskID }
+func verifierUnitForGoal(goalSessionID string) string { return "goal:" + goalSessionID }
 
 // VerifierSessionRegistry maps an adjudication unit (plan ID, task ID, or
 // goal-session ID) to the verifier's own session ID for the lifetime of one

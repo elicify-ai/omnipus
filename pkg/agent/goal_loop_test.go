@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // --- shared test helpers -----------------------------------------------
@@ -221,6 +222,92 @@ func TestGoalCommand_AdmissionRefusal(t *testing.T) {
 	if after.GoalCondition != "" {
 		t.Fatal("goal must not be set when admission is refused")
 	}
+}
+
+// TestGoalClear_CancelsInFlightGoalVerifierSession proves ADR-052 FR-037's
+// `/goal clear` cancel half (7-reviewer gate item 2): clearGoal looks up the
+// goal unit's registered verifier session (verifierUnitForGoal(sessionID))
+// and cancels it via RequestCancelForSession — the SAME chat-cancel every
+// other Stop surface uses (A2) — then unregisters the entry. Drives a REAL
+// in-flight verifier turn (runVerifierAdjudication via al.JudgeCriteria,
+// blocked on a channel-gated fake provider) rather than a fake registry
+// entry alone, so the assertion proves an actual turn gets canceled, not
+// just that a map entry disappears.
+func TestGoalClear_CancelsInFlightGoalVerifierSession(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	pe := NewPlanEngine(al, plan.New(t.TempDir()), nil, nil)
+	al.SetPlanEngine(pe)
+
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+
+	registered := make(chan struct{})
+	proceed := make(chan struct{})
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		close(registered)
+		<-proceed
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"goal-condition","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+	judgeInst.Provider = fake
+
+	judgeDone := make(chan JudgeCriteriaResult, 1)
+	go func() {
+		judgeDone <- al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+			Scope:           task.VerdictScopeGoal,
+			AssigneeAgentID: agentInst.ID,
+			Criteria: []task.AcceptanceCriterion{
+				{ID: "goal-condition", Kind: task.KindProse, Text: "make the tests pass"},
+			},
+			Attempt:       1,
+			ClaimText:     "done",
+			GoalSessionID: sid,
+		})
+	}()
+
+	<-registered
+	verifierSessionID, ok := pe.VerifierRegistry().Lookup(verifierUnitForGoal(sid))
+	if !ok || verifierSessionID == "" {
+		t.Fatal("expected the goal verifier session to be registered before dispatch")
+	}
+
+	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal clear", UserInitiated: true}, agentInst, &opts)
+	if !matched || !handled || !strings.Contains(reply, "cleared") {
+		t.Fatalf("/goal clear: matched=%v handled=%v reply=%q", matched, handled, reply)
+	}
+
+	if _, stillRegistered := pe.VerifierRegistry().Lookup(verifierUnitForGoal(sid)); stillRegistered {
+		t.Error("the verifier registry entry must be unregistered by /goal clear")
+	}
+
+	// Prove clearGoal's own RequestCancelForSession call actually FIRED (was
+	// not a no-op) via the codebase's established double-cancel semantics
+	// (TestRequestCancel_DoubleCancelReturnsFiredFalse, cancel_test.go): once
+	// a cancel has claimed a turn, a SECOND cancel attempt on the SAME
+	// session returns Fired=false. The cancel cascade itself is graceful-
+	// then-hard-abort on its own internal timer (InterruptSession's 3s grace
+	// window, cancel.go) — asserting on ctx.Err() immediately would be
+	// timing-dependent/flaky; Fired is the deterministic, already-proven
+	// signal this codebase uses to verify "a cancel was actually claimed".
+	fired, err := al.RequestCancelForSession(context.Background(), verifierSessionID, "", "")
+	if err != nil {
+		t.Fatalf("RequestCancelForSession (verification probe): %v", err)
+	}
+	if fired {
+		t.Error("/goal clear's own cancel must already have claimed this session — a second cancel " +
+			"attempt returning Fired=true means clearGoal never actually canceled it")
+	}
+
+	close(proceed)
+	<-judgeDone
 }
 
 // --- /goal: judge-gated round advance (checkGoalLoopAfterTurn) ----------

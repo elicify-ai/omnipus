@@ -24,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- verifierUnitID ---------------------------------------------------------
@@ -37,6 +38,36 @@ func TestVerifierUnitID_PrefersTaskThenPlanThenAgentFallback(t *testing.T) {
 	}
 	if got := verifierUnitID(JudgeCriteriaInput{AssigneeAgentID: "mia"}); got != "goal-agent:mia" {
 		t.Errorf("goal-scope (no TaskID/PlanID) must fall back to a per-agent key, got %q", got)
+	}
+}
+
+// TestVerifierUnitID_GoalScopeUsesSessionIDKey covers verifierUnitID's
+// primary goal-scope branch (GoalSessionID set) — previously untested
+// (this wave's own comment sweep, item 12). This is the key /goal clear
+// looks up to cancel an in-flight goal verifier (FR-037).
+func TestVerifierUnitID_GoalScopeUsesSessionIDKey(t *testing.T) {
+	got := verifierUnitID(JudgeCriteriaInput{GoalSessionID: "sess-123"})
+	if want := "goal:sess-123"; got != want {
+		t.Errorf("verifierUnitID(goal scope) = %q, want %q", got, want)
+	}
+	if got, want := verifierUnitID(JudgeCriteriaInput{TaskID: "t1", GoalSessionID: "sess-123"}), "task:t1"; got != want {
+		t.Errorf("TaskID must win over GoalSessionID when both are somehow set, got %q want %q", got, want)
+	}
+}
+
+// TestVerifierUnitID_MatchesSharedKeyHelpers pins verifierUnitID to the
+// SAME shared helpers (verifier_registry.go) plan_engine.go's Stop fan-out
+// uses — the F1 regression this wave closes was exactly the two sides
+// disagreeing on this scheme.
+func TestVerifierUnitID_MatchesSharedKeyHelpers(t *testing.T) {
+	if got, want := verifierUnitID(JudgeCriteriaInput{TaskID: "t1"}), verifierUnitForTask("t1"); got != want {
+		t.Errorf("task-scope key = %q, want it to equal verifierUnitForTask(...) = %q", got, want)
+	}
+	if got, want := verifierUnitID(JudgeCriteriaInput{PlanID: "p1"}), verifierUnitForPlan("p1"); got != want {
+		t.Errorf("plan-scope key = %q, want it to equal verifierUnitForPlan(...) = %q", got, want)
+	}
+	if got, want := verifierUnitID(JudgeCriteriaInput{GoalSessionID: "s1"}), verifierUnitForGoal("s1"); got != want {
+		t.Errorf("goal-scope key = %q, want it to equal verifierUnitForGoal(...) = %q", got, want)
 	}
 }
 
@@ -213,11 +244,50 @@ func TestVerifierWindowFeed_PlanScope_ReturnsEmptyComposition(t *testing.T) {
 	}
 }
 
-func TestVerifierWindowFeed_GoalScope_ReturnsEmptyUntilCallerPassesSessionID(t *testing.T) {
+// TestVerifierWindowFeed_GoalScope_ReturnsEmptyWhenNoSessionID covers the
+// defensive case: a goal-scope input with no GoalSessionID set (production
+// callers — goal_loop.go's checkGoalLoopAfterTurn — always set it) must
+// still degrade to an empty window, never panic or error.
+func TestVerifierWindowFeed_GoalScope_ReturnsEmptyWhenNoSessionID(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	got := al.resolveVerifierWindowText(JudgeCriteriaInput{Scope: task.VerdictScopeGoal, AssigneeAgentID: "native-agent"})
 	if got != "" {
-		t.Errorf("goal scope must return \"\" until goal_loop.go passes a session id (WAVE-MERGE note), got %q", got)
+		t.Errorf("goal scope with no GoalSessionID must return \"\", got %q", got)
+	}
+}
+
+// TestVerifierWindowFeed_GoalScope_ReadsSessionTail proves the goal-scope
+// window is read from the REAL chat session carrying the goal condition
+// (goalSessionWindowText -> sessionWindowText -> UnifiedStore.ReadTranscript)
+// — the positive counterpart to the empty-input case above, mirroring
+// TestVerifierWindowFeed_TaskScope_ReadsSessionTail for the goal scope.
+func TestVerifierWindowFeed_GoalScope_ReadsSessionTail(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+
+	store := al.GetAgentStore("native-agent")
+	if store == nil {
+		t.Fatal("native-agent must have a UnifiedStore session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		Role: "user", Content: "run 5 web searches", AgentID: "native-agent",
+	}); err != nil {
+		t.Fatalf("AppendTranscript: %v", err)
+	}
+	if err := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		Role: "assistant", Content: "done, 5 searches completed", AgentID: "native-agent",
+	}); err != nil {
+		t.Fatalf("AppendTranscript: %v", err)
+	}
+
+	got := al.resolveVerifierWindowText(JudgeCriteriaInput{
+		Scope: task.VerdictScopeGoal, AssigneeAgentID: "native-agent", GoalSessionID: meta.ID,
+	})
+	if !strings.Contains(got, "run 5 web searches") || !strings.Contains(got, "5 searches completed") {
+		t.Errorf("goal-scope window must contain the goal session's real transcript, got %q", got)
 	}
 }
 
@@ -277,6 +347,142 @@ func TestVerifierWindowFeed_TaskScope_MissingSessionReturnsEmpty(t *testing.T) {
 	}
 	if got := al.taskSessionWindowText("does-not-exist", "native-agent"); got != "" {
 		t.Errorf("an unresolvable task id must yield an empty window, got %q", got)
+	}
+}
+
+// --- inspect_session target scope (FR-033/R3-10/R3-11, item 8) -------------
+
+func TestResolveVerifierSessionScope_TaskScope(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	taskStore := GetTaskStore(al)
+	tk := &task.Task{
+		ID: "t-scope", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "scope test", SessionID: "sess-t",
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("task Create: %v", err)
+	}
+	got := al.resolveVerifierSessionScope(JudgeCriteriaInput{Scope: task.VerdictScopeTask, TaskID: "t-scope"})
+	if len(got) != 1 || got[0] != "sess-t" {
+		t.Errorf("task scope = %v, want [sess-t]", got)
+	}
+}
+
+func TestResolveVerifierSessionScope_PlanScope_MemberSessionsOnly(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	taskStore := GetTaskStore(al)
+	for _, tk := range []*task.Task{
+		{ID: "m1", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "m1", PlanID: "p1", SessionID: "sess-m1"},
+		{ID: "m2", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "m2", PlanID: "p1", SessionID: "sess-m2"},
+		{ID: "other", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "other", PlanID: "p2", SessionID: "sess-other"},
+	} {
+		if err := taskStore.Create(tk); err != nil {
+			t.Fatalf("task Create %s: %v", tk.ID, err)
+		}
+	}
+	got := al.resolveVerifierSessionScope(JudgeCriteriaInput{Scope: task.VerdictScopePlan, PlanID: "p1"})
+	want := map[string]bool{"sess-m1": true, "sess-m2": true}
+	if len(got) != 2 {
+		t.Fatalf("plan scope = %v, want exactly 2 sessions (p1's members only)", got)
+	}
+	for _, s := range got {
+		if !want[s] {
+			t.Errorf("plan scope leaked a non-p1-member session: %q (got=%v)", s, got)
+		}
+	}
+}
+
+func TestResolveVerifierSessionScope_GoalScope(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	got := al.resolveVerifierSessionScope(JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalSessionID: "goal-sess"})
+	if len(got) != 1 || got[0] != "goal-sess" {
+		t.Errorf("goal scope = %v, want [goal-sess]", got)
+	}
+}
+
+// TestRunVerifierAdjudication_PlumbsVerifierSessionScopeOntoTurnCtx proves the
+// ctx runVerifierAdjudication dispatches the verifier's turn with actually
+// carries the FR-033 target-session allowlist — end to end through
+// processTaskDirect into the Judge's own LLM call — not just that
+// resolveVerifierSessionScope computes the right list in isolation.
+func TestRunVerifierAdjudication_PlumbsVerifierSessionScopeOntoTurnCtx(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+
+	taskStore := GetTaskStore(al)
+	tk := &task.Task{
+		ID: "t-ctx-scope", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "x", SessionID: "sess-under-review",
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("task Create: %v", err)
+	}
+
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+	judgeInst.Provider = fake
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeTask,
+		TaskID:          "t-ctx-scope",
+		AssigneeAgentID: "native-agent",
+		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "x")},
+		Attempt:         1,
+		ClaimText:       "done",
+	})
+	if result.Unavailable {
+		t.Fatalf("unexpected Unavailable: %s", result.Reason)
+	}
+
+	capturedCtx := fake.capturedCtx()
+	if capturedCtx == nil {
+		t.Fatal("the verifier's LLM call must have received a ctx")
+	}
+	if !tools.VerifierSessionScopeAllows(capturedCtx, "sess-under-review") {
+		t.Error("the verifier turn's ctx must authorize the task's own session via WithVerifierSessionScope")
+	}
+	if tools.VerifierSessionScopeAllows(capturedCtx, "some-other-session") {
+		t.Error("the verifier turn's ctx must NOT authorize a session outside the resolved scope")
+	}
+}
+
+// --- verifier verdict dedup (any-unmet-wins, item 6) ------------------------
+
+func TestDedupeJudgeCriteriaAnyUnmetWins(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      []judgeCriterionResponse
+		wantMet bool
+	}{
+		{"met_then_unmet_stays_unmet", []judgeCriterionResponse{
+			{ID: "c1", Met: true, Reason: "looks fine"},
+			{ID: "c1", Met: false, Reason: "actually not fine"},
+		}, false},
+		{"unmet_then_met_stays_unmet", []judgeCriterionResponse{
+			{ID: "c1", Met: false, Reason: "not fine"},
+			{ID: "c1", Met: true, Reason: "fine after all"},
+		}, false},
+		{"met_then_met_stays_met", []judgeCriterionResponse{
+			{ID: "c1", Met: true},
+			{ID: "c1", Met: true},
+		}, true},
+		{"single_unmet", []judgeCriterionResponse{{ID: "c1", Met: false}}, false},
+		{"single_met", []judgeCriterionResponse{{ID: "c1", Met: true}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dedupeJudgeCriteriaAnyUnmetWins(tc.in)
+			entry, ok := got["c1"]
+			if !ok {
+				t.Fatalf("dedupe dropped id %q entirely", "c1")
+			}
+			if entry.Met != tc.wantMet {
+				t.Errorf("dedupe(%+v)[c1].Met = %v, want %v (any-unmet-wins)", tc.in, entry.Met, tc.wantMet)
+			}
+		})
+	}
+	if got := dedupeJudgeCriteriaAnyUnmetWins(nil); len(got) != 0 {
+		t.Errorf("dedupe(nil) = %v, want empty map", got)
 	}
 }
 

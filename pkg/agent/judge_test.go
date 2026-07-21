@@ -64,19 +64,24 @@ func (f *fakeBashTool) callCount() int {
 
 // fakeJudgeProvider is a providers.LLMProvider double for the Judge's own
 // no-tools structured LLM call. chatFn receives the 1-based call number so
-// tests can script different responses per attempt.
+// tests can script different responses per attempt. lastCtx records the ctx
+// of the most recent Chat call so a test can assert what the engine plumbed
+// onto the verifier's turn (e.g. tools.WithVerifierSessionScope, ADR-052
+// FR-033) actually reached the LLM call.
 type fakeJudgeProvider struct {
-	mu     sync.Mutex
-	calls  int
-	chatFn func(callNum int) (*providers.LLMResponse, error)
+	mu      sync.Mutex
+	calls   int
+	lastCtx context.Context
+	chatFn  func(callNum int) (*providers.LLMResponse, error)
 }
 
 func (f *fakeJudgeProvider) Chat(
-	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
+	ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
 ) (*providers.LLMResponse, error) {
 	f.mu.Lock()
 	f.calls++
 	n := f.calls
+	f.lastCtx = ctx
 	f.mu.Unlock()
 	return f.chatFn(n)
 }
@@ -87,6 +92,12 @@ func (f *fakeJudgeProvider) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeJudgeProvider) capturedCtx() context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastCtx
 }
 
 // newGoalLoopTestLoop builds an AgentLoop with one native worker agent
@@ -657,6 +668,77 @@ func TestJudge_UnknownCriterionKind_FailsClosed(t *testing.T) {
 	}
 	if result.Verdict.PerCriterion[0].Met {
 		t.Error("unknown-kind criterion must be recorded as unmet")
+	}
+	if fake.callCount() != 0 {
+		t.Errorf("judge LLM called %d times, want 0", fake.callCount())
+	}
+}
+
+// --- JudgeCriteriaInput.validate() (7-reviewer gate item 9) ---------------
+
+func TestJudgeCriteriaInput_Validate(t *testing.T) {
+	cases := []struct {
+		name      string
+		in        JudgeCriteriaInput
+		wantValid bool
+	}{
+		{"task_scope_ok", JudgeCriteriaInput{Scope: task.VerdictScopeTask, TaskID: "t1"}, true},
+		{"task_scope_missing_taskid", JudgeCriteriaInput{Scope: task.VerdictScopeTask}, false},
+		{"task_scope_also_carries_planid", JudgeCriteriaInput{Scope: task.VerdictScopeTask, TaskID: "t1", PlanID: "p1"}, false},
+		{"task_scope_also_carries_goalsession", JudgeCriteriaInput{Scope: task.VerdictScopeTask, TaskID: "t1", GoalSessionID: "s1"}, false},
+		{"plan_scope_ok", JudgeCriteriaInput{Scope: task.VerdictScopePlan, PlanID: "p1"}, true},
+		{"plan_scope_missing_planid", JudgeCriteriaInput{Scope: task.VerdictScopePlan}, false},
+		{"plan_scope_also_carries_taskid", JudgeCriteriaInput{Scope: task.VerdictScopePlan, PlanID: "p1", TaskID: "t1"}, false},
+		{"goal_scope_ok", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalSessionID: "s1"}, true},
+		{"goal_scope_missing_sessionid", JudgeCriteriaInput{Scope: task.VerdictScopeGoal}, false},
+		{"goal_scope_also_carries_planid", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalSessionID: "s1", PlanID: "p1"}, false},
+		{"unknown_scope", JudgeCriteriaInput{Scope: "bogus", TaskID: "t1"}, false},
+		{"empty_scope", JudgeCriteriaInput{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.in.validate()
+			if tc.wantValid && got != "" {
+				t.Errorf("validate() = %q, want valid (empty string)", got)
+			}
+			if !tc.wantValid && got == "" {
+				t.Error("validate() = \"\", want a non-empty violation reason")
+			}
+		})
+	}
+}
+
+// TestJudgeCriteria_InvalidInput_FailsClosedNotUnavailable proves the
+// validate() call site in JudgeCriteria: a scope/id mismatch returns a real
+// (Unavailable=false), fail-closed-unmet verdict — never Unavailable=true
+// (which would tell a caller not to consume an attempt/round, incorrectly
+// implying a transient condition worth retrying) — and never dispatches the
+// Judge LLM at all.
+func TestJudgeCriteria_InvalidInput_FailsClosedNotUnavailable(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		t.Fatal("the Judge LLM must never be called for an invalid JudgeCriteriaInput")
+		return nil, nil
+	}}
+	judgeInst.Provider = fake
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		// Scope says task, but carries a PlanID instead of a TaskID —
+		// exactly the "mismatched scope" shape validate() must reject.
+		Scope:           task.VerdictScopeTask,
+		PlanID:          "p1",
+		AssigneeAgentID: "native-agent",
+		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "x")},
+		Attempt:         1,
+	})
+	if result.Unavailable {
+		t.Fatalf("an invalid input must be a real fail-closed verdict, not Unavailable: %s", result.Reason)
+	}
+	if result.Verdict == nil || result.Verdict.Met {
+		t.Fatalf("expected a non-nil, unmet verdict, got %+v", result.Verdict)
+	}
+	if len(result.Verdict.PerCriterion) != 1 || result.Verdict.PerCriterion[0].Met {
+		t.Fatalf("expected exactly one unmet per-criterion entry, got %+v", result.Verdict.PerCriterion)
 	}
 	if fake.callCount() != 0 {
 		t.Errorf("judge LLM called %d times, want 0", fake.callCount())

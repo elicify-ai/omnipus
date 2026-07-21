@@ -38,8 +38,13 @@ properties:
       Agent lifecycle classification.
       "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray).
       "system" = the System Agents category (ADR-049 D3) — seeded, locked,
-      non-privileged internal-LLM agents that execute as no-tools structured
-      calls (e.g. the Judge). Seeding is the only creation path: not
+      non-privileged internal-LLM agents that run as real agents in a
+      verifier role: same agent loop and ContextBuilder as any agent, own
+      session, but with memory injection off and a narrow read-only tool
+      set (read_file, list_directory, and a scoped inspect_session — no
+      writes, mutations, commits, task-state changes, or delegation)
+      (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is
+      the only creation path: not
       creatable via POST /agents or the create_agent tool (400), not
       deletable, and excluded from chat-target/default-fallback/routing-
       binding/delegation-target/team-roster enumeration — visible only in

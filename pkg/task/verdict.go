@@ -49,6 +49,11 @@ type JudgeVerdict struct {
 	TaskID string `json:"task_id,omitempty"`
 	// PlanID is set when Scope == VerdictScopePlan.
 	PlanID string `json:"plan_id,omitempty"`
+	// GoalSessionID is set when Scope == VerdictScopeGoal (ADR-052 FR-037):
+	// the chat session carrying the /goal condition this verdict adjudicated,
+	// so a goal-scope verdict stays correlated to its session like task/plan
+	// verdicts correlate via TaskID/PlanID.
+	GoalSessionID string `json:"goal_session_id,omitempty"`
 	// Round is the attempt/round index (ADR D7: a "round" is one worker turn
 	// plus its judge evaluation).
 	Round int `json:"round"`

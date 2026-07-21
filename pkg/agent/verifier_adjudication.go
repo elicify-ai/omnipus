@@ -37,6 +37,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // verifierWindowTokensDefault is ADR-052 FR-032's confirmed default transcript
@@ -85,11 +86,14 @@ type VerifierSessionPublisher interface {
 }
 
 // The canonical registry implementation lives in verifier_registry.go
-// (VerifierSessionRegistry + NewVerifierSessionRegistry): PlanEngine owns
-// the process-wide instance and NewPlanEngine points this package seam at
-// it, so the Stop fan-out enumerates (SessionsFor) the very same entries
-// runVerifierAdjudication publishes here. Tests may still override the seam
-// with a 2-method spy.
+// (VerifierSessionRegistry + NewVerifierSessionRegistry): PlanEngine
+// constructs and owns the single process-wide instance, and NewPlanEngine
+// points this package-wide seam at it, so the Stop fan-out enumerates
+// (SessionsFor) the very same entries runVerifierAdjudication publishes
+// here. Both sides key their entries via verifier_registry.go's
+// verifierUnitForPlan/verifierUnitForTask/verifierUnitForGoal (through
+// verifierUnitID below) — never a raw id — so the two sides always agree
+// (ADR-052 FR-037, F1). Tests may still override the seam with a spy.
 
 var (
 	verifierSessionRegistryMu sync.RWMutex
@@ -120,20 +124,25 @@ func currentVerifierSessionRegistry() VerifierSessionPublisher {
 	return verifierPublisherSeam
 }
 
-// verifierUnitID resolves the registry key a Stop fan-out will look up a
-// verifier session by, from whatever JudgeCriteriaInput already carries.
+// verifierUnitID resolves the registry key a Stop fan-out (and /goal clear)
+// will look up a verifier session by, from whatever JudgeCriteriaInput
+// already carries. MUST use the shared verifierUnitForPlan/ForTask/ForGoal
+// helpers (verifier_registry.go) — the single source of truth for this
+// scheme (ADR-052 FR-037, F1: a prior version of this file constructed the
+// prefix ad hoc here while plan_engine.go's Stop fan-out enumerated raw ids,
+// so Stop never found a live verifier session at all).
 func verifierUnitID(in JudgeCriteriaInput) string {
 	if in.TaskID != "" {
-		return "task:" + in.TaskID
+		return verifierUnitForTask(in.TaskID)
 	}
 	if in.PlanID != "" {
-		return "plan:" + in.PlanID
+		return verifierUnitForPlan(in.PlanID)
 	}
 	if in.GoalSessionID != "" {
 		// The collision-free /goal unit key (FR-037): the chat session that
 		// carries the goal condition. /goal clear looks this up to cancel an
 		// in-flight goal verifier.
-		return "goal:" + in.GoalSessionID
+		return verifierUnitForGoal(in.GoalSessionID)
 	}
 	// Defensive fallback for a goal-scope caller that somehow passed no
 	// session id — a per-agent key so the verifier still gets SOME registry
@@ -225,13 +234,34 @@ func (al *AgentLoop) resolveVerifierWindowText(in JudgeCriteriaInput) string {
 	}
 }
 
-// taskSessionWindowText resolves and renders a task's own working-session
-// tail. Returns "" (never an error) on any missing/unresolvable input —
-// window evidence is a best-effort enrichment, never a hard requirement for
+// sessionWindowText is the shared read+render tail for both the task-scope
+// and goal-scope FR-032 window feeds (Simplifier Q2: the two scopes'
+// wrappers below differ only in HOW they resolve sessionID — task scope
+// resolves it via the task store first, goal scope already has it in
+// GoalSessionID — the read+trim+render body is identical, so it lives here
+// once). extraLogFields are merged into the Warn log's structured fields on
+// a ReadTranscript failure (session_id and error are always included) — the
+// task-scope wrapper passes its task_id for correlation; the goal-scope
+// wrapper passes nil. Returns "" (never an error) on a read failure — window
+// evidence is a best-effort enrichment, never a hard requirement for
 // adjudication to proceed.
+func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID string, extraLogFields map[string]any) string {
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		fields := map[string]any{"session_id": sessionID, "error": err.Error()}
+		for k, v := range extraLogFields {
+			fields[k] = v
+		}
+		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
+		return ""
+	}
+	return renderVerifierWindowText(entries, al.effectiveVerifierWindowTokens())
+}
+
 // goalSessionWindowText renders the transcript window for a chat /goal
 // verification (FR-032): the last N tokens of the session carrying the goal
-// condition, read from the goal agent's own session store.
+// condition, read from the goal agent's own session store. Returns "" (never
+// an error) on any missing/unresolvable input.
 func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string {
 	if goalSessionID == "" || agentID == "" {
 		return ""
@@ -240,38 +270,44 @@ func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string
 	if store == nil {
 		return ""
 	}
-	entries, err := store.ReadTranscript(goalSessionID)
-	if err != nil {
-		logger.WarnCF("agent", "verifier: could not read goal session for window feed",
-			map[string]any{"session_id": goalSessionID, "error": err.Error()})
-		return ""
-	}
-	return renderVerifierWindowText(entries, al.effectiveVerifierWindowTokens())
+	return al.sessionWindowText(store, goalSessionID, nil)
 }
 
+// taskSessionWindowText resolves and renders a task's own working-session
+// tail (FR-032): the task's SessionID (via the task store), then the last N
+// tokens of that session, read from the assignee agent's own session store.
+// Returns "" (never an error) on any missing/unresolvable input — window
+// evidence is a best-effort enrichment, never a hard requirement for
+// adjudication to proceed — but every branch that returns "" because a
+// collaborator is missing/unreachable (as opposed to the ordinary "task has
+// no session yet" case) logs a Warn with task_id so a persistently-broken
+// window feed is observable, not silent.
 func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) string {
 	if taskID == "" || assigneeAgentID == "" {
 		return ""
 	}
 	ts := GetTaskStore(al)
 	if ts == nil {
+		logger.WarnCF("agent", "verifier: no task store available for task window feed",
+			map[string]any{"task_id": taskID})
 		return ""
 	}
 	t, err := ts.Get(taskID)
-	if err != nil || t == nil || t.SessionID == "" {
+	if err != nil {
+		logger.WarnCF("agent", "verifier: could not resolve task for window feed",
+			map[string]any{"task_id": taskID, "error": err.Error()})
 		return ""
+	}
+	if t == nil || t.SessionID == "" {
+		return "" // task has no session yet — not an error, just nothing to feed
 	}
 	store := al.GetAgentStore(assigneeAgentID)
 	if store == nil {
+		logger.WarnCF("agent", "verifier: no session store for assignee agent (task window feed)",
+			map[string]any{"task_id": taskID, "agent_id": assigneeAgentID})
 		return ""
 	}
-	entries, err := store.ReadTranscript(t.SessionID)
-	if err != nil {
-		logger.WarnCF("agent", "verifier: could not read task session for window feed",
-			map[string]any{"task_id": taskID, "session_id": t.SessionID, "error": err.Error()})
-		return ""
-	}
-	return renderVerifierWindowText(entries, al.effectiveVerifierWindowTokens())
+	return al.sessionWindowText(store, t.SessionID, map[string]any{"task_id": taskID})
 }
 
 // renderTranscriptEntriesForWindow converts raw session.TranscriptEntry
@@ -282,8 +318,11 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 // reviewed unit's own top-level thread, mirroring the same server-side
 // suppression the live chat surfaces already apply. Tool calls are rendered
 // as compact one-line summaries (tool name + status) so the deterministic
-// "called X N times" style of evidence survives the window even before the
-// dedicated `behavior` criteria kind (a different wave's work) exists.
+// "called X N times" style of evidence still survives a subjective/prose
+// verifier's transcript window even though the dedicated `behavior`
+// criteria kind (behavior_scan.go) already resolves that same class of
+// criterion deterministically, with no LLM verifier dispatch at all — this
+// rendering exists for whatever a prose criterion's own window still needs.
 func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry) []providers.Message {
 	out := make([]providers.Message, 0, len(entries))
 	for _, e := range entries {
@@ -338,6 +377,57 @@ func renderVerifierWindowText(entries []session.TranscriptEntry, budgetTokens in
 		fmt.Fprintf(&sb, "%s: %s\n", m.Role, m.Content)
 	}
 	return sb.String()
+}
+
+// --- inspect_session target scope (ADR-052 FR-033, R3-10/R3-11) -----------
+
+// resolveVerifierSessionScope resolves the set of session IDs the verifier
+// turn dispatched for in is authorized to read via the inspect_session tool
+// (tools.WithVerifierSessionScope/VerifierSessionScopeAllows,
+// pkg/tools/base.go) — engine-set, never client-suppliable. Per scope: task
+// -> that task's own session only; plan -> that plan's member sessions only
+// (GS-04: no single "plan session" exists); goal -> the chat session
+// carrying the goal condition only. Returns nil (authorizes nothing —
+// VerifierSessionScopeAllows fails closed on an unset/empty scope) when the
+// relevant id(s) cannot be resolved.
+func (al *AgentLoop) resolveVerifierSessionScope(in JudgeCriteriaInput) []string {
+	switch in.Scope {
+	case task.VerdictScopeTask:
+		ts := GetTaskStore(al)
+		if ts == nil || in.TaskID == "" {
+			return nil
+		}
+		t, err := ts.Get(in.TaskID)
+		if err != nil || t == nil || t.SessionID == "" {
+			return nil
+		}
+		return []string{t.SessionID}
+	case task.VerdictScopePlan:
+		ts := GetTaskStore(al)
+		if ts == nil || in.PlanID == "" {
+			return nil
+		}
+		members, err := ts.List(task.Filter{PlanID: in.PlanID})
+		if err != nil {
+			logger.WarnCF("agent", "verifier: could not list plan member sessions for inspect_session scope",
+				map[string]any{"plan_id": in.PlanID, "error": err.Error()})
+			return nil
+		}
+		var sessions []string
+		for i := range members {
+			if members[i].SessionID != "" {
+				sessions = append(sessions, members[i].SessionID)
+			}
+		}
+		return sessions
+	case task.VerdictScopeGoal:
+		if in.GoalSessionID == "" {
+			return nil
+		}
+		return []string{in.GoalSessionID}
+	default:
+		return nil
+	}
 }
 
 // --- The verifier turn itself (ADR-052 FR-011) ------------------------------
@@ -430,6 +520,16 @@ func (al *AgentLoop) runVerifierAdjudication(
 		}
 
 		callCtx, cancel := context.WithTimeout(ctx, judgeCallTimeout)
+		// FR-033/R3-10/R3-11 (F2 half): plumb the engine-set inspect_session
+		// target scope onto the verifier's own turn ctx BEFORE dispatch — the
+		// ctx propagates through processTaskDirect's own derivation
+		// (tools.WithAgentID(ctx, ...) etc.) into every tool call the
+		// verifier's turn makes, so inspect_session's
+		// VerifierSessionScopeAllows check (pkg/tools/inspect_session.go)
+		// sees it. A scope that resolves to nil leaves ctx untouched
+		// (WithVerifierSessionScope's own "empty is unset" contract), which
+		// correctly fails inspect_session closed for every session id.
+		callCtx = tools.WithVerifierSessionScope(callCtx, al.resolveVerifierSessionScope(in))
 		content, callErr := al.processTaskDirect(callCtx, judgeInst.ID, prompt, sessionKey, chatID)
 		cancel()
 
@@ -456,10 +556,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			), judgeInst.Model, judgeInst.ID, false, ""
 		}
 
-		byID := make(map[string]judgeCriterionResponse, len(parsed.Criteria))
-		for _, c := range parsed.Criteria {
-			byID[c.ID] = c
-		}
+		byID := dedupeJudgeCriteriaAnyUnmetWins(parsed.Criteria)
 		out := make([]task.CriterionVerdict, 0, len(proseCriteria))
 		for _, c := range proseCriteria {
 			if pc, found := byID[c.ID]; found {
@@ -473,4 +570,23 @@ func (al *AgentLoop) runVerifierAdjudication(
 		}
 		return out, judgeInst.Model, judgeInst.ID, false, ""
 	}
+}
+
+// dedupeJudgeCriteriaAnyUnmetWins collapses a verifier's raw per-criterion
+// responses into one response per criterion id, FAIL-CLOSED on a duplicate:
+// a real LLM occasionally repeats an id across multiple JSON array entries,
+// and a naive last-write-wins map assignment would let a later met:true
+// duplicate silently override an earlier, correct met:false — laundering a
+// real failure into a pass purely by array ordering. Here, if ANY duplicate
+// entry for an id reports met:false, the collapsed result for that id stays
+// unmet regardless of where in the array that entry appears.
+func dedupeJudgeCriteriaAnyUnmetWins(responses []judgeCriterionResponse) map[string]judgeCriterionResponse {
+	byID := make(map[string]judgeCriterionResponse, len(responses))
+	for _, c := range responses {
+		if existing, seen := byID[c.ID]; seen && !existing.Met {
+			continue // an earlier unmet duplicate for this id is never overridden
+		}
+		byID[c.ID] = c
+	}
+	return byID
 }
