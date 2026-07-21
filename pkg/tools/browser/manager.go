@@ -53,6 +53,23 @@ type BrowserConfig struct {
 	// post-launch auto-load to actually run.
 	ExtensionDir string `json:"extension_dir,omitempty"`
 	ExtensionID  string `json:"extension_id,omitempty"`
+	// PreferPackaged (ADR-052 D2/M1) makes the runtime package-managed Chrome
+	// (sibling chromium/ dir next to the binary, computed at runtime via
+	// os.Executable()) OUTRANK a system Chrome on $PATH during resolution —
+	// intended for fleets that want the pinned package Chrome to win for
+	// reproducibility. Default false preserves operator autonomy (M1): a
+	// deliberately newer/patched $PATH Chrome still wins on a fresh install.
+	// Operator `exec_path` override (above) ALWAYS outranks this, as before.
+	PreferPackaged bool `json:"prefer_packaged,omitempty"`
+	// TrustPathChrome (ADR-052 SEC-002) gates whether a Chrome found on
+	// $PATH is permitted to launch WITHOUT integrity verification. Default
+	// false (the security-hardened default): a $PATH resolution is recorded
+	// at WARN-BROWSER-007 and the resolver falls through to the verified
+	// package Chrome (SEC-ADR052-002 — an unverified binary is a "trusted
+	// RCE-engine origin" risk on a multi-tenant / CI-runner / compromised
+	// host). Operators who deliberately want a custom Chrome set this to
+	// true (or use the explicit ExecPath override, which always wins).
+	TrustPathChrome bool `json:"trust_path_chrome,omitempty"`
 }
 
 // DefaultConfig returns a BrowserConfig with spec-defined defaults.

@@ -60,6 +60,15 @@ var goosForCapability = runtime.GOOS
 // so classification never triggers a download — it only inspects what is
 // already on disk.
 //
+// ADR-052 Phase 1: the package-managed Chrome (sibling chromium/ next to
+// the binary, computed at runtime via packageChromeRoot) is ALSO consulted
+// before classifying not-capable. The package Chrome IS video-capable when
+// its sha256 verifies (installer.go's findInstalledBuild, which this
+// function calls, now verifies chrome.sha256 when present — M2). The
+// linux-only gate itself stays strict: per ADR-052 M3/M6, "only after
+// per-OS audio verification" — macOS / Windows Phase 3/4 work; the
+// classifier must not advertise Capable when capture cannot succeed.
+//
 // This is the BASE classification only — it does not know about the
 // ADR-048 preconditions (capture extension seeded, shared-default-context
 // capture enabled). See CaptureVideoCapability (manager.go/this file) for
@@ -80,6 +89,19 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 		return notCapable("unsupported platform for managed chromium: " + err.Error())
 	}
 	if findInstalledBuild(installRoot, platform, fullChromeBuild()) == "" {
+		// ADR-052 Phase 1: fall through to the package-managed Chrome before
+		// classifying not-capable. The package root is computed at runtime
+		// from os.Executable(); when a valid full Chrome lives there
+		// (findInstalledBuild returns its binary path), the host is video-
+		// capable even when the per-profile installRoot is empty.
+		pkgRoot := packageChromeRoot()
+		if pkgRoot != "" {
+			if pkgBin, pkgSHA := findPackageChrome(pkgRoot); pkgBin != "" {
+				if pkgSHA == "" || verifyChromeSHA256(pkgBin, pkgSHA) == nil {
+					return videoAndAudio()
+				}
+			}
+		}
 		return notCapable("full-Chrome build not installed yet (download pending or unavailable)")
 	}
 	return videoAndAudio()
@@ -104,6 +126,12 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 // fatal to the product: the capture session simply fails to start and the
 // panel stays on the JPEG fallback tier (ADR-047 D3), exactly like any other
 // capture-path failure.
+//
+// ADR-052 Phase 1: PreferPackaged true still does NOT relax the linux-only
+// gate here — only the Resolution-order priority in exec_resolver.go changes
+// when the toggle is set. The capability classifier keeps its
+// "linux + non-headless-shell" contract unchanged in Phase 1 (M3/M6: gate
+// relaxes only after per-OS audio verification, which lands in Phase 3/4).
 func ClassifyVideoCapabilityWithExec(execPath, installRoot string) VideoCapability {
 	if execPath == "" {
 		return ClassifyVideoCapability(installRoot)
