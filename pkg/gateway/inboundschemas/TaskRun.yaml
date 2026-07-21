@@ -44,10 +44,13 @@ properties:
       - in_progress
       - done
       - failed
+      - skipped
     description: >
       Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has
       no producer today; a stuck-run reaper closes abandoned runs to
-      `failed`).
+      `failed`). `skipped` records a scheduled fire that never ran at all
+      because the overlap guard found the previous occurrence still
+      `in_progress` — a purely bookkeeping close, not a failure.
     example: "done"
   result:
     type: string
@@ -61,7 +64,9 @@ properties:
     description: >
       The chat session this run produced. Minted at open time, unlike
       Task.session_id (which is only set once a task has ever run) — a
-      TaskRun always has one from creation onward.
+      TaskRun always has one from creation onward, EXCEPT a `status: skipped`
+      record: the overlap guard's scheduled fire never started a session, so
+      a skipped run's `session_id` is always the empty string.
     example: "session-uuid"
   kind:
     type: string

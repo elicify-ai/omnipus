@@ -103,6 +103,7 @@ type wireRunCounts = struct {
 	Failed     int32 `json:"failed"`
 	InProgress int32 `json:"in_progress"`
 	Scheduled  int32 `json:"scheduled"`
+	Skipped    int32 `json:"skipped"`
 }
 
 // wireDayBucket mirrors the element type of gen.TaskOccurrenceSet.DayBuckets
@@ -503,9 +504,10 @@ func populateOccurrenceRunEntries(set *gen.TaskOccurrenceSet, runs []task.TaskRu
 // spring-forward gap — is a different, already-documented edge case and does
 // not excuse this bucket WINDOW from being DST-aware too.)
 //
-// scheduled is derived as bucket.Count minus the three observed statuses,
-// clamped at 0 — a day whose bucket count reflects occurrences whose runs
-// were later pruned (retention) could otherwise go negative.
+// scheduled is derived as bucket.Count minus the four observed statuses
+// (in_progress/done/failed/skipped), clamped at 0 — a day whose bucket count
+// reflects occurrences whose runs were later pruned (retention) could
+// otherwise go negative.
 func populateBucketRunCounts(set *gen.TaskOccurrenceSet, runs []task.TaskRun, loc *time.Location) {
 	if len(set.DayBuckets) == 0 {
 		return
@@ -518,7 +520,7 @@ func populateBucketRunCounts(set *gen.TaskOccurrenceSet, runs []task.TaskRun, lo
 		b := &set.DayBuckets[i]
 		dayFrom := b.DayStartMs
 		dayTo := civilDayNext(dayFrom, loc)
-		var inProgress, done, failed int32
+		var inProgress, done, failed, skipped int32
 		for ms, run := range byOccurrence {
 			if ms < dayFrom || ms >= dayTo {
 				continue
@@ -530,12 +532,14 @@ func populateBucketRunCounts(set *gen.TaskOccurrenceSet, runs []task.TaskRun, lo
 				done++
 			case task.StatusFailed:
 				failed++
+			case task.StatusSkipped:
+				skipped++
 			}
 		}
-		if inProgress == 0 && done == 0 && failed == 0 {
+		if inProgress == 0 && done == 0 && failed == 0 && skipped == 0 {
 			continue // no runs recorded for this day — leave run_counts unset (nil)
 		}
-		scheduled := b.Count - (inProgress + done + failed)
+		scheduled := b.Count - (inProgress + done + failed + skipped)
 		if scheduled < 0 {
 			scheduled = 0
 		}
@@ -544,6 +548,7 @@ func populateBucketRunCounts(set *gen.TaskOccurrenceSet, runs []task.TaskRun, lo
 			Failed:     failed,
 			InProgress: inProgress,
 			Scheduled:  scheduled,
+			Skipped:    skipped,
 		}
 	}
 }

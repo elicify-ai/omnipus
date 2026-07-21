@@ -2673,6 +2673,7 @@ func FixtureTaskOccurrenceSet_Populated() TaskOccurrenceSet {
 				Failed     int32 `json:"failed"`
 				InProgress int32 `json:"in_progress"`
 				Scheduled  int32 `json:"scheduled"`
+				Skipped    int32 `json:"skipped"`
 			} `json:"run_counts,omitempty"`
 		}{
 			{Count: 48, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784620800000, IntervalMs: &interval},
@@ -2701,6 +2702,7 @@ func FixtureTaskOccurrenceSet_BucketsOnly() TaskOccurrenceSet {
 				Failed     int32 `json:"failed"`
 				InProgress int32 `json:"in_progress"`
 				Scheduled  int32 `json:"scheduled"`
+				Skipped    int32 `json:"skipped"`
 			} `json:"run_counts,omitempty"`
 		}{
 			{Count: 1440, DayEndMs: 1784678400000, DayStartMs: 1784592000000, FirstMs: 1784592000000, IntervalMs: &interval},
@@ -2727,6 +2729,7 @@ func FixtureTaskOccurrenceSet_OccurrencesOnly() TaskOccurrenceSet {
 				Failed     int32 `json:"failed"`
 				InProgress int32 `json:"in_progress"`
 				Scheduled  int32 `json:"scheduled"`
+				Skipped    int32 `json:"skipped"`
 			} `json:"run_counts,omitempty"`
 		}{},
 		Truncated: false,
@@ -2754,6 +2757,7 @@ func FixtureTaskOccurrenceSet_WithRunOverlay() TaskOccurrenceSet {
 				Failed     int32 `json:"failed"`
 				InProgress int32 `json:"in_progress"`
 				Scheduled  int32 `json:"scheduled"`
+				Skipped    int32 `json:"skipped"`
 			} `json:"run_counts,omitempty"`
 		}{
 			{
@@ -2763,7 +2767,8 @@ func FixtureTaskOccurrenceSet_WithRunOverlay() TaskOccurrenceSet {
 					Failed     int32 `json:"failed"`
 					InProgress int32 `json:"in_progress"`
 					Scheduled  int32 `json:"scheduled"`
-				}{Done: 12, Failed: 2, InProgress: 0, Scheduled: 26},
+					Skipped    int32 `json:"skipped"`
+				}{Done: 12, Failed: 2, InProgress: 0, Scheduled: 25, Skipped: 1},
 			},
 		},
 		OccurrenceRuns: &[]struct {
@@ -2842,6 +2847,31 @@ func FixtureTaskRun_Edge() TaskRun {
 		Kind:         TaskRunKind("manual"),
 		StartedAt:    startedAt,
 		EndedAt:      &endedAt,
+	}
+}
+
+// FixtureTaskRun_Skipped — a closed (skipped) scheduled recurring-occurrence
+// run: the overlap guard found the previous occurrence still in_progress, so
+// this occurrence never actually ran. Recorded as a zero-duration bookkeeping
+// record (started_at == ended_at) so the calendar overlay has something to
+// join against instead of silently omitting the occurrence. Matches what
+// Store.RecordSkippedOccurrence (pkg/task/run_store.go) actually writes: no
+// session ever ran for a skip, so session_id is always "" (never a synthetic
+// value), and no result is ever set (a skip is a pure bookkeeping close, not
+// an execution outcome) — this fixture deliberately does NOT set Result,
+// unlike its sibling Populated/Edge builders which represent real executions.
+func FixtureTaskRun_Skipped() TaskRun {
+	occMs := int64(1784624400000)
+	skippedAt := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	return TaskRun{
+		RunId:        "01J8Z3K2R9G4S6M0N1P2Q3R4S7",
+		TaskId:       "550e8400-e29b-41d4-a716-446655440000",
+		OccurrenceMs: &occMs,
+		Status:       TaskRunStatus("skipped"),
+		SessionId:    "",
+		Kind:         TaskRunKind("scheduled"),
+		StartedAt:    skippedAt,
+		EndedAt:      &skippedAt,
 	}
 }
 

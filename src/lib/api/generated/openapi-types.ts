@@ -6768,7 +6768,7 @@ export interface components {
                  * @example done
                  * @enum {string}
                  */
-                status: "in_progress" | "done" | "failed";
+                status: "in_progress" | "done" | "failed" | "skipped";
                 /**
                  * @description The matched run's ID (ULID).
                  * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
@@ -6826,7 +6826,7 @@ export interface components {
              * @example 1800000
              */
             interval_ms: number | null;
-            /** @description Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > in_progress > done > scheduled) and tooltip breakdown read this object when present. */
+            /** @description Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > skipped > in_progress > done > scheduled) and tooltip breakdown read this object when present. */
             run_counts?: {
                 /**
                  * Format: int32
@@ -6849,6 +6849,12 @@ export interface components {
                  * @example 2
                  */
                 failed: number;
+                /**
+                 * Format: int32
+                 * @description Occurrences on this day whose fire was skipped by the overlap guard (the previous occurrence was still in_progress).
+                 * @example 0
+                 */
+                skipped: number;
             };
         };
         /**
@@ -6873,18 +6879,18 @@ export interface components {
              */
             occurrence_ms: number | null;
             /**
-             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`).
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
              * @example done
              * @enum {string}
              */
-            status: "in_progress" | "done" | "failed";
+            status: "in_progress" | "done" | "failed" | "skipped";
             /**
              * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
              * @example Found 3 anomalies in the gateway logs.
              */
             result?: string;
             /**
-             * @description The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward.
+             * @description The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward, EXCEPT a `status: skipped` record: the overlap guard's scheduled fire never started a session, so a skipped run's `session_id` is always the empty string.
              * @example session-uuid
              */
             session_id: string;

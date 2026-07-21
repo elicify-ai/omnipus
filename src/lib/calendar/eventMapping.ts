@@ -28,6 +28,7 @@ import {
   MILESTONE_STYLE,
   SCHEDULED_STYLE,
   NO_RECORD_STYLE,
+  SKIPPED_STYLE,
   type CalendarEventExtProps,
   type ChipStyle,
   type OccurrenceChipStatus,
@@ -233,9 +234,16 @@ function resolveOccurrenceChipState(
   tooltip?: string
 } {
   if (run) {
+    // `skipped` is a real `TaskRun.status` value but NOT a `TaskStatus`
+    // member — `STATUS_STYLE` (keyed by the 7-state `TaskStatus`) must not
+    // gain a `skipped` entry (that would wrongly imply it's a valid
+    // `Task.status`). Resolve it to its own dedicated style instead of
+    // falling through to `STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK`,
+    // which would silently render it as the grey fallback.
+    const style = run.status === 'skipped' ? SKIPPED_STYLE : (STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK)
     return {
       status: run.status,
-      style: STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK,
+      style,
       runId: run.run_id,
       sessionId: run.session_id,
       hasResult: run.has_result,
@@ -297,25 +305,34 @@ export function resolveRunForOccurrence(runs: TaskRun[], occurrenceMs: number): 
  * Format a bucket's `run_counts` tally as a breakdown tooltip, e.g.
  * `"12 done · 2 failed · 26 scheduled"` (task-run-history-spec.md §4.2, BDD
  * scenario 9). Zero-count categories are omitted. The fixed presentation
- * order (done, failed, in_progress, scheduled) reproduces the spec's own
- * example wording exactly.
+ * order (done, failed, skipped, in_progress, scheduled) reproduces the
+ * spec's own example wording exactly, with `skipped` slotted alongside its
+ * siblings (backend overlap-guard addition).
  */
 export function buildRunCountsTooltip(counts: RunCounts): string {
   const parts: string[] = []
   if (counts.done > 0) parts.push(`${counts.done} done`)
   if (counts.failed > 0) parts.push(`${counts.failed} failed`)
+  if (counts.skipped > 0) parts.push(`${counts.skipped} skipped`)
   if (counts.in_progress > 0) parts.push(`${counts.in_progress} in progress`)
   if (counts.scheduled > 0) parts.push(`${counts.scheduled} scheduled`)
   return parts.join(' · ')
 }
 
 /**
- * Worst-wins glyph/status for an aggregated bucket: failed > in_progress >
- * done > scheduled. Never a single clean status — the bucket shows the WORST
- * outcome present that day, not an average or the first one.
+ * Worst-wins glyph/status for an aggregated bucket: failed > skipped >
+ * in_progress > done > scheduled. Never a single clean status — the bucket
+ * shows the WORST outcome present that day, not an average or the first one.
+ *
+ * Placement judgment call (not spec-mandated): `skipped` (an occurrence that
+ * never ran at all, because the overlap guard found the previous occurrence
+ * still `in_progress`) is worse than a clean `done`, but not as urgent as an
+ * active `failed` run — so it's ranked directly below `failed` and above
+ * `in_progress`/`done`/`scheduled`.
  */
 function resolveBucketWorstWins(counts: RunCounts): { status: OccurrenceChipStatus; style: ChipStyle } {
   if (counts.failed > 0) return { status: 'failed', style: STATUS_STYLE.failed }
+  if (counts.skipped > 0) return { status: 'skipped', style: SKIPPED_STYLE }
   if (counts.in_progress > 0) return { status: 'in_progress', style: STATUS_STYLE.in_progress }
   if (counts.done > 0) return { status: 'done', style: STATUS_STYLE.done }
   return { status: 'scheduled', style: SCHEDULED_STYLE }

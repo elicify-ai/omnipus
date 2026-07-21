@@ -104,6 +104,16 @@ type TaskTriggerScheduler struct {
 	// and computes it — see its own doc comment.
 	dispatch func(ctx context.Context, taskID string, occurrenceMs *int64) error
 
+	// emitRunStatus, when set, publishes a TaskRun status transition onto the
+	// agent event bus — the exact same emitEvent-based mechanism OpenRun/
+	// CloseRun already use via TaskExecutor.emitRunStatus (task_executor.go),
+	// so a recorded skipped-occurrence run also gets a live task_run_status
+	// WS push, matching every other run-status transition (ADR-050
+	// Consequences "Realtime"). Wired from the *TaskExecutor passed to
+	// NewTaskTriggerScheduler — nil in tests that construct a scheduler
+	// without one, mirroring dispatch's own "unset = no-op" convention.
+	emitRunStatus func(taskID, runID string, occurrenceMs *int64, status task.Status)
+
 	mu        sync.Mutex
 	taskToJob map[string]trackedTrigger // taskID → {cronJobID, trigger generation}
 	clock     cron.Clock                // mirrors cs's clock; defaults to systemClock, set via SetClock
@@ -162,6 +172,7 @@ func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *Task
 	}
 	if executor != nil {
 		s.dispatch = executor.SpawnTriggeredRun
+		s.emitRunStatus = executor.emitRunStatus
 	}
 	return s
 }
@@ -654,6 +665,21 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 			// interval will re-fire. Do not stomp an in-flight run.
 			slog.Info("task_trigger: task already in_progress, skipping fire (overlap guard)",
 				"task_id", taskID, "job_id", job.ID)
+			// Record a skipped-run entry for run-history/calendar transparency
+			// (task-run-history-spec.md, TaskRun.status=skipped) — this is a
+			// "nice to have," never allowed to block the re-arm below: a
+			// failure to record the skip must not stall the scheduler's
+			// forward progress. RecordSkippedOccurrence returns (nil, nil)
+			// when it correctly suppressed a duplicate/misleading skip (a run
+			// already exists for this exact occurrence, e.g. RD8 Run-now) —
+			// nothing to emit in that case, and that is not a failure.
+			skippedRun, recErr := s.store.RecordSkippedOccurrence(taskID, occurrenceMs)
+			if recErr != nil {
+				slog.Warn("task_trigger: failed to record skipped-occurrence run, continuing anyway",
+					"task_id", taskID, "job_id", job.ID, "error", recErr)
+			} else if skippedRun != nil && s.emitRunStatus != nil {
+				s.emitRunStatus(taskID, skippedRun.RunID, skippedRun.OccurrenceMs, skippedRun.Status)
+			}
 			if isRrule {
 				s.rearmRrule(t, fireGen)
 			}

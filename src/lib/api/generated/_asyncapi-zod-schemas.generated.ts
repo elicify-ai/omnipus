@@ -217,7 +217,7 @@ export const TaskRunStatusFrame = z
     task_id: z.string().min(1),
     run_id: z.string().min(1),
     occurrence_ms: z.number().int().optional(),
-    status: z.enum(["in_progress", "done", "failed"]),
+    status: z.enum(["in_progress", "done", "failed", "skipped"]),
   })
   .strict();
 

@@ -1075,6 +1075,7 @@ func TestContract_TaskOccurrenceSet_NilOccurrencesMsRejected(t *testing.T) {
 				Failed     int32 `json:"failed"`
 				InProgress int32 `json:"in_progress"`
 				Scheduled  int32 `json:"scheduled"`
+				Skipped    int32 `json:"skipped"`
 			} `json:"run_counts,omitempty"`
 		}{},
 		OccurrencesMs: nil, // bug: nil slice marshals to null
@@ -1184,7 +1185,7 @@ func TestContract_TaskOccurrenceSet_WithRunOverlay_NullFree(t *testing.T) {
 
 func TestContract_TaskOccurrenceSet_OccurrenceRunsInvalidStatus(t *testing.T) {
 	// Traces to: TaskOccurrenceSet.yaml — occurrence_runs[].status enum:
-	// [in_progress, done, failed]. "wibble" is not a member.
+	// [in_progress, done, failed, skipped]. "wibble" is not a member.
 	doc := map[string]any{
 		"task_id":        "task-1",
 		"occurrences_ms": []int64{1784620800000},
@@ -1203,7 +1204,32 @@ func TestContract_TaskOccurrenceSet_OccurrenceRunsInvalidStatus(t *testing.T) {
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TaskOccurrenceSet", raw),
-		"occurrence_runs[].status='wibble' must fail — not in enum [in_progress, done, failed]")
+		"occurrence_runs[].status='wibble' must fail — not in enum [in_progress, done, failed, skipped]")
+}
+
+func TestContract_TaskOccurrenceSet_OccurrenceRunsSkippedStatus(t *testing.T) {
+	// Traces to: TaskOccurrenceSet.yaml — occurrence_runs[].status enum gained
+	// `skipped` (the overlap-guard outcome, TaskRun-only — never Task.status).
+	// "skipped" must now validate where it was previously rejected.
+	doc := map[string]any{
+		"task_id":        "task-1",
+		"occurrences_ms": []int64{1784620800000},
+		"day_buckets":    []any{},
+		"truncated":      false,
+		"occurrence_runs": []map[string]any{
+			{
+				"occurrence_ms": 1784620800000,
+				"status":        "skipped",
+				"run_id":        "run-1",
+				"session_id":    "sess-1",
+				"has_result":    false,
+			},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "TaskOccurrenceSet", raw),
+		"occurrence_runs[].status='skipped' must now validate — added to the enum")
 }
 
 // ── TaskRun ──────────────────────────────────────────────────────────────────
@@ -1242,7 +1268,7 @@ func TestContract_TaskRun_Differentiation(t *testing.T) {
 }
 
 func TestContract_TaskRun_InvalidStatus(t *testing.T) {
-	// Traces to: TaskRun.yaml — status enum: [in_progress, done, failed]
+	// Traces to: TaskRun.yaml — status enum: [in_progress, done, failed, skipped]
 	doc := map[string]any{
 		"run_id": "run-1", "task_id": "task-1", "occurrence_ms": nil,
 		"status": "wibble", "session_id": "sess-1", "kind": "scheduled",
@@ -1251,7 +1277,15 @@ func TestContract_TaskRun_InvalidStatus(t *testing.T) {
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TaskRun", raw),
-		"status='wibble' must fail TaskRun — not in enum [in_progress, done, failed]")
+		"status='wibble' must fail TaskRun — not in enum [in_progress, done, failed, skipped]")
+}
+
+func TestContract_TaskRun_Skipped(t *testing.T) {
+	// Traces to: TaskRun.yaml — status enum gained `skipped` (the overlap
+	// guard's "this occurrence never ran" bookkeeping outcome). TaskRun-only:
+	// must NEVER be added to Task.status or IsTerminal — those are separate
+	// concepts (~13 unrelated dependents).
+	mustPassComponent(t, "TaskRun", FixtureTaskRun_Skipped())
 }
 
 func TestContract_TaskRun_InvalidKind(t *testing.T) {

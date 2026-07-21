@@ -91,7 +91,43 @@ export function CalendarToolbar({
 
   const handlePrev = withApi('prev', (api) => api.prev())
   const handleNext = withApi('next', (api) => api.next())
-  const handleToday = withApi('today', (api) => api.today())
+  // "Today" jumps the DATE range (api.today()) AND scrolls to the current
+  // TIME — matching Google Calendar's own Today button, which does both, not
+  // just the date. Reported live: without this, landing back on today's date
+  // still left the user scrolled wherever they'd last scrolled to (e.g.
+  // 8am), with no way to jump straight to "now" itself.
+  //   - timeGrid views (Week/Day): api.scrollToTime — a real FullCalendar
+  //     API for this, takes an "HH:MM:SS" duration-from-midnight string.
+  //   - Agenda (listWeek): no FullCalendar API scrolls a list view to a
+  //     time — `calendarRef`'s `elRef` isn't exposed, so this queries the
+  //     rendered now-marker row directly (present whenever there's at least
+  //     one real event that day — see CalendarScreen's nowMarkerEvent) and
+  //     falls back to today's own day-group header when the marker isn't
+  //     rendered (e.g. a day with zero real events).
+  //   - Month: date-only, no time position to scroll to.
+  const handleToday = withApi('today', (api) => {
+    api.today()
+    const view = api.view.type
+    if (view === 'timeGridWeek' || view === 'timeGridDay') {
+      const now = new Date()
+      const hh = String(now.getHours()).padStart(2, '0')
+      const mm = String(now.getMinutes()).padStart(2, '0')
+      const ss = String(now.getSeconds()).padStart(2, '0')
+      api.scrollToTime(`${hh}:${mm}:${ss}`)
+    } else if (view === 'listWeek') {
+      requestAnimationFrame(() => {
+        const now = new Date()
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+        // .fc-list-day has no dedicated "is today" class — it carries a
+        // data-date="YYYY-MM-DD" attribute (@fullcalendar/list's own
+        // formatDayString), which is what the fallback keys off.
+        const target =
+          document.querySelector('.fc-sovereign-wrapper .fc-sovereign-now-marker-row') ??
+          document.querySelector(`.fc-sovereign-wrapper .fc-list-day[data-date="${todayStr}"]`)
+        target?.scrollIntoView({ block: 'center' })
+      })
+    }
+  })
 
   const handleViewChange = (view: CalendarViewName) => {
     withApi('changeView', (api) => api.changeView(view))()

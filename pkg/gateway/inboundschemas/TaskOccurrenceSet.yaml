@@ -69,6 +69,7 @@ properties:
             - in_progress
             - done
             - failed
+            - skipped
           description: The matched run's status.
           example: "done"
         run_id:

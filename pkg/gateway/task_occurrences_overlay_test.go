@@ -206,6 +206,65 @@ func TestOccurrenceOverlay(t *testing.T) {
 		}
 	})
 
+	t.Run("run_counts tallies skipped and subtracts it from scheduled too", func(t *testing.T) {
+		// Overlap-guard skip (task-run-history-spec.md, TaskRun.status=skipped,
+		// pkg/task/run_store.go's RecordSkippedOccurrence): a skipped occurrence
+		// already happened-and-was-skipped, so it must be tallied into its own
+		// bucket and NOT counted as still-"scheduled" — regression coverage for
+		// the populateBucketRunCounts fix accompanying the new status.
+		from := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+		to := from.AddDate(0, 0, 10) // 10 days: OVERVIEW mode (> 8*24h)
+		fromMs, toMs := from.UnixMilli(), to.UnixMilli()
+
+		tasks := []task.Task{{
+			ID: "hourly-skip-task",
+			Trigger: &task.Trigger{
+				Type: task.TriggerRecurring,
+				Config: task.TriggerConfig{
+					Rrule:     ptr("FREQ=HOURLY"),
+					DtstartMs: ptr(from.UnixMilli()),
+					Tz:        ptr("UTC"),
+				},
+			},
+		}}
+
+		day0Start := from.UnixMilli()
+		var runs []task.TaskRun
+		addRun := func(hourOffset int, status task.Status) {
+			ms := day0Start + int64(hourOffset)*int64(time.Hour/time.Millisecond)
+			runs = append(runs, task.TaskRun{
+				RunID: runID(hourOffset, status), TaskID: "hourly-skip-task",
+				OccurrenceMs: ptr(ms), Status: status,
+			})
+		}
+		for i := 0; i < 4; i++ {
+			addRun(i, task.StatusDone)
+		}
+		for i := 4; i < 7; i++ {
+			addRun(i, task.StatusSkipped)
+		}
+		stub := func(string, int64, int64) ([]task.TaskRun, error) { return runs, nil }
+
+		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", noEveryAnchor, stub)
+		require.NoError(t, err)
+		require.Len(t, sets, 1)
+		set := sets[0]
+		require.Len(t, set.DayBuckets, 10, "one bucket per day, dense (24/day hourly)")
+
+		b0 := set.DayBuckets[0]
+		require.Equal(t, int32(24), b0.Count)
+		require.NotNil(t, b0.RunCounts, "day 0 has runs, expected a populated run_counts")
+		assert.Equal(t, int32(4), b0.RunCounts.Done)
+		assert.Equal(t, int32(0), b0.RunCounts.Failed)
+		assert.Equal(t, int32(0), b0.RunCounts.InProgress)
+		assert.Equal(t, int32(3), b0.RunCounts.Skipped)
+		assert.Equal(t, int32(17), b0.RunCounts.Scheduled, "24 - (4 done + 3 skipped) = 17, skipped must NOT be double-counted as scheduled")
+
+		for i := 1; i < len(set.DayBuckets); i++ {
+			assert.Nil(t, set.DayBuckets[i].RunCounts, "day %d has no runs, run_counts must stay unset", i)
+		}
+	})
+
 	t.Run("run_counts clamps scheduled at 0 when statuses exceed the bucket count", func(t *testing.T) {
 		from := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
 		to := from.AddDate(0, 0, 10)

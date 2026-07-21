@@ -40,8 +40,13 @@ export type TaskStatus = Task['status']
  * never comes from `task.status` at all (see `RunDerivedChipStatus`) — the
  * two variants have different real domains, which is why they get different
  * types (M6).
+ *
+ * `'skipped'` is included here too (not a `TaskStatus` member — see
+ * `RunDerivedChipStatus`'s doc comment) so the aggregated-bucket worst-wins
+ * resolution (`resolveBucketWorstWins` in eventMapping.ts) can resolve a
+ * bucket to `'skipped'` when that's the day's worst outcome.
  */
-export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record'
+export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record' | 'skipped'
 
 /**
  * `task-occurrence` (individual instant) chip status domain (ADR-050 RD6,
@@ -55,8 +60,16 @@ export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record'
  * Narrower than `OccurrenceChipStatus` (which stays the full `TaskStatus`
  * union for `task-occurrence-agg`'s legacy fallback) precisely because this
  * variant's domain excludes the other four `TaskStatus` members entirely.
+ *
+ * `'skipped'` (added alongside the backend's overlap-guard run-outcome) is a
+ * fifth REAL `TaskRun.status` member — a scheduled fire that never ran
+ * because the previous occurrence was still `in_progress` — not a synthetic
+ * day-vs-now state like `'scheduled'`/`'no_record'`. It renders as its own
+ * distinct orange chip (`SKIPPED_STYLE`) rather than falling through
+ * `STATUS_STYLE` (which stays `TaskStatus`-only — `skipped` is NOT a
+ * `Task.status` value).
  */
-export type RunDerivedChipStatus = 'done' | 'in_progress' | 'failed' | 'scheduled' | 'no_record'
+export type RunDerivedChipStatus = 'done' | 'in_progress' | 'failed' | 'skipped' | 'scheduled' | 'no_record'
 
 /** The four views offered by the toolbar (FR-006). */
 export type CalendarViewName =
@@ -92,6 +105,7 @@ export type StatusIconKey =
   | 'Circle' //      inbox / next / planning (muted)
   | 'Clock' //       once-trigger "fires" chip (overrides status icon)
   | 'Flag' //        milestone
+  | 'SkipForward' //  TaskRun.status === 'skipped' (overlap-guard, run-only)
 
 /**
  * extendedProps carried on every FullCalendar EventInput we produce.
@@ -169,6 +183,28 @@ export type CalendarEventExtProps =
       dayEndMs: number
     }
   | { kind: 'task-occurrence-more'; taskId: string; status: TaskStatus; icon: 'Clock'; tooltip: string }
+  /**
+   * Synthetic live "now" divider — Agenda (`listWeek`) view ONLY, added
+   * because `@fullcalendar/list` has no time axis and structurally cannot
+   * render FullCalendar's built-in `nowIndicator` (Week/Day only — confirmed
+   * working there, untouched). `CalendarScreen` appends exactly one of these
+   * to `events` per render, ONLY while `listWeek` is the active view and the
+   * live-ticking "now" timestamp falls inside FullCalendar's own visible
+   * range; FullCalendar's own start-time sort then places it chronologically
+   * among that day's real rows, same as Google Calendar's agenda view.
+   * `FullCalendarView`'s `EventChip` branches to a bare `NowMarkerLine`
+   * divider instead of a real chip, and `CalendarScreen.handleEventClick`
+   * treats it as non-interactive (mirrors `task-occurrence-more`, above).
+   *
+   * `timeLabel` is pre-formatted by `CalendarScreen` at construction time
+   * (NOT read from FullCalendar's own `arg.timeText` at render time):
+   * `@fullcalendar/list` hardcodes `timeText: ""` for every custom
+   * `eventContent` in list/Agenda view (it renders the native time into its
+   * own separate `<td>` instead), so `arg.timeText` is always empty there —
+   * confirmed by reading `@fullcalendar/list`'s source and empirically in a
+   * real browser. Carrying the label as data sidesteps that entirely.
+   */
+  | { kind: 'now-marker'; timeLabel: string }
 
 /** Near-black chip text — clears WCAG AAA (>=7:1) on every chip background (SC-006b). */
 export const CHIP_TEXT_COLOR = '#0A0A0B'
@@ -217,6 +253,20 @@ export const SCHEDULED_STYLE: ChipStyle = { bg: '#94A3B8', icon: 'Clock' }
  * chip and any status-colored run chip (task-run-history-spec.md §4.2).
  */
 export const NO_RECORD_STYLE: ChipStyle = { bg: '#94A3B8', icon: 'Circle' }
+
+/**
+ * "Skipped" occurrence chip style — a real `TaskRun.status` value (not a
+ * synthetic day-vs-now state): a scheduled fire the backend's overlap guard
+ * declined to run because the previous occurrence was still `in_progress`.
+ * Distinct orange (operator direction: "make it orange... so it is
+ * transparent to the user what happened") — reuses the SAME hex as
+ * `src/lib/statusColors.ts`'s `blocked` (`#F97316` / `--color-cancelled` in
+ * `src/styles/globals.css`), this codebase's one established "orange", never
+ * a newly invented hue. `SkipForward` (not `Prohibit`, already `blocked`;
+ * not `Warning`/`WarningCircle`, already error-banner meaning) reads as
+ * "this fire was skipped".
+ */
+export const SKIPPED_STYLE: ChipStyle = { bg: '#F97316', icon: 'SkipForward' }
 
 /** The forwarded ref both FullCalendarView and CalendarToolbar share. */
 export type CalendarApiRef = MutableRefObject<FullCalendar | null>

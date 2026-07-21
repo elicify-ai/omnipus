@@ -4,8 +4,17 @@
 // the calendar's TaskRunStatusField (a read-only badge for the recurring-task
 // EDIT slide-over) render the exact same status vocabulary — no drift between
 // the two surfaces that show a task's lifecycle state.
+//
+// `skipped` is a `TaskRun.status`-only value (a scheduled fire the backend's
+// overlap guard declined to run because the previous occurrence was still
+// `in_progress`) — NOT a `Task['status']` member. It's included in
+// `STATUS_BADGE`/`statusLabel` below because both `TaskRunsList.tsx` and
+// `TaskRunStatusField.tsx` key these maps off a `TaskRun['status']` value
+// (a strict superset-minus-`next`/`inbox`/`planning`/`blocked` of
+// `Task['status']`, plus `skipped`), not off `Task['status']` itself.
 
 import type { Task } from '@/lib/api'
+import type { TaskRun } from '@/lib/api'
 
 // User-settable status options (blocked is excluded — it is backend-derived
 // and read-only). Theme-token colours. `text-[color:…]` keeps these as
@@ -28,10 +37,23 @@ export const STATUS_BADGE: Record<string, string> = {
   blocked:     'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
   done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',
   failed:      'text-[color:var(--color-error)] bg-[var(--color-error)]/10',
+  // TaskRun-only outcome (overlap guard) — the established design-system
+  // orange (`--color-cancelled`, #F97316), NOT `--color-warning` (yellow,
+  // already used for `blocked`/`in_progress` above) — distinct so a skipped
+  // run never reads as the same color as those.
+  skipped:     'text-[color:var(--color-cancelled)] bg-[var(--color-cancelled)]/10',
 }
 
-/** Human-readable label for a status value, including the backend-derived "blocked" state. */
-export function statusLabel(status: Task['status']): string {
+/**
+ * Human-readable label for a status value. Widened to accept both
+ * `Task['status']` (the 7-state task lifecycle, including the backend-derived
+ * "blocked" state) and `TaskRun['status']` (the run-outcome vocabulary,
+ * including "skipped") — `TaskRunsList.tsx`/`TaskRunStatusField.tsx` call
+ * this with a `TaskRun['status']` value, which is not assignable to
+ * `Task['status']` now that `skipped` exists on runs only.
+ */
+export function statusLabel(status: Task['status'] | TaskRun['status']): string {
   if (status === 'blocked') return 'Blocked'
+  if (status === 'skipped') return 'Skipped'
   return STATUS_OPTIONS.find((o) => o.value === status)?.label ?? status
 }

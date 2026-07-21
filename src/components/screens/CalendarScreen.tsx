@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type FullCalendar from '@fullcalendar/react'
-import type { EventClickArg, EventDropArg, DateSelectArg } from '@fullcalendar/core'
+import type { EventClickArg, EventDropArg, DateSelectArg, EventInput } from '@fullcalendar/core'
 import type { DateClickArg } from '@fullcalendar/interaction'
 import {
   fetchTasks,
@@ -181,6 +181,83 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
 
   const handleViewChange = useCallback((view: CalendarViewName) => setCurrentView(view), [])
 
+  // ── Agenda "now" marker (live divider, listWeek ONLY) ─────────────────────────
+  // `nowIndicator={true}` (FullCalendarView.tsx) already renders a correct, live
+  // Google-Calendar-style "now" line in Week/Day via FullCalendar's own timeGrid
+  // machinery — untouched here. `@fullcalendar/list` (Agenda) has no time axis and
+  // structurally cannot render that built-in indicator, so a single synthetic
+  // `kind: 'now-marker'` EventInput is injected instead, ONLY while Agenda is the
+  // active view. `nowTick` only needs to advance roughly every 30-60s (no
+  // per-second precision required), and the interval is scoped to Agenda being
+  // open — no background ticking (and no timer leak) in Month/Week/Day.
+  // `Date.now()`-driven; resynced the INSTANT Agenda becomes active (not left to
+  // wait for the first 30s tick — switching in from a view that had been open for
+  // minutes would otherwise show a stale "now" position until the first tick).
+  const [nowTick, setNowTick] = useState<number>(() => Date.now())
+  useEffect(() => {
+    if (currentView !== 'listWeek') return
+    setNowTick(Date.now())
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => window.clearInterval(id)
+  }, [currentView])
+
+  // Time label pre-formatted here (not read from FullCalendar's arg.timeText at
+  // render time — see the `now-marker` variant's doc comment in types.ts for why
+  // that's always empty in list view). Matches FullCalendarView's own
+  // eventTimeFormat/slotLabelFormat options so the label is visually consistent
+  // with every other view's time formatting.
+  const NOW_MARKER_TIME_FORMAT = useMemo(
+    () => new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', hour12: true }),
+    [],
+  )
+
+  // Only materialize the marker when it would actually land inside FullCalendar's
+  // OWN reported visible range (`activeRange`, half-open — `end` exclusive, same
+  // convention as `onDatesSet`) — never in Month/Week/Day, never a stale marker
+  // outside the currently-viewed Agenda week, and only when there's at least one
+  // real item for it to sit among (a lone divider on an otherwise-empty Agenda
+  // has nothing to divide and would render simultaneously with the "No scheduled
+  // items" empty-state hint, which reads as contradictory/broken).
+  const nowMarkerEvent = useMemo<EventInput | null>(() => {
+    if (currentView !== 'listWeek' || !activeRange || filteredEvents.length === 0) return null
+    if (nowTick < activeRange.start.getTime() || nowTick >= activeRange.end.getTime()) return null
+    return {
+      id: 'now-marker',
+      start: new Date(nowTick),
+      // A minimal (1s) but STRICTLY GREATER-than-start `end` — NOT equal.
+      // WITHOUT any explicit `end`, FullCalendar assigns its own
+      // `defaultTimedEventDuration` (1 hour) to a timed event, which late at
+      // night pushed the marker's span past midnight; Agenda's list view then
+      // renders a segment of any day-spanning event on EVERY day it touches
+      // — the marker showed twice, once under today and once under
+      // tomorrow. The first fix (end === start) was ALSO wrong: FullCalendar
+      // itself treats `end <= start` as "no end provided" (@fullcalendar/
+      // core's parseSingle: `if (startMarker && endMarker <= startMarker)
+      // endMarker = null`) and falls through to the SAME 1-hour default —
+      // confirmed live, still duplicated. `end` must be strictly after
+      // `start`; 1 second is enough to satisfy that check while staying
+      // visually/semantically instantaneous (NowMarkerLine never renders
+      // anything duration-dependent).
+      end: new Date(nowTick + 1000),
+      allDay: false,
+      title: '',
+      editable: false,
+      extendedProps: { kind: 'now-marker', timeLabel: NOW_MARKER_TIME_FORMAT.format(nowTick) },
+    }
+  }, [currentView, activeRange, nowTick, filteredEvents.length, NOW_MARKER_TIME_FORMAT])
+
+  // Appended AFTER the agent-filter step (never before) — it is not a task and
+  // must never be dropped by `filterEventsByAgent`. Kept as a SEPARATE array from
+  // `filteredEvents` (rather than mutating it) so `isEmpty` above still reflects
+  // only real data — the marker is a visual divider, not a schedulable item, and
+  // must never mask a genuinely empty Agenda view. FullCalendar's list view sorts
+  // by `start` automatically, so the marker lands in the right chronological slot
+  // among the day's real events with no manual sorting needed.
+  const calendarEvents = useMemo(
+    () => (nowMarkerEvent ? [...filteredEvents, nowMarkerEvent] : filteredEvents),
+    [filteredEvents, nowMarkerEvent],
+  )
+
   // ── Slide-over / popover state ───────────────────────────────────────────────
   // CalendarEventSlideOver is a single component covering BOTH create (US-1)
   // and recurring/legacy series edit (US-2/US-5) — `eventSlideOverTask` null
@@ -241,11 +318,20 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   }, [])
 
   // ── Reschedule persistence (whole-trigger + date-format rules — F-05/F-06/F-08) ─
-  // `ext` is the discriminated CalendarEventExtProps union, so the switch narrows
-  // taskId/milestoneId with no defensive checks and is exhaustive over `kind`.
+  // `ext` is the discriminated CalendarEventExtProps union; the switch narrows
+  // taskId/milestoneId with no defensive checks. NOT exhaustive over `kind` (a
+  // pre-existing gap, not introduced here): task-occurrence/-agg/-more chips are
+  // never draggable (eventMapping.ts sets `editable: false` on all three), and
+  // now-marker is likewise `editable: false` (below), so `eventDrop` can never
+  // fire for any of them — an implicit fall-through-and-return is safe today.
+  // The `now-marker` case is still spelled out explicitly (mirrors the same
+  // defensive style already used for it in `patchCacheDate` and
+  // `handleEventClick`, both below) rather than relying on that fall-through.
   const persistReschedule = useCallback(
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
       switch (ext.kind) {
+        case 'now-marker':
+          return
         case 'milestone':
           // Milestone due_date is a plain ISO date string → local YYYY-MM-DD.
           await updateMilestone(workspaceId, ext.milestoneId, {
@@ -299,6 +385,13 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
           }
         }
       }
+      // The Agenda "now" divider is `editable: false` (see the marker event
+      // built above) — FullCalendar never fires `eventDrop`/reschedule for
+      // it, so this branch never runs in practice. Guarded here only so the
+      // rest of this function can safely narrow `ext` to the taskId-bearing
+      // members below (TypeScript exhaustiveness — `now-marker` has no
+      // `taskId`).
+      if (ext.kind === 'now-marker') return () => {}
       const key = tasksQueryKeys.list({ workspace_id: workspaceId })
       // Capture only the single prior task for a targeted rollback.
       const prevItem = queryClient
@@ -442,6 +535,9 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         case 'task-occurrence-more':
           // Non-interactive truncation marker — no click action.
           return
+        case 'now-marker':
+          // Non-interactive Agenda "now" divider — no click action.
+          return
         case 'task-due':
         case 'task-fire': {
           const t = tasks.find((x) => x.id === ext.taskId)
@@ -512,7 +608,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
 
       <div className="flex-1 min-h-0 min-w-0 p-3" data-testid="calendar-grid">
         <FullCalendarView
-          events={filteredEvents}
+          events={calendarEvents}
           calendarRef={calendarRef}
           isLoading={isLoading}
           isEmpty={isEmpty}

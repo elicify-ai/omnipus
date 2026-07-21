@@ -10,8 +10,9 @@
  *   2. individual instant, no run, occurrence_ms >= now → 'scheduled' (Clock).
  *   3. individual instant, no run, occurrence_ms < now → 'no_record' (a
  *      distinct muted glyph) — and NEVER rendered as 'scheduled'.
- *   4. aggregated day bucket → worst-wins glyph (failed > in_progress > done
- *      > scheduled) + "N done · N failed · N scheduled" tooltip breakdown.
+ *   4. aggregated day bucket → worst-wins glyph (failed > skipped > in_progress
+ *      > done > scheduled) + "N done · N failed · N skipped · N in progress ·
+ *      N scheduled" tooltip breakdown.
  *   5. aggregated day bucket with no `run_counts` → falls back to today's
  *      pre-overlay rendering (task.status + Clock + "first at HH:MM").
  */
@@ -222,7 +223,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
           count: 40,
           first_ms: dayStart,
           interval_ms: null,
-          run_counts: { scheduled: 26, in_progress: 0, done: 12, failed: 2 },
+          run_counts: { scheduled: 26, in_progress: 0, done: 12, failed: 2, skipped: 0 },
         },
       ],
     })
@@ -250,7 +251,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
           count: 10,
           first_ms: dayStart,
           interval_ms: null,
-          run_counts: { scheduled: 0, in_progress: 3, done: 6, failed: 0 },
+          run_counts: { scheduled: 0, in_progress: 3, done: 6, failed: 0, skipped: 0 },
         },
       ],
     })
@@ -270,7 +271,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
           count: 5,
           first_ms: dayStart,
           interval_ms: null,
-          run_counts: { scheduled: 3, in_progress: 0, done: 2, failed: 0 },
+          run_counts: { scheduled: 3, in_progress: 0, done: 2, failed: 0, skipped: 0 },
         },
       ],
     })
@@ -290,7 +291,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
           count: 4,
           first_ms: dayStart,
           interval_ms: null,
-          run_counts: { scheduled: 4, in_progress: 0, done: 0, failed: 0 },
+          run_counts: { scheduled: 4, in_progress: 0, done: 0, failed: 0, skipped: 0 },
         },
       ],
     })
@@ -313,7 +314,7 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
           count: 10,
           first_ms: dayStart,
           interval_ms: null,
-          run_counts: { scheduled: 0, in_progress: 0, done: 9, failed: 1 },
+          run_counts: { scheduled: 0, in_progress: 0, done: 9, failed: 1, skipped: 0 },
         },
       ],
     })
@@ -322,9 +323,107 @@ describe('four-state chip rule — state 4: aggregated bucket worst-wins', () =>
     expect(events[0].extendedProps?.status).toBe('failed')
   })
 
-  it('buildRunCountsTooltip omits zero-count categories, in fixed done/failed/in_progress/scheduled order', () => {
-    expect(buildRunCountsTooltip({ scheduled: 0, in_progress: 0, done: 5, failed: 0 })).toBe('5 done')
-    expect(buildRunCountsTooltip({ scheduled: 0, in_progress: 2, done: 0, failed: 1 })).toBe('1 failed · 2 in progress')
+  it('buildRunCountsTooltip omits zero-count categories, in fixed done/failed/skipped/in_progress/scheduled order', () => {
+    expect(buildRunCountsTooltip({ scheduled: 0, in_progress: 0, done: 5, failed: 0, skipped: 0 })).toBe('5 done')
+    expect(buildRunCountsTooltip({ scheduled: 0, in_progress: 2, done: 0, failed: 1, skipped: 0 })).toBe(
+      '1 failed · 2 in progress',
+    )
+    expect(buildRunCountsTooltip({ scheduled: 0, in_progress: 0, done: 0, failed: 0, skipped: 3 })).toBe('3 skipped')
+    expect(
+      buildRunCountsTooltip({ scheduled: 5, in_progress: 1, done: 2, failed: 1, skipped: 4 }),
+    ).toBe('2 done · 1 failed · 4 skipped · 1 in progress · 5 scheduled')
+  })
+})
+
+// ─── State 5: skipped — a real TaskRun.status, its OWN chip and bucket rank ────
+//
+// `skipped` (backend overlap guard: a scheduled fire that never ran because
+// the previous occurrence was still `in_progress`) is a genuine 5th
+// `TaskRun.status` member — NOT a synthetic day-vs-now state like
+// `scheduled`/`no_record`. It must resolve to its own distinct orange chip
+// (never the grey `STATUS_STYLE_FALLBACK`), and rank directly below `failed`
+// in the aggregated-bucket worst-wins order (above in_progress/done/scheduled).
+
+describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)', () => {
+  it('individual instant with a matching skipped run → its own status/color/glyph, runId/sessionId carried', () => {
+    const occurrenceMs = NOW - 60_000
+    const task = makeTask({ status: 'next' }) // task.status must not leak through
+    const set = makeOccurrenceSet({
+      occurrences_ms: [occurrenceMs],
+      occurrence_runs: [
+        { occurrence_ms: occurrenceMs, status: 'skipped', run_id: 'run-skip', session_id: 's-skip', has_result: false },
+      ],
+    })
+
+    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const ext = events[0].extendedProps
+    expect(ext?.status).toBe('skipped')
+    expect(ext?.icon).toBe('SkipForward')
+    expect(events[0].backgroundColor).toBe('#F97316') // SKIPPED_STYLE.bg — the orange, not the grey fallback
+    if (ext?.kind === 'task-occurrence') {
+      expect(ext.runId).toBe('run-skip')
+      expect(ext.sessionId).toBe('s-skip')
+    }
+  })
+
+  it('a skipped run is NOT overridden by task.status, and never falls back to STATUS_STYLE_FALLBACK grey', () => {
+    const occurrenceMs = NOW - 30_000
+    const task = makeTask({ status: 'done' })
+    const set = makeOccurrenceSet({
+      occurrences_ms: [occurrenceMs],
+      occurrence_runs: [
+        { occurrence_ms: occurrenceMs, status: 'skipped', run_id: 'run-skip-2', session_id: 's-2', has_result: false },
+      ],
+    })
+
+    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    expect(events[0].extendedProps?.status).toBe('skipped') // NOT 'done'
+    expect(events[0].backgroundColor).not.toBe('#94A3B8') // not the grey STATUS_STYLE_FALLBACK/NO_RECORD_STYLE
+    expect(events[0].backgroundColor).not.toBe('#34D399') // not task.status=done's green
+  })
+
+  it('worst-wins priority: skipped beats in_progress/done/scheduled when there is no failure', () => {
+    const task = makeTask()
+    const dayStart = new Date(2026, 6, 27).getTime()
+    const set = makeOccurrenceSet({
+      day_buckets: [
+        {
+          day_start_ms: dayStart,
+          day_end_ms: dayStart + 86_400_000,
+          count: 10,
+          first_ms: dayStart,
+          interval_ms: null,
+          run_counts: { scheduled: 2, in_progress: 3, done: 4, failed: 0, skipped: 1 },
+        },
+      ],
+    })
+    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    const ext = events[0].extendedProps
+    expect(ext?.status).toBe('skipped')
+    expect(ext?.icon).toBe('SkipForward')
+    if (ext?.kind === 'task-occurrence-agg') {
+      expect(ext.tooltip).toBe('4 done · 1 skipped · 3 in progress · 2 scheduled')
+    }
+  })
+
+  it('worst-wins priority: failed still beats skipped when both are present', () => {
+    const task = makeTask()
+    const dayStart = new Date(2026, 6, 28).getTime()
+    const set = makeOccurrenceSet({
+      day_buckets: [
+        {
+          day_start_ms: dayStart,
+          day_end_ms: dayStart + 86_400_000,
+          count: 10,
+          first_ms: dayStart,
+          interval_ms: null,
+          run_counts: { scheduled: 0, in_progress: 0, done: 5, failed: 1, skipped: 4 },
+        },
+      ],
+    })
+    const events = mapToCalendarEvents([task], [], [set], NOW, NOW)
+    expect(events[0].extendedProps?.status).toBe('failed')
+    expect(events[0].extendedProps?.icon).toBe('XCircle')
   })
 })
 

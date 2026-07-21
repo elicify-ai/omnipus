@@ -288,4 +288,20 @@ describe('TaskRunStatusField — run-aware (`occurrence` prop, ADR-050 RD8 / M7)
     expect(screen.queryByTestId('occurrence-run-now-only')).not.toBeInTheDocument()
     expect(screen.queryByTestId('occurrence-scheduled')).not.toBeInTheDocument()
   })
+
+  // Backend overlap-guard run outcome (`skipped`) — a scheduled fire the
+  // server never ran because the previous occurrence was still in_progress.
+  // Must render the "Skipped" badge with the orange skipped classes, and
+  // (since `skipped` is a terminal, past-run outcome, not "in flight") keep
+  // "Run now" available so the operator can materialize the occurrence anyway.
+  it('with a resolved skipped run, the badge shows "Skipped" with the orange classes, and "Run now" stays available', async () => {
+    const task = makeTask({ id: 'task-occ-skipped', status: 'next' })
+    const run = makeRun({ status: 'skipped', occurrence_ms: PAST_MS })
+    renderField(task, { occurrence: { ms: PAST_MS, run }, now: NOW })
+
+    const badge = await screen.findByTestId('task-run-status-badge')
+    expect(badge).toHaveTextContent('Skipped')
+    expect(badge.className).toContain('--color-cancelled')
+    expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
+  })
 })

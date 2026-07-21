@@ -1264,3 +1264,190 @@ func TestTriggerScheduler_SweepReArmsTerminalRepeatingLostJob(t *testing.T) {
 		t.Errorf("RunRecoverySweep must NOT resurrect an exhausted (COUNT reached) series, got %d jobs", len(jobs))
 	}
 }
+
+// TestTriggerOverlapGuard_RecordsSkippedOccurrence covers the run-history
+// transparency fix for the overlap guard (task-run-history-spec.md,
+// TaskRun.status=skipped): when RunScheduled's SpawnReset hits
+// task.ErrAlreadyRunning, a run record must actually be written for the
+// occurrence that was skipped — not just logged and silently dropped
+// (mirrors TestTriggerOverlapGuard / the "ReArmOnOverlapSkip" subtest's
+// setup technique, extended to assert on run-history rather than just the
+// re-arm).
+func TestTriggerOverlapGuard_RecordsSkippedOccurrence(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-skip-record", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	jobsBefore := jobsForTask(sched, tsk.ID)
+	if len(jobsBefore) != 1 || jobsBefore[0].Schedule.AtMS == nil {
+		t.Fatalf("setup: expected 1 armed job with AtMS set, got %+v", jobsBefore)
+	}
+	wantOccurrenceMs := *jobsBefore[0].Schedule.AtMS
+
+	// Force the overlap guard: SpawnReset returns ErrAlreadyRunning while the
+	// task is in_progress (mirrors TestTriggerOverlapGuard's technique).
+	inProgress := task.StatusInProgress
+	if _, err := store.Update(tsk.ID, task.Patch{Status: &inProgress}); err != nil {
+		t.Fatalf("store.Update to in_progress: %v", err)
+	}
+
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+
+	// No dispatch — the overlap guard fired, exactly as before.
+	if n := len(rec.calls()); n != 0 {
+		t.Fatalf("overlap guard: expected 0 dispatches, got %d", n)
+	}
+
+	// A run record for the skipped occurrence MUST now exist, carrying the
+	// exact occurrence_ms the fired job was armed for.
+	runs, err := store.RunsInRange(tsk.ID, wantOccurrenceMs, wantOccurrenceMs+1)
+	if err != nil {
+		t.Fatalf("store.RunsInRange: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected exactly 1 run recorded for the skipped occurrence, got %d (%+v)", len(runs), runs)
+	}
+	got := runs[0]
+	if got.Status != task.StatusSkipped {
+		t.Errorf("recorded run status = %q, want %q", got.Status, task.StatusSkipped)
+	}
+	if got.OccurrenceMs == nil || *got.OccurrenceMs != wantOccurrenceMs {
+		t.Errorf("recorded run occurrence_ms = %v, want %d", derefI64(got.OccurrenceMs), wantOccurrenceMs)
+	}
+	if got.SessionID != "" {
+		t.Errorf("skipped run must carry no session_id (no session ever ran), got %q", got.SessionID)
+	}
+	if got.Kind != task.RunKindScheduled {
+		t.Errorf("skipped run kind = %q, want %q (this occurrence WAS the scheduled fire)", got.Kind, task.RunKindScheduled)
+	}
+	if got.EndedAt == nil {
+		t.Errorf("skipped run must be recorded already-closed (EndedAt set), got nil")
+	} else if got.StartedAt != *got.EndedAt {
+		t.Errorf("skipped run StartedAt (%q) must equal EndedAt (%q) — recorded in one shot, never opened separately",
+			got.StartedAt, *got.EndedAt)
+	}
+
+	// The store-level validator and the REST-layer wire mapping's own guard
+	// (toWireTaskRun / gen.TaskRunStatus(...).Valid(), pkg/gateway/
+	// rest_task_runs.go) both gate on IsValidRunStatus — confirm the new
+	// status is accepted there too, so the wire round trip does not silently
+	// drop it (task-run-history-spec.md's "IsValidRunStatus/the wire round
+	// trip ... don't drop it" requirement).
+	if !task.IsValidRunStatus(task.StatusSkipped) {
+		t.Errorf("task.IsValidRunStatus(StatusSkipped) = false, want true")
+	}
+
+	// The re-arm must still have happened regardless — the skip-recording is
+	// a "nice to have," never allowed to block the scheduler's forward
+	// progress (Scheduler rule 2/3).
+	jobsAfter := jobsForTask(sched, tsk.ID)
+	if len(jobsAfter) != 1 {
+		t.Fatalf("expected exactly 1 armed job after overlap-skip re-arm, got %d", len(jobsAfter))
+	}
+	wantNext := dtstart + oneDayMs
+	if jobsAfter[0].Schedule.AtMS == nil || *jobsAfter[0].Schedule.AtMS != wantNext {
+		t.Errorf("re-armed job AtMS = %v, want %d", derefI64(jobsAfter[0].Schedule.AtMS), wantNext)
+	}
+}
+
+// TestTriggerOverlapGuard_SuppressesSkipWhenOccurrenceAlreadyRunNow is the
+// regression test for the confirmed concurrency-review finding: RD8 lets a
+// user Run-now a FUTURE occurrence ahead of its natural schedule. If that
+// manual run is STILL in_progress when the SAME occurrence's natural
+// scheduled fire arrives, the overlap guard used to unconditionally write a
+// SECOND "skipped" TaskRun record for the exact same occurrence_ms — and
+// because both the server (task_occurrences.go's runIsNewer) and the client
+// (eventMapping.ts's isRunNewer) resolve multiple runs per occurrence by
+// "latest StartedAt wins", that skip record (stamped at the LATER natural
+// fire time) would permanently out-rank the manual run's own record once it
+// closes — mislabeling a task the user successfully ran by hand as
+// "skipped".
+//
+// This test reproduces the exact sequence: OpenRun a manual run for a
+// FUTURE occurrence (simulating Run-now-early), force the task in_progress
+// past that occurrence's own natural scheduled fire, then let the scheduler
+// fire and hit the overlap guard. The fix (Store.RecordSkippedOccurrence's
+// occurrenceAlreadyHasRunLocked guard) must suppress the duplicate skip: only
+// the ORIGINAL manual run's record may exist for this occurrence_ms
+// afterward.
+func TestTriggerOverlapGuard_SuppressesSkipWhenOccurrenceAlreadyRunNow(t *testing.T) {
+	sched, store, clk, rec := newTriggerSchedulerForTest(t)
+
+	dtstart := secondAligned(clk.Now().Add(time.Minute))
+	tsk := makeRruleTask(t, store, "agent-run-now-early", "FREQ=DAILY", dtstart, "UTC")
+	sched.OnTaskUpserted(tsk)
+
+	jobsBefore := jobsForTask(sched, tsk.ID)
+	if len(jobsBefore) != 1 || jobsBefore[0].Schedule.AtMS == nil {
+		t.Fatalf("setup: expected 1 armed job with AtMS set, got %+v", jobsBefore)
+	}
+	occurrenceMs := *jobsBefore[0].Schedule.AtMS
+
+	// RD8: the user Run-now's this exact FUTURE occurrence ahead of its
+	// natural schedule — OpenRun records a manual, still-open run keyed to
+	// occurrenceMs.
+	manualRun, created, err := store.OpenRun(tsk.ID, &occurrenceMs, task.RunKindManual, "session-manual-run-now")
+	if err != nil {
+		t.Fatalf("store.OpenRun (manual run-now): %v", err)
+	}
+	if !created {
+		t.Fatalf("expected OpenRun to create a new run, got created=false")
+	}
+
+	// That manual run is still executing (in_progress) when the occurrence's
+	// own natural scheduled fire arrives (mirrors TestTriggerOverlapGuard's
+	// technique for forcing the overlap guard).
+	inProgress := task.StatusInProgress
+	if _, err := store.Update(tsk.ID, task.Patch{Status: &inProgress}); err != nil {
+		t.Fatalf("store.Update to in_progress: %v", err)
+	}
+
+	clk.Advance(2 * time.Minute)
+	sched.RunDueJobs(clk.Now())
+	sched.WaitForLane()
+
+	// No dispatch — the overlap guard fired, exactly as before.
+	if n := len(rec.calls()); n != 0 {
+		t.Fatalf("overlap guard: expected 0 dispatches, got %d", n)
+	}
+
+	// The fix under test: exactly ONE run record must exist for this
+	// occurrence — the original manual run — with NO second "skipped"
+	// record written alongside it.
+	runs, err := store.RunsInRange(tsk.ID, occurrenceMs, occurrenceMs+1)
+	if err != nil {
+		t.Fatalf("store.RunsInRange: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected exactly 1 run for occurrence_ms=%d (the manual run, no duplicate skip), got %d: %+v",
+			occurrenceMs, len(runs), runs)
+	}
+	got := runs[0]
+	if got.RunID != manualRun.RunID {
+		t.Errorf("surviving run_id = %q, want the manual run's %q (a skip record must not have been written)",
+			got.RunID, manualRun.RunID)
+	}
+	if got.Status != task.StatusInProgress {
+		t.Errorf("surviving run status = %q, want %q — the manual run must be untouched by the overlap guard",
+			got.Status, task.StatusInProgress)
+	}
+	if got.Kind != task.RunKindManual {
+		t.Errorf("surviving run kind = %q, want %q", got.Kind, task.RunKindManual)
+	}
+
+	// Re-arm must still happen regardless — suppressing the duplicate skip
+	// must never block the scheduler's forward progress (Scheduler rule 2/3,
+	// same invariant TestTriggerOverlapGuard_RecordsSkippedOccurrence checks).
+	jobsAfter := jobsForTask(sched, tsk.ID)
+	if len(jobsAfter) != 1 {
+		t.Fatalf("expected exactly 1 armed job after overlap-skip re-arm, got %d", len(jobsAfter))
+	}
+	wantNext := dtstart + oneDayMs
+	if jobsAfter[0].Schedule.AtMS == nil || *jobsAfter[0].Schedule.AtMS != wantNext {
+		t.Errorf("re-armed job AtMS = %v, want %d", derefI64(jobsAfter[0].Schedule.AtMS), wantNext)
+	}
+}

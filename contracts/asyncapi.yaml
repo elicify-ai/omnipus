@@ -1842,6 +1842,7 @@ components:
             - in_progress
             - done
             - failed
+            - skipped
 
     ReplayMessageFrame:
       title: ReplayMessageFrame

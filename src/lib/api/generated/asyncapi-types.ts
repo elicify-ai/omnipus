@@ -226,7 +226,7 @@ export interface TaskRunStatusFrame {
   task_id: string;
   run_id: string;
   occurrence_ms?: number;
-  status: "in_progress" | "done" | "failed";
+  status: "in_progress" | "done" | "failed" | "skipped";
 }
 
 export interface ReplayMessageFrame {

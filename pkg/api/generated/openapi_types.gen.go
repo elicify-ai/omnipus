@@ -2716,6 +2716,7 @@ const (
 	TaskOccurrenceSetOccurrenceRunsStatusDone       TaskOccurrenceSetOccurrenceRunsStatus = "done"
 	TaskOccurrenceSetOccurrenceRunsStatusFailed     TaskOccurrenceSetOccurrenceRunsStatus = "failed"
 	TaskOccurrenceSetOccurrenceRunsStatusInProgress TaskOccurrenceSetOccurrenceRunsStatus = "in_progress"
+	TaskOccurrenceSetOccurrenceRunsStatusSkipped    TaskOccurrenceSetOccurrenceRunsStatus = "skipped"
 )
 
 // Valid indicates whether the value is a known member of the TaskOccurrenceSetOccurrenceRunsStatus enum.
@@ -2726,6 +2727,8 @@ func (e TaskOccurrenceSetOccurrenceRunsStatus) Valid() bool {
 	case TaskOccurrenceSetOccurrenceRunsStatusFailed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusInProgress:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusSkipped:
 		return true
 	default:
 		return false
@@ -2755,6 +2758,7 @@ const (
 	TaskRunStatusDone       TaskRunStatus = "done"
 	TaskRunStatusFailed     TaskRunStatus = "failed"
 	TaskRunStatusInProgress TaskRunStatus = "in_progress"
+	TaskRunStatusSkipped    TaskRunStatus = "skipped"
 )
 
 // Valid indicates whether the value is a known member of the TaskRunStatus enum.
@@ -2765,6 +2769,8 @@ func (e TaskRunStatus) Valid() bool {
 	case TaskRunStatusFailed:
 		return true
 	case TaskRunStatusInProgress:
+		return true
+	case TaskRunStatusSkipped:
 		return true
 	default:
 		return false
@@ -4764,7 +4770,7 @@ type DayBucket struct {
 	// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
 	IntervalMs *int64 `json:"interval_ms"`
 
-	// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > in_progress > done > scheduled) and tooltip breakdown read this object when present.
+	// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > skipped > in_progress > done > scheduled) and tooltip breakdown read this object when present.
 	RunCounts *struct {
 		Done       int32 `json:"done"`
 		Failed     int32 `json:"failed"`
@@ -4772,6 +4778,9 @@ type DayBucket struct {
 
 		// Scheduled Occurrences on this day with no run yet (future, or "no record").
 		Scheduled int32 `json:"scheduled"`
+
+		// Skipped Occurrences on this day whose fire was skipped by the overlap guard (the previous occurrence was still in_progress).
+		Skipped int32 `json:"skipped"`
 	} `json:"run_counts,omitempty"`
 }
 
@@ -7651,7 +7660,7 @@ type TaskOccurrenceSet struct {
 		// IntervalMs Fixed spacing between this day's occurrences in milliseconds, when the rule is regular (used to derive the client label "· every 30 min"). null when the rule is irregular (BY*-modified) and spacing varies — the client falls back to a "· {count}×/day" label.
 		IntervalMs *int64 `json:"interval_ms"`
 
-		// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > in_progress > done > scheduled) and tooltip breakdown read this object when present.
+		// RunCounts Additive per-day run-status tally (ADR-050 RD6 / task-run-history-spec §3.7), computed by scanning this day's actual TaskRun records — NOT by enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 — no migration); absent until the occurrence-overlay handler populates it. The client's worst-wins glyph (failed > skipped > in_progress > done > scheduled) and tooltip breakdown read this object when present.
 		RunCounts *struct {
 			Done       int32 `json:"done"`
 			Failed     int32 `json:"failed"`
@@ -7659,6 +7668,9 @@ type TaskOccurrenceSet struct {
 
 			// Scheduled Occurrences on this day with no run yet (future, or "no record").
 			Scheduled int32 `json:"scheduled"`
+
+			// Skipped Occurrences on this day whose fire was skipped by the overlap guard (the previous occurrence was still in_progress).
+			Skipped int32 `json:"skipped"`
 		} `json:"run_counts,omitempty"`
 	} `json:"day_buckets"`
 
@@ -7710,13 +7722,13 @@ type TaskRun struct {
 	// RunId Stable ULID identifying this run across its open and close records.
 	RunId string `json:"run_id"`
 
-	// SessionId The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward.
+	// SessionId The chat session this run produced. Minted at open time, unlike Task.session_id (which is only set once a task has ever run) — a TaskRun always has one from creation onward, EXCEPT a `status: skipped` record: the overlap guard's scheduled fire never started a session, so a skipped run's `session_id` is always the empty string.
 	SessionId string `json:"session_id"`
 
 	// StartedAt RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
 	StartedAt time.Time `json:"started_at"`
 
-	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`).
+	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
 	Status TaskRunStatus `json:"status"`
 
 	// TaskId The task this run belongs to.
@@ -7726,7 +7738,7 @@ type TaskRun struct {
 // TaskRunKind How the run started — an automatic trigger fire, or a user Run-now.
 type TaskRunKind string
 
-// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`).
+// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
 type TaskRunStatus string
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.

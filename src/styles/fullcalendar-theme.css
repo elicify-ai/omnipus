@@ -293,6 +293,54 @@
   border-color: var(--color-accent);
 }
 
+/* Agenda (listWeek) "now" divider — @fullcalendar/list has no time axis and
+ * cannot render the built-in nowIndicator above; CalendarScreen injects one
+ * synthetic `now-marker` event instead, rendered as NowMarkerLine
+ * (FullCalendarView.tsx) in place of the normal event chip. Reuses the SAME
+ * --fc-now-indicator-color as the native Week/Day line above. */
+.fc-sovereign-now-marker-line {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  height: 2px;
+  background-color: var(--fc-now-indicator-color);
+}
+
+.fc-sovereign-now-marker-time {
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--fc-now-indicator-color);
+  background: var(--color-surface-0);
+  white-space: nowrap;
+}
+
+/* @fullcalendar/list renders 3 <td>s per row: time | graphic (dot) | title.
+ * eventContent (NowMarkerLine) only fills the title <td>, so on its own the
+ * line spans just that column, not the row. `eventClassNames`
+ * (FullCalendarView.tsx) tags the marker's <tr> with this class; hiding its
+ * sibling time/graphic <td>s here lets the title <td> — the only cell left
+ * — expand to the row's full width, the "goes over the entire length"
+ * behaviour the Agenda divider needs (matching Week's line spanning its
+ * single day column, and Day's spanning its single-column width). Also
+ * suppress the row's own hover highlight and pointer cursor — a pure
+ * divider, not a clickable item. */
+.fc .fc-list-event.fc-sovereign-now-marker-row > .fc-list-event-time,
+.fc .fc-list-event.fc-sovereign-now-marker-row > .fc-list-event-graphic {
+  display: none;
+}
+.fc .fc-list-event.fc-sovereign-now-marker-row {
+  cursor: default;
+}
+.fc .fc-list-event.fc-sovereign-now-marker-row:hover td {
+  background-color: transparent;
+}
+
 /* ------------------------------------------------------------------ */
 /* Touch targets: time-grid chips ≥ 44px on coarse-pointer devices    */
 /* (FR-007, I-4, WCAG 2.5.8)                                          */

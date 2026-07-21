@@ -606,7 +606,7 @@ type TaskOccurrenceSet = {
   occurrence_runs?:
     | Array<{
         occurrence_ms: number;
-        status: "in_progress" | "done" | "failed";
+        status: "in_progress" | "done" | "failed" | "skipped";
         run_id: string;
         session_id: string;
         has_result: boolean;
@@ -626,6 +626,7 @@ type DayBucket = {
         in_progress: number;
         done: number;
         failed: number;
+        skipped: number;
       }
     | undefined;
 };
@@ -2107,6 +2108,7 @@ export const DayBucket: z.ZodType<DayBucket> = z.object({
       in_progress: z.number().int(),
       done: z.number().int(),
       failed: z.number().int(),
+      skipped: z.number().int(),
     })
     .optional(),
 });
@@ -2118,7 +2120,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
     .array(
       z.object({
         occurrence_ms: z.number().int(),
-        status: z.enum(["in_progress", "done", "failed"]),
+        status: z.enum(["in_progress", "done", "failed", "skipped"]),
         run_id: z.string(),
         session_id: z.string(),
         has_result: z.boolean(),
@@ -2160,7 +2162,7 @@ export const TaskRun = z.object({
   run_id: z.string(),
   task_id: z.string(),
   occurrence_ms: z.number().int().nullable(),
-  status: z.enum(["in_progress", "done", "failed"]),
+  status: z.enum(["in_progress", "done", "failed", "skipped"]),
   result: z.string().max(50000).optional(),
   session_id: z.string(),
   kind: z.enum(["scheduled", "manual"]),
@@ -7555,7 +7557,7 @@ export const TaskRunStatusFrame = z
     task_id: z.string().min(1),
     run_id: z.string().min(1),
     occurrence_ms: z.number().int().optional(),
-    status: z.enum(["in_progress", "done", "failed"]),
+    status: z.enum(["in_progress", "done", "failed", "skipped"]),
   })
   .strict();
 

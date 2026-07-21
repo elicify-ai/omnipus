@@ -66,13 +66,14 @@ properties:
       §3.7), computed by scanning this day's actual TaskRun records — NOT by
       enumerating RRULE members. Read-only, purely additive (ADR-050 RD11 —
       no migration); absent until the occurrence-overlay handler populates
-      it. The client's worst-wins glyph (failed > in_progress > done >
-      scheduled) and tooltip breakdown read this object when present.
+      it. The client's worst-wins glyph (failed > skipped > in_progress >
+      done > scheduled) and tooltip breakdown read this object when present.
     required:
       - scheduled
       - in_progress
       - done
       - failed
+      - skipped
     additionalProperties: false
     properties:
       scheduled:
@@ -92,3 +93,10 @@ properties:
         type: integer
         format: int32
         example: 2
+      skipped:
+        type: integer
+        format: int32
+        description: >
+          Occurrences on this day whose fire was skipped by the overlap guard
+          (the previous occurrence was still in_progress).
+        example: 0

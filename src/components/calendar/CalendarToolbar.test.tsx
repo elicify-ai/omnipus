@@ -28,21 +28,38 @@ import type FullCalendar from '@fullcalendar/react'
  * Build a fake FullCalendar ref whose `.current.getApi()` returns spies.
  * The spies are returned alongside the ref so tests can assert on them.
  */
-function makeFakeCalendarRef() {
+// `viewType` mirrors what a real CalendarApi's `.view.type` reports — used by
+// handleToday's scroll-to-now branch (real API, not modeled by anything else
+// here previously). Defaults to 'dayGridMonth' to match `renderToolbar`'s own
+// default `currentView`.
+function makeFakeCalendarRef(viewType: string = 'dayGridMonth') {
   const changeView = vi.fn()
   const prev = vi.fn()
   const next = vi.fn()
   const today = vi.fn()
+  const scrollToTime = vi.fn()
   const currentDate = new Date('2026-08-15T00:00:00')
   const getDate = vi.fn(() => currentDate)
 
-  const getApi = vi.fn(() => ({ changeView, prev, next, today, getDate }))
+  const getApi = vi.fn(() => ({
+    changeView,
+    prev,
+    next,
+    today,
+    getDate,
+    scrollToTime,
+    view: { type: viewType },
+  }))
 
   const calendarRef: CalendarApiRef = {
     current: { getApi } as unknown as FullCalendar,
   }
 
-  return { calendarRef, currentDate, spies: { getApi, changeView, prev, next, today, getDate } }
+  return {
+    calendarRef,
+    currentDate,
+    spies: { getApi, changeView, prev, next, today, getDate, scrollToTime },
+  }
 }
 
 function renderToolbar(
@@ -53,8 +70,6 @@ function renderToolbar(
     onNewTask: () => void
   }> = {},
 ) {
-  const { calendarRef, spies, currentDate } = makeFakeCalendarRef()
-
   const defaults = {
     currentView: 'dayGridMonth' as const,
     title: 'June 2026',
@@ -63,6 +78,10 @@ function renderToolbar(
   }
 
   const props = { ...defaults, ...overrides }
+
+  // The mock API's own view.type mirrors `currentView` — in the real app
+  // both are always in sync (both driven by the same onDatesSet callback).
+  const { calendarRef, spies, currentDate } = makeFakeCalendarRef(props.currentView)
 
   const { rerender } = render(
     <CalendarToolbar
@@ -208,6 +227,99 @@ describe('CalendarToolbar — navigation: prev / next / today (spec §9 #19, FR-
     expect(spies.next).toHaveBeenCalledOnce()
     // The spy functions themselves are different (not the same function)
     expect(spies.prev).not.toBe(spies.next)
+  })
+})
+
+describe('CalendarToolbar — "Today" also scrolls to the current TIME, not just the date', () => {
+  // Reported live: clicking Today jumped the date range back but left the
+  // view scrolled wherever the user last was (e.g. 8am) — no way to jump
+  // straight to "now" itself, unlike Google Calendar's own Today button.
+
+  it('timeGridWeek: calls api.scrollToTime with the current wall-clock time (HH:MM:SS)', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-15T14:37:05'))
+
+    const { spies } = renderToolbar({ currentView: 'timeGridWeek' })
+    fireEvent.click(screen.getByTestId('calendar-today'))
+
+    expect(spies.today).toHaveBeenCalledOnce()
+    expect(spies.scrollToTime).toHaveBeenCalledWith('14:37:05')
+
+    vi.useRealTimers()
+  })
+
+  it('timeGridDay: also calls api.scrollToTime (same mechanism as Week)', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-15T09:02:00'))
+
+    const { spies } = renderToolbar({ currentView: 'timeGridDay' })
+    fireEvent.click(screen.getByTestId('calendar-today'))
+
+    expect(spies.scrollToTime).toHaveBeenCalledWith('09:02:00')
+
+    vi.useRealTimers()
+  })
+
+  it('dayGridMonth: does NOT call scrollToTime — a date-only view has no time position', () => {
+    const { spies } = renderToolbar({ currentView: 'dayGridMonth' })
+    fireEvent.click(screen.getByTestId('calendar-today'))
+
+    expect(spies.today).toHaveBeenCalledOnce()
+    expect(spies.scrollToTime).not.toHaveBeenCalled()
+  })
+
+  it('listWeek: scrolls the rendered now-marker row into view when one is present', () => {
+    renderToolbar({ currentView: 'listWeek' })
+
+    const markerRow = document.createElement('tr')
+    markerRow.className = 'fc-sovereign-now-marker-row'
+    const scrollIntoView = vi.fn()
+    markerRow.scrollIntoView = scrollIntoView
+    const wrapper = document.createElement('div')
+    wrapper.className = 'fc-sovereign-wrapper'
+    wrapper.appendChild(markerRow)
+    document.body.appendChild(wrapper)
+
+    fireEvent.click(screen.getByTestId('calendar-today'))
+    // The scroll happens inside a requestAnimationFrame callback.
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+        wrapper.remove()
+        resolve()
+      })
+    })
+  })
+
+  it('listWeek: falls back to today\'s day-group header when no marker row is rendered (e.g. zero real events that day)', () => {
+    // Scoped to Date only — faking requestAnimationFrame too would freeze
+    // the very rAF this test's assertion waits on (handleToday's own
+    // scheduling), hanging until the real 15s test timeout.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-15T10:00:00'))
+
+    renderToolbar({ currentView: 'listWeek' })
+
+    const dayHeader = document.createElement('tr')
+    dayHeader.className = 'fc-list-day'
+    dayHeader.setAttribute('data-date', '2026-08-15')
+    const scrollIntoView = vi.fn()
+    dayHeader.scrollIntoView = scrollIntoView
+    const wrapper = document.createElement('div')
+    wrapper.className = 'fc-sovereign-wrapper'
+    wrapper.appendChild(dayHeader)
+    document.body.appendChild(wrapper)
+
+    fireEvent.click(screen.getByTestId('calendar-today'))
+
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+        wrapper.remove()
+        vi.useRealTimers()
+        resolve()
+      })
+    })
   })
 })
 

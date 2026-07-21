@@ -577,9 +577,13 @@ type TaskStatusChangedPayload struct {
 //
 // OccurrenceMs mirrors task.TaskRun.OccurrenceMs's own nullability: nil for
 // an ad-hoc/once/manual run, non-nil for the RRULE instant a recurring fire
-// realizes. Status is one of task.StatusInProgress/StatusDone/StatusFailed
-// (task.IsValidRunStatus) — the narrower 3-state TaskRun vocabulary, not the
-// full 7-state Task one.
+// realizes. Status is one of task.StatusInProgress/StatusDone/StatusFailed/
+// task.StatusSkipped (task.IsValidRunStatus) — the narrower 4-state TaskRun
+// vocabulary, not the full 7-state Task one. StatusSkipped is emitted by
+// TaskTriggerScheduler (task_trigger.go's RunScheduled, via the same
+// TaskExecutor.emitRunStatus function OpenRun/CloseRun already use) when the
+// overlap guard records a skipped-occurrence run, not just by OpenRun/
+// CloseRun's in_progress/done/failed transitions.
 type TaskRunStatusPayload struct {
 	TaskID       string `json:"task_id"`
 	RunID        string `json:"run_id"`

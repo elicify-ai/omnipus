@@ -46,18 +46,31 @@ func IsValidRunKind(k RunKind) bool {
 	return k == RunKindScheduled || k == RunKindManual
 }
 
-// IsValidRunStatus reports whether s is one of the three statuses a TaskRun
-// may carry (in_progress, done, failed) — a narrower subset of the 7-state
-// Task Status vocabulary. ADR-050 RD10 deliberately excludes `canceled`/
-// `queued` from v1: no cancel producer exists anywhere in the codebase today.
-// Consumed by CloseRun as a belt-and-suspenders guard alongside IsTerminal
-// (H4): IsTerminal is the broader Task-status terminal set (done/failed
-// today), while IsValidRunStatus is the TaskRun-specific vocabulary — should
-// Task ever grow a new terminal status IsTerminal would accept but v1
-// TaskRun does not (e.g. a future `canceled`), CloseRun must still reject it
-// here rather than silently widening what a run can close to.
+// StatusSkipped marks a TaskRun (never a Task) whose scheduled fire was
+// skipped entirely by the overlap guard (pkg/agent/task_trigger.go's
+// RunScheduled, on task.ErrAlreadyRunning) because the task's previous run
+// was still in_progress at the next occurrence's fire time — no
+// session/agent ever started for this occurrence. This is deliberately a
+// TaskRun-only concept: it must NEVER be added to Task.Status's seven-state
+// lifecycle (task.go) or to IsTerminal — see RecordSkippedOccurrence.
+const StatusSkipped Status = "skipped"
+
+// IsValidRunStatus reports whether s is one of the four statuses a TaskRun
+// may carry (in_progress, done, failed, skipped) — a narrower subset of the
+// 7-state Task Status vocabulary (StatusSkipped is not even a member of that
+// vocabulary at all — it exists only here). ADR-050 RD10 deliberately
+// excludes `canceled`/`queued` from v1: no cancel producer exists anywhere in
+// the codebase today. Consumed by CloseRun as a belt-and-suspenders guard
+// alongside IsTerminal (H4): IsTerminal is the broader Task-status terminal
+// set (done/failed today), while IsValidRunStatus is the TaskRun-specific
+// vocabulary — should Task ever grow a new terminal status IsTerminal would
+// accept but v1 TaskRun does not (e.g. a future `canceled`), CloseRun must
+// still reject it here rather than silently widening what a run can close
+// to. skipped is accepted here (a run CAN carry it) but is never produced by
+// CloseRun/OpenRun — only RecordSkippedOccurrence writes it, as a
+// fully-closed record in one shot.
 func IsValidRunStatus(s Status) bool {
-	return s == StatusInProgress || s == StatusDone || s == StatusFailed
+	return s == StatusInProgress || s == StatusDone || s == StatusFailed || s == StatusSkipped
 }
 
 // maxRunResultChars is the TaskRun.result contract cap (TaskRun.yaml,
@@ -516,6 +529,131 @@ func (s *Store) CloseRun(taskID, runID string, status Status, result string) err
 	closeRec.Result = result
 	closeRec.EndedAt = &endedAt
 	return s.appendRunRecord(taskID, closeRec, now)
+}
+
+// occurrenceAlreadyHasRunLocked reports whether ANY run (open OR closed —
+// i.e. any record at all, regardless of its current fold state) already
+// exists for taskID with the exact same non-nil OccurrenceMs. It folds every
+// day file under taskID's runs directory (foldRunsLocked, not a single
+// day's file) because a manually Run-now'd future occurrence (RD8) opens its
+// record on the calendar day it was DISPATCHED, which can be an arbitrary
+// number of days before the occurrence's own natural scheduled-fire day —
+// appendRunRecord/runsDayFilePath partitions by write time, not by
+// OccurrenceMs — so only a full fold can conclusively answer "does this
+// occurrence already have a run" (mirrors findOpenRunLocked's own doc
+// comment on why a stale-looking file can never be assumed irrelevant).
+//
+// occurrenceMs == nil always reports false: a nil key denotes an ad-hoc/
+// manual/non-rrule-trigger run (TaskRun.OccurrenceMs's own contract), so
+// every such run shares the same nil key and "already has a run" would be
+// true unconditionally and meaninglessly — this guard exists specifically
+// for RD8's real, non-nil occurrence identity collision, not the ad-hoc case.
+//
+// Caller must hold the per-task lock (s.lock.Get(taskID)).
+func (s *Store) occurrenceAlreadyHasRunLocked(taskID string, occurrenceMs *int64) (bool, error) {
+	if occurrenceMs == nil {
+		return false, nil
+	}
+	folded, err := s.foldRunsLocked(taskID)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range folded {
+		if r.OccurrenceMs != nil && *r.OccurrenceMs == *occurrenceMs {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// RecordSkippedOccurrence records a run-history entry for an occurrence whose
+// scheduled fire never ran at all: the overlap guard (pkg/agent/
+// task_trigger.go's RunScheduled, on task.ErrAlreadyRunning) found the
+// task's previous run still in_progress and skipped the fire before any
+// session/agent started. Unlike a normal run, there is no open→close pair
+// here to thread through OpenRun/CloseRun (CloseRun requires an existing
+// open record for runID, and a skip never opens one) — this writes a single,
+// ALREADY-CLOSED TaskRun record in one shot: StartedAt == EndedAt == now,
+// SessionID == "" (no session ever ran), Status == StatusSkipped, Kind ==
+// RunKindScheduled (this occurrence WAS the scheduled fire; it just never
+// got to run).
+//
+// occurrenceMs is the calendar join key — nil for a skip on a non-rrule
+// trigger (every/cron_expr), mirroring TaskRun.OccurrenceMs's own "nil for an
+// ad-hoc/once/manual run" contract; the caller (RunScheduled) only ever has
+// a non-nil occurrenceMs on the RRULE branch.
+//
+// Suppression guard (confirmed concurrency-review finding, 2026-07-20): RD8
+// allows a user to Run-now a FUTURE occurrence ahead of its natural
+// schedule. If that manual run is still in_progress when the SAME
+// occurrence's natural scheduled fire arrives, the overlap guard fires here
+// too — but the occurrence genuinely WAS handled (via Run-now), just not via
+// its own scheduled fire, so recording a SECOND "skipped" record for the
+// same OccurrenceMs would be actively wrong, not just redundant: both the
+// server (task_occurrences.go's runIsNewer) and the client
+// (eventMapping.ts's isRunNewer) resolve multiple runs per occurrence by
+// latest StartedAt wins, and a skip recorded at the natural fire time is BY
+// CONSTRUCTION always later than the early manual run's StartedAt — so the
+// skip would permanently out-rank the real (possibly successful) manual run
+// once it closes. Before writing anything, this checks whether a run for the
+// EXACT same OccurrenceMs already exists (open or closed) and no-ops if so —
+// returning (nil, nil), not an error, since "correctly declining to record a
+// misleading duplicate" is success, not failure.
+//
+// Returns the TaskRun that was written, or nil if the skip was suppressed.
+//
+// Uses the same per-task StripedLock domain and appendRunRecord write path
+// as OpenRun/CloseRun (s.lock, one appendRunRecord call), so this skip record
+// is crash-safe and cross-process-safe exactly like every other run write —
+// and the suppression check above runs inside the SAME locked section as the
+// write, so the check-then-write is atomic with respect to any concurrent
+// OpenRun/CloseRun/RecordSkippedOccurrence call for this task.
+func (s *Store) RecordSkippedOccurrence(taskID string, occurrenceMs *int64) (*TaskRun, error) {
+	if err := validateID(taskID); err != nil {
+		return nil, err
+	}
+
+	mu := s.lock.Get(taskID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	alreadyRecorded, err := s.occurrenceAlreadyHasRunLocked(taskID, occurrenceMs)
+	if err != nil {
+		return nil, err
+	}
+	if alreadyRecorded {
+		slog.Info("task: suppressing skipped-occurrence record — a run already exists for this exact occurrence "+
+			"(e.g. manually Run-now'd ahead of its natural schedule, RD8); recording a skip here would mislabel a "+
+			"real run",
+			"task_id", taskID, "occurrence_ms", *occurrenceMs)
+		return nil, nil
+	}
+
+	runID, err := newRunID()
+	if err != nil {
+		return nil, err
+	}
+	var occCopy *int64
+	if occurrenceMs != nil {
+		v := *occurrenceMs
+		occCopy = &v
+	}
+	now := time.Now().UTC()
+	ts := now.Format(time.RFC3339)
+	run := TaskRun{
+		RunID:        runID,
+		TaskID:       taskID,
+		OccurrenceMs: occCopy,
+		Status:       StatusSkipped,
+		SessionID:    "",
+		Kind:         RunKindScheduled,
+		StartedAt:    ts,
+		EndedAt:      &ts,
+	}
+	if err := s.appendRunRecord(taskID, run, now); err != nil {
+		return nil, err
+	}
+	return &run, nil
 }
 
 // parseRunTime parses an RFC 3339 timestamp, falling back to the zero time on

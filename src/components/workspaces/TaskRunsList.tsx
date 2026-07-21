@@ -11,9 +11,13 @@
 // re-run flow). Do not fork/duplicate this component — extend it in place.
 //
 // Each run renders: a status badge sharing taskStatusConfig's STATUS_BADGE/
-// statusLabel vocabulary (TaskRun.status is a strict subset of Task['status'] —
-// in_progress | done | failed — so the two surfaces never disagree on colors/
-// labels), how it started (scheduled fire vs manual Run-now), when it ended,
+// statusLabel vocabulary (TaskRun.status is in_progress | done | failed |
+// skipped — the first three ARE Task['status'] members, but skipped is a
+// TaskRun-only outcome, the overlap guard's declined-fire result, that is NOT
+// a valid Task['status'] value; see taskStatusConfig.ts's doc comment — so
+// the two surfaces share colors/labels via STATUS_BADGE/statusLabel's
+// TaskRun['status'] widening, not an identical status domain), how it
+// started (scheduled fire vs manual Run-now), when it ended,
 // its terminal result (mirrors TaskResultField's compact display idiom via
 // the shared `hasVisibleResult` gate — Q3 dedup), and an Open-in-Chat action
 // when it produced a session (mirrors OpenInChatButton's navigation — a

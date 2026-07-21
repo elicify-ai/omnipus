@@ -149,6 +149,21 @@ describe('TaskRunsList — populated', () => {
     await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(1))
     expect(screen.queryByRole('button', { name: /open in chat/i })).not.toBeInTheDocument()
   })
+
+  // Backend overlap-guard run outcome (`skipped`) — a scheduled fire the
+  // server never ran because the previous occurrence was still in_progress.
+  // Must render its own "Skipped" badge with the orange (--color-cancelled)
+  // classes, not silently fall back to the "Inbox" badge/label.
+  it('renders a "Skipped" badge with the orange skipped classes for a skipped run', async () => {
+    vi.mocked(fetchTaskRuns).mockResolvedValue([makeRun({ status: 'skipped', result: undefined, ended_at: null })])
+    renderList()
+
+    await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(1))
+    const badge = screen.getByText('Skipped')
+    expect(badge).toBeInTheDocument()
+    expect(badge.className).toContain('--color-cancelled')
+    expect(screen.queryByText('Inbox')).not.toBeInTheDocument()
+  })
 })
 
 // ── dayRange (H2 fix — bucket drill-in, task-run-history-spec §4.3) ─────────
