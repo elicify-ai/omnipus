@@ -113,8 +113,13 @@ func newGoalLoopTestLoop(
 					Name: "Judge",
 					Type: config.AgentTypeSystem,
 					Home: judgeHome,
-					Rubric: `Return ONLY valid JSON of the shape ` +
-						`{"met": <bool>, "criteria": [{"id": "<id>", "met": <bool>, "reason": "<why>"}]}`,
+					// No Rubric field anymore (ADR-052 FR-038 deleted it —
+					// one unified soul concept). ensureVerifierSoul
+					// (verifier_adjudication.go) lazily seeds
+					// coreagent.JudgeDefaultRubric into judgeHome/SOUL.md
+					// on first real verifier dispatch, which already
+					// includes the same "Return ONLY valid JSON..."
+					// instruction this literal used to carry.
 				},
 			},
 		},
