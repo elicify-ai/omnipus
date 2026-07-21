@@ -59,6 +59,35 @@ export function planStateLabel(state: PlanState | string | undefined): string {
   return PLAN_STATE_LABELS[(state as PlanState) ?? 'draft'] ?? PLAN_STATE_LABELS.draft
 }
 
+// ── Cancelled discriminator (ADR-052 FR-015/US-8) ───────────────────────────
+//
+// A user-Stop sets `state: 'failed'` + `failed_reason: 'stopped_by_user'` —
+// NOT a new PlanState, NOT a new board column. It must render as an orange
+// "Cancelled" marker, visually distinct from a genuine red "Failed"
+// (judge_rounds_exhausted / idle_expired), while staying in the same Failed
+// bucket everywhere a plan's state badge is drawn (PlansFilterBand tiles,
+// WorkspaceGraphTab's plan info strip). Reuses the existing warning-orange
+// token (`--color-warning`, already the "blocked"/paused accent) rather than
+// a new hardcoded hex — dark-first tokens, single source of truth.
+
+/** Orange accent for a user-cancelled plan — distinct from `PLAN_STATE_COLORS.failed` (red). */
+export const PLAN_CANCELLED_COLOR = 'var(--color-warning)'
+
+/** True when this plan is `failed` specifically because the user Stopped it (not a genuine failure). */
+export function isPlanCancelled(plan: Pick<Plan, 'state' | 'failed_reason'>): boolean {
+  return plan.state === 'failed' && plan.failed_reason === 'stopped_by_user'
+}
+
+/** The badge colour to render for this plan — orange "Cancelled" overrides red "Failed". */
+export function planDisplayColor(plan: Pick<Plan, 'state' | 'failed_reason'>): string {
+  return isPlanCancelled(plan) ? PLAN_CANCELLED_COLOR : planStateColor(plan.state)
+}
+
+/** The badge label to render for this plan — "Cancelled" overrides "Failed". */
+export function planDisplayLabel(plan: Pick<Plan, 'state' | 'failed_reason'>): string {
+  return isPlanCancelled(plan) ? 'Cancelled' : planStateLabel(plan.state)
+}
+
 /**
  * Secondary-chip label for a running/failed plan's sub-state (R1 — never
  * treated as a `PlanState` itself). Returns null when there is nothing to

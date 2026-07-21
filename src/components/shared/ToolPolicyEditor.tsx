@@ -44,7 +44,7 @@
  */
 
 import { useMemo, useState } from 'react'
-import { CaretDown, CaretUp, Database, LockSimple, Warning } from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Database, LockSimple, ShieldWarning, Warning } from '@phosphor-icons/react'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { PolicyBadge } from '@/components/shared/PolicyBadge'
@@ -55,6 +55,16 @@ import {
   type RolePreset,
   type ToolPolicyValue,
 } from '@/lib/toolPolicyPresets'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -116,6 +126,38 @@ function globalOverrideFor(toolName: string, global?: ToolPolicyValue): GlobalFl
 function isPolicyLocked(p: ToolPolicy, floor: GlobalFloor): boolean {
   if (!floor || floor === 'unconfigured') return false
   return POLICY_RANK[p] < POLICY_RANK[floor]
+}
+
+// ── ADR-052 FR-021/F6 — execute_plan grant security affordance ─────────────
+//
+// "Holding execute_plan IS the approval" for autonomous multi-task plan
+// execution (ADR-052 §6.1) — the resolved posture (strictest-wins,
+// deny > ask > allow) determines whether an agent's execute_plan call
+// raises an operator-approval prompt (the default, ceiling "ask") or runs
+// with zero human interlock (ceiling raised to "allow"). Any edit here that
+// would make execute_plan RESOLVE to "allow" — a per-agent grant while the
+// global ceiling already allows it, or raising the ceiling entry itself —
+// therefore carries the same blast radius as flipping that human interlock
+// off. FR-021 requires a confirmation modal with explicit warning copy
+// before such an edit lands, not a plain checkbox toggle.
+const EXECUTE_PLAN_TOOL_NAME = 'execute_plan'
+
+/**
+ * True when setting `toolId` to `p` — in THIS editor instance (per-agent when
+ * `globalPolicies` is supplied, the global ceiling editor itself when it is
+ * not) — would make `execute_plan` actually RESOLVE to "allow":
+ *   - Global ceiling editor (no `globalPolicies` prop — there is no floor
+ *     above it): any "allow" write to the ceiling entry is the sensitive
+ *     edit — it is the ceiling every per-agent "allow" grant depends on.
+ *   - Per-agent editor (`globalPolicies` supplied): a per-agent "allow" only
+ *     resolves when it isn't floored by a stricter global policy (the
+ *     control is already disabled/unclickable when it IS floored — see
+ *     `isPolicyLocked` — this check is the defensive, non-UI-dependent twin).
+ */
+function resolvesExecutePlanAllow(toolId: string, p: ToolPolicy, globalPolicies?: ToolPolicyValue): boolean {
+  if (toolId !== EXECUTE_PLAN_TOOL_NAME || p !== 'allow') return false
+  const floor = globalOverrideFor(toolId, globalPolicies)
+  return !isPolicyLocked('allow', floor)
 }
 
 /** The rolled-up policy shown in a category's summary pill. */
@@ -540,8 +582,18 @@ function McpServerSection({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
+/**
+ * A tool-policy edit awaiting the FR-021 confirmation before it is applied —
+ * either a single per-tool badge click or a role-preset click, whichever
+ * would make `execute_plan` resolve to "allow".
+ */
+type PendingExecutePlanGrant =
+  | { kind: 'tool'; toolId: string; policy: ToolPolicy }
+  | { kind: 'preset'; role: RolePreset }
+
 export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies }: ToolPolicyEditorProps) {
   const { policies } = value
+  const [pendingGrant, setPendingGrant] = useState<PendingExecutePlanGrant | null>(null)
 
   // ── Partition tools into two buckets ─────────────────────────────────────────
   // MCP tools → MCP section (grouped by server name).
@@ -579,17 +631,65 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  function handlePresetClick(role: RolePreset) {
+  /**
+   * True when applying `role` would set `execute_plan` to "allow" — either
+   * as the preset's explicit override for that tool, or (no override) its
+   * `defaultPolicy` — AND that would actually resolve (not floored by a
+   * stricter global ceiling entry — see `resolvesExecutePlanAllow`). Only
+   * relevant when `execute_plan` is actually a tool in this registry.
+   */
+  function presetGrantsExecutePlanAllow(role: RolePreset): boolean {
+    if (!tools.some((t) => t.name === EXECUTE_PLAN_TOOL_NAME)) return false
+    const preset = POLICY_PRESETS[role]
+    const resolvedByPreset = preset.overrides[EXECUTE_PLAN_TOOL_NAME] ?? preset.defaultPolicy
+    return resolvesExecutePlanAllow(EXECUTE_PLAN_TOOL_NAME, resolvedByPreset, globalPolicies)
+  }
+
+  /** The actual role-preset write — bypasses the FR-021 gate (already cleared by the caller). */
+  function commitPreset(role: RolePreset) {
     onChange(applyRolePreset(role, tools))
   }
 
+  function handlePresetClick(role: RolePreset) {
+    if (presetGrantsExecutePlanAllow(role)) {
+      setPendingGrant({ kind: 'preset', role })
+      return
+    }
+    commitPreset(role)
+  }
+
   /**
-   * Always writes an explicit entry for the tool being changed — there is no
-   * "matches the default, so remove the override" optimization anymore, since
-   * there is no default to match against. Every write is unconditional.
+   * The actual per-tool write — always writes an explicit entry for the tool
+   * being changed (there is no "matches the default, so remove the
+   * override" optimization anymore, since there is no default to match
+   * against). Bypasses the FR-021 gate (already cleared by the caller).
+   */
+  function commitToolPolicy(toolId: string, p: ToolPolicy) {
+    onChange({ policies: { ...policies, [toolId]: p } })
+  }
+
+  /**
+   * ADR-052 FR-021/F6: a per-tool edit that would make `execute_plan`
+   * resolve to "allow" (in either this per-agent editor or the global
+   * ceiling editor itself) is routed through a confirmation modal instead of
+   * writing immediately — see `resolvesExecutePlanAllow`.
    */
   function handleToolPolicy(toolId: string, p: ToolPolicy) {
-    onChange({ policies: { ...policies, [toolId]: p } })
+    if (resolvesExecutePlanAllow(toolId, p, globalPolicies)) {
+      setPendingGrant({ kind: 'tool', toolId, policy: p })
+      return
+    }
+    commitToolPolicy(toolId, p)
+  }
+
+  function confirmPendingGrant() {
+    if (!pendingGrant) return
+    if (pendingGrant.kind === 'tool') {
+      commitToolPolicy(pendingGrant.toolId, pendingGrant.policy)
+    } else {
+      commitPreset(pendingGrant.role)
+    }
+    setPendingGrant(null)
   }
 
   /**
@@ -675,6 +775,37 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
           </div>
         </div>
       )}
+
+      {/* ADR-052 FR-021/F6 — security affordance for an execute_plan "allow"
+          grant. A concrete, testable confirm gate (modal presence), not
+          styling: the edit is held in `pendingGrant` and only committed via
+          the Action button. Escape/overlay-dismiss (AlertDialog's
+          onOpenChange(false)) discards the pending edit exactly like Cancel. */}
+      <AlertDialog open={pendingGrant != null} onOpenChange={(open) => { if (!open) setPendingGrant(null) }}>
+        <AlertDialogContent data-testid="execute-plan-grant-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <ShieldWarning size={18} weight="bold" className="text-[var(--color-warning)]" />
+              Confirm autonomous plan execution
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingGrant?.kind === 'preset'
+                ? `The "${POLICY_PRESETS[pendingGrant.role].label}" preset sets execute_plan to Allow. `
+                : ''}
+              Setting execute_plan to Allow enables autonomous multi-task execution without an approval prompt
+              {'  '}— once this resolves to Allow, the agent can author and run a full task plan end-to-end
+              with no human interlock. Guardrails (concurrency cap, per-task attempt limit, idle expiry,
+              required acceptance criteria) still apply, but no operator approval prompt will be raised.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="execute-plan-grant-cancel">Cancel</AlertDialogCancel>
+            <AlertDialogAction data-testid="execute-plan-grant-confirm" onClick={confirmPendingGrant}>
+              Allow autonomous execution
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

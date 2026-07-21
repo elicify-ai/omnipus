@@ -1,5 +1,6 @@
 /**
- * PlansFilterBand.test.tsx — ADR-051 D2/D3 (Plans-as-Filter band).
+ * PlansFilterBand.test.tsx — ADR-051 D2/D3 (Plans-as-Filter band) + ADR-052
+ * §6.8 (▶/■ plan action button, orange "Cancelled" marker).
  *
  * Covers:
  *   1. The leading "All tasks" tile selects (onSelectPlan(null)) and reflects
@@ -8,15 +9,19 @@
  *   3. Re-clicking the ALREADY-active plan tile clears the filter
  *      (onSelectPlan(null)) — toggle-off.
  *   4. The pencil (edit) button fires onEditPlan and NEVER onSelectPlan.
- *   5. The ⋯ menu's Approve/Stop/Clear fire their own callbacks and NEVER
- *      onSelectPlan, including through the portalled confirm dialogs.
+ *   5. The ADR-052 ▶/■/Play action button and the ⋯ menu's Clear fire their
+ *      own effects and NEVER onSelectPlan, including through the portalled
+ *      confirm dialogs.
  *   6. Selected state (ring + aria-pressed) reflects `selectedPlanId`.
  *   7. ＋ New Plan fires onNewPlan.
+ *   8. The orange "Cancelled" marker is textually/visually distinct from the
+ *      red "Failed" marker (FR-015/US-8).
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PlansFilterBand } from './PlansFilterBand'
 import type { Agent, Plan, Task } from '@/lib/api'
 
@@ -46,6 +51,35 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   ),
   DropdownMenuSeparator: () => <hr />,
 }))
+
+const executePlanMock = vi.fn()
+const stopPlanMock = vi.fn()
+const restartPlanMock = vi.fn()
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    executePlan: (id: string) => executePlanMock(id),
+    stopPlan: (id: string) => stopPlanMock(id),
+    restartPlan: (id: string) => restartPlanMock(id),
+  }
+})
+
+const mockAddToast = vi.fn()
+vi.mock('@/store/ui', () => ({
+  useUiStore: (selector?: (s: { addToast: typeof mockAddToast }) => unknown) => {
+    const store = { addToast: mockAddToast }
+    return selector ? selector(store) : store
+  },
+}))
+
+beforeEach(() => {
+  executePlanMock.mockReset().mockResolvedValue(undefined)
+  stopPlanMock.mockReset().mockResolvedValue(undefined)
+  restartPlanMock.mockReset().mockResolvedValue(undefined)
+  mockAddToast.mockReset()
+})
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -83,15 +117,18 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 }
 
 const agents: Agent[] = [
-  { id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50 },
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  { id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, memory_enabled: true },
 ]
+
+function makeClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+}
 
 function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBand>> = {}) {
   const onSelectPlan = vi.fn()
   const onNewPlan = vi.fn()
   const onEditPlan = vi.fn()
-  const onApprovePlan = vi.fn()
-  const onStopPlan = vi.fn()
   const onClearPlan = vi.fn()
   const props = {
     plans: [makePlan()],
@@ -101,13 +138,15 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
     onSelectPlan,
     onNewPlan,
     onEditPlan,
-    onApprovePlan,
-    onStopPlan,
     onClearPlan,
     ...overrides,
   }
-  const utils = render(<PlansFilterBand {...props} />)
-  return { onSelectPlan, onNewPlan, onEditPlan, onApprovePlan, onStopPlan, onClearPlan, ...utils }
+  const utils = render(
+    <QueryClientProvider client={makeClient()}>
+      <PlansFilterBand {...props} />
+    </QueryClientProvider>,
+  )
+  return { onSelectPlan, onNewPlan, onEditPlan, onClearPlan, ...utils }
 }
 
 // ── All tasks tile ───────────────────────────────────────────────────────────
@@ -125,18 +164,18 @@ describe('PlansFilterBand — All tasks tile', () => {
     expect(screen.getByRole('button', { name: /All tasks/ })).toHaveAttribute('aria-pressed', 'true')
 
     rerender(
-      <PlansFilterBand
-        plans={[makePlan()]}
-        tasks={[]}
-        agents={agents}
-        selectedPlanId="plan-1"
-        onSelectPlan={vi.fn()}
-        onNewPlan={vi.fn()}
-        onEditPlan={vi.fn()}
-        onApprovePlan={vi.fn()}
-        onStopPlan={vi.fn()}
-        onClearPlan={vi.fn()}
-      />,
+      <QueryClientProvider client={makeClient()}>
+        <PlansFilterBand
+          plans={[makePlan()]}
+          tasks={[]}
+          agents={agents}
+          selectedPlanId="plan-1"
+          onSelectPlan={vi.fn()}
+          onNewPlan={vi.fn()}
+          onEditPlan={vi.fn()}
+          onClearPlan={vi.fn()}
+        />
+      </QueryClientProvider>,
     )
     expect(screen.getByRole('button', { name: /All tasks/ })).toHaveAttribute('aria-pressed', 'false')
   })
@@ -231,50 +270,78 @@ describe('PlansFilterBand — edit pencil isolation', () => {
   })
 })
 
-// ── ⋯ menu isolation (never filters) ─────────────────────────────────────────
+// ── ADR-052 §6.8 plan action button (Execute/Stop/Play) ─────────────────────
 
-describe('PlansFilterBand — ⋯ menu isolation', () => {
-  it('Approve fires onApprovePlan and NOT onSelectPlan', async () => {
+describe('PlansFilterBand — ▶/■/Play action button (ADR-052 §6.8)', () => {
+  it('shows Execute for a draft plan; confirming calls executePlan directly (never the old PUT-based approve) and NOT onSelectPlan', async () => {
     const user = userEvent.setup()
-    const { onApprovePlan, onSelectPlan } = renderBand({
-      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
-    })
-    await user.click(screen.getByRole('button', { name: 'Approve' }))
-    expect(onApprovePlan).toHaveBeenCalledTimes(1)
+    const { onSelectPlan } = renderBand({ plans: [makePlan({ id: 'plan-x', state: 'draft' })] })
+    await user.click(screen.getByRole('button', { name: 'Execute plan Launch' }))
+    const dialog = screen.getByRole('alertdialog')
+    expect(executePlanMock).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: 'Execute' }))
+    expect(executePlanMock).toHaveBeenCalledWith('plan-x')
     expect(onSelectPlan).not.toHaveBeenCalled()
   })
 
-  it('does not show Approve for a non-draft plan', () => {
+  it('does not show Execute for a non-draft plan', () => {
     renderBand({ plans: [makePlan({ state: 'running' })] })
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Execute plan/ })).not.toBeInTheDocument()
   })
 
-  it('shows Stop for a running/approved plan; confirming calls onStop but NEVER onSelectPlan', async () => {
+  it('shows Stop for a running plan; confirming calls stopPlan but NEVER onSelectPlan', async () => {
     const user = userEvent.setup()
-    const { onStopPlan, onSelectPlan } = renderBand({
+    const { onSelectPlan } = renderBand({
       plans: [makePlan({ id: 'plan-x', state: 'running' })],
     })
-    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    await user.click(screen.getByRole('button', { name: 'Stop plan Launch' }))
     const dialog = screen.getByRole('alertdialog')
-    expect(onStopPlan).not.toHaveBeenCalled()
+    expect(stopPlanMock).not.toHaveBeenCalled()
     await user.click(within(dialog).getByRole('button', { name: 'Stop' }))
-    expect(onStopPlan).toHaveBeenCalledTimes(1)
+    expect(stopPlanMock).toHaveBeenCalledWith('plan-x')
     expect(onSelectPlan).not.toHaveBeenCalled()
   })
 
-  it('Cancel dismisses the Stop confirm dialog without calling onStopPlan', async () => {
+  it('Cancel dismisses the Stop confirm dialog without calling stopPlan', async () => {
     const user = userEvent.setup()
-    const { onStopPlan, onSelectPlan } = renderBand({ plans: [makePlan({ state: 'running' })] })
-    await user.click(screen.getByRole('button', { name: 'Stop' }))
+    const { onSelectPlan } = renderBand({ plans: [makePlan({ state: 'running' })] })
+    await user.click(screen.getByRole('button', { name: 'Stop plan Launch' }))
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    expect(onStopPlan).not.toHaveBeenCalled()
-    // Parity with the confirm-path isolation tests above — cancelling out of
-    // the ⋯ menu's confirm dialog must never bubble into the tile's own
-    // select/filter control either.
+    expect(stopPlanMock).not.toHaveBeenCalled()
     expect(onSelectPlan).not.toHaveBeenCalled()
   })
 
+  it('shows Play for a cancelled plan; confirming calls restartPlan', async () => {
+    const user = userEvent.setup()
+    const { onSelectPlan } = renderBand({
+      plans: [makePlan({ id: 'plan-x', state: 'failed', failed_reason: 'stopped_by_user' })],
+    })
+    await user.click(screen.getByRole('button', { name: 'Play plan Launch' }))
+    const dialog = screen.getByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Play' }))
+    expect(restartPlanMock).toHaveBeenCalledWith('plan-x')
+    expect(onSelectPlan).not.toHaveBeenCalled()
+  })
+
+  it('shows no action button for a genuinely-failed plan (judge_rounds_exhausted)', () => {
+    renderBand({ plans: [makePlan({ state: 'failed', failed_reason: 'judge_rounds_exhausted' })] })
+    expect(screen.queryByRole('button', { name: /Play plan/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Execute plan/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Stop plan/ })).not.toBeInTheDocument()
+  })
+
+  it('shows no action button for a done plan', () => {
+    renderBand({ plans: [makePlan({ state: 'done' })] })
+    expect(screen.queryByRole('button', { name: /Play plan/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Execute plan/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Stop plan/ })).not.toBeInTheDocument()
+  })
+})
+
+// ── ⋯ menu isolation (Clear only — never filters) ────────────────────────────
+
+describe('PlansFilterBand — ⋯ menu (Clear only)', () => {
   it('Clear opens a confirm dialog naming the plan; confirming calls onClearPlan but NEVER onSelectPlan', async () => {
     const user = userEvent.setup()
     const { onClearPlan, onSelectPlan } = renderBand({
@@ -291,6 +358,11 @@ describe('PlansFilterBand — ⋯ menu isolation', () => {
   it('Clear is disabled while the plan is running', () => {
     renderBand({ plans: [makePlan({ state: 'running' })] })
     expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
+  })
+
+  it('the ⋯ menu no longer offers Approve (superseded by the Execute action button)', () => {
+    renderBand({ plans: [makePlan({ state: 'draft' })] })
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
   })
 
   it('names the ⋯ trigger after the plan', () => {
@@ -310,62 +382,50 @@ describe('PlansFilterBand — New Plan affordance', () => {
   })
 })
 
-// ── pendingAction (discriminated prop) ──────────────────────────────────────
-//
-// PlansFilterBand collapses the three independently-pending mutation states
-// (approve/stop/clear) into ONE `pendingAction: { planId, action } | null`
-// prop — the tile derives its own isApproving/isStopping/isClearing by
-// matching `pendingAction.planId` against its own plan id AND checking
-// `action`. These tests exercise that derivation directly via the real prop
-// shape (not the old approvingPlanId/stoppingPlanId/clearingPlanId props).
+// ── Cancelled vs Failed discrimination (ADR-052 FR-015/US-8) ────────────────
 
-describe('PlansFilterBand — pendingAction (discriminated prop)', () => {
-  it('disables Approve and shows "Approving…" when pendingAction matches this plan\'s approve', () => {
-    renderBand({
-      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
-      pendingAction: { planId: 'plan-x', action: 'approve' },
-    })
-    const approveBtn = screen.getByRole('button', { name: 'Approving…' })
-    expect(approveBtn).toBeDisabled()
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+describe('PlansFilterBand — orange "Cancelled" vs red "Failed" (ADR-052 FR-015/US-8)', () => {
+  it('a plan Stopped by the user (failed_reason: stopped_by_user) renders "Cancelled", not "Failed"', () => {
+    renderBand({ plans: [makePlan({ state: 'failed', failed_reason: 'stopped_by_user' })] })
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
   })
 
-  it('disables Stop and shows "Stopping…" when pendingAction matches this plan\'s stop', () => {
-    renderBand({
-      plans: [makePlan({ id: 'plan-x', state: 'running' })],
-      pendingAction: { planId: 'plan-x', action: 'stop' },
-    })
-    const stopBtn = screen.getByRole('button', { name: 'Stopping…' })
-    expect(stopBtn).toBeDisabled()
-    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+  it('a genuinely-failed plan (judge_rounds_exhausted) renders "Failed", not "Cancelled"', () => {
+    renderBand({ plans: [makePlan({ state: 'failed', failed_reason: 'judge_rounds_exhausted' })] })
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+    expect(screen.queryByText('Cancelled')).not.toBeInTheDocument()
   })
 
-  it('disables Clear and shows "Clearing…" when pendingAction matches this plan\'s clear', () => {
-    renderBand({
-      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
-      pendingAction: { planId: 'plan-x', action: 'clear' },
-    })
-    const clearBtn = screen.getByRole('button', { name: 'Clearing…' })
-    expect(clearBtn).toBeDisabled()
-    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument()
+  it('a genuinely-failed plan (idle_expired) renders "Failed", not "Cancelled"', () => {
+    renderBand({ plans: [makePlan({ state: 'failed', failed_reason: 'idle_expired' })] })
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+    expect(screen.queryByText('Cancelled')).not.toBeInTheDocument()
   })
 
-  it('a pendingAction for a DIFFERENT plan does not disable this plan\'s actions (proves the planId match, not a global flag)', () => {
-    renderBand({
-      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
-      pendingAction: { planId: 'plan-other', action: 'approve' },
+  it('"Cancelled" and "Failed" render in visually distinct (non-equal) colours', () => {
+    const { rerender } = renderBand({
+      plans: [makePlan({ id: 'plan-x', state: 'failed', failed_reason: 'stopped_by_user' })],
     })
-    const approveBtn = screen.getByRole('button', { name: 'Approve' })
-    expect(approveBtn).not.toBeDisabled()
-    expect(screen.queryByRole('button', { name: 'Approving…' })).not.toBeInTheDocument()
-  })
+    const cancelledColor = screen.getByText('Cancelled').style.color
 
-  it('a pendingAction for a DIFFERENT action on this same plan does not disable Approve (proves the action match)', () => {
-    renderBand({
-      plans: [makePlan({ id: 'plan-x', state: 'draft' })],
-      pendingAction: { planId: 'plan-x', action: 'clear' },
-    })
-    const approveBtn = screen.getByRole('button', { name: 'Approve' })
-    expect(approveBtn).not.toBeDisabled()
+    rerender(
+      <QueryClientProvider client={makeClient()}>
+        <PlansFilterBand
+          plans={[makePlan({ id: 'plan-x', state: 'failed', failed_reason: 'judge_rounds_exhausted' })]}
+          tasks={[]}
+          agents={agents}
+          selectedPlanId={null}
+          onSelectPlan={vi.fn()}
+          onNewPlan={vi.fn()}
+          onEditPlan={vi.fn()}
+          onClearPlan={vi.fn()}
+        />
+      </QueryClientProvider>,
+    )
+    const failedColor = screen.getByText('Failed').style.color
+    expect(cancelledColor).not.toBe(failedColor)
+    expect(cancelledColor).not.toBe('')
+    expect(failedColor).not.toBe('')
   })
 })

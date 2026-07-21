@@ -5,6 +5,11 @@
  * (`TaskCard.tsx:191-195` pre-removal). Migrated `milestone:<name>` tags
  * render as ordinary chips, verbatim — no special-casing, no client-side
  * re-prefixing/uniquifying.
+ *
+ * `showActions={false}` on every render here (ADR-052 §6.8): this file only
+ * exercises tag-chip rendering, unrelated to the ▶/■ action button — turning
+ * it off avoids needing a QueryClientProvider (TaskActionButton's
+ * useMutation/useQueryClient would otherwise throw without one).
  */
 
 import { describe, it, expect } from 'vitest'
@@ -31,12 +36,12 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 describe('TaskCard — tag chips (replaces the milestone chip)', () => {
   it('renders no tag chips and no milestone UI when the task has no tags', () => {
-    render(<TaskCard task={makeTask()} onClick={() => {}} />)
+    render(<TaskCard task={makeTask()} onClick={() => {}} showActions={false} />)
     expect(screen.queryByText(/milestone/i)).toBeNull()
   })
 
   it('renders a chip per tag', () => {
-    render(<TaskCard task={makeTask({ tags: ['release', 'urgent'] })} onClick={() => {}} />)
+    render(<TaskCard task={makeTask({ tags: ['release', 'urgent'] })} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('release')).toBeInTheDocument()
     expect(screen.getByText('urgent')).toBeInTheDocument()
   })
@@ -46,6 +51,7 @@ describe('TaskCard — tag chips (replaces the milestone chip)', () => {
       <TaskCard
         task={makeTask({ tags: ['a', 'b', 'c', 'd', 'e'] })}
         onClick={() => {}}
+        showActions={false}
       />,
     )
     expect(screen.getByText('a')).toBeInTheDocument()
@@ -57,7 +63,7 @@ describe('TaskCard — tag chips (replaces the milestone chip)', () => {
   })
 
   it('renders a migrated milestone:<name> tag as an ordinary chip, verbatim', () => {
-    render(<TaskCard task={makeTask({ tags: ['milestone:q3'] })} onClick={() => {}} />)
+    render(<TaskCard task={makeTask({ tags: ['milestone:q3'] })} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('milestone:q3')).toBeInTheDocument()
     // No dedicated "Milestone" label/dropdown/select anywhere on the card.
     expect(screen.queryByText(/^milestone$/i)).toBeNull()
@@ -65,7 +71,7 @@ describe('TaskCard — tag chips (replaces the milestone chip)', () => {
 
   it('a chip carries the full tag as its title (tooltip) for truncation', () => {
     const longTag = 'a'.repeat(64)
-    render(<TaskCard task={makeTask({ tags: [longTag] })} onClick={() => {}} />)
+    render(<TaskCard task={makeTask({ tags: [longTag] })} onClick={() => {}} showActions={false} />)
     expect(screen.getByTitle(longTag)).toBeInTheDocument()
   })
 })

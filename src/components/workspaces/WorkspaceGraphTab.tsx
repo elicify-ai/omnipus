@@ -19,7 +19,7 @@ import {
   tasksQueryKeys,
   plansQueryKeys,
 } from '@/lib/api'
-import { planStateColor, planStateLabel } from '@/lib/planStateColors'
+import { planDisplayColor, planDisplayLabel } from '@/lib/planStateColors'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { planDependencyReconnect } from './dependencyReconnect'
@@ -238,14 +238,17 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
 
         {activePlan && (
           <div className="flex flex-1 min-w-0 items-center gap-2 pl-2">
+            {/* ADR-052 FR-015/US-8 — a user-cancelled plan renders
+                "Cancelled" (orange), distinct from a genuine "Failed" (red),
+                via the shared planDisplayColor/planDisplayLabel helpers. */}
             <span
               className="flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold"
               style={{
-                color: planStateColor(activePlan.state),
-                backgroundColor: `${planStateColor(activePlan.state)}1a`,
+                color: planDisplayColor(activePlan),
+                backgroundColor: `${planDisplayColor(activePlan)}1a`,
               }}
             >
-              {planStateLabel(activePlan.state)}
+              {planDisplayLabel(activePlan)}
             </span>
             {activePlan.goal && (
               <p

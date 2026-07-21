@@ -34,6 +34,8 @@ function makeWorker(overrides: Partial<Agent> = {}): Agent {
     soul: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
+    // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+    memory_enabled: true,
     ...overrides,
   }
 }

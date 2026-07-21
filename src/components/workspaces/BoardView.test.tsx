@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoardView, canDropTransition } from './BoardView'
 import type { Task, Plan } from '@/lib/api'
 import { STATUS_ORDER, STATUS_LABELS } from '@/lib/statusColors'
@@ -49,18 +50,24 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 const plans: Plan[] = []
 
+// ADR-052 §6.8: every rendered TaskCard now embeds a TaskActionButton, which
+// calls useMutation/useQueryClient — those hooks throw without a QueryClient
+// in the tree.
 function renderBoard(props: Partial<React.ComponentProps<typeof BoardView>> = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
-    <BoardView
-      tasks={[]}
-      plans={plans}
-      agents={[]}
-      altitude="top-level"
-      onTaskClick={vi.fn()}
-      onTaskMove={vi.fn()}
-      onMoveRejected={vi.fn()}
-      {...props}
-    />,
+    <QueryClientProvider client={client}>
+      <BoardView
+        tasks={[]}
+        plans={plans}
+        agents={[]}
+        altitude="top-level"
+        onTaskClick={vi.fn()}
+        onTaskMove={vi.fn()}
+        onMoveRejected={vi.fn()}
+        {...props}
+      />
+    </QueryClientProvider>,
   )
 }
 

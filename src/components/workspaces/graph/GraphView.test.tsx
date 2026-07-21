@@ -6,10 +6,16 @@
  * These tests assert the two user-visible outcomes: the empty state when there
  * are no graphable tasks, and a node-per-task render with the task titles when
  * there are.
+ *
+ * Wrapped in a QueryClientProvider (ADR-052 §6.8): every task node now embeds
+ * a TaskActionButton (▶/■), which calls `useMutation`/`useQueryClient` — those
+ * hooks throw without a QueryClient in the tree, even when no test here ever
+ * clicks the button.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, type RenderResult } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Node } from '@xyflow/react'
 import type { Task } from '@/lib/api'
 
@@ -75,16 +81,28 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   } as Task
 }
 
+function makeClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+}
+
+/** Render GraphView under a QueryClientProvider — exposes the client too so
+ * a rerender in the same test can reuse the SAME provider instance. */
+function renderGraph(ui: React.ReactElement): RenderResult & { client: QueryClient } {
+  const client = makeClient()
+  const utils = render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  return { ...utils, client }
+}
+
 describe('GraphView — empty state', () => {
   it('shows the empty state when there are no tasks', () => {
-    render(<GraphView tasks={[]} agents={[]} onTaskClick={() => {}} />)
+    renderGraph(<GraphView tasks={[]} agents={[]} onTaskClick={() => {}} />)
     expect(screen.getByTestId('graph-empty-state')).toBeInTheDocument()
     expect(screen.getByText('No tasks yet')).toBeInTheDocument()
   })
 
   it('shows the empty state when every task is non-user-surface', () => {
     const tasks = [makeTask({ id: 'hb', surface: 'heartbeat' })]
-    render(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+    renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
     expect(screen.getByTestId('graph-empty-state')).toBeInTheDocument()
   })
 })
@@ -95,7 +113,7 @@ describe('GraphView — renders nodes + edges', () => {
       makeTask({ id: 'a', title: 'Design the schema' }),
       makeTask({ id: 'b', title: 'Build the API', blocked_by: ['a'] }),
     ]
-    const { container } = render(
+    const { container } = renderGraph(
       <GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />,
     )
 
@@ -118,7 +136,7 @@ describe('GraphView — renders nodes + edges', () => {
       makeTask({ id: 'a', title: 'Alpha' }),
       makeTask({ id: 'b', title: 'Bravo', blocked_by: ['a'] }),
     ]
-    const { container } = render(
+    const { container } = renderGraph(
       <GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />,
     )
     expect(container.querySelector('.react-flow__edges')).not.toBeNull()
@@ -135,7 +153,7 @@ describe('GraphView — keyboard operability (WCAG 2.1.1 / 4.1.2)', () => {
 
   it('exposes each node as a single focusable role="button" with a title+status label', () => {
     const tasks = [makeTask({ id: 'a', title: 'Design the schema', status: 'in_progress' })]
-    const { container } = render(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+    const { container } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
 
     const node = container.querySelector('[data-testid="task-node-a"]')
     expect(node).not.toBeNull()
@@ -155,7 +173,7 @@ describe('GraphView — keyboard operability (WCAG 2.1.1 / 4.1.2)', () => {
   it('Enter on a focused node opens the task via onTaskClick', () => {
     const tasks = [makeTask({ id: 'a', title: 'Design the schema' })]
     const onTaskClick = vi.fn()
-    const { container } = render(<GraphView tasks={tasks} agents={[]} onTaskClick={onTaskClick} />)
+    const { container } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={onTaskClick} />)
 
     const node = container.querySelector('[data-testid="task-node-a"]') as HTMLElement
     fireEvent.keyDown(node, { key: 'Enter' })
@@ -166,7 +184,7 @@ describe('GraphView — keyboard operability (WCAG 2.1.1 / 4.1.2)', () => {
   it('Space on a focused node also opens the task via onTaskClick', () => {
     const tasks = [makeTask({ id: 'a', title: 'Build the API' })]
     const onTaskClick = vi.fn()
-    const { container } = render(<GraphView tasks={tasks} agents={[]} onTaskClick={onTaskClick} />)
+    const { container } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={onTaskClick} />)
 
     const node = container.querySelector('[data-testid="task-node-a"]') as HTMLElement
     fireEvent.keyDown(node, { key: ' ' })
@@ -203,7 +221,7 @@ describe('GraphView — position stability across an unrelated re-render', () =>
     // actually changes.
     const agents: never[] = []
     const onTaskClickA = () => {}
-    const { rerender } = render(
+    const { rerender, client } = renderGraph(
       <GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickA} />,
     )
 
@@ -215,7 +233,11 @@ describe('GraphView — position stability across an unrelated re-render', () =>
     // unchanged here, `nodesWithOpen` cannot recompute either way (fixed or
     // reverted), so this step is neutral with respect to the regression this
     // test targets.
-    rerender(<GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickA} />)
+    rerender(
+      <QueryClientProvider client={client}>
+        <GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickA} />
+      </QueryClientProvider>,
+    )
     expect(capturedNodesCalls.length).toBeGreaterThan(0)
     const firstNodes = capturedNodesCalls[capturedNodesCalls.length - 1]
     expect(firstNodes).toHaveLength(2)
@@ -223,7 +245,11 @@ describe('GraphView — position stability across an unrelated re-render', () =>
     // Re-render with a BRAND NEW onTaskClick closure — same tasks/agents, so
     // nothing about the actual graph changed.
     const onTaskClickB = () => {}
-    rerender(<GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickB} />)
+    rerender(
+      <QueryClientProvider client={client}>
+        <GraphView tasks={tasks} agents={agents} onTaskClick={onTaskClickB} />
+      </QueryClientProvider>,
+    )
 
     const lastNodes = capturedNodesCalls[capturedNodesCalls.length - 1]
     // Same array reference — `nodesWithOpen` did not recompute, so the re-seed

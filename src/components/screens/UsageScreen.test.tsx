@@ -297,4 +297,40 @@ describe('UsageScreen', () => {
     const heroRow = screen.getByTestId('usage-hero-row')
     expect(heroRow.textContent?.toLowerCase()).not.toContain('cost')
   })
+
+  // ADR-052 FR-036 / SC-014 — UsageScreen must show verifier (Judge) LLM
+  // spend, unlike Sidebar/SearchModal which exclude it. Verified against
+  // pkg/gateway/rest_stats.go's HandleTokenStats: it aggregates every
+  // session type with no filter, so a verifier agent's entry in the
+  // fetchTokenStats response already surfaces here today — no
+  // include_verifier plumbing needed for THIS view.
+  describe('ADR-052 FR-036: verifier (Judge) spend visibility', () => {
+    it('shows a verifier-role agent entry in the "By agent" breakdown (aggregate spend is unfiltered by session type)', async () => {
+      vi.mocked(fetchTokenStats).mockResolvedValue({
+        ...mockSummary,
+        agents: [
+          ...mockSummary.agents!,
+          {
+            agent_id: 'judge',
+            agent_name: 'Judge',
+            tokens_in: 800,
+            tokens_out: 200,
+            tokens_total: 1000,
+          },
+        ],
+      })
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      // "By agent" is the default active tab.
+      expect(screen.getByTestId('tab-content-agent')).toHaveTextContent('Judge')
+      // Verifier spend is folded into the grand total too.
+      expect(screen.getByTestId('usage-hero-row')).toHaveTextContent(formatTokens(15000 + 3000 + 1000))
+    })
+
+    it('the "By session" tab still calls fetchSessions with no include_verifier — a known, documented residual gap (fetchSessions in src/lib/api.ts has no such parameter yet)', async () => {
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith()
+    })
+  })
 })

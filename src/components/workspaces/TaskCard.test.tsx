@@ -73,10 +73,18 @@ function makeDrag(): TaskCardDrag {
   }
 }
 
+// ADR-052 §6.8: TaskCard now embeds a `TaskActionButton` (also role="button")
+// by default. These two describe blocks test the CARD ROOT's own keyboard
+// semantics (open vs. drag-lift) in isolation from that new, orthogonal
+// affordance — `showActions={false}` keeps `screen.getByRole('button')`
+// (no name filter) unambiguous, exactly as before this feature landed. The
+// action button's own isolation (a click on it never opens the card) is
+// covered separately in TaskCard.cancelled.test.tsx, and it needs no
+// QueryClientProvider here since `showActions={false}` means it never mounts.
 describe('TaskCard — keyboard activation, draggable (drag prop present)', () => {
   it('Enter opens the task via onClick', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: 'Enter' })
@@ -86,7 +94,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
 
   it('Space does NOT open the task — it is reserved for dnd-kit keyboard lift', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: ' ' })
@@ -97,7 +105,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
   it('still forwards Space to dnd-kit\'s own onKeyDown listener (the lift itself keeps working)', () => {
     const onClick = vi.fn()
     const drag = makeDrag()
-    render(<TaskCard task={baseTask()} onClick={onClick} drag={drag} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} drag={drag} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: ' ' })
@@ -109,7 +117,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
 describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. ExecutionView)', () => {
   it('Enter opens the task via onClick', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: 'Enter' })
@@ -119,7 +127,7 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
 
   it('Space ALSO opens the task — there is no drag context reserving it (WCAG 4.1.2)', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
     const card = screen.getByRole('button')
     fireEvent.keyDown(card, { key: ' ' })
@@ -129,7 +137,7 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
 
   it('a plain mouse click also opens the task', () => {
     const onClick = vi.fn()
-    render(<TaskCard task={baseTask()} onClick={onClick} />)
+    render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
     fireEvent.click(screen.getByRole('button'))
 

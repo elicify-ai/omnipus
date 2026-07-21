@@ -233,6 +233,18 @@ describe('Sidebar — overlay rendering when open', () => {
   })
 })
 
+// ADR-052 FR-036: verifier-role sessions must stay hidden from the sidebar's
+// session list by default. GET /sessions defaults to excluding type
+// "verifier" unless include_verifier=true is passed — this is a regression
+// guard that the sidebar's session query never opts in.
+describe('Sidebar — ADR-052 FR-036: verifier sessions excluded by default', () => {
+  it('calls fetchSessions with no arguments (never requests include_verifier)', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith()
+  })
+})
+
 // test_sidebar_pin_icon_hidden_mobile
 // Traces to: wave0-brand-design-spec.md Scenario: Pin icon hidden on phone breakpoint (US-5 AC7, FR-015)
 describe('Sidebar — pin icon visibility on mobile', () => {

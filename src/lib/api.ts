@@ -140,6 +140,8 @@ import {
   TokenUsageSummary as TokenUsageSummarySchema,
   // Planning & Goals (ADR-049, contract-first #8):
   Plan as PlanSchema,
+  // ADR-052 Wave 2 — plan execute/restart 400 error body (contract-first #8):
+  PlanApproveError as PlanApproveErrorSchema,
   EvidenceRecord as EvidenceRecordSchema,
   JudgeVerdict as JudgeVerdictSchema,
   // Spec-3 max-parallel + orchestrator (contract-first #8):
@@ -378,6 +380,8 @@ import type {
   PlanCreateRequest,
   PlanUpdateRequest,
   PlanListResponse,
+  // ADR-052 Wave 2 — plan execute/restart 400 error body (contract-first #8):
+  PlanApproveError,
   AcceptanceCriterion,
   EvidenceRecord,
   JudgeVerdict,
@@ -535,6 +539,8 @@ export type {
   PlanCreateRequest,
   PlanUpdateRequest,
   PlanListResponse,
+  // ADR-052 Wave 2 — plan execute/restart 400 error body:
+  PlanApproveError,
   AcceptanceCriterion,
   EvidenceRecord,
   JudgeVerdict,
@@ -1945,9 +1951,13 @@ export function rotateGatewayToken(): Promise<{ token: string }> {
 //   GET    /tasks/{id}/subtasks → Task[]
 //   PUT    /tasks/{id}/todos    → Task     (replace checklist atomically)
 //   PUT    /tasks/{id}/dependencies → Task (replace blocked_by atomically)
+//   POST   /tasks/{id}/stop     → Task     (Stop/Clear — `stopTask`, ADR-052)
+//   POST   /tasks/{id}/restart  → Task | 409 (▶ Play a Stopped task — `restartTask`, ADR-052 FR-026)
 //
-// "Start" semantics: there is no /start endpoint. Set status=in_progress via
-// PATCH to start a task (drag or Run button).
+// "Start"/"Run" semantics: there is no /start or /run endpoint for a
+// standalone task (`run_task` on the wire is an AGENT tool, not a REST
+// route — ADR-052 G4). Set status=in_progress via PATCH to start/run one
+// (drag, the board's Run button, or `runTask` below).
 
 export const tasksQueryKeys = {
   list: (params?: { workspace_id?: string; status?: string; agent_id?: string; plan_id?: string; surface?: string }) => {
@@ -2009,14 +2019,70 @@ export function deleteTask(id: string): Promise<void> {
 }
 
 /**
- * Stop/Clear (D8) a task's own goal loop (ADR-049 — "clear affordances at
- * every level", distinct from `stopPlan`, which stops a Plan's loop). NOT a
- * generated contract endpoint yet — Wave 2 backend work; mirrors the `Plan`
- * stop shape (`POST .../stop` -> the updated `Task`) so the SPA can call it
- * optimistically per the existing TanStack Query patterns.
+ * Stop/Clear (D8) a task's own goal loop — POST /tasks/{id}/stop (ADR-049 —
+ * "clear affordances at every level", distinct from `stopPlan`, which stops
+ * a Plan's loop; ADR-052 FR-010/FR-022/US-7 — `RequestCancelForSession`
+ * reaches the worker turn + its subagents + its shells, the same chat
+ * cancel cascade `handleTaskStop` already uses).
  */
-export function stopTaskGoalLoop(id: string): Promise<Task> {
+export function stopTask(id: string): Promise<Task> {
   return request<Task>(`/tasks/${encodeURIComponent(id)}/stop`, { method: 'POST' }, TaskSchema as ZodType<Task>)
+}
+
+/** @deprecated Use `stopTask` — kept as an alias for callers not yet swept (e.g. `TaskDetailPanel.tsx`). Same signature/behavior. */
+export const stopTaskGoalLoop = stopTask
+
+/**
+ * Restart (▶ Play) a standalone task previously Stopped by the user — POST
+ * /tasks/{id}/restart (ADR-052 FR-026/US-9/US-10). Resets `attempt_count` to
+ * 0, clears `cancel_reason`, and transitions the task to `next` so the goal
+ * loop picks it up again and drives the FULL attempt loop (run -> judge ->
+ * retry to the limit — same as `run_task` / a plan member, A3).
+ *
+ * A `409` means "not restartable": the task belongs to a plan (an in-plan
+ * member restarts only via its plan — restart the plan instead, `restartPlan`),
+ * or the task isn't `failed`, or its `cancel_reason` isn't `stopped_by_user`.
+ * Rewritten into a specific, actionable message here rather than the generic
+ * "conflicts with current state" default.
+ */
+export async function restartTask(id: string): Promise<Task> {
+  try {
+    return await request<Task>(`/tasks/${encodeURIComponent(id)}/restart`, { method: 'POST' }, TaskSchema as ZodType<Task>)
+  } catch (err) {
+    throw friendlyConflictError(
+      err,
+      "This task is not restartable — it belongs to a plan (restart the plan instead), or wasn't Stopped by a user.",
+    )
+  }
+}
+
+/**
+ * Run a standalone task now (▶ Play on an idle task — ADR-052 FR-019/G4).
+ *
+ * There is NO dedicated REST route for this: `run_task` on the wire is an
+ * AGENT tool only (verified against the generated contract — no
+ * `/tasks/{id}/run` operation exists in `src/lib/api/generated/openapi-types.ts`).
+ * The UI's "run now" path is the SAME one the board's drag-to-`in_progress`
+ * move and `CreateTaskSlideOver`'s "Create & Run" already use ("Start"
+ * semantics, see the Tasks section header above): PATCH the task to
+ * `status: 'in_progress'`. The engine's goal loop then drives the task
+ * through the FULL attempt loop (run -> judge -> retry to the limit),
+ * identical to `run_task` / a plan member (A3) — this is not a lesser,
+ * single-shot run.
+ *
+ * The engine — not this call — rejects an in-plan member (G4: in-plan tasks
+ * start only via their plan); a `409` from that case is rewritten into a
+ * friendlier "not runnable" message rather than the generic conflict default.
+ */
+export async function runTask(id: string): Promise<Task> {
+  try {
+    return await updateTask(id, { status: 'in_progress' })
+  } catch (err) {
+    throw friendlyConflictError(
+      err,
+      "This task can't be run right now — it may already be running, or be an in-plan member (its plan drives its start, not a standalone run).",
+    )
+  }
 }
 
 // ── Task evidence & judge verdicts (ADR-049 D2, Planning & Goals) ───────────
@@ -3366,7 +3432,25 @@ export function updateWorkspaceInstructions(
   )
 }
 
-// ── Plans (ADR-049 D1/FR-1 — replaces Milestones) ────────────────────────────
+/**
+ * Rewrite a `409 Conflict` into an action-specific, human-actionable message
+ * — the generic `ApiError` default for 409 ("This conflicts with the
+ * current state. Please refresh and try again.") doesn't say WHY a
+ * restart/run isn't possible right now. Only 409 is rewritten; every other
+ * status (400/401/404/network) and every non-`ApiError` passes through
+ * completely unchanged. Shared by `restartPlan`/`restartTask`/`runTask`
+ * (ADR-052 FR-016/FR-019/FR-026 — restart/run reject with 409 for "not
+ * restartable"/"not runnable" states).
+ */
+function friendlyConflictError(err: unknown, message: string): unknown {
+  if (isApiErrorFn(err) && err.status === 409) {
+    return new ApiError(409, message, { code: err.code, body: err.body, cause: err.cause })
+  }
+  return err
+}
+
+// ── Plans (ADR-049 D1/FR-1 — replaces Milestones; ADR-052 Wave 2 — agent plan
+// authoring & execution) ──────────────────────────────────────────────────
 //
 // A Plan is a first-class entity that groups an executable task DAG under a
 // goal, Definition of Done, owner agent, and 5-value state machine
@@ -3375,18 +3459,33 @@ export function updateWorkspaceInstructions(
 // backend — never stored on the Plan record (mirrors the removed Milestone's
 // computeMilestoneCounts). See contracts/components/schemas/Plan*.yaml.
 //
-// Endpoints (Wave 2 — backend lands these; the SPA calls them optimistically
-// per the generated contract shape, guarded by the existing TanStack Query
-// error/loading patterns):
+// Endpoints:
 //   GET    /workspaces/{id}/plans → PlanListResponse
 //   POST   /plans                → Plan   (top-level create, NOT nested under
 //                                           a workspace path — workspace_id is
 //                                           a body field)
-//   PUT    /plans/{id}           → Plan   (partial update incl. `state`
-//                                           transitions — Approve is
-//                                           `state: 'approved'`)
+//   PUT    /plans/{id}           → Plan   (partial update — title/goal/
+//                                           description/owner/dod/bounds
+//                                           ONLY. ADR-052 G2/FR-007: the SPA
+//                                           MUST NEVER send `state` here —
+//                                           PUT is not a gated transition
+//                                           entry point [it skips both the
+//                                           FR-084 criteria gate and the
+//                                           cap-16 admission check]. The
+//                                           single gated entry point into
+//                                           `approved` is POST .../approve.)
+//   POST   /plans/{id}/approve   → Plan | 400 PlanApproveError
+//                                           (executePlan — ADR-052 FR-003;
+//                                           the ONLY path draft->approved
+//                                           takes; the engine then promotes
+//                                           approved->running under the cap
+//                                           on its own tick)
 //   POST   /plans/{id}/stop      → Plan   (Stop/Clear a running plan, D8)
-//   DELETE /plans/{id}           → void   (rejected 400 while running)
+//   POST   /plans/{id}/restart   → Plan | 409
+//                                           (restartPlan — ADR-052 FR-026,
+//                                           the ▶ Play route for a plan
+//                                           `failed`+`stopped_by_user`)
+//   DELETE /plans/{id}           → void   (rejected 400/409 while running)
 
 export const plansQueryKeys = {
   list: (workspaceId: string) => ['plans', workspaceId] as const,
@@ -3414,18 +3513,72 @@ export function createPlan(body: PlanCreateRequest): Promise<Plan> {
   return request<Plan>('/plans', { method: 'POST', body: JSON.stringify(body) }, PlanSchema as ZodType<Plan>)
 }
 
-export function updatePlan(id: string, body: PlanUpdateRequest): Promise<Plan> {
+/**
+ * Partial plan update — title/goal/description/owner_agent_id/dod/bounds
+ * ONLY. ADR-052 §6.3/FR-007 (G2 fix): the SPA must NEVER send `state` in this
+ * body — PUT is not, and must never become, a state-transition entry point
+ * (the backend endpoint that previously accepted `state` here bypassed both
+ * the FR-084 per-task criteria gate and the cap-16 admission check). Use
+ * `executePlan` / `stopPlan` / `restartPlan` for every state transition.
+ */
+export function updatePlan(id: string, body: Omit<PlanUpdateRequest, 'state'>): Promise<Plan> {
   return request<Plan>(`/plans/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }, PlanSchema as ZodType<Plan>)
 }
 
-/** Approve is a plain state transition (`draft` -> `approved`) — SD-C4: confirm-on-success, no optimistic flip. */
-export function approvePlan(id: string): Promise<Plan> {
-  return updatePlan(id, { state: 'approved' })
+/**
+ * Execute (Approve) a draft plan — POST /plans/{id}/approve (ADR-052 FR-003/
+ * FR-007/FR-008/US-3/US-5). This is the SOLE gated entry point into
+ * `approved`: it runs the tiered Definition-of-Done check plus the
+ * unconditional per-member-task criteria gate (FR-084), then the single
+ * plan-engine instance promotes `approved` -> `running` under the global cap
+ * (16) on its own tick — this call returns once the plan reaches `approved`,
+ * it does not wait for a cap slot ("queued behind cap" is a normal outcome,
+ * not an error). SD-C4: confirm-on-success, no optimistic flip — a `400`
+ * carries a `PlanApproveError` body (`error` and/or `task_errors`); parse it
+ * with `parsePlanApproveTaskErrors`.
+ *
+ * Named `executePlan` (the ▶ Execute button's semantics — G4/FR-003) rather
+ * than the historical `approvePlan`, which used to PUT `{state:'approved'}`
+ * and — per the G2 bug this repoints — silently bypassed BOTH the criteria
+ * gate and the cap. `approvePlan` survives below as a deprecated alias for
+ * any not-yet-swept caller; new call sites should use `executePlan`.
+ */
+export function executePlan(id: string): Promise<Plan> {
+  return request<Plan>(`/plans/${encodeURIComponent(id)}/approve`, { method: 'POST' }, PlanSchema as ZodType<Plan>)
 }
+
+/** @deprecated Use `executePlan` — this name predates the ADR-052 G2 fix (PUT-based approve bypassed the criteria gate + cap). Same signature/behavior, POST /approve underneath. */
+export const approvePlan = executePlan
 
 /** Stop/Clear (D8) — stops a running plan's loop. May be optimistic (SD-C5): it cannot validation-fail like Approve. */
 export function stopPlan(id: string): Promise<Plan> {
   return request<Plan>(`/plans/${encodeURIComponent(id)}/stop`, { method: 'POST' }, PlanSchema as ZodType<Plan>)
+}
+
+/**
+ * Restart (▶ Play) a plan previously Stopped by the user — POST
+ * /plans/{id}/restart (ADR-052 FR-016/FR-017/FR-026, US-9). Resets every
+ * non-`done` member to `next`/`blocked` with `attempt_count` reset to 0,
+ * resets the plan's `judge_rounds` to 0, preserves `done` members + their
+ * evidence, clears `failed_reason`, and returns the plan in `approved` state
+ * (NOT `running` — the engine promotes it under the cap on its own tick,
+ * exactly like a first execute, so a restart can never skip cap admission).
+ *
+ * A `409` means "not restartable": the plan isn't `failed`, or its
+ * `failed_reason` isn't `stopped_by_user` (a GENUINE failure —
+ * `judge_rounds_exhausted` / `idle_expired` — is a terminal state with no
+ * Play offered, FR-018). Rewritten into a specific, actionable message here
+ * rather than the generic "conflicts with current state" default.
+ */
+export async function restartPlan(id: string): Promise<Plan> {
+  try {
+    return await request<Plan>(`/plans/${encodeURIComponent(id)}/restart`, { method: 'POST' }, PlanSchema as ZodType<Plan>)
+  } catch (err) {
+    throw friendlyConflictError(
+      err,
+      'This plan is not restartable — it must have been Stopped by a user (not a genuine failure) to Play it again.',
+    )
+  }
 }
 
 export function deletePlan(id: string): Promise<void> {
@@ -3433,44 +3586,35 @@ export function deletePlan(id: string): Promise<void> {
 }
 
 /**
- * PlanApproveTaskError — the per-task validation error shape Approve's `400`
- * response is expected to carry (FR-084: "list the per-task criteria-missing
- * validation errors inline"). NOT a generated contract type — the Wave 2
- * backend endpoint that produces this body doesn't exist yet, so this is a
- * defensive, best-effort parse of `ApiError.body` rather than a Constraint #8
- * wire type. Once Wave 2 lands the real endpoint + error schema, this should
- * be replaced by a generated type per the 5-step contract process.
+ * PlanApproveTaskError — one entry of the generated `PlanApproveError.task_errors`
+ * array (contracts/components/schemas/PlanApproveError.yaml — now a real,
+ * generated Constraint #8 wire type; this alias exists only so callers don't
+ * need to reach into `NonNullable<PlanApproveError['task_errors']>[number]`
+ * themselves).
  */
-export interface PlanApproveTaskError { // not-wire-format: defensive parse of a not-yet-contracted error body
-  task_id: string
-  title?: string
-  reason: string
-}
+export type PlanApproveTaskError = NonNullable<PlanApproveError['task_errors']>[number]
 
-/** Best-effort parse of an Approve `400` body into a per-task error list. Returns null when the body isn't the expected shape (falls back to `err.userMessage`). */
+/**
+ * Parse a `POST /plans/{id}/approve` `400` body (`ApiError.body`) into the
+ * generated `PlanApproveError` shape, edge-validated with the generated Zod
+ * schema (Constraint #8 — no hand-rolled parsing of the response shape).
+ * Returns `null` when the body is empty, not JSON, doesn't validate against
+ * the schema, or validates but carries no `task_errors` — callers fall back
+ * to `err.userMessage` (which already carries the plan-level `error` string
+ * for the non-task-errors rejection case, e.g. an empty DoD).
+ */
 export function parsePlanApproveTaskErrors(body: string | undefined): PlanApproveTaskError[] | null {
   if (!body) return null
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(body) as { task_errors?: unknown; errors?: unknown }
-    const raw = Array.isArray(parsed.task_errors)
-      ? parsed.task_errors
-      : Array.isArray(parsed.errors)
-        ? parsed.errors
-        : null
-    if (!raw) return null
-    const out: PlanApproveTaskError[] = []
-    for (const entry of raw) {
-      if (typeof entry !== 'object' || entry === null) continue
-      const e = entry as Record<string, unknown>
-      const reason = typeof e.reason === 'string' ? e.reason : typeof e.message === 'string' ? e.message : null
-      const taskId = typeof e.task_id === 'string' ? e.task_id : typeof e.id === 'string' ? e.id : null
-      if (reason == null || taskId == null) continue
-      out.push({ task_id: taskId, title: typeof e.title === 'string' ? e.title : undefined, reason })
-    }
-    return out.length > 0 ? out : null
+    parsed = JSON.parse(body)
   } catch {
     return null
   }
+  const result = PlanApproveErrorSchema.safeParse(parsed)
+  if (!result.success) return null
+  const taskErrors = result.data.task_errors
+  return taskErrors && taskErrors.length > 0 ? taskErrors : null
 }
 
 // ── Token Usage Stats ─────────────────────────────────────────────────────────

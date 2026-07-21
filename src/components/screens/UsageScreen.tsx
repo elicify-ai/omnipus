@@ -231,6 +231,15 @@ export function UsageScreen() {
   const [period, setPeriod] = useState<TokenStatsPeriod>('month')
   const [breakdownTab, setBreakdownTab] = useState<'agent' | 'model' | 'session'>('agent')
 
+  // ADR-052 FR-036 / SC-014: UsageScreen is the ONE surface that must show
+  // verifier-role (the Judge) LLM spend, unlike Sidebar/SearchModal which
+  // exclude it. Verified against the live backend (pkg/gateway/rest_stats.go
+  // HandleTokenStats, 2026-07): it aggregates ALL sessions returned by
+  // ListAllSessions with NO session-type filter (it only excludes
+  // subagent_3p agents) — so the hero stats, "By agent", and "By model"
+  // breakdowns below already include the Judge's token/cost totals with
+  // ZERO changes needed here. `include_verifier` only affects the separate
+  // GET /sessions list endpoint.
   const {
     data: summary,
     isLoading: statsLoading,
@@ -240,6 +249,15 @@ export function UsageScreen() {
     queryFn: () => fetchTokenStats(period),
   })
 
+  // "By session" tab ONLY: built from GET /sessions, which excludes
+  // verifier-type sessions by default (FR-036) unless include_verifier=true
+  // is passed. fetchSessions() in src/lib/api.ts does not yet expose an
+  // include_verifier parameter (out of this file's ownership) — so
+  // individual verifier session ROWS are not yet listed in this one
+  // sub-tab, even though their spend IS already counted in the hero/
+  // by-agent/by-model views above via the unfiltered token-stats endpoint.
+  // Once fetchSessions grows that parameter, pass include_verifier: true
+  // here to close this last gap.
   const {
     data: sessions = [],
     isLoading: sessionsLoading,

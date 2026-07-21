@@ -49,13 +49,15 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchPlans: vi.fn(),
     fetchAgents: vi.fn(),
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
-    approvePlan: vi.fn(),
+    // ADR-052 G2: the tab calls executePlan (POST /approve), not the
+    // deprecated approvePlan alias — mock the name it actually imports.
+    executePlan: vi.fn(),
     stopPlan: vi.fn(),
     deletePlan: vi.fn(),
   }
 })
 
-import { fetchTasks, fetchPlans, fetchAgents, approvePlan, stopPlan, deletePlan } from '@/lib/api'
+import { fetchTasks, fetchPlans, fetchAgents, executePlan, stopPlan, deletePlan } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
@@ -181,6 +183,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     icon: 'MagnifyingGlass',
     timeout_seconds: 300,
     max_tool_iterations: 50,
+    // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+    memory_enabled: true,
     ...overrides,
   }
 }
@@ -205,7 +209,7 @@ beforeEach(() => {
   vi.mocked(fetchTasks).mockReset().mockResolvedValue([])
   vi.mocked(fetchPlans).mockReset().mockResolvedValue([])
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([])
-  vi.mocked(approvePlan).mockReset()
+  vi.mocked(executePlan).mockReset()
   vi.mocked(stopPlan).mockReset()
   vi.mocked(deletePlan).mockReset()
 })
@@ -298,16 +302,16 @@ describe('WorkspaceTasksTab — New task', () => {
 // ── Plan mutation wiring (through the callback props passed to the band) ────
 
 describe('WorkspaceTasksTab — plan mutation wiring', () => {
-  it('the band stub\'s approve button calls approvePlan with the plan id and toasts on success', async () => {
+  it('the band stub\'s approve button calls executePlan (POST /approve, ADR-052 G2) with the plan id and toasts on success', async () => {
     const user = userEvent.setup()
     const plan = makePlan({ state: 'draft' })
     vi.mocked(fetchPlans).mockResolvedValue([plan])
-    vi.mocked(approvePlan).mockResolvedValue({ ...plan, state: 'approved' })
+    vi.mocked(executePlan).mockResolvedValue({ ...plan, state: 'approved' })
 
     renderTab()
     await user.click(await screen.findByRole('button', { name: 'approve-plan-a' }))
 
-    await waitFor(() => expect(approvePlan).toHaveBeenCalledWith('plan-a'))
+    await waitFor(() => expect(executePlan).toHaveBeenCalledWith('plan-a'))
     await waitFor(() =>
       expect(mockAddToast).toHaveBeenCalledWith(
         expect.objectContaining({ variant: 'success', message: 'Plan approved' }),
@@ -322,7 +326,7 @@ describe('WorkspaceTasksTab — plan mutation wiring', () => {
     const body = JSON.stringify({
       task_errors: [{ task_id: 't1', title: 'Write report', reason: 'missing acceptance criteria' }],
     })
-    vi.mocked(approvePlan).mockRejectedValue(new ApiError(400, 'Bad request', { body }))
+    vi.mocked(executePlan).mockRejectedValue(new ApiError(400, 'Bad request', { body }))
 
     renderTab()
     await user.click(await screen.findByRole('button', { name: 'approve-plan-a' }))

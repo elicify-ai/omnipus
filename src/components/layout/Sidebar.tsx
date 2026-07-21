@@ -160,6 +160,12 @@ export function Sidebar() {
   })
 
   // Sessions + agents — used by the workspace accordion's expanded session list.
+  // ADR-052 FR-036: verifier-role adjudication sessions (type "verifier")
+  // MUST stay hidden from this list — GET /sessions defaults to excluding
+  // them (include_verifier=false) unless the caller explicitly opts in.
+  // fetchSessions() below is called with NO include_verifier argument
+  // (its signature does not even expose one), so this is the excluded
+  // default by construction — do not add one here.
   const { data: allSessions = [], isError: sessionsError } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
