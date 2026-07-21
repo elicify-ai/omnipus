@@ -83,3 +83,33 @@ export function statusColor(status: TaskStatus | string | undefined): string {
 export function statusLabel(status: TaskStatus | string | undefined): string {
   return STATUS_LABELS[(status as TaskStatus) ?? 'inbox'] ?? STATUS_LABELS.inbox
 }
+
+// ── Cancelled discriminator (ADR-052 FR-015/FR-028/US-8) ────────────────────
+//
+// A task Stopped by the user is persisted as `status: 'failed'` +
+// `cancel_reason: 'stopped_by_user'` — NOT a new status, NOT a new board
+// column. It renders as an orange "Cancelled" marker, distinct from a
+// genuine red "Failed" (attempts exhausted), while staying in the Failed
+// column/bucket everywhere a task's status is drawn (Board card, List status
+// cell, Graph node). Reuses the existing warning-orange token rather than a
+// new hardcoded hex — mirrors `planStateColors.ts`'s PLAN_CANCELLED_COLOR,
+// deliberately duplicated (not shared) because Task/Plan are different
+// domains — see that module's header comment.
+
+/** Orange accent for a user-cancelled task — distinct from `STATUS_COLORS.failed` (red). */
+export const TASK_CANCELLED_COLOR = 'var(--color-warning)'
+
+/** True when this task is `failed` specifically because the user Stopped it (not a genuine failure). */
+export function isTaskCancelled(task: Pick<Task, 'status' | 'cancel_reason'>): boolean {
+  return task.status === 'failed' && task.cancel_reason === 'stopped_by_user'
+}
+
+/** The status colour to render for this task — orange "Cancelled" overrides red "Failed". */
+export function taskDisplayColor(task: Pick<Task, 'status' | 'cancel_reason'>): string {
+  return isTaskCancelled(task) ? TASK_CANCELLED_COLOR : statusColor(task.status)
+}
+
+/** The status label to render for this task — "Cancelled" overrides "Failed". */
+export function taskDisplayLabel(task: Pick<Task, 'status' | 'cancel_reason'>): string {
+  return isTaskCancelled(task) ? 'Cancelled' : statusLabel(task.status)
+}

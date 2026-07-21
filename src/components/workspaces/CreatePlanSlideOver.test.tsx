@@ -23,12 +23,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
     createPlan: vi.fn(),
     updatePlan: vi.fn(),
-    approvePlan: vi.fn(),
+    // ADR-052 G2: the component calls executePlan (POST /approve), not the
+    // deprecated approvePlan alias — mock the name it actually imports.
+    executePlan: vi.fn(),
     plansQueryKeys: { list: (id: string) => ['plans', id] },
   }
 })
 
-import { createPlan, approvePlan } from '@/lib/api'
+import { createPlan, executePlan } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
@@ -80,7 +82,7 @@ function renderSlideOver(props: Partial<React.ComponentProps<typeof CreatePlanSl
 
 beforeEach(() => {
   vi.mocked(createPlan).mockReset()
-  vi.mocked(approvePlan).mockReset()
+  vi.mocked(executePlan).mockReset()
   mockAddToast.mockReset()
 })
 
@@ -120,7 +122,7 @@ describe('CreatePlanSlideOver — Approve (SD-C4 confirm-on-success)', () => {
     const body = JSON.stringify({
       task_errors: [{ task_id: 't1', title: 'Write report', reason: 'missing acceptance criteria' }],
     })
-    vi.mocked(approvePlan).mockRejectedValueOnce(new ApiError(400, 'Bad request', { body }))
+    vi.mocked(executePlan).mockRejectedValueOnce(new ApiError(400, 'Bad request', { body }))
 
     renderSlideOver({ plan: makePlan({ state: 'draft' }), onOpenChange })
 
@@ -132,7 +134,7 @@ describe('CreatePlanSlideOver — Approve (SD-C4 confirm-on-success)', () => {
 
   it('a successful Approve closes the slide-over and toasts', async () => {
     const onOpenChange = vi.fn()
-    vi.mocked(approvePlan).mockResolvedValueOnce(makePlan({ state: 'approved' }) as never)
+    vi.mocked(executePlan).mockResolvedValueOnce(makePlan({ state: 'approved' }) as never)
 
     renderSlideOver({ plan: makePlan({ state: 'draft' }), onOpenChange })
     fireEvent.click(screen.getByRole('button', { name: /^approve$/i }))

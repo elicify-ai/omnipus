@@ -13,6 +13,7 @@ import {
   Lock,
   WarningCircle,
   Trash,
+  Brain,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
@@ -316,6 +317,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [maxToolCallsPerMinute, setMaxToolCallsPerMinute] = useState<number | ''>('')
   const [maxCostPerDay, setMaxCostPerDay] = useState<number | ''>('')
   const [soul, setSoul] = useState('')
+  // ADR-052 FR-039: per-agent memory-injection gate. Defaults to true (the
+  // wire default for ordinary agents); the seeded Judge (and any future
+  // verifier-role System Agent) is seeded false server-side and re-enforced
+  // on every boot — reproducible, impartial verdicts require the same
+  // evidence to always yield the same verdict, which injected memory would
+  // undermine. "Allowed on all agents" per AgentUpdateRequest.yaml, so this
+  // is NOT stripped from the locked-agent payload below like soul/name/etc.
+  const [memoryEnabled, setMemoryEnabled] = useState(true)
   // W6-B4 / G1: per-agent persona voice identifier (TTS voice name or model ID).
   // Schema-pinned on Agent.voice; not active until v0.2.0 TTS. Empty string
   // means "not configured" — the wire payload omits the field entirely.
@@ -478,6 +487,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setMaxToolCallsPerMinute(agent.rate_limits?.max_tool_calls_per_minute ?? '')
     setMaxCostPerDay(agent.rate_limits?.max_cost_per_day ?? '')
     setSoul(agent.soul ?? '')
+    // ADR-052 FR-039: the wire field is required (non-nullable) on GET, but
+    // hydrate defensively for any test double / legacy snapshot that omits it.
+    setMemoryEnabled(agent.memory_enabled ?? true)
     // W6-B4 / G1: hydrate the persona voice. The wire field is nullable;
     // `null` and absent both render as the empty string in the input.
     // W6-B-fix: trim existing whitespace on disk so the input never
@@ -556,6 +568,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         // O3 two-field: include provider only when non-empty.
         provider: primaryProvider.trim() !== '' ? primaryProvider.trim() : undefined,
         soul,
+        // ADR-052 FR-039: allowed on all agents, including subagent_3p — not
+        // one of firstForbiddenSubagent3pField's rejected fields
+        // (pkg/gateway/agent_field_rules.go).
+        memory_enabled: memoryEnabled,
         rate_limits: rateLimits,
         timeout_seconds: timeoutPayload,
         executor,
@@ -572,6 +588,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       model_params: { temperature, max_tokens: maxTokens, top_p: topP },
       rate_limits: rateLimits,
       soul,
+      // ADR-052 FR-039: "Allowed on all agents" per AgentUpdateRequest.yaml —
+      // including locked/system agents (the Judge). Always sent (not
+      // conditionally omitted) so a deliberate toggle-off round-trips like
+      // every other boolean field on this form.
+      memory_enabled: memoryEnabled,
       // W6-B4 / G1: voice is optional — emit only when non-empty so the backend
       // can leave the field unchanged when the user hasn't set it. An empty
       // string and `undefined` are semantically equivalent for the wire (both
@@ -624,7 +645,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
-    maxToolCallsPerMinute, maxCostPerDay, soul, voice,
+    maxToolCallsPerMinute, maxCostPerDay, soul, memoryEnabled, voice,
     timeoutPayload, timeoutSeconds, maxToolIterations,
     shellDenyPatterns,
     agentSkills, executor,
@@ -1555,6 +1576,46 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const personalityPanel = (
     <div className="space-y-5">
 
+          {/* ADR-052 FR-039: per-agent memory-injection gate. Live/editable
+              for every agent — memory_enabled is "allowed on all agents"
+              server-side (rest.go explicitly exempts it from the
+              locked-identity reject-set). The one exception is a System
+              Agent (the Judge): its memory is forced OFF and re-enforced on
+              EVERY boot (coreagent.seedSystemAgents) for reproducible,
+              impartial verdicts — same evidence must always yield the same
+              verdict — so an operator toggle here would just be silently
+              reverted at next boot. Render it disabled + off with an
+              explanatory note instead of a control that lies about being
+              durable. */}
+          <div
+            data-testid="memory-toggle-row"
+            className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Brain
+                size={14}
+                weight={memoryEnabled ? 'fill' : 'regular'}
+                className={memoryEnabled ? 'text-[var(--color-accent)] shrink-0' : 'text-[var(--color-muted)] shrink-0'}
+                aria-hidden="true"
+              />
+              <div className="min-w-0">
+                <p className="text-sm text-[var(--color-secondary)]">Memory</p>
+                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                  {isSystemAgent
+                    ? 'Verifier agents always run with memory off — the same evidence must always yield the same verdict.'
+                    : "Lets this agent recall its workspace's shared memory across sessions. Off starts every turn from a clean slate."}
+                </p>
+              </div>
+            </div>
+            <Switch
+              data-testid="memory-toggle"
+              checked={memoryEnabled}
+              disabled={isSystemAgent}
+              onCheckedChange={isSystemAgent ? undefined : (v) => { markDirty(); setMemoryEnabled(v) }}
+              aria-label={memoryEnabled ? 'Turn memory off' : 'Turn memory on'}
+            />
+          </div>
+
           <BehaviorFields
             isWorker={isWorkerAgent}
             soul={soul}
@@ -1562,11 +1623,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             voice={voice}
             setVoice={(v) => { markDirty(); setVoice(v) }}
             renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
+            // ADR-052 FR-038: soul is read-only for every LOCKED agent
+            // (core + system) — the backend's updateAgent handler rejects
+            // `soul` unconditionally when `locked: true`, with no
+            // `IsSystem()` carve-out on the write path yet (confirmed by
+            // reading pkg/gateway/rest.go), so an interactive textarea for
+            // the Judge would silently never persist. See the System-agent
+            // banner below for the operator-facing explanation.
+            soulReadOnly={isLocked}
           />
 
           {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
               Heartbeat is now configured in the Workspace edit panel, not here. */}
-        
+
     </div>
   )
 
@@ -2277,9 +2346,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           amber/warning visual language as the executor-external-cli
           callout (sibling concept — "this agent is special, read the
           caveat before editing"). Hidden for non-locked agents.
-          ADR-049 SD-C18: extended to System agents (the Judge) too, with
-          copy naming what IS still editable (model/provider/rubric) rather
-          than the core banner's blanket "most fields are read-only". */}
+          ADR-049 SD-C18 / ADR-052 FR-038: extended to System agents (the
+          Judge) too, with copy naming what IS still editable (model,
+          provider) rather than the core banner's blanket "most fields are
+          read-only". Soul/rubric unification (FR-038) means there is no
+          longer a separate "rubric" field — the Judge's soul IS its
+          judging rubric, and the wire contract describes it as
+          "editable while locked". Verified against the live backend
+          (pkg/gateway/rest.go's updateAgent, 2026-07): the locked-identity
+          reject-set still rejects `soul` unconditionally for ANY locked
+          agent, with no `IsSystem()` exception on the write path — so this
+          copy says the honest thing (soul is locked today, not "editable")
+          rather than promising something that would 403 on save. */}
       {agent.type === 'core' && agent.locked && (
         <div
           role="alert"
@@ -2305,7 +2383,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <div className="text-sm">
             <div className="font-semibold text-[var(--color-error)]">System agent</div>
             <div className="text-[var(--color-muted)] mt-1">
-              Model, provider and rubric are editable; identity is locked.
+              Model and provider are editable. Its soul (below, in Personality)
+              defines its verification standards — soul editing for System
+              Agents isn&apos;t available yet; identity stays locked.
             </div>
           </div>
         </div>

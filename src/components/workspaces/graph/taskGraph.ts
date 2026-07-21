@@ -53,6 +53,24 @@ export function statusVisual(status: TaskStatus | string | undefined): StatusVis
   return STATUS_VISUALS[(status as TaskStatus) ?? 'inbox'] ?? STATUS_VISUALS.inbox
 }
 
+/**
+ * The visual a graph NODE renders (ADR-052 FR-015/US-8) — like `statusVisual`,
+ * but a user-cancelled task (`status: 'failed'`, `cancel_reason:
+ * 'stopped_by_user'`) overrides the label/colour to the orange "Cancelled"
+ * marker instead of the genuine red "Failed", so it reads as distinct on the
+ * node chip + left rail. Deliberately node-scoped (not folded into
+ * `statusVisual`, which also colours dependency EDGES by their target task's
+ * status) — extending the cancelled override to edges is out of this wave's
+ * scope.
+ */
+export function taskNodeVisual(task: Pick<Task, 'status' | 'cancel_reason'>): StatusVisual {
+  const base = statusVisual(task.status)
+  if (task.status === 'failed' && task.cancel_reason === 'stopped_by_user') {
+    return { ...base, label: 'Cancelled', color: 'var(--color-warning)' }
+  }
+  return base
+}
+
 export const PRIORITY_LABELS: Record<number, string> = {
   1: 'P1',
   2: 'P2',

@@ -18,10 +18,16 @@
  * The Radix DropdownMenu is stubbed inline (its pointer/portal internals don't
  * drive in jsdom — same convention as WorkspaceTasksTab.test.tsx) so each
  * column menu's items render inline; tests scope to a column via its <th>.
+ *
+ * Wrapped in a QueryClientProvider (ADR-052 §6.8): each row now renders a
+ * TaskActionButton (▶/■), which calls `useMutation`/`useQueryClient` — those
+ * hooks throw without a QueryClient in the tree, even when no test here ever
+ * clicks the button.
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, within, fireEvent } from '@testing-library/react'
+import { render, screen, within, fireEvent, type RenderResult } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Task } from '@/lib/api'
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
@@ -62,6 +68,18 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   }
 }
 
+function makeClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+}
+
+/** Render ListView under a QueryClientProvider — exposes the client too so
+ * `rerenderList` can reuse the SAME provider instance across a rerender. */
+function renderList(ui: React.ReactElement): RenderResult & { client: QueryClient } {
+  const client = makeClient()
+  const utils = render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  return { ...utils, client }
+}
+
 /** Scope queries to one column's header menu (trigger + inline stub content). */
 function columnMenu(label: string) {
   const trigger = screen.getByRole('button', { name: new RegExp(`^${label} column`, 'i') })
@@ -79,14 +97,14 @@ function rowTitles(): string[] {
 
 describe('ListView — no milestone UI anywhere (SC-040)', () => {
   it('renders no "Milestone" filter, column, or text', () => {
-    render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
     expect(screen.queryByText(/milestone/i)).toBeNull()
   })
 })
 
 describe('ListView — column header sort', () => {
   it('defaults to newest-first (Updated desc) on initial render', () => {
-    render(
+    renderList(
       <ListView
         tasks={[
           makeTask({ id: 'old', title: 'Older', updated_at: '2026-06-20T10:00:00Z' }),
@@ -102,7 +120,7 @@ describe('ListView — column header sort', () => {
   })
 
   it('sorts by priority via the Pri column menu (asc = P1 first, desc = P5 first)', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'Low', priority: 5 }), makeTask({ id: 't2', title: 'High', priority: 1 })]}
         agents={[]}
@@ -116,7 +134,7 @@ describe('ListView — column header sort', () => {
   })
 
   it('sorts by status via the Status column menu', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'DoneTask', status: 'done' }), makeTask({ id: 't2', title: 'InboxTask', status: 'inbox' })]}
         agents={[]}
@@ -129,7 +147,7 @@ describe('ListView — column header sort', () => {
   })
 
   it('sorts by title A–Z via the Title column menu', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'Zebra' }), makeTask({ id: 't2', title: 'Apple' })]}
         agents={[]}
@@ -141,7 +159,7 @@ describe('ListView — column header sort', () => {
   })
 
   it('sorts by agent A–Z via the Agent column menu', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'RayTask', agent_name: 'Ray' }), makeTask({ id: 't2', title: 'AvaTask', agent_name: 'Ava' })]}
         agents={[]}
@@ -155,7 +173,7 @@ describe('ListView — column header sort', () => {
 
 describe('ListView — column value filters', () => {
   it('filters by status via the Status column checklist', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'InboxT', status: 'inbox' }), makeTask({ id: 't2', title: 'DoneT', status: 'done' })]}
         agents={[]}
@@ -168,7 +186,7 @@ describe('ListView — column value filters', () => {
   })
 
   it('a column filter is a union across the checked values', () => {
-    render(
+    renderList(
       <ListView
         tasks={[
           makeTask({ id: 't1', title: 'InboxT', status: 'inbox' }),
@@ -187,7 +205,7 @@ describe('ListView — column value filters', () => {
   })
 
   it('filters by priority via the Pri column checklist', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'P1T', priority: 1 }), makeTask({ id: 't2', title: 'P3T', priority: 3 })]}
         agents={[]}
@@ -200,7 +218,7 @@ describe('ListView — column value filters', () => {
   })
 
   it('filters by tag, with an Untagged bucket', () => {
-    render(
+    renderList(
       <ListView
         tasks={[
           makeTask({ id: 't1', title: 'Tagged', tags: ['release'] }),
@@ -222,7 +240,7 @@ describe('ListView — column value filters', () => {
   })
 
   it('filters by agent, with an Unassigned bucket', () => {
-    render(
+    renderList(
       <ListView
         tasks={[
           makeTask({ id: 't1', title: 'RayTask', agent_id: 'ray' }),
@@ -245,7 +263,7 @@ describe('ListView — column value filters', () => {
   })
 
   it('offers only the values present in the current task set, in canonical order', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', status: 'inbox' }), makeTask({ id: 't2', status: 'done' })]}
         agents={[]}
@@ -262,7 +280,7 @@ describe('ListView — column value filters', () => {
   })
 
   it('the Clear filter action resets a column filter', () => {
-    render(
+    renderList(
       <ListView
         tasks={[makeTask({ id: 't1', title: 'InboxT', status: 'inbox' }), makeTask({ id: 't2', title: 'DoneT', status: 'done' })]}
         agents={[]}
@@ -280,7 +298,7 @@ describe('ListView — column value filters', () => {
   it('prunes a checked filter value once it leaves the plan scope (no stuck-empty list)', () => {
     const rayTask = makeTask({ id: 't1', title: 'RayTask', agent_id: 'ray' })
     const bareTask = makeTask({ id: 't2', title: 'BareTask' })
-    const { rerender } = render(
+    const { rerender, client } = renderList(
       <ListView tasks={[rayTask, bareTask]} agents={[{ id: 'ray', name: 'Ray' }]} onTaskClick={() => {}} />,
     )
     fireEvent.click(columnMenu('Agent').getByRole('menuitemcheckbox', { name: 'Ray' }))
@@ -290,7 +308,11 @@ describe('ListView — column value filters', () => {
     // Plan scope changes and Ray's task is gone. The stale 'Ray' key must be
     // pruned — BareTask shows, no filtered-empty copy, and Ray is no longer an
     // offered value.
-    rerender(<ListView tasks={[bareTask]} agents={[{ id: 'ray', name: 'Ray' }]} onTaskClick={() => {}} />)
+    rerender(
+      <QueryClientProvider client={client}>
+        <ListView tasks={[bareTask]} agents={[{ id: 'ray', name: 'Ray' }]} onTaskClick={() => {}} />
+      </QueryClientProvider>,
+    )
     expect(screen.getByText('BareTask')).toBeInTheDocument()
     expect(screen.queryByText('No tasks match the column filters')).toBeNull()
     expect(columnMenu('Agent').queryByRole('menuitemcheckbox', { name: 'Ray' })).toBeNull()
@@ -300,13 +322,13 @@ describe('ListView — column value filters', () => {
 
 describe('ListView — empty state', () => {
   it('renders "No tasks to show" when there are no tasks', () => {
-    render(<ListView tasks={[]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[]} agents={[]} onTaskClick={() => {}} />)
     expect(screen.getByText('No tasks to show')).toBeInTheDocument()
     expect(screen.queryByText('Task')).toBeNull()
   })
 
   it('renders the filtered-empty copy when ANDed column filters exclude every row', () => {
-    render(
+    renderList(
       <ListView
         tasks={[
           makeTask({ id: 'a', title: 'InboxP1', status: 'inbox', priority: 1 }),
@@ -328,25 +350,25 @@ describe('ListView — empty state', () => {
 
 describe('ListView — Agent column resolution', () => {
   it('prefers the server-set agent_name over the agents lookup', () => {
-    render(<ListView tasks={[makeTask({ agent_name: 'Ray Direct', agent_id: 'ray-1' })]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask({ agent_name: 'Ray Direct', agent_id: 'ray-1' })]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     expect(within(row).getByText('Ray Direct')).toBeInTheDocument()
   })
 
   it('resolves agent_id via the agents list when agent_name is absent', () => {
-    render(<ListView tasks={[makeTask({ agent_id: 'ray-1' })]} agents={[{ id: 'ray-1', name: 'Ray' }]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask({ agent_id: 'ray-1' })]} agents={[{ id: 'ray-1', name: 'Ray' }]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     expect(within(row).getByText('Ray')).toBeInTheDocument()
   })
 
   it('falls back to the raw agent_id when it is not in the agents list', () => {
-    render(<ListView tasks={[makeTask({ agent_id: 'ghost' })]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask({ agent_id: 'ghost' })]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     expect(within(row).getByText('ghost')).toBeInTheDocument()
   })
 
   it('renders "—" in the Agent cell when a task has no agent', () => {
-    render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     // Agent is the 5th <td> (index 4): Pri, Title, Status, Tags, Agent, Updated.
     const cells = within(row).getAllByRole('cell')
@@ -356,7 +378,7 @@ describe('ListView — Agent column resolution', () => {
 
 describe('ListView — surface filter (user tasks only)', () => {
   it('excludes non-user (heartbeat) tasks from the list', () => {
-    render(
+    renderList(
       <ListView
         tasks={[
           makeTask({ id: 'u', title: 'UserTask', surface: 'user' }),
@@ -371,21 +393,21 @@ describe('ListView — surface filter (user tasks only)', () => {
   })
 
   it('renders tasks whose surface is undefined (treated as user)', () => {
-    render(<ListView tasks={[makeTask({ title: 'NoSurface', surface: undefined })]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask({ title: 'NoSurface', surface: undefined })]} agents={[]} onTaskClick={() => {}} />)
     expect(screen.getByText('NoSurface')).toBeInTheDocument()
   })
 })
 
 describe('ListView — Tags column render', () => {
   it('renders a Tags column header (sort/filter menu), not Milestone', () => {
-    render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
     expect(screen.getByRole('button', { name: /^Tags column/i })).toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: /milestone/i })).toBeNull()
   })
 
   it('renders tag chips in a row, capped with a "+N" overflow indicator', () => {
     const task = makeTask({ tags: ['release', 'urgent', 'q3', 'extra'] })
-    render(<ListView tasks={[task]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[task]} agents={[]} onTaskClick={() => {}} />)
 
     const row = screen.getByText('Task').closest('tr')!
     expect(within(row).getByText('release')).toBeInTheDocument()
@@ -394,7 +416,7 @@ describe('ListView — Tags column render', () => {
   })
 
   it('renders "—" in the Tags cell when a task has no tags', () => {
-    render(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
+    renderList(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     const cells = within(row).getAllByRole('cell')
     expect(within(cells[3]).getByText('—')).toBeInTheDocument()

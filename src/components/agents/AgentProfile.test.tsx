@@ -83,6 +83,8 @@ const mockCoreAgent: Agent = {
   max_tool_iterations: 20,
   rate_limits: { use_global_defaults: true },
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  memory_enabled: true,
 }
 
 const mockLockedCoreAgent: Agent = {
@@ -96,6 +98,8 @@ const mockLockedCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  memory_enabled: true,
 }
 
 // Tier-branched form fixtures (Spec-4 FR-4.1 + locked concept in
@@ -135,6 +139,24 @@ const mockSubagent3pAgent: Agent = {
   type: 'subagent_3p',
   description: 'Delegation-only worker on an external CLI runner',
   executor: { kind: 'external-cli', cli: 'claude-code' },
+}
+
+// ADR-052 FR-038/FR-039 — the seeded Judge System Agent. Locked + type
+// 'system'; its soul carries the judging rubric (soul/rubric unification —
+// `AgentConfig.Rubric` was deleted) and memory_enabled is seeded false
+// (impartial, reproducible verdicts).
+const mockJudgeAgent: Agent = {
+  id: 'judge',
+  name: 'Judge',
+  type: 'system',
+  locked: true,
+  status: 'active',
+  model: 'claude-opus-4-6',
+  description: 'Impartial acceptance-criteria verifier',
+  soul: 'You are the Judge — an impartial acceptance-criteria evaluator.',
+  timeout_seconds: 60,
+  max_tool_iterations: 20,
+  memory_enabled: false,
 }
 
 function makeClient() {
@@ -1282,6 +1304,97 @@ describe('AgentProfile — locked banner (spec §6 BDD #13)', () => {
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expect(screen.queryByTestId('locked-banner')).toBeNull()
+  })
+})
+
+// ADR-052 FR-038 (soul/rubric unification) + FR-039 (memory_enabled).
+describe('AgentProfile — ADR-052 soul unification + memory toggle (FR-038/FR-039)', () => {
+  it('renders the soul textarea read-only for a locked core agent (no dead edits)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+    expect((soulTextarea as HTMLTextAreaElement).disabled).toBe(true)
+    expect((soulTextarea as HTMLTextAreaElement).readOnly).toBe(true)
+    // The "no dead code" guarantee: a locked agent's soul edit must never be
+    // silently discarded — making the field read-only (rather than editable
+    // but stripped from the PUT payload) is how that's enforced.
+  })
+
+  it('renders the System-agent banner naming model/provider as editable and soul as locked (matches the live backend, not the wire-contract aspiration)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    const banner = screen.getByTestId('locked-banner')
+    expect(banner).toHaveTextContent(/system agent/i)
+    expect(banner).toHaveTextContent(/model and provider are editable/i)
+    expect(banner).not.toHaveTextContent(/rubric/i)
+  })
+
+  it('renders the Judge soul textarea read-only, not a "rubric" field', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    switchTab('tab-personality')
+    const soulTextarea = await screen.findByTestId('agent-soul')
+    expect((soulTextarea as HTMLTextAreaElement).disabled).toBe(true)
+    expect((soulTextarea as HTMLTextAreaElement).value).toBe(mockJudgeAgent.soul)
+    expect(screen.queryByText(/rubric/i)).toBeNull()
+  })
+
+  it('shows the Memory toggle OFF and disabled for the Judge (System agent)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockJudgeAgent)
+    renderProfile('judge')
+    await screen.findByText('Judge')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    expect(memorySwitch).toHaveAttribute('data-state', 'unchecked')
+    expect(memorySwitch).toBeDisabled()
+    expect(screen.getByTestId('memory-toggle-row')).toHaveTextContent(/verifier agents always run with memory off/i)
+  })
+
+  it('shows a live, editable Memory toggle (default ON) for an ordinary agent', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    expect(memorySwitch).toHaveAttribute('data-state', 'checked')
+    expect(memorySwitch).not.toBeDisabled()
+  })
+
+  it('persists a Memory toggle-off through updateAgent for an ordinary (non-locked) agent', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockCoreAgent)
+    vi.mocked(updateAgent).mockReset().mockResolvedValue({ ...mockCoreAgent, memory_enabled: false })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    fireEvent.click(memorySwitch)
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalledWith(
+        'general-assistant',
+        expect.objectContaining({ memory_enabled: false }),
+      )
+    }, { timeout: 6000 })
+  })
+
+  it('persists a Memory toggle-on for a LOCKED core agent (memory_enabled is allowed on all agents, unlike soul/name)', async () => {
+    vi.mocked(fetchAgent).mockReset().mockResolvedValue({ ...mockLockedCoreAgent, memory_enabled: false })
+    vi.mocked(updateAgent).mockReset().mockResolvedValue({ ...mockLockedCoreAgent, memory_enabled: true })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    switchTab('tab-personality')
+    const memorySwitch = await screen.findByTestId('memory-toggle')
+    expect(memorySwitch).not.toBeDisabled()
+    fireEvent.click(memorySwitch)
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalledWith(
+        'mia',
+        expect.objectContaining({ memory_enabled: true }),
+      )
+    }, { timeout: 6000 })
   })
 })
 

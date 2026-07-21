@@ -81,6 +81,8 @@ const agentRay: Agent = {
   icon: 'MagnifyingGlass',
   timeout_seconds: 300,
   max_tool_iterations: 50,
+  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+  memory_enabled: true,
 }
 
 const plans: Plan[] = []

@@ -4,7 +4,6 @@ import {
   Plus,
   PencilSimple,
   DotsThreeVertical,
-  Play,
   Stop,
   Broom,
   CheckCircle,
@@ -16,7 +15,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import {
   AlertDialog,
@@ -29,8 +27,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Progress } from '@/components/ui/progress'
+import { PlanActionButton } from './PlanActionButton'
 import type { Agent, Plan, Task } from '@/lib/api'
-import { planStateColor, planStateLabel } from '@/lib/planStateColors'
+import { isPlanCancelled, planDisplayColor, planDisplayLabel } from '@/lib/planStateColors'
 import { cn } from '@/lib/utils'
 
 interface PlansFilterBandProps {
@@ -41,13 +40,26 @@ interface PlansFilterBandProps {
   onSelectPlan: (planId: string | null) => void
   onNewPlan: () => void
   onEditPlan: (plan: Plan) => void
-  onApprovePlan: (plan: Plan) => void
-  onStopPlan: (plan: Plan) => void
+  /**
+   * @deprecated ADR-052 replaces the old PUT-based Approve affordance with a
+   * self-contained ▶ Execute button (`PlanActionButton`, calling the gated
+   * `executePlan`/POST-approve flow directly) — this callback is no longer
+   * invoked. Kept optional, unused, for compatibility with existing callers
+   * during the ADR-052 rollout.
+   */
+  onApprovePlan?: (plan: Plan) => void
+  /**
+   * @deprecated Stop is now handled by the self-contained `PlanActionButton`
+   * (calling `stopPlan` directly). Kept optional, unused, for compatibility.
+   */
+  onStopPlan?: (plan: Plan) => void
   onClearPlan: (plan: Plan) => void
-  /** The plan (if any) with an approve/stop/clear mutation currently in
-   * flight, and which one — at most one plan action is ever pending at a
-   * time, so this is a single discriminated field rather than three
-   * independently-nullable id props. */
+  /**
+   * The plan (if any) with a Clear mutation currently in flight. (Execute/
+   * Stop/Play pending state is now owned internally by `PlanActionButton` —
+   * this prop only ever needs to carry `action: 'clear'`; the wider union is
+   * kept for compatibility with existing callers during the ADR-052 rollout.)
+   */
   pendingAction?: { planId: string; action: 'approve' | 'stop' | 'clear' } | null
   /** Render the trailing dashed "New plan" tile. Default true (standalone use);
    * the Tasks screen sets false because its "Plans" section header owns the
@@ -59,10 +71,13 @@ interface PlansFilterBandProps {
 const TILE_SIZE = 'w-56 flex-shrink-0'
 
 /**
- * Per-state glyph — always paired with `planStateLabel`'s visible text,
- * never color-alone (a11y).
+ * Per-state glyph — always paired with `planDisplayLabel`'s visible text,
+ * never color-alone (a11y). `cancelled` (ADR-052 FR-015/US-8) overrides the
+ * `failed`-state glyph with a distinct shape (Stop, not XCircle) so the
+ * orange "Cancelled" marker doesn't just repaint the red "Failed" icon.
  */
-function PlanStateGlyph({ state, size = 9 }: { state: Plan['state']; size?: number }) {
+function PlanStateGlyph({ state, cancelled = false, size = 9 }: { state: Plan['state']; cancelled?: boolean; size?: number }) {
+  if (cancelled) return <Stop size={size} weight="fill" />
   switch (state) {
     case 'draft':
       return <PencilSimple size={size} />
@@ -88,14 +103,16 @@ function PlanStateGlyph({ state, size = 9 }: { state: Plan['state']; size?: numb
  * already-active plan tile also clears it (toggle-off).
  *
  * Because the tile body is a filter control (not an edit affordance), each
- * plan tile exposes an explicit pencil (edit) button plus a ⋯ menu
- * (Approve/Stop/Clear) as SIBLINGS of the select button — never nested
- * inside it — so a click on either can never bubble into the tile's
- * onSelectPlan. The tile itself is `role="group"`, not a `role="button"`
- * wrapping other buttons, so this isolation holds structurally rather than
- * by convention. The ⋯ menu content and both AlertDialog confirms render
- * through a Radix portal (outside the tile's DOM subtree), so their clicks
- * structurally cannot reach the tile's select button either.
+ * plan tile exposes an explicit pencil (edit) button, the ADR-052 §6.8
+ * ▶/■ action button (Execute/Stop/Play — `PlanActionButton`), and a ⋯ menu
+ * (Clear) as SIBLINGS of the select button — never nested inside it — so a
+ * click on any of them can never bubble into the tile's onSelectPlan. The
+ * tile itself is `role="group"`, not a `role="button"` wrapping other
+ * buttons, so this isolation holds structurally rather than by convention.
+ * The ⋯ menu content, `PlanActionButton`'s own confirm modal, and the ⋯
+ * menu's Clear AlertDialog all render through a Radix portal (outside the
+ * tile's DOM subtree), so their clicks structurally cannot reach the tile's
+ * select button either.
  */
 export function PlansFilterBand({
   plans,
@@ -105,8 +122,6 @@ export function PlansFilterBand({
   onSelectPlan,
   onNewPlan,
   onEditPlan,
-  onApprovePlan,
-  onStopPlan,
   onClearPlan,
   pendingAction = null,
   showNewPlanTile = true,
@@ -142,11 +157,7 @@ export function PlansFilterBand({
             selected={isSelected}
             onSelect={() => onSelectPlan(isSelected ? null : plan.id)}
             onEdit={() => onEditPlan(plan)}
-            onApprove={() => onApprovePlan(plan)}
-            onStop={() => onStopPlan(plan)}
             onClear={() => onClearPlan(plan)}
-            isApproving={pendingAction?.planId === plan.id && pendingAction.action === 'approve'}
-            isStopping={pendingAction?.planId === plan.id && pendingAction.action === 'stop'}
             isClearing={pendingAction?.planId === plan.id && pendingAction.action === 'clear'}
           />
         )
@@ -224,11 +235,7 @@ interface PlanFilterTileProps {
   selected: boolean
   onSelect: () => void
   onEdit: () => void
-  onApprove: () => void
-  onStop: () => void
   onClear: () => void
-  isApproving: boolean
-  isStopping: boolean
   isClearing: boolean
 }
 
@@ -240,21 +247,16 @@ function PlanFilterTile({
   selected,
   onSelect,
   onEdit,
-  onApprove,
-  onStop,
   onClear,
-  isApproving,
-  isStopping,
   isClearing,
 }: PlanFilterTileProps) {
-  const [confirmStop, setConfirmStop] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
 
   const owner = agents.find((a) => a.id === plan.owner_agent_id)
   const pct = memberTotal > 0 ? Math.round((memberDone / memberTotal) * 100) : 0
-  const canApprove = plan.state === 'draft'
-  const canStop = plan.state === 'running' || plan.state === 'approved'
-  const stateColor = planStateColor(plan.state)
+  const cancelled = isPlanCancelled(plan)
+  const displayColor = planDisplayColor(plan)
+  const displayLabelText = planDisplayLabel(plan)
 
   return (
     <div
@@ -270,8 +272,8 @@ function PlanFilterTile({
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
       )}
     >
-      {/* Edit + ⋯ actions — SIBLINGS of the select button below, never
-          nested inside it, so they can never trigger onSelect. Hover-
+      {/* Edit + ▶/■/Play + ⋯ actions — SIBLINGS of the select button below,
+          never nested inside it, so they can never trigger onSelect. Hover-
           revealed on pointer-fine devices, always visible on touch. */}
       <div
         className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
@@ -286,6 +288,12 @@ function PlanFilterTile({
           <PencilSimple size={13} />
         </button>
 
+        {/* ADR-052 §6.8 button matrix — draft → Execute, running/cap-queued
+            approved → Stop, cancelled → Play. Renders nothing for done/a
+            genuinely-failed plan. Self-contained: owns its own confirm modal
+            + mutation (executePlan/stopPlan/restartPlan). */}
+        <PlanActionButton plan={plan} />
+
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button tabIndex={0}
@@ -297,19 +305,6 @@ function PlanFilterTile({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
-            {canApprove && (
-              <DropdownMenuItem onClick={onApprove} disabled={isApproving} className="flex items-center gap-2">
-                <Play size={13} weight="fill" />
-                {isApproving ? 'Approving…' : 'Approve'}
-              </DropdownMenuItem>
-            )}
-            {canStop && (
-              <DropdownMenuItem onClick={() => setConfirmStop(true)} disabled={isStopping} className="flex items-center gap-2">
-                <Stop size={13} weight="fill" />
-                {isStopping ? 'Stopping…' : 'Stop'}
-              </DropdownMenuItem>
-            )}
-            {(canApprove || canStop) && <DropdownMenuSeparator />}
             <DropdownMenuItem
               onClick={() => setConfirmClear(true)}
               disabled={isClearing || plan.state === 'running'}
@@ -333,10 +328,10 @@ function PlanFilterTile({
       >
         <span
           className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight"
-          style={{ color: stateColor, backgroundColor: `${stateColor}1a` }}
+          style={{ color: displayColor, backgroundColor: `${displayColor}1a` }}
         >
-          <PlanStateGlyph state={plan.state} />
-          {planStateLabel(plan.state)}
+          <PlanStateGlyph state={plan.state} cancelled={cancelled} />
+          {displayLabelText}
         </span>
 
         <span className="line-clamp-2 text-sm font-medium leading-snug text-[var(--color-secondary)]">
@@ -364,26 +359,6 @@ function PlanFilterTile({
           )}
         </span>
       </button>
-
-      <AlertDialog open={confirmStop} onOpenChange={setConfirmStop}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Stop this plan?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This winds down “{plan.title}”'s active loop. In-flight work finishes gracefully; the plan will not resume automatically.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => { setConfirmStop(false); onStop() }}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
-            >
-              Stop
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <AlertDialog open={confirmClear} onOpenChange={setConfirmClear}>
         <AlertDialogContent>

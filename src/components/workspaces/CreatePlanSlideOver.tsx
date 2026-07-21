@@ -16,7 +16,7 @@ import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
 import {
   createPlan,
   updatePlan,
-  approvePlan,
+  executePlan,
   fetchAgents,
   buildTaskAssigneeItems,
   plansQueryKeys,
@@ -146,10 +146,11 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
     },
   })
 
-  // Approve (SD-C4): confirm-on-success only — a 400 never transitions the
-  // badge; the per-task error list renders inline instead of a toast.
+  // Approve/Execute (SD-C4): confirm-on-success only — a 400 never
+  // transitions the badge; the per-task error list renders inline instead
+  // of a toast. ADR-052 G2: POST /approve (`executePlan`), never PUT.
   const approveMutation = useMutation({
-    mutationFn: () => approvePlan(plan!.id),
+    mutationFn: () => executePlan(plan!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: plansQueryKeys.list(workspaceId) })
       setApproveErrors(null)

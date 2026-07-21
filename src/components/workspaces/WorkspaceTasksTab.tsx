@@ -24,7 +24,7 @@ import {
   fetchPlans,
   fetchAgents,
   updateTask,
-  approvePlan,
+  executePlan,
   stopPlan,
   deletePlan,
   isApiError,
@@ -86,8 +86,9 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   // Plan-tile actions (PlansFilterBand's edit pencil + ⋯ menu): Approve
   // (draft-only), Stop (running/approved cap-waiting), Clear (delete). Edit
   // reuses the same CreatePlanSlideOver as "New plan", opened with `plan` set.
+  // ADR-052 G2: routes through POST /approve (`executePlan`), never PUT.
   const approvePlanMutation = useMutation({
-    mutationFn: (planId: string) => approvePlan(planId),
+    mutationFn: (planId: string) => executePlan(planId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: plansQueryKeys.list(workspaceId) })
       addToast({ message: 'Plan approved', variant: 'success' })

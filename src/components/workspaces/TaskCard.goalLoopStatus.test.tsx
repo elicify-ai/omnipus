@@ -6,6 +6,11 @@
  * `Task.max_attempts` wire fields, with a "· paused" suffix when the task's
  * owning Plan (via `plan_id`) reports `state: running` + a non-empty
  * `paused_reason` — never a fabricated/always-false pause state.
+ *
+ * `showActions={false}` on every render here (ADR-052 §6.8): this file only
+ * exercises the goal-loop status chip, unrelated to the ▶/■ action button —
+ * turning it off avoids needing a QueryClientProvider (TaskActionButton's
+ * useMutation/useQueryClient would otherwise throw without one).
  */
 
 import { describe, it, expect } from 'vitest'
@@ -70,33 +75,33 @@ describe('goalLoopStatusLabel — pure fn', () => {
 
 describe('TaskCard — goal-loop status affordance (FR-090)', () => {
   it('shows "attempt N/M" when the task has a real attempt_count', () => {
-    render(<TaskCard task={makeTask({ attempt_count: 2, max_attempts: 3 })} onClick={() => {}} />)
+    render(<TaskCard task={makeTask({ attempt_count: 2, max_attempts: 3 })} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 2/3')).toBeInTheDocument()
   })
 
   it('shows nothing when attempt_count is absent (task not running a goal loop)', () => {
-    render(<TaskCard task={makeTask()} onClick={() => {}} />)
+    render(<TaskCard task={makeTask()} onClick={() => {}} showActions={false} />)
     expect(screen.queryByText(/attempt \d/)).toBeNull()
   })
 
   it('shows the paused suffix when the owning plan is running and paused', () => {
     const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
     const plans = [makePlan({ id: 'plan-1', state: 'running', paused_reason: 'owner agent disabled' })]
-    render(<TaskCard task={task} plans={plans} onClick={() => {}} />)
+    render(<TaskCard task={task} plans={plans} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 1/3 · paused')).toBeInTheDocument()
   })
 
   it('does NOT show paused when the owning plan is running but not paused', () => {
     const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
     const plans = [makePlan({ id: 'plan-1', state: 'running' })]
-    render(<TaskCard task={task} plans={plans} onClick={() => {}} />)
+    render(<TaskCard task={task} plans={plans} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 1/3')).toBeInTheDocument()
     expect(screen.queryByText(/paused/)).toBeNull()
   })
 
   it('does NOT show paused when the plans prop is absent entirely (no fabricated state)', () => {
     const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
-    render(<TaskCard task={task} onClick={() => {}} />)
+    render(<TaskCard task={task} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 1/3')).toBeInTheDocument()
     expect(screen.queryByText(/paused/)).toBeNull()
   })
@@ -104,7 +109,7 @@ describe('TaskCard — goal-loop status affordance (FR-090)', () => {
   it('does NOT show paused when the owning plan is done/failed even with a stale paused_reason', () => {
     const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
     const plans = [makePlan({ id: 'plan-1', state: 'done' })]
-    render(<TaskCard task={task} plans={plans} onClick={() => {}} />)
+    render(<TaskCard task={task} plans={plans} onClick={() => {}} showActions={false} />)
     expect(screen.queryByText(/paused/)).toBeNull()
   })
 })

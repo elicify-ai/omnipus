@@ -3,7 +3,8 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { motion } from 'framer-motion'
 import { getIconComponent } from '@/lib/agentIcons'
 import { cn } from '@/lib/utils'
-import { PRIORITY_LABELS, statusVisual, type TaskGraphNode } from './taskGraph'
+import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
+import { TaskActionButton } from '../TaskActionButton'
 
 // Priority pill colours — mirrors TaskCard's P1..P5 ladder (red→muted).
 const PRIORITY_CLASS: Record<number, string> = {
@@ -27,7 +28,10 @@ const PRIORITY_CLASS: Record<number, string> = {
  */
 function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
   const { task, agentName, agentColor, agentIcon, onOpen } = data
-  const visual = statusVisual(task.status)
+  // ADR-052 FR-015/US-8 — a user-cancelled task renders orange "Cancelled",
+  // distinct from a genuine red "Failed" (taskNodeVisual overrides
+  // statusVisual's plain status→colour/label for that one case).
+  const visual = taskNodeVisual(task)
   const priority = task.priority ?? 3
   const AgentIcon = getIconComponent(agentIcon)
   const hasAgent = Boolean(agentName)
@@ -96,6 +100,21 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         className="absolute inset-y-0 left-0 w-1"
         style={{ backgroundColor: visual.color }}
       />
+
+      {/* ADR-052 §6.8 ▶/■ action button — hover/selected-revealed (mirrors
+          TaskCard's/PlansFilterBand's tile action overlay for cross-surface
+          consistency), always visible on touch. Sits above the priority
+          pill only while revealed; TaskActionButton stops its own
+          click/pointerdown/keydown from reaching this node's onKeyDown or
+          React Flow's onNodeClick. */}
+      <div
+        className={cn(
+          'absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
+          selected && 'opacity-100',
+        )}
+      >
+        <TaskActionButton task={task} className="bg-[var(--color-surface-1)]" />
+      </div>
 
       <div className="flex flex-col gap-2 py-2.5 pl-3.5 pr-3">
         {/* Top row: status chip + priority. */}

@@ -100,6 +100,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     soul: '',
     timeout_seconds: 60,
     max_tool_iterations: 20,
+    // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
+    memory_enabled: true,
     ...overrides,
   }
 }
@@ -145,6 +147,19 @@ beforeEach(() => {
       attachedTaskTitle: null,
     })
     useWorkspacesStore.setState({ activeWorkspaceId: null })
+  })
+})
+
+// ADR-052 FR-036: verifier-role sessions must stay hidden from the search
+// modal's session list by default. GET /sessions defaults to excluding
+// type "verifier" unless include_verifier=true is passed — this is a
+// regression guard that the modal's session query never opts in.
+describe('SearchModal — ADR-052 FR-036: verifier sessions excluded by default', () => {
+  it('calls fetchSessions with no arguments (never requests include_verifier)', async () => {
+    renderModal()
+    await waitFor(() => {
+      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith()
+    })
   })
 })
 

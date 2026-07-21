@@ -348,6 +348,11 @@ function StatusColumnsRow({
               agents={agents}
               altitude="top-level"
               onClick={() => {}}
+              // Never render the ADR-052 action button on the purely-visual
+              // drag ghost — it's aria-hidden and unreachable anyway; an
+              // interactive-looking control following the cursor mid-drag
+              // would just be visual noise.
+              showActions={false}
             />
           </div>
         ) : null}

@@ -4,6 +4,8 @@ import type { Task, Agent, Plan } from '@/lib/api'
 import { CheckSquare } from '@phosphor-icons/react'
 import { RollupBadge } from './RollupBadge'
 import { TaskChildren } from './TaskChildren'
+import { TaskActionButton } from './TaskActionButton'
+import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 
@@ -92,6 +94,14 @@ interface TaskCardProps {
    * focusable/role="button" element around it.
    */
   drag?: TaskCardDrag
+  /**
+   * Render the ADR-052 §6.8 ▶/■ action button (`TaskActionButton`). Default
+   * true. BoardView's `DragOverlay` sets this false on its purely-visual
+   * drag-ghost clone — an interactive-looking action button following the
+   * cursor mid-drag would be confusing, and the ghost is `aria-hidden`
+   * anyway (never keyboard/pointer reachable).
+   */
+  showActions?: boolean
 }
 
 export function TaskCard({
@@ -102,6 +112,7 @@ export function TaskCard({
   onClick,
   onChildClick,
   drag,
+  showActions = true,
 }: TaskCardProps) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
@@ -177,7 +188,7 @@ export function TaskCard({
         }
       }}
       className={cn(
-        'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer',
+        'group relative rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer',
         'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
         hasRollup && 'border-[var(--color-accent)]/30',
       )}
@@ -187,6 +198,18 @@ export function TaskCard({
           Enter to open, Space to move.
         </span>
       )}
+
+      {/* ADR-052 §6.8 ▶/■ action button — hover-revealed on pointer-fine
+          devices, always visible on touch (mirrors PlansFilterBand's tile
+          action row). Renders nothing when the task offers no action
+          (TaskActionButton itself returns null for e.g. an in-plan idle
+          task or a `done` task). */}
+      {showActions && (
+        <div className="absolute right-1.5 top-1.5 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+          <TaskActionButton task={task} />
+        </div>
+      )}
+
       {/* Top row: priority badge + title */}
       <div className="flex items-start gap-2">
         <span
@@ -197,10 +220,25 @@ export function TaskCard({
         >
           {badge.label}
         </span>
-        <p className="flex-1 text-sm font-medium text-[var(--color-secondary)] leading-snug line-clamp-2">
+        <p className="flex-1 text-sm font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 pr-6">
           {task.title}
         </p>
       </div>
+
+      {/* Cancelled/Failed marker (ADR-052 FR-015/US-8) — a `failed` task
+          gets an explicit state chip so a user-Stopped (orange "Cancelled")
+          task reads as distinct from a genuine failure (red "Failed") within
+          the same Failed board column. */}
+      {task.status === 'failed' && (
+        <div className="mt-2 flex items-center gap-1.5">
+          <span
+            className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+            style={{ color: taskDisplayColor(task), backgroundColor: `${taskDisplayColor(task)}1a` }}
+          >
+            {taskDisplayLabel(task)}
+          </span>
+        </div>
+      )}
 
       {/* Todos checklist progress */}
       {todos.length > 0 && (
