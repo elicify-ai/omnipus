@@ -746,6 +746,13 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	agentFilter := r.URL.Query().Get("agent_id")
 	typeFilter := r.URL.Query().Get("type")
+	// ADR-052 FR-036/US-13 Acceptance 6: verifier-role sessions are excluded
+	// by default, REGARDLESS of the type filter — ?type=verifier alone does
+	// NOT surface them; the operator must also pass include_verifier=true.
+	// strconv.ParseBool accepts "1"/"t"/"T"/"TRUE"/"true"/"True" (and their
+	// false counterparts); any absent/unparseable value defaults to false
+	// per the contract (ListSessionsParams.IncludeVerifier default: false).
+	includeVerifier, _ := strconv.ParseBool(r.URL.Query().Get("include_verifier"))
 
 	metas, partialErrs := a.agentLoop.ListAllSessions()
 	for _, pe := range partialErrs {
@@ -759,6 +766,9 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if typeFilter != "" && string(m.Type) != typeFilter {
+			continue
+		}
+		if m.Type == session.SessionTypeVerifier && !includeVerifier {
 			continue
 		}
 		filtered = append(filtered, m)

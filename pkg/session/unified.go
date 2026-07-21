@@ -40,6 +40,20 @@ const (
 	// the top of the Session panel and disables their delete control while the
 	// heartbeat is active (FR-021, FR-028).
 	SessionTypeHeartbeat UnifiedSessionType = "heartbeat"
+	// SessionTypeVerifier classifies a session created for a verifier-role
+	// adjudication (ADR-052 FR-036/US-13 Acceptance 6): the Judge System
+	// Agent, or a future custom verifier, runs its own real agent-loop turn
+	// in a session of this type rather than the old blind Provider.Chat
+	// shortcut. Persisted with normal 90-day retention but hidden by default
+	// from GET /api/v1/sessions (see the include_verifier query param);
+	// Sidebar and SearchModal always exclude it, UsageScreen INCLUDES it
+	// (verifier LLM spend must stay visible, SC-014), and the ActivityPanel /
+	// verdict drill-down surface it on demand. Client-created via POST
+	// /api/v1/sessions is intentionally NOT supported for this type
+	// (SessionCreateRequest.yaml's type enum is narrower than this one, by
+	// design — mirrors the existing "scheduled" precedent) — only the engine
+	// mints verifier sessions, via NewVerifierSession below.
+	SessionTypeVerifier UnifiedSessionType = "verifier"
 )
 
 // IsValidSessionType reports whether t is one of the known session types.
@@ -47,7 +61,7 @@ const (
 // validation/listing site accepts them.
 func IsValidSessionType(t UnifiedSessionType) bool {
 	switch t {
-	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled, SessionTypeHeartbeat:
+	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled, SessionTypeHeartbeat, SessionTypeVerifier:
 		return true
 	default:
 		return false
@@ -493,6 +507,35 @@ func (us *UnifiedStore) NewHeartbeatSession(workspaceID, agentID string) (*Unifi
 		return nil, fmt.Errorf("session: stamp workspace_id on heartbeat session %s: %w", meta.ID, err)
 	}
 	meta.WorkspaceID = workspaceID
+	return meta, nil
+}
+
+// NewVerifierSession mints a fresh, isolated session of SessionTypeVerifier
+// for a verifier-role adjudication (ADR-052 FR-036/US-13 Acceptance 1+6):
+// runVerifierAdjudication (pkg/agent) creates one FRESH session per
+// adjudication call — never reused across calls — so this is a thin
+// "New", not "GetOrCreate", wrapper (mirroring NewScheduledSession's
+// shape, not NewHeartbeatSession's reuse-by-id shape).
+//
+// ownerAgentID is the verifier agent actually running the turn (e.g. the
+// Judge System Agent's id, coreagent.IDJudge) — NOT the agent under
+// review. The returned session's Type is stamped SessionTypeVerifier so
+// it round-trips through the wire as "verifier" and is excluded by
+// listSessions' default filtering (pkg/gateway/rest.go) unless
+// include_verifier=true is passed, while remaining fully visible to the
+// usage/cost aggregation path (session.AggregateUsage applies no
+// type-based filter at all — SC-014).
+//
+// This is the ONLY sanctioned way to create a verifier-typed session on
+// disk; POST /api/v1/sessions (createSessionHTTP) intentionally does not
+// accept type="verifier" in its request body (SessionCreateRequest.yaml's
+// type enum is narrower by design), so a REST client can never spoof a
+// hidden verifier session.
+func (us *UnifiedStore) NewVerifierSession(ownerAgentID string) (*UnifiedMeta, error) {
+	meta, err := us.NewSession(SessionTypeVerifier, "verifier", ownerAgentID)
+	if err != nil {
+		return nil, fmt.Errorf("session: new verifier session (owner=%s): %w", ownerAgentID, err)
+	}
 	return meta, nil
 }
 
