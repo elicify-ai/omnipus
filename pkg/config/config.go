@@ -3063,6 +3063,25 @@ type BrowserToolConfig struct {
 	// (ADR-047 D7) and behave as if this were false regardless of its
 	// configured value (reason:"lite_build").
 	WebRTCEnabled bool `json:"webrtc_enabled" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_ENABLED"`
+	// PreferPackaged (ADR-052 D2) makes the runtime package-managed Chrome
+	// (sibling chromium/ dir next to the binary) outrank system Chrome on $PATH
+	// for reproducibility across fleets. Default false preserves operator
+	// autonomy: a deliberately newer/patched $PATH Chrome still wins. When
+	// true, the package Chrome — verified at package build via verifyGoogHashMD5
+	// and stamped with chrome.sha256 — wins over both $PATH and the runtime
+	// chrome-for-testing download path.
+	PreferPackaged bool `json:"prefer_packaged" env:"OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED"`
+	// TrustPathChrome (ADR-052 SEC-ADR052-002) gates whether the resolver
+	// HONORS a system Chrome on $PATH when it outranks the verified package
+	// Chrome. Default false: a $PATH Chrome is still RECORDED by the
+	// resolver (so operators can see what's happening) but the launch is
+	// refused — the resolver falls through to the package Chrome — and the
+	// gateway emits WARN-BROWSER-007 at WARN severity. Operators who
+	// deliberately want a custom $PATH Chrome (Homebrew, patched Chrome,
+	// development) set this true. The integrity axis — "do we trust the
+	// binary at the resolved path?" — is independent of
+	// OMNIPUS_BROWSER_NO_SANDBOX (the inner-sandbox-suppression toggle).
+	TrustPathChrome bool `json:"trust_path_chrome" env:"OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME"`
 	// WebRTCStunServer is the STUN server URI (e.g.
 	// "stun:stun.l.google.com:19302") the gateway's Pion relay uses for ICE
 	// candidate gathering on both the viewer and capture-ingest legs.

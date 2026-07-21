@@ -34,6 +34,34 @@ before:
     # After mirroring the SPA into the embed target, wipe dist/ so goreleaser
     # can write its own artifacts there (or it errors "dist is not empty").
     - sh -c 'rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa && rm -rf dist'
+    # ADR-052 Phase 1: bundle a pinned full Chrome-for-Testing build alongside
+    # the binary so each per-OS package ships a version-pinned, integrity-
+    # verified Chrome. Only run for linux/amd64 in Phase 1 — darwin/arm64 and
+    # windows/amd64 land in Phases 3 and 4 (the macOS notarization decision +
+    # Windows allocator work). See docs/internal/architecture/ADR-052-*.md §D2
+    # + SEC-ADR052-003 (security review mandates the CfT X-Goog-Hash md5
+    # verification + chrome.sha256 emit on every build).
+    #
+    # Pipeline (the scripts/cft-bundle.sh helper does steps 1-5; this hook
+    # only gates on platform + delegates):
+    #   1. Fetch the live CfT "last-known-good-versions-with-downloads.json"
+    #      manifest via curl (same URL pkg/tools/browser/installer.go's
+    #      cftManifestURL uses at runtime).
+    #   2. Parse with python3 to resolve the chrome-linux64.zip URL for the
+    #      Stable channel's "chrome" build (full Chrome, NOT
+    #      chrome-headless-shell — per ADR D2 the bundled build must be
+    #      full Chrome).
+    #   3. Download chrome-linux64.zip to a temp dir + verify X-Goog-Hash md5
+    #      against the response header (mirrors verifyGoogHashMD5 in
+    #      pkg/tools/browser/installer.go:414-461 — M2 / SEC-ADR052-003).
+    #   4. Unzip into dist/chromium/ (goreleaser's working dir).
+    #   5. Compute SHA-256 of dist/chromium/chrome-linux64/chrome and write
+    #      to dist/chromium/chrome.sha256 — the integrity manifest the
+    #      runtime reads back and verifies at first launch
+    #      (chrome.sha256 reader: cmd/omnipus/internal/doctor/command.go's
+    #      readChromeSHA — BOM/CRLF/comment/prefix tolerant per
+    #      SEC-ADR052-004).
+    - sh -c 'test "{{ .Os }}" = "linux" && test "{{ .Arch }}" = "amd64" && bash scripts/cft-bundle.sh || echo "ADR-052: skipping chrome bundling for {{ .Os }}/{{ .Arch }} (Phase 1 is linux/amd64 only)"'
 
 builds:
   - id: omnipus
@@ -89,6 +117,14 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
+    # ADR-052 Phase 1: include the pinned Chrome-for-Testing payload + its
+    # integrity manifest in the per-OS archive. The archive's `files`
+    # defaults to the binary only; chromium/ is added explicitly so
+    # install.sh / package managers lay it down alongside `omnipus`. The
+    # pre-build hook above creates dist/chromium/ before goreleaser packs.
+    files:
+      - omnipus
+      - chromium/**/*
 
 nfpms:
   - id: omnipus
@@ -109,6 +145,13 @@ nfpms:
       - rpm
       - deb
     bindir: /usr/bin
+    # ADR-052 Phase 1: drop chromium/ alongside the binary in the system
+    # package so .deb / .rpm installs land chrome at /usr/share/omnipus/chromium
+    # (nfpm honors files: globs as relative to the build dir; the package
+    # owns the directory layout — install.sh handles the move for tar.gz).
+    files:
+      - omnipus
+      - chromium/**/*
 
 changelog:
   sort: asc
