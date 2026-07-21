@@ -7,12 +7,9 @@
 // meta.json carries a "verifier" session type from the moment it is
 // created (newVerifierSessionChatID), via a pre-created, explicitly-typed
 // UnifiedStore session — NOT a post-hoc patch (MetaPatch carries no Type
-// field; UnifiedStore has no such seam). WAVE-MERGE: pkg/session/unified.go
-// has no exported SessionTypeVerifier constant yet (the "sessions-vis" Wave
-// 2 agent's own slice — default session-list exclusion, Sidebar/SearchModal
-// filtering, FR-036) — these tests assert on the literal string "verifier",
-// the stable cross-wave contract newVerifierSessionChatID's own doc comment
-// documents.
+// field; UnifiedStore has no such seam). Creation goes through
+// session.NewVerifierSession, so the stamped type is the exported
+// session.SessionTypeVerifier constant (FR-036).
 package agent
 
 import (
@@ -81,8 +78,8 @@ func TestVerifierSessionType_RealAdjudicationStampsVerifierType(t *testing.T) {
 		}
 		t.Fatalf("no verifier session found with title %q among session titles %v", wantTitle, titles)
 	}
-	if found.Type != session.UnifiedSessionType("verifier") {
-		t.Errorf("verifier session Type = %q, want %q", found.Type, "verifier")
+	if found.Type != session.SessionTypeVerifier {
+		t.Errorf("verifier session Type = %q, want %q", found.Type, session.SessionTypeVerifier)
 	}
 }
 
@@ -105,8 +102,8 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 	if err != nil {
 		t.Fatalf("newVerifierSessionChatID returned %q, which does not resolve to a real session: %v", chatID, err)
 	}
-	if meta.Type != session.UnifiedSessionType("verifier") {
-		t.Errorf("pre-created session Type = %q, want %q", meta.Type, "verifier")
+	if meta.Type != session.SessionTypeVerifier {
+		t.Errorf("pre-created session Type = %q, want %q", meta.Type, session.SessionTypeVerifier)
 	}
 	if meta.Title != "Verifier: task:t-precreate" {
 		t.Errorf("pre-created session Title = %q, want %q", meta.Title, "Verifier: task:t-precreate")

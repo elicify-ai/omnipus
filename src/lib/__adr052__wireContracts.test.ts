@@ -378,19 +378,20 @@ describe('ADR-052 FR-034 — AcceptanceCriterion behavior-kind payload contract 
   //    ADR-052 spec DS-7 row 6) DOCUMENTS but which openapi-zod-client cannot
   //    express as generated Zod code (no .strict()/.superRefine() emitted for
   //    either additionalProperties:false or a cross-field business rule from
-  //    prose). These two tests assert the SPEC'd behavior and are EXPECTED TO
-  //    FAIL against today's generated schema — reported honestly in the QA
-  //    output as a contract-fidelity gap, not silently worked around. If a
-  //    later contracts-wave adds a manual .superRefine()/.strict() to close
-  //    this gap, these tests should start passing and can lose this comment.
-  it('[EXPECTED FAIL — contract-fidelity gap] rejects max_count < min_count per DS-7 row 6', () => {
+  //    prose). These two tests assert the SPEC'd behavior and are marked
+  //    it.fails as inverted canaries for a known contract-fidelity gap
+  //    (tracked on the ADR-052 fix-wave ledger, not silently worked around):
+  //    the moment a contracts fix adds .strict()/.superRefine() coverage,
+  //    they flip to failing-as-fails, forcing removal of the .fails marker
+  //    and promotion to ordinary assertions.
+  it.fails('[KNOWN GAP — contract fidelity] rejects max_count < min_count per DS-7 row 6', () => {
     const result = AcceptanceCriterionSchema.safeParse(
       baseCriterion({ behavior: { tool: 'web_search', min_count: 5, max_count: 2 } }),
     )
     expect(result.success).toBe(false)
   })
 
-  it('[EXPECTED FAIL — contract-fidelity gap] rejects an unknown field in the behavior payload (additionalProperties:false, AcceptanceCriterion.yaml:81-82)', () => {
+  it.fails('[KNOWN GAP — contract fidelity] rejects an unknown field in the behavior payload (additionalProperties:false, AcceptanceCriterion.yaml:81-82)', () => {
     const result = AcceptanceCriterionSchema.safeParse(
       baseCriterion({ behavior: { tool: 'web_search', bogus_field: 'nope' } }),
     )
