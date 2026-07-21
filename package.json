@@ -122,7 +122,11 @@
       "dompurify": "^3.4.0",
       "@radix-ui/react-dismissable-layer": "1.1.16",
       "@radix-ui/react-focus-scope": "1.1.13",
-      "@radix-ui/react-focus-guards": "1.1.4"
+      "@radix-ui/react-focus-guards": "1.1.4",
+      "axios": "^1.18.1",
+      "undici": "^7.28.0",
+      "js-yaml": "^4.2.0",
+      "form-data": "^4.0.6"
     }
   },
   "overrides": {
