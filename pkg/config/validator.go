@@ -343,6 +343,16 @@ func validateBootConfig(cfg *Config) error {
 			cfg.Planning.CheckTimeoutSeconds,
 		)
 	}
+	// ADR-052 FR-032: verifier transcript-window token bound.
+	if cfg.Planning.VerifierWindowTokens == 0 {
+		cfg.Planning.VerifierWindowTokens = DefaultVerifierWindowTokens
+	}
+	if cfg.Planning.VerifierWindowTokens < 1 {
+		return fmt.Errorf(
+			"config error: cfg.Planning.VerifierWindowTokens=%d must be at least 1",
+			cfg.Planning.VerifierWindowTokens,
+		)
+	}
 
 	// Apply defaults for ServeWorkspace durations.
 	if cfg.Tools.ServeWorkspace.MaxDurationSeconds == 0 {
