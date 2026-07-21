@@ -122,7 +122,7 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	// run resolves to THAT workspace's work/ dir, independent of agent.Home —
 	// resolve it the same way runExternalCLISubTurn itself does so this
 	// assertion doesn't hardcode the harness's internal seed-workspace id.
-	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse(context.Background(), ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
 	if wsErr != nil {
 		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
 	}
@@ -497,7 +497,7 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 
 	al, ts := newExternalTestLoop(t, "claude-code", "")
-	repo, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	repo, wsErr := resolveTurnWorkDirOrRefuse(context.Background(), ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
 	if wsErr != nil {
 		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
 	}

@@ -325,6 +325,12 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// verifier registry (so /goal clear can cancel an in-flight goal
 		// verifier) and sources the transcript window the verifier is fed.
 		GoalSessionID: sessionID,
+		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the chat
+		// turn's own channel-bound workspace (opts.WorkspaceID; may
+		// legitimately be empty for an unbound chat — the Judge's turn then
+		// falls back to its own agent home, never a hard failure). See
+		// JudgeCriteriaInput.WorkspaceID.
+		WorkspaceID: opts.WorkspaceID,
 	})
 
 	if jr.Unavailable {

@@ -706,6 +706,10 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		Attempt:         p.JudgeRounds + 1,
 		ClaimText:       buildPlanClaimText(tasks),
 		ExtraContext:    buildPlanJudgeExtraContext(p),
+		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the plan's
+		// own workspace (plan.go:264) — same rationale as task_executor.go's
+		// task-scope call. See JudgeCriteriaInput.WorkspaceID.
+		WorkspaceID: p.WorkspaceID,
 	})
 
 	// FR-014 (US-6 acceptance 3, Test 7): JudgeCriteria runs OUTSIDE
