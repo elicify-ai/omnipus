@@ -163,12 +163,19 @@ remove_from_path() {
   [ "$status" -eq 0 ]
   [ -d "dist/chromium/chrome-linux64" ]
   [ -x "dist/chromium/chrome-linux64/chrome" ]
-  [ -f "dist/chromium/chrome.sha256" ]
+  # PERF2-001: chrome.sha256 lives NEXT TO the binary (per-binary manifest
+  # placement), not at the chromium/ root. The runtime's findPackageChrome
+  # probes <extraction-subdir>/chrome.sha256 first.
+  [ -f "dist/chromium/chrome-linux64/chrome.sha256" ]
   # The sha256 file must contain the hex digest of the fixture chrome.
-  run cat "dist/chromium/chrome.sha256"
-  [[ "$output" == *"$FIXTURE_CHROME_SHA256_HEX"* ]]
-  # And it must follow the sha256sum text-mode format: hex, two spaces, path.
-  [[ "$output" == *"  chrome-linux64/chrome"* ]]
+  manifest_contents="$(cat dist/chromium/chrome-linux64/chrome.sha256)"
+  [[ "$manifest_contents" == *"$FIXTURE_CHROME_SHA256_HEX"* ]]
+  # sha256sum text-mode format: hex, exactly two spaces, then the
+  # per-binary relative path. Per-binary placement (PERF2-001) means the
+  # captured `$2` includes the leading "dist/chromium/<subdir>" prefix
+  # when cft-bundle.sh is invoked from the goreleaser cwd — the runtime
+  # parser tolerates any leading path component.
+  [[ "$manifest_contents" == *"  "*"chrome"* ]]
 }
 
 @test "cft-bundle.sh: linux/arm64 skips cleanly when CfT has no arm64 build (SPEC-003)" {
@@ -206,8 +213,9 @@ remove_from_path() {
   echo "status=$status output=$output"
   [ "$status" -eq 0 ]
   [ -x "dist/chromium/chrome-linux-arm64/chrome" ]
-  [ -f "dist/chromium/chrome.sha256" ]
-  run cat "dist/chromium/chrome.sha256"
+  # PERF2-001: per-binary manifest placement.
+  [ -f "dist/chromium/chrome-linux-arm64/chrome.sha256" ]
+  run cat "dist/chromium/chrome-linux-arm64/chrome.sha256"
   [[ "$output" == *"chrome-linux-arm64/chrome"* ]]
 }
 
@@ -231,6 +239,66 @@ remove_from_path() {
   run bash "$CFT_BUNDLE_SH" amd64
   [ "$status" -eq 0 ]
   [[ "$output" == *"md5 verified"* ]] || [[ "$output" == *"md5 OK"* ]]
+}
+
+@test "cft-bundle.sh: tampered X-Goog-Hash md5 aborts with 'chrome zip md5 mismatch'" {
+  # CORR-008 (full path): install a curl stub that emits a synthetic
+  # X-Goog-Hash with a deliberately wrong md5 (cft-curl-stub.sh always
+  # computes the real md5, so a true mismatch test requires an in-test
+  # variant). cft-bundle.sh's md5 verification must catch the mismatch
+  # and abort with a clear error — never silently pass.
+  FIX="$SANDBOX/fixture"
+  # Build a tampered.zip whose real md5 differs from what the stub
+  # announces. The stub synthesizes md5=<base64-of-md5-of-whatever-it-
+  # serves-from-the-URL>, so we don't actually need a different file —
+  # we just need the stub to emit a WRONG md5. We do this by overriding
+  # the stub to emit a constant bogus md5 in the X-Goog-Hash header
+  # (see the inline stub below).
+  WRONG_MD5_B64="$(printf 'tampered-md5-not-real' | base64 | tr -d '\n')"
+  cat > "$SCRUB_BIN/curl" <<STUB
+#!/bin/bash
+if [ "\$#" -eq 1 ] && [ "\$1" = "--version" ]; then
+  printf 'curl-stub 0.1\n'
+  exit 0
+fi
+url=""
+out=""
+head_only=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -fsSI) head_only=1; shift ;;
+    -fsSL|-sSL) shift ;;
+    -I|--head) head_only=1; shift ;;
+    --version) printf 'curl-stub 0.1\n'; exit 0 ;;
+    -o) shift; [ \$# -gt 0 ] && out="\$1"; shift ;;
+    -*) shift ;;
+    *) [ -z "\$url" ] && url="\$1"; shift ;;
+  esac
+done
+FIX="\${CFT_FIXTURE_DIR:-}"
+[ -z "\$FIX" ] && { echo "no CFT_FIXTURE_DIR" >&2; exit 1; }
+case "\$url" in
+  *last-known-good-versions-with-downloads.json) src="\$FIX/manifest.json" ;;
+  file://*) src="\${url#file://}" ;;
+  *linux64/chrome-linux64.zip) src="\$FIX/chrome.zip" ;;
+  *) echo "stub: unknown URL \$url" >&2; exit 22 ;;
+esac
+[ -f "\$src" ] || { echo "stub: missing fixture \$src" >&2; exit 22; }
+if [ "\$head_only" = "1" ]; then
+  # Tampered: emit a wrong md5 (not the real md5 of the served zip).
+  printf 'HTTP/1.1 200 OK\r\n'
+  printf 'X-Goog-Hash: crc32c=fakecrc32c,md5=%s\r\n' "$WRONG_MD5_B64"
+  printf 'Content-Length: %d\r\n' "\$(wc -c < "\$src")"
+  printf '\r\n'
+  exit 0
+fi
+if [ -n "\$out" ]; then cp "\$src" "\$out"; else cat "\$src"; fi
+STUB
+  chmod +x "$SCRUB_BIN/curl"
+  run bash "$CFT_BUNDLE_SH" amd64
+  echo "status=$status output=$output"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"chrome zip md5 mismatch"* ]]
 }
 
 @test "cft-bundle.sh: missing X-Goog-Hash md5 aborts with a clear error" {
@@ -280,4 +348,42 @@ STUB
   echo "status=$status output=$output"
   [ "$status" -ne 0 ]
   [[ "$output" == *"no md5 in X-Goog-Hash"* ]]
+}
+
+@test "cft-bundle.sh: chrome.sha256 self-test rejects tampered manifest (SEC-NEW2-004)" {
+  # Drive cft-bundle.sh end-to-end once to populate
+  # dist/chromium/chrome-linux64/chrome + chrome.sha256. Then tamper the
+  # per-binary manifest with a wrong digest and invoke ONLY the
+  # self-verify step (which cft-bundle.sh exposes as a standalone bash
+  # function). The self-verify re-hashes the binary and compares against
+  # the manifest — a tampered manifest fails closed with "self-test
+  # FAILED" on stderr.
+  run bash "$CFT_BUNDLE_SH" amd64
+  echo "first run status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -f dist/chromium/chrome-linux64/chrome.sha256 ]
+
+  # Tamper with the per-binary manifest.
+  printf '%s  chrome\n' \
+    "0000000000000000000000000000000000000000000000000000000000000000" \
+    > dist/chromium/chrome-linux64/chrome.sha256
+
+  # Extract self_verify_chrome_sha256 from cft-bundle.sh and source it
+  # in isolation. The function is the second `function ... { ... }`
+  # block in the script; awk walks until the next blank line after the
+  # matching `}` to capture the whole definition.
+  function_lib="$SANDBOX/self_verify_lib.sh"
+  awk '
+    /self_verify_chrome_sha256\(\)/ { capture=1 }
+    capture { print }
+    capture && /^}/ { exit }
+  ' "$CFT_BUNDLE_SH" > "$function_lib"
+  # shellcheck disable=SC1090
+  run bash -c '
+    source "'"$function_lib"'"
+    self_verify_chrome_sha256 "dist/chromium/chrome-linux64/chrome" "dist/chromium/chrome-linux64/chrome.sha256"
+  '
+  echo "self-verify run status=$status output=$output"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"self-test FAILED"* ]]
 }

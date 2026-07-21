@@ -7,10 +7,9 @@
 package doctor
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
@@ -258,15 +258,33 @@ func checkDMPolicies(cfg *config.Config) []warning {
 var packageChromeRootOverride string
 
 // packageChromeRootForDoctor computes the on-disk location of the package
-// Chrome (ADR-052 §D2) the way pkg/tools/browser/exec_resolver.go computes
-// it at runtime: <dir(os.Executable())>/../chromium on linux/darwin, the
-// same path on windows. This is duplicated locally in the doctor package
-// to keep doctor offline + read-only (no package-import cycle with the
-// browser resolver's package-managed flag plumbing); the runtime path
-// computation in exec_resolver.go remains the source of truth for the
-// resolution order itself. If backend-lead-A exposes a public
-// PackageChromeRoot() helper in pkg/tools/browser this local helper can be
-// replaced with a thin re-export.
+// Chrome (ADR-052 §D2). It is a thin shim around the runtime's
+// packageChromeRoot (pkg/tools/browser/package_chrome.go), which probes the
+// install-path multi-root candidate list (<dir(exe)>/../chromium,
+// ../share/omnipus/chromium, ../libexec/omnipus/chromium) and returns the
+// first existing root. We keep the local helper because:
+//   - the runtime function is package-private (lowercase
+//     packageChromeRoot) and is being exported as
+//     browser.PackageChromeRoot() by the parallel FIX-W5-1 commit
+//     (CORR2-001).
+//   - doctor must stay offline + read-only (no import of the
+//     package-managed flag plumbing from the resolver).
+//
+// TODO(FIX-W5-1): once browser.PackageChromeRoot() lands, replace this
+// function's body with `return browser.PackageChromeRoot(), true`. Until
+// then we inline the same multi-root probe here so the doctor recognizes
+// an install.sh-laid-down chromium/ at ../share/omnipus/chromium — the
+// single-candidate <dir>/../chromium lookup the previous version did
+// silently never fired WARN-BROWSER-005/006 on real install.sh installs.
+//
+// TODO(SEC-NEW2-003 follow-up): once findPackageChrome exposes a
+// isHeadlessShell distinction (planned by the parallel review), have the
+// doctor surface a distinct NotCapable-style reason when the package
+// Chrome is a headless-shell binary (not video-capable) so operators can
+// tell apart "no Chrome installed" from "Chrome installed but it's the
+// headless-shell fallback, install full Chrome for video capture". Until
+// then the headless-shell case reads as the same generic
+// "full-Chrome build not installed yet" reason the no-chrome case uses.
 //
 // When packageChromeRootOverride is set (test seam only), returns it
 // unconditionally with ok=true — the test owns the existence/invariants.
@@ -282,7 +300,30 @@ func packageChromeRootForDoctor() (root string, ok bool) {
 	if err != nil {
 		return "", false
 	}
-	return filepath.Join(filepath.Dir(absExe), "..", "chromium"), true
+	exeDir := filepath.Dir(absExe)
+	// Mirror packageChromeRootCandidates() in pkg/tools/browser/package_chrome.go.
+	candidates := []string{
+		filepath.Join(exeDir, "..", "chromium"),
+		filepath.Join(exeDir, "..", "share", "omnipus", "chromium"),
+		filepath.Join(exeDir, "..", "libexec", "omnipus", "chromium"),
+	}
+	for _, candidate := range candidates {
+		info, err := os.Lstat(candidate)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
+		if info.Mode()&0o002 != 0 {
+			continue
+		}
+		return candidate, true
+	}
+	return "", false
 }
 
 // packageChromeBinaryPath returns the absolute path of the bundled chrome
@@ -321,7 +362,8 @@ func packageChromeBinaryPath(root string) string {
 }
 
 // checkBrowserPackageChrome (ADR-052 §D2/M2 + §1 C2 + SEC-ADR052-007) emits
-// two warnings:
+// up to three diagnostic warnings, applied independently so an operator
+// sees every applicable problem in a single doctor run:
 //
 //   - WARN-BROWSER-005 (Linux only): in-process ELF parsing of the bundled
 //     chrome binary's DT_NEEDED entries (no shelling out — HC #2) against
@@ -334,7 +376,14 @@ func packageChromeBinaryPath(root string) string {
 //   - WARN-BROWSER-006: hashes the bundled chrome binary, parses
 //     chrome.sha256 alongside it, and warns on a mismatch — the
 //     equivalent of the runtime's verifyGoogHashMD5 check applied to the
-//     package-installed chrome.
+//     package-installed chrome. The parser + verifier are the shared
+//     pkg/tools/browser/chromeintegrity helpers so the runtime and the
+//     doctor cannot drift on tolerance rules (SEC-ADR052-004).
+//
+//   - WARN-BROWSER-008: package-chrome layout/path anomaly — a symlinked
+//     chromium/ root (SEC-NEW-003), or a chromium/ root with the chrome
+//     binary missing (the chrome payload itself is gone, distinct from
+//     the "missing host libs" WARN-BROWSER-005).
 //
 // Primary defense (SEC-ADR052-008): WARN-BROWSER-005 is the durable
 // runtime-correctness gate. The hard-coded host-libs list in install.sh
@@ -421,7 +470,7 @@ func checkBrowserPackageChrome() []warning {
 		}
 	}
 
-	if got, want, err := readChromeSHA(root, chromeBin); err == nil && got != "" && want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+	if mismatch, got, want := readChromeSHA(root, chromeBin); mismatch {
 		warnings = append(warnings, warning{
 			code: "WARN-BROWSER-006",
 			message: fmt.Sprintf(
@@ -434,146 +483,76 @@ func checkBrowserPackageChrome() []warning {
 	return warnings
 }
 
-// readChromeSHA reads dist/chromium/chrome.sha256, computes the SHA-256 of
-// chromeBin, and returns both as hex strings. A missing file or unreadable
-// binary returns ("", "", nil) — caller treats that as "not checkable,
-// silent". Errors reading the file return a non-nil error.
+// readChromeSHA delegates the manifest parse to the shared
+// pkg/tools/browser/chromeintegrity helpers so the doctor cannot drift
+// from the runtime's tolerance rules (SEC-ADR052-004 — BOM, CRLF,
+// sha256:/SHA-256: prefixes, comment lines, two-field sha256sum form,
+// uppercase-hex rejection, NUL truncation, 64-char digest length).
 //
-// PERF-003 note: this function reads chromeBin ONCE (the final os.Open +
-// io.Copy below). The sibling WARN-BROWSER-005 ELF walk in
-// missingChromeLibsELF (command_libs_linux.go) opens chromeBin a SECOND
-// time to slurp the DT_NEEDED table. On cold cache the doctor command pays
-// ~2× binary reads. That is acceptable: `omnipus doctor` is an offline,
-// on-demand CLI, not a hot path; co-ordinating a single shared read between
-// the ELF walker (linux-only, build-tagged) and the SHA hash (cross-OS) would
-// force the SHA path to drag in the ELF parser's signature. The savings
-// (one ~200 MB sequential read on a CfT chrome binary) are not worth the
-// coupling. The 2× cost is documented here so a future benchmark is not
-// mistaken for a regression.
+// Returns (mismatch=true, got, want) when the binary's actual SHA-256
+// differs from the manifest's declared digest. Returns (false, "", "")
+// for any "not checkable" condition — a missing manifest
+// (chromeintegrity.ErrSHA256ManifestMissing), an unparseable manifest,
+// a missing binary. The caller treats these as silent (bare-binary
+// users have no package Chrome to verify; the runtime falls through to
+// download). Real verifier errors (parse failures, hash mismatches) are
+// surfaced as WARN-BROWSER-006 with got/want both populated when
+// possible.
 //
-// SECURITY (SEC-NEW-003): chromeBin is read via a plain os.Open; the symlink
-// posture is enforced by the caller's Lstat on `root` (the chromium/
-// directory). chromeBin is a derived child path under that root — Stat on
-// the chrome binary itself is unnecessary because the root's Lstat is
-// sufficient to reject a symlinked tree.
-//
-// Parser hardening (ADR-052 SEC-ADR052-004):
-//   - BOM at file start is stripped.
-//   - CRLF / LF / CR line endings all tolerated.
-//   - Leading "sha256:" prefix on a hash field is stripped.
-//   - Lines starting with "#" (after whitespace) are treated as comments.
-//   - Whitespace-only lines are ignored.
-//   - The first 64-char hex field is taken as the expected digest;
-//     uppercase hex is normalized to lowercase (sha256sum / shasum emit
-//     lowercase; any toolchain that emits uppercase is normalized rather
-//     than rejected, so a non-canonical-but-valid manifest still matches).
-//   - NUL bytes inside a field terminate the field — never silently
-//     absorbed into the digest.
-//   - The hash comparison uses crypto/subtle.ConstantTimeCompare so the
-//     comparison itself does not leak the expected digest via timing.
-//
-// A manifest with no parseable hex digest returns ("", "", non-nil error)
-// — the caller treats that as "not checkable, silent" by the same path,
-// but the underlying error is preserved for tests that want to assert on
-// it directly.
-func readChromeSHA(root, chromeBin string) (got, want string, err error) {
+// SECURITY (SEC-NEW-003): chromeintegrity.VerifyChromeSHA256 does its
+// own Lstat on both the manifest and the binary, refusing a symlink at
+// the leaf. The caller's Lstat on `root` is the directory-level defense;
+// the verifier adds the per-file defense so a tampered manifest at the
+// leaf cannot pass.
+func readChromeSHA(root, chromeBin string) (mismatch bool, got, want string) {
 	shaFile := filepath.Join(root, "chrome.sha256")
+	err := chromeintegrity.VerifyChromeSHA256(chromeBin, shaFile)
+	if err == nil {
+		return false, "", ""
+	}
+	if errors.Is(err, chromeintegrity.ErrSHA256ManifestMissing) {
+		// Manifest missing or unreadable — bare-binary fallback posture.
+		return false, "", ""
+	}
+	// Real mismatch / parse failure. Surface got/want so the operator sees
+	// both digests verbatim. Best-effort: any of these I/O calls failing
+	// leaves the corresponding field blank rather than failing closed.
+	want = parseManifestDigestBestEffort(shaFile)
+	if g := hashChromeBinaryBestEffort(chromeBin); g != "" {
+		got = g
+	}
+	return true, got, want
+}
+
+// parseManifestDigestBestEffort returns the manifest's declared digest
+// (lowercase hex) or "" if the manifest is missing/unparseable. Best-effort:
+// callers must not fail closed on this returning "".
+func parseManifestDigestBestEffort(shaFile string) string {
 	data, err := os.ReadFile(shaFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return "", "", nil
-		}
-		return "", "", fmt.Errorf("read chrome.sha256: %w", err)
+		return ""
 	}
-	// Strip a leading UTF-8 BOM, if present.
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-
-	want, err = parseSHA256Manifest(data)
+	digest, err := chromeintegrity.ParseChromeSHA256Manifest(data)
 	if err != nil {
-		return "", "", err
+		return ""
 	}
-	if want == "" {
-		// File present but empty / no parseable hash. Treat as "not
-		// checkable" — same posture as a missing file.
-		return "", "", nil
-	}
+	return digest
+}
 
-	f, err := os.Open(chromeBin)
+// hashChromeBinaryBestEffort streams the chrome binary through
+// crypto/sha256 and returns the lowercase-hex digest. Returns "" on any
+// I/O error — callers must not fail closed on this.
+func hashChromeBinaryBestEffort(path string) string {
+	f, err := os.Open(path)
 	if err != nil {
-		return "", "", fmt.Errorf("open chrome binary: %w", err)
+		return ""
 	}
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", "", fmt.Errorf("hash chrome binary: %w", err)
+		return ""
 	}
-	return strings.ToLower(hex.EncodeToString(h.Sum(nil))), want, nil
-}
-
-// parseSHA256Manifest extracts the first valid hex SHA-256 from a CfT-style
-// `sha256sum`-format manifest (hex + 2-space + filename, or `<hex> *chrome`
-// binary-mode, or a `sha256:` prefixed line, or comment lines). Returns
-// the lowercase hex digest. Empty input → empty digest, no error. Caller
-// distinguishes "no digest" from "error" by inspecting the returned error.
-//
-// The parser is self-contained — it strips a leading UTF-8 BOM if
-// present, so callers don't need to. readChromeSHA still does its own
-// (idempotent) TrimPrefix before calling here so the BOM strip survives
-// either entry point.
-func parseSHA256Manifest(data []byte) (string, error) {
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
-	for _, raw := range strings.Split(string(data), "\n") {
-		// Strip CR for CRLF-tolerant parsing.
-		raw = strings.TrimRight(raw, "\r")
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
-		}
-		// Comment lines: leading "#" (sha256sum / shasum don't emit them,
-		// but hand-edited manifests sometimes do).
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		// Strip a leading "sha256:" prefix if present.
-		trimmed = strings.TrimPrefix(trimmed, "sha256:")
-		trimmed = strings.TrimSpace(trimmed)
-		// Walk fields, take the first that looks like a SHA-256 digest.
-		for _, f := range strings.Fields(trimmed) {
-			// NUL bytes inside a field terminate it cleanly.
-			if idx := strings.IndexByte(f, 0); idx >= 0 {
-				f = f[:idx]
-			}
-			if len(f) != 64 {
-				continue
-			}
-			if !isLowerHex(f) {
-				continue
-			}
-			return f, nil
-		}
-	}
-	return "", nil
-}
-
-// isLowerHex reports whether s is composed entirely of lowercase hex
-// digits. Per ADR-052 SEC-ADR052-004 the manifest must be lowercase
-// (sha256sum / shasum both default to lowercase); uppercase is rejected
-// at the parse step. The caller normalizes on read for safety against
-// non-canonical-but-valid toolchains, but a strict-by-default parser
-// surfaces mismatched toolchains instead of silently matching.
-func isLowerHex(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for _, r := range s {
-		switch {
-		case r >= '0' && r <= '9':
-		case r >= 'a' && r <= 'f':
-		default:
-			return false
-		}
-	}
-	return true
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // debianMissingLibs maps the set of missing ldd basenames (e.g.

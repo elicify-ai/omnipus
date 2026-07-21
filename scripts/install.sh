@@ -223,7 +223,9 @@ if [ -d "$CHROMIUM_DIR" ]; then
     # no \xHH escapes, no gawk extensions, no `continue` outside loops (use
     # `next` which is valid in any pattern-action context). Tolerates:
     #   - CRLF line endings (CR stripped)
-    #   - "sha256: <hex>" prefix
+    #   - "sha256: <hex>" / "SHA-256: <hex>" prefix (CORR2-010: some
+    #     toolchains emit the uppercase + hyphen form; the parser must
+    #     accept both)
     #   - "# comment" lines
     #   - Whitespace-only lines
     #   - sha256sum text mode ("<hex>  filename") AND binary mode ("<hex> *filename")
@@ -241,12 +243,21 @@ if [ -d "$CHROMIUM_DIR" ]; then
       if (line == "") next
       # Skip comment lines.
       if (substr(line, 1, 1) == "#") next
-      # Strip optional "sha256:" prefix.
+      # Strip optional "sha256:" / "SHA-256:" prefix. POSIX awk has no
+      # IGNORECASE and no character-class negation in regex, so we
+      # expand the prefix explicitly. The two stripped forms are kept
+      # adjacent so a reader can verify both are exercised.
       sub(/^sha256:/, "", line)
+      sub(/^SHA-256:/, "", line)
       sub(/^[[:space:]]+/, "", line)
+      # Push the stripped line back into $0 so NF and $i see the
+      # post-prefix text (sub() on a local variable does NOT update
+      # $0/NF in POSIX awk — see CORR2-010 fix-up).
+      $0 = line
+      nf = split($0, parts, /[[:space:]]+/)
       # Walk fields; emit the first 64-char lowercase-hex one.
-      for (i = 1; i <= NF; i++) {
-        if (length($i) == 64 && $i ~ /^[0-9a-f]{64}$/) { print $i; exit }
+      for (i = 1; i <= nf; i++) {
+        if (length(parts[i]) == 64 && parts[i] ~ /^[0-9a-f]{64}$/) { print parts[i]; exit }
       }
     }
   ' "$SHA_FILE")"

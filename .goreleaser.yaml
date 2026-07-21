@@ -162,11 +162,13 @@ nfpms:
     bindir: /usr/bin
     # ADR-052 Phase 1: drop chromium/ alongside the binary in the system
     # package so .deb / .rpm installs land chrome at /usr/share/omnipus/chromium
-    # (nfpm honors files: globs as relative to the build dir; the package
-    # owns the directory layout — install.sh handles the move for tar.gz).
-    files:
-      - omnipus
-      - chromium/**/*
+    # (GoReleaser v2 / nfpm v2 uses `contents:` instead of the v1 `files:` key
+    # — each entry is an explicit {src, dst} mapping).
+    contents:
+      - src: ./omnipus
+        dst: /usr/bin/omnipus
+      - src: ./dist/chromium/**/*
+        dst: /usr/share/omnipus/chromium
 
 changelog:
   sort: asc

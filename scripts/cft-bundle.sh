@@ -18,9 +18,18 @@
 #   5. Compute SHA-256 of the chrome binary and write
 #      dist/chromium/<arch>/chrome.sha256 — the integrity manifest the
 #      runtime reads back and verifies at first launch
-#      (chrome.sha256 reader: cmd/omnipus/internal/doctor/command.go's
-#      readChromeSHA — BOM/CRLF/comment/prefix tolerant per
-#      SEC-ADR052-004).
+#      (chrome.sha256 reader: pkg/tools/browser/chromeintegrity +
+#      cmd/omnipus/internal/doctor/command.go's readChromeSHA — BOM/CRLF/
+#      comment/prefix tolerant per SEC-ADR052-004).
+#
+# Per-binary manifest placement (PERF2-001): the runtime's
+# findPackageChrome probes for chrome.sha256 NEXT TO the binary, i.e.
+# <extraction-subdir>/chrome.sha256. Writing it at the chromium/ root
+# would silently miss the runtime's probe, fall through to the managed
+# download path, and surface as an untraceable installation downgrade.
+# The bsd/unix convention "manifest beside binary" is also what
+# install.sh expects when it lays down chromium/ to <prefix>/share/.../
+# chromium.
 #
 # CfT platform availability (verified 2026-07-21): the live manifest's
 # chrome.platforms are {linux64, mac-arm64, mac-x64, win32, win64} — CfT
@@ -168,16 +177,45 @@ echo "ADR-052: chrome zip md5 OK" >&2
 
 unzip -q "$ZIP_PATH" -d "$STAGE"
 
-if [ ! -x "$STAGE/$EXTRACT_SUBDIR/chrome" ]; then
-  echo "ADR-052: chrome binary missing after extraction (looked for $STAGE/$EXTRACT_SUBDIR/chrome)" >&2
+BINARY="$STAGE/$EXTRACT_SUBDIR/chrome"
+if [ ! -x "$BINARY" ]; then
+  echo "ADR-052: chrome binary missing after extraction (looked for $BINARY)" >&2
   exit 1
 fi
 
-# Emit chrome.sha256 (sha256sum format) at the package root. install.sh's
-# awk + the runtime's Go reader both consume this format.
-(
-  cd "$STAGE"
-  sha256sum "$EXTRACT_SUBDIR/chrome" | awk '{printf "%s  %s\n", $1, $2}' > chrome.sha256
-)
+# Emit chrome.sha256 (sha256sum format) NEXT TO the binary. install.sh's
+# awk + the runtime's Go reader both consume this format. The runtime's
+# findPackageChrome probes <extraction-subdir>/chrome.sha256 first; a
+# root-level chrome.sha256 would silently miss (PERF2-001).
+SHA_TARGET="$STAGE/$EXTRACT_SUBDIR/chrome.sha256"
+sha256sum "$BINARY" | awk '{printf "%s  %s\n", $1, $2}' > "$SHA_TARGET"
 
-echo "ADR-052: bundled $STAGE/$EXTRACT_SUBDIR/chrome + $STAGE/chrome.sha256"
+# Self-verify (SEC-NEW2-004): re-hash and compare against the manifest we
+# just wrote. A mismatch here means the pipeline is corrupt (the binary
+# changed between the sha256sum invocation and the write, or the awk
+# formatter mangled the digest) — neither should ever happen in practice,
+# but checking costs nothing and catches a class of bugs where the
+# manifest and the binary disagree silently.
+#
+# Exposed as a standalone function so bats tests can invoke it directly
+# against a tampered manifest (a re-run of cft-bundle.sh would just
+# overwrite chrome.sha256 before the self-verify, masking the tamper).
+self_verify_chrome_sha256() {
+  local binary="$1"
+  local sha_target="$2"
+  local written
+  local computed
+  written="$(awk '{print $1}' "$sha_target")"
+  computed="$(sha256sum "$binary" | awk '{print $1}')"
+  if [ "$written" != "$computed" ]; then
+    echo "ADR-052: chrome.sha256 self-test FAILED — pipeline corruption detected" >&2
+    echo "ADR-052:   manifest: $written" >&2
+    echo "ADR-052:   computed: $computed" >&2
+    return 1
+  fi
+  return 0
+}
+
+self_verify_chrome_sha256 "$BINARY" "$SHA_TARGET"
+
+echo "ADR-052: bundled $BINARY + $SHA_TARGET"

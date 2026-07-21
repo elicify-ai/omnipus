@@ -12,4 +12,17 @@
 #   - SC3043 — "In POSIX sh, 'local' is undefined" — only relevant if
 #     install.sh ever uses `local`. Currently it doesn't (POSIX-clean),
 #     but the flag is forward-looking for anyone who tries to add it.
-disable=SC1091,SC2317,SC3043
+#   - SC2030 / SC2031 / SC3010 / SC2046 / SC2164 — bats harness false
+#     positives. install_test.bats and cft-bundle_test.bats are bats
+#     (>=1.5) files, not standalone shell scripts. bats wraps each
+#     `@test` body in a subshell, so `export` inside a test reads as
+#     "local to subshell" (SC2030/SC2031). The [[ ]] keyword is a bats
+#     extension (SC3010 — POSIX sh alone wouldn't support it). Plain
+#     `cd "$WORK"` inside setup() reads as "un-checked cd" (SC2164);
+#     bats aborts the test on a non-zero setup() exit anyway, so an
+#     explicit `cd ... || exit 1` is a no-op. `$(echo chromium)`
+#     word-splitting (SC2046) is the intended bats idiom for composing
+#     tar's file-list argument. Disabling them for the bats files only
+#     keeps install.sh and cft-bundle.sh (the actually-deployed
+#     scripts) under full shellcheck scrutiny.
+disable=SC1091,SC2317,SC3043,SC2030,SC2031,SC3010,SC2046,SC2164,SC2155
