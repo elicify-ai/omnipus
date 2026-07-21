@@ -1780,13 +1780,16 @@ func registerSharedTools(
 		// wirePlanToolsForAgent does its own nil-checks per dependency
 		// (taskStore, taskExecutor, planStore, session store) and logs
 		// loudly (Error) on any gap rather than silently skipping the whole
-		// surface. al.planStore may still be nil here on the very FIRST
-		// pass — this call runs inside NewAgentLoop, before the gateway
-		// constructs the real plan.Store in setupAndStartServices — so
-		// create_plan/execute_plan register with a nil store and fail
+		// surface. al.GetPlanStore() may still return nil here on the very
+		// FIRST pass — this call runs inside NewAgentLoop, before the
+		// gateway constructs the real plan.Store in setupAndStartServices —
+		// so create_plan/execute_plan register with a nil store and fail
 		// closed at Execute() (Wave-1 discipline) until SetPlanStore
-		// re-wires every agent with the real store once it exists.
-		al.wirePlanToolsForAgent(agent, al.planStore)
+		// re-wires every agent with the real store once it exists. Read via
+		// the accessor (not the bare al.planStore field) since SetPlanStore
+		// writes it under al.mu — a bare field read here would race that
+		// writer (7-reviewer gate NIT).
+		al.wirePlanToolsForAgent(agent, al.GetPlanStore())
 
 		// Browser automation tools (US-4/US-6/US-7).
 		// Tools are always registered; whether an agent can actually invoke them
@@ -4289,6 +4292,13 @@ func (al *AgentLoop) isRegisteredAgentID(id string) bool {
 // instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
 // store / nil checker / nil dispatcher => explicit error result, never an
 // implicit allow or a silently-dead no-op tool).
+// The four tools below are registered via RegisterReplacing, not Register:
+// this function is called once per agent at registerSharedTools time AND
+// again for every already-registered agent from SetPlanStore once the real
+// plan.Store is installed (this function's own doc comment) — the second
+// pass is an EXPECTED same-name re-registration, not an accidental
+// collision, so it must not spam a WARN per tool per agent (7-reviewer gate
+// item 5; see ToolRegistry.RegisterReplacing's own doc comment).
 func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan.Store) {
 	if agent == nil || agent.Tools == nil {
 		return
@@ -4309,7 +4319,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	planCreate.SetOwnerValidator(func(ownerAgentID string) error {
 		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
 	})
-	agent.Tools.Register(planCreate)
+	agent.Tools.RegisterReplacing(planCreate)
 
 	// execute_plan (FR-003/004/030, US-3): SD-A7 tiered-DoD gate's isAgentID
 	// checker (SetIsAgentIDChecker) mirrors gateway's restAPI.isAgentID.
@@ -4320,7 +4330,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	}
 	planExecute := tools.NewPlanExecuteTool(planStore, al.taskStore)
 	planExecute.SetIsAgentIDChecker(al.isRegisteredAgentID)
-	agent.Tools.Register(planExecute)
+	agent.Tools.RegisterReplacing(planExecute)
 
 	// run_task (FR-019, US-10): dispatches via the real
 	// TaskExecutor.StartTaskNow — the standalone-task full attempt loop.
@@ -4332,7 +4342,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 			"run_task registered but will fail closed (no dispatcher installed)",
 			map[string]any{"agent_id": agent.ID})
 	}
-	agent.Tools.Register(taskRun)
+	agent.Tools.RegisterReplacing(taskRun)
 
 	// inspect_session (FR-033, US-13 Acceptance 3): verifier-role-only by
 	// seeded tool policy (enforced outside this function); target-session
@@ -4354,7 +4364,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	// non-nil al): Execute()'s own not-found error (via GetMeta/
 	// ReadTranscript, once VerifierSessionScopeAllows has already passed)
 	// is the fail-closed signal, not a nil-store check.
-	agent.Tools.Register(tools.NewInspectSessionTool(agentLoopInspectSessionStore{al: al}))
+	agent.Tools.RegisterReplacing(tools.NewInspectSessionTool(agentLoopInspectSessionStore{al: al}))
 }
 
 // agentLoopInspectSessionStore adapts AgentLoop.ResolveSessionStore to the

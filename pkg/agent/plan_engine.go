@@ -883,6 +883,17 @@ func isCancelledMember(t *task.Task) bool {
 // could still independently progress (that conditional case is FR-041,
 // member-level Stop only) — transitions the plan itself to
 // `failed`(stopped_by_user). Returns the updated plan on success.
+//
+// Also accepts a cap-queued `approved` plan (ADR-052 spec, Edge Case "Stop
+// wins" — the SPA ships a Stop button for approved plans same as running
+// ones). For approved, the fan-out below is naturally a no-op: nothing has
+// been dispatched yet (Admit/tryStartApprovedPlan hasn't fired), so there
+// are no in_progress members and no registered verifier sessions to cancel
+// — only the plan's own state write (approved -> failed(stopped_by_user))
+// happens. This is race-free against a concurrent admission: both StopPlan
+// and tryStartApprovedPlan (the only path that promotes approved -> running)
+// take planDecisionMu, so an approved plan can never be admitted between
+// this check and the state write below.
 func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel string) (*plan.Plan, error) {
 	pe.planDecisionMu.Lock()
 	defer pe.planDecisionMu.Unlock()
@@ -891,8 +902,8 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	if err != nil {
 		return nil, fmt.Errorf("plan_engine: StopPlan: get plan %q: %w", planID, err)
 	}
-	if p.State != plan.StateRunning {
-		return nil, fmt.Errorf("plan_engine: StopPlan: plan %q is %s, not running", planID, p.State)
+	if p.State != plan.StateRunning && p.State != plan.StateApproved {
+		return nil, fmt.Errorf("plan_engine: StopPlan: plan %q is %s, not running or approved", planID, p.State)
 	}
 
 	tasks, err := pe.taskStore.List(task.Filter{PlanID: planID})

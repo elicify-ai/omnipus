@@ -297,8 +297,13 @@ func TestPlanApprove_SoftTierEmptyDoDSucceeds_ThenNotDraftRejected(t *testing.T)
 }
 
 // TestPlanStop_RequiresRunning verifies POST /plans/{id}/stop is rejected on
-// a non-running plan and succeeds (running->failed(stopped_by_user)) once the
-// plan is running.
+// a draft plan and succeeds (running->failed(stopped_by_user)) once the plan
+// is running. Stop ALSO succeeds on a cap-queued `approved` plan (ADR-052
+// spec Edge Case "Stop wins", gap-sweep fix-wave-2 finding #1) — see
+// TestPlanStop_OnApprovedCapQueued_MembersUntouchedAndRestartable
+// (rest_plan_task_restart_test.go) for that dedicated coverage; this test's
+// own draft-rejection case is unaffected since draft is neither running nor
+// approved.
 func TestPlanStop_RequiresRunning(t *testing.T) {
 	api := newTestRestAPIWithPlans(t)
 	wsID := createTestWorkspace(t, api, "Stop WS")

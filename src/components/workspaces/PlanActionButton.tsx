@@ -24,6 +24,13 @@ export function planActionFor(plan: Pick<Plan, 'state' | 'failed_reason'>): Plan
   return null // done, or a genuinely-failed plan — no restart offered (US-9 Acceptance 2)
 }
 
+/** Exhaustiveness guard for the `PlanAction` switch below — a compile error
+ * here (not a silent fallthrough) is exactly what should happen if a 4th
+ * `PlanAction` variant is ever added without updating the mutation dispatch. */
+function assertNever(x: never): never {
+  throw new Error(`Unhandled PlanAction: ${JSON.stringify(x)}`)
+}
+
 interface ActionCopy {
   icon: Icon
   label: string
@@ -98,9 +105,16 @@ export function PlanActionButton({ plan, className }: PlanActionButtonProps) {
 
   const mutation = useMutation({
     mutationFn: (a: PlanAction) => {
-      if (a === 'execute') return executePlan(plan.id)
-      if (a === 'stop') return stopPlan(plan.id)
-      return restartPlan(plan.id)
+      switch (a) {
+        case 'execute':
+          return executePlan(plan.id)
+        case 'stop':
+          return stopPlan(plan.id)
+        case 'play':
+          return restartPlan(plan.id)
+        default:
+          return assertNever(a)
+      }
     },
     onSuccess: (_data, a) => {
       // Broad prefix invalidation (no workspaceId needed) — matches the
@@ -142,7 +156,18 @@ export function PlanActionButton({ plan, className }: PlanActionButtonProps) {
   const pending = mutation.isPending && mutation.variables === action
 
   return (
-    <>
+    <span
+      // Self-contained click isolation (parity with TaskActionButton's own
+      // wrapper) — defense-in-depth. PlansFilterBand already wraps this
+      // control's slot in an `onClick={(e) => e.stopPropagation()}` div
+      // alongside the pencil/⋯ menu, so this is a second, redundant layer:
+      // it keeps the button safe from bubbling into an ancestor's onSelect
+      // even if a future caller renders it outside that wrapper.
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+      className="inline-flex"
+    >
       <button tabIndex={0}
         type="button"
         aria-label={`${copy.label} plan ${plan.title}`}
@@ -170,6 +195,6 @@ export function PlanActionButton({ plan, className }: PlanActionButtonProps) {
         isPending={pending}
         onConfirm={() => mutation.mutate(action)}
       />
-    </>
+    </span>
   )
 }

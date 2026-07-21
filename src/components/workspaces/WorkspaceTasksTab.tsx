@@ -24,11 +24,8 @@ import {
   fetchPlans,
   fetchAgents,
   updateTask,
-  executePlan,
-  stopPlan,
   deletePlan,
   isApiError,
-  parsePlanApproveTaskErrors,
   tasksQueryKeys,
   plansQueryKeys,
   workspacesQueryKeys,
@@ -83,47 +80,13 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     },
   })
 
-  // Plan-tile actions (PlansFilterBand's edit pencil + ⋯ menu): Approve
-  // (draft-only), Stop (running/approved cap-waiting), Clear (delete). Edit
-  // reuses the same CreatePlanSlideOver as "New plan", opened with `plan` set.
-  // ADR-052 G2: routes through POST /approve (`executePlan`), never PUT.
-  const approvePlanMutation = useMutation({
-    mutationFn: (planId: string) => executePlan(planId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: plansQueryKeys.list(workspaceId) })
-      addToast({ message: 'Plan approved', variant: 'success' })
-    },
-    onError: (err) => {
-      // A 400 carries a per-task "needs acceptance criteria" payload —
-      // surface those reasons instead of the generic fallback.
-      if (isApiError(err) && err.status === 400) {
-        const taskErrors = parsePlanApproveTaskErrors(err.body)
-        if (taskErrors) {
-          const lines = taskErrors.map((e) => `${e.title ?? e.task_id}: ${e.reason}`)
-          addToast({
-            message: `Cannot approve — the following tasks are missing criteria:\n${lines.join('\n')}`,
-            variant: 'error',
-          })
-          return
-        }
-      }
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to approve plan'
-      addToast({ message: msg, variant: 'error' })
-    },
-  })
-
-  const stopPlanMutation = useMutation({
-    mutationFn: (planId: string) => stopPlan(planId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: plansQueryKeys.list(workspaceId) })
-      addToast({ message: 'Plan stopped', variant: 'success' })
-    },
-    onError: (err) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to stop plan'
-      addToast({ message: msg, variant: 'error' })
-    },
-  })
-
+  // Plan-tile ⋯ menu's Clear (delete) — the only plan mutation this screen
+  // still owns. Execute/Stop/Play (the old Approve/Stop pair this block used
+  // to drive) moved entirely into the self-contained `PlanActionButton`
+  // (ADR-052 §6.8) — this tab no longer wires onApprovePlan/onStopPlan into
+  // PlansFilterBand (Gate-2 finding #4: that wiring, and the mutations behind
+  // it, were dead code once PlanActionButton took over). Edit reuses the same
+  // CreatePlanSlideOver as "New plan", opened with `plan` set.
   const clearPlanMutation = useMutation({
     mutationFn: (planId: string) => deletePlan(planId),
     onSuccess: () => {
@@ -139,18 +102,10 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
     },
   })
 
-  // At most one plan action is ever in flight — collapse the three
-  // mutations' pending state into the one discriminated value PlansFilterBand
-  // takes, instead of three independently-nullable "which plan is pending"
-  // props.
-  const pendingAction: { planId: string; action: 'approve' | 'stop' | 'clear' } | null =
-    approvePlanMutation.isPending && approvePlanMutation.variables
-      ? { planId: approvePlanMutation.variables, action: 'approve' }
-      : stopPlanMutation.isPending && stopPlanMutation.variables
-        ? { planId: stopPlanMutation.variables, action: 'stop' }
-        : clearPlanMutation.isPending && clearPlanMutation.variables
-          ? { planId: clearPlanMutation.variables, action: 'clear' }
-          : null
+  const pendingAction: { planId: string; action: 'clear' } | null =
+    clearPlanMutation.isPending && clearPlanMutation.variables
+      ? { planId: clearPlanMutation.variables, action: 'clear' }
+      : null
 
   const { data: plans = [], isError: plansError } = useQuery({
     queryKey: plansQueryKeys.list(workspaceId),
@@ -280,8 +235,6 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         onSelectPlan={setActivePlanId}
         onNewPlan={() => setPlanSlideOver({ open: true, plan: null })}
         onEditPlan={(plan) => setPlanSlideOver({ open: true, plan })}
-        onApprovePlan={(plan) => approvePlanMutation.mutate(plan.id)}
-        onStopPlan={(plan) => stopPlanMutation.mutate(plan.id)}
         onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)}
         pendingAction={pendingAction}
         showNewPlanTile={false}

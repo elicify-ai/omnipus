@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -185,6 +186,66 @@ func TestListSessions_IncludeVerifierFalseExplicit(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	got := decodeSessionList(t, w.Body.Bytes())
 	assert.NotContains(t, sessionIDs(got), verifierMeta.ID)
+}
+
+// --- FR-036 creation-side verifier spoof guard -------------------------------
+
+// TestCreateSession_TypeVerifierSpoof_CoercedToChat verifies POST
+// /api/v1/sessions can never MINT a verifier-type session directly: a client
+// that supplies {"type":"verifier"} does not get a verifier session back —
+// createSessionHTTP's switch (rest.go's createSessionHTTP, ~L1122-1134)
+// recognizes only "task" and "channel" as explicit types and falls through
+// to its `default` branch (SessionTypeChat) for anything else, including
+// "verifier". Only store.NewVerifierSession (never client-reachable) mints
+// the real thing — see TestListSessions_IncludesVerifierWithParam above for
+// that path.
+//
+// Traces to: FR-036 (creation-side spoof guard, gap-sweep fix-wave-2 finding #3).
+func TestCreateSession_TypeVerifierSpoof_CoercedToChat(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	body := `{"type":"verifier"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.createSessionHTTP(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	var created wireSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	assert.NotEqual(t, "verifier", created.Type, "a client-supplied type:verifier must never mint a real verifier session")
+	assert.Equal(t, "chat", created.Type, "an unrecognized/disallowed type coerces to chat, the switch's default branch")
+}
+
+// TestCreateSession_TypeVerifierSpoof_RejectedWithValidateInboundEnabled
+// verifies the SAME spoof attempt 400s at the schema gate when
+// gateway.validate_inbound is enabled: SessionCreateRequest.yaml's type enum
+// is intentionally narrower than Session.type (chat|task|channel only,
+// EXCLUDING verifier and scheduled — both are server-minted only, never
+// client-created via POST /sessions). With validation on, the malformed
+// body never even reaches the coercion switch exercised by the test above.
+//
+// Traces to: FR-036 (creation-side spoof guard, gap-sweep fix-wave-2 finding #3).
+func TestCreateSession_TypeVerifierSpoof_RejectedWithValidateInboundEnabled(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+	api.agentLoop.GetConfig().Gateway.ValidateInbound = true
+
+	body := `{"type":"verifier"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.createSessionHTTP(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "SessionCreateRequest", "must reject at the schema gate, referencing the schema name")
 }
 
 // TestHandleTokenStats_IncludesVerifierSessionSpend verifies that the

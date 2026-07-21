@@ -393,10 +393,12 @@ func truncateRunes(s string, maxRunes int) string {
 // primitives: computeFencedLines, isExcludedMarkerLine, taskStatusLineRe) so
 // the two functions can never disagree about fencing/exclusion semantics,
 // while keeping parseTaskCompletionSignal's existing behavior and the 27
-// pre-existing tests around it completely unchanged. Wiring this gate into
-// TaskExecutor's dispatch path (task_executor.go) — calling it before
-// parseTaskCompletionSignal and re-prompting on !Honored — is a separate,
-// later change; this file only supplies the primitive.
+// pre-existing tests around it completely unchanged. This gate IS wired into
+// TaskExecutor's dispatch path: TaskExecutor.finishTaskRun (task_executor.go)
+// calls it before parseTaskCompletionSignal and, on Applicable && !Honored,
+// re-prompts via rejectBareEvidenceClaim (which also owns the
+// evidenceGateMaxConsecutiveRejections bound and its Warn logging) — this
+// file only supplies the primitive.
 
 // goalEvidenceLabel is the ADR-052 evidence-marker token. Case-insensitive at
 // match time (goalEvidenceLineRe), like the rest of the ADR-043 vocabulary.

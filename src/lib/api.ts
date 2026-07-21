@@ -991,7 +991,10 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   id: string
   agent_id: string
   title: string
-  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat'
+  // 'verifier' (ADR-052 FR-036) tags a verifier-role adjudication session
+  // (the Judge). Hidden from GET /sessions by default; fetchSessions()'s
+  // includeVerifier opt-in surfaces it (UsageScreen's "By session" tab only).
+  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -1019,7 +1022,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat'
+  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -1357,10 +1360,25 @@ function rawToMessage(raw: RawMessage): Message {
   } satisfies AssistantMessage
 }
 
-export async function fetchSessions(agentId?: string, type?: Session['type']): Promise<Session[]> {
+// The 3rd-arg opts object is opt-in and additive only — every existing
+// zero/one/two-arg call site (Sidebar, SearchModal) is byte-for-byte
+// unaffected and keeps excluding verifier sessions by construction, since
+// `opts` (and therefore `opts?.includeVerifier`) is simply undefined.
+// includeVerifier maps 1:1 to the generated `include_verifier` query param
+// (contracts/openapi.yaml `listSessions`, ADR-052 FR-036): omitted/false
+// excludes type:"verifier" sessions from the response; true opts them in.
+// UsageScreen's "By session" tab is the one caller that passes true, so
+// verifier LLM spend is auditable per-session there (SC-014), not just in
+// the unfiltered token-stats aggregate.
+export async function fetchSessions(
+  agentId?: string,
+  type?: Session['type'],
+  opts?: { includeVerifier?: boolean },
+): Promise<Session[]> {
   const params: Record<string, string> = {}
   if (agentId) params.agent_id = agentId
   if (type) params.type = type
+  if (opts?.includeVerifier) params.include_verifier = 'true'
   const qs = Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : ''
   // The OpenAPI contract for GET /sessions describes a oneOf response: a
   // plain JSON array when there are no partial errors, OR

@@ -66,7 +66,35 @@ type TaskExecutor struct {
 	// tests observe the context that the goroutine received (e.g. to verify it is
 	// not derived from the HTTP request context and survives request cancellation).
 	goroutineCtxHook func(ctx context.Context, taskID string)
+
+	// evidenceMu guards evidenceRejectStreak (ADR-052 FR-035 evidence-marker
+	// gate bound, Fix-Wave-2). In-memory only, never persisted, and
+	// deliberately NOT AttemptCount: rejectBareEvidenceClaim's free re-dispatch
+	// must not touch AttemptCount (consumeAttemptOrExhaust is the sole writer)
+	// so this streak needs its own storage. A process restart resets it, which
+	// is safe — it is a soft bound against an in-process livelock, not a
+	// durability contract.
+	evidenceMu sync.Mutex
+	// evidenceRejectStreak counts CONSECUTIVE evidence-marker-gate rejections
+	// per task ID (rejectBareEvidenceClaim). Cleared (entry deleted) the
+	// moment the task's evidence gate is no longer being violated — see
+	// clearEvidenceGateStreak's call sites (gate pass/not-applicable in
+	// finishTaskRun, and both terminal-write chokepoints,
+	// completeTaskWithResult and failTask). A nil map is valid for reads
+	// (hasEvidenceGateRejection); bumpEvidenceRejectStreak lazily allocates it.
+	evidenceRejectStreak map[string]int
 }
+
+// evidenceGateMaxConsecutiveRejections is N in ADR-052 FR-035's "after N
+// consecutive bare-evidence-claim rejections, stop the free ride" bound
+// (Fix-Wave-2, closing the four-reviewer-confirmed livelock). The first
+// rejection for a task is always free (a single missing [goal:evidence] line
+// is treated as a one-off mechanical formatting miss, per
+// rejectBareEvidenceClaim's existing doc comment) — reaching the SECOND
+// consecutive rejection (streak == N) is what routes the run through
+// consumeAttemptOrExhaust instead of another free re-dispatch, restoring the
+// hardCeiling guarantee.
+const evidenceGateMaxConsecutiveRejections = 2
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.
 func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
@@ -77,12 +105,54 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 		}
 	}
 	return &TaskExecutor{
-		agentLoop:     al,
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(capacity),
+		agentLoop:            al,
+		store:                store,
+		running:              make(map[string]*taskSlot),
+		maxConcurrent:        defaultMaxConcurrentTasksPerAgent,
+		dispatchSema:         newDispatchSemaphore(capacity),
+		evidenceRejectStreak: make(map[string]int),
 	}
+}
+
+// bumpEvidenceRejectStreak increments and returns taskID's consecutive
+// evidence-marker-gate rejection count (ADR-052 FR-035, Fix-Wave-2).
+func (te *TaskExecutor) bumpEvidenceRejectStreak(taskID string) int {
+	te.evidenceMu.Lock()
+	defer te.evidenceMu.Unlock()
+	if te.evidenceRejectStreak == nil {
+		te.evidenceRejectStreak = make(map[string]int)
+	}
+	te.evidenceRejectStreak[taskID]++
+	return te.evidenceRejectStreak[taskID]
+}
+
+// hasEvidenceGateRejection reports whether taskID currently has a pending
+// (unresolved) evidence-marker-gate rejection — i.e. whether buildPrompt's
+// next render for this task must carry evidenceGateSteeringText forward. This
+// is the delivery mechanism the "no free ride" livelock fix required
+// (Fix-Wave-2): rejectBareEvidenceClaim deliberately never increments
+// AttemptCount, so buildPrompt's pre-existing t.AttemptCount>0-guarded
+// feedback block (which renders t.Result) never rendered it — a
+// re-dispatched prompt was byte-identical to the first attempt. Tracking
+// presence here, independent of AttemptCount/t.Result, is what makes the
+// steering actually reach the worker.
+func (te *TaskExecutor) hasEvidenceGateRejection(taskID string) bool {
+	te.evidenceMu.Lock()
+	defer te.evidenceMu.Unlock()
+	return te.evidenceRejectStreak[taskID] > 0
+}
+
+// clearEvidenceGateStreak resets taskID's evidence-marker-gate rejection
+// streak to zero. Called whenever the gate is no longer being violated for
+// this task: it passed (or wasn't applicable) on the latest response
+// (finishTaskRun), or the task reached ANY terminal disposition
+// (completeTaskWithResult, failTask) — the latter also bounds the map's
+// lifetime so a long-running gateway does not accumulate one entry per task
+// ID forever.
+func (te *TaskExecutor) clearEvidenceGateStreak(taskID string) {
+	te.evidenceMu.Lock()
+	defer te.evidenceMu.Unlock()
+	delete(te.evidenceRejectStreak, taskID)
 }
 
 // ExecuteTask starts executing the dispatchable task identified by taskID. It
@@ -443,20 +513,30 @@ func (te *TaskExecutor) finishTaskRun(
 	// NO verifier is ever dispatched for this run. Scratchpad tasks are
 	// exempt (FR-048 — they trust ANY found marker directly, success or
 	// failure, and never reach the judge/verifier either way, so the gate
-	// would have nothing to protect). Deliberately does NOT consume an
-	// attempt via rejectBareEvidenceClaim — forgetting the evidence marker
-	// is a mechanical formatting miss, not a genuine work-verification
-	// failure (contrast the "no signal at all" and judge-"unmet" paths
-	// below, both of which DO consume an attempt via
-	// consumeAttemptOrExhaust) — while still actively re-prompting (unlike
-	// the D7 judge-Unavailable case, which pauses silently with no
-	// redispatch): the fix here is mechanical and the worker is expected to
-	// self-correct on the very next attempt.
+	// would have nothing to protect). The FIRST rejection for a task does NOT
+	// consume an attempt via rejectBareEvidenceClaim — forgetting the evidence
+	// marker once is a mechanical formatting miss, not a genuine
+	// work-verification failure (contrast the "no signal at all" and
+	// judge-"unmet" paths below, both of which DO consume an attempt via
+	// consumeAttemptOrExhaust) — while still actively re-prompting (unlike the
+	// D7 judge-Unavailable case, which pauses silently with no redispatch).
+	// From the SECOND consecutive rejection onward (Fix-Wave-2,
+	// evidenceGateMaxConsecutiveRejections), rejectBareEvidenceClaim itself
+	// routes through consumeAttemptOrExhaust instead — an unbroken streak of
+	// bare claims is no longer treated as one-off and must not be a free,
+	// unbounded re-dispatch loop (four independent gate reviews confirmed
+	// exactly that livelock).
 	if !current.Scratchpad {
 		if gate := checkEvidenceMarkerGate(resp); gate.Applicable && !gate.Honored {
-			return te.rejectBareEvidenceClaim(current, taskSessionID, gate.SteeringText)
+			return te.rejectBareEvidenceClaim(ctx, current, taskSessionID, gate.SteeringText)
 		}
 	}
+	// Gate is no longer being violated for this run (honored, not
+	// applicable, or a Scratchpad task that never checks it at all) — any
+	// earlier rejection streak for this task is resolved; clear it so a
+	// LATER, unrelated bare claim starts counting from zero rather than
+	// inheriting a stale streak.
+	te.clearEvidenceGateStreak(current.ID)
 
 	// Agent did not call task_update — no explicit signal, or an explicit
 	// non-terminal write. Parse the agent's final output for the standardized
@@ -698,27 +778,51 @@ func (te *TaskExecutor) writeSteeringPrompt(
 	}
 }
 
-// rejectBareEvidenceClaim (ADR-052 FR-035, R3-13) re-dispatches t with the
-// evidence-marker gate's steering text WITHOUT incrementing AttemptCount.
-// Unlike consumeAttemptOrExhaust's "no signal"/"judge unmet" paths, a
-// missing/empty [goal:evidence] line immediately before the completion
-// marker is a mechanical formatting miss, not a genuine work-verification
-// failure — it must not cost the worker a real attempt (this is the "does
-// not consume" side of the same D7 distinction JudgeCriteriaResult.
-// Unavailable relies on, kept deliberately separate from — and never
-// routed through — consumeAttemptOrExhaust, which is the sole writer of
-// AttemptCount). Unlike D7's silent pause (no redispatch at all while the
-// judge itself is down), this DOES actively redispatch: the fix is
-// mechanical and the worker is expected to self-correct on the very next
-// turn. Does not reuse writeSteeringPrompt's transcript-entry ID scheme
-// (`<task>-steering-<AttemptCount+1>`) — since AttemptCount is
-// deliberately left unchanged here, that scheme could collide with a
-// genuine attempt's steering entry recorded at the same AttemptCount+1
-// value; a nanosecond-timestamped ID keeps this entry collision-free
-// without needing a new persisted counter field.
+// rejectBareEvidenceClaim (ADR-052 FR-035, R3-13) handles a completion claim
+// the evidence-marker gate rejected. The FIRST consecutive rejection for a
+// task re-dispatches WITHOUT incrementing AttemptCount — a missing/empty
+// [goal:evidence] line immediately before the completion marker is a
+// mechanical formatting miss, not a genuine work-verification failure, so it
+// must not cost the worker a real attempt (this is the "does not consume"
+// side of the same D7 distinction JudgeCriteriaResult.Unavailable relies on,
+// kept deliberately separate from — and never routed through —
+// consumeAttemptOrExhaust, which is the sole writer of AttemptCount). Unlike
+// D7's silent pause (no redispatch at all while the judge itself is down),
+// this DOES actively redispatch: the fix is mechanical and the worker is
+// expected to self-correct on the very next turn.
+//
+// From the SECOND consecutive rejection onward (streak reaches
+// evidenceGateMaxConsecutiveRejections, tracked in-memory via
+// bumpEvidenceRejectStreak — Fix-Wave-2), the free ride ends: an unbroken
+// run of bare claims is no longer a one-off slip, and re-dispatching it
+// forever with no AttemptCount movement is an unbounded, silent, full-LLM-
+// spend loop (the exact livelock four independent gate reviews confirmed).
+// This branch instead routes through consumeAttemptOrExhaust — the SAME
+// attempt/hardCeiling budget every other unmet outcome uses — so the task
+// eventually reaches a terminal state even if the worker never emits the
+// marker at all (whether it is trying to succeed or trying to fail out
+// cleanly; the gate does not distinguish, and neither does this bound).
+//
+// Every rejection (bounded or not) is logged at Warn with the consecutive
+// count, per Fix-Wave-2's "make it loud" requirement.
 func (te *TaskExecutor) rejectBareEvidenceClaim(
-	t *task.Task, taskSessionID, steeringText string,
+	ctx context.Context, t *task.Task, taskSessionID, steeringText string,
 ) (redispatchTaskID string) {
+	streak := te.bumpEvidenceRejectStreak(t.ID)
+	logger.WarnCF("task_executor",
+		"evidence-marker gate: rejected bare completion claim (no [goal:evidence] line immediately before the completion marker)",
+		map[string]any{"task_id": t.ID, "consecutive_rejections": streak})
+
+	if streak >= evidenceGateMaxConsecutiveRejections {
+		te.clearEvidenceGateStreak(t.ID)
+		reason := fmt.Sprintf(
+			"worker repeated a completion claim with no [goal:evidence] line %d consecutive times — "+
+				"treating as an unmet attempt instead of re-dispatching for free",
+			streak,
+		)
+		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil)
+	}
+
 	nextStatus := task.StatusNext
 	updated, uerr := te.store.Update(t.ID, task.Patch{Status: &nextStatus})
 	if uerr != nil {
@@ -873,6 +977,11 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 // so narrowing the signature to "success or not" makes writing a non-terminal
 // status here a compile error instead of a reviewable-but-possible mistake.
 func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID string, success bool, result string) {
+	// Fix-Wave-2: this is a terminal write for t.ID — any evidence-marker-gate
+	// rejection streak still tracked for it is now moot (and, left uncleared,
+	// would leak for the process lifetime; see evidenceRejectStreak's doc
+	// comment).
+	te.clearEvidenceGateStreak(t.ID)
 	status := task.StatusDone
 	if !success {
 		status = task.StatusFailed
@@ -995,11 +1104,35 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 		sb.WriteString(t.Result)
 		sb.WriteString("\n\n")
 	}
+	// ADR-052 FR-035 fix (Fix-Wave-2): a pending evidence-marker-gate
+	// rejection (rejectBareEvidenceClaim) is delivered here, NOT via the
+	// t.AttemptCount>0 block above — rejectBareEvidenceClaim deliberately
+	// never increments AttemptCount (a missing [goal:evidence] line is a
+	// mechanical formatting miss, not a genuine work-verification failure, so
+	// it must not cost a real attempt), so that block's guard is never true
+	// for this path. hasEvidenceGateRejection/evidenceRejectStreak is
+	// in-memory TaskExecutor state kept independent of AttemptCount/t.Result
+	// for exactly this reason — see its doc comment.
+	if te.hasEvidenceGateRejection(t.ID) {
+		sb.WriteString("## Your last attempt was rejected by the evidence-marker gate — address this before re-claiming completion:\n")
+		sb.WriteString(evidenceGateSteeringText)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString(fmt.Sprintf("Priority: %d (1=highest, 5=lowest)\n", t.EffectivePriority()))
 	sb.WriteString(fmt.Sprintf("Task ID: %s\n\n", t.ID))
 
-	sb.WriteString("When you are done, end your final message with ONE of the two status lines " +
-		"below (never both), plus an optional one-line summary:\n")
+	// ADR-052 FR-035: teach the evidence marker itself, immediately before the
+	// completion marker it must precede — checkEvidenceMarkerGate
+	// (task_completion_signal.go) requires a non-empty [goal:evidence] line
+	// as the nearest non-blank line above TASK_STATUS. This block sits BEFORE
+	// the external-CLI early return below so both dispatch kinds are taught
+	// it; a subagent_3p worker has no task_update tool escape hatch at all
+	// (see dispatchesExternalCLI's doc comment), so the marker instruction is
+	// its ONLY path to ever satisfy the gate.
+	sb.WriteString("When you are done, verify your work, then end your final message with the " +
+		"evidence line immediately followed by ONE of the two status lines below (never both), " +
+		"plus an optional one-line summary:\n")
+	sb.WriteString("  " + goalEvidenceLabel + " <one line stating what you verified>\n")
 	sb.WriteString("  " + taskStatusLabel + ": success\n")
 	sb.WriteString("  " + taskStatusLabel + ": failure\n")
 	sb.WriteString("  " + taskSummaryLabel + ": <one-paragraph summary of the outcome>\n")
@@ -1215,6 +1348,9 @@ func (te *TaskExecutor) emitStatusChanged(t *task.Task, status task.Status) {
 
 // failTask marks a task as failed with the given reason.
 func (te *TaskExecutor) failTask(taskID, reason string) {
+	// Fix-Wave-2: terminal write — see completeTaskWithResult's identical
+	// clear for why.
+	te.clearEvidenceGateStreak(taskID)
 	now := time.Now().UTC().Format(time.RFC3339)
 	failed := task.StatusFailed
 	updated, err := te.store.Update(taskID, task.Patch{

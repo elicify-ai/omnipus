@@ -909,15 +909,19 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 }
 
 // handlePlanStop handles POST /api/v1/plans/{id}/stop (ADR-052 US-6/FR-009/
-// FR-010, spec DS-4). Delegates the actual fan-out to PlanEngine.StopPlan,
-// which — under planDecisionMu, so a concurrently-dispatched member cannot
-// escape (grill F3) — issues RequestCancelForSession (the SAME chat cancel
-// every other surface uses, A2) over {each in_progress member session} +
-// {each registered verifier session, member- and plan-level}, marks every
+// FR-010, spec DS-4; approved-plan Stop per the spec's Edge Case "Stop
+// wins"). Delegates the actual fan-out to PlanEngine.StopPlan, which — under
+// planDecisionMu, so a concurrently-dispatched member cannot escape (grill
+// F3) — issues RequestCancelForSession (the SAME chat cancel every other
+// surface uses, A2) over {each in_progress member session} + {each
+// registered verifier session, member- and plan-level}, marks every
 // in_progress member failed+cancelled, and transitions the plan itself to
-// failed(stopped_by_user). This handler no longer touches a.planStore
-// directly — the precondition check (only a running plan can be stopped) and
-// the state write both live in the engine now.
+// failed(stopped_by_user). For a cap-queued `approved` plan that fan-out is
+// naturally a no-op (nothing dispatched yet — Admit hasn't fired), so only
+// the state write happens. The state check below is a targeted fail-fast
+// error message, not the sole guard: plan.Store.Update re-validates against
+// the FRESH on-disk state regardless, and the engine (StopPlan) re-checks
+// its own precondition and owns the fan-out + the state write.
 func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
@@ -933,8 +937,8 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 		jsonErr(w, http.StatusInternalServerError, "could not read plan")
 		return
 	}
-	if p.State != plan.StateRunning {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("plan is %q; only a running plan can be stopped", p.State))
+	if p.State != plan.StateRunning && p.State != plan.StateApproved {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("plan is %q; only a running or approved plan can be stopped", p.State))
 		return
 	}
 

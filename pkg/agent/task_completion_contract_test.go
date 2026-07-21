@@ -422,6 +422,47 @@ func TestBuildPrompt_InstructionEchoNeverResolvesToSuccess(t *testing.T) {
 	})
 }
 
+// TestBuildPrompt_TeachesEvidenceMarkerBothDispatchKinds is ADR-052 FR-035
+// Fix-Wave-2's fix 1 regression proof: buildPrompt's instruction text must
+// teach the [goal:evidence] marker requirement in BOTH the native and the
+// external-CLI branch. Before this fix, [goal:evidence] appeared NOWHERE in
+// either prompt — only in checkEvidenceMarkerGate's parser regex, the
+// goalEvidenceLabel const, and evidenceGateSteeringText — so every
+// marker-path completion tripped the gate on turn 1 by construction. This
+// was especially acute for external-CLI (subagent_3p) dispatch:
+// dispatchesExternalCLI's early return in buildPrompt means that worker gets
+// ONLY the marker instruction (no task_update tool escape hatch exists for
+// it at all — see dispatchesExternalCLI's own doc comment), so teaching the
+// evidence marker there is its ONLY possible path to ever satisfy the gate.
+//
+// Verified this fails against pre-fix code: the pre-fix buildPrompt (read
+// directly before this wave's edits) wrote exactly two example lines —
+// "  TASK_STATUS: success\n" and "  TASK_STATUS: failure\n" — with no
+// occurrence of goalEvidenceLabel ("[goal:evidence]") anywhere in either the
+// native or the external-CLI instruction block; this assertion would have
+// failed on that text for both subtests.
+func TestBuildPrompt_TeachesEvidenceMarkerBothDispatchKinds(t *testing.T) {
+	t.Run("native", func(t *testing.T) {
+		al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
+		tk := newCompletionContractTask(t, al, "native-agent", "evidence-marker teaching native")
+		prompt := al.taskExecutor.buildPrompt(tk)
+		if !strings.Contains(prompt, goalEvidenceLabel) {
+			t.Fatalf("native buildPrompt output does not mention %q — the worker is never taught the "+
+				"evidence-marker gate's requirement:\n%s", goalEvidenceLabel, prompt)
+		}
+	})
+	t.Run("external_cli", func(t *testing.T) {
+		al, _ := newExternalCLITaskTestLoop(t, &countingProvider{})
+		tk := newCompletionContractTask(t, al, "ext-agent", "evidence-marker teaching external")
+		prompt := al.taskExecutor.buildPrompt(tk)
+		if !strings.Contains(prompt, goalEvidenceLabel) {
+			t.Fatalf("external-CLI buildPrompt output does not mention %q — a subagent_3p worker has no "+
+				"task_update escape hatch, so this instruction is its ONLY path to ever satisfy the "+
+				"gate:\n%s", goalEvidenceLabel, prompt)
+		}
+	})
+}
+
 // TestTaskCompletionContract_BlockedDependent_StaysBlockedOnFailedBlocker is
 // review E1 — the headline regression ADR-043 exists to close: task B is
 // blocked on task A; A's run ends with NO TASK_STATUS marker (fails closed to

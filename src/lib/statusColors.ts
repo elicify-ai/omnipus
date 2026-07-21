@@ -91,13 +91,25 @@ export function statusLabel(status: TaskStatus | string | undefined): string {
 // column. It renders as an orange "Cancelled" marker, distinct from a
 // genuine red "Failed" (attempts exhausted), while staying in the Failed
 // column/bucket everywhere a task's status is drawn (Board card, List status
-// cell, Graph node). Reuses the existing warning-orange token rather than a
-// new hardcoded hex — mirrors `planStateColors.ts`'s PLAN_CANCELLED_COLOR,
-// deliberately duplicated (not shared) because Task/Plan are different
-// domains — see that module's header comment.
+// cell, Graph node). Matches the existing warning-orange token's VALUE
+// (`--color-warning: #EAB308` in globals.css) rather than a new invented hex
+// — mirrors `planStateColors.ts`'s PLAN_CANCELLED_COLOR, deliberately
+// duplicated (not shared) because Task/Plan are different domains — see that
+// module's header comment.
 
-/** Orange accent for a user-cancelled task — distinct from `STATUS_COLORS.failed` (red). */
-export const TASK_CANCELLED_COLOR = 'var(--color-warning)'
+/**
+ * Orange accent for a user-cancelled task — distinct from `STATUS_COLORS.failed`
+ * (red). A LITERAL hex, not a `var(--color-warning)` CSS custom-property
+ * reference (Gate-2 finding #1): every consumer (TaskCard, PlansFilterBand,
+ * WorkspaceGraphTab) builds its pill tint by string-concatenating an alpha
+ * suffix onto this value (`` `${color}1a` ``) — `var(--color-warning)1a` is not
+ * valid CSS (`var()` doesn't accept a trailing token), so that declaration was
+ * silently dropped and the "Cancelled" pill rendered with NO background tint
+ * (orange text, transparent fill), unlike the red "Failed" pill built from the
+ * literal-hex `STATUS_COLORS.failed`. A literal 6-digit hex keeps the concat
+ * producing a valid 8-digit `#RRGGBBAA`.
+ */
+export const TASK_CANCELLED_COLOR = '#EAB308'
 
 /** True when this task is `failed` specifically because the user Stopped it (not a genuine failure). */
 export function isTaskCancelled(task: Pick<Task, 'status' | 'cancel_reason'>): boolean {

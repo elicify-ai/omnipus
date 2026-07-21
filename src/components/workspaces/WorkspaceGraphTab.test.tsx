@@ -20,6 +20,7 @@ import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import { WorkspaceGraphTab } from './WorkspaceGraphTab'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { Plan, Task } from '@/lib/api'
+import { PLAN_CANCELLED_COLOR, planDisplayColor } from '@/lib/planStateColors'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -161,6 +162,35 @@ describe('WorkspaceGraphTab — active-plan header', () => {
 
     await screen.findByTestId('graph-view-stub')
     expect(screen.queryByText('Running')).not.toBeInTheDocument()
+  })
+
+  // Gate-2 finding #1 regression: WorkspaceGraphTab.tsx:248 builds the plan
+  // info strip's state-chip tint fill as `` `${planDisplayColor(activePlan)}1a` ``
+  // — a bare string concat, not a CSS function call. If PLAN_CANCELLED_COLOR
+  // were ever a `var(--x)` reference again, the result
+  // (`var(--color-warning)1a`) is not valid CSS (`var()` doesn't accept a
+  // trailing token), so the whole `backgroundColor` declaration would be
+  // silently dropped and the "Cancelled" chip would render with orange text
+  // but NO tint — inconsistent with the red "Failed" chip elsewhere. jsdom
+  // won't reliably validate/reject that invalid CSS for us, so this asserts
+  // directly on the STRING the component builds, not on DOM style-parsing
+  // behavior.
+  it('PLAN_CANCELLED_COLOR is a literal hex, not a var(...) reference, so the "Cancelled" chip tint stays valid CSS', () => {
+    expect(PLAN_CANCELLED_COLOR).not.toMatch(/^var\(/)
+    expect(PLAN_CANCELLED_COLOR).toMatch(/^#[0-9a-fA-F]{6}$/)
+    const cancelledTint = `${planDisplayColor(makePlan({ state: 'failed', failed_reason: 'stopped_by_user' }))}1a`
+    expect(cancelledTint).toMatch(/^#[0-9a-fA-F]{8}$/)
+  })
+
+  it('renders the "Cancelled" state chip (not "Failed") for a user-stopped active plan', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-9', title: 'Launch', state: 'failed', failed_reason: 'stopped_by_user' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-9' })
+    renderTab()
+
+    expect(await screen.findByText('Cancelled')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
   })
 })
 

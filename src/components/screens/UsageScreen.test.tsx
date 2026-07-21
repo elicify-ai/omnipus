@@ -327,10 +327,44 @@ describe('UsageScreen', () => {
       expect(screen.getByTestId('usage-hero-row')).toHaveTextContent(formatTokens(15000 + 3000 + 1000))
     })
 
-    it('the "By session" tab still calls fetchSessions with no include_verifier — a known, documented residual gap (fetchSessions in src/lib/api.ts has no such parameter yet)', async () => {
+    it('the "By session" tab calls fetchSessions with includeVerifier:true so verifier session rows are auditable (SC-014)', async () => {
       renderUsage()
       await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
-      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith()
+      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith(undefined, undefined, { includeVerifier: true })
+    })
+
+    it('shows a verifier session row tagged "Verifier" in the "By session" tab', async () => {
+      const user = userEvent.setup()
+      vi.mocked(fetchSessions).mockResolvedValue([
+        ...mockSessions,
+        {
+          id: 'sess-judge',
+          agent_id: 'judge',
+          title: 'Verdict review',
+          type: 'verifier',
+          created_at: '2026-06-07T00:00:00Z',
+          updated_at: '2026-06-07T00:05:00Z',
+          message_count: 4,
+          total_tokens: 1000,
+        },
+      ])
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      await user.click(screen.getByTestId('tab-session'))
+      await waitFor(
+        () => expect(screen.getByTestId('sessions-table')).toBeInTheDocument(),
+        { timeout: 5000 },
+      )
+
+      expect(screen.getByText('Verdict review')).toBeInTheDocument()
+      const tag = screen.getByTestId('session-verifier-tag')
+      expect(tag).toBeInTheDocument()
+      expect(tag).toHaveTextContent('Verifier')
+
+      // Non-verifier rows must NOT carry the tag.
+      const rows = screen.getByTestId('sessions-table').querySelectorAll('tbody tr')
+      expect(rows).toHaveLength(3) // sess-1, sess-2, sess-judge (sess-3 has 0 tokens, excluded)
+      expect(screen.getAllByTestId('session-verifier-tag')).toHaveLength(1)
     })
   })
 })

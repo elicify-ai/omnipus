@@ -7,9 +7,11 @@ import {
   PLAN_STATE_COLORS,
   PLAN_STATE_LABELS,
   PLAN_STATE_ORDER,
+  PLAN_CANCELLED_COLOR,
   planStateColor,
   planStateLabel,
   planSecondaryChipLabel,
+  planDisplayColor,
 } from './planStateColors'
 
 describe('planStateColors — badge matrix', () => {
@@ -40,6 +42,38 @@ describe('planStateColors — badge matrix', () => {
   it('never shares a colour value with a different state (no accidental aliasing)', () => {
     const hexes = Object.values(PLAN_STATE_COLORS)
     expect(new Set(hexes).size).toBe(hexes.length)
+  })
+})
+
+// Gate-2 finding #1 regression: every consumer (PlansFilterBand,
+// WorkspaceGraphTab) builds its badge tint fill as a bare string concat —
+// `` `${displayColor}1a` `` — not a CSS function call. A `var(--x)` value
+// concatenated with a trailing alpha token (`var(--color-warning)1a`) is not
+// valid CSS (`var()` doesn't accept a trailing token past its closing paren),
+// so that declaration would be silently dropped by the browser and the
+// "Cancelled" badge would render with no background tint at all — orange
+// text on a transparent pill, inconsistent with the red "Failed" pill (built
+// from the already-literal-hex `PLAN_STATE_COLORS.failed`). This asserts
+// directly on the exported constant/string, not on DOM/CSSOM behavior (which
+// varies by environment and won't reliably reject invalid CSS for us).
+describe('PLAN_CANCELLED_COLOR / planDisplayColor — literal-hex tint mechanism (Gate-2 finding #1)', () => {
+  it('is a literal hex, not a var(...) CSS custom-property reference', () => {
+    expect(PLAN_CANCELLED_COLOR).not.toMatch(/^var\(/)
+    expect(PLAN_CANCELLED_COLOR).toMatch(/^#[0-9a-fA-F]{6}$/)
+  })
+
+  it('matches the --color-warning token value (#EAB308) it stands in for', () => {
+    expect(PLAN_CANCELLED_COLOR).toBe('#EAB308')
+  })
+
+  it('planDisplayColor for a cancelled plan produces a valid 8-digit hex once the "1a" tint suffix is appended', () => {
+    const tint = `${planDisplayColor({ state: 'failed', failed_reason: 'stopped_by_user' })}1a`
+    expect(tint).toMatch(/^#[0-9a-fA-F]{8}$/)
+  })
+
+  it('is visually distinct from PLAN_STATE_COLORS.failed while using the same literal-hex mechanism', () => {
+    expect(PLAN_CANCELLED_COLOR).not.toBe(PLAN_STATE_COLORS.failed)
+    expect(PLAN_STATE_COLORS.failed).toMatch(/^#[0-9a-fA-F]{6}$/)
   })
 })
 

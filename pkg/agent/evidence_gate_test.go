@@ -16,6 +16,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -207,17 +208,139 @@ func TestEvidenceGate_ClaimWithGenuineEvidenceReachesVerifier(t *testing.T) {
 	}
 }
 
-// TestEvidenceGate_RepeatedBareClaimsNeverCollideOnTranscriptID guards
-// rejectBareEvidenceClaim's own documented risk: since AttemptCount is
-// deliberately left unchanged across repeated bare-claim rejections, a
-// transcript entry id NAIVELY derived from AttemptCount (mirroring
-// writeSteeringPrompt's `<task>-steering-<AttemptCount+1>` scheme) would
-// collide across two such rejections in a row — both would compute the
-// SAME id, since AttemptCount stays 0 both times. Calling finishTaskRun
-// twice in a row against a real, pre-created session and reading the
-// transcript back proves the two evidence-gate steering entries got
-// DISTINCT ids.
-func TestEvidenceGate_RepeatedBareClaimsNeverCollideOnTranscriptID(t *testing.T) {
+// TestEvidenceGate_SteeringDeliveredToRedispatchedPrompt is Fix-Wave-2's
+// fix 2 regression proof: the steering text rejectBareEvidenceClaim computes
+// for a bare claim must actually reach the worker on the VERY NEXT dispatch.
+// Before this fix it did not: rejectBareEvidenceClaim wrote the steering to
+// t.Result, but buildPrompt only renders t.Result inside its "AttemptCount >
+// 0" block — and rejectBareEvidenceClaim deliberately never increments
+// AttemptCount (a mechanical formatting miss must not cost a real attempt),
+// so that block's guard was never true for this path. The transcript-only
+// write was ALSO orphaned: createTaskSessionSync mints a fresh session on
+// every re-dispatch, so the entry appended to the OLD session was never seen
+// again either. Net effect pre-fix: the re-dispatched prompt was
+// byte-identical to the first attempt — a deterministic livelock. This test
+// proves buildPrompt's output for the re-dispatched task now contains the
+// gate's steering text.
+func TestEvidenceGate_SteeringDeliveredToRedispatchedPrompt(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+
+	taskStore := GetTaskStore(al)
+	tk := &task.Task{
+		ID: "t-evidence-steering-delivery", AgentID: "native-agent", WorkspaceID: "test-ws",
+		Title:    "steering delivery",
+		Status:   task.StatusInProgress,
+		Criteria: []task.AcceptanceCriterion{proseCriterion("c1", "must do X")},
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	resp := "I finished the work.\nTASK_STATUS: success\n"
+	redispatch := al.taskExecutor.finishTaskRun(context.Background(), tk, "", resp, nil, "")
+	if redispatch == "" {
+		t.Fatal("expected a non-empty re-dispatch id")
+	}
+
+	redispatched, err := taskStore.Get(redispatch)
+	if err != nil {
+		t.Fatalf("get redispatched task: %v", err)
+	}
+	prompt := al.taskExecutor.buildPrompt(redispatched)
+	if !strings.Contains(prompt, evidenceGateSteeringText) {
+		t.Fatalf("re-dispatched prompt does not contain the evidence-marker gate's steering text — the "+
+			"worker would see the SAME prompt as attempt 1 and repeat the same mistake forever:\n%s", prompt)
+	}
+}
+
+// TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget is Fix-Wave-2's
+// fix 3 livelock-bound regression proof: a worker that NEVER emits
+// [goal:evidence] — whatever it is claiming — must still reach a terminal
+// task state within the attempt/hardCeiling budget, not loop the LLM forever
+// with AttemptCount frozen at 0. Before this fix, rejectBareEvidenceClaim
+// always took the free (non-attempt-consuming) re-dispatch path with no
+// ceiling of its own, bypassing consumeAttemptOrExhaust entirely — this test
+// would time out (or loop until the process is killed) waiting for a
+// terminal status that never arrives. max_attempts=1 keeps the dispatch
+// count small and the test fast: dispatch 1 is the FREE first rejection
+// (streak=1, AttemptCount stays 0); dispatch 2 hits
+// evidenceGateMaxConsecutiveRejections (streak=2) and routes through
+// consumeAttemptOrExhaust, which exhausts immediately (newAttempt=1 is not <
+// maxAttempts=1) and marks the task Failed. A short 2s deadline (not the 5s
+// waitForCompletionContractTerminal default) is deliberate — this test's
+// whole point is proving the loop does NOT run away, so it must fail fast if
+// the bound regresses, not just eventually.
+func TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget(t *testing.T) {
+	worker := &scriptedProvider{
+		responseBody: "did the work\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
+	}
+	al, _ := newGoalLoopTestLoop(t, worker, nil)
+
+	maxAttempts := 1
+	tk := &task.Task{
+		Title: "never emits evidence marker", Prompt: "do it", Action: task.ActionLLM,
+		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
+		MaxAttempts: &maxAttempts,
+		Criteria:    []task.AcceptanceCriterion{proseCriterion("c1", "the work is really done")},
+	}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
+		t.Fatalf("ExecuteTask: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var final *task.Task
+	for time.Now().Before(deadline) {
+		got, err := al.taskStore.Get(tk.ID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if task.IsTerminal(got.Status) {
+			final = got
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if final == nil {
+		t.Fatal("task never reached a terminal status within 2s — the evidence-marker gate is looping " +
+			"without a bound (livelock)")
+	}
+	if final.Status != task.StatusFailed {
+		t.Errorf("status = %q, want %q — a worker that never emits [goal:evidence] must fail out, not "+
+			"succeed by exhausting the free ride", final.Status, task.StatusFailed)
+	}
+	if final.AttemptCount != 1 {
+		t.Errorf("attempt_count = %d, want 1 — exactly one real attempt should have been consumed once "+
+			"the consecutive-rejection bound tripped", final.AttemptCount)
+	}
+	worker.mu.Lock()
+	dispatches := worker.callCount
+	worker.mu.Unlock()
+	if dispatches != 2 {
+		t.Errorf("worker dispatched %d times, want exactly 2 (1 free rejection + 1 bound-triggered "+
+			"attempt before exhaustion) — an unbounded count would mean the fix regressed", dispatches)
+	}
+}
+
+// TestEvidenceGate_ConsecutiveRejectionsRouteThroughAttemptBudgetOnSecond
+// (formerly "NeverCollideOnTranscriptID") pins Fix-Wave-2's fix 3 boundary
+// precisely: the FIRST bare-claim rejection for a task is free (no
+// AttemptCount change, an "evidence-gate"-tagged transcript entry using a
+// nanosecond-timestamped id distinct from writeSteeringPrompt's own
+// AttemptCount-derived scheme) — but the SECOND CONSECUTIVE bare-claim
+// rejection hits evidenceGateMaxConsecutiveRejections and routes through
+// consumeAttemptOrExhaust instead of taking another free ride: AttemptCount
+// increments, and the resulting steering transcript entry uses
+// writeSteeringPrompt's OWN `<task>-steering-<AttemptCount+1>` id scheme,
+// never an "evidence-gate"-tagged one. Before this fix, BOTH consecutive
+// calls took the free path forever (the original form of this test asserted
+// AttemptCount stayed 0 and found 2 "evidence-gate" entries) — this test now
+// pins the point where that free ride stops, and that the two id schemes
+// still never collide with each other.
+func TestEvidenceGate_ConsecutiveRejectionsRouteThroughAttemptBudgetOnSecond(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
 	taskStore := GetTaskStore(al)
@@ -258,24 +381,35 @@ func TestEvidenceGate_RepeatedBareClaimsNeverCollideOnTranscriptID(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final.AttemptCount != 0 {
-		t.Errorf("attempt_count = %d, want 0 after two repeated bare-claim rejections", final.AttemptCount)
+	if final.AttemptCount != 1 {
+		t.Errorf("attempt_count = %d, want 1 — the SECOND consecutive bare claim must consume a real "+
+			"attempt via consumeAttemptOrExhaust, not ride free again", final.AttemptCount)
 	}
 
 	entries, terr := sessStore.ReadTranscript(taskSessionID)
 	if terr != nil {
 		t.Fatalf("ReadTranscript: %v", terr)
 	}
-	var steeringIDs []string
+	var evidenceGateIDs, steeringIDs []string
 	for _, e := range entries {
-		if strings.Contains(e.ID, "evidence-gate") {
+		switch {
+		case strings.Contains(e.ID, "evidence-gate"):
+			evidenceGateIDs = append(evidenceGateIDs, e.ID)
+		case strings.Contains(e.ID, "-steering-"):
 			steeringIDs = append(steeringIDs, e.ID)
 		}
 	}
-	if len(steeringIDs) != 2 {
-		t.Fatalf("found %d evidence-gate steering transcript entries, want 2: %v", len(steeringIDs), steeringIDs)
+	if len(evidenceGateIDs) != 1 {
+		t.Errorf("found %d evidence-gate-tagged transcript entries, want exactly 1 (only the FIRST, free "+
+			"rejection uses this id scheme): %v", len(evidenceGateIDs), evidenceGateIDs)
 	}
-	if steeringIDs[0] == steeringIDs[1] {
-		t.Errorf("the two evidence-gate steering entries share the SAME id %q — collision", steeringIDs[0])
+	if len(steeringIDs) != 1 {
+		t.Errorf("found %d steering-tagged transcript entries, want exactly 1 (the SECOND, bound-triggered "+
+			"rejection goes through consumeAttemptOrExhaust's writeSteeringPrompt instead): %v",
+			len(steeringIDs), steeringIDs)
+	}
+	if len(evidenceGateIDs) == 1 && len(steeringIDs) == 1 && evidenceGateIDs[0] == steeringIDs[0] {
+		t.Errorf("the free-rejection and bound-triggered steering entries share the SAME id %q — collision",
+			evidenceGateIDs[0])
 	}
 }

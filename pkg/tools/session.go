@@ -164,6 +164,45 @@ func (s *ProcessSession) SetExitCode(code int) {
 	s.ExitCode = code
 }
 
+// statusPriority ranks terminal SessionStatus values so KillAndRelabel can
+// tell a caller with a SPECIFIC terminal reason (canceled/killed/timeout)
+// apart from one with only a GENERIC fallback reason (done/exited — "no more
+// specific label to apply", see StatusDone's doc comment). Two independent
+// callers can legitimately race to be the one that transitions the SAME
+// ProcessSession out of StatusRunning — e.g. SessionManager.KillAll's
+// unconditional process-wide shutdown reaper racing SessionManager.
+// KillAllForSession's owner-scoped RequestCancel cascade for the same
+// session (this is not merely theoretical: in the pkg/agent test suite,
+// tools.GetSharedSessionManager() is ONE process-wide singleton shared by
+// every *AgentLoop any test constructs — see AgentLoop.Close's own
+// "LOAD-BEARING PRECONDITION" doc comment in pkg/agent/loop.go — so one
+// test's shutdown-driven KillAll() can race a DIFFERENT, concurrently
+// running test's own explicit-cancel KillAllForSession() for a session
+// neither test intended the other to touch). Whichever caller wins the
+// mutex first has, until now, permanently decided the label — if the
+// generic caller won, the specific caller's own KillAndRelabel call found
+// Status already non-running and silently gave up (ErrSessionDone, the
+// existing documented "benign lost race" no-op), leaving a canceled/killed/
+// timed-out session mislabeled with the generic fallback forever. See
+// KillAndRelabel's doc comment for how this ranking is used to fix that
+// without weakening the pre-existing "a genuinely already-terminal session
+// is left untouched" no-op guarantee every KillAllForSession/KillAll/
+// executeKill caller pre-checks for BEFORE ever reaching KillAndRelabel
+// (TestSessionManager_KillAllForSession's "skips already-done sessions"
+// case, TestSessionManager_KillAll's "already-terminal session must be left
+// untouched" case, and TestBash_KillRacingNaturalExit/MIN-002 all stop at
+// that earlier pre-check and never exercise this ranking at all).
+func statusPriority(s SessionStatus) int {
+	switch s {
+	case StatusKilled, StatusTimeout, StatusCanceled:
+		return 2 // a caller that knows WHY the session ended
+	case StatusDone, StatusExited:
+		return 1 // the generic fallback — no specific reason known
+	default: // StatusRunning, or any future/unrecognized value
+		return 0
+	}
+}
+
 // killProcessGroupFn indirects the OS-level process-group kill syscall
 // (killProcessGroup, session_process_unix.go/session_process_windows.go) so
 // tests can force a kill FAILURE deterministically. A real "fake" PID chosen
@@ -189,6 +228,31 @@ func (s *ProcessSession) KillAndRelabel(status SessionStatus) error {
 	defer s.mu.Unlock()
 
 	if s.Status != StatusRunning {
+		// Not running anymore. Every caller of KillAndRelabel (KillAllFor
+		// Session, KillAll's Kill(), the timeout guard, executeKill) already
+		// pre-checked GetStatus()/IsDone() before calling in, so reaching
+		// this branch means the session's terminal status was written by a
+		// DIFFERENT caller in the narrow window between that pre-check and
+		// this lock acquisition (every existing "leave an already-terminal
+		// session untouched" test — see statusPriority's doc comment —
+		// never reaches this branch at all; they stop at the pre-check).
+		// Default to the existing benign no-op UNLESS the racing writer only
+		// left the generic StatusDone/StatusExited fallback and THIS call
+		// carries a more specific terminal reason: then correct the label in
+		// place rather than silently discarding it. The process itself is
+		// already terminated (or a kill for it is already in flight) by
+		// construction of how the generic fallback gets set, so no further
+		// kill syscall is issued here — only the label is corrected.
+		// ExitCode is deliberately left untouched: whichever writer got
+		// there first may have recorded a real exit code (a natural exit)
+		// that remains the most accurate value available. A generic status
+		// can never downgrade an already-specific one, and two
+		// equally-specific statuses never flip-flop — the first specific
+		// writer still wins ties, exactly as before.
+		if statusPriority(status) > statusPriority(s.Status) {
+			s.Status = status
+			return nil
+		}
 		return ErrSessionDone
 	}
 
@@ -360,6 +424,18 @@ func (sm *SessionManager) cleanupOldSessions() {
 // total; it does not abort the rest of the cascade (matches the "on
 // failure" contract for this hook: killing an individual background session
 // that fails must not abort RequestCancel's own turn-cancellation flow).
+//
+// One refinement to "loses the race against another terminal-status writer"
+// above: if that other writer only left the generic StatusDone fallback (see
+// KillAll's shutdown reaper, which relabels unconditionally and without a
+// specific reason) and this call's KillAndRelabel(StatusCanceled) reaches
+// the session microseconds later, statusPriority lets the more specific
+// "canceled" label win and correct it in place — this call still counts it
+// as killed/logs it normally in that case (see KillAndRelabel's doc
+// comment). Only a same-or-more-specific existing label (canceled/killed/
+// timeout, or a session that was ALREADY non-running well before this scan
+// even started — the ordinary case this comment block otherwise describes)
+// is still treated as a benign no-op.
 //
 // Returns (killed, failed): killed is the count successfully terminated and
 // relabeled StatusCanceled (as before); failed is the count of REAL kill
