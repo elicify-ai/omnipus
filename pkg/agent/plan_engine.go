@@ -82,6 +82,17 @@ type planTaskDispatcher interface {
 	ExecuteTask(ctx context.Context, taskID string) error
 }
 
+// sessionCanceller is the narrow interface *AgentLoop.RequestCancelForSession
+// (cancel.go) satisfies (mirrors planJudge/planTaskDispatcher's own
+// narrow-interface test-seam pattern, ADR-052 §6.4/§6.9 "Stop = the existing
+// chat cancel"). A dedicated interface — rather than a concrete *AgentLoop
+// field — lets tests inject a fake and assert the Stop fan-out's session set
+// deterministically (US-6/US-7, DS-4) without booting a real AgentLoop/
+// session store.
+type sessionCanceller interface {
+	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, error)
+}
+
 // ActiveCounterFunc reports the current count of active units of some
 // loop-shaped kind the plan store cannot itself enumerate (R5's counted
 // set): a /goal session count or an enabled /loop job count. Wave 2-C
@@ -142,17 +153,30 @@ type PlanEngine struct {
 	dispatcher planTaskDispatcher
 	judge      planJudge
 	notifier   AsyncNotifier
+	// canceller issues the actual session-level cancel for the Stop fan-out
+	// (US-6/US-7, ADR-052 §6.4/§6.9/§6.10). Set to al itself in
+	// NewPlanEngine (which satisfies sessionCanceller trivially); nil in a
+	// bare struct-literal test engine unless the test injects a fake —
+	// cancelSessions nil-guards it the same way notifier/dispatcher calls do
+	// elsewhere in this file.
+	canceller sessionCanceller
 
 	clock        PlanEngineClock
 	tickInterval time.Duration
 
-	// mu guards ticking (the overlap guard), activeCounters, and
-	// inFlightJudge — all small, fast-to-touch bookkeeping. It is NEVER held
-	// across a store call or the judge LLM call itself.
+	// mu guards ticking, activeCounters, and verifierRegistry's lazy
+	// initialization — all small, fast-to-touch bookkeeping. It is NEVER
+	// held across a store call or the judge LLM call itself.
 	mu             sync.Mutex
 	ticking        bool
 	activeCounters map[string]ActiveCounterFunc
-	inFlightJudge  map[string]bool
+	// verifierRegistry replaces the old inFlightJudge map[string]bool
+	// (ADR-052 FR-037/R3-7 — see verifier_registry.go's package doc for the
+	// full design). Accessed exclusively via the registry() accessor, which
+	// lazily initializes it under mu — never read/written directly — so a
+	// struct-literal-constructed test engine that omits this field never
+	// nil-derefs.
+	verifierRegistry VerifierSessionRegistry
 
 	// planDecisionMu serializes every plan-mutating decision (dispatch,
 	// judge-round start, idle-expiry) process-wide. It is coarse (one lock
@@ -183,21 +207,47 @@ type PlanEngine struct {
 // satisfies planJudge; al.asyncNotifier satisfies AsyncNotifier.
 func NewPlanEngine(al *AgentLoop, planStore *plan.Store, taskStore *task.Store, taskExecutor *TaskExecutor) *PlanEngine {
 	pe := &PlanEngine{
-		agentLoop:      al,
-		planStore:      planStore,
-		taskStore:      taskStore,
-		dispatcher:     taskExecutor,
-		judge:          al,
-		clock:          realPlanEngineClock{},
-		tickInterval:   defaultPlanEngineTickInterval,
-		activeCounters: make(map[string]ActiveCounterFunc),
-		inFlightJudge:  make(map[string]bool),
-		judgeSema:      newDispatchSemaphore(defaultPlanJudgeConcurrency),
+		agentLoop:        al,
+		planStore:        planStore,
+		taskStore:        taskStore,
+		dispatcher:       taskExecutor,
+		judge:            al,
+		clock:            realPlanEngineClock{},
+		tickInterval:     defaultPlanEngineTickInterval,
+		activeCounters:   make(map[string]ActiveCounterFunc),
+		verifierRegistry: NewVerifierSessionRegistry(),
+		judgeSema:        newDispatchSemaphore(defaultPlanJudgeConcurrency),
 	}
 	if al != nil {
 		pe.notifier = al.asyncNotifier
+		pe.canceller = al
 	}
 	return pe
+}
+
+// registry returns the verifier-session registry, lazily initializing it
+// under mu on first use. This lets a bare struct-literal PlanEngine (the
+// same-package test-construction pattern this file's tests use throughout —
+// see plan_engine_test.go's newTestPlanEngine) omit verifierRegistry without
+// risking a nil-map panic, exactly as NewPlanEngine's own construction does
+// explicitly.
+func (pe *PlanEngine) registry() VerifierSessionRegistry {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.verifierRegistry == nil {
+		pe.verifierRegistry = NewVerifierSessionRegistry()
+	}
+	return pe.verifierRegistry
+}
+
+// VerifierRegistry exposes the engine's single verifier-session registry
+// (FR-037/R3-7) to the adjudication callers that need to register their own
+// verifier session BEFORE dispatch — judge.go's runVerifierAdjudication (all
+// three JudgeCriteria scopes: task, plan, chat `/goal`) reaches it via
+// GetPlanEngine(al).VerifierRegistry(). See verifier_registry.go's package
+// doc for the full registration contract.
+func (pe *PlanEngine) VerifierRegistry() VerifierSessionRegistry {
+	return pe.registry()
 }
 
 // --- Lifecycle -----------------------------------------------------------
@@ -438,9 +488,7 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 
 	switch p.EffectivePlanPhase() {
 	case plan.PhaseJudging:
-		pe.mu.Lock()
-		inFlight := pe.inFlightJudge[p.ID]
-		pe.mu.Unlock()
+		_, inFlight := pe.registry().Lookup(p.ID)
 		if inFlight {
 			return // a goroutine is already adjudicating this round
 		}
@@ -475,6 +523,19 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 	dispatched := pe.dispatchReadyMembers(ctx, planID, tasks)
 	if dispatched {
 		pe.touchActivity(planID)
+	}
+
+	// FR-041/R2-04 (US-7 acceptance 3, DS-4, "member-cancel plan outcome"):
+	// checked BEFORE allMembersTerminal, and takes priority over it. A
+	// member left `blocked` behind a cancelled member is never terminal
+	// (AdvanceBlockedDependents only ever promotes a blocked dependent on a
+	// DONE dependency — blocked_by.go — never on a cancelled/failed one), so
+	// allMembersTerminal would silently stay false forever and the plan
+	// would otherwise rot until FR-064's (days-later, UNrestartable)
+	// idle-expiry brake — exactly the outcome this rule exists to prevent.
+	if planStuckAfterMemberCancel(tasks) {
+		pe.failPlanLocked(p.ID, plan.FailedReasonStoppedByUser, buildMemberCancelHandover(p, tasks))
+		return
 	}
 
 	if allMembersTerminal(tasks) {
@@ -577,25 +638,28 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan) {
 		return
 	}
 
-	pe.mu.Lock()
-	pe.inFlightJudge[p.ID] = true
-	pe.mu.Unlock()
+	// Register the round as in-flight BEFORE launching the goroutine —
+	// exactly the same synchronous timing the old inFlightJudge[p.ID]=true
+	// write had (FR-037 extends this "assign before dispatch" rule to
+	// verifiers generally; here it doubles as the plan-round's own
+	// crash-resume liveness marker — see verifier_registry.go's package
+	// doc). The verifier session id is not known yet at this point (judge.go
+	// creates it once the round actually runs JudgeCriteria), so this call
+	// registers an empty-session placeholder; judge.go upserts the real id
+	// via the SAME Register call before dispatching the verifier's turn.
+	pe.registry().Register(p.ID, "")
 
 	pe.judgeWG.Add(1)
 	go pe.runPlanJudgeRound(p.ID, release)
 }
 
 // runPlanJudgeRound performs ONE plan-level judge round. It ALWAYS clears
-// its judgeSema slot, inFlightJudge marker, and judgeWG count on return
+// its judgeSema slot, verifier-registry entry, and judgeWG count on return
 // (defers below), regardless of outcome.
 func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	defer pe.judgeWG.Done()
 	defer release()
-	defer func() {
-		pe.mu.Lock()
-		delete(pe.inFlightJudge, planID)
-		pe.mu.Unlock()
-	}()
+	defer pe.registry().Unregister(planID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), planJudgeRoundTimeout)
 	defer cancel()
@@ -636,6 +700,23 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		ClaimText:       buildPlanClaimText(tasks),
 		ExtraContext:    buildPlanJudgeExtraContext(p),
 	})
+
+	// FR-014 (US-6 acceptance 3, Test 7): JudgeCriteria runs OUTSIDE
+	// planDecisionMu by design (this whole goroutine is decoupled from the
+	// lock precisely so a slow-but-alive judge call never blocks other
+	// plans' dispatch — see beginPlanJudgeRound's doc comment), so a Stop
+	// can land on this exact plan microseconds before the call returns.
+	// Re-acquire the lock and re-check State==running before applying ANY
+	// outcome below (Unavailable-revert, a real verdict, or the wakeOwner
+	// side effects either path triggers) — a plan a concurrent Stop already
+	// moved to `failed` must never have that outcome overwritten by a stale
+	// in-flight round.
+	if !pe.verdictStillApplicable(planID) {
+		logger.InfoCF("plan_engine",
+			"plan judge round outcome dropped: plan left running during adjudication (Stop landed concurrently)",
+			map[string]any{"plan_id": planID})
+		return
+	}
 
 	if result.Unavailable {
 		// D7: 0 rounds consumed, idle clock NOT bumped (spec R9/m4: judge
@@ -740,6 +821,316 @@ func (pe *PlanEngine) failPlanLocked(planID string, reason plan.FailedReason, ha
 	pe.wakeOwner(planID, updated.OwnerAgentID, fmt.Sprintf(
 		"Plan %q has ended (%s).\n\n%s", updated.Title, reason, handover,
 	), "plan_"+string(reason))
+}
+
+// verdictStillApplicable re-checks, under planDecisionMu, that planID is
+// still State==running (FR-014/US-6 acceptance 3, Test 7) — see
+// runPlanJudgeRound's call site for why this exists.
+func (pe *PlanEngine) verdictStillApplicable(planID string) bool {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+	p, err := pe.planStore.Get(planID)
+	if err != nil {
+		return false
+	}
+	return p.State == plan.StateRunning
+}
+
+// --- Stop (US-6/US-7, FR-009/010/013/025/029/037/041) ---------------------
+//
+// Stop reuses the SAME chat cancel primitive (RequestCancelForSession, A2)
+// as every other cancel surface — no new cancel machinery. The ENTIRE
+// fan-out (session cancels + the plan/member state writes) runs under
+// planDecisionMu (FR-009, grill F3) so a member or verifier concurrently
+// being dispatched cannot escape: M1 (task_executor.go) guarantees a
+// member's SessionID is assigned+persisted BEFORE it ever leaves `next`, and
+// FR-037 (verifier_registry.go) guarantees a verifier's session id is
+// registered BEFORE its own turn is dispatched — both synchronously, so the
+// snapshot this code takes while holding the lock is always complete.
+
+// memberCancelReasonMarker prefixes Task.Result on a member/standalone task
+// PlanEngine.StopPlan/StopTask cancels (US-8's orange "Cancelled" marker;
+// FR-041's dead-end detection below). WAVE-MERGE: replace with
+// task.CancelReason once that field lands (owned by a sibling wave) — this
+// Result-text marker is the interim discriminator between a genuine
+// judge/attempt-exhaustion failure and a user cancel, since pkg/task in this
+// worktree does not yet carry a dedicated cancel-reason field.
+const memberCancelReasonMarker = "[reason:stopped_by_user]"
+
+// isCancelledMember reports whether t was terminated by a user Stop (as
+// opposed to a genuine judge/attempt-exhaustion failure) — see
+// memberCancelReasonMarker.
+func isCancelledMember(t *task.Task) bool {
+	return t.Status == task.StatusFailed && strings.HasPrefix(t.Result, memberCancelReasonMarker)
+}
+
+// StopPlan implements US-6: the plan-level Stop fan-out. Cancels {every
+// `in_progress` member's worker session} + {every REGISTERED verifier
+// session for the plan itself and every one of its members, via the
+// verifier registry}, marks every `in_progress` member `failed`+cancel-
+// marker (US-8), and — unconditionally, regardless of whether other members
+// could still independently progress (that conditional case is FR-041,
+// member-level Stop only) — transitions the plan itself to
+// `failed`(stopped_by_user). Returns the updated plan on success.
+func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel string) (*plan.Plan, error) {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+
+	p, err := pe.planStore.Get(planID)
+	if err != nil {
+		return nil, fmt.Errorf("plan_engine: StopPlan: get plan %q: %w", planID, err)
+	}
+	if p.State != plan.StateRunning {
+		return nil, fmt.Errorf("plan_engine: StopPlan: plan %q is %s, not running", planID, p.State)
+	}
+
+	tasks, err := pe.taskStore.List(task.Filter{PlanID: planID})
+	if err != nil {
+		return nil, fmt.Errorf("plan_engine: StopPlan: list member tasks: %w", err)
+	}
+
+	// Canonical fan-out set (GS-04, FR-009): {each in_progress member
+	// session} + {each registered verifier session for the plan AND every
+	// member — regardless of that member's OWN status, since a plan-level
+	// verifier session is registered under the plan's own unit (planID) and
+	// a member's verifier session is only ever registered while that member
+	// is itself in_progress (adjudication runs before the member's own
+	// terminal write — see task_executor.go's finishTaskRun), so scanning
+	// every member id costs nothing and misses nothing}.
+	units := make([]string, 0, len(tasks)+1)
+	units = append(units, planID)
+	var sessions []string
+	for i := range tasks {
+		t := &tasks[i]
+		units = append(units, t.ID)
+		if t.Status == task.StatusInProgress && t.SessionID != "" {
+			sessions = append(sessions, t.SessionID)
+		}
+	}
+	sessions = append(sessions, pe.registry().SessionsFor(units...)...)
+	pe.cancelSessions(ctx, sessions, userID, channel)
+
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Status == task.StatusInProgress {
+			pe.cancelMemberLocked(t.ID, userID)
+		}
+	}
+
+	failed := plan.StateFailed
+	reason := plan.FailedReasonStoppedByUser
+	handover := fmt.Sprintf("Plan %q was stopped by %s.", p.Title, userID)
+	updated, err := pe.planStore.Update(planID, plan.Patch{
+		State:        &failed,
+		FailedReason: &reason,
+		HandoverText: &handover,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("plan_engine: StopPlan: transition plan %q to failed: %w", planID, err)
+	}
+	pe.wakeOwner(planID, updated.OwnerAgentID, handover, "plan_stopped_by_user")
+	return updated, nil
+}
+
+// StopTask implements US-7: Stop for a standalone `in_progress` task OR a
+// SINGLE `in_progress` in-plan member (member-Stop, A5) — distinct from
+// StopPlan (US-6/FR-025). Cancels the task's own worker session AND its
+// registered verifier session (if adjudication is in flight) and marks the
+// task `failed`+cancel-marker. Deliberately does NOT touch the task's plan
+// (if any): the plan's other independent members keep running (FR-025).
+// FR-041 (the "no further progress possible" immediate plan-fail) is
+// evaluated by the engine's own dispatch loop (processPlan) on ITS next
+// reactive pass, triggered by the EmitTaskStatusChanged this call fires
+// below — never inline here, since StopTask already holds planDecisionMu
+// and processPlan acquiring it too would deadlock (planDecisionMu is not
+// reentrant). Returns the updated task on success.
+func (pe *PlanEngine) StopTask(ctx context.Context, taskID, userID, channel string) (*task.Task, error) {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+
+	t, err := pe.taskStore.Get(taskID)
+	if err != nil {
+		return nil, fmt.Errorf("plan_engine: StopTask: get task %q: %w", taskID, err)
+	}
+	if t.Status != task.StatusInProgress {
+		return nil, fmt.Errorf("plan_engine: StopTask: task %q is %s, not in_progress", taskID, t.Status)
+	}
+
+	var sessions []string
+	if t.SessionID != "" {
+		sessions = append(sessions, t.SessionID)
+	}
+	sessions = append(sessions, pe.registry().SessionsFor(taskID)...)
+	pe.cancelSessions(ctx, sessions, userID, channel)
+
+	return pe.cancelMemberLocked(taskID, userID)
+}
+
+// cancelSessions issues RequestCancelForSession (the SAME chat cancel every
+// other surface uses, A2) for every session in sessions (deduped inline by
+// the caller's use of registry.SessionsFor + the direct worker-session
+// append, both of which already avoid duplicates in practice, but a
+// belt-and-suspenders local dedupe costs nothing). A single session's cancel
+// failure is logged, never escalated — the engine's OWN state transition
+// (member/plan -> failed) must still be attempted regardless (US-6
+// acceptance 1: the plan is marked `cancelled` even if one session's cancel
+// call errored — the session-level cancel and the state transition are
+// independent guarantees, not a single atomic unit).
+func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, userID, channel string) {
+	if pe.canceller == nil {
+		if len(sessions) > 0 {
+			logger.WarnCF("plan_engine",
+				"stop fan-out: no sessionCanceller configured; session-level cancel skipped",
+				map[string]any{"session_count": len(sessions)})
+		}
+		return
+	}
+	seen := make(map[string]bool, len(sessions))
+	for _, sessionID := range sessions {
+		if sessionID == "" || seen[sessionID] {
+			continue
+		}
+		seen[sessionID] = true
+		if _, err := pe.canceller.RequestCancelForSession(ctx, sessionID, userID, channel); err != nil {
+			logger.WarnCF("plan_engine", "stop fan-out: session cancel failed",
+				map[string]any{"session_id": sessionID, "error": err.Error()})
+		}
+	}
+}
+
+// cancelMemberLocked marks task taskID `failed` with the user-cancel marker
+// (US-8; WAVE-MERGE: task.CancelReason) and emits task_status_changed so
+// PlanEngine's own reactive event loop re-evaluates the owning plan (FR-041)
+// on its next pass. Caller must hold planDecisionMu (both StopPlan and
+// StopTask call this while holding it). A store-write failure is returned
+// to the caller (StopTask propagates it; StopPlan logs and continues the
+// fan-out for the plan's other members — a single member's write failure
+// must not abort cancelling the rest).
+func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, error) {
+	failed := task.StatusFailed
+	result := fmt.Sprintf("%s Cancelled by %s via Stop.", memberCancelReasonMarker, userID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	updated, err := pe.taskStore.Update(taskID, task.Patch{
+		Status:      &failed,
+		Result:      &result,
+		CompletedAt: &now,
+	})
+	if err != nil {
+		logger.WarnCF("plan_engine", "stop: could not mark member task cancelled",
+			map[string]any{"task_id": taskID, "error": err.Error()})
+		return nil, fmt.Errorf("plan_engine: cancel task %q: %w", taskID, err)
+	}
+	if pe.agentLoop != nil {
+		sessionID := updated.SessionID
+		if sessionID == "" {
+			sessionID = "task:" + updated.ID
+		}
+		pe.agentLoop.EmitTaskStatusChanged(TaskStatusChangedPayload{
+			TaskID:    updated.ID,
+			Status:    string(updated.Status),
+			SessionID: sessionID,
+			AgentID:   updated.AgentID,
+		})
+	}
+	return updated, nil
+}
+
+// planStuckAfterMemberCancel implements FR-041 (US-7 acceptance 3, DS-4,
+// R2-04): "no further progress possible" — at least one member was
+// user-cancelled AND every remaining non-`done` member is either terminal
+// (done is excluded by the caller check, so this means `failed`, any
+// reason — cancelled or a genuine judge/attempt-exhaustion failure) or
+// `blocked` with its ENTIRE blocked_by chain (directly or transitively,
+// within this plan's own member set) bottoming out exclusively in terminal
+// members. Grounded: task.Store.AdvanceBlockedDependents only ever promotes
+// a blocked dependent on a DONE dependency (blocked_by.go) — never on a
+// cancelled/failed one — so without this check the plan would silently rot
+// until FR-064's idle-expiry brake (days later, and idle_expired is NOT
+// restartable, breaking the "re-run via plan restart" promise this rule
+// exists to preserve).
+func planStuckAfterMemberCancel(tasks []task.Task) bool {
+	anyCancelled := false
+	for i := range tasks {
+		if isCancelledMember(&tasks[i]) {
+			anyCancelled = true
+			break
+		}
+	}
+	if !anyCancelled {
+		return false
+	}
+
+	byID := make(map[string]*task.Task, len(tasks))
+	for i := range tasks {
+		byID[tasks[i].ID] = &tasks[i]
+	}
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Status == task.StatusDone {
+			continue
+		}
+		if !memberIsDeadEnd(t, byID, make(map[string]bool)) {
+			return false // at least one non-done member can still make progress
+		}
+	}
+	return true
+}
+
+// memberIsDeadEnd reports whether t can never reach `done` without an
+// operator restart: t itself is terminal (`failed`, any reason), or t is
+// `blocked` and EVERY one of its blocked_by dependencies (within this
+// plan's member set, byID) is itself a dead end. visiting guards a chain
+// re-visit within one top-level DFS (defensive, not load-bearing: the
+// store's own write-time DAG validator, pkg/task/blocked_by.go, already
+// rejects cycles — this scans a possibly-stale in-memory snapshot, not the
+// live store, so the guard costs nothing and removes any doubt).
+func memberIsDeadEnd(t *task.Task, byID map[string]*task.Task, visiting map[string]bool) bool {
+	if visiting[t.ID] {
+		return true
+	}
+	visiting[t.ID] = true
+	if task.IsTerminal(t.Status) {
+		return true // done was already excluded by the caller; this means failed
+	}
+	if t.Status != task.StatusBlocked || len(t.BlockedBy) == 0 {
+		return false // next/in_progress/inbox, or blocked with no listed blocker: a live path forward exists
+	}
+	for _, depID := range t.BlockedBy {
+		dep, ok := byID[depID]
+		if !ok {
+			// The blocker is outside this plan's member set (or was deleted) —
+			// cannot be confirmed a dead end; fail safe (that dependency may
+			// still resolve independently, so progress may still be possible).
+			return false
+		}
+		if dep.Status == task.StatusDone {
+			continue // this blocker is satisfied — not a reason t is stuck
+		}
+		if !memberIsDeadEnd(dep, byID, visiting) {
+			return false
+		}
+	}
+	return true
+}
+
+// buildMemberCancelHandover renders the graceful wind-down summary written
+// when FR-041 fires — mirrors buildPlanRoundsExhaustedHandover's shape at
+// the sibling idle/judge-exhaustion terminal brakes.
+func buildMemberCancelHandover(p *plan.Plan, tasks []task.Task) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Plan %q cannot make further progress: one or more member tasks were "+
+		"cancelled by a user Stop, and every remaining member is either finished or blocked "+
+		"exclusively behind a cancelled member.\n\nMember outcomes:\n", p.Title)
+	for i := range tasks {
+		t := &tasks[i]
+		fmt.Fprintf(&sb, "- %s (%s)", t.Title, t.Status)
+		if isCancelledMember(t) {
+			sb.WriteString(" [cancelled]")
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\nRestart the plan (Play) to re-run the non-done members.")
+	return sb.String()
 }
 
 // --- Idle-expiry sweep (FR-064) -------------------------------------------
