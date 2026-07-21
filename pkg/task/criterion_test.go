@@ -5,6 +5,7 @@
 package task
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -194,4 +195,195 @@ func TestCriterion_AuthorRecorded(t *testing.T) {
 
 	// Differentiation: the two tasks' recorded authors must differ.
 	assert.NotEqual(t, got1.Criteria[0].Author, got2.Criteria[0].Author)
+}
+
+// TestCriterion_BehaviorPayload_Validate is the ADR-052 FR-034 companion to
+// TestCriterion_Validate: valid rows plus each documented invalid case
+// (missing tool, negative min, max<min, bad scope, mixed shape) for the new
+// `behavior` criterion kind, exercised through the store's normal Create path
+// exactly like the check/prose dataset above.
+func TestCriterion_BehaviorPayload_Validate(t *testing.T) {
+	author := CriterionAuthor{Kind: AuthorKindAgent, ID: "jim"}
+	cases := []struct {
+		name    string
+		crit    AcceptanceCriterion
+		wantErr bool
+		// wantMinCount/wantScope check the post-validate defaulted values,
+		// only when wantErr is false.
+		wantMinCount int
+		wantScope    BehaviorScope
+	}{
+		{
+			name: "valid: min_count/scope omitted defaults to 1/task_session",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "called bash at least once",
+				Behavior: &CriterionBehavior{Tool: "bash"},
+				Author:   author,
+			},
+			wantErr:      false,
+			wantMinCount: 1,
+			wantScope:    BehaviorScopeTaskSession,
+		},
+		{
+			name: "valid: explicit min/max/scope",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "called bash 2-5 times this attempt",
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: 2, MaxCount: ptr(5), Scope: BehaviorScopeAttempt},
+				Author:   author,
+			},
+			wantErr:      false,
+			wantMinCount: 2,
+			wantScope:    BehaviorScopeAttempt,
+		},
+		{
+			name: "valid: min_count=0 + max_count=0 expresses never call X",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "never called rm",
+				Behavior: &CriterionBehavior{Tool: "rm", MinCount: 0, MaxCount: ptr(0)},
+				Author:   author,
+			},
+			wantErr:      false,
+			wantMinCount: 0,
+			wantScope:    BehaviorScopeTaskSession,
+		},
+		{
+			name: "valid: min_count=0 alone (no max) still defaults to 1",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "min_count omitted",
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: 0},
+				Author:   author,
+			},
+			wantErr:      false,
+			wantMinCount: 1,
+			wantScope:    BehaviorScopeTaskSession,
+		},
+		{
+			name: "invalid: missing tool",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "x",
+				Behavior: &CriterionBehavior{Tool: ""},
+				Author:   author,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid: negative min_count",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "x",
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: -1},
+				Author:   author,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid: max_count < min_count",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "x",
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: 3, MaxCount: ptr(2)},
+				Author:   author,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid: unknown scope value",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "x",
+				Behavior: &CriterionBehavior{Tool: "bash", Scope: "whenever"},
+				Author:   author,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid: behavior kind with no payload",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "x",
+				Author: author,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid: behavior kind mixed with a check object",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "x",
+				Behavior: &CriterionBehavior{Tool: "bash"},
+				Check:    &CriterionCheck{Command: "x", ExpectedExitCode: 0},
+				Author:   author,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid: check kind mixed with a behavior payload",
+			crit: AcceptanceCriterion{
+				Kind: KindCheck, Text: "x",
+				Check:    &CriterionCheck{Command: "x", ExpectedExitCode: 0},
+				Behavior: &CriterionBehavior{Tool: "bash"},
+				Author:   author,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid: prose kind mixed with a behavior payload",
+			crit: AcceptanceCriterion{
+				Kind: KindProse, Text: "x",
+				Behavior: &CriterionBehavior{Tool: "bash"},
+				Author:   author,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			tk := mkTask("crit-behavior-task", "ws-1")
+			tk.Criteria = []AcceptanceCriterion{tc.crit}
+			err := s.Create(tk)
+			if tc.wantErr {
+				require.Error(t, err, "case %q must be rejected", tc.name)
+				assert.True(t, errors.Is(err, ErrValidation),
+					"case %q must wrap ErrValidation, got: %v", tc.name, err)
+				return
+			}
+			require.NoError(t, err, "case %q must be accepted", tc.name)
+			require.Len(t, tk.Criteria, 1)
+			require.NotNil(t, tk.Criteria[0].Behavior)
+			assert.Equal(t, tc.wantMinCount, tk.Criteria[0].Behavior.MinCount, "min_count default/value")
+			assert.Equal(t, tc.wantScope, tk.Criteria[0].Behavior.Scope, "scope default/value")
+		})
+	}
+}
+
+// TestCriterionBehavior_UnmarshalJSON_RejectsUnknownFields locks in FR-034's
+// "unknown fields reject" payload rule. A plain Go struct literal can't
+// express an "unknown field" (there's no such field to set), so this is
+// exercised at the JSON boundary directly, which is where an unrecognized key
+// would actually arrive from (a REST/tool-layer request body).
+func TestCriterionBehavior_UnmarshalJSON_RejectsUnknownFields(t *testing.T) {
+	valid := `{"tool":"bash","min_count":1,"max_count":5,"scope":"attempt"}`
+	var b CriterionBehavior
+	require.NoError(t, json.Unmarshal([]byte(valid), &b), "known fields must decode cleanly")
+	assert.Equal(t, "bash", b.Tool)
+
+	withUnknown := `{"tool":"bash","min_count":1,"bogus_field":"nope"}`
+	var b2 CriterionBehavior
+	err := json.Unmarshal([]byte(withUnknown), &b2)
+	require.Error(t, err, "an unrecognized payload key must be rejected")
+	assert.Contains(t, err.Error(), "bogus_field")
+}
+
+// TestCriterionBehavior_UnmarshalJSON_RejectsUnknownFields_ViaCriterion
+// confirms the same rejection fires when the behavior payload arrives nested
+// inside a full AcceptanceCriterion (the realistic shape), not just when
+// CriterionBehavior is unmarshaled standalone.
+func TestCriterionBehavior_UnmarshalJSON_RejectsUnknownFields_ViaCriterion(t *testing.T) {
+	raw := `{
+		"kind": "behavior",
+		"text": "x",
+		"behavior": {"tool": "bash", "min_count": 1, "extra_key": true},
+		"author": {"kind": "agent", "id": "jim"}
+	}`
+	var c AcceptanceCriterion
+	err := json.Unmarshal([]byte(raw), &c)
+	require.Error(t, err, "unknown key nested under behavior must be rejected")
+	assert.Contains(t, err.Error(), "extra_key")
 }

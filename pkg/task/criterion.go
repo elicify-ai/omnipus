@@ -8,20 +8,89 @@
 // import them cleanly.
 package task
 
-import "github.com/google/uuid"
+import (
+	"bytes"
+	"encoding/json"
 
-// CriterionKind discriminates a machine-checkable command from a free-text
-// prose statement judged by the Judge System Agent.
-type CriterionKind string
-
-// The two criterion kinds (ADR D2).
-const (
-	KindCheck CriterionKind = "check"
-	KindProse CriterionKind = "prose"
+	"github.com/google/uuid"
 )
 
-// IsValidCriterionKind reports whether k is a known criterion kind.
-func IsValidCriterionKind(k CriterionKind) bool { return k == KindCheck || k == KindProse }
+// CriterionKind discriminates a machine-checkable command, a free-text prose
+// statement judged by the Judge System Agent, or a deterministic behavior
+// check against the session tool-call log.
+type CriterionKind string
+
+// The three criterion kinds (ADR D2; behavior added by ADR-052 FR-034).
+const (
+	KindCheck    CriterionKind = "check"
+	KindProse    CriterionKind = "prose"
+	KindBehavior CriterionKind = "behavior"
+)
+
+// IsValidCriterionKind reports whether k is a known criterion kind. Any other
+// value fails closed — validateCriterion is reached only after this gate, so
+// there is no unrecognized-kind fallthrough left to guard in its switch.
+func IsValidCriterionKind(k CriterionKind) bool {
+	return k == KindCheck || k == KindProse || k == KindBehavior
+}
+
+// BehaviorScope enumerates CriterionBehavior.Scope (ADR-052 FR-034): whether
+// the deterministic tool-call count is read from just the current dispatch
+// attempt's log, or the whole task session (every attempt).
+type BehaviorScope string
+
+// The two valid BehaviorScope values. BehaviorScopeTaskSession is the default
+// when a payload omits scope.
+const (
+	BehaviorScopeAttempt     BehaviorScope = "attempt"
+	BehaviorScopeTaskSession BehaviorScope = "task_session"
+)
+
+// IsValidBehaviorScope reports whether s is a known behavior scope.
+func IsValidBehaviorScope(s BehaviorScope) bool {
+	return s == BehaviorScopeAttempt || s == BehaviorScopeTaskSession
+}
+
+// CriterionBehavior is the payload of a `kind: behavior` criterion (ADR-052
+// FR-034): the criterion is met when the count of SUCCESSFUL calls to Tool
+// within Scope falls in [MinCount, MaxCount] (MaxCount nil = unbounded above).
+// MinCount=0 with MaxCount pointing at 0 expresses "never call Tool".
+//
+// This type is the payload SHAPE plus its own strict validation only — the
+// deterministic scanner that reads the session tool-call log and evaluates a
+// criterion against this payload lives in the runtime engine, not here.
+type CriterionBehavior struct {
+	// Tool is the tool name whose successful-call count is scanned. Required.
+	Tool string `json:"tool"`
+	// MinCount is the minimum number of successful Tool calls required within
+	// Scope. Must be >= 0. A zero value defaults to 1 UNLESS paired with
+	// MaxCount pointing at 0 (the explicit "never call Tool" combo) — plain
+	// int can't otherwise distinguish an omitted value from an explicit 0, so
+	// that pairing is the disambiguator (FR-034).
+	MinCount int `json:"min_count"`
+	// MaxCount is the maximum number of successful Tool calls allowed within
+	// Scope. nil = unbounded. When set, MUST be >= the (possibly defaulted)
+	// MinCount.
+	MaxCount *int `json:"max_count,omitempty"`
+	// Scope is "attempt" or "task_session" (default when empty).
+	Scope BehaviorScope `json:"scope,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler for CriterionBehavior. It rejects
+// unknown fields (ADR-052 FR-034: "unknown fields reject") — a payload typo
+// or an unsupported future key fails closed at decode time rather than being
+// silently dropped.
+func (b *CriterionBehavior) UnmarshalJSON(data []byte) error {
+	type alias CriterionBehavior // breaks the recursive UnmarshalJSON call
+	var a alias
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&a); err != nil {
+		return err
+	}
+	*b = CriterionBehavior(a)
+	return nil
+}
 
 // CriterionStatus is the per-run judgement status of a criterion.
 type CriterionStatus string
@@ -86,9 +155,12 @@ type AcceptanceCriterion struct {
 	// Text is the criterion statement (prose) or a human-readable description
 	// of what the check verifies (check). 1..1000 runes.
 	Text string `json:"text"`
-	// Check is required iff Kind == KindCheck; must be nil iff Kind ==
-	// KindProse (no mixed shape, SD-A9).
+	// Check is required iff Kind == KindCheck; must be nil for every other
+	// kind (no mixed shape, SD-A9).
 	Check *CriterionCheck `json:"check,omitempty"`
+	// Behavior is required iff Kind == KindBehavior; must be nil for every
+	// other kind (no mixed shape, mirrors Check; ADR-052 FR-034).
+	Behavior *CriterionBehavior `json:"behavior,omitempty"`
 	// Author records who authored this criterion (mandatory, ADR D2 rule 3).
 	Author CriterionAuthor `json:"author"`
 	// Status is the per-run judgement status; defaults to CritPending.
@@ -133,7 +205,7 @@ func NormalizeCriteria(criteria []AcceptanceCriterion) ([]AcceptanceCriterion, e
 // returned error.
 func validateCriterion(c *AcceptanceCriterion, idx int) error {
 	if !IsValidCriterionKind(c.Kind) {
-		return verr("criteria[%d]: invalid kind %q (must be \"check\" or \"prose\")", idx, c.Kind)
+		return verr("criteria[%d]: invalid kind %q (must be \"check\", \"prose\", or \"behavior\")", idx, c.Kind)
 	}
 	n := len([]rune(c.Text))
 	if n < 1 {
@@ -150,9 +222,22 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 		if c.Check.ExpectedExitCode < 0 || c.Check.ExpectedExitCode > 255 {
 			return verr("criteria[%d]: expected_exit_code must be between 0 and 255", idx)
 		}
+		if c.Behavior != nil {
+			return verr("criteria[%d]: check criterion must not carry a behavior payload", idx)
+		}
 	case KindProse:
 		if c.Check != nil {
 			return verr("criteria[%d]: prose criterion must not carry a check object", idx)
+		}
+		if c.Behavior != nil {
+			return verr("criteria[%d]: prose criterion must not carry a behavior payload", idx)
+		}
+	case KindBehavior:
+		if c.Check != nil {
+			return verr("criteria[%d]: behavior criterion must not carry a check object", idx)
+		}
+		if err := validateCriterionBehavior(c.Behavior, idx); err != nil {
+			return err
 		}
 	}
 	if c.Author.Kind != AuthorKindAgent && c.Author.Kind != AuthorKindUser {
@@ -163,6 +248,40 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 	}
 	if !IsValidCriterionStatus(c.Status) {
 		return verr("criteria[%d]: invalid status %q", idx, c.Status)
+	}
+	return nil
+}
+
+// validateCriterionBehavior validates (and, for MinCount/Scope, defaults) a
+// KindBehavior criterion's payload (ADR-052 FR-034, spec Part A §C). It
+// mutates b in place to apply the documented defaults, mirroring how
+// normalizeCriteria defaults an unset Status before validating. idx is used
+// only to name the field in the returned error.
+func validateCriterionBehavior(b *CriterionBehavior, idx int) error {
+	if b == nil {
+		return verr("criteria[%d]: behavior criterion requires a behavior payload", idx)
+	}
+	if b.Tool == "" {
+		return verr("criteria[%d]: behavior.tool is required", idx)
+	}
+	if b.MinCount < 0 {
+		return verr("criteria[%d]: behavior.min_count must not be negative", idx)
+	}
+	// "never call Tool" is the one case where an explicit min_count=0 must
+	// survive as 0 rather than being treated as an omitted (zero-value) field
+	// and defaulted to 1 — disambiguated by its required max_count=0 pairing.
+	neverCall := b.MaxCount != nil && *b.MaxCount == 0
+	if b.MinCount == 0 && !neverCall {
+		b.MinCount = 1
+	}
+	if b.MaxCount != nil && *b.MaxCount < b.MinCount {
+		return verr("criteria[%d]: behavior.max_count must be >= min_count", idx)
+	}
+	if b.Scope == "" {
+		b.Scope = BehaviorScopeTaskSession
+	}
+	if !IsValidBehaviorScope(b.Scope) {
+		return verr("criteria[%d]: invalid behavior.scope %q (must be \"attempt\" or \"task_session\")", idx, b.Scope)
 	}
 	return nil
 }
