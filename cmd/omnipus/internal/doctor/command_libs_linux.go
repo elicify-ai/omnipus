@@ -147,9 +147,12 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		phdrSz = phdrSize64
 		dynEntry = dynEntrySize64
 	} else {
-		ehdrSz = ehdrSize32
-		phdrSz = phdrSize32
-		dynEntry = dynEntrySize32
+		// 32-bit ELF (EI_CLASS=1) — this parser is 64-bit-only (CfT
+		// ships 64-bit Chrome on every supported arch). Surface the
+		// synthetic not-an-elf-binary entry so the operator sees the
+		// diagnostic, matching the contract for any other non-ELF
+		// file at this offset (see the magic check above).
+		return []string{"not-an-elf-binary"}, nil
 	}
 	var dataByte [1]byte
 	if _, err := f.Seek(5, io.SeekStart); err != nil {
