@@ -32,6 +32,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
@@ -140,6 +141,17 @@ type AgentLoop struct {
 	// (SetPlanEngine); nil in tests / before wiring. Wave 2-C2's /goal and
 	// /loop command admission reaches it via GetPlanEngine(al).Admit(kind).
 	planEngine *PlanEngine
+	// planStore is the shared *plan.Store (ADR-052) the create_plan/
+	// execute_plan agent tools read/write. It is constructed by the gateway
+	// AFTER NewAgentLoop returns (setupAndStartServices, alongside
+	// agent.NewPlanEngine — see gateway.go's boot wiring region), so it is
+	// nil on the FIRST registerSharedTools pass (inside NewAgentLoop) and
+	// installed later via SetPlanStore, which re-wires the plan-tool surface
+	// for every currently-registered agent with the real store. Mirrors
+	// planEngine's own late-binding discipline exactly. nil in tests /
+	// before boot wiring completes — create_plan/execute_plan then register
+	// but fail closed at Execute() (Wave-1 discipline, pkg/tools/plan.go).
+	planStore *plan.Store
 	// loopSched is the dedicated /loop time-driven scheduler (ADR-049 D6/D7,
 	// loop_scheduler.go). Set once at boot by the gateway
 	// (SetLoopScheduler); nil in tests / before wiring — applyLoopCommandPrompt
@@ -1759,6 +1771,22 @@ func registerSharedTools(
 				return infos
 			}))
 		}
+
+		// ADR-052 plan/task tool surface (create_plan, execute_plan,
+		// run_task, inspect_session) — the single wiring site Wave 1 left
+		// unwired for Wave 2 (see pkg/tools/plan.go / run_task.go /
+		// inspect_session.go's "another wave's job" doc comments). Not
+		// nested inside the `al.taskStore != nil` guard above —
+		// wirePlanToolsForAgent does its own nil-checks per dependency
+		// (taskStore, taskExecutor, planStore, session store) and logs
+		// loudly (Error) on any gap rather than silently skipping the whole
+		// surface. al.planStore may still be nil here on the very FIRST
+		// pass — this call runs inside NewAgentLoop, before the gateway
+		// constructs the real plan.Store in setupAndStartServices — so
+		// create_plan/execute_plan register with a nil store and fail
+		// closed at Execute() (Wave-1 discipline) until SetPlanStore
+		// re-wires every agent with the real store once it exists.
+		al.wirePlanToolsForAgent(agent, al.planStore)
 
 		// Browser automation tools (US-4/US-6/US-7).
 		// Tools are always registered; whether an agent can actually invoke them
@@ -4154,6 +4182,207 @@ func GetPlanEngine(al *AgentLoop) *PlanEngine {
 	al.mu.RLock()
 	defer al.mu.RUnlock()
 	return al.planEngine
+}
+
+// SetPlanStore installs the shared *plan.Store (ADR-052) so the
+// create_plan/execute_plan agent tools can read/write it, and re-wires the
+// full plan/task tool surface (create_plan, execute_plan, run_task,
+// inspect_session) for every CURRENTLY-registered agent with the real
+// store — mirrors SetPlanEngine's late-binding discipline exactly. Called
+// once at boot by the gateway (setupAndStartServices), right where
+// plan.New(...) constructs the store — see gateway.go's boot wiring
+// region. Idempotent; safe to call again on hot-reload (registerSharedTools
+// already re-runs wirePlanToolsForAgent on every reload, so this mainly
+// matters for the initial boot gap between NewAgentLoop and
+// setupAndStartServices).
+func (al *AgentLoop) SetPlanStore(store *plan.Store) {
+	al.mu.Lock()
+	al.planStore = store
+	al.mu.Unlock()
+
+	if store == nil {
+		logger.ErrorCF("agent", "SetPlanStore: installed a nil plan store — "+
+			"create_plan/execute_plan will remain fail-closed", nil)
+		return
+	}
+
+	reg := al.GetRegistry()
+	if reg == nil {
+		logger.ErrorCF("agent", "SetPlanStore: no agent registry available — "+
+			"plan tool surface not re-wired", nil)
+		return
+	}
+	for _, agentID := range reg.ListAgentIDs() {
+		inst, ok := reg.GetAgent(agentID)
+		if !ok || inst == nil {
+			continue
+		}
+		al.wirePlanToolsForAgent(inst, store)
+	}
+}
+
+// GetPlanStore returns the installed plan.Store (may be nil in tests or
+// before boot wiring completes). Mirrors GetTaskStore/GetPlanEngine's
+// free-function-with-al-parameter convention is intentionally NOT followed
+// here since every other Set/Get pair on AgentLoop that is read from
+// pkg/tools construction sites (SetMediaStore/GetMediaStore) uses the
+// method form; kept consistent with that sibling pair.
+func (al *AgentLoop) GetPlanStore() *plan.Store {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+	return al.planStore
+}
+
+// validatePlanOwnerAgentForTool mirrors pkg/gateway/rest_plans.go's
+// validatePlanOwnerAgent EXACTLY (same rule, same error text shape) for
+// create_plan's SetOwnerValidator seam. pkg/agent cannot import pkg/gateway
+// (gateway already imports agent — that would be a cycle), so this is a
+// same-behavior local copy consumed only here. Rejects an owner_agent_id
+// that is not a registered agent, or that IS registered but is a System
+// Agent or worker — OwnerAgentID's contract ("the agent woken at plan
+// decision points", ADR-049 D4) requires a real, addressable agent.
+func validatePlanOwnerAgentForTool(cfg *config.Config, ownerAgentID string) error {
+	if cfg == nil {
+		return fmt.Errorf("owner_agent_id %q is not a registered agent", ownerAgentID)
+	}
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID != ownerAgentID {
+			continue
+		}
+		if !cfg.Agents.List[i].IsChatTarget() {
+			return fmt.Errorf(
+				"owner_agent_id %q is a System Agent or worker and cannot own a plan", ownerAgentID)
+		}
+		return nil
+	}
+	return fmt.Errorf("owner_agent_id %q is not a registered agent", ownerAgentID)
+}
+
+// isRegisteredAgentID reports whether id resolves to a known agent in the
+// live registry — mirrors pkg/gateway/rest_plans.go's restAPI.isAgentID
+// exactly, and drives execute_plan's SD-A7 tiered-DoD gate via
+// SetIsAgentIDChecker (a plan whose CreatedBy resolves to an agent — strict
+// tier — must carry >=1 DoD criterion).
+func (al *AgentLoop) isRegisteredAgentID(id string) bool {
+	if id == "" {
+		return false
+	}
+	reg := al.GetRegistry()
+	if reg == nil {
+		return false
+	}
+	_, ok := reg.GetAgent(id)
+	return ok
+}
+
+// wirePlanToolsForAgent constructs and registers the ADR-052 create_plan /
+// execute_plan / run_task / inspect_session tool surface for a single
+// agent instance — the single clear wiring site Wave 1 left unwired for
+// Wave 2 (pkg/tools/plan.go / run_task.go / inspect_session.go's "another
+// wave's job" doc comments name pkg/agent/loop.go explicitly). Called from
+// registerSharedTools's per-agent loop (planStore may be nil there on the
+// very first pass) and again from SetPlanStore for every already-registered
+// agent once the gateway installs the real store.
+//
+// Every dependency gap is logged LOUDLY (Error, never silently) at wiring
+// time so an unwired seam is visible in the boot log — on top of, not
+// instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
+// store / nil checker / nil dispatcher => explicit error result, never an
+// implicit allow or a silently-dead no-op tool).
+func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan.Store) {
+	if agent == nil || agent.Tools == nil {
+		return
+	}
+
+	if planStore == nil {
+		logger.WarnCF("agent", "wirePlanToolsForAgent: plan store not yet installed — "+
+			"create_plan/execute_plan register but will fail closed until SetPlanStore runs",
+			map[string]any{"agent_id": agent.ID})
+	}
+
+	// create_plan (FR-001, US-1): owner_agent_id validated against the live
+	// config/registry (SetOwnerValidator — see the field doc on
+	// tools.PlanCreateTool for the fail-closed-when-unwired discipline this
+	// honors).
+	planCreate := tools.NewPlanCreateTool(planStore)
+	planCreate.SetHome(al.homePath)
+	planCreate.SetOwnerValidator(func(ownerAgentID string) error {
+		return validatePlanOwnerAgentForTool(al.GetConfig(), ownerAgentID)
+	})
+	agent.Tools.Register(planCreate)
+
+	// execute_plan (FR-003/004/030, US-3): SD-A7 tiered-DoD gate's isAgentID
+	// checker (SetIsAgentIDChecker) mirrors gateway's restAPI.isAgentID.
+	if al.taskStore == nil {
+		logger.ErrorCF("agent", "wirePlanToolsForAgent: task store unavailable — "+
+			"execute_plan registered but will fail closed (no task store to list members)",
+			map[string]any{"agent_id": agent.ID})
+	}
+	planExecute := tools.NewPlanExecuteTool(planStore, al.taskStore)
+	planExecute.SetIsAgentIDChecker(al.isRegisteredAgentID)
+	agent.Tools.Register(planExecute)
+
+	// run_task (FR-019, US-10): dispatches via the real
+	// TaskExecutor.StartTaskNow — the standalone-task full attempt loop.
+	taskRun := tools.NewTaskRunTool(al.taskStore)
+	if al.taskExecutor != nil {
+		taskRun.SetStartTaskNow(al.taskExecutor.StartTaskNow)
+	} else {
+		logger.ErrorCF("agent", "wirePlanToolsForAgent: task executor unavailable — "+
+			"run_task registered but will fail closed (no dispatcher installed)",
+			map[string]any{"agent_id": agent.ID})
+	}
+	agent.Tools.Register(taskRun)
+
+	// inspect_session (FR-033, US-13 Acceptance 3): verifier-role-only by
+	// seeded tool policy (enforced outside this function); target-session
+	// locked via the engine-set WithVerifierSessionScope ctx value
+	// (verifier_adjudication.go), not by anything wired here.
+	//
+	// Deliberately NOT wired to al.GetSessionStore() alone: that is only
+	// the SHARED store at $OMNIPUS_HOME/sessions/ (new webchat/channel
+	// sessions), but a task's own session — the exact thing task-scope
+	// verification targets — is created via createTaskSessionSync
+	// (task_executor.go), which writes through al.GetAgentStore(t.AgentID):
+	// the ASSIGNEE agent's own per-agent legacy store, a DIFFERENT
+	// directory. A single fixed store can never cover both. agentLoopInspectSessionStore
+	// (below) instead adapts al.ResolveSessionStore — the SAME
+	// shared-store-first-then-per-agent-scan resolver cancel.go's
+	// RequestCancel already uses to find an arbitrary session id's owning
+	// store — so inspect_session finds a target session regardless of
+	// which store actually holds it. Always non-nil (a value type over a
+	// non-nil al): Execute()'s own not-found error (via GetMeta/
+	// ReadTranscript, once VerifierSessionScopeAllows has already passed)
+	// is the fail-closed signal, not a nil-store check.
+	agent.Tools.Register(tools.NewInspectSessionTool(agentLoopInspectSessionStore{al: al}))
+}
+
+// agentLoopInspectSessionStore adapts AgentLoop.ResolveSessionStore to the
+// tools.InspectSessionStore interface (GetMeta/ReadTranscript keyed purely
+// on session ID — see that interface's own doc comment: "the store resolves
+// the owning agent internally"). ResolveSessionStore already implements
+// exactly that resolution (shared store fast path, DefaultAgentID legacy
+// fast path, then a scan across every per-agent store, cancel.go) — reused
+// here rather than re-implemented, so inspect_session and RequestCancel
+// agree on where any given session id actually lives.
+type agentLoopInspectSessionStore struct {
+	al *AgentLoop
+}
+
+func (s agentLoopInspectSessionStore) GetMeta(sessionID string) (*session.UnifiedMeta, error) {
+	store := s.al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return nil, fmt.Errorf("session %q not found in any known session store", sessionID)
+	}
+	return store.GetMeta(sessionID)
+}
+
+func (s agentLoopInspectSessionStore) ReadTranscript(sessionID string) ([]session.TranscriptEntry, error) {
+	store := s.al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return nil, fmt.Errorf("session %q not found in any known session store", sessionID)
+	}
+	return store.ReadTranscript(sessionID)
 }
 
 // taskTriggerScheduler returns the installed scheduler under the loop lock.

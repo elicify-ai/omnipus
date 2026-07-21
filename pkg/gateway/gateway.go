@@ -2181,6 +2181,25 @@ func setupAndStartServices(
 		}
 		agentLoop.EmitPlanStatusChanged(payload)
 	}
+
+	// ADR-052 Wave 2 (caller-int): install the real plan store into the
+	// create_plan/execute_plan agent-tool surface. SetPlanStore re-wires
+	// wirePlanToolsForAgent (pkg/agent/loop.go) for every currently
+	// registered agent — closing the DI seam Wave 1 left as
+	// NewPlanCreateTool(nil)/NewPlanExecuteTool(nil, nil) inside
+	// registerSharedTools's first pass (which runs inside NewAgentLoop,
+	// BEFORE this planStore exists). Every dependency gap inside that
+	// re-wiring is logged at Error level (loud failure, never a silently
+	// dead tool) — see wirePlanToolsForAgent's doc comment. Verified
+	// non-nil here too: planStore is a concrete value from plan.New just
+	// above, so this guards against a future refactor silently routing a
+	// nil store through, not today's happy path.
+	agentLoop.SetPlanStore(planStore)
+	if agentLoop.GetPlanStore() == nil {
+		return nil, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store")
+	}
+	fmt.Println("✓ Plan tool surface wired (create_plan/execute_plan/run_task/inspect_session)")
+
 	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
 	// convention immediately below/above for a missing task store/executor
 	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
