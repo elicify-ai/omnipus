@@ -15,6 +15,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -106,6 +107,37 @@ func allCheckCriteriaWorkspace(criteria []task.AcceptanceCriterion) bool {
 	return true
 }
 
+// validateTaskPlanLinkageWorkspace enforces the same-workspace FK a
+// Task.plan_id reference must satisfy AND rejects linking to a terminal
+// (done/failed) plan (ADR-052 spec "Edge Cases": "create_task(plan_id)
+// referencing a plan already done -> reject"). Mirrors
+// pkg/tools/plan.go's validateTaskPlanLinkage exactly (duplicated rather
+// than exported+imported: that helper is unexported package-internal to
+// pkg/tools, and this package must not reach into pkg/tools' internals —
+// same rationale as parseCriteriaArgsFromWorkspaceTool above). planID == ""
+// (no linkage requested) is always valid (nil). A nil planStore fails
+// CLOSED — an unwired store is a configuration error, never a permission
+// grant.
+func validateTaskPlanLinkageWorkspace(planStore *plan.Store, planID, workspaceID string) error {
+	if planID == "" {
+		return nil
+	}
+	if planStore == nil {
+		return fmt.Errorf("cannot verify plan_id %q: plan store is not configured", planID)
+	}
+	if err := planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
+		return err
+	}
+	p, err := planStore.Get(planID)
+	if err != nil {
+		return fmt.Errorf("could not load plan %q: %w", planID, err)
+	}
+	if plan.IsTerminal(p.State) {
+		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
+	}
+	return nil
+}
+
 // delegationDenied evaluates the FR-6.2 delegation gate for an update/delete
 // mutation that targets a task assigned to (or being reassigned to) targetAgentID.
 // It returns the structured denial to DENY, or nil to ALLOW. When the hook is
@@ -127,7 +159,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done)."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -141,6 +173,10 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			"agent_id":     map[string]any{"type": "string"},
 			"status":       map[string]any{"type": "string"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
+			"plan_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
+			},
 			"blocked_by": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
@@ -293,6 +329,17 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if v, ok := args["due"].(string); ok && v != "" {
 		tk.Due = v
 	}
+
+	// Optional plan_id (ADR-052 FR-002): same-workspace FK + not-terminal
+	// (validateTaskPlanLinkageWorkspace above). A call with no plan_id is
+	// entirely unaffected — the check is a no-op for planID == "".
+	if v, ok := args["plan_id"].(string); ok && v != "" {
+		if pErr := validateTaskPlanLinkageWorkspace(t.deps.PlanStore, v, tk.WorkspaceID); pErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", pErr.Error(), "plan_id"))
+		}
+		tk.PlanID = v
+	}
+
 	if rawDeps, ok := args["blocked_by"].([]any); ok && len(rawDeps) > 0 {
 		deps := make([]string, 0, len(rawDeps))
 		for _, d := range rawDeps {
