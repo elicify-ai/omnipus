@@ -364,7 +364,6 @@ type shaVerifyCacheEntry struct {
 	manifestMtime int64
 	manifestInode uint64
 	manifestSize  int64
-	ok            bool
 	err           error
 	cachedAt      time.Time
 }
@@ -457,18 +456,19 @@ func shaVerifyCacheLookup(binaryPath, shaPath string) (shaVerifyCacheEntry, bool
 	if !hit {
 		return shaVerifyCacheEntry{}, false, false
 	}
-	if entry.ok {
+	if entry.err == nil {
 		return entry, true, true
 	}
 	return entry, true, time.Since(entry.cachedAt) < shaVerifyNegativeTTL
 }
 
-// shaVerifyCacheHit reports the cached entry, whether its metadata key matched,
-// and whether the result is fresh enough to use. Positive entries remain fresh
-// while the metadata key matches; negative entries become retryable after the
-// bounded TTL.
-func shaVerifyCacheHit(binaryPath, shaPath string) (entry shaVerifyCacheEntry, hit bool, fresh bool) {
-	return shaVerifyCacheLookup(binaryPath, shaPath)
+// shaVerifyCacheHit reports the cached verification result, whether its
+// metadata key matched, and whether the result is fresh enough to use. Positive
+// entries remain fresh while the metadata key matches; negative entries become
+// retryable after the bounded TTL.
+func shaVerifyCacheHit(binaryPath, shaPath string) (ok bool, hit bool, fresh bool) {
+	entry, hit, fresh := shaVerifyCacheLookup(binaryPath, shaPath)
+	return entry.err == nil, hit, fresh
 }
 
 // shaVerifyCacheStore records the verification result using current metadata.
@@ -484,7 +484,6 @@ func shaVerifyCacheStore(binaryPath, shaPath string, verifyErr error) {
 		manifestMtime: key.manifestMtime,
 		manifestInode: key.manifestInode,
 		manifestSize:  key.manifestSize,
-		ok:            verifyErr == nil,
 		err:           verifyErr,
 		cachedAt:      time.Now(),
 	}
@@ -496,7 +495,8 @@ func shaVerifyCacheStore(binaryPath, shaPath string, verifyErr error) {
 // cachedVerifyChromeSHA256 is chromeintegrity.VerifyChromeSHA256 plus the
 // process-wide cache and per-key single-flight coordination.
 func cachedVerifyChromeSHA256(binaryPath, shaPath string) error {
-	if entry, hit, fresh := shaVerifyCacheHit(binaryPath, shaPath); hit && fresh {
+	if _, hit, fresh := shaVerifyCacheHit(binaryPath, shaPath); hit && fresh {
+		entry, _, _ := shaVerifyCacheLookup(binaryPath, shaPath)
 		return entry.err
 	}
 	key, keyOK := shaVerifyCacheKeyFor(binaryPath, shaPath)
@@ -507,7 +507,8 @@ func cachedVerifyChromeSHA256(binaryPath, shaPath string) error {
 	actual, loaded := globalSHAVerifyFlights.LoadOrStore(key, flight)
 	if loaded {
 		<-actual.(*shaVerifyFlight).done
-		if entry, hit, fresh := shaVerifyCacheHit(binaryPath, shaPath); hit && fresh {
+		if _, hit, fresh := shaVerifyCacheHit(binaryPath, shaPath); hit && fresh {
+			entry, _, _ := shaVerifyCacheLookup(binaryPath, shaPath)
 			return entry.err
 		}
 		// Metadata changed during the first flight. Re-evaluate under the
@@ -520,7 +521,8 @@ func cachedVerifyChromeSHA256(binaryPath, shaPath string) error {
 	}()
 	// A concurrent caller may have filled the cache between the initial
 	// lookup and LoadOrStore; use that result instead of hashing twice.
-	if entry, hit, fresh := shaVerifyCacheHit(binaryPath, shaPath); hit && fresh {
+	if _, hit, fresh := shaVerifyCacheHit(binaryPath, shaPath); hit && fresh {
+		entry, _, _ := shaVerifyCacheLookup(binaryPath, shaPath)
 		return entry.err
 	}
 	verifyErr := verifyChromeSHA256Fn(binaryPath, shaPath)

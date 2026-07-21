@@ -269,10 +269,10 @@ func TestShaVerifyCache_HitsOnSecondCall(t *testing.T) {
 	assert.NoError(t, cachedVerifyChromeSHA256(binPath, shaPath))
 
 	// Verify the cache entry is now populated (hit returns true).
-	entry, hit, fresh := shaVerifyCacheHit(binPath, shaPath)
+	ok, hit, fresh := shaVerifyCacheHit(binPath, shaPath)
 	assert.True(t, hit, "cache hit must return true after a successful verification")
 	assert.True(t, fresh, "successful cache entry must be fresh")
-	assert.True(t, entry.ok, "cached result must be ok=true")
+	assert.True(t, ok, "cached result must be ok=true")
 
 	// Second call: must short-circuit on the cache.
 	// We don't have a clean way to assert "no disk read" from outside;
