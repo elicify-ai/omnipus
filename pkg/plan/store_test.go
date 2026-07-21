@@ -424,7 +424,7 @@ func TestPlan_RestartTransition_ViaStoreUpdate(t *testing.T) {
 		}
 	})
 
-	t.Run("restart wins even if the same patch also carries an explicit failed_reason/judge_rounds", func(t *testing.T) {
+	t.Run("restart rejects an explicit failed_reason/judge_rounds in the same patch (fix-wave #4)", func(t *testing.T) {
 		s := newStore(t)
 		p := mkPlan("Explicit Patch Plan", "ws-1", "agent-a")
 		if err := s.Create(p); err != nil {
@@ -433,17 +433,63 @@ func TestPlan_RestartTransition_ViaStoreUpdate(t *testing.T) {
 		driveToFailed(t, s, p.ID, FailedReasonStoppedByUser, 5, "")
 
 		approved := StateApproved
-		conflictingReason := FailedReasonStoppedByUser // still a valid enum value, just should be cleared anyway
+		conflictingReason := FailedReasonStoppedByUser // still a valid enum value on its own
+		if _, err := s.Update(p.ID, Patch{State: &approved, FailedReason: &conflictingReason}); !errors.Is(err, ErrValidation) {
+			t.Fatalf("restart + explicit failed_reason in the same patch must be rejected (ErrValidation), got %v", err)
+		}
+
 		conflictingRounds := 7
-		restarted, err := s.Update(p.ID, Patch{State: &approved, FailedReason: &conflictingReason, JudgeRounds: &conflictingRounds})
+		if _, err := s.Update(p.ID, Patch{State: &approved, JudgeRounds: &conflictingRounds}); !errors.Is(err, ErrValidation) {
+			t.Fatalf("restart + explicit judge_rounds in the same patch must be rejected (ErrValidation), got %v", err)
+		}
+
+		// Neither rejected patch may have mutated the plan.
+		reloaded, err := s.Get(p.ID)
 		if err != nil {
-			t.Fatalf("restart with same-patch explicit fields: %v", err)
+			t.Fatalf("Get after rejected restart patches: %v", err)
+		}
+		if reloaded.State != StateFailed || reloaded.FailedReason != FailedReasonStoppedByUser || reloaded.JudgeRounds != 5 {
+			t.Fatalf("plan mutated by a rejected restart patch: %+v", reloaded)
+		}
+
+		// A plain restart (neither field set) still succeeds and performs the
+		// clean-slate reset.
+		restarted, err := s.Update(p.ID, Patch{State: &approved})
+		if err != nil {
+			t.Fatalf("plain restart: %v", err)
 		}
 		if restarted.FailedReason != "" {
-			t.Fatalf("restart must clear failed_reason even if the same patch set it, got %q", restarted.FailedReason)
+			t.Fatalf("restart must clear failed_reason, got %q", restarted.FailedReason)
 		}
 		if restarted.JudgeRounds != 0 {
-			t.Fatalf("restart must reset judge_rounds to 0 even if the same patch set it, got %d", restarted.JudgeRounds)
+			t.Fatalf("restart must reset judge_rounds to 0, got %d", restarted.JudgeRounds)
+		}
+	})
+
+	t.Run("crafted-patch attack: forged failed_reason cannot restart a genuinely-failed plan (fix-wave #4)", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Attack Target Plan", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		// The plan's REAL on-disk reason is judge_rounds_exhausted — never
+		// restartable.
+		driveToFailed(t, s, p.ID, FailedReasonJudgeRoundsExhausted, 3, "")
+
+		approved := StateApproved
+		forged := FailedReasonStoppedByUser
+		if _, err := s.Update(p.ID, Patch{State: &approved, FailedReason: &forged}); !errors.Is(err, ErrValidation) {
+			t.Fatalf("crafted patch (state=approved + forged failed_reason=stopped_by_user) must be rejected, got %v", err)
+		}
+
+		// The plan must remain exactly as it was: still failed, still its
+		// REAL reason, never restarted.
+		reloaded, err := s.Get(p.ID)
+		if err != nil {
+			t.Fatalf("Get after rejected crafted-patch attack: %v", err)
+		}
+		if reloaded.State != StateFailed || reloaded.FailedReason != FailedReasonJudgeRoundsExhausted {
+			t.Fatalf("crafted-patch attack mutated the plan: %+v", reloaded)
 		}
 	})
 }

@@ -1510,7 +1510,7 @@ func TestCancelReason_RequiresFailedStatus(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrValidation))
 	})
 
-	t.Run("leaving failed without clearing cancel_reason is rejected", func(t *testing.T) {
+	t.Run("leaving failed without clearing cancel_reason auto-clears (fix-wave #3)", func(t *testing.T) {
 		tk := mkTask("t2", "ws")
 		tk.Status = StatusInProgress
 		mustCreate(t, s, tk)
@@ -1519,15 +1519,19 @@ func TestCancelReason_RequiresFailedStatus(t *testing.T) {
 			CancelReason: ptr(CancelReasonStoppedByUser),
 		})
 
-		_, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
-		require.Error(t, err, "status leaving failed must reject a stale cancel_reason")
-		assert.True(t, errors.Is(err, ErrValidation))
+		// A status-only patch leaving failed (e.g. run_task resuming a
+		// stopped task) now auto-clears the stale cancel_reason instead of
+		// being rejected — see TestCancelReason_AutoClearOnStatusLeavingFailed
+		// for the full dedicated coverage.
+		updated, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
+		require.NoError(t, err, "status leaving failed must auto-clear a stale cancel_reason")
+		assert.Equal(t, StatusNext, updated.Status)
+		assert.Empty(t, updated.CancelReason, "cancel_reason must be auto-cleared")
 
-		// The task must be unchanged on disk (still failed + cancel_reason set).
 		got, gerr := s.Get(tk.ID)
 		require.NoError(t, gerr)
-		assert.Equal(t, StatusFailed, got.Status)
-		assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason)
+		assert.Equal(t, StatusNext, got.Status)
+		assert.Empty(t, got.CancelReason, "auto-cleared cancel_reason must persist")
 	})
 
 	t.Run("create-time coupling is also enforced", func(t *testing.T) {
@@ -1538,6 +1542,91 @@ func TestCancelReason_RequiresFailedStatus(t *testing.T) {
 		err := s.Create(bad)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrValidation))
+	})
+}
+
+// TestCancelReason_AutoClearOnStatusLeavingFailed is the ADR-052 fix-wave
+// regression lock for finding #3 ("run_task on a stopped task breaks"): when
+// a patch moves Status OFF failed and does NOT also touch CancelReason in
+// the same call, the store auto-clears the stale CancelReason before the
+// merged cross-field check runs (mirrors RestartReset's clear-on-restart),
+// rather than rejecting the patch outright. An explicit CancelReason
+// supplied in the SAME patch as a status leaving failed is still rejected —
+// the auto-clear is a convenience for the common "forgot to also clear it"
+// case, not a license to silently drop explicit conflicting data.
+func TestCancelReason_AutoClearOnStatusLeavingFailed(t *testing.T) {
+	s := newStore(t)
+
+	t.Run("run_task-shaped patch: failed+stopped_by_user -> in_progress succeeds, reason cleared", func(t *testing.T) {
+		tk := mkTask("t1", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		updated, err := s.Update(tk.ID, Patch{Status: ptr(StatusInProgress)})
+		require.NoError(t, err, "run_task resuming a stopped task must succeed")
+		assert.Equal(t, StatusInProgress, updated.Status)
+		assert.Empty(t, updated.CancelReason, "cancel_reason must be auto-cleared")
+
+		got, gerr := s.Get(tk.ID)
+		require.NoError(t, gerr)
+		assert.Equal(t, StatusInProgress, got.Status)
+		assert.Empty(t, got.CancelReason, "auto-cleared cancel_reason must persist")
+	})
+
+	t.Run("failed -> next auto-clears too (no explicit cancel_reason in the patch)", func(t *testing.T) {
+		tk := mkTask("t2", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		restarted, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
+		require.NoError(t, err)
+		assert.Equal(t, StatusNext, restarted.Status)
+		assert.Empty(t, restarted.CancelReason)
+	})
+
+	t.Run("explicit cancel_reason supplied alongside a status leaving failed is still rejected (backstop)", func(t *testing.T) {
+		tk := mkTask("t3", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		_, err := s.Update(tk.ID, Patch{
+			Status:       ptr(StatusInProgress),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+		require.Error(t, err, "explicit conflicting cancel_reason must never be silently dropped")
+		assert.True(t, errors.Is(err, ErrValidation))
+
+		got, gerr := s.Get(tk.ID)
+		require.NoError(t, gerr)
+		assert.Equal(t, StatusFailed, got.Status, "rejected patch must not mutate the task")
+		assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason)
+	})
+
+	t.Run("a patch that does not touch Status at all is unaffected (no auto-clear)", func(t *testing.T) {
+		tk := mkTask("t4", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		updated, err := s.Update(tk.ID, Patch{Priority: ptr(3)})
+		require.NoError(t, err)
+		assert.Equal(t, StatusFailed, updated.Status)
+		assert.Equal(t, CancelReasonStoppedByUser, updated.CancelReason, "cancel_reason survives an unrelated patch")
 	})
 }
 

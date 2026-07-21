@@ -175,10 +175,94 @@ func TestSeed_JudgeReEnforced_Tamper(t *testing.T) {
 	assert.False(t, j.Default, "stray Default cleared")
 	assert.Equal(t, config.AgentTypeSystem, j.Type, "Type re-enforced to system")
 	assert.Equal(t, config.ToolPolicyDeny, j.Tools.Builtin.Policies["bash"],
-		"granted tool re-enforced back to deny (no-tools invariant)")
+		"granted tool re-enforced back to deny (exact-set invariant: bash is outside the verifier read-only set)")
 	// Operator-editable fields preserved.
 	require.NotNil(t, j.Model)
 	assert.Equal(t, "operator/model", j.Model.Primary, "operator model edit must survive re-enforcement")
+}
+
+// TestSeed_JudgeMemoryDisabled verifies ADR-052 FR-039 (fix-wave finding #1):
+// a fresh SeedConfig seeds the Judge with MemoryEnabled explicitly false (not
+// nil/omitted) — memory-off is an impartiality property (reproducible
+// verdicts: same evidence -> same verdict), not a preference, and the
+// ContextBuilder's memory injection would otherwise include the shared
+// workspace memory room, making verdicts non-reproducible across
+// adjudications.
+func TestSeed_JudgeMemoryDisabled(t *testing.T) {
+	cfg := &config.Config{}
+	require.True(t, coreagent.SeedConfig(cfg))
+
+	var j *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == "judge" {
+			j = &cfg.Agents.List[i]
+		}
+	}
+	require.NotNil(t, j, "Judge must be seeded")
+	require.NotNil(t, j.MemoryEnabled, "Judge's MemoryEnabled must be explicitly set, not left nil")
+	assert.False(t, *j.MemoryEnabled, "Judge's MemoryEnabled must be explicit false")
+	assert.False(t, j.MemoryEnabledEffective(), "Judge's MemoryEnabledEffective() must resolve false")
+}
+
+// TestSeed_JudgeMemoryReEnforced_BothDirections verifies the tamper
+// re-enforcement is bidirectional (fix-wave finding #1): an operator/tamper
+// flip to EITHER nil (which would resolve true via MemoryEnabledEffective's
+// "unset defaults to true" rule) OR an explicit true is repaired back to
+// explicit false on the next SeedConfig — this is an impartiality property,
+// not an operator preference, so unlike Model/Provider it does NOT survive
+// re-enforcement.
+func TestSeed_JudgeMemoryReEnforced_BothDirections(t *testing.T) {
+	t.Run("tampered to explicit true", func(t *testing.T) {
+		cfg := &config.Config{}
+		require.True(t, coreagent.SeedConfig(cfg))
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == "judge" {
+				enabled := true
+				cfg.Agents.List[i].MemoryEnabled = &enabled
+			}
+		}
+		require.True(t, coreagent.SeedConfig(cfg), "re-enforcement must report modified=true after tamper")
+
+		var j *config.AgentConfig
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == "judge" {
+				j = &cfg.Agents.List[i]
+			}
+		}
+		require.NotNil(t, j)
+		require.NotNil(t, j.MemoryEnabled)
+		assert.False(t, *j.MemoryEnabled, "tampered explicit-true must be repaired back to explicit false")
+	})
+
+	t.Run("tampered/reset to nil", func(t *testing.T) {
+		cfg := &config.Config{}
+		require.True(t, coreagent.SeedConfig(cfg))
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == "judge" {
+				cfg.Agents.List[i].MemoryEnabled = nil
+			}
+		}
+		require.True(t, coreagent.SeedConfig(cfg), "re-enforcement must report modified=true after reset to nil")
+
+		var j *config.AgentConfig
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == "judge" {
+				j = &cfg.Agents.List[i]
+			}
+		}
+		require.NotNil(t, j)
+		require.NotNil(t, j.MemoryEnabled, "nil must be repaired back to an explicit value")
+		assert.False(t, *j.MemoryEnabled, "repaired value must be false")
+	})
+
+	t.Run("already-correct explicit false is a no-op (no spurious modified=true)", func(t *testing.T) {
+		cfg := &config.Config{}
+		require.True(t, coreagent.SeedConfig(cfg))
+		// Re-seeding an already-correctly-seeded config must not report
+		// modified=true purely due to MemoryEnabled (it was already false).
+		modifiedAgain := coreagent.SeedConfig(cfg)
+		assert.False(t, modifiedAgain, "re-seeding an already-correct config must be a no-op")
+	})
 }
 
 // TestSystemAgents_RosterDisjointFromAll asserts the Judge is seeded via the

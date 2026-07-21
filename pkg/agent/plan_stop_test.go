@@ -13,10 +13,14 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -68,12 +72,15 @@ func TestPlanEngine_StopPlan_FanoutCancelsMembersAndPlan(t *testing.T) {
 		Title: "m3-already-done", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone, SessionID: "sess-m3",
 	})
 	// A plan-level verifier session, registered as if a plan-judge round
-	// were mid-flight (R3-7/FR-037's registry contract).
-	h.pe.VerifierRegistry().Register("p1", "verifier-plan")
+	// were mid-flight (R3-7/FR-037's registry contract) — under the SAME
+	// verifierUnitForPlan/ForTask keys the real runVerifierAdjudication and
+	// beginPlanJudgeRound register through (F1: these must match StopPlan's
+	// own lookup keys, not a raw id).
+	h.pe.VerifierRegistry().Register(verifierUnitForPlan("p1"), "verifier-plan")
 	// A member-level verifier session for m1, registered the same way
 	// (mirrors judge.go's runVerifierAdjudication registering BEFORE
 	// dispatching the verifier's turn).
-	h.pe.VerifierRegistry().Register(m1.ID, "verifier-m1")
+	h.pe.VerifierRegistry().Register(verifierUnitForTask(m1.ID), "verifier-m1")
 
 	updated, err := h.pe.StopPlan(context.Background(), "p1", "tester", "web")
 	if err != nil {
@@ -148,7 +155,7 @@ func TestPlanEngine_StopTask_MemberOnlyPlanContinues(t *testing.T) {
 	m2 := mustCreateTask(t, h.tasks, &task.Task{
 		Title: "m2", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusInProgress, SessionID: "sess-m2",
 	})
-	h.pe.VerifierRegistry().Register(m1.ID, "verifier-m1")
+	h.pe.VerifierRegistry().Register(verifierUnitForTask(m1.ID), "verifier-m1")
 
 	updated, err := h.pe.StopTask(context.Background(), m1.ID, "tester", "web")
 	if err != nil {
@@ -235,10 +242,11 @@ func TestPlanEngine_StopPlan_DropsStaleVerdictAfterConcurrentJudgeRound(t *testi
 	proceed := make(chan struct{})
 	h.judge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		// Mimic judge.go's runVerifierAdjudication (FR-011/037): register
-		// the real verifier session id BEFORE the verifier's own turn would
+		// the real verifier session id (under the SAME verifierUnitForPlan
+		// key the real code uses, F1) BEFORE the verifier's own turn would
 		// run, then simulate that turn still being in flight when Stop
 		// lands.
-		h.pe.VerifierRegistry().Register(in.PlanID, "verifier-sess-1")
+		h.pe.VerifierRegistry().Register(verifierUnitForPlan(in.PlanID), "verifier-sess-1")
 		close(registered)
 		<-proceed
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{Met: true}}
@@ -368,6 +376,117 @@ func TestPlanEngine_FR041_BlockedBehindCancelledMember_PlanFailsImmediately(t *t
 	}
 	if h.judge.callCount() != 0 {
 		t.Fatalf("judge was called %d time(s); FR-041 must skip judge rounds entirely", h.judge.callCount())
+	}
+}
+
+// --- F1 seam-crossing regression --------------------------------------------
+
+// TestPlanEngine_StopPlan_SeamCrossing_ReachesRealVerifierSession is F1's
+// end-to-end regression: it proves the REAL runVerifierAdjudication
+// (verifier_adjudication.go, dispatched via al.JudgeCriteria — NOT the fake
+// planJudge every other test in this file uses) and StopPlan's own fan-out
+// (this file) agree on the SAME verifier-session-registry key
+// (verifierUnitForPlan). Uses a REAL AgentLoop + a REAL PlanEngine built via
+// NewPlanEngine, which wires the package-wide registry seam
+// (verifier_adjudication.go's SetVerifierSessionRegistry) at construction —
+// not two independently-faked registries that could agree by coincidence.
+// Before the F1 fix, runVerifierAdjudication registered under "plan:"+id
+// while StopPlan enumerated the raw id, so this fan-out would find nothing
+// to cancel at all.
+func TestPlanEngine_StopPlan_SeamCrossing_ReachesRealVerifierSession(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+
+	registered := make(chan struct{})
+	proceed := make(chan struct{})
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		close(registered)
+		<-proceed
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+	judgeInst.Provider = fake
+
+	dir := t.TempDir()
+	planStore := plan.New(filepath.Join(dir, "plans"))
+	taskStore := task.New(filepath.Join(dir, "tasks"))
+	if err := planStore.Create(&plan.Plan{
+		ID: "p1", Title: "p1", WorkspaceID: "ws", OwnerAgentID: "native-agent", State: plan.StateRunning,
+	}); err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+
+	pe := NewPlanEngine(al, planStore, taskStore, nil)
+	canceller := &fakeSessionCanceller{}
+	pe.canceller = canceller // observe the fan-out; the REAL registry wiring from NewPlanEngine is untouched
+
+	judgeDone := make(chan JudgeCriteriaResult, 1)
+	go func() {
+		judgeDone <- al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+			Scope:           task.VerdictScopePlan,
+			PlanID:          "p1",
+			AssigneeAgentID: "native-agent",
+			Criteria:        []task.AcceptanceCriterion{planProseCriterion("the plan is done")},
+			Attempt:         1,
+		})
+	}()
+
+	<-registered
+	if _, err := pe.StopPlan(context.Background(), "p1", "tester", "web"); err != nil {
+		t.Fatalf("StopPlan: %v", err)
+	}
+	close(proceed)
+	result := <-judgeDone
+	if result.Unavailable {
+		t.Fatalf("unexpected Unavailable: %s", result.Reason)
+	}
+
+	calls := canceller.callList()
+	if len(calls) == 0 {
+		t.Fatal("StopPlan's fan-out never reached the REAL verifier session — verifierUnitID's " +
+			"registration key and StopPlan's lookup key disagree (F1 regression)")
+	}
+	found := false
+	for _, sess := range calls {
+		if strings.HasPrefix(sess, "agent:"+string(coreagent.IDJudge)+":verify:") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the fan-out to cancel the real verifier session, got calls=%v", calls)
+	}
+}
+
+// --- isCancelledMember (item 12) --------------------------------------------
+
+// TestIsCancelledMember_CancelReasonAloneIsAuthoritative proves
+// task.CancelReason alone (with NO memberCancelReasonMarker prefix on
+// Result at all) is sufficient — the Result-prefix check is a defensive
+// fallback only, never required alongside the field.
+func TestIsCancelledMember_CancelReasonAloneIsAuthoritative(t *testing.T) {
+	tk := &task.Task{Status: task.StatusFailed, CancelReason: task.CancelReasonStoppedByUser, Result: "unrelated text"}
+	if !isCancelledMember(tk) {
+		t.Fatal("isCancelledMember must be true from CancelReason ALONE, independent of the Result-prefix fallback")
+	}
+}
+
+// --- StopPlan partial-failure aggregation (item 5) --------------------------
+
+func TestAggregateMemberCancelErrors_NilWhenNoFailures(t *testing.T) {
+	if err := aggregateMemberCancelErrors("p1", nil); err != nil {
+		t.Errorf("aggregateMemberCancelErrors with no failures = %v, want nil", err)
+	}
+}
+
+func TestAggregateMemberCancelErrors_ListsFailedMembers(t *testing.T) {
+	err := aggregateMemberCancelErrors("p1", []string{"m1", "m2"})
+	if err == nil {
+		t.Fatal("expected a non-nil partial-stop error")
+	}
+	for _, want := range []string{"p1", "m1", "m2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must mention %q", err.Error(), want)
+		}
 	}
 }
 

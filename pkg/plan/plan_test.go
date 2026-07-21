@@ -245,6 +245,30 @@ func TestPlan_ValidateRestartTransition(t *testing.T) {
 	}
 }
 
+// TestPlan_MatrixNeverWidens_FailedToApprovedStaysIllegal is a direct,
+// narrowly-scoped regression lock (fix-wave finding #5 companion): the
+// canonical legalPlanTransitions matrix itself — NOT the reason-aware
+// ValidateRestartTransition layer built on top of it — must NEVER be widened
+// to admit failed->approved (or failed->running). TestPlan_StateTransitions
+// above already covers this as part of its full 5x5 sweep and
+// TestPlan_ValidateRestartTransition asserts it via ValidateStateTransition;
+// this test pins the SAME invariant via a direct map read so a future edit to
+// legalPlanTransitions cannot silently widen the matrix without failing here,
+// independent of ValidateStateTransition's own logic.
+func TestPlan_MatrixNeverWidens_FailedToApprovedStaysIllegal(t *testing.T) {
+	if legalPlanTransitions[StateFailed][StateApproved] {
+		t.Fatal("legalPlanTransitions must keep failed->approved illegal — restart is a store-level " +
+			"reason-gated amendment (ValidateRestartTransition), never a matrix widening (grill M2/R3-4)")
+	}
+	if legalPlanTransitions[StateFailed][StateRunning] {
+		t.Fatal("legalPlanTransitions must keep failed->running illegal")
+	}
+	// The matrix's only legal outbound edge from failed is the no-op.
+	if len(legalPlanTransitions[StateFailed]) != 1 || !legalPlanTransitions[StateFailed][StateFailed] {
+		t.Fatalf("legalPlanTransitions[failed] must contain exactly the no-op, got %+v", legalPlanTransitions[StateFailed])
+	}
+}
+
 // fakeTaskLister is a minimal TaskLister stub for ComputeProgress tests —
 // pkg/plan deliberately depends only on this interface, not a concrete
 // *task.Store, so this test proves that decoupling actually works (no import

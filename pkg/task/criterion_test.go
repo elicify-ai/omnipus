@@ -228,7 +228,7 @@ func TestCriterion_BehaviorPayload_Validate(t *testing.T) {
 			name: "valid: explicit min/max/scope",
 			crit: AcceptanceCriterion{
 				Kind: KindBehavior, Text: "called bash 2-5 times this attempt",
-				Behavior: &CriterionBehavior{Tool: "bash", MinCount: 2, MaxCount: ptr(5), Scope: BehaviorScopeAttempt},
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: ptr(2), MaxCount: ptr(5), Scope: BehaviorScopeAttempt},
 				Author:   author,
 			},
 			wantErr:      false,
@@ -239,7 +239,7 @@ func TestCriterion_BehaviorPayload_Validate(t *testing.T) {
 			name: "valid: min_count=0 + max_count=0 expresses never call X",
 			crit: AcceptanceCriterion{
 				Kind: KindBehavior, Text: "never called rm",
-				Behavior: &CriterionBehavior{Tool: "rm", MinCount: 0, MaxCount: ptr(0)},
+				Behavior: &CriterionBehavior{Tool: "rm", MinCount: ptr(0), MaxCount: ptr(0)},
 				Author:   author,
 			},
 			wantErr:      false,
@@ -247,14 +247,45 @@ func TestCriterion_BehaviorPayload_Validate(t *testing.T) {
 			wantScope:    BehaviorScopeTaskSession,
 		},
 		{
-			name: "valid: min_count=0 alone (no max) still defaults to 1",
+			// Fix-wave finding #5: MinCount is now *int — nil (this field
+			// simply never set) is the "omitted" signal, unambiguous without
+			// the old max_count=0 disambiguator hack.
+			name: "valid: min_count/max_count both omitted (nil) defaults min to 1",
 			crit: AcceptanceCriterion{
 				Kind: KindBehavior, Text: "min_count omitted",
-				Behavior: &CriterionBehavior{Tool: "bash", MinCount: 0},
+				Behavior: &CriterionBehavior{Tool: "bash"},
 				Author:   author,
 			},
 			wantErr:      false,
 			wantMinCount: 1,
+			wantScope:    BehaviorScopeTaskSession,
+		},
+		{
+			// Fix-wave finding #5's headline capability: an EXPLICIT
+			// min_count=0 (a real *int pointing at 0, not an omitted field)
+			// now stays 0 — it no longer silently defaults to 1 just because
+			// no max_count=0 pairing disambiguates it.
+			name: "valid: explicit min_count=0 alone (no max) stays 0, does not default to 1",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "optional, no upper bound",
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: ptr(0)},
+				Author:   author,
+			},
+			wantErr:      false,
+			wantMinCount: 0,
+			wantScope:    BehaviorScopeTaskSession,
+		},
+		{
+			// [0, N>0] is now expressible (fix-wave finding #5): "called at
+			// most 3 times, calling it at all is optional".
+			name: "valid: min_count=0 + max_count=3 expresses 0..3 calls (optional, bounded)",
+			crit: AcceptanceCriterion{
+				Kind: KindBehavior, Text: "called at most 3 times",
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: ptr(0), MaxCount: ptr(3)},
+				Author:   author,
+			},
+			wantErr:      false,
+			wantMinCount: 0,
 			wantScope:    BehaviorScopeTaskSession,
 		},
 		{
@@ -270,7 +301,7 @@ func TestCriterion_BehaviorPayload_Validate(t *testing.T) {
 			name: "invalid: negative min_count",
 			crit: AcceptanceCriterion{
 				Kind: KindBehavior, Text: "x",
-				Behavior: &CriterionBehavior{Tool: "bash", MinCount: -1},
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: ptr(-1)},
 				Author:   author,
 			},
 			wantErr: true,
@@ -279,7 +310,7 @@ func TestCriterion_BehaviorPayload_Validate(t *testing.T) {
 			name: "invalid: max_count < min_count",
 			crit: AcceptanceCriterion{
 				Kind: KindBehavior, Text: "x",
-				Behavior: &CriterionBehavior{Tool: "bash", MinCount: 3, MaxCount: ptr(2)},
+				Behavior: &CriterionBehavior{Tool: "bash", MinCount: ptr(3), MaxCount: ptr(2)},
 				Author:   author,
 			},
 			wantErr: true,
@@ -347,7 +378,8 @@ func TestCriterion_BehaviorPayload_Validate(t *testing.T) {
 			require.NoError(t, err, "case %q must be accepted", tc.name)
 			require.Len(t, tk.Criteria, 1)
 			require.NotNil(t, tk.Criteria[0].Behavior)
-			assert.Equal(t, tc.wantMinCount, tk.Criteria[0].Behavior.MinCount, "min_count default/value")
+			require.NotNil(t, tk.Criteria[0].Behavior.MinCount, "min_count must be normalized to an explicit value")
+			assert.Equal(t, tc.wantMinCount, tk.Criteria[0].Behavior.EffectiveMinCount(), "min_count default/value")
 			assert.Equal(t, tc.wantScope, tk.Criteria[0].Behavior.Scope, "scope default/value")
 		})
 	}

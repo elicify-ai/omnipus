@@ -683,6 +683,23 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		}
 		t.Status = *patch.Status
 	}
+	// Fix-wave finding #3 (run_task on a stopped task breaks): when THIS
+	// patch moves Status OFF failed and the caller did NOT also touch
+	// CancelReason in the same call, auto-clear the now-stale reason before
+	// the merged cross-field check further down — mirrors RestartReset's
+	// CancelReason clear on restart (a task no longer sitting at failed
+	// cannot still be "stopped_by_user"). Without this, a run_task-shaped
+	// patch that only sets Status (e.g. failed+stopped_by_user ->
+	// in_progress, to resume a stopped task) would fail the cross-field
+	// check purely because it forgot to also clear the now-irrelevant
+	// reason. An explicit CancelReason supplied ALONGSIDE a non-failed
+	// Status in the SAME patch is deliberately NOT auto-cleared here — it
+	// falls through to patch.CancelReason's own handling below and is caught
+	// by the merged check as before (explicit conflicting data is rejected,
+	// never silently dropped; the merged check stays the backstop).
+	if patch.Status != nil && *patch.Status != StatusFailed && patch.CancelReason == nil {
+		t.CancelReason = ""
+	}
 	if patch.CancelReason != nil {
 		if *patch.CancelReason != "" && !IsValidCancelReason(*patch.CancelReason) {
 			return nil, verr("invalid cancel_reason %q", *patch.CancelReason)

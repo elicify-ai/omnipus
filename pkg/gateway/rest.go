@@ -1599,6 +1599,17 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if ac.MaxToolIterations > 0 {
 		ag.MaxToolIterations = ac.MaxToolIterations
 	}
+	// memory_enabled (ADR-052 FR-039): every response path (list/get/create/
+	// update) funnels through this function, so populating it here once
+	// covers all of them. Previously never set here — the wire field is
+	// `omitempty` on the generated Go struct, so an unset pointer meant the
+	// key was silently dropped from every JSON response and the SPA always
+	// rendered memory as on, even for the seeded-memory-off Judge. Always
+	// resolve via MemoryEnabledEffective() (nil → true) rather than echoing
+	// the raw possibly-nil ac.MemoryEnabled, so the wire always carries the
+	// agent's actual effective value.
+	memEnabled := ac.MemoryEnabledEffective()
+	ag.MemoryEnabled = &memEnabled
 	// shell_policy: echo the persisted per-agent override. Previously this was
 	// persisted (updateAgent) or should have been persisted (createAgent, fixed
 	// alongside this) but never surfaced on any response path (list/get/create/
@@ -3274,6 +3285,14 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 					if req.Icon != nil {
 						agentMap["icon"] = *req.Icon
+					}
+					// memory_enabled (ADR-052 FR-039): "Allowed on all agents" per
+					// AgentUpdateRequest.yaml — including locked/system agents (the
+					// Judge), which is why this is not gated behind the
+					// foundAgent.Locked identity-mutation check above (that block
+					// only forbids name/description/soul/color/icon/skills).
+					if req.MemoryEnabled != nil {
+						agentMap["memory_enabled"] = *req.MemoryEnabled
 					}
 					if req.FallbackModels != nil {
 						agentMap["fallback_models"] = *req.FallbackModels

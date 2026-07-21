@@ -288,24 +288,52 @@ type planTaskError struct {
 }
 
 // PlanExecuteTool implements the execute_plan agent tool (ADR-052
-// FR-003/004/030, spec US-3). It routes through the SAME internal
-// gated-approve logic the POST /plans/{id}/approve REST handler runs
-// (handlePlanApprove, rest_plans.go) — the unconditional FR-084
-// per-member-criteria gate, plus the FR-030 empty-plan gate — then
-// transitions draft->approved via the SAME single gated state-transition
-// path (plan.Store.Update through ValidateStateTransition) and RETURNS
-// IMMEDIATELY. Promotion of approved->running under the global concurrency
-// cap is the engine's job (pkg/agent's PlanEngine, out of this package's
-// scope) and happens asynchronously; this tool has no visibility into the
-// engine's live cap occupancy, so its "queued behind cap" note is reported
-// unconditionally for a freshly-approved plan (spec G5/FR-003: "the tool
-// reports queued behind cap semantics" — accurate whether or not a slot
-// happens to be free at the instant this call returns, since the outcome —
-// wait at approved, or promote — is the engine's async decision either way).
+// FR-003/004/030, spec US-3). It routes through the SAME gates
+// POST /plans/{id}/approve (handlePlanApprove, rest_plans.go) enforces —
+// the SD-A7 tiered-DoD gate (see isAgentID) and the unconditional FR-084
+// per-member-criteria gate — then transitions draft->approved via the SAME
+// single gated state-transition path (plan.Store.Update through
+// ValidateStateTransition) and RETURNS IMMEDIATELY. Promotion of
+// approved->running under the global concurrency cap is the engine's job
+// (pkg/agent's PlanEngine, out of this package's scope) and happens
+// asynchronously; this tool has no visibility into the engine's live cap
+// occupancy, so its "queued behind cap" note is reported unconditionally
+// for a freshly-approved plan (spec G5/FR-003: "the tool reports queued
+// behind cap semantics" — accurate whether or not a slot happens to be
+// free at the instant this call returns, since the outcome — wait at
+// approved, or promote — is the engine's async decision either way).
+//
+// Two INTENTIONAL differences remain from handlePlanApprove — not gaps,
+// flagged here for the Wave-2 shared-gate extraction that would fold both
+// handlers onto one internal gate function:
+//  1. FR-030 empty-plan reject (zero member tasks) exists here but not in
+//     REST — an agent driving its own plan end-to-end has no other point
+//     at which "nothing to run" would ever surface; a human using the UI
+//     approve button is assumed to already see the (empty) task list.
+//  2. State handling is broader here: REST 400s anything that is not
+//     StateDraft; this tool additionally treats StateRunning/StateApproved
+//     as an idempotent no-op (spec edge case: "execute_plan on an
+//     already-running plan -> no-op") rather than an error, since a
+//     tool-calling agent may re-issue execute_plan without first checking
+//     state, where a human clicking Approve in the UI would not.
 type PlanExecuteTool struct {
 	BaseTool
 	planStore *plan.Store
 	taskStore *task.Store
+	// isAgentID reports whether id resolves to a registered agent — mirrors
+	// restAPI.isAgentID (pkg/gateway/rest_plans.go) exactly, and drives the
+	// SAME SD-A7 tiered-DoD gate handlePlanApprove enforces: a plan whose
+	// CreatedBy resolves to an agent (strict tier) must carry >=1 DoD
+	// criterion; a human-authored plan (soft tier) may have none. Injected
+	// by the wiring layer (pkg/agent/loop.go, another wave's job) — mirrors
+	// PlanCreateTool.validateOwner's unwired-until-wired discipline.
+	//
+	// FAIL CLOSED, not open, when unwired: an unset isAgentID must NOT be
+	// read as "CreatedBy is not an agent" (which would silently skip the
+	// gate for every plan, agent-authored or not). Treat CreatedBy as
+	// agent-authored (require DoD) until the real checker is wired — same
+	// discipline as every other DI checker in this package.
+	isAgentID func(id string) bool
 }
 
 // NewPlanExecuteTool constructs a PlanExecuteTool. Either store may be nil
@@ -313,6 +341,12 @@ type PlanExecuteTool struct {
 // in that mode.
 func NewPlanExecuteTool(planStore *plan.Store, taskStore *task.Store) *PlanExecuteTool {
 	return &PlanExecuteTool{planStore: planStore, taskStore: taskStore}
+}
+
+// SetIsAgentIDChecker installs the CreatedBy-is-an-agent predicate the
+// SD-A7 tiered-DoD gate uses (see the isAgentID field doc).
+func (t *PlanExecuteTool) SetIsAgentIDChecker(fn func(id string) bool) {
+	t.isAgentID = fn
 }
 
 func (t *PlanExecuteTool) Name() string           { return "execute_plan" }
@@ -381,6 +415,17 @@ func (t *PlanExecuteTool) Execute(_ context.Context, args map[string]any) *ToolR
 		// Fall through to the gate below.
 	default:
 		return ErrorResult(fmt.Sprintf("plan %q is in an unrecognized state %q", planID, p.State))
+	}
+
+	// SD-A7 tiered-DoD gate (mirrors handlePlanApprove exactly — see the
+	// isAgentID field doc for the fail-closed default when unwired).
+	requiresDoD := true
+	if t.isAgentID != nil {
+		requiresDoD = t.isAgentID(p.CreatedBy)
+	}
+	if requiresDoD && len(p.DoD) == 0 {
+		return ErrorResult(
+			"execute_plan failed: plan requires a Definition of Done before execution (agent-authored plan)")
 	}
 
 	// FR-030: an empty plan (0 member tasks) is rejected — nothing to run.

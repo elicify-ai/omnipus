@@ -224,12 +224,22 @@ func TestPlanCreateTool_NilStore_FailsClosed(t *testing.T) {
 // --- execute_plan ---
 
 // seedPlanWithMembers creates a draft plan with n member tasks in wsID,
-// each carrying one criterion unless its index is in noCriteriaIdx.
+// each carrying one criterion unless its index is in noCriteriaIdx. The
+// seeded plan carries a satisfying (non-empty) DoD by default so the
+// SD-A7 tiered-DoD gate (execute_plan's isAgentID fail-closed default —
+// see TestPlanExecuteTool_* DoD-specific cases below for that gate
+// exercised in isolation) never interferes with tests targeting a
+// DIFFERENT check (criteria gap, empty plan, idempotent no-ops, terminal
+// rejection).
 func seedPlanWithMembers(t *testing.T, planStore *plan.Store, taskStore *task.Store, wsID string, n int, noCriteriaIdx map[int]bool) *plan.Plan {
 	t.Helper()
 	p := &plan.Plan{
 		Title: "Test Plan", WorkspaceID: wsID, OwnerAgentID: "jim",
-		CreatedBy: "jim", DoD: nil,
+		CreatedBy: "jim",
+		DoD: []task.AcceptanceCriterion{{
+			Kind: task.KindProse, Text: "plan done",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
+		}},
 	}
 	if err := planStore.Create(p); err != nil {
 		t.Fatalf("seed plan: %v", err)
@@ -341,6 +351,131 @@ func TestPlanExecuteTool_RejectsEmptyPlan(t *testing.T) {
 	}
 	if got.State != plan.StateDraft {
 		t.Errorf("plan state = %q, want draft (unchanged)", got.State)
+	}
+}
+
+// TestPlanExecuteTool_RejectsMissingDoD_AgentAuthored proves the SD-A7
+// tiered-DoD gate rejects a draft plan with zero DoD when CreatedBy
+// resolves to an agent (strict tier), mirroring handlePlanApprove
+// (rest_plans.go) exactly, and leaves the plan draft.
+func TestPlanExecuteTool_RejectsMissingDoD_AgentAuthored(t *testing.T) {
+	t.Parallel()
+	planStore, taskStore := newPlanAndTaskStores(t)
+	p := &plan.Plan{
+		Title: "No DoD", WorkspaceID: "ws-1", OwnerAgentID: "jim",
+		CreatedBy: "jim", DoD: nil,
+	}
+	if err := planStore.Create(p); err != nil {
+		t.Fatalf("seed plan: %v", err)
+	}
+	tk := &task.Task{
+		Title: "member", Prompt: "do it", Action: task.ActionLLM,
+		AgentID: "worker", WorkspaceID: "ws-1", Status: task.StatusNext,
+		PlanID: p.ID,
+		Criteria: []task.AcceptanceCriterion{{
+			Kind: task.KindProse, Text: "done",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
+		}},
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("seed member task: %v", err)
+	}
+
+	tool := NewPlanExecuteTool(planStore, taskStore)
+	tool.SetIsAgentIDChecker(func(string) bool { return true })
+	res := tool.Execute(context.Background(), map[string]any{"plan_id": p.ID})
+	if !res.IsError {
+		t.Fatal("expected rejection for an agent-authored plan with zero DoD")
+	}
+	if !strings.Contains(res.ForLLM, "Definition of Done") {
+		t.Errorf("unexpected rejection message: %s", res.ForLLM)
+	}
+
+	got, err := planStore.Get(p.ID)
+	if err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+	if got.State != plan.StateDraft {
+		t.Errorf("plan state = %q, want draft (unchanged)", got.State)
+	}
+}
+
+// TestPlanExecuteTool_AllowsMissingDoD_HumanAuthored proves the SD-A7 gate's
+// soft tier: a plan whose CreatedBy does NOT resolve to an agent may be
+// executed with zero DoD, mirroring handlePlanApprove's human-authored path.
+func TestPlanExecuteTool_AllowsMissingDoD_HumanAuthored(t *testing.T) {
+	t.Parallel()
+	planStore, taskStore := newPlanAndTaskStores(t)
+	p := &plan.Plan{
+		Title: "No DoD, human", WorkspaceID: "ws-1", OwnerAgentID: "jim",
+		CreatedBy: "alice", DoD: nil,
+	}
+	if err := planStore.Create(p); err != nil {
+		t.Fatalf("seed plan: %v", err)
+	}
+	tk := &task.Task{
+		Title: "member", Prompt: "do it", Action: task.ActionLLM,
+		AgentID: "worker", WorkspaceID: "ws-1", Status: task.StatusNext,
+		PlanID: p.ID,
+		Criteria: []task.AcceptanceCriterion{{
+			Kind: task.KindProse, Text: "done",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
+		}},
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("seed member task: %v", err)
+	}
+
+	tool := NewPlanExecuteTool(planStore, taskStore)
+	tool.SetIsAgentIDChecker(func(id string) bool { return id == "jim" }) // "alice" is not an agent
+	res := tool.Execute(context.Background(), map[string]any{"plan_id": p.ID})
+	if res.IsError {
+		t.Fatalf("expected a human-authored plan with zero DoD to be approved: %s", res.ForLLM)
+	}
+
+	got, err := planStore.Get(p.ID)
+	if err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+	if got.State != plan.StateApproved {
+		t.Errorf("plan state = %q, want approved", got.State)
+	}
+}
+
+// TestPlanExecuteTool_UnwiredIsAgentIDChecker_FailsClosed proves that when
+// no isAgentID checker is installed, execute_plan treats CreatedBy as
+// agent-authored (strict tier) rather than silently skipping the SD-A7
+// gate — the same fail-closed discipline as PlanCreateTool.validateOwner.
+func TestPlanExecuteTool_UnwiredIsAgentIDChecker_FailsClosed(t *testing.T) {
+	t.Parallel()
+	planStore, taskStore := newPlanAndTaskStores(t)
+	p := &plan.Plan{
+		Title: "No DoD, unwired checker", WorkspaceID: "ws-1", OwnerAgentID: "jim",
+		CreatedBy: "jim", DoD: nil,
+	}
+	if err := planStore.Create(p); err != nil {
+		t.Fatalf("seed plan: %v", err)
+	}
+	tk := &task.Task{
+		Title: "member", Prompt: "do it", Action: task.ActionLLM,
+		AgentID: "worker", WorkspaceID: "ws-1", Status: task.StatusNext,
+		PlanID: p.ID,
+		Criteria: []task.AcceptanceCriterion{{
+			Kind: task.KindProse, Text: "done",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
+		}},
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("seed member task: %v", err)
+	}
+
+	tool := NewPlanExecuteTool(planStore, taskStore) // isAgentID never set
+	res := tool.Execute(context.Background(), map[string]any{"plan_id": p.ID})
+	if !res.IsError {
+		t.Fatal("expected fail-closed rejection with no isAgentID checker installed")
+	}
+	if !strings.Contains(res.ForLLM, "Definition of Done") {
+		t.Errorf("unexpected rejection message: %s", res.ForLLM)
 	}
 }
 

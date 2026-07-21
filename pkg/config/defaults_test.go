@@ -48,9 +48,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — a third
 	// ceiling category alongside "destructive" (ask) and the allow-by-default
 	// rest: the three plan-execution tools are explicit "ask" (never absent,
-	// never deny — only Jim's own seeded policy is "allow"), and the
-	// verifier-role-only inspect_session is explicit "deny" (not ask-able;
-	// only the Judge's own seeded policy is "allow").
+	// never deny — only Jim's own seeded policy is "allow").
 	planningAsk := map[string]bool{
 		"create_plan":  true,
 		"execute_plan": true,
@@ -66,8 +64,15 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 			t.Errorf("expected seeded ceiling policy 'ask' for plan-execution tool %q, got %q", name, got)
 		}
 	}
-	if got := cfg.Sandbox.ToolPolicies["inspect_session"]; got != "deny" {
-		t.Errorf("expected seeded ceiling policy 'deny' for verifier-only tool \"inspect_session\", got %q", got)
+	// inspect_session (fix-wave finding #2, architect F2 half 1): the ceiling
+	// seeds "allow" — the strictest-wins global x agent merge means a ceiling
+	// "deny" would OVERRULE the Judge's own seeded "allow" and resolve the
+	// Judge to deny (the landed defect this inverts). Every seeded non-Judge
+	// agent instead carries an explicit per-agent "deny" (asserted by
+	// pkg/coreagent's TestToolPolicy_InspectSession_JudgeOnly), so the
+	// resolved posture for everyone but the Judge is unchanged.
+	if got := cfg.Sandbox.ToolPolicies["inspect_session"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for verifier-only tool \"inspect_session\", got %q", got)
 	}
 
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
@@ -92,12 +97,14 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		)
 	}
 
-	// Every non-destructive, non-ADR-052-planning entry must be "allow" —
+	// Every non-destructive, non-ADR-052-planning-ask entry must be "allow" —
 	// this is an allow-by-default ceiling, not a narrow ask-list.
 	// disable_channel is explicitly checked as the canonical
-	// "reversible, not destructive" example.
+	// "reversible, not destructive" example. inspect_session is no longer
+	// excluded (fix-wave finding #2): it is now seeded "allow" at the
+	// ceiling too, same as any other non-destructive tool.
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		if destructive[name] || planningAsk[name] || name == "inspect_session" {
+		if destructive[name] || planningAsk[name] {
 			continue
 		}
 		if policy != "allow" {

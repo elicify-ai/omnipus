@@ -59,9 +59,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// judgeCallTimeout bounds a single Judge LLM call. Distinct from
-// config.PlanningConfig.CheckTimeoutSeconds, which bounds a machine-check
-// COMMAND, not the judge's own structured call.
+// judgeCallTimeout bounds ONE verifier turn (runVerifierAdjudication's
+// al.processTaskDirect dispatch, verifier_adjudication.go) — a full
+// agent-loop turn under the seeded Judge's identity, potentially several LLM
+// calls if the verifier's rubric escalates to its read-only tools
+// (read_file/list_directory/inspect_session), not a single raw provider
+// Chat call. Distinct from config.PlanningConfig.CheckTimeoutSeconds, which
+// bounds a machine-check COMMAND, not the judge/verifier's own turn.
 const judgeCallTimeout = 120 * time.Second
 
 // judgeRetryBackoff is the cron-style transient backoff schedule (ADR D7,
@@ -111,7 +115,8 @@ const judgeTimedOutMarker = "command timed out after"
 // adjudicate one set of acceptance criteria for one attempt (task scope) or
 // round (plan scope, Wave 2-B).
 type JudgeCriteriaInput struct {
-	// Scope is task.VerdictScopeTask or task.VerdictScopePlan.
+	// Scope is task.VerdictScopeTask, task.VerdictScopePlan, or
+	// task.VerdictScopeGoal.
 	Scope string
 	// TaskID/PlanID correlate the verdict (NFR-5) and, for TaskID, the
 	// on-disk EvidenceStore path; set the one matching Scope.
@@ -139,6 +144,42 @@ type JudgeCriteriaInput struct {
 	// in-flight goal verifier, and sources the transcript window the goal
 	// verifier is fed. Empty for task/plan scopes.
 	GoalSessionID string
+}
+
+// validate enforces JudgeCriteriaInput's scope invariant (7-reviewer gate
+// item 9): exactly one of TaskID/PlanID/GoalSessionID must be set, and it
+// MUST be the one matching in.Scope. A caller that mismatches Scope against
+// its own correlating id (or supplies more than one) is a programming
+// error — JudgeCriteria must never silently adjudicate against the wrong
+// record, or silently accept an ambiguous input. Returns "" when in is
+// valid, or a human-readable violation reason otherwise.
+func (in JudgeCriteriaInput) validate() string {
+	switch in.Scope {
+	case task.VerdictScopeTask:
+		if in.TaskID == "" {
+			return fmt.Sprintf("scope %q requires TaskID to be set", in.Scope)
+		}
+		if in.PlanID != "" || in.GoalSessionID != "" {
+			return fmt.Sprintf("scope %q must not also carry PlanID/GoalSessionID", in.Scope)
+		}
+	case task.VerdictScopePlan:
+		if in.PlanID == "" {
+			return fmt.Sprintf("scope %q requires PlanID to be set", in.Scope)
+		}
+		if in.TaskID != "" || in.GoalSessionID != "" {
+			return fmt.Sprintf("scope %q must not also carry TaskID/GoalSessionID", in.Scope)
+		}
+	case task.VerdictScopeGoal:
+		if in.GoalSessionID == "" {
+			return fmt.Sprintf("scope %q requires GoalSessionID to be set", in.Scope)
+		}
+		if in.TaskID != "" || in.PlanID != "" {
+			return fmt.Sprintf("scope %q must not also carry TaskID/PlanID", in.Scope)
+		}
+	default:
+		return fmt.Sprintf("unknown scope %q", in.Scope)
+	}
+	return ""
 }
 
 // JudgeCriteriaResult is the outcome of one JudgeCriteria call.
@@ -184,6 +225,21 @@ type JudgeCriteriaResult struct {
 // all — machine-only criteria adjudicate purely from real exit codes, and
 // Unavailable is impossible in that case (FR-052's all-machine scenario).
 func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) JudgeCriteriaResult {
+	// Item 9 (7-reviewer gate): a malformed JudgeCriteriaInput (Scope
+	// mismatched against its correlating id, or an unknown Scope) fails
+	// CLOSED with an explicit unmet reason on every criterion — never
+	// Unavailable=true (which would tell the caller not to consume an
+	// attempt/round and to retry; a shape violation is not a transient
+	// judge-availability problem and retrying it verbatim would just
+	// violate the same invariant again).
+	if violation := in.validate(); violation != "" {
+		logger.ErrorCF("agent", "judge: JudgeCriteriaInput failed validation (fail-closed)",
+			map[string]any{"reason": violation, "scope": in.Scope})
+		return al.finalizeVerdict(
+			in, failClosedProseVerdicts(in.Criteria, "invalid JudgeCriteriaInput: "+violation), "", "",
+		)
+	}
+
 	var machineCriteria, behaviorCriteria, proseCriteria []task.AcceptanceCriterion
 	perCriterion := make([]task.CriterionVerdict, 0, len(in.Criteria))
 	for _, c := range in.Criteria {
@@ -256,16 +312,17 @@ func (al *AgentLoop) finalizeVerdict(
 		}
 	}
 	v := &task.JudgeVerdict{
-		ID:           uuid.New().String(),
-		Scope:        in.Scope,
-		TaskID:       in.TaskID,
-		PlanID:       in.PlanID,
-		Round:        in.Attempt,
-		Met:          met,
-		PerCriterion: perCriterion,
-		Model:        judgeModel,
-		JudgedAt:     time.Now().UTC().Format(time.RFC3339),
-		JudgeAgentID: judgeAgentID,
+		ID:            uuid.New().String(),
+		Scope:         in.Scope,
+		TaskID:        in.TaskID,
+		PlanID:        in.PlanID,
+		GoalSessionID: in.GoalSessionID,
+		Round:         in.Attempt,
+		Met:           met,
+		PerCriterion:  perCriterion,
+		Model:         judgeModel,
+		JudgedAt:      time.Now().UTC().Format(time.RFC3339),
+		JudgeAgentID:  judgeAgentID,
 	}
 	return JudgeCriteriaResult{Verdict: v, Reason: summarizeVerdict(v)}
 }

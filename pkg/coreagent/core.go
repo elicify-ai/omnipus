@@ -49,7 +49,11 @@ const (
 	// IDJudge is the seeded System Agent (ADR-049 D3, Planning & Goals epic). It
 	// is NOT a base/core agent and NOT a subagent-tier worker: it is the first
 	// member of the "System Agents" category — a seeded, locked, NON-privileged
-	// internal-LLM agent that executes as a no-tools structured judging call.
+	// internal-LLM agent that adjudicates as a real agent turn in a read-only
+	// VERIFIER ROLE (ADR-052), in its own session, with a narrow read-only +
+	// verification tool set (read_file/list_directory/inspect_session) and
+	// memory OFF for reproducible, impartial verdicts — not the old no-tools
+	// structured shortcut call it replaced.
 	// It is seeded via SystemAgents() through a path SEPARATE from the All()
 	// core/worker loop (so ByID/IsCoreAgent never classify it as core), carries
 	// Type=AgentTypeSystem, is never a chat target, never the default, never a
@@ -474,11 +478,19 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"delete_workspace": deny,
 			"list_workspaces":  deny,
 			"get_workspace":    deny,
-			// --- ADR-052 planning/verifier tools: deliberately ABSENT here,
-			// same as list_agents/list_tasks above — Worker inherits
-			// create_plan/execute_plan/run_task ("ask") and inspect_session
-			// ("deny") from the global ceiling (DS-6), which is sufficient
-			// coverage under the OR-based coverage validator.
+			// --- ADR-052 planning/verifier tools ---
+			// create_plan/execute_plan/run_task are deliberately ABSENT
+			// here, same as list_agents/list_tasks above — Worker inherits
+			// them ("ask") from the global ceiling (DS-6), which is
+			// sufficient coverage under the OR-based coverage validator.
+			// inspect_session, by contrast, is an EXPLICIT "deny" here
+			// (fix-wave finding #2) — NOT absent: the global ceiling now
+			// seeds inspect_session "allow" (raising the ceiling so the
+			// Judge's own "allow" resolves cleanly under strictest-wins,
+			// see defaults.go), so an absent entry here would silently
+			// inherit that "allow" instead of the deny every non-Judge
+			// agent must carry.
+			"inspect_session": deny,
 		})
 	}
 	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
@@ -1030,6 +1042,11 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 // intPtr returns a pointer to v. Used to set DelegationPolicy.Depth in seeds.
 func intPtr(v int) *int { return &v }
 
+// boolPtr returns a pointer to v. Used to set AgentConfig.MemoryEnabled in
+// seeds (ADR-052 FR-039) — a pointer is required to distinguish "never set"
+// (nil, defaults to true) from an explicit false.
+func boolPtr(v bool) *bool { return &v }
+
 // SeedDelegationEdges returns the seeded canonical delegation policy for a
 // core agent ID (ADR-037, Wave 2). AgentConfig.DelegationPolicy — the field
 // this used to be copied onto at boot — has been removed entirely; the
@@ -1267,6 +1284,17 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				Type:        config.AgentTypeSystem,
 				Locked:      true,
 				Default:     false,
+				// ADR-052 FR-039: a verifier-role agent's evidence-in →
+				// verdict-out mapping must be reproducible and impartial —
+				// injected episodic memory would otherwise let the SAME
+				// evidence yield a DIFFERENT verdict across adjudications
+				// (the ContextBuilder's memory injection includes the
+				// shared workspace memory room, so memory-on is a real
+				// non-reproducibility channel, not a cosmetic default).
+				// Explicit false (never nil) so re-enforcement below can
+				// distinguish "seeded correctly" from a tampered/absent
+				// value.
+				MemoryEnabled: boolPtr(false),
 				Tools: &config.AgentToolsCfg{
 					Builtin: config.AgentBuiltinToolsCfg{
 						Policies: policies,
@@ -1311,6 +1339,18 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			}
 			if a.Icon != sa.Icon {
 				a.Icon = sa.Icon
+				modified = true
+			}
+			// Re-enforce MemoryEnabled=false on EVERY boot (ADR-052 FR-039):
+			// this is an IMPARTIALITY PROPERTY of the verifier role, not an
+			// operator preference — unlike Model/Provider (which stay
+			// operator-editable below), a tampered/reset value (nil, which
+			// resolves true via MemoryEnabledEffective, or an explicit true)
+			// must be repaired in BOTH directions so the Judge's verdicts
+			// stay reproducible (same evidence -> same verdict) regardless
+			// of config-file edits or upgrade artifacts.
+			if a.MemoryEnabled == nil || *a.MemoryEnabled {
+				a.MemoryEnabled = boolPtr(false)
 				modified = true
 			}
 			// Re-enforce the EXACT seeded tool policy on EVERY boot (ADR-052
@@ -1584,10 +1624,15 @@ func Judge() *CoreAgent {
 		Name:     "Judge",
 		Subtitle: "Acceptance-Criteria Evaluator",
 		Description: "Impartial acceptance-criteria evaluator for the Planning & Goals engine. " +
-			"Makes out-of-turn, no-tools structured judging calls; not a chat persona.",
+			"Adjudicates as a real agent in a read-only verifier role, in its own session; " +
+			"not a chat persona.",
 		Color: "#64748B",
 		Icon:  "gavel",
-		// No tools: the Judge is a no-tools structured LLM call (all-deny seed).
+		// DefaultTools is unused for the Judge (and every System Agent): its
+		// actual tool policy is systemAgentSeed's fully-enumerated verifier
+		// set (read_file/list_directory/inspect_session allow, else deny),
+		// not this field. Left nil rather than repeating that set here, to
+		// avoid two sources of truth drifting apart.
 		DefaultTools: nil,
 	}
 }

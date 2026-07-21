@@ -53,8 +53,10 @@ func IsValidBehaviorScope(s BehaviorScope) bool {
 
 // CriterionBehavior is the payload of a `kind: behavior` criterion (ADR-052
 // FR-034): the criterion is met when the count of SUCCESSFUL calls to Tool
-// within Scope falls in [MinCount, MaxCount] (MaxCount nil = unbounded above).
-// MinCount=0 with MaxCount pointing at 0 expresses "never call Tool".
+// within Scope falls in [EffectiveMinCount(), MaxCount] (MaxCount nil =
+// unbounded above). MinCount=0 (explicit) with MaxCount pointing at 0
+// expresses "never call Tool"; MinCount=0 (explicit) with MaxCount pointing
+// at N>0 expresses "call it 0..N times" (calling it at all is optional).
 //
 // This type is the payload SHAPE plus its own strict validation only — the
 // deterministic scanner that reads the session tool-call log and evaluates a
@@ -63,17 +65,35 @@ type CriterionBehavior struct {
 	// Tool is the tool name whose successful-call count is scanned. Required.
 	Tool string `json:"tool"`
 	// MinCount is the minimum number of successful Tool calls required within
-	// Scope. Must be >= 0. A zero value defaults to 1 UNLESS paired with
-	// MaxCount pointing at 0 (the explicit "never call Tool" combo) — plain
-	// int can't otherwise distinguish an omitted value from an explicit 0, so
-	// that pairing is the disambiguator (FR-034).
-	MinCount int `json:"min_count"`
+	// Scope. Pointer so an OMITTED value (nil) defaults to 1, while an
+	// EXPLICIT zero (MinCount != nil, *MinCount == 0) stays zero — this is
+	// what makes "0..N calls, calling it at all is optional" expressible;
+	// "never call Tool" is the plain {min_count:0, max_count:0} pairing, with
+	// no special-case sentinel needed (fix-wave finding #5 — the pointer
+	// refactor replaces the prior "0 unless paired with max_count:0" hack).
+	// Must be >= 0 when set. Normalized (defaulted to 1 when nil) by
+	// validateCriterionBehavior, so a persisted criterion always carries an
+	// explicit value; use EffectiveMinCount() to read the resolved floor
+	// without re-deriving the nil-default at each call site.
+	MinCount *int `json:"min_count,omitempty"`
 	// MaxCount is the maximum number of successful Tool calls allowed within
-	// Scope. nil = unbounded. When set, MUST be >= the (possibly defaulted)
-	// MinCount.
+	// Scope. nil = unbounded. When set, MUST be >= EffectiveMinCount().
 	MaxCount *int `json:"max_count,omitempty"`
 	// Scope is "attempt" or "task_session" (default when empty).
 	Scope BehaviorScope `json:"scope,omitempty"`
+}
+
+// EffectiveMinCount returns the resolved minimum successful-call floor: an
+// explicit MinCount value (including an explicit zero), or 1 when MinCount is
+// nil (the FR-034 default). Callers that read the floor for comparison logic
+// (the deterministic scanner, validation, reason rendering) should always go
+// through this method rather than dereferencing MinCount directly, so the
+// nil-default is resolved in exactly one place.
+func (b CriterionBehavior) EffectiveMinCount() int {
+	if b.MinCount == nil {
+		return 1
+	}
+	return *b.MinCount
 }
 
 // UnmarshalJSON implements json.Unmarshaler for CriterionBehavior. It rejects
@@ -257,6 +277,11 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 // mutates b in place to apply the documented defaults, mirroring how
 // normalizeCriteria defaults an unset Status before validating. idx is used
 // only to name the field in the returned error.
+//
+// Fix-wave finding #5 deleted the old "MinCount==0 defaults to 1 UNLESS
+// max_count is also 0" sentinel: MinCount is now *int, so nil (omitted) is
+// unambiguous and defaults to 1, while an explicit zero simply stays zero —
+// there is no longer a special "never call" combo to detect here.
 func validateCriterionBehavior(b *CriterionBehavior, idx int) error {
 	if b == nil {
 		return verr("criteria[%d]: behavior criterion requires a behavior payload", idx)
@@ -264,17 +289,14 @@ func validateCriterionBehavior(b *CriterionBehavior, idx int) error {
 	if b.Tool == "" {
 		return verr("criteria[%d]: behavior.tool is required", idx)
 	}
-	if b.MinCount < 0 {
+	if b.MinCount != nil && *b.MinCount < 0 {
 		return verr("criteria[%d]: behavior.min_count must not be negative", idx)
 	}
-	// "never call Tool" is the one case where an explicit min_count=0 must
-	// survive as 0 rather than being treated as an omitted (zero-value) field
-	// and defaulted to 1 — disambiguated by its required max_count=0 pairing.
-	neverCall := b.MaxCount != nil && *b.MaxCount == 0
-	if b.MinCount == 0 && !neverCall {
-		b.MinCount = 1
+	if b.MinCount == nil {
+		one := 1
+		b.MinCount = &one
 	}
-	if b.MaxCount != nil && *b.MaxCount < b.MinCount {
+	if b.MaxCount != nil && *b.MaxCount < *b.MinCount {
 		return verr("criteria[%d]: behavior.max_count must be >= min_count", idx)
 	}
 	if b.Scope == "" {

@@ -1255,6 +1255,92 @@ func TestUpdateAgent_SkillsClear(t *testing.T) {
 	assert.False(t, hasSkills, "skills key must be absent in config.json after clearing with empty array")
 }
 
+// TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT proves the
+// ADR-052 FR-039 memory_enabled wire field: (1) an agent with no persisted
+// MemoryEnabled override defaults to true on GET/list (applyAgentOverrides
+// populates it from MemoryEnabledEffective, which treats nil as true), and
+// (2) a PUT setting memory_enabled:false persists to config.json and is
+// echoed back false on the PUT response and a subsequent GET — closing the
+// gap where toWireAgent's response paths never set the field at all.
+func TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"mem-agent","name":"Mem Agent"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:      tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "mem-agent", Name: "Mem Agent"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// 1. GET with no persisted override: defaults to true.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/mem-agent", nil)
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	var getResp struct {
+		MemoryEnabled *bool `json:"memory_enabled"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &getResp))
+	require.NotNil(t, getResp.MemoryEnabled, "memory_enabled must always be present on the wire")
+	assert.True(t, *getResp.MemoryEnabled, "memory_enabled must default to true when never set")
+
+	// 2. PUT memory_enabled:false persists and echoes back on the response.
+	body := `{"memory_enabled":false}`
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/mem-agent", strings.NewReader(body))
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	var putResp struct {
+		MemoryEnabled *bool `json:"memory_enabled"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
+	require.NotNil(t, putResp.MemoryEnabled)
+	assert.False(t, *putResp.MemoryEnabled, "PUT response must echo the just-persisted memory_enabled:false")
+
+	// 3. config.json actually persisted memory_enabled:false.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	persistedVal, hasKey := agentMap["memory_enabled"]
+	require.True(t, hasKey, "memory_enabled key must be persisted in config.json")
+	assert.Equal(t, false, persistedVal)
+
+	// 4. A subsequent GET (fresh read of the live/reloaded config) reflects false.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/agents/mem-agent", nil)
+	api.HandleAgents(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	var getResp2 struct {
+		MemoryEnabled *bool `json:"memory_enabled"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &getResp2))
+	require.NotNil(t, getResp2.MemoryEnabled)
+	assert.False(t, *getResp2.MemoryEnabled, "GET after PUT must reflect the persisted memory_enabled:false")
+}
+
 // TestCreateAgent_UnknownSkillIDRejected verifies that POST /api/v1/agents with a
 // skill ID not in the installed registry is rejected with 400 when skills are installed.
 //

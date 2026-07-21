@@ -40,7 +40,7 @@ func TestBehaviorScan_CountMet(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		entries = append(entries, mkEntry(baseTime.Add(time.Duration(i)*time.Second), mkToolCall("web_search", "success")))
 	}
-	criterion := BehaviorCriterion{Tool: "web_search", MinCount: 5, Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(5), Scope: BehaviorScopeTaskSession}
 
 	result := ScanBehaviorCriterionEntries(entries, criterion, time.Time{})
 
@@ -65,7 +65,7 @@ func TestBehaviorScan_CountUnmet(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		entries = append(entries, mkEntry(baseTime.Add(time.Duration(i)*time.Second), mkToolCall("web_search", "success")))
 	}
-	criterion := BehaviorCriterion{Tool: "web_search", MinCount: 5, Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(5), Scope: BehaviorScopeTaskSession}
 
 	result := ScanBehaviorCriterionEntries(entries, criterion, time.Time{})
 
@@ -80,7 +80,7 @@ func TestBehaviorScan_CountUnmet(t *testing.T) {
 // TestBehaviorScan_SendMessageCalled covers DS-7's "send_message called"
 // met/unmet pair (min_count default of 1).
 func TestBehaviorScan_SendMessageCalled(t *testing.T) {
-	criterion := BehaviorCriterion{Tool: "send_message", MinCount: 1, Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "send_message", MinCount: intPtr(1), Scope: BehaviorScopeTaskSession}
 
 	t.Run("one call met", func(t *testing.T) {
 		entries := []session.TranscriptEntry{mkEntry(baseTime, mkToolCall("send_message", "success"))}
@@ -106,7 +106,7 @@ func TestBehaviorScan_MaxCountExceeded(t *testing.T) {
 		entries = append(entries, mkEntry(baseTime.Add(time.Duration(i)*time.Second), mkToolCall("web_search", "success")))
 	}
 	criterion := BehaviorCriterion{
-		Tool: "web_search", MinCount: 3, MaxCount: intPtr(5), Scope: BehaviorScopeTaskSession,
+		Tool: "web_search", MinCount: intPtr(3), MaxCount: intPtr(5), Scope: BehaviorScopeTaskSession,
 	}
 
 	result := ScanBehaviorCriterionEntries(entries, criterion, time.Time{})
@@ -132,7 +132,7 @@ func TestBehaviorScan_ScopeAttemptVsTaskSession(t *testing.T) {
 	}
 
 	t.Run("scope=attempt sees none of the prior attempt", func(t *testing.T) {
-		criterion := BehaviorCriterion{Tool: "web_search", MinCount: 1, Scope: BehaviorScopeAttempt}
+		criterion := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(1), Scope: BehaviorScopeAttempt}
 		result := ScanBehaviorCriterionEntries(entries, criterion, attemptStart)
 		if result.Met {
 			t.Error("Met = true, want false — prior-attempt calls must not count in scope=attempt")
@@ -143,7 +143,7 @@ func TestBehaviorScan_ScopeAttemptVsTaskSession(t *testing.T) {
 	})
 
 	t.Run("scope=task_session sees all 5", func(t *testing.T) {
-		criterion := BehaviorCriterion{Tool: "web_search", MinCount: 5, Scope: BehaviorScopeTaskSession}
+		criterion := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(5), Scope: BehaviorScopeTaskSession}
 		result := ScanBehaviorCriterionEntries(entries, criterion, attemptStart)
 		if !result.Met {
 			t.Errorf("Met = false, want true; reason=%q", result.Reason)
@@ -159,7 +159,7 @@ func TestBehaviorScan_ScopeAttemptVsTaskSession(t *testing.T) {
 			mkEntry(attemptStart, mkToolCall("web_search", "success")),
 			mkEntry(attemptStart.Add(time.Minute), mkToolCall("web_search", "success")),
 		)
-		criterion := BehaviorCriterion{Tool: "web_search", MinCount: 2, Scope: BehaviorScopeAttempt}
+		criterion := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(2), Scope: BehaviorScopeAttempt}
 		result := ScanBehaviorCriterionEntries(entriesWithCurrent, criterion, attemptStart)
 		if !result.Met {
 			t.Errorf("Met = false, want true; reason=%q", result.Reason)
@@ -179,7 +179,7 @@ func TestBehaviorScan_FailedCallsNotCounted(t *testing.T) {
 		mkEntry(baseTime.Add(2*time.Second), mkToolCall("web_search", "denied")),
 		mkEntry(baseTime.Add(3*time.Second), mkToolCall("web_search", "pending")),
 	}
-	criterion := BehaviorCriterion{Tool: "web_search", MinCount: 3, Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(3), Scope: BehaviorScopeTaskSession}
 
 	result := ScanBehaviorCriterionEntries(entries, criterion, time.Time{})
 
@@ -197,7 +197,7 @@ func TestBehaviorScan_FailedCallsNotCounted(t *testing.T) {
 // TestBehaviorScan_NeverCallX covers DS-7's min_count=0 + max_count=0 "never
 // call X" pair — met when the tool is never called, violated when it is.
 func TestBehaviorScan_NeverCallX(t *testing.T) {
-	criterion := BehaviorCriterion{Tool: "delete_file", MinCount: 0, MaxCount: intPtr(0), Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "delete_file", MinCount: intPtr(0), MaxCount: intPtr(0), Scope: BehaviorScopeTaskSession}
 
 	t.Run("met when never called", func(t *testing.T) {
 		entries := []session.TranscriptEntry{mkEntry(baseTime, mkToolCall("read_file", "success"))}
@@ -230,7 +230,7 @@ func TestBehaviorScan_UnknownToolFailClosed(t *testing.T) {
 		mkEntry(baseTime, mkToolCall("web_search", "success")),
 		mkEntry(baseTime.Add(time.Second), mkToolCall("read_file", "success")),
 	}
-	criterion := BehaviorCriterion{Tool: "totally_not_a_real_tool", MinCount: 1, Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "totally_not_a_real_tool", MinCount: intPtr(1), Scope: BehaviorScopeTaskSession}
 
 	result := ScanBehaviorCriterionEntries(entries, criterion, time.Time{})
 
@@ -253,7 +253,7 @@ func TestBehaviorScan_KnownToolZeroSuccessNotFlaggedUnknown(t *testing.T) {
 	entries := []session.TranscriptEntry{
 		mkEntry(baseTime, mkToolCall("flaky_tool", "error")),
 	}
-	criterion := BehaviorCriterion{Tool: "flaky_tool", MinCount: 1, Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "flaky_tool", MinCount: intPtr(1), Scope: BehaviorScopeTaskSession}
 
 	result := ScanBehaviorCriterionEntries(entries, criterion, time.Time{})
 
@@ -273,10 +273,10 @@ func TestBehaviorScan_InvalidCriterion(t *testing.T) {
 		name      string
 		criterion BehaviorCriterion
 	}{
-		{"empty tool", BehaviorCriterion{Tool: "", MinCount: 1, Scope: BehaviorScopeTaskSession}},
-		{"negative min_count", BehaviorCriterion{Tool: "x", MinCount: -1, Scope: BehaviorScopeTaskSession}},
-		{"max below min", BehaviorCriterion{Tool: "x", MinCount: 5, MaxCount: intPtr(2), Scope: BehaviorScopeTaskSession}},
-		{"invalid scope", BehaviorCriterion{Tool: "x", MinCount: 1, Scope: "bogus"}},
+		{"empty tool", BehaviorCriterion{Tool: "", MinCount: intPtr(1), Scope: BehaviorScopeTaskSession}},
+		{"negative min_count", BehaviorCriterion{Tool: "x", MinCount: intPtr(-1), Scope: BehaviorScopeTaskSession}},
+		{"max below min", BehaviorCriterion{Tool: "x", MinCount: intPtr(5), MaxCount: intPtr(2), Scope: BehaviorScopeTaskSession}},
+		{"invalid scope", BehaviorCriterion{Tool: "x", MinCount: intPtr(1), Scope: "bogus"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -294,12 +294,12 @@ func TestBehaviorScan_InvalidCriterion(t *testing.T) {
 // TestBehaviorCriterionValidate directly exercises BehaviorCriterion.Validate
 // for the FR-034 payload constraints.
 func TestBehaviorCriterionValidate(t *testing.T) {
-	valid := BehaviorCriterion{Tool: "web_search", MinCount: 1, Scope: BehaviorScopeTaskSession}
+	valid := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(1), Scope: BehaviorScopeTaskSession}
 	if err := validateBehaviorCriterion(valid); err != nil {
 		t.Errorf("Validate() = %v, want nil for a well-formed criterion", err)
 	}
 
-	neverCallX := BehaviorCriterion{Tool: "x", MinCount: 0, MaxCount: intPtr(0), Scope: BehaviorScopeAttempt}
+	neverCallX := BehaviorCriterion{Tool: "x", MinCount: intPtr(0), MaxCount: intPtr(0), Scope: BehaviorScopeAttempt}
 	if err := validateBehaviorCriterion(neverCallX); err != nil {
 		t.Errorf("Validate() = %v, want nil — min_count=0+max_count=0 is a valid ('never call X') shape", err)
 	}
@@ -335,7 +335,7 @@ func TestBehaviorScan_ViaPartitionStore_SessionID(t *testing.T) {
 		}
 	}
 
-	criterion := BehaviorCriterion{Tool: "web_search", MinCount: 3, Scope: BehaviorScopeTaskSession}
+	criterion := BehaviorCriterion{Tool: "web_search", MinCount: intPtr(3), Scope: BehaviorScopeTaskSession}
 	result, err := ScanBehaviorCriterion(store, meta.ID, criterion, time.Time{})
 	if err != nil {
 		t.Fatalf("ScanBehaviorCriterion: %v", err)

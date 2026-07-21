@@ -491,6 +491,16 @@ func (te *TaskExecutor) finishTaskRun(
 func (te *TaskExecutor) adjudicateClaim(
 	ctx context.Context, t *task.Task, taskSessionID, claimSummary string,
 ) (redispatchTaskID string) {
+	if strings.TrimSpace(claimSummary) == "" {
+		// ADR-052 (7-reviewer gate item 3): an empty completion claim has
+		// nothing to adjudicate — fail closed BEFORE any verifier dispatch,
+		// never a full (potentially D7-backoff-stalled) verifier turn for a
+		// claim carrying no content to check evidence against.
+		reason := "worker reported a completion signal with an empty claim summary — " +
+			"nothing to adjudicate (fail-closed, no verifier dispatched)"
+		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil)
+	}
+
 	criteria := t.Criteria
 	usedSoftTier := false
 	if len(criteria) == 0 {
@@ -537,6 +547,23 @@ func (te *TaskExecutor) adjudicateClaim(
 		return ""
 	}
 
+	// FR-014 (member-path parity with plan_engine.go's verdictStillApplicable
+	// — item 4 of the 7-reviewer gate): JudgeCriteria's verifier turn ran
+	// OUTSIDE any lock, by design (the SAME reason the plan-round path
+	// decouples into its own goroutine) — a concurrent Stop
+	// (PlanEngine.StopTask/StopPlan) may have already moved this task out of
+	// in_progress while the judge call was in flight. Re-check BEFORE
+	// writing the verdict transcript or applying its outcome: a task the
+	// Stop fan-out already cancelled/terminated must never have that outcome
+	// silently overwritten by a stale verdict, and must never have an
+	// attempt "consumed" for a run that was actually cancelled.
+	if !te.taskVerdictStillApplicable(t.ID) {
+		logger.InfoCF("task_executor",
+			"judge verdict dropped: task left in_progress during adjudication (Stop landed concurrently)",
+			map[string]any{"task_id": t.ID})
+		return ""
+	}
+
 	verdict := result.Verdict
 	te.writeJudgeVerdictTranscript(t, taskSessionID, verdict)
 
@@ -546,6 +573,22 @@ func (te *TaskExecutor) adjudicateClaim(
 	}
 
 	return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, claimSummary, verdict)
+}
+
+// taskVerdictStillApplicable re-reads taskID's CURRENT status directly from
+// the store (FR-014) and reports whether a judge verdict computed moments
+// ago is still safe to apply: the task must still be in_progress. A store
+// read failure fails SAFE (returns false, drops the verdict) rather than
+// risking a stale-verdict overwrite on an unreadable/uncertain state.
+func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
+	current, err := te.store.Get(taskID)
+	if err != nil {
+		logger.WarnCF("task_executor",
+			"adjudicateClaim: could not re-read task before applying verdict (fail-safe: dropping verdict)",
+			map[string]any{"task_id": taskID, "error": err.Error()})
+		return false
+	}
+	return current.Status == task.StatusInProgress
 }
 
 // consumeAttemptOrExhaust increments+persists Task.AttemptCount (server-set,

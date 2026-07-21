@@ -70,14 +70,22 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 		}
 	})
 
-	t.Run("global ceiling seeds explicit ask for the three tools, explicit deny for inspect_session", func(t *testing.T) {
+	t.Run("global ceiling seeds explicit ask for the three tools, explicit allow for inspect_session", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		for _, tool := range planExecutionTools {
 			assert.Equalf(t, "ask", cfg.Sandbox.ToolPolicies[tool],
 				"global ceiling must seed 'ask' for %q", tool)
 		}
-		assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["inspect_session"],
-			"global ceiling must seed 'deny' for inspect_session (verifier-role-only, not ask-able)")
+		// fix-wave finding #2 (architect F2 half 1): the ceiling seeds
+		// "allow" for inspect_session — under strictest-wins
+		// (pkg/tools/compositor.go), a ceiling "deny" would OVERRULE the
+		// Judge's own seeded "allow" and resolve the Judge to deny (the
+		// landed defect). Every seeded non-Judge agent carries an explicit
+		// per-agent "deny" instead (asserted by
+		// TestToolPolicy_InspectSession_JudgeOnly below), so the resolved
+		// posture is unchanged for everyone but the Judge.
+		assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["inspect_session"],
+			"global ceiling must seed 'allow' for inspect_session (raises the ceiling only; per-agent deny does the real gating)")
 	})
 
 	t.Run("missing entry backfilled to explicit deny, boots (no abort)", func(t *testing.T) {
@@ -122,10 +130,14 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 	})
 }
 
-// TestToolPolicy_InspectSession_JudgeOnly verifies DS-6/FR-027: inspect_session
-// resolves allow ONLY for the Judge; every other seeded agent (core +
-// subagent tier + worker) is explicit deny via its own fully-enumerated seed
-// map or ceiling inheritance, and the global ceiling itself is explicit deny.
+// TestToolPolicy_InspectSession_JudgeOnly verifies DS-6/FR-027, updated by
+// fix-wave finding #2 (architect F2 half 1): inspect_session resolves allow
+// ONLY for the Judge. Since the global ceiling now seeds "allow" for
+// inspect_session (defaults.go — necessary so the Judge's own "allow"
+// resolves under strictest-wins), EVERY other seeded agent (core + subagent
+// tier + worker) MUST carry an EXPLICIT per-agent "deny" — an absent entry
+// would now silently inherit the ceiling's "allow", which is exactly the
+// class of gap this test locks shut.
 func TestToolPolicy_InspectSession_JudgeOnly(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -135,11 +147,12 @@ func TestToolPolicy_InspectSession_JudgeOnly(t *testing.T) {
 			continue // Judge asserted separately by TestSeed_JudgeSystemAgent
 		}
 		require.NotNilf(t, a.Tools, "agent %q must carry an explicit tools policy", a.ID)
-		if p, ok := a.Tools.Builtin.Policies["inspect_session"]; ok {
-			assert.Equalf(t, config.ToolPolicyDeny, p,
-				"non-Judge agent %q must not be granted inspect_session", a.ID)
-		}
-		// Absent (e.g. Worker) is fine — it inherits the ceiling's deny.
+		p, ok := a.Tools.Builtin.Policies["inspect_session"]
+		require.Truef(t, ok,
+			"non-Judge agent %q must carry an EXPLICIT inspect_session entry (never absent) — "+
+				"an absent entry would silently inherit the ceiling's allow", a.ID)
+		assert.Equalf(t, config.ToolPolicyDeny, p,
+			"non-Judge agent %q must not be granted inspect_session", a.ID)
 	}
 }
 

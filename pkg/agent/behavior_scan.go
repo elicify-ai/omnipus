@@ -57,23 +57,29 @@ func IsValidBehaviorScope(s BehaviorScope) bool {
 type BehaviorCriterion = task.CriterionBehavior
 
 // validateBehaviorCriterion reports a non-nil error when c's shape violates
-// the FR-034 payload contract: tool required; min_count >= 0; max_count
-// (when set) >= min_count; scope one of the two known values.
-// ScanBehaviorCriterionEntries calls this itself and fails the criterion
-// closed (unmet) rather than panicking or silently misinterpreting a
-// malformed criterion. (pkg/task enforces the same contract at decode/store
-// time; re-checking here keeps the scanner fail-closed even for callers that
-// construct payloads directly.)
+// the FR-034 payload contract: tool required; min_count >= 0 (when set);
+// max_count (when set) >= the EFFECTIVE min_count; scope one of the two known
+// values. ScanBehaviorCriterionEntries calls this itself and fails the
+// criterion closed (unmet) rather than panicking or silently misinterpreting
+// a malformed criterion. (pkg/task enforces the same contract at
+// decode/store time; re-checking here keeps the scanner fail-closed even for
+// callers that construct payloads directly.)
+//
+// Fix-wave finding #5: MinCount is now *int (pkg/task/criterion.go) — nil
+// means "omitted, defaults to 1 via EffectiveMinCount()", an explicit zero
+// stays zero. The negative-value check only applies when MinCount is set;
+// the max>=min comparison always reads the EFFECTIVE value so a nil
+// (not-yet-defaulted) MinCount still validates correctly.
 func validateBehaviorCriterion(c BehaviorCriterion) error {
 	if strings.TrimSpace(c.Tool) == "" {
 		return fmt.Errorf("behavior criterion: tool is required")
 	}
-	if c.MinCount < 0 {
-		return fmt.Errorf("behavior criterion: min_count must be >= 0, got %d", c.MinCount)
+	if c.MinCount != nil && *c.MinCount < 0 {
+		return fmt.Errorf("behavior criterion: min_count must be >= 0, got %d", *c.MinCount)
 	}
-	if c.MaxCount != nil && *c.MaxCount < c.MinCount {
+	if c.MaxCount != nil && *c.MaxCount < c.EffectiveMinCount() {
 		return fmt.Errorf(
-			"behavior criterion: max_count (%d) must be >= min_count (%d)", *c.MaxCount, c.MinCount,
+			"behavior criterion: max_count (%d) must be >= min_count (%d)", *c.MaxCount, c.EffectiveMinCount(),
 		)
 	}
 	if !IsValidBehaviorScope(c.Scope) {
@@ -116,9 +122,11 @@ type BehaviorScanResult struct {
 // BehaviorScopeTaskSession — the whole session counts).
 //
 // attemptStart is the current attempt's start marker as a timestamp — the
-// engine-side caller (task_executor.go, wired at merge) is the source of
-// truth for when the current attempt began; this function only consumes the
-// cutoff, it does not discover it. Passing the zero time.Time when
+// engine-side caller (runBehaviorScan, below, in THIS file) is the source of
+// truth for when the current attempt began: it resolves the cutoff from the
+// task's own Task.StartedAt (task scope only; goal scope has no per-attempt
+// cutoff, see runBehaviorScan's doc comment). This function only consumes
+// the cutoff, it does not discover it. Passing the zero time.Time when
 // scope=="attempt" degenerates to "everything counts" (equivalent to
 // task_session) — callers that track attempts should always pass a real
 // cutoff.
@@ -154,7 +162,12 @@ func ScanBehaviorCriterionEntries(
 		}
 	}
 
-	met := observed >= criterion.MinCount && (criterion.MaxCount == nil || observed <= *criterion.MaxCount)
+	// NOTE (fix-wave finding #5, minimal compile fix — see behavior_scan.go's
+	// package-level owner for the full ScanBehaviorCriterionEntries function):
+	// criterion.MinCount is now *int (pkg/task/criterion.go); EffectiveMinCount()
+	// resolves nil to the FR-034 default of 1, matching pkg/task's own
+	// validateCriterionBehavior normalization.
+	met := observed >= criterion.EffectiveMinCount() && (criterion.MaxCount == nil || observed <= *criterion.MaxCount)
 	reason := behaviorScanReason(criterion, observed, met)
 
 	unknownTool := everSeen == 0
@@ -230,7 +243,8 @@ func criterionScopeIsAttempt(c BehaviorCriterion) bool {
 // behaviorScanReason renders the human-readable verdict explanation shared by
 // both the met and unmet paths of ScanBehaviorCriterionEntries.
 func behaviorScanReason(c BehaviorCriterion, observed int, met bool) string {
-	bound := fmt.Sprintf("min_count=%d", c.MinCount)
+	// Fix-wave finding #5, minimal compile fix (c.MinCount is now *int).
+	bound := fmt.Sprintf("min_count=%d", c.EffectiveMinCount())
 	if c.MaxCount != nil {
 		bound += fmt.Sprintf(", max_count=%d", *c.MaxCount)
 	}

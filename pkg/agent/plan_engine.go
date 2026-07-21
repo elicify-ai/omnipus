@@ -493,7 +493,7 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 
 	switch p.EffectivePlanPhase() {
 	case plan.PhaseJudging:
-		_, inFlight := pe.registry().Lookup(p.ID)
+		_, inFlight := pe.registry().Lookup(verifierUnitForPlan(p.ID))
 		if inFlight {
 			return // a goroutine is already adjudicating this round
 		}
@@ -650,9 +650,11 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan) {
 	// crash-resume liveness marker — see verifier_registry.go's package
 	// doc). The verifier session id is not known yet at this point (judge.go
 	// creates it once the round actually runs JudgeCriteria), so this call
-	// registers an empty-session placeholder; judge.go upserts the real id
-	// via the SAME Register call before dispatching the verifier's turn.
-	pe.registry().Register(p.ID, "")
+	// registers an empty-session placeholder under the SAME
+	// verifierUnitForPlan key runVerifierAdjudication upserts the real id
+	// through (F1: both sides must agree on this key) before dispatching the
+	// verifier's turn.
+	pe.registry().Register(verifierUnitForPlan(p.ID), "")
 
 	pe.judgeWG.Add(1)
 	go pe.runPlanJudgeRound(p.ID, release)
@@ -664,7 +666,7 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan) {
 func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	defer pe.judgeWG.Done()
 	defer release()
-	defer pe.registry().Unregister(planID)
+	defer pe.registry().Unregister(verifierUnitForPlan(planID))
 
 	ctx, cancel := context.WithTimeout(context.Background(), planJudgeRoundTimeout)
 	defer cancel()
@@ -905,13 +907,16 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	// a member's verifier session is only ever registered while that member
 	// is itself in_progress (adjudication runs before the member's own
 	// terminal write — see task_executor.go's finishTaskRun), so scanning
-	// every member id costs nothing and misses nothing}.
+	// every member id costs nothing and misses nothing}. Unit keys MUST go
+	// through verifierUnitForPlan/verifierUnitForTask (F1) — the exact same
+	// helpers runVerifierAdjudication/beginPlanJudgeRound register under —
+	// never the raw plan/task id.
 	units := make([]string, 0, len(tasks)+1)
-	units = append(units, planID)
+	units = append(units, verifierUnitForPlan(planID))
 	var sessions []string
 	for i := range tasks {
 		t := &tasks[i]
-		units = append(units, t.ID)
+		units = append(units, verifierUnitForTask(t.ID))
 		if t.Status == task.StatusInProgress && t.SessionID != "" {
 			sessions = append(sessions, t.SessionID)
 		}
@@ -919,10 +924,19 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	sessions = append(sessions, pe.registry().SessionsFor(units...)...)
 	pe.cancelSessions(ctx, sessions, userID, channel)
 
+	// Item 5: aggregate (never silently discard) any per-member store-write
+	// failure while still completing the REST of the fan-out — a single
+	// member's write failure must not abort cancelling its siblings, and
+	// must not report an unqualified success either (an orphaned
+	// still-in_progress member is exactly the outcome ADR-052 §6.4 warns
+	// about).
+	var failedMemberIDs []string
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status == task.StatusInProgress {
-			pe.cancelMemberLocked(t.ID, userID)
+			if _, cerr := pe.cancelMemberLocked(t.ID, userID); cerr != nil {
+				failedMemberIDs = append(failedMemberIDs, t.ID)
+			}
 		}
 	}
 
@@ -938,7 +952,27 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 		return nil, fmt.Errorf("plan_engine: StopPlan: transition plan %q to failed: %w", planID, err)
 	}
 	pe.wakeOwner(planID, updated.OwnerAgentID, handover, "plan_stopped_by_user")
-	return updated, nil
+	return updated, aggregateMemberCancelErrors(planID, failedMemberIDs)
+}
+
+// aggregateMemberCancelErrors renders a partial-stop error listing every
+// member task id whose cancelMemberLocked store write failed during
+// StopPlan's fan-out, or nil when none did. The plan's own state transition
+// to failed(stopped_by_user) — and every session-level cancel — has ALREADY
+// completed by the time this is called (StopPlan never short-circuits the
+// fan-out on a single member's failure); this only reports that the
+// resulting state may contain an orphaned still-in_progress member so the
+// caller (and the operator) know to investigate rather than reading Stop as
+// an unqualified success.
+func aggregateMemberCancelErrors(planID string, failedMemberIDs []string) error {
+	if len(failedMemberIDs) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"plan_engine: StopPlan: plan %q was stopped, but %d member task(s) could not be marked "+
+			"cancelled (store write failed) and may remain in_progress: %s",
+		planID, len(failedMemberIDs), strings.Join(failedMemberIDs, ", "),
+	)
 }
 
 // StopTask implements US-7: Stop for a standalone `in_progress` task OR a
@@ -969,7 +1003,7 @@ func (pe *PlanEngine) StopTask(ctx context.Context, taskID, userID, channel stri
 	if t.SessionID != "" {
 		sessions = append(sessions, t.SessionID)
 	}
-	sessions = append(sessions, pe.registry().SessionsFor(taskID)...)
+	sessions = append(sessions, pe.registry().SessionsFor(verifierUnitForTask(taskID))...)
 	pe.cancelSessions(ctx, sessions, userID, channel)
 
 	return pe.cancelMemberLocked(taskID, userID)
@@ -1008,7 +1042,7 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 }
 
 // cancelMemberLocked marks task taskID `failed` with the user-cancel marker
-// (US-8; WAVE-MERGE: task.CancelReason) and emits task_status_changed so
+// (US-8, task.CancelReason) and emits task_status_changed so
 // PlanEngine's own reactive event loop re-evaluates the owning plan (FR-041)
 // on its next pass. Caller must hold planDecisionMu (both StopPlan and
 // StopTask call this while holding it). A store-write failure is returned
