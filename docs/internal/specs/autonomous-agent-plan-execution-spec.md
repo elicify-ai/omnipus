@@ -3,8 +3,17 @@
 - **Source ADR:** [ADR-052](../architecture/ADR-052-autonomous-agent-plan-execution.md) — **Accepted (r6)**; operator interview 2026-07-21 closed all open points
 - **Grill reviews:** ADR r1–r3 + spec r1–r2 (`ADR-052-...-review.md`, `...-spec-review.md`)
 - **Phase:** the **v0.1.1 release line** — shipped together (no existing installations; no back-compat constraints)
-- **Status:** plan-spec r3 (final-pass applied) — ready for `/taskify`
+- **Status:** **Implemented** (`feature/plan-swimlane-board`, 2026-07-21) — Wave 1 merged `4a772291`, Wave 2 `8ea0ba65`, fix wave `2224de75`/`51d69adb`; CI `go-test` ALL GREEN at `51d69adb`.
 - **Supersedes (in part):** the human-approval gate from [ADR-049](../architecture/ADR-049-planning-goals-system-agents.md) (Planning & Goals epic, PR #526)
+
+### Implementation notes (2026-07-21)
+
+Verified against the merged code on `feature/plan-swimlane-board`. Deliberate deviations from this spec / ADR-052, discovered during implementation:
+
+1. **Run vs. Restart split.** ADR-052 §6.8's button matrix collapses standalone-task idle/next/failed/cancelled states into one `▶ Play (re-run)` action (`ADR-052-autonomous-agent-plan-execution.md:147`). The implementation splits this into two distinct routes, reason-gated: **Run** — `PATCH /api/v1/tasks/{id}` with `status:"in_progress"` (`handleTaskPatch`, `pkg/gateway/rest_tasks.go:930`) for an idle task or a genuinely-failed one (attempts exhausted, not user-cancelled) — and **Play** — `POST /api/v1/tasks/{id}/restart` (`handleTaskRestart`, `pkg/gateway/rest_tasks.go:1535`), legal ONLY when `status == StatusFailed && cancel_reason == CancelReasonStoppedByUser`, enforced by `task.ValidateStandaloneRestart` (`pkg/task/store.go:944-958`). A genuinely-failed standalone task cannot Play — same "author fresh" posture FR-018 gives plans.
+2. **"Stop wins" on a cap-queued `approved` plan.** Architect decision post-gate (not spelled out in the ADR's state diagram): Stop is additionally accepted on a plan still `approved` (cap-queued, not yet promoted to `running`) — `approved→failed(stopped_by_user)` is a legal transition. Confirmed in `legalPlanTransitions[StateApproved]` including `StateFailed: true` (`pkg/plan/plan.go:100-105`).
+3. **Evidence-gate first-offense leniency.** FR-035's bare-completion-claim rejection (missing `[goal:evidence]` line) is free on the first occurrence — it does not consume an attempt or increment `AttemptCount`. Only a SECOND consecutive rejection counts toward the bound. `evidenceGateMaxConsecutiveRejections = 2` (`pkg/agent/task_executor.go:88-97`); enforced in `rejectBareEvidenceClaim` (`pkg/agent/task_executor.go:784-825`).
+4. **`[goal:evidence]` taught to both dispatch kinds.** The worker-prompt block teaching the `[goal:evidence]` marker (FR-035) is emitted BEFORE the `dispatchesExternalCLI(t.AgentID)` early-return in the prompt builder (`pkg/agent/task_executor.go:1124-1141`), so both native (Main/Subagent, which also has the `update_task` tool escape hatch) and external-CLI (`subagent_3p`, which has no tool escape hatch — the marker is its ONLY path to satisfy the gate) workers receive the instruction.
 
 ## Overview
 

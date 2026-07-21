@@ -436,7 +436,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         })
         return
       }
-      if (incomingTime <= incorporatedTime) {
+      if (incomingTime === incorporatedTime) {
+        // Wave-3 hotfix: an incoming snapshot EQUAL to what's already
+        // incorporated is not a conflict — it's the expected echo of an
+        // `invalidateQueries` background refetch (or the save-success
+        // `setQueryData` patch above) resolving with the exact same row
+        // this component already applied. It used to fall into the "<="
+        // branch below and log a rejected-hydration telemetry error on
+        // every profile open and after every successful autosave — a false
+        // positive with no real conflict. Skip re-hydrating (nothing
+        // changed) silently; only a STRICTLY older incoming snapshot is a
+        // genuine race worth a breadcrumb.
+        return
+      }
+      if (incomingTime < incorporatedTime) {
         // 7-reviewer-gate fix: this guard used to be a bare early-`return`
         // with no signal when it actually rejected a hydration. If this
         // guard ever incorrectly rejects a legitimate hydration (e.g. clock
