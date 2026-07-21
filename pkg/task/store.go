@@ -286,6 +286,14 @@ func (t *Task) normalize() error {
 	if !IsValidStatus(t.Status) {
 		return verr("invalid status %q", t.Status)
 	}
+	if t.CancelReason != "" {
+		if !IsValidCancelReason(t.CancelReason) {
+			return verr("invalid cancel_reason %q", t.CancelReason)
+		}
+		if t.Status != StatusFailed {
+			return verr("cancel_reason is only valid when status is failed")
+		}
+	}
 	if t.Priority != 0 && (t.Priority < 1 || t.Priority > 5) {
 		return verr("priority must be between 1 and 5, got %d", t.Priority)
 	}
@@ -514,15 +522,21 @@ type Patch struct {
 	Description *string
 	Prompt      *string
 	Status      *Status
-	AgentID     *string
-	Priority    *int
-	BlockedBy   *[]string
-	Todos       *[]Todo
-	Trigger     **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
-	Due         *string
-	PlanID      *string
-	Tags        *[]string
-	Criteria    *[]AcceptanceCriterion
+	// CancelReason is the write path for Task.CancelReason (ADR-052 FR-028).
+	// nil = unchanged; pointing at "" clears it; pointing at a valid
+	// CancelReason value sets it (mirrors plan.Patch.FailedReason,
+	// pkg/plan/store.go:259 — a single, non-double pointer, since "" is
+	// itself a legal target value, not a "no clear" sentinel).
+	CancelReason *CancelReason
+	AgentID      *string
+	Priority     *int
+	BlockedBy    *[]string
+	Todos        *[]Todo
+	Trigger      **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
+	Due          *string
+	PlanID       *string
+	Tags         *[]string
+	Criteria     *[]AcceptanceCriterion
 	// MaxAttempts is a double pointer (mirrors Trigger): outer nil = unchanged,
 	// *outer nil = clear the override (inherit the global PlanningConfig
 	// default), *outer non-nil = set to that value.
@@ -669,6 +683,12 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		}
 		t.Status = *patch.Status
 	}
+	if patch.CancelReason != nil {
+		if *patch.CancelReason != "" && !IsValidCancelReason(*patch.CancelReason) {
+			return nil, verr("invalid cancel_reason %q", *patch.CancelReason)
+		}
+		t.CancelReason = *patch.CancelReason
+	}
 	if patch.AgentID != nil {
 		t.AgentID = *patch.AgentID
 	}
@@ -788,6 +808,79 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		t.PendingJudgeClaim = *patch.PendingJudgeClaim
 	}
 
+	// Cross-field invariant (ADR-052 FR-028, mirrors plan.Plan's normalize()-
+	// enforced FailedReason/State coupling — pkg/plan/plan.go:299-306):
+	// CancelReason is only meaningful on a failed task. Checked here against
+	// the FULLY merged t.Status/t.CancelReason regardless of which patch
+	// field(s) were actually touched this call (unlike plan's Update, this
+	// store does not re-run the whole normalize() on every patch — see
+	// normalize()'s own per-field checks for the Create-time equivalent), so
+	// e.g. a caller that patches Status away from failed without also
+	// clearing CancelReason in the same call is rejected rather than landing
+	// an inconsistent record on disk.
+	if t.CancelReason != "" && t.Status != StatusFailed {
+		return nil, verr("cancel_reason is only valid when status is failed")
+	}
+
+	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.write(t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// ErrNotRestartable is returned by RestartReset when the task is not
+// currently `failed` — restart (ADR-052 FR-026/028) only applies to a failed
+// task, for ANY failure reason (a genuine attempt-limit exhaustion or a user
+// cancel alike — task-level `failed→next` is un-frozen unconditionally,
+// unlike the plan-level restart guard which is reason-gated). A task in any
+// other status has nothing to restart. Control-flow sentinel (mirrors
+// ErrAlreadyClaimed/ErrAlreadyRunning), NOT a wire validation error — the
+// restart handler maps it to its own HTTP status (spec FR-026: 409).
+var ErrNotRestartable = errors.New("task: not restartable: task is not failed")
+
+// RestartReset atomically resets a failed task to a fresh runnable state for
+// a plan/task restart (ADR-052 FR-016/017/028) in a single write: it resets
+// AttemptCount to 0 (a restarted task's goal loop starts its attempt count
+// over — the "attempt_count reset primitive" restart needs), clears
+// CancelReason (mirrors the plan's FailedReason clear on restart — a re-run
+// task is no longer "stopped by user"), and clears the previous run's
+// session/result/artifacts/timestamps — the same "fresh" field set
+// SpawnReset clears for a trigger re-fire, reached here via a distinct path
+// because SpawnReset (a) does not touch AttemptCount/CancelReason and (b) is
+// scoped to a `next` re-fire, not a restart of a `failed` task. The task
+// lands on `next`, or on the derived `blocked` side-state if a blocked_by
+// dependency is not yet `done` — the same dependency recompute Update applies
+// when BlockedBy is patched (DS-5: restart resets a member to "next/blocked").
+//
+// Returns ErrNotRestartable when the task is not currently `failed`. Takes
+// the per-task lock once internally.
+func (s *Store) RestartReset(id string) (*Task, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+	mu := s.lock.Get(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	t, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != StatusFailed {
+		return nil, fmt.Errorf("%w: task %q is %q", ErrNotRestartable, id, t.Status)
+	}
+	t.Status = StatusNext
+	t.CancelReason = ""
+	t.AttemptCount = 0
+	t.Result = ""
+	t.Artifacts = nil
+	t.SessionID = ""
+	t.StartedAt = ""
+	t.CompletedAt = ""
+	t.FollowedUp = false
+	t.PendingJudgeClaim = ""
+	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {
 		return nil, err
