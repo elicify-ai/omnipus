@@ -397,11 +397,40 @@ func (m *BrowserManager) InstallRoot() string {
 // full-Chrome download exists under the install root (W3 e2e finding — the
 // install-root-only check wrongly classified such hosts not_capable and
 // permanently disabled WebRTC for them). See ClassifyVideoCapabilityWithExec.
+//
+// When cfg.ExecPath is unset — the common case, since most installs never
+// set an explicit override — this also falls back to the already-RESOLVED
+// exec path cached by execPathCaches (m.execPath.cachedPath(),
+// exec_resolver.go). Rationale (download-vs-launch mismatch): exec_resolver's
+// resolve() checks $PATH for a system google-chrome/chromium BEFORE falling
+// back to the managed Chrome-for-Testing download. On a host with a system
+// Chrome on $PATH, that system binary is what actually launches every real
+// browser session, and the managed install root this method otherwise
+// inspects is NEVER populated — so without this fallback,
+// ClassifyVideoCapability would permanently misclassify a perfectly capable
+// full-Chrome host as not_capable ("full-Chrome build not installed yet"),
+// disabling WebRTC live-view video for good on that host.
+//
+// This reads m.execPath's cache field only — it never calls resolve() /
+// resolveExecPath() itself. Those probe up to 4 PATH candidates (5s timeout
+// each) and can fetch the Chrome-for-Testing manifest over the network, which
+// is unacceptable on this method's call path (gateway request handling, see
+// CaptureVideoCapability's callers in pkg/gateway/browser_webrtc.go) — it
+// must stay a fast, non-blocking, no-network classification. If the cache is
+// empty (nothing resolved yet), behavior is unchanged from before: falls
+// through to the install-root-only check.
 func (m *BrowserManager) VideoCapability() VideoCapability {
 	m.mu.Lock()
 	execPath := m.cfg.ExecPath
 	profileDir := m.cfg.ProfileDir
 	m.mu.Unlock()
+	if execPath == "" {
+		// m.execPath has its own mutex (see execPathCaches' doc comment) —
+		// deliberately read after releasing m.mu above, mirroring every other
+		// caller in this package that touches both locks (ADR-038 discipline:
+		// never hold m.mu while touching execPath's lock, and vice versa).
+		execPath = m.execPath.cachedPath()
+	}
 	return ClassifyVideoCapabilityWithExec(execPath, InstallRootForProfileDir(profileDir))
 }
 

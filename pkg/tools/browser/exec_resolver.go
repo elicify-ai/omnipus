@@ -379,3 +379,20 @@ func (e *execPathCaches) cacheFailure(err error) {
 			"error":       err.Error(),
 		})
 }
+
+// cachedPath returns the last successfully-resolved Chromium binary path, or
+// "" if nothing has been resolved yet (or the prior success was invalidated,
+// e.g. by cacheFailure or a stat-miss in resolve). Guarded by mu.
+//
+// This is a plain, non-blocking field read — unlike resolve(), it NEVER
+// re-validates the path with os.Stat, never probes $PATH, and never reaches
+// the network for the Chrome-for-Testing manifest. It exists for callers on
+// hot request paths (BrowserManager.VideoCapability, manager.go) that need a
+// best-effort snapshot of "what Chromium binary, if any, has already been
+// resolved for a real launch" without risking resolve()'s up-to-4-candidate
+// PATH probe (5s timeout each) or a CfT manifest fetch.
+func (e *execPathCaches) cachedPath() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.success
+}

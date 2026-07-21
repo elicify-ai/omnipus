@@ -85,17 +85,25 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 	return videoAndAudio()
 }
 
-// ClassifyVideoCapabilityWithExec is ClassifyVideoCapability plus the
-// operator's exec_path override (W3 e2e finding): when execPath is non-empty,
-// the configured binary IS the browser the coordinator launches, so the
-// managed install root's contents are irrelevant to whether capture can work.
-// The operator's binary is trusted the same way exec_resolver's resolve()
-// trusts it (a stat check, no probing) — full video+audio capability is
-// assumed unless the path visibly names a headless-shell build, which lacks
-// the tabCapture/extension surface entirely. Misclassifying a genuinely
-// non-capable custom binary as capable is not fatal to the product: the
-// capture session simply fails to start and the panel stays on the JPEG
-// fallback tier (ADR-047 D3), exactly like any other capture-path failure.
+// ClassifyVideoCapabilityWithExec is ClassifyVideoCapability plus a resolved
+// exec path override: when execPath is non-empty, that binary IS the browser
+// that actually launches, so the managed install root's contents are
+// irrelevant to whether capture can work. execPath may be either (a) the
+// operator's explicit exec_path override (W3 e2e finding — tools.browser.exec_path
+// pinned in config) or (b) a path exec_resolver.go's resolve() already
+// resolved on this manager's behalf without any explicit operator override —
+// most commonly a system google-chrome/chromium found on $PATH, but also a
+// prior managed Chrome-for-Testing download (BrowserManager.VideoCapability,
+// manager.go, passes whichever of the two is available). Both cases are
+// trusted identically: full video+audio capability is assumed unless the
+// path visibly names a headless-shell build, which lacks the
+// tabCapture/extension surface entirely. This mirrors the same
+// stat-check-only trust exec_resolver's resolve() itself applies (no
+// probing) — this function does no additional validation of its own.
+// Misclassifying a genuinely non-capable custom binary as capable is not
+// fatal to the product: the capture session simply fails to start and the
+// panel stays on the JPEG fallback tier (ADR-047 D3), exactly like any other
+// capture-path failure.
 func ClassifyVideoCapabilityWithExec(execPath, installRoot string) VideoCapability {
 	if execPath == "" {
 		return ClassifyVideoCapability(installRoot)
