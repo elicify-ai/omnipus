@@ -7,7 +7,7 @@ package browser
 // strict (M3/M6 — "only after per-OS audio verification"). Phase 1
 // validates the linux layout only; the package Chrome is video-capable
 // there, and the classifier returns Capable=true when its SHA-256 verifies
-// (or its chrome.sha256 manifest is absent — degraded-but-accept).
+// (and its chrome.sha256 manifest verifies; missing metadata is refused).
 
 import (
 	"crypto/sha256"
@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,6 +129,7 @@ func TestClassifyVideoCapability_PackageChromeLinux_SHAMismatch_NotCapable(t *te
 	if got.Reason == "" {
 		t.Fatal("expected a non-empty operator-facing Reason (O-3) on not-capable")
 	}
+	assert.Contains(t, got.Reason, "chrome.sha256 verification failed")
 }
 
 // TestClassifyVideoCapability_PackageChromeNonLinux_NotCapable proves the

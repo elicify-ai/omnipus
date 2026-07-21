@@ -24,9 +24,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -247,9 +250,9 @@ func TestFindInstalledBuild_NewestVersionWins(t *testing.T) {
 }
 
 // TestShaVerifyCache_HitsOnSecondCall proves PERF-001/004 (TEST-005
-// subset): when verifyChromeSHA256 is invoked twice on the same
-// (binary, manifest, mtime) tuple, the second call short-circuits via
-// the cache. We assert the cache hit by clearing the on-disk binary
+// subset): when the shared verifier is invoked twice on the same binary and
+// manifest metadata tuple, the second call short-circuits via the cache. We
+// assert the cache hit by clearing the on-disk binary
 // between calls (chmod 0o000 to deny re-read) — the second call MUST
 // still report "verified" because the cache hit means no re-hash is
 // attempted.
@@ -266,9 +269,10 @@ func TestShaVerifyCache_HitsOnSecondCall(t *testing.T) {
 	assert.NoError(t, cachedVerifyChromeSHA256(binPath, shaPath))
 
 	// Verify the cache entry is now populated (hit returns true).
-	ok, hit := shaVerifyCacheHit(binPath, shaPath)
+	entry, hit, fresh := shaVerifyCacheHit(binPath, shaPath)
 	assert.True(t, hit, "cache hit must return true after a successful verification")
-	assert.True(t, ok, "cached result must be ok=true")
+	assert.True(t, fresh, "successful cache entry must be fresh")
+	assert.True(t, entry.ok, "cached result must be ok=true")
 
 	// Second call: must short-circuit on the cache.
 	// We don't have a clean way to assert "no disk read" from outside;
@@ -320,6 +324,84 @@ func mustStat(t *testing.T, path string) os.FileInfo {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	return info
+}
+
+// TestShaVerifyCache_BinarySwappedUnderSameManifestMtime_Refuses proves that
+// changing only the binary cannot reuse a positive result, even when an
+// attacker preserves the manifest timestamp. The binary mtime is part of the
+// cache key; manifest inode and size remain part of the manifest key.
+func TestShaVerifyCache_BinarySwappedUnderSameManifestMtime_Refuses(t *testing.T) {
+	root := t.TempDir()
+	binPath, shaPath := seedPackageChrome(t, root, true)
+	manifestInfo, err := os.Stat(shaPath)
+	require.NoError(t, err)
+	oldBinaryTime := manifestInfo.ModTime().Add(-time.Minute)
+	require.NoError(t, os.Chtimes(binPath, oldBinaryTime, oldBinaryTime))
+	require.NoError(t, cachedVerifyChromeSHA256(binPath, shaPath))
+
+	require.NoError(t, os.WriteFile(binPath, []byte("different chrome payload\n"), 0o755))
+	// Preserve the manifest mtime and deliberately make the new binary mtime
+	// equal to it, exercising the preserve-timestamps attack shape.
+	require.NoError(t, os.Chtimes(binPath, manifestInfo.ModTime(), manifestInfo.ModTime()))
+
+	err = cachedVerifyChromeSHA256(binPath, shaPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sha256 mismatch")
+}
+
+// TestShaVerifyCache_NegativeResult_RespectsBoundedRetry proves permanent
+// mismatches do not cause a full binary hash on every capability check.
+func TestShaVerifyCache_NegativeResult_RespectsBoundedRetry(t *testing.T) {
+	root := t.TempDir()
+	binPath, shaPath := seedPackageChrome(t, root, true)
+	require.NoError(t, os.WriteFile(shaPath,
+		[]byte("0000000000000000000000000000000000000000000000000000000000000000\n"), 0o644))
+
+	previous := verifyChromeSHA256Fn
+	var calls atomic.Int64
+	verifyChromeSHA256Fn = func(binaryPath, manifestPath string) error {
+		calls.Add(1)
+		return chromeintegrity.VerifyChromeSHA256(binaryPath, manifestPath)
+	}
+	t.Cleanup(func() { verifyChromeSHA256Fn = previous })
+
+	for i := 0; i < 10; i++ {
+		require.Error(t, cachedVerifyChromeSHA256(binPath, shaPath))
+	}
+	assert.LessOrEqual(t, calls.Load(), int64(2))
+}
+
+// TestShaVerifyCache_ConcurrentMisses_SingleFlight proves concurrent misses
+// for one metadata key share one underlying SHA-256 verification.
+func TestShaVerifyCache_ConcurrentMisses_SingleFlight(t *testing.T) {
+	root := t.TempDir()
+	binPath, shaPath := seedPackageChrome(t, root, true)
+
+	previous := verifyChromeSHA256Fn
+	var calls atomic.Int64
+	verifyChromeSHA256Fn = func(binaryPath, manifestPath string) error {
+		calls.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		return chromeintegrity.VerifyChromeSHA256(binaryPath, manifestPath)
+	}
+	t.Cleanup(func() { verifyChromeSHA256Fn = previous })
+
+	const workers = 10
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := cachedVerifyChromeSHA256(binPath, shaPath); err != nil {
+				t.Errorf("cached verification failed: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	assert.Equal(t, int64(1), calls.Load())
 }
 
 // TestIsUsablePackageRoot covers the helper that drives the multi-root

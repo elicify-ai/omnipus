@@ -584,31 +584,19 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTota
 			nil,
 		)
 	}
-	// ADR-052 D2/M1 + SPEC-002: log PreferPackaged / TrustPathChrome flips
-	// on reload. These do NOT require a gateway restart — the resolver
-	// consults them on every fresh binary resolution (and the existing
-	// success/failure caches only suppress the re-probe, not the policy
-	// check itself). The log line is the operator's audit-trail signal
-	// that the new policy is in effect; we don't re-resolve because that
-	// would churn Chrome for the change-of-a-boolean and the live Chrome
-	// is already running.
-	if oldCfg.PreferPackaged != newCfg.PreferPackaged {
+	// ADR-052 D2/M1 + SPEC-002: policy flips invalidate the resolved-path
+	// cache immediately. A cached PATH result can otherwise survive a toggle
+	// until the resolution negative TTL expires, defeating the new policy.
+	if oldCfg.PreferPackaged != newCfg.PreferPackaged || oldCfg.TrustPathChrome != newCfg.TrustPathChrome {
+		c.execPath.invalidate()
 		logger.InfoCF(
 			"browser",
-			"coordinator: tools.browser.prefer_packaged changed on reload — new resolutions use the new policy",
+			"coordinator: browser resolution policy changed; exec-path cache invalidated, next resolution uses the new policy",
 			map[string]any{
-				"old": oldCfg.PreferPackaged,
-				"new": newCfg.PreferPackaged,
-			},
-		)
-	}
-	if oldCfg.TrustPathChrome != newCfg.TrustPathChrome {
-		logger.InfoCF(
-			"browser",
-			"coordinator: tools.browser.trust_path_chrome changed on reload — new resolutions use the new policy",
-			map[string]any{
-				"old": oldCfg.TrustPathChrome,
-				"new": newCfg.TrustPathChrome,
+				"prefer_packaged_old":   oldCfg.PreferPackaged,
+				"prefer_packaged_new":   newCfg.PreferPackaged,
+				"trust_path_chrome_old": oldCfg.TrustPathChrome,
+				"trust_path_chrome_new": newCfg.TrustPathChrome,
 			},
 		)
 	}

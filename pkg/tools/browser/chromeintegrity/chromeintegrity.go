@@ -10,7 +10,7 @@
 // (tolerance for UTF-8 BOM / CRLF / sha256: prefix / sha256sum two-field
 // format, rejection of uppercase hex, NUL bytes inside the digest, or
 // digest length != 64 chars) and the SEC-ADR052-001 fail-closed contract
-// (errSHA256ManifestMissing when shaPath is empty or unreadable).
+// (ErrSHA256ManifestMissing when shaPath is empty or unreadable).
 package chromeintegrity
 
 import (
@@ -32,6 +32,8 @@ import (
 // findInstalledBuild) treats this as permissive back-compat for the
 // runtime-download path that doesn't ship a manifest by default.
 var ErrSHA256ManifestMissing = errors.New("chrome.sha256 integrity manifest missing or unreadable")
+
+var errNoSHA256Line = errors.New("manifest contains no SHA-256 digest line")
 
 // ParseChromeSHA256Manifest extracts the canonical 64-char lowercase hex
 // SHA-256 digest from raw. Tolerant of the well-formed-but-noisy shapes
@@ -112,14 +114,14 @@ func ParseChromeSHA256Manifest(raw []byte) (string, error) {
 		digest = candidate
 	}
 	if digest == "" {
-		return "", fmt.Errorf("manifest contains no SHA-256 digest line")
+		return "", errNoSHA256Line
 	}
 	return digest, nil
 }
 
-// VerifyChromeSHA256 hashes binaryPath with crypto/sha256 and compares the
-// digest against the value in shaPath using crypto/subtle.ConstantTimeCompare
-// (constant-time to defeat timing-side-channel observation of the digest).
+// Integrity comparison uses subtle.ConstantTimeCompare. The constant-time
+// requirement is enforced by code review and static lint convention rather
+// than a timing-sensitive unit test.
 //
 // SEC-ADR052-001 fail-closed contract: returns ErrSHA256ManifestMissing
 // when shaPath is empty OR the manifest cannot be read for any reason

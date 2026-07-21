@@ -2,7 +2,7 @@ package browser
 
 // exec_resolver_phase1_test.go — coverage for ADR-052 Phase 1 step 3
 // (package-managed Chrome resolution) and its integrity verification
-// (ADR-052 M2 — verifyChromeSHA256). Builds on execpath_test.go's harness
+// (ADR-052 M2 — chromeintegrity.VerifyChromeSHA256). Builds on execpath_test.go's harness
 // style (temp installRoot, no real network, every chromium-on-$PATH stub is
 // a temp shell script with the correct #!/bin/sh + exit 0).
 //
@@ -12,7 +12,7 @@ package browser
 // ldflags). It must resolve without ever touching the network — the
 // "guaranteed floor" claim the ADR is built on. chrome.sha256 is REQUIRED
 // (SEC-ADR052-001 fail-closed: a missing or unreadable manifest is a
-// refusal, not a degraded-but-accept — the only legitimate causes of a
+// refusal, not an unverified acceptance — the only legitimate causes of a
 // missing manifest are pipeline failures or tampering, both of which are
 // release blockers). When chrome.sha256 disagrees with the binary's actual
 // digest (SEC-ADR052-004 hardened parser + constant-time compare), the
@@ -28,12 +28,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,7 +45,8 @@ import (
 // findInstalledBuild inspect on the managed installRoot, so the package
 // Chrome is at the layout ClassifyVideoCapability already knows) plus an
 // optional chrome.sha256 with the binary's actual hex digest. Pass an empty
-// sha to skip writing the manifest (degraded-but-accept path). Returns the
+// sha to skip writing the manifest; package-root discovery then refuses the
+// payload under the fail-closed Phase 1 contract. Returns the
 // absolute binary path and the absolute manifest path (or "" when sha is
 // empty).
 func seedPackageChrome(t *testing.T, root string, writeSHA bool) (binPath, shaPath string) {
@@ -65,11 +68,8 @@ func seedPackageChrome(t *testing.T, root string, writeSHA bool) (binPath, shaPa
 }
 
 // withPackageChromeRoot overrides packageChromeRoot for the duration of the
-// test, restoring the previous value on cleanup. The function itself reads
-// os.Executable() which we can't redirect cheaply per-test, so the seam is
-// the packageChromeRootForTest package-level variable defined in
-// exec_resolver.go (consulted first by packageChromeRoot, with the
-// os.Executable() fallback when empty).
+// test, restoring the previous value on cleanup. Tests that exercise the
+// production candidate list replace osExecutable directly.
 func withPackageChromeRoot(t *testing.T, root string) {
 	t.Helper()
 	prev := packageChromeRootForTest
@@ -102,34 +102,32 @@ func TestPackageChromeRoot_RuntimeComputed(t *testing.T) {
 	assert.Equal(t, wantLibexec, got[2], "third candidate must be the nfpms libexec/ layout")
 }
 
-// TestPackageChromeRoot_FirstExistingCandidateWins proves the SPEC-001
-// multi-root probe (BLOCKER): when the goreleaser layout
-// (<dir(exe)>/../chromium) does not exist, packageChromeRoot walks the
-// candidate list and returns the FIRST existing root. This matches the
-// real production layouts: install.sh places chromium at
-// share/omnipus/chromium, goreleaser places it at ../chromium — and an
-// operator-extracted tarball (hand-cp) may end up at the
-// InstallRootForProfileDir fallback (a separate entry point).
-func TestPackageChromeRoot_FirstExistingCandidateWins(t *testing.T) {
+// TestPackageChromeRoot_EmptySlot1Skipped_FindsSlot2 proves the SPEC-001
+// multi-root probe skips an existing but empty first slot and selects the
+// first candidate containing a valid, integrity-manifested Chrome payload.
+func TestPackageChromeRoot_EmptySlot1Skipped_FindsSlot2(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Phase 1 deferral: packageChromeRoot returns \"\" on Windows; see TestPackageChromeRoot_Windows_ReturnsEmpty")
+		t.Skip("Phase 1 deferral: packageChromeRoot returns empty on Windows")
 	}
-	exe, err := os.Executable()
-	require.NoError(t, err)
-	// Plant a candidate at slot 2 (FHS share/) so slot 1 (goreleaser
-	// ../chromium) does not exist — the resolver must skip it.
-	shareRoot := filepath.Join(filepath.Dir(exe), "..", "share", "omnipus", "chromium")
-	require.NoError(t, os.MkdirAll(shareRoot, 0o755))
-	t.Cleanup(func() { _ = os.RemoveAll(shareRoot) })
+	base := t.TempDir()
+	exe := filepath.Join(base, "bin", "omnipus")
+	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
+	require.NoError(t, os.WriteFile(exe, []byte("binary"), 0o755))
+	slot1 := filepath.Join(base, "chromium")
+	slot2 := filepath.Join(base, "share", "omnipus", "chromium")
+	require.NoError(t, os.MkdirAll(slot1, 0o755))
+	seedPackageChrome(t, slot2, true)
 
-	got := packageChromeRoot()
-	// The first existing candidate wins; since we only planted slot 2,
-	// slot 2 is what gets returned. (Slot 1 may coincidentally exist on
-	// a developer machine — skip if so.)
-	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), "..", "chromium")); err == nil {
-		t.Skip("first candidate exists on this host; cannot verify slot 2 promotion")
-	}
-	assert.Equal(t, shareRoot, got, "packageChromeRoot must walk the candidate list and return the first existing root")
+	previousExecutable := osExecutable
+	osExecutable = func() (string, error) { return exe, nil }
+	t.Cleanup(func() { osExecutable = previousExecutable })
+	previousRoot := packageChromeRootForTest
+	packageChromeRootForTest = ""
+	t.Cleanup(func() { packageChromeRootForTest = previousRoot })
+
+	gotRoot, gotStatus := packageChromeRootProbe()
+	assert.Equal(t, slot2, gotRoot)
+	assert.Equal(t, ProbeUsable, gotStatus)
 }
 
 // TestPackageChromeRoot_NoCandidatePresent_ReturnsEmpty proves the
@@ -139,47 +137,39 @@ func TestPackageChromeRoot_FirstExistingCandidateWins(t *testing.T) {
 // download path cleanly.
 func TestPackageChromeRoot_NoCandidatePresent_ReturnsEmpty(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Phase 1 deferral: packageChromeRoot returns \"\" on Windows regardless of disk state")
+		t.Skip("Phase 1 deferral: packageChromeRoot returns empty on Windows")
 	}
-	// Use the test seam to disable the production candidate list
-	// (forcing the function to walk candidates, none of which exist in
-	// the test environment for unrelated binary paths).
-	withPackageChromeRoot(t, "")
-	// We can't easily force os.Executable to return a path with no
-	// candidates, but we CAN force a "no install" scenario by relying
-	// on the fact that the test binary's candidates won't exist as
-	// valid roots — verify the function returns "" or a non-existent
-	// path that findPackageChrome rejects.
-	got := packageChromeRoot()
-	// Either "" (no candidate exists at all) or a non-existent path
-	// that findPackageChrome refuses. Both are correct fall-through
-	// signals to the caller.
-	if got != "" {
-		_, statErr := os.Stat(got)
-		// The candidate might exist as an unrelated file — that's also
-		// acceptable, since findPackageChrome filters further. The
-		// contract under test is that the function returns SOME path
-		// from the candidate list when nothing else does, NOT that it
-		// returns the literal first candidate regardless.
-		_ = statErr
-	}
+	base := t.TempDir()
+	exe := filepath.Join(base, "bin", "omnipus")
+	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0o755))
+	require.NoError(t, os.WriteFile(exe, []byte("binary"), 0o755))
+	previousExecutable := osExecutable
+	osExecutable = func() (string, error) { return exe, nil }
+	t.Cleanup(func() { osExecutable = previousExecutable })
+	previousRoot := packageChromeRootForTest
+	packageChromeRootForTest = ""
+	t.Cleanup(func() { packageChromeRootForTest = previousRoot })
+
+	gotRoot, gotStatus := packageChromeRootProbe()
+	assert.Empty(t, gotRoot)
+	assert.Equal(t, ProbeNotFound, gotStatus)
 }
 
 // TestPackageChromeRoot_ExecutableErrorReturnsEmpty proves the defensive
 // contract: if os.Executable() ever fails (a theoretical on a stripped
 // binary on a weird FS), packageChromeRoot returns "" rather than
-// panicking. We exercise this by temporarily replacing os.Executable via
-// the test seam (overriding the seam triggers an explicit "" path).
+// panicking. We exercise this by replacing the osExecutable seam with a failing function.
 func TestPackageChromeRoot_ExecutableErrorReturnsEmpty(t *testing.T) {
-	// Simulate os.Executable error by setting the test seam to "" AND
-	// confirming the helper gracefully returns "" (no panic). The seam
-	// returns whatever string is set; "" represents the no-package-root case.
-	withPackageChromeRoot(t, "")
-	got := packageChromeRoot()
-	// The test seam is consulted first by packageChromeRoot — verify the
-	// fallback behavior (real os.Executable()) is recoverable when the seam
-	// returns a value, AND that empty-string seam input doesn't blow up.
-	_ = got
+	previousExecutable := osExecutable
+	osExecutable = func() (string, error) { return "", errors.New("simulated executable failure") }
+	t.Cleanup(func() { osExecutable = previousExecutable })
+	previousRoot := packageChromeRootForTest
+	packageChromeRootForTest = ""
+	t.Cleanup(func() { packageChromeRootForTest = previousRoot })
+
+	gotRoot, gotStatus := packageChromeRootProbe()
+	assert.Empty(t, gotRoot)
+	assert.Equal(t, ProbeNotFound, gotStatus)
 }
 
 // --- findPackageChrome ---
@@ -207,7 +197,7 @@ func TestFindPackageChrome_RootEmpty_ReturnsEmpty(t *testing.T) {
 // TestFindPackageChrome_BinaryPresentSHAProvided is the happy-path probe:
 // when root has a binary AND a chrome.sha256, findPackageChrome returns
 // both. The helper does NOT verify the digest — that's the caller's job
-// (verifyChromeSHA256) — so the SHA is returned verbatim for inspection.
+// (chromeintegrity.VerifyChromeSHA256) — so the SHA is returned verbatim for inspection.
 func TestFindPackageChrome_BinaryPresentSHAProvided(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix exec-bit layout; full Chrome binary path on Windows differs")
@@ -438,7 +428,7 @@ func TestResolve_Step3_SHAMismatchFallsThroughToManaged(t *testing.T) {
 
 // TestResolve_Step3_SHAMissingFallsThrough proves the SEC-ADR052-001
 // fail-closed contract on the resolve path: a package Chrome without a
-// sibling chrome.sha256 is REFUSED at step 3 (not "degraded-but-accept").
+// sibling chrome.sha256 is REFUSED at step 3 (not an unverified acceptance).
 // Resolution falls through to step 4 (managed download). In this test
 // environment step 4 will also fail (no manifest server, no pre-installed
 // binary) — the relevant assertion is that pkgBin is NOT the returned
@@ -507,22 +497,22 @@ func TestResolve_Step3_PackageRootMissingFallsThroughToManaged(t *testing.T) {
 	assert.Equal(t, binPath, got, "missing package root must NOT interfere with the managed-install path")
 }
 
-// --- verifyChromeSHA256 direct coverage ---
+// --- chromeintegrity.VerifyChromeSHA256 direct coverage ---
 
 // TestVerifyChromeSHA256_AcceptsCorrectDigest proves the happy path:
 // when the binary's actual SHA-256 matches the manifest, no error is
 // returned. The seeded fixture writes the correct digest by construction;
-// this test confirms verifyChromeSHA256 reads + hashes + compares correctly.
+// this test confirms the shared verifier reads + hashes + compares correctly.
 func TestVerifyChromeSHA256_AcceptsCorrectDigest(t *testing.T) {
 	root := t.TempDir()
 	binPath, shaPath := seedPackageChrome(t, root, true)
 
-	assert.NoError(t, verifyChromeSHA256(binPath, shaPath))
+	assert.NoError(t, chromeintegrity.VerifyChromeSHA256(binPath, shaPath))
 }
 
 // TestVerifyChromeSHA256_RejectsMismatch proves the hard-fail direction:
 // when the manifest declares a digest that disagrees with the binary's
-// actual SHA-256, verifyChromeSHA256 returns a descriptive error mentioning
+// actual SHA-256, chromeintegrity.VerifyChromeSHA256 returns a descriptive error mentioning
 // the mismatch.
 func TestVerifyChromeSHA256_RejectsMismatch(t *testing.T) {
 	root := t.TempDir()
@@ -531,7 +521,7 @@ func TestVerifyChromeSHA256_RejectsMismatch(t *testing.T) {
 	require.NoError(t, os.WriteFile(shaPath,
 		[]byte("0000000000000000000000000000000000000000000000000000000000000000\n"), 0o644))
 
-	err := verifyChromeSHA256(binPath, shaPath)
+	err := chromeintegrity.VerifyChromeSHA256(binPath, shaPath)
 	require.Error(t, err)
 	// The error must be specific enough to triage — expected/actual prefix.
 	assert.Contains(t, err.Error(), "sha256 mismatch")
@@ -541,7 +531,7 @@ func TestVerifyChromeSHA256_RejectsMismatch(t *testing.T) {
 
 // TestVerifyChromeSHA256_EmptySHA_Refuses proves the SEC-ADR052-001
 // fail-closed contract: an empty shaPath is the same as a missing manifest,
-// and verifyChromeSHA256 returns errSHA256ManifestMissing (not nil). The
+// and chromeintegrity.VerifyChromeSHA256 returns chromeintegrity.ErrSHA256ManifestMissing (not nil). The
 // caller (resolve step 3) uses errors.Is to detect this sentinel and fall
 // through to the managed download path. findInstalledBuild (the managed
 // installRoot path) explicitly accepts this sentinel because the runtime-
@@ -551,9 +541,9 @@ func TestVerifyChromeSHA256_EmptySHA_Refuses(t *testing.T) {
 	root := t.TempDir()
 	binPath, _ := seedPackageChrome(t, root, false)
 
-	err := verifyChromeSHA256(binPath, "")
-	require.Error(t, err, "SEC-ADR052-001: empty shaPath must surface errSHA256ManifestMissing, not be a silent no-op")
-	assert.ErrorIs(t, err, errSHA256ManifestMissing)
+	err := chromeintegrity.VerifyChromeSHA256(binPath, "")
+	require.Error(t, err, "SEC-ADR052-001: empty shaPath must surface chromeintegrity.ErrSHA256ManifestMissing, not be a silent no-op")
+	assert.ErrorIs(t, err, chromeintegrity.ErrSHA256ManifestMissing)
 }
 
 // TestVerifyChromeSHA256_TolerantOfSHA256Prefix proves the format
@@ -574,7 +564,7 @@ func TestVerifyChromeSHA256_TolerantOfSHA256Prefix(t *testing.T) {
 		digest + "  chrome\n", // sha256sum format
 	} {
 		require.NoError(t, os.WriteFile(shaPath, []byte(shape), 0o644))
-		assert.NoError(t, verifyChromeSHA256(binPath, shaPath),
+		assert.NoError(t, chromeintegrity.VerifyChromeSHA256(binPath, shaPath),
 			"shape %q must be accepted", shape)
 	}
 }
@@ -589,7 +579,7 @@ func TestVerifyChromeSHA256_RejectsNonHexDigest(t *testing.T) {
 	binPath, shaPath := seedPackageChrome(t, root, true)
 
 	require.NoError(t, os.WriteFile(shaPath, []byte("not-a-hex-digest-at-all\n"), 0o644))
-	err := verifyChromeSHA256(binPath, shaPath)
+	err := chromeintegrity.VerifyChromeSHA256(binPath, shaPath)
 	require.Error(t, err)
 	// Length check fires first (16 chars); content-class check fires for
 	// 64-char non-hex. Both produce a parse error that names "sha256 manifest"
@@ -607,7 +597,7 @@ func TestVerifyChromeSHA256_RejectsNonHexAtLength64(t *testing.T) {
 
 	// 64 underscores — right length, wrong content (no hex digits at all).
 	require.NoError(t, os.WriteFile(shaPath, []byte(strings.Repeat("_", 64)+"\n"), 0o644))
-	err := verifyChromeSHA256(binPath, shaPath)
+	err := chromeintegrity.VerifyChromeSHA256(binPath, shaPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "lowercase hex")
 }
@@ -616,7 +606,7 @@ func TestVerifyChromeSHA256_RejectsNonHexAtLength64(t *testing.T) {
 
 // TestParseSHA256Manifest_Table exercises every accepted and rejected
 // shape per SEC-ADR052-004's grammar. The accepted shapes round-trip
-// through verifyChromeSHA256 (when matched against a real binary); the
+// through chromeintegrity.VerifyChromeSHA256 (when matched against a real binary); the
 // rejected shapes fail with a descriptive error rather than a silent
 // accept or panic.
 func TestParseSHA256Manifest_Table(t *testing.T) {
@@ -704,7 +694,7 @@ func TestParseSHA256Manifest_Table(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := parseSHA256Manifest(c.input)
+			got, err := chromeintegrity.ParseChromeSHA256Manifest(c.input)
 			if c.wantErr {
 				require.Error(t, err)
 				if c.errSubstr != "" {
@@ -716,28 +706,6 @@ func TestParseSHA256Manifest_Table(t *testing.T) {
 			assert.Equal(t, c.wantDigest, got)
 		})
 	}
-}
-
-// TestVerifyChromeSHA256_ConstantTimeCompareUsed is a code-level guard:
-// the implementation MUST use crypto/subtle.ConstantTimeCompare for the
-// digest comparison (per SEC-ADR052-004). We can't directly observe the
-// timing side channel in a unit test, so this asserts the call site via
-// grep — if a future refactor accidentally switches to bytes.Equal or
-// strings.EqualFold, this test fails and surfaces the regression.
-func TestVerifyChromeSHA256_ConstantTimeCompareUsed(t *testing.T) {
-	// Indirect proof: build the same digest mismatch via verifyChromeSHA256
-	// and confirm the error message format ("manifest X declares Y...") is
-	// the SAME one ConstantTimeCompare-based rejection produces. (A
-	// bytes.Equal path would produce the same error string; this is a
-	// smoke-test, not a behavioral guarantee — the real defense is the
-	// reviewer + grep over the source.)
-	root := t.TempDir()
-	binPath, shaPath := seedPackageChrome(t, root, true)
-	require.NoError(t, os.WriteFile(shaPath,
-		[]byte("0000000000000000000000000000000000000000000000000000000000000000\n"), 0o644))
-	err := verifyChromeSHA256(binPath, shaPath)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sha256 mismatch")
 }
 
 // --- SEC-ADR052-005 symlink + world-writable install root ---

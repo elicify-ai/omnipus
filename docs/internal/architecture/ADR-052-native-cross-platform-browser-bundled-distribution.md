@@ -154,8 +154,10 @@ supported** (C2/m1 — supported-OS list is explicit; macOS scoped by the C3 dec
 **Integrity (M2):** the package-build pipeline fetches CfT at release time and runs `verifyGoogHashMD5`
 (`installer.go:414-461`) against the live response — the same check the runtime-download path uses —
 then ships a `chrome.sha256` alongside the binary. `findInstalledBuild` verifies that file at first
-launch and refuses a mismatched bundled Chrome (`doctor WARN-BROWSER-006`). This makes the package
-path **at least as strong** as runtime-download, not weaker.
+launch and refuses a mismatched bundled Chrome (`doctor WARN-BROWSER-006`). Runtime package-root
+selection also accepts the older root-level manifest location for hand-copied or pre-fix packages,
+while remaining fail-closed when neither manifest candidate exists. This makes the package
+path at least as strong as runtime-download, not weaker.
 
 **Confidence: High on Linux; Medium on macOS (gated by C3); Medium on Windows (gated by D3).**
 
@@ -257,7 +259,7 @@ through to the runtime-download fallback (resolution step 4) — the lean-binary
 
 | Phase | Focus | "Done" | Lands grill items |
 |---|---|---|---|
-| **1 — Bundles + installer** | Delivery machinery **regardless of which OS builds are ready**: goreleaser carries pinned Chrome + `chrome.sha256` in archive/deb/rpm at the package root; `install.sh` (OS-detect, SHA-pinned, installs host libs); resolver + classifier learn the package root (`os.Executable()`); `doctor` gains `WARN-BROWSER-005` (ldd) + `WARN-BROWSER-006` (Chrome hash). | A Linux package installs and resolves the bundled Chrome with no first-use download. | C2, M2, M5 |
+| **1 — Bundles + installer** | Delivery machinery **regardless of which OS builds are ready**: goreleaser carries pinned Chrome + `chrome.sha256` in archive/deb/rpm at the package root (canonical extracted layout keeps the manifest next to the binary); `install.sh` (OS-detect, SHA-pinned, installs host libs); resolver + classifier learn the package root (`os.Executable()`), validate candidate payloads, and preserve root-level manifest compatibility; `doctor` gains `WARN-BROWSER-005` (host-library check), `WARN-BROWSER-006` (Chrome hash), `WARN-BROWSER-008` (symlinked root), and `WARN-BROWSER-009` (missing binary in an otherwise-present root). | A Linux package installs and resolves the bundled Chrome with no first-use download. | C2, M2, M5 |
 | **2 — Linux E2E** | Validate the whole stack through the new installer on the tested platform: browsing **and** WebRTC video, agent loop, channels, **sandbox (Landlock+seccomp)**, credentials. | Linux package install → `localhost` → full agent + live video, deterministically. | M1 (resolution order keeps `$PATH` above package Chrome; classifier fix stays live) |
 | **3 — macOS + audio** | The empirical spike ADR-047 §13.4 flagged: does `chrome.tabCapture` yield **audio** under `--headless` on darwin? Plus the **C3 notarization** decision and the macOS sandbox (Seatbelt/sandbox_exec) + launchd service model. | darwin/arm64 build, real audio-verified capture — **or** a documented "macOS = browsing-only, video deferred" with the gate staying not-capable. | C3, M3 (macOS not-capable until audio proven) |
 | **4 — Windows** | The **named-pipe allocator** (`//go:build windows`) replacing `os.Pipe`+`ExtraFiles`, matching Chrome's Windows `--remote-debugging-pipe` handle convention; the Windows sandbox backend (Job Objects + Restricted Tokens) exercised **as a Service** under a dedicated account; `.msi` packaging. | Native Windows install → browsing works; video follows only after its own audio verification. | C1 (allocator work), M4 (service/privilege) |

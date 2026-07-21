@@ -52,22 +52,11 @@ import (
 // pass the bounds check while data[54:56] / data[56:58] panicked.
 const ehdrSize64 = 64
 
-// ehdrSize32 is the 32-bit ELF header size: e_ident[16] + 12 fields
-// (u16 u16 u32 u32 u32 u32 u32 u16 u16 u16 u16 u16 u16) = 52 bytes.
-const ehdrSize32 = 52
+// phdrSize64 is the 64-bit program-header entry size.
+const phdrSize64 = 56
 
-// phdrSize64 / phdrSize32 are the per-entry program-header sizes.
-const (
-	phdrSize64 = 56
-	phdrSize32 = 32
-)
-
-// dynEntrySize64 / dynEntrySize32 are the per-entry DT_DYNAMIC sizes
-// (Elf{64,32}_Dyn: d_tag + d_val).
-const (
-	dynEntrySize64 = 16
-	dynEntrySize32 = 8
-)
+// dynEntrySize64 is the 64-bit DT_DYNAMIC entry size.
+const dynEntrySize64 = 16
 
 // elfSearchPaths are the canonical library search directories probed in
 // order. Mirrors glibc's default /usr/lib + /lib ordering; covers every
@@ -124,16 +113,12 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		return []string{"not-an-elf-binary"}, nil
 	}
 
-	// Identify 32-bit vs 64-bit from EI_CLASS at offset 4, and
-	// endianness from EI_DATA at offset 5. Chrome-for-Testing ships
-	// only 64-bit; we still need the right struct widths.
-	var (
-		is64     bool
-		bo       binary.ByteOrder
-		ehdrSz   int
-		phdrSz   uint64
-		dynEntry uint64
-	)
+	// Identify the 64-bit ELF class from EI_CLASS at offset 4 and the
+	// byte order from EI_DATA at offset 5.
+	var bo binary.ByteOrder
+	ehdrSz := ehdrSize64
+	phdrSz := uint64(phdrSize64)
+	dynEntry := uint64(dynEntrySize64)
 	var class [1]byte
 	if _, err := f.Seek(4, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek to EI_CLASS: %w", err)
@@ -141,17 +126,8 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 	if _, err := io.ReadFull(f, class[:]); err != nil {
 		return nil, fmt.Errorf("read EI_CLASS: %w", err)
 	}
-	is64 = class[0] == 2
-	if is64 {
-		ehdrSz = ehdrSize64
-		phdrSz = phdrSize64
-		dynEntry = dynEntrySize64
-	} else {
-		// 32-bit ELF (EI_CLASS=1) — this parser is 64-bit-only (CfT
-		// ships 64-bit Chrome on every supported arch). Surface the
-		// synthetic not-an-elf-binary entry so the operator sees the
-		// diagnostic, matching the contract for any other non-ELF
-		// file at this offset (see the magic check above).
+	if class[0] != 2 {
+		// Chrome-for-Testing is 64-bit on every supported platform.
 		return []string{"not-an-elf-binary"}, nil
 	}
 	var dataByte [1]byte
@@ -167,10 +143,7 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		bo = binary.BigEndian
 	}
 
-	// CORR-002 regression guard: a 32-bit ELF on a 32-bit host still
-	// needs its full 52-byte header read. A 64-bit host's chrome is
-	// always 64-bit; a deliberately-truncated 64-bit binary (53–57
-	// bytes) MUST be rejected cleanly, not panic.
+	// A deliberately truncated 64-bit binary MUST be rejected cleanly.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek to ELF header: %w", err)
 	}
@@ -182,24 +155,12 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		return nil, fmt.Errorf("read ELF header: %w", err)
 	}
 
-	// 64-bit ELF header field offsets:
-	//   e_phoff   @ 32 (u64)
-	//   e_phentsz @ 54 (u16)
-	//   e_phnum   @ 56 (u16)
-	// 32-bit ELF header field offsets:
-	//   e_phoff   @ 28 (u32)
-	//   e_phentsz @ 42 (u16)
-	//   e_phnum   @ 44 (u16)
+	// 64-bit ELF header field offsets: e_phoff @ 32, e_phentsz @ 54,
+	// and e_phnum @ 56.
 	var ePhOff, ePhEntSize, ePhNum uint64
-	if is64 {
-		ePhOff = bo.Uint64(ehdr[32:40])
-		ePhEntSize = uint64(bo.Uint16(ehdr[54:56]))
-		ePhNum = uint64(bo.Uint16(ehdr[56:58]))
-	} else {
-		ePhOff = uint64(bo.Uint32(ehdr[28:32]))
-		ePhEntSize = uint64(bo.Uint16(ehdr[42:44]))
-		ePhNum = uint64(bo.Uint16(ehdr[44:46]))
-	}
+	ePhOff = bo.Uint64(ehdr[32:40])
+	ePhEntSize = uint64(bo.Uint16(ehdr[54:56]))
+	ePhNum = uint64(bo.Uint16(ehdr[56:58]))
 	if ePhEntSize != 0 && ePhEntSize != phdrSz {
 		// Some toolchains emit e_phentsize == 0 in stripped
 		// binaries; treat that as "use the canonical size" but
@@ -227,14 +188,9 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		if pType != 2 /* PT_DYNAMIC */ {
 			continue
 		}
-		if is64 {
-			// 64-bit: p_offset=24, p_filesz=40 within the program header.
-			dynOff = bo.Uint64(phdr[24:32])
-			dynSize = bo.Uint64(phdr[40:48])
-		} else {
-			dynOff = uint64(bo.Uint32(phdr[4:8]))
-			dynSize = uint64(bo.Uint32(phdr[16:20]))
-		}
+		// 64-bit: p_offset=24, p_filesz=40 within the program header.
+		dynOff = bo.Uint64(phdr[24:32])
+		dynSize = bo.Uint64(phdr[40:48])
 		break
 	}
 	if dynSize == 0 {
@@ -257,13 +213,8 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 			return nil, fmt.Errorf("read DT_DYNAMIC entry %d: %w", i, err)
 		}
 		var tag, val uint64
-		if is64 {
-			tag = bo.Uint64(entry[0:8])
-			val = bo.Uint64(entry[8:16])
-		} else {
-			tag = uint64(bo.Uint32(entry[0:4]))
-			val = uint64(bo.Uint32(entry[4:8]))
-		}
+		tag = bo.Uint64(entry[0:8])
+		val = bo.Uint64(entry[8:16])
 		switch tag {
 		case 1: // DT_NEEDED
 			needed = append(needed, val)

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,7 +57,7 @@ func TestVerifyChromeSHA256_Installer_HappyPath(t *testing.T) {
 	binPath := seedBuildBinary(t, root, "131.0.6778.108", platform, fullChromeBuild())
 	writeSHA256Manifest(t, root, hashBinary(t, binPath))
 
-	assert.NoError(t, verifyChromeSHA256(binPath, filepath.Join(root, "chrome.sha256")))
+	assert.NoError(t, chromeintegrity.VerifyChromeSHA256(binPath, filepath.Join(root, "chrome.sha256")))
 }
 
 // TestVerifyChromeSHA256_Installer_MismatchRejected covers the M2
@@ -74,7 +75,7 @@ func TestVerifyChromeSHA256_Installer_MismatchRejected(t *testing.T) {
 	// Write a manifest with a definitely-wrong digest.
 	writeSHA256Manifest(t, root, "0000000000000000000000000000000000000000000000000000000000000000")
 
-	err = verifyChromeSHA256(binPath, filepath.Join(root, "chrome.sha256"))
+	err = chromeintegrity.VerifyChromeSHA256(binPath, filepath.Join(root, "chrome.sha256"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sha256 mismatch")
 }

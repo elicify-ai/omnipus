@@ -335,9 +335,9 @@ func findInstalledBinary(installRoot, platform string) string {
 // in package_chrome.go, which requires chrome.sha256.)
 //
 // CORR-007 deliberate asymmetry: this permissive-missing-manifest posture
-// is INTENTIONAL and tracks the runtime-download-path contract. A future
-// PR will close the back-compat window — see the TODO at the bottom of
-// this function's body.
+// is INTENTIONAL and tracks the runtime-download-path contract. A later
+// release may close the back-compat window after pre-ADR-052 installs pass
+// their retention horizon.
 //
 // SEC-ADR052-005/006 hardening: installRoot is Lstat-checked before any
 // candidate is read (refuses a symlinked install root, refuses a
@@ -437,62 +437,6 @@ func findInstalledBuild(installRoot, platform string, build chromiumBuild) strin
 		}
 	}
 	return best.path
-	// TODO(corr-007-tracking): close the permissive-missing-manifest
-	// back-compat window once pre-ADR-052 installs have rolled past their
-	// retention horizon (operators currently relying on it will get an
-	// automatic managed re-download on first launch after this lands).
-}
-
-// errSHA256ManifestMissing is an alias kept for legacy call sites — the
-// canonical sentinel now lives in pkg/tools/browser/chromeintegrity. All
-// new code should use errors.Is(err, chromeintegrity.ErrSHA256ManifestMissing)
-// directly; the alias here is `var`-shadowed to preserve the local
-// identity for any in-package test assertions (e.g. capability.go's
-// short-circuit checks) and to keep the same wrapping semantics that
-// callers relied on before the CORR-005 extraction.
-var errSHA256ManifestMissing = chromeintegrity.ErrSHA256ManifestMissing
-
-// verifyChromeSHA256 is the package-level convenience wrapper over
-// chromeintegrity.VerifyChromeSHA256. The full implementation moved to
-// the shared chromeintegrity package as part of CORR-005 (eliminating
-// the doctor command's duplicate parser); this thin wrapper preserves
-// the call-site shape that exec_resolver.go and capability.go use, and
-// the SHAVerify-cache keying (package_chrome.go's shaVerifyCache)
-// still keys on (binaryPath, shaPath) identically. Use the chromeintegrity
-// function directly from new code; this alias exists so the existing
-// callers don't need to change.
-func verifyChromeSHA256(binaryPath, shaPath string) error {
-	err := chromeintegrity.VerifyChromeSHA256(binaryPath, shaPath)
-	if err == nil {
-		return nil
-	}
-	// Preserve the same wrapping semantics the in-package callers expect:
-	// the chromeintegrity call's sentinel already wraps
-	// ErrSHA256ManifestMissing via %w, so errors.Is works without
-	// re-wrapping. Nothing to do here beyond passing through.
-	return err
-}
-
-// parseSHA256Manifest is the in-package alias for
-// chromeintegrity.ParseChromeSHA256Manifest. Kept for the in-package
-// table-driven tests; new callers should use chromeintegrity directly.
-func parseSHA256Manifest(raw []byte) (string, error) {
-	return chromeintegrity.ParseChromeSHA256Manifest(raw)
-}
-
-// isLowerHex reports whether b is non-empty and contains only lowercase
-// hex digits ([0-9a-f]). Kept for the in-package table-driven tests
-// that reference it directly; chromeintegrity owns its own copy.
-func isLowerHex(b []byte) bool {
-	if len(b) == 0 {
-		return false
-	}
-	for _, c := range b {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			return false
-		}
-	}
-	return true
 }
 
 func cftPlatform() (string, error) {

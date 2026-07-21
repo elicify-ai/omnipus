@@ -99,20 +99,24 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 		// (findPackageChrome returns its binary path AND the SHA verifies),
 		// the host is video-capable even when the per-profile installRoot
 		// is empty.
-		pkgRoot := packageChromeRoot()
-		if pkgRoot != "" {
+		pkgRoot, pkgStatus := packageChromeRootProbe()
+		if pkgStatus == ProbeUsable && pkgRoot != "" {
 			if pkgBin, pkgSHA := findPackageChrome(pkgRoot); pkgBin != "" {
-				if err := cachedVerifyChromeSHA256(pkgBin, pkgSHA); err == nil {
+				verifyErr := cachedVerifyChromeSHA256(pkgBin, pkgSHA)
+				if verifyErr == nil {
 					return videoAndAudio()
-				} else if !errors.Is(err, chromeintegrity.ErrSHA256ManifestMissing) {
-					// SEC-ADR052-001 (strict): an empty OR mismatching manifest
-					// is a refusal. The previous "pkgSHA == "" short-circuit"
-					// accepted an unverifiable binary as Capable — that
-					// contradicted the resolver's strict fail-closed posture
-					// (SEC-NEW-005). Only a verified package Chrome counts.
-					logger.DebugCF("browser", "package chrome SHA-256 verification failed",
-						map[string]any{"binary": pkgBin, "error": err.Error()})
 				}
+				logger.WarnCF("browser", "package chrome SHA-256 verification failed",
+					map[string]any{
+						"binary":           pkgBin,
+						"manifest":         pkgSHA,
+						"error":            verifyErr.Error(),
+						"manifest_missing": errors.Is(verifyErr, chromeintegrity.ErrSHA256ManifestMissing),
+					})
+				return notCapable(fmt.Sprintf(
+					"package chrome present but chrome.sha256 verification failed: %v — reinstall the omnipus package to recover the integrity-verified payload",
+					verifyErr,
+				))
 			}
 		}
 		return notCapable("full-Chrome build not installed yet (download pending or unavailable)")

@@ -77,7 +77,7 @@ func TestApplyBrowserConfigOpts_DefaultFalseRoundTrip(t *testing.T) {
 // SEC-NEW-005 capability-classifier fix: a package Chrome without a
 // sibling chrome.sha256 manifest MUST classify not-capable, exactly
 // matching the resolver's strict fail-closed posture. The pre-fix
-// short-circuit `pkgSHA == "" || verifyChromeSHA256(...) == nil`
+// short-circuit `pkgSHA == "" || chromeintegrity.VerifyChromeSHA256(...) == nil`
 // accepted an unverifiable binary as Capable — that contradicted the
 // SEC-ADR052-001 contract (capability classifier must not advertise
 // Capable=true when capture cannot succeed).
@@ -124,4 +124,20 @@ func TestClassifyVideoCapability_VerificationFailed_NotCapable(t *testing.T) {
 	if got.Reason == "" {
 		t.Fatal("expected a non-empty operator-facing Reason on not-capable")
 	}
+	assert.Contains(t, got.Reason, "chrome.sha256 verification failed")
+}
+
+// TestApplyRuntimeConfig_PreferPackagedFlip_InvalidatesExecPathCache proves a
+// live policy change cannot continue using a previously resolved PATH Chrome.
+func TestApplyRuntimeConfig_PreferPackagedFlip_InvalidatesExecPathCache(t *testing.T) {
+	coordinator := &BrowserCoordinator{}
+	coordinator.execPath.success = "/tmp/cached-chrome"
+	oldCfg := BrowserConfig{PreferPackaged: false, TrustPathChrome: false}
+	coordinator.cfg = oldCfg
+
+	newCfg := oldCfg
+	newCfg.PreferPackaged = true
+	coordinator.ApplyRuntimeConfig(newCfg, 1)
+
+	assert.Empty(t, coordinator.execPath.cachedPath())
 }

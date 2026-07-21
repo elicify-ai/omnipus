@@ -397,8 +397,8 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// is false but $PATH either missed or was discarded above, the package
 	// Chrome is the floor.
 	if pathResolved == "" || cfg.PreferPackaged {
-		pkgRoot := packageChromeRoot()
-		if pkgRoot != "" {
+		pkgRoot, pkgStatus := packageChromeRootProbe()
+		if pkgStatus == ProbeUsable && pkgRoot != "" {
 			pkgBin, pkgSHA := findPackageChrome(pkgRoot)
 			if pkgBin != "" {
 				// SEC-ADR052-001 + SEC-ADR052-004: chrome.sha256 is REQUIRED
@@ -439,7 +439,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 
 	// Step 4 — managed download (first-use): bare-binary / no-package
 	// installs land here. The installer-side findInstalledBuild also runs
-	// verifyChromeSHA256 when chrome.sha256 is present (ADR-052 M2), so the
+	// chromeintegrity.VerifyChromeSHA256 when chrome.sha256 is present (ADR-052 M2), so the
 	// downloaded build's integrity is verified before it can ever launch.
 	installRoot := InstallRootForProfileDir(cfg.ProfileDir)
 	managedPath, err := EnsureChromium(ctx, installRoot)
@@ -479,17 +479,19 @@ func (e *execPathCaches) cacheFailure(err error) {
 		})
 }
 
+// invalidate clears both resolution caches so the next resolution observes a
+// changed runtime policy immediately. Guarded by the cache mutex.
+func (e *execPathCaches) invalidate() {
+	e.mu.Lock()
+	e.success = ""
+	e.failErr = nil
+	e.failUntil = time.Time{}
+	e.mu.Unlock()
+}
+
 // cachedPath returns the last successfully-resolved Chromium binary path, or
-// "" if nothing has been resolved yet (or the prior success was invalidated,
-// e.g. by cacheFailure or a stat-miss in resolve). Guarded by mu.
-//
-// This is a plain, non-blocking field read — unlike resolve(), it NEVER
-// re-validates the path with os.Stat, never probes $PATH, and never reaches
-// the network for the Chrome-for-Testing manifest. It exists for callers on
-// hot request paths (BrowserManager.VideoCapability, manager.go) that need a
-// best-effort snapshot of "what Chromium binary, if any, has already been
-// resolved for a real launch" without risking resolve()'s up-to-4-candidate
-// PATH probe (5s timeout each) or a CfT manifest fetch.
+// "" if nothing has been resolved yet. It is a non-blocking snapshot and does
+// not probe the filesystem or network.
 func (e *execPathCaches) cachedPath() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
