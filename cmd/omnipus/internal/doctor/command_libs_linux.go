@@ -189,9 +189,9 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		if pType != 2 /* PT_DYNAMIC */ {
 			continue
 		}
-		// 64-bit: p_offset=24, p_filesz=40 within the program header.
-		dynOff = bo.Uint64(phdr[24:32])
-		dynSize = bo.Uint64(phdr[40:48])
+		// 64-bit: p_offset=8, p_filesz=32 within the program header.
+		dynOff = bo.Uint64(phdr[8:16])
+		dynSize = bo.Uint64(phdr[32:40])
 		break
 	}
 	if dynSize == 0 {

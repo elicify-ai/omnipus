@@ -315,12 +315,34 @@ fi
 SHARE_CHROMIUM="${INSTALL_DIR}/../share/omnipus/chromium"
 if [ "$OS" = "Linux" ] && { [ -d "$CHROMIUM_DIR" ] || [ -d "$SHARE_CHROMIUM" ]; }; then
   install_host_libs_apt() {
-    HOST_LIBS="libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxshmfence1 libasound2 libpango-1.0-0 libcairo2"
+    HOST_LIBS="libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxshmfence1 libasound2 libasound2t64 libpango-1.0-0 libcairo2"
     set --
     for lib in $HOST_LIBS; do
-      if ! dpkg -s "$lib" >/dev/null 2>&1; then
-        set -- "$@" "$lib"
-      fi
+      # libasound2 (Ubuntu ≤ 22.04) and libasound2t64 (Ubuntu ≥ 24.04) are
+      # mutually exclusive on a given host — only one is available. Probe
+      # for EITHER being installed before deciding the pair needs to be
+      # staged for install. The apt-get install line below lists both so
+      # apt picks whichever is present.
+      case "$lib" in
+        libasound2t64)
+          if dpkg -s libasound2 >/dev/null 2>&1 || dpkg -s libasound2t64 >/dev/null 2>&1; then
+            continue
+          fi
+          # Neither installed — stage BOTH names so apt can pick whichever
+          # the running distro provides.
+          set -- "$@" libasound2 libasound2t64
+          ;;
+        libasound2)
+          # Pair partner handled in the libasound2t64 branch above; skip
+          # the standalone probe to avoid duplicating the install list.
+          ;;
+        *)
+          if dpkg -s "$lib" >/dev/null 2>&1; then
+            continue
+          fi
+          set -- "$@" "$lib"
+          ;;
+      esac
     done
     if [ "$#" -gt 0 ]; then
       info "installing Chrome host libraries: $*"
