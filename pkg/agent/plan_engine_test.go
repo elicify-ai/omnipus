@@ -149,16 +149,16 @@ func newTestPlanEngine(t *testing.T) *planEngineHarness {
 	fc := &fakePlanClock{now: time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)}
 
 	pe := &PlanEngine{
-		planStore:      ps,
-		taskStore:      ts,
-		dispatcher:     fd,
-		judge:          fj,
-		notifier:       fn,
-		clock:          fc,
-		tickInterval:   defaultPlanEngineTickInterval,
-		activeCounters: make(map[string]ActiveCounterFunc),
-		inFlightJudge:  make(map[string]bool),
-		judgeSema:      newDispatchSemaphore(defaultPlanJudgeConcurrency),
+		planStore:        ps,
+		taskStore:        ts,
+		dispatcher:       fd,
+		judge:            fj,
+		notifier:         fn,
+		clock:            fc,
+		tickInterval:     defaultPlanEngineTickInterval,
+		activeCounters:   make(map[string]ActiveCounterFunc),
+		verifierRegistry: NewVerifierSessionRegistry(),
+		judgeSema:        newDispatchSemaphore(defaultPlanJudgeConcurrency),
 	}
 	return &planEngineHarness{pe: pe, plans: ps, tasks: ts, judge: fj, disp: fd, notif: fn, clock: fc}
 }
