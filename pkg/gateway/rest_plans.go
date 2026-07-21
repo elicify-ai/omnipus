@@ -33,11 +33,9 @@ package gateway
 // successful Create/Update — this file never emits frames directly.
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -649,42 +647,40 @@ func (a *restAPI) handlePlanGet(w http.ResponseWriter, id string) {
 // handlePlanPut handles PUT /api/v1/plans/{id}. Plain field update — NEVER a
 // state transition (ADR-052 FR-007/US-5, A1): every plan state change goes
 // through a dedicated endpoint (POST /approve, POST /stop, POST /restart, or
-// the engine's own cap-gated promotion). `[FACT]` before this guard, PUT set
+// the engine's own cap-gated promotion). Before this guard existed, PUT set
 // patch.State directly and skipped BOTH the FR-084 criteria gate (only
 // enforced in handlePlanApprove) and the engine's cap admission (Admit lives
 // only in tryStartApprovedPlan) — a client could `PUT {"state":"running"}`
 // and bypass both safety nets (ADR-052 G2/§3). gen.PlanUpdateRequest still
 // carries a State field on the wire (existing generated type, unchanged by
 // this feature — Constraint #8 does not require touching it since the fix is
-// behavioral, not shape-level), so the guard cannot rely on Go's decode
-// silently dropping an unrecognized field the way the sandbox_profile/
-// delegation_policy precedent (rest.go's PUT /agents/{id}) does; it must
-// reject the presence of ANY "state" key at the raw-JSON level instead,
-// mirroring that same raw-body-sniff pattern (ADR-035 precedent) one level
-// up: a present-but-absent-effect field is still a request that named a
-// forbidden transition and must 400, not silently no-op.
+// behavioral, not shape-level). UNLIKE the sandbox_profile/delegation_policy
+// precedent (rest.go's PUT /agents/{id}), where the forbidden field is
+// entirely ABSENT from the generated struct and a raw-body sniff is the only
+// way to detect it, PlanUpdateRequest.State is a `*PlanUpdateRequestState`
+// pointer field — its presence is directly observable post-decode via
+// `req.State != nil`, with no raw-body sniff needed. (An earlier version of
+// this guard raw-body-sniffed for a literal `"state"` byte sequence instead;
+// that both over-rejected any field VALUE equal to "state" — e.g.
+// {"title":"state"} — and missed a unicode-escaped key, e.g.
+// {"\u0073tate":"running"}, which decodes to the same "state" key Go's
+// own json.Unmarshal recognizes. The post-decode pointer check below has neither
+// failure mode.)
 func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
 		return
 	}
 
-	rawBody, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if readErr != nil {
-		jsonErr(w, http.StatusBadRequest, "could not read request body")
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(rawBody))
-	if bytes.Contains(rawBody, []byte(`"state"`)) {
-		jsonErr(w, http.StatusBadRequest,
-			`state cannot be set via PUT — use POST /plans/{id}/approve, POST /plans/{id}/stop, or `+
-				`POST /plans/{id}/restart; every plan state transition goes through a dedicated endpoint`)
-		return
-	}
-
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.PlanUpdateRequest
 	if !decodeAndValidate(w, r, "PlanUpdateRequest", &req, validateEnabled) {
+		return
+	}
+	if req.State != nil {
+		jsonErr(w, http.StatusBadRequest,
+			`state cannot be set via PUT — use POST /plans/{id}/approve, POST /plans/{id}/stop, or `+
+				`POST /plans/{id}/restart; every plan state transition goes through a dedicated endpoint`)
 		return
 	}
 
@@ -755,10 +751,9 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		}
 		patch.Bounds = &b
 	}
-	// req.State is intentionally never read here (FR-007/A1): the raw-body
-	// sniff above already 400s any request whose body contains a "state" key,
-	// so this decoded field is unreachable non-nil at this point — patch.State
-	// stays permanently unset on the PUT path.
+	// req.State is intentionally never read here (FR-007/A1): the guard above
+	// already 400s and returns whenever req.State != nil, so it is guaranteed
+	// nil at this point — patch.State stays permanently unset on the PUT path.
 
 	updated, err := a.planStore.Update(id, patch)
 	if err != nil {
@@ -955,6 +950,22 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 				jsonErr(w, http.StatusNotFound, "plan not found")
 				return
 			}
+			// TOCTOU (sign-off P1 finding #3): the precondition check above
+			// passed against a.planStore.Get, but StopPlan re-reads the plan
+			// under its own planDecisionMu and re-checks the SAME precondition
+			// — a concurrent stop/restart/completion between those two reads
+			// can flip it. plan_engine.go owns no exported sentinel for this
+			// (and none is added here — that package belongs to another
+			// agent), so distinguish the race from a genuine internal failure
+			// by re-fetching: if the plan is no longer running/approved on
+			// disk, this is that same precondition, just lost the race, and
+			// gets the engine's own message mapped to 409 rather than a
+			// generic 500.
+			if reread, rerr := a.planStore.Get(id); rerr == nil &&
+				reread.State != plan.StateRunning && reread.State != plan.StateApproved {
+				jsonErr(w, http.StatusConflict, serr.Error())
+				return
+			}
 			slog.Error("rest: plan stop: engine stop failed", "id", id, "error", serr)
 			jsonErr(w, http.StatusInternalServerError, "could not stop plan")
 			return
@@ -1071,5 +1082,18 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, id string) {
 		return
 	}
 	a.auditPlan("plan.restart", id)
+	if len(resetFailures) > 0 {
+		// Mirror handlePlanStop's partial-fan-out-failure honesty precedent
+		// (ADR-052 §6.4 Item 5): the plan itself DID transition to approved —
+		// updated reflects that, and the audit entry above records it
+		// happened — but >=1 member's own RestartReset write failed and stays
+		// `failed`, never re-run. Report this honestly as a server error
+		// naming the un-reset task IDs rather than an unqualified 200: the
+		// caller must re-check member state instead of assuming every
+		// non-done member was actually reset.
+		jsonErr(w, http.StatusInternalServerError,
+			fmt.Sprintf("plan restarted, but member reset failed for task(s) %v; re-check their state", resetFailures))
+		return
+	}
 	jsonOK(w, a.toWirePlan(*updated))
 }

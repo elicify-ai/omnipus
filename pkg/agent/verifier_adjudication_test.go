@@ -15,6 +15,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -605,6 +606,145 @@ func TestContextBuilder_MemoryEnabled_FalseStillBuildsRestOfPrompt(t *testing.T)
 	if !strings.Contains(prompt, "Verifier X") {
 		t.Error("disabling memory must not affect identity/other prompt sections")
 	}
+}
+
+// --- Judge-unavailability escalation (sign-off finding 1) ------------------
+
+// TestRunVerifierAdjudication_UnavailabilityEscalatesAfterThreeConsecutive
+// proves the CENTRAL fix for sign-off finding 1: every JudgeCriteria caller
+// already handles a single Unavailable result with a WARN + silent pause —
+// correct for a one-off transient blip, but a PERSISTENTLY down Judge then
+// loops forever looking healthy to an operator scanning logs, because every
+// individual WARN reads identically to an isolated hiccup. This asserts the
+// per-unit consecutive-Unavailable streak escalates to ERROR once it crosses
+// verifierUnavailabilityEscalateAt (3), keeps erroring on every subsequent
+// occurrence (not just the Nth), and clears the moment a real verdict comes
+// back — all observed via the verifierUnavailabilityEscalateFn seam (this
+// file's own test hook, mirroring the existing judgeSleepFn/
+// killProcessGroupFn pattern) rather than by scraping real log output.
+func TestRunVerifierAdjudication_UnavailabilityEscalatesAfterThreeConsecutive(t *testing.T) {
+	origSleep := judgeSleepFn
+	t.Cleanup(func() { judgeSleepFn = origSleep })
+	judgeSleepFn = func(context.Context, time.Duration) error {
+		return context.Canceled // give up immediately on D7 backoff — no real sleep
+	}
+
+	origEscalate := verifierUnavailabilityEscalateFn
+	t.Cleanup(func() { verifierUnavailabilityEscalateFn = origEscalate })
+	type escalation struct {
+		unitID string
+		streak int
+	}
+	var escalations []escalation
+	verifierUnavailabilityEscalateFn = func(unitID string, streak int) {
+		escalations = append(escalations, escalation{unitID, streak})
+	}
+
+	const taskID = "t-unavailability-escalation"
+	unitID := verifierUnitForTask(taskID)
+	resetVerifierUnavailabilityStreakForTest(t, unitID)
+
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return nil, errors.New("simulated provider outage") // every call fails -> Unavailable
+	}}
+	judgeInst.Provider = fake
+
+	callOnce := func() JudgeCriteriaResult {
+		t.Helper()
+		return al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+			Scope:           task.VerdictScopeTask,
+			TaskID:          taskID,
+			AssigneeAgentID: "native-agent",
+			Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "x")},
+			Attempt:         1,
+			ClaimText:       "done",
+		})
+	}
+
+	for i := 1; i <= 2; i++ {
+		result := callOnce()
+		if !result.Unavailable {
+			t.Fatalf("call %d: expected Unavailable=true, got %+v", i, result)
+		}
+		if len(escalations) != 0 {
+			t.Fatalf("call %d: escalate fn must not fire before the streak crosses %d, got %d call(s): %+v",
+				i, verifierUnavailabilityEscalateAt, len(escalations), escalations)
+		}
+	}
+
+	// 3rd consecutive Unavailable crosses the threshold.
+	if result := callOnce(); !result.Unavailable {
+		t.Fatalf("call 3: expected Unavailable=true, got %+v", result)
+	}
+	if len(escalations) != 1 {
+		t.Fatalf("call 3: escalate fn must fire exactly once at streak=%d, got %d call(s): %+v",
+			verifierUnavailabilityEscalateAt, len(escalations), escalations)
+	}
+	if escalations[0].unitID != unitID || escalations[0].streak != 3 {
+		t.Errorf("escalation = %+v, want unitID=%q streak=3", escalations[0], unitID)
+	}
+
+	// 4th consecutive: must escalate AGAIN, not just once ever.
+	if result := callOnce(); !result.Unavailable {
+		t.Fatalf("call 4: expected Unavailable=true, got %+v", result)
+	}
+	if len(escalations) != 2 {
+		t.Fatalf("call 4: escalate fn must fire again (stay loud), got %d total call(s): %+v", len(escalations), escalations)
+	}
+	if escalations[1].streak != 4 {
+		t.Errorf("call 4 streak = %d, want 4", escalations[1].streak)
+	}
+
+	// A genuine success (the Judge's LLM call actually completes) clears the
+	// streak — this IS a real verdict, not another Unavailable outcome.
+	fake.chatFn = func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}
+	result := callOnce()
+	if result.Unavailable {
+		t.Fatalf("expected the recovered call to succeed, got Unavailable: %s", result.Reason)
+	}
+	if streak := verifierUnavailabilityStreakForTest(unitID); streak != 0 {
+		t.Errorf("a successful adjudication must clear the streak, got %d", streak)
+	}
+
+	// Back to failing: the streak restarts from 1 — no immediate re-escalation.
+	fake.chatFn = func(int) (*providers.LLMResponse, error) {
+		return nil, errors.New("simulated provider outage")
+	}
+	if result := callOnce(); !result.Unavailable {
+		t.Fatalf("expected Unavailable=true after recovery+relapse, got %+v", result)
+	}
+	if len(escalations) != 2 {
+		t.Errorf("streak restarting from 1 after a clear must not immediately re-escalate, got %d total escalations: %+v",
+			len(escalations), escalations)
+	}
+}
+
+// resetVerifierUnavailabilityStreakForTest clears unitID's entry in the
+// process-wide streak map before and after the test, so this test's use of a
+// distinctive unitID cannot leak state into (or be polluted by) any other
+// test in this package that happens to share a unit id.
+func resetVerifierUnavailabilityStreakForTest(t *testing.T, unitID string) {
+	t.Helper()
+	clear := func() {
+		verifierUnavailabilityMu.Lock()
+		delete(verifierUnavailabilityStreak, unitID)
+		verifierUnavailabilityMu.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
+// verifierUnavailabilityStreakForTest reads back the current streak count for
+// unitID, for test assertions only.
+func verifierUnavailabilityStreakForTest(unitID string) int {
+	verifierUnavailabilityMu.Lock()
+	defer verifierUnavailabilityMu.Unlock()
+	return verifierUnavailabilityStreak[unitID]
 }
 
 // --- D7 sanity: a turn-level error is Unavailable, never fail-closed-unmet -

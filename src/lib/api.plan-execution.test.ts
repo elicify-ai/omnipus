@@ -359,6 +359,39 @@ describe('runTask', () => {
   })
 })
 
+// ── stopPlan / deletePlan (D8 — the P0 stop route) ──────────────────────────
+
+describe('stopPlan', () => {
+  it('calls POST /api/v1/plans/{id}/stop and returns the stopped Plan', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeJsonResponse(makePlanResponse({ id: 'plan-x', state: 'failed', failed_reason: 'stopped_by_user' })),
+    )
+
+    const { stopPlan } = await import('./api')
+    const result = await stopPlan('plan-x')
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/plans/plan-x/stop')
+    expect(init.method).toBe('POST')
+    expect(result.id).toBe('plan-x')
+  })
+})
+
+describe('deletePlan', () => {
+  it('calls DELETE /api/v1/plans/{id}', async () => {
+    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 204 }))
+
+    const { deletePlan } = await import('./api')
+    await deletePlan('plan-x')
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/plans/plan-x')
+    expect(init.method).toBe('DELETE')
+  })
+})
+
 // ── stopTask / stopTaskGoalLoop ─────────────────────────────────────────────
 
 describe('stopTask', () => {

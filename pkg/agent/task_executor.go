@@ -148,11 +148,28 @@ func (te *TaskExecutor) hasEvidenceGateRejection(taskID string) bool {
 // (finishTaskRun), or the task reached ANY terminal disposition
 // (completeTaskWithResult, failTask) — the latter also bounds the map's
 // lifetime so a long-running gateway does not accumulate one entry per task
-// ID forever.
+// ID forever. See ClearEvidenceGateStreak for the THIRD terminal-write path
+// (a user Stop) that also needs this.
 func (te *TaskExecutor) clearEvidenceGateStreak(taskID string) {
 	te.evidenceMu.Lock()
 	defer te.evidenceMu.Unlock()
 	delete(te.evidenceRejectStreak, taskID)
+}
+
+// ClearEvidenceGateStreak is the exported counterpart of
+// clearEvidenceGateStreak (ADR-052 fix-wave, evidence-streak leak item ii):
+// PlanEngine.cancelMemberLocked (plan_engine.go) marks a Stopped task
+// `failed` via a DIRECT store write, bypassing both of TaskExecutor's own
+// terminal-write chokepoints (completeTaskWithResult, failTask) that
+// clearEvidenceGateStreak's own doc comment names as clearing "ANY terminal
+// disposition" — a Stop IS a terminal disposition too, and without this the
+// streak would leak in evidenceRejectStreak for the remainder of the
+// process lifetime. Exposed via the planTaskDispatcher interface so
+// PlanEngine can reach it through its existing narrow test-seam field
+// (dispatcher) rather than holding a second, wider reference to
+// *TaskExecutor.
+func (te *TaskExecutor) ClearEvidenceGateStreak(taskID string) {
+	te.clearEvidenceGateStreak(taskID)
 }
 
 // ExecuteTask starts executing the dispatchable task identified by taskID. It
@@ -562,7 +579,7 @@ func (te *TaskExecutor) finishTaskRun(
 		if current.Scratchpad {
 			// FR-048: Scratchpad (set_todos) tasks are exempt from the goal
 			// loop entirely — today's exact fail-closed-immediately behavior.
-			te.completeTaskWithResult(current, taskSessionID, false, reason)
+			te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, false, reason)
 			return ""
 		}
 		// FR-045: for a real task, no signal is an UNMET claim (attempt
@@ -574,7 +591,7 @@ func (te *TaskExecutor) finishTaskRun(
 		// FR-048 (Scratchpad: exempt from the goal loop entirely, even for a
 		// success marker — trust it directly) OR SD-B1 (an explicit failure
 		// marker is an accepted give-up: terminal immediately, no judge).
-		te.completeTaskWithResult(current, taskSessionID, signal.Status() == task.StatusDone, signal.Result)
+		te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, signal.Status() == task.StatusDone, signal.Result)
 		return ""
 	}
 
@@ -617,7 +634,7 @@ func (te *TaskExecutor) adjudicateClaim(
 	if len(criteria) == 0 {
 		// Structurally empty task (no criteria, no prompt, no title/description
 		// text worth judging) — nothing to judge; trust the claim.
-		te.completeTaskWithResult(t, taskSessionID, true, claimSummary)
+		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary)
 		return ""
 	}
 
@@ -627,7 +644,7 @@ func (te *TaskExecutor) adjudicateClaim(
 				"goal-loop: Judge System Agent not configured; trusting the worker's claim "+
 					"directly for this criteria-less task",
 				map[string]any{"task_id": t.ID})
-			te.completeTaskWithResult(t, taskSessionID, true, claimSummary)
+			te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary)
 			return ""
 		}
 	}
@@ -677,7 +694,7 @@ func (te *TaskExecutor) adjudicateClaim(
 	te.writeJudgeVerdictTranscript(t, taskSessionID, verdict)
 
 	if verdict.Met {
-		te.completeTaskWithResult(t, taskSessionID, true, claimSummary)
+		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary)
 		return ""
 	}
 
@@ -715,6 +732,21 @@ func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
 // re-dispatch or interrupt state", even though under this function's own
 // invariants (it is the sole writer of AttemptCount) the two gates always
 // coincide.
+//
+// ADR-052 FR-014/§6.4(b) TOCTOU fix (interleaving (a), 7-reviewer +
+// architect gate): this is one of the "no-recheck sibling paths"
+// (finishTaskRun's no-signal branch, adjudicateClaim's empty-claim branch,
+// rejectBareEvidenceClaim's streak-exhaust branch, and adjudicateClaim's own
+// post-recheck unmet branch all funnel through here) that previously wrote
+// via a plain store.Update with NO guard at all against a concurrent Stop
+// having already moved t out of in_progress — a Stop landing between the
+// caller's stale read of t and this write would be silently REVIVED
+// (Status -> next, and CancelReason auto-cleared by updateLocked's own
+// leaving-failed clear) even though the user had just stopped it. The write
+// below is now a compare-and-swap (UpdateIfStatus, expecting t to still be
+// in_progress) — on a conflict the outcome is dropped (logged, never
+// re-dispatched), mirroring the documented drop-stale-verdict semantics
+// adjudicateClaim's taskVerdictStillApplicable fast-path already uses.
 func (te *TaskExecutor) consumeAttemptOrExhaust(
 	ctx context.Context,
 	t *task.Task,
@@ -731,8 +763,15 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 
 	newAttempt := t.AttemptCount + 1
 	nextStatus := task.StatusNext
-	updated, uerr := te.store.Update(t.ID, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
 	if uerr != nil {
+		if errors.Is(uerr, task.ErrStatusConflict) {
+			logger.WarnCF("task_executor",
+				"goal-loop: dropping unmet outcome — task left in_progress before the attempt could be "+
+					"recorded (Stop landed concurrently); not re-dispatching",
+				map[string]any{"task_id": t.ID})
+			return ""
+		}
 		logger.ErrorCF("task_executor",
 			"goal-loop: could not persist attempt increment; failing the run closed",
 			map[string]any{"task_id": t.ID, "error": uerr.Error()})
@@ -745,9 +784,17 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 		return updated.ID
 	}
 
+	// updated.Status is `next` here (just written above by the CAS write this
+	// function performed) — the terminal write below CASes against THAT
+	// status, not in_progress, chaining the same guarantee: nothing besides
+	// this same goroutine could have touched the task between the two writes
+	// (a real Stop requires in_progress, per StopTask's own guard, so it
+	// cannot land on a `next` task at all — see completeTaskWithResult's
+	// `expected` parameter doc).
 	handover := buildHandover(updated, claimSummary, verdict, maxAttempts)
-	te.completeTaskWithResult(updated, taskSessionID, false, handover)
-	te.wakeOwnerAttemptsExhausted(updated, taskSessionID, handover)
+	if te.completeTaskWithResult(updated, taskSessionID, task.StatusNext, false, handover) {
+		te.wakeOwnerAttemptsExhausted(updated, taskSessionID, handover)
+	}
 	return ""
 }
 
@@ -828,9 +875,22 @@ func (te *TaskExecutor) rejectBareEvidenceClaim(
 		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil)
 	}
 
+	// ADR-052 FR-014/§6.4(b) TOCTOU fix: this is the FREE re-dispatch write
+	// (does not consume an attempt) — but it is still an "outcome" write in
+	// the same sense as consumeAttemptOrExhaust's: an unguarded plain Update
+	// here would just as readily revive a task a concurrent Stop already
+	// moved to failed+stopped_by_user (Status -> next, CancelReason
+	// auto-cleared) as the attempt-consuming path would. CAS it the same way.
 	nextStatus := task.StatusNext
-	updated, uerr := te.store.Update(t.ID, task.Patch{Status: &nextStatus})
+	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{Status: &nextStatus})
 	if uerr != nil {
+		if errors.Is(uerr, task.ErrStatusConflict) {
+			logger.WarnCF("task_executor",
+				"evidence-marker gate: dropping free re-dispatch — task left in_progress concurrently "+
+					"(Stop landed); not re-dispatching",
+				map[string]any{"task_id": t.ID})
+			return ""
+		}
 		logger.ErrorCF("task_executor",
 			"evidence-marker gate: could not persist re-dispatch status; failing the run closed",
 			map[string]any{"task_id": t.ID, "error": uerr.Error()})
@@ -977,15 +1037,37 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 // deliberately narrower shape (no parent follow-up) — that asymmetry predates
 // this change and is out of scope here.
 //
-// The parameter is deliberately a plain bool, not a task.Status (review C1):
-// completeTaskWithResult only ever writes one of the two terminal statuses,
-// so narrowing the signature to "success or not" makes writing a non-terminal
-// status here a compile error instead of a reviewable-but-possible mistake.
-func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID string, success bool, result string) {
+// The success parameter is deliberately a plain bool, not a task.Status
+// (review C1): completeTaskWithResult only ever writes one of the two
+// terminal statuses, so narrowing the signature to "success or not" makes
+// writing a non-terminal status here a compile error instead of a
+// reviewable-but-possible mistake.
+//
+// expected is the on-disk status the caller believes t is CURRENTLY at
+// (ADR-052 FR-014/§6.4(b) TOCTOU fix, 7-reviewer + architect gate): every
+// call site reached this function after some earlier, possibly-unlocked
+// work (a judge/verifier turn, an attempt-increment write) during which a
+// concurrent Stop could have moved the task out from under it. The write
+// below is a compare-and-swap (UpdateIfStatus) against expected rather than
+// a plain Update — on a conflict (the task is no longer at expected, most
+// commonly because StopTask/StopPlan already moved it to
+// failed+stopped_by_user) the completion is DROPPED: logged, no session
+// archive, no onTaskComplete/notifySourceChannel side effects, and — via
+// the returned bool — no owner-wake either at call sites that gate one on
+// it. This is the same "drop the stale outcome, never resurrect or
+// silently overwrite a Stop" contract taskVerdictStillApplicable's
+// pre-existing fast-path already documents; the CAS makes it authoritative
+// (belt-and-suspenders) rather than relying solely on that earlier,
+// separately-timed re-check. Returns whether the write actually landed.
+func (te *TaskExecutor) completeTaskWithResult(
+	t *task.Task, taskSessionID string, expected task.Status, success bool, result string,
+) (applied bool) {
 	// Fix-Wave-2: this is a terminal write for t.ID — any evidence-marker-gate
 	// rejection streak still tracked for it is now moot (and, left uncleared,
 	// would leak for the process lifetime; see evidenceRejectStreak's doc
-	// comment).
+	// comment). Cleared unconditionally, even on a CAS conflict below: either
+	// way the task IS terminal by now (just via a different writer), so the
+	// streak is moot regardless.
 	te.clearEvidenceGateStreak(t.ID)
 	status := task.StatusDone
 	if !success {
@@ -993,12 +1075,19 @@ func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID strin
 	}
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 	now := time.Now().UTC().Format(time.RFC3339)
-	final, uerr := te.store.Update(t.ID, task.Patch{
+	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
 		Status:      &status,
 		Result:      &result,
 		CompletedAt: &now,
 	})
 	if uerr != nil {
+		if errors.Is(uerr, task.ErrStatusConflict) {
+			logger.WarnCF("task_executor",
+				"goal-loop: dropping completion outcome — task left its expected status concurrently "+
+					"(Stop landed); the task's own outcome is authoritative",
+				map[string]any{"task_id": t.ID, "expected_status": string(expected), "target_status": string(status)})
+			return false
+		}
 		// Known, accepted limitation (ADR-043 §3): the task is left stuck at
 		// whatever non-terminal status it had before this call (typically
 		// in_progress) — we do not retry and we do not force a second write
@@ -1010,7 +1099,7 @@ func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID strin
 		// stuck task (e.g. via a direct store fix or `omnipus` CLI update).
 		logger.ErrorCF("task_executor", "Completion update failed",
 			map[string]any{"task_id": t.ID, "status": string(status), "error": uerr.Error()})
-		return
+		return false
 	}
 	if taskSessionID != "" && sessStore != nil {
 		statusArchived := session.StatusArchived
@@ -1021,6 +1110,7 @@ func (te *TaskExecutor) completeTaskWithResult(t *task.Task, taskSessionID strin
 	}
 	te.onTaskComplete(final)
 	te.notifySourceChannel(final)
+	return true
 }
 
 // notifySourceChannel sends a compact task result back to the originating

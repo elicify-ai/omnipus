@@ -17,6 +17,7 @@ import {
   STATUS_COLORS,
   STATUS_LABELS,
   STATUS_MUTED,
+  TASK_CANCELLED_COLOR,
   type TaskStatus as SharedTaskStatus,
 } from '@/lib/statusColors'
 
@@ -66,7 +67,13 @@ export function statusVisual(status: TaskStatus | string | undefined): StatusVis
 export function taskNodeVisual(task: Pick<Task, 'status' | 'cancel_reason'>): StatusVisual {
   const base = statusVisual(task.status)
   if (task.status === 'failed' && task.cancel_reason === 'stopped_by_user') {
-    return { ...base, label: 'Cancelled', color: 'var(--color-warning)' }
+    // Literal hex, not a `var(--color-warning)` reference — TaskNode.tsx:126
+    // string-concatenates an alpha suffix onto this value (`${visual.color}1f`);
+    // `var(--color-warning)1f` is invalid CSS and silently drops the
+    // backgroundColor declaration (Gate-2 finding #1, same bug class as
+    // TaskCard/PlansFilterBand/WorkspaceGraphTab — see statusColors.ts's
+    // TASK_CANCELLED_COLOR doc comment).
+    return { ...base, label: 'Cancelled', color: TASK_CANCELLED_COLOR }
   }
   return base
 }

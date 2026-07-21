@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -212,6 +213,27 @@ func (al *AgentLoop) runBehaviorScan(in JudgeCriteriaInput, c task.AcceptanceCri
 		if criterionScopeIsAttempt(*c.Behavior) && t.StartedAt != "" {
 			if cutoff, perr := time.Parse(time.RFC3339, t.StartedAt); perr == nil {
 				attemptStart = cutoff
+			} else {
+				// Sign-off finding 3: ScanBehaviorCriterionEntries's own
+				// contract says passing the ZERO time.Time for an
+				// attempt-scoped criterion "degenerates to everything counts
+				// (equivalent to task_session)" — i.e. leaving attemptStart at
+				// its zero value here would silently WIDEN this criterion from
+				// attempt-scoped to whole-session, potentially laundering a
+				// genuine "not done THIS attempt" unmet result into a false
+				// PASS purely because Task.StartedAt failed to parse. Fail
+				// closed instead: pin the cutoff to "now" so every
+				// already-recorded entry falls strictly before it and is
+				// excluded from the attempt-scoped count (observed stays 0
+				// for this scope) — the criterion becomes effectively
+				// unmet-able rather than accidentally lenient. A malformed
+				// StartedAt is itself a data-integrity bug worth an operator's
+				// attention, so it is logged at Warn rather than silently
+				// swallowed.
+				logger.WarnCF("agent",
+					"behavior scan: task StartedAt failed to parse; failing attempt scope closed (0 observed) instead of silently widening to whole session",
+					map[string]any{"task_id": in.TaskID, "started_at": t.StartedAt, "error": perr.Error()})
+				attemptStart = time.Now()
 			}
 		}
 	case in.GoalSessionID != "":

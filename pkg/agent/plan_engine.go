@@ -76,10 +76,18 @@ type planJudge interface {
 	JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) JudgeCriteriaResult
 }
 
-// planTaskDispatcher is the narrow interface *TaskExecutor.ExecuteTask
-// satisfies, for the same reason as planJudge above.
+// planTaskDispatcher is the narrow interface *TaskExecutor satisfies, for
+// the same reason as planJudge above.
 type planTaskDispatcher interface {
 	ExecuteTask(ctx context.Context, taskID string) error
+	// ClearEvidenceGateStreak resets taskID's in-memory evidence-marker-gate
+	// rejection streak (ADR-052 Fix-Wave-2/fix-wave item ii). cancelMemberLocked
+	// (this file, US-6/US-7 Stop) marks a task `failed` via a direct store
+	// write, bypassing TaskExecutor's own completeTaskWithResult/failTask
+	// terminal-write chokepoints that would otherwise have cleared it — see
+	// TaskExecutor.ClearEvidenceGateStreak's doc comment for why a Stop needs
+	// the same treatment those "ANY terminal disposition" call sites get.
+	ClearEvidenceGateStreak(taskID string)
 }
 
 // sessionCanceller is the narrow interface *AgentLoop.RequestCancelForSession
@@ -210,13 +218,24 @@ func NewPlanEngine(al *AgentLoop, planStore *plan.Store, taskStore *task.Store, 
 		agentLoop:        al,
 		planStore:        planStore,
 		taskStore:        taskStore,
-		dispatcher:       taskExecutor,
 		judge:            al,
 		clock:            realPlanEngineClock{},
 		tickInterval:     defaultPlanEngineTickInterval,
 		activeCounters:   make(map[string]ActiveCounterFunc),
 		verifierRegistry: NewVerifierSessionRegistry(),
 		judgeSema:        newDispatchSemaphore(defaultPlanJudgeConcurrency),
+	}
+	// Guard against the classic Go "typed nil inside an interface" footgun:
+	// assigning a nil *TaskExecutor directly to the dispatcher interface
+	// field (as the old `dispatcher: taskExecutor,` struct-literal line did)
+	// leaves pe.dispatcher NON-nil at the interface level (it has a concrete
+	// type, just a nil pointer) — every existing `pe.dispatcher != nil` guard
+	// in this file (cancelMemberLocked's ClearEvidenceGateStreak call) would
+	// then pass the nil check and panic calling a method on a nil receiver.
+	// Test callers that legitimately pass nil (e.g. a bare-engine test that
+	// never dispatches) now get a TRUE nil interface, so those guards work.
+	if taskExecutor != nil {
+		pe.dispatcher = taskExecutor
 	}
 	if al != nil {
 		pe.notifier = al.asyncNotifier
@@ -693,8 +712,13 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	}
 	if len(criteria) == 0 {
 		// SD-A7 soft tier: title/description/goal all empty too — nothing to
-		// judge at all. Trust completion directly rather than looping forever.
-		pe.completePlan(p)
+		// judge at all. Trust completion directly rather than looping
+		// forever. Still routed through applyJudgeRoundOutcomeLocked's own
+		// fresh State==running re-check (FR-014) — a Stop can land during the
+		// taskStore.List call above just as easily as during a real judge
+		// call, so this short-circuit gets the SAME atomicity guarantee as
+		// the real-verdict path below, not a bespoke unlocked shortcut.
+		pe.applyJudgeRoundOutcomeLocked(planID, JudgeCriteriaResult{}, true)
 		return
 	}
 
@@ -716,16 +740,53 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// planDecisionMu by design (this whole goroutine is decoupled from the
 	// lock precisely so a slow-but-alive judge call never blocks other
 	// plans' dispatch — see beginPlanJudgeRound's doc comment), so a Stop
-	// can land on this exact plan microseconds before the call returns.
-	// Re-acquire the lock and re-check State==running before applying ANY
-	// outcome below (Unavailable-revert, a real verdict, or the wakeOwner
-	// side effects either path triggers) — a plan a concurrent Stop already
-	// moved to `failed` must never have that outcome overwritten by a stale
-	// in-flight round.
-	if !pe.verdictStillApplicable(planID) {
+	// can land on this exact plan at any point up to and including the
+	// instant this call returns. Delegate to applyJudgeRoundOutcomeLocked,
+	// which re-checks State==running and applies the outcome as ONE atomic
+	// critical section under planDecisionMu.
+	pe.applyJudgeRoundOutcomeLocked(planID, result, false)
+}
+
+// applyJudgeRoundOutcomeLocked applies a just-computed plan-level judge
+// round result to planID — but ONLY after acquiring planDecisionMu and
+// re-confirming, from a FRESH read, that the plan is still `running`, and it
+// keeps holding that lock across every write the outcome requires.
+//
+// ADR-052 FR-014/§6.4(b) TOCTOU fix (7-reviewer + architect gate,
+// "plan-scope variant"): PRE-FIX, the equivalent re-check
+// (verdictStillApplicable) ran under its OWN separate, momentary lock
+// acquisition and then RELEASED it — the outcome writes that followed
+// (PlanPhase revert on Unavailable, JudgeRounds/PlanPhase/HandoverText on an
+// unmet verdict, the two synthesizeAndComplete writes on a met verdict, and
+// the wakeOwner side effects any of those trigger) were entirely
+// UNPROTECTED plain store.Update calls. plan.Store's own transition guard
+// rejects a stale State write (failed->done is illegal), but it has no
+// opinion on the OTHER fields — so a Stop landing in the gap between that
+// released lock and these writes could still see its own HandoverText
+// clobbered by the round's steering text, and could still fire a spurious
+// plan_judge_unmet/plan_judge_met wakeOwner notification for a plan the
+// user had just stopped. Collapsing recheck+apply into ONE lock acquisition
+// closes that gap: every OTHER real plan-state mutator
+// (StopPlan/StopTask/tryStartApprovedPlan/idleExpireOneLocked) also takes
+// planDecisionMu before touching plan state, so nothing can interleave here
+// once this function has re-read and confirmed `running`.
+//
+// nothingToJudge is true for the SD-A7 soft-tier-empty short-circuit
+// (completePlan), in which case result is ignored.
+func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCriteriaResult, nothingToJudge bool) {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+
+	current, err := pe.planStore.Get(planID)
+	if err != nil || current.State != plan.StateRunning {
 		logger.InfoCF("plan_engine",
 			"plan judge round outcome dropped: plan left running during adjudication (Stop landed concurrently)",
 			map[string]any{"plan_id": planID})
+		return
+	}
+
+	if nothingToJudge {
+		pe.completePlan(current)
 		return
 	}
 
@@ -738,38 +799,38 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		// OWN timeout fires — JudgeCriteria itself retries forever otherwise,
 		// respecting ctx).
 		dispatching := plan.PhaseDispatching
-		if _, uerr := pe.planStore.Update(p.ID, plan.Patch{PlanPhase: &dispatching}); uerr != nil {
+		if _, uerr := pe.planStore.Update(current.ID, plan.Patch{PlanPhase: &dispatching}); uerr != nil {
 			logger.WarnCF("plan_engine", "judge round: could not revert plan_phase after unavailability",
-				map[string]any{"plan_id": p.ID, "error": uerr.Error()})
+				map[string]any{"plan_id": current.ID, "error": uerr.Error()})
 		}
 		logger.WarnCF("plan_engine", "plan judge round abandoned (judge unavailable)",
-			map[string]any{"plan_id": p.ID, "reason": result.Reason})
+			map[string]any{"plan_id": current.ID, "reason": result.Reason})
 		return
 	}
 
 	verdict := result.Verdict
-	newRounds := p.JudgeRounds + 1
-	pe.touchActivity(p.ID)
+	newRounds := current.JudgeRounds + 1
+	pe.touchActivity(current.ID)
 
 	if verdict.Met {
-		pe.synthesizeAndComplete(p, newRounds)
+		pe.synthesizeAndComplete(current, newRounds)
 		return
 	}
 
 	steering := buildPlanSteeringText(verdict)
 	dispatching := plan.PhaseDispatching
-	if _, uerr := pe.planStore.Update(p.ID, plan.Patch{
+	if _, uerr := pe.planStore.Update(current.ID, plan.Patch{
 		JudgeRounds:  &newRounds,
 		PlanPhase:    &dispatching,
 		HandoverText: &steering,
 	}); uerr != nil {
 		logger.ErrorCF("plan_engine", "judge round: could not persist unmet verdict",
-			map[string]any{"plan_id": p.ID, "error": uerr.Error()})
+			map[string]any{"plan_id": current.ID, "error": uerr.Error()})
 		return
 	}
-	pe.wakeOwner(p.ID, p.OwnerAgentID, fmt.Sprintf(
+	pe.wakeOwner(current.ID, current.OwnerAgentID, fmt.Sprintf(
 		"Plan %q round %d: the plan judge found the Definition of Done UNMET.\n\n%s",
-		p.Title, newRounds, steering,
+		current.Title, newRounds, steering,
 	), "plan_judge_unmet")
 }
 
@@ -781,7 +842,8 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 // not block waiting for the owner's synthesis reply (which is an ordinary,
 // possibly-never-answered chat turn) before finalizing the mechanical
 // outcome. plan_phase is deliberately left at "synthesizing" after Done as a
-// historical marker of how the plan finished.
+// historical marker of how the plan finished. Caller must hold
+// planDecisionMu (see applyJudgeRoundOutcomeLocked/completePlan).
 func (pe *PlanEngine) synthesizeAndComplete(p *plan.Plan, newRounds int) {
 	synthesizing := plan.PhaseSynthesizing
 	if _, err := pe.planStore.Update(p.ID, plan.Patch{
@@ -809,7 +871,9 @@ func (pe *PlanEngine) synthesizeAndComplete(p *plan.Plan, newRounds int) {
 // title/description/goal text worth judging at all): nothing to adjudicate,
 // so the plan is trusted complete directly, mirroring
 // TaskExecutor.adjudicateClaim's identical "structurally empty, trust it"
-// branch.
+// branch. Caller must hold planDecisionMu (applyJudgeRoundOutcomeLocked's
+// own re-checked lock, or FR-041/idle-expiry's — every call site already
+// holds it before reaching here).
 func (pe *PlanEngine) completePlan(p *plan.Plan) {
 	pe.touchActivity(p.ID)
 	pe.synthesizeAndComplete(p, p.JudgeRounds)
@@ -832,19 +896,6 @@ func (pe *PlanEngine) failPlanLocked(planID string, reason plan.FailedReason, ha
 	pe.wakeOwner(planID, updated.OwnerAgentID, fmt.Sprintf(
 		"Plan %q has ended (%s).\n\n%s", updated.Title, reason, handover,
 	), "plan_"+string(reason))
-}
-
-// verdictStillApplicable re-checks, under planDecisionMu, that planID is
-// still State==running (FR-014/US-6 acceptance 3, Test 7) — see
-// runPlanJudgeRound's call site for why this exists.
-func (pe *PlanEngine) verdictStillApplicable(planID string) bool {
-	pe.planDecisionMu.Lock()
-	defer pe.planDecisionMu.Unlock()
-	p, err := pe.planStore.Get(planID)
-	if err != nil {
-		return false
-	}
-	return p.State == plan.StateRunning
 }
 
 // --- Stop (US-6/US-7, FR-009/010/013/025/029/037/041) ---------------------
@@ -1080,6 +1131,15 @@ func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, err
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return nil, fmt.Errorf("plan_engine: cancel task %q: %w", taskID, err)
 	}
+	// Fix-wave item ii: this write is a terminal disposition for taskID (like
+	// completeTaskWithResult/failTask) that bypasses both of TaskExecutor's
+	// own chokepoints — clear its evidence-marker-gate streak directly so it
+	// does not leak for the process lifetime. dispatcher is nil-guarded the
+	// same way agentLoop/canceller/notifier are elsewhere in this file (a
+	// bare struct-literal test engine may omit it).
+	if pe.dispatcher != nil {
+		pe.dispatcher.ClearEvidenceGateStreak(taskID)
+	}
 	if pe.agentLoop != nil {
 		sessionID := updated.SessionID
 		if sessionID == "" {
@@ -1155,6 +1215,7 @@ func memberIsDeadEnd(t *task.Task, byID map[string]*task.Task, visiting map[stri
 	if t.Status != task.StatusBlocked || len(t.BlockedBy) == 0 {
 		return false // next/in_progress/inbox, or blocked with no listed blocker: a live path forward exists
 	}
+	allBlockersDone := true
 	for _, depID := range t.BlockedBy {
 		dep, ok := byID[depID]
 		if !ok {
@@ -1166,9 +1227,19 @@ func memberIsDeadEnd(t *task.Task, byID map[string]*task.Task, visiting map[stri
 		if dep.Status == task.StatusDone {
 			continue // this blocker is satisfied — not a reason t is stuck
 		}
+		allBlockersDone = false
 		if !memberIsDeadEnd(dep, byID, visiting) {
 			return false
 		}
+	}
+	// Defensive: if EVERY blocker in this snapshot already reads `done`, t is
+	// not actually stuck — it is a stale-snapshot artifact (recomputeBlockedStateLocked
+	// / AdvanceBlockedDependents will promote t to `next` on the very next
+	// pass), never a genuine dead end. Without this, a plan-member snapshot
+	// caught between "its last blocker just completed" and "the dependent's
+	// own blocked->next promotion" would be misreported as terminally stuck.
+	if allBlockersDone {
+		return false
 	}
 	return true
 }

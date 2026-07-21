@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { buildTaskGraph, statusVisual, STATUS_VISUALS, type AgentLike } from './taskGraph'
+import { buildTaskGraph, statusVisual, taskNodeVisual, STATUS_VISUALS, type AgentLike } from './taskGraph'
 import type { Task } from '@/lib/api'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -199,5 +199,37 @@ describe('statusVisual', () => {
 
   it('falls back to inbox for an unknown status', () => {
     expect(statusVisual('totally-unknown')).toEqual(STATUS_VISUALS.inbox)
+  })
+})
+
+describe('taskNodeVisual — Cancelled marker (ADR-052 FR-015/US-8, Gate-2 finding #1)', () => {
+  it('overrides label/colour to "Cancelled" for a user-stopped task', () => {
+    const visual = taskNodeVisual({ status: 'failed', cancel_reason: 'stopped_by_user' })
+    expect(visual.label).toBe('Cancelled')
+  })
+
+  it('leaves a genuine failure as "Failed"', () => {
+    const visual = taskNodeVisual({ status: 'failed', cancel_reason: undefined })
+    expect(visual.label).toBe('Failed')
+  })
+
+  // Regression: taskGraph.ts previously returned `'var(--color-warning)'` for
+  // the Cancelled override. TaskNode.tsx:126 builds the chip's tint fill via
+  // a bare string concat (`${visual.color}1f`) — `var(--color-warning)1f` is
+  // invalid CSS (`var()` doesn't accept a trailing token), so the
+  // backgroundColor declaration is silently dropped and the chip renders
+  // with orange text but no fill. This is the same bug class fixed for
+  // TaskCard/PlansFilterBand/WorkspaceGraphTab via TASK_CANCELLED_COLOR
+  // (see TaskCard.cancelled.test.tsx) — the graph node is the 4th surface.
+  it('taskNodeVisual(cancelledTask).color is a literal hex, not a var(...) reference', () => {
+    const visual = taskNodeVisual({ status: 'failed', cancel_reason: 'stopped_by_user' })
+    expect(visual.color).not.toMatch(/^var\(/)
+    expect(visual.color).toMatch(/^#[0-9a-fA-F]{6}$/)
+  })
+
+  it('the chip tint concat (`${color}1f`) yields a valid 8-digit hex string', () => {
+    const visual = taskNodeVisual({ status: 'failed', cancel_reason: 'stopped_by_user' })
+    const tint = `${visual.color}1f`
+    expect(tint).toMatch(/^#[0-9a-fA-F]{8}$/)
   })
 })

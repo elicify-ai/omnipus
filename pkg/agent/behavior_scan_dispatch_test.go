@@ -16,6 +16,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -211,6 +212,143 @@ func TestJudgeCriteria_BehaviorRung_NilBehaviorPayload_FailClosed(t *testing.T) 
 	}
 	if !strings.Contains(result.Verdict.PerCriterion[0].Reason, "missing payload") {
 		t.Errorf("reason = %q, want it to explain the missing payload", result.Verdict.PerCriterion[0].Reason)
+	}
+}
+
+// --- StartedAt parse handling (sign-off finding 3) --------------------------
+
+// TestJudgeCriteria_BehaviorRung_AttemptScope_ValidStartedAt_UsesRealCutoff
+// is the "both branches" positive control for sign-off finding 3: a
+// well-formed, RFC3339 Task.StartedAt is parsed and used as the real
+// attempt-scope cutoff, so a call recorded BEFORE it (a prior attempt) is
+// correctly excluded while a call recorded AT/AFTER it (the current attempt)
+// is correctly counted. This is the behavior the malformed-StartedAt sibling
+// test below must NOT silently degrade to "everything counts."
+func TestJudgeCriteria_BehaviorRung_AttemptScope_ValidStartedAt_UsesRealCutoff(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
+
+	store := al.GetAgentStore("native-agent")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	attemptStart := baseTime.Add(1 * time.Hour)
+	// A prior attempt's call, well before attemptStart — must NOT count.
+	if err := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		Role: "assistant", AgentID: "native-agent", Timestamp: baseTime,
+		ToolCalls: []session.ToolCall{{Tool: "web_search", Status: "success"}},
+	}); err != nil {
+		t.Fatalf("AppendTranscript (prior attempt): %v", err)
+	}
+	// The current attempt's own call, at-or-after attemptStart — must count.
+	if err := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		Role: "assistant", AgentID: "native-agent", Timestamp: attemptStart,
+		ToolCalls: []session.ToolCall{{Tool: "web_search", Status: "success"}},
+	}); err != nil {
+		t.Fatalf("AppendTranscript (current attempt): %v", err)
+	}
+
+	taskStore := GetTaskStore(al)
+	tk := &task.Task{
+		ID: "t-valid-started-at", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "x",
+		SessionID: meta.ID, StartedAt: attemptStart.Format(time.RFC3339),
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("task Create: %v", err)
+	}
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeTask,
+		TaskID:          tk.ID,
+		AssigneeAgentID: "native-agent",
+		Criteria: []task.AcceptanceCriterion{{
+			ID: "c1", Kind: task.KindBehavior,
+			Behavior: &task.CriterionBehavior{Tool: "web_search", MinCount: intPtr(1), Scope: task.BehaviorScopeAttempt},
+			Author:   task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "tester"},
+		}},
+		Attempt: 2,
+	})
+	if result.Unavailable {
+		t.Fatalf("unexpected Unavailable: %s", result.Reason)
+	}
+	if !result.Verdict.Met {
+		t.Fatalf("expected Met=true (exactly 1 call at-or-after the real StartedAt cutoff, min_count=1), got %+v",
+			result.Verdict.PerCriterion)
+	}
+	if !strings.Contains(result.Verdict.PerCriterion[0].Reason, "observed 1") {
+		t.Errorf("reason = %q, want it to report exactly 1 observed call (the prior-attempt call must be excluded)",
+			result.Verdict.PerCriterion[0].Reason)
+	}
+}
+
+// TestJudgeCriteria_BehaviorRung_AttemptScope_MalformedStartedAt_FailsClosed
+// is the negative control (sign-off finding 3): when Task.StartedAt is set
+// but fails to parse as RFC3339, an attempt-scoped criterion must NOT
+// silently widen to whole-session counting (ScanBehaviorCriterionEntries's
+// own doc comment: passing the zero time.Time for scope=="attempt"
+// "degenerates to everything counts, equivalent to task_session"). Instead
+// runBehaviorScan must fail the attempt scope CLOSED: even though the
+// session has 5 successful calls of the criterion's tool (which would
+// trivially satisfy min_count=1 under the old zero-time/whole-session
+// degradation), the malformed cutoff must make the criterion come back
+// UNMET, because none of those calls can be proven to belong to the CURRENT
+// attempt.
+func TestJudgeCriteria_BehaviorRung_AttemptScope_MalformedStartedAt_FailsClosed(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
+
+	store := al.GetAgentStore("native-agent")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	// 5 successful calls, all comfortably satisfying min_count=1 under the
+	// OLD (buggy) whole-session widening — proving the fix actually changed
+	// the outcome, not just the log line.
+	for i := 0; i < 5; i++ {
+		if err := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+			Role: "assistant", AgentID: "native-agent", Timestamp: baseTime.Add(time.Duration(i) * time.Second),
+			ToolCalls: []session.ToolCall{{Tool: "web_search", Status: "success"}},
+		}); err != nil {
+			t.Fatalf("AppendTranscript: %v", err)
+		}
+	}
+
+	taskStore := GetTaskStore(al)
+	tk := &task.Task{
+		ID: "t-malformed-started-at", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "x",
+		SessionID: meta.ID, StartedAt: "not-a-valid-rfc3339-timestamp",
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("task Create: %v", err)
+	}
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeTask,
+		TaskID:          tk.ID,
+		AssigneeAgentID: "native-agent",
+		Criteria: []task.AcceptanceCriterion{{
+			ID: "c1", Kind: task.KindBehavior,
+			Behavior: &task.CriterionBehavior{Tool: "web_search", MinCount: intPtr(1), Scope: task.BehaviorScopeAttempt},
+			Author:   task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "tester"},
+		}},
+		Attempt: 1,
+	})
+	if result.Unavailable {
+		t.Fatalf("unexpected Unavailable: %s", result.Reason)
+	}
+	if result.Verdict.Met {
+		t.Fatalf(
+			"a malformed Task.StartedAt must fail the attempt scope CLOSED (unmet), never silently widen to "+
+				"whole-session and pass — got Met=true with per-criterion=%+v",
+			result.Verdict.PerCriterion,
+		)
+	}
+	if !strings.Contains(result.Verdict.PerCriterion[0].Reason, "observed 0") {
+		t.Errorf("reason = %q, want it to report 0 observed calls (fail-closed, not the whole session's 5)",
+			result.Verdict.PerCriterion[0].Reason)
 	}
 }
 

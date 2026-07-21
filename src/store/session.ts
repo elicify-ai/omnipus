@@ -33,11 +33,13 @@ interface SessionStore {
     agentType?: AgentKind | null
   ) => void
   setActiveAgentType: (type: AgentKind | null) => void
-  // 'verifier' included for type-completeness with Session['type'] (ADR-052
-  // FR-036) — verifier sessions are never actually attachable via any UI
-  // session-selection flow (Sidebar/SearchModal exclude them by default), so
-  // this value is structurally reachable but not expected in practice.
-  attachedSessionType: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | null
+  // 'verifier' is part of Session['type'] (ADR-052 FR-036) — verifier
+  // sessions are never actually attachable via any UI session-selection flow
+  // (Sidebar/SearchModal exclude them by default), so this value is
+  // structurally reachable but not expected in practice. Derived from
+  // Session['type'] (rather than a hand-respelled union literal) so a future
+  // wire enum change can't silently drift out of sync here.
+  attachedSessionType: Session['type'] | null
   attachedTaskTitle: string | null
   /**
    * Attaches the WS to a session (sends `attach_session`) and updates local

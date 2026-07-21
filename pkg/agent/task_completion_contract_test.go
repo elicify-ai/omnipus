@@ -246,6 +246,18 @@ func TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone(t *testi
 func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing.T) {
 	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
 	tk := newCompletionContractTask(t, al, "native-agent", "empty output task")
+	// ADR-052 FR-014/§6.4(b) TOCTOU fix: finishTaskRun's outcome writers
+	// (consumeAttemptOrExhaust) now CAS against the task being genuinely
+	// in_progress — the SAME invariant a real dispatch always establishes via
+	// ExecuteTask's own ClaimForRun claim before it ever calls finishTaskRun.
+	// This test intentionally bypasses real dispatch (see the doc comment
+	// above) to inject a truly empty resp, so it must claim the task itself
+	// to keep that invariant true, rather than calling finishTaskRun against
+	// the fixture's on-disk `next` status.
+	if _, err := al.taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
+		t.Fatalf("claim task before direct finishTaskRun call: %v", err)
+	}
+	tk.Status = task.StatusInProgress
 
 	redispatchID := al.taskExecutor.finishTaskRun(context.Background(), tk, "", "", nil, "")
 	if redispatchID != "" {

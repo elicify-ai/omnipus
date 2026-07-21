@@ -72,6 +72,23 @@ import (
 func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWorkspaceID string) (string, error) {
 	home := omnipusHome()
 
+	// Sign-off 14 MINOR-1 / architect F4: an explicit agent-home request
+	// (WithSystemAgentAgentHomeOverride) short-circuits straight to the same
+	// agent-home rooting the "genuinely no workspace exists yet" branch below
+	// already expresses — requested by runVerifierAdjudication for an UNBOUND
+	// chat /goal verifier turn (Scope==goal, no WorkspaceID), which has no
+	// work-under-review workspace to prefer among the Judge's (every)
+	// implicit memberships at all. Checked BEFORE FindForAgentPreferring so
+	// it applies even when one or more workspaces DO exist (the ordinary
+	// "no workspace at all" branch below only fires when none do). Gated on
+	// coreagent.IsSystemAgentID exactly like that branch — an ordinary agent
+	// never gets this override (WithSystemAgentAgentHomeOverride has exactly
+	// one producer, runVerifierAdjudication, which only ever dispatches
+	// System Agent turns).
+	if systemAgentAgentHomeOverrideFromContext(ctx) && coreagent.IsSystemAgentID(coreagent.CoreAgentID(agentID)) {
+		return systemAgentHomeDir(agentID, agentHome)
+	}
+
 	// The verifier turn's work-under-review workspace (ADR-052
 	// JudgeCriteriaInput.WorkspaceID) has no other channel into this
 	// function — processTaskDirect's fixed signature carries no
@@ -89,20 +106,19 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 	wsID, found := workspace.FindForAgentPreferring(home, agentID, preferredWsID)
 	if !found {
 		// A System Agent is an IMPLICIT member of every workspace
-		// (pkg/workspace's FindForAgent/FindForAgentPreferring), so !found
-		// for one can ONLY mean genuinely NO workspace exists yet at all —
-		// the pre-onboarding edge, before a default workspace is seeded.
-		// Fall back to its own agent home rather than refuse; every other
-		// agent keeps the hard refusal below unconditionally.
+		// (pkg/workspace's FindForAgent/FindForAgentPreferring). !found for
+		// one is USUALLY the pre-onboarding edge — genuinely NO workspace
+		// exists yet, before a default workspace is seeded — but is not
+		// exclusively that: FindForAgent's own enumeration silently skips an
+		// unreadable or malformed workspace record (a corrupt/partially
+		// written JSON file, a permissions problem), so a directory that
+		// technically contains workspace files but none of them PARSE can
+		// reach this same branch. Either way the correct response is
+		// identical — fall back to the System Agent's own agent home rather
+		// than refuse; every other agent keeps the hard refusal below
+		// unconditionally.
 		if coreagent.IsSystemAgentID(coreagent.CoreAgentID(agentID)) {
-			agentHome = strings.TrimSpace(agentHome)
-			if agentHome == "" {
-				return "", fmt.Errorf("system agent has no resolvable work directory: agent_id=%s", agentID)
-			}
-			if mkErr := os.MkdirAll(agentHome, 0o700); mkErr != nil {
-				return "", fmt.Errorf("system agent home dir unavailable for agent_id=%s: %w", agentID, mkErr)
-			}
-			return agentHome, nil
+			return systemAgentHomeDir(agentID, agentHome)
 		}
 
 		logger.WarnCF(
@@ -145,6 +161,24 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 	return wsDir, nil
 }
 
+// systemAgentHomeDir materializes and returns a System Agent's own private
+// home directory as its turn's work dir — the shared body behind BOTH
+// agent-home fallback branches in resolveTurnWorkDirOrRefuse: the explicit
+// WithSystemAgentAgentHomeOverride request (sign-off 14 MINOR-1 / architect
+// F4) and the pre-existing "genuinely no workspace resolvable" branch. A
+// single body keeps the two call sites from silently drifting apart (e.g. one
+// gaining a permissions fix the other misses).
+func systemAgentHomeDir(agentID, agentHome string) (string, error) {
+	agentHome = strings.TrimSpace(agentHome)
+	if agentHome == "" {
+		return "", fmt.Errorf("system agent has no resolvable work directory: agent_id=%s", agentID)
+	}
+	if mkErr := os.MkdirAll(agentHome, 0o700); mkErr != nil {
+		return "", fmt.Errorf("system agent home dir unavailable for agent_id=%s: %w", agentID, mkErr)
+	}
+	return agentHome, nil
+}
+
 // --- System Agent workspace selector (ADR-052 FR-011/012) -------------------
 
 // systemAgentWorkspaceOverrideCtxKey is the unexported ctx key backing
@@ -171,10 +205,15 @@ type systemAgentWorkspaceOverrideCtxKey struct{}
 //
 // An empty workspaceID is a no-op — ctx is returned unmodified — mirroring
 // tools.WithVerifierSessionScope's own "empty is unset" contract
-// (pkg/tools/base.go), so a caller with nothing to thread (e.g. an unbound
-// chat /goal) never needs its own branch: it simply falls through to
+// (pkg/tools/base.go). For most scopes (task/plan, and a goal bound to a
+// workspace) a caller with nothing to thread simply falls through to
 // FindForAgentPreferring's ordinary sorted-first pick among the Judge's
-// (every) workspace, same as any other multi-membership agent.
+// (every) workspace, same as any other multi-membership agent. The ONE
+// exception is an UNBOUND chat /goal (Scope==goal with no WorkspaceID at
+// all): runVerifierAdjudication does NOT fall through to the sorted-first
+// pick for that case — it requests WithSystemAgentAgentHomeOverride instead
+// (sign-off 14 MINOR-1 / architect F4), because an unbound /goal has no
+// work-under-review workspace to prefer among in the first place.
 func WithSystemAgentWorkspaceOverride(ctx context.Context, workspaceID string) context.Context {
 	if strings.TrimSpace(workspaceID) == "" {
 		return ctx
@@ -186,5 +225,38 @@ func WithSystemAgentWorkspaceOverride(ctx context.Context, workspaceID string) c
 // WithSystemAgentWorkspaceOverride set, or "" if none was set.
 func systemAgentWorkspaceOverrideFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(systemAgentWorkspaceOverrideCtxKey{}).(string)
+	return v
+}
+
+// systemAgentAgentHomeOverrideCtxKey is the unexported ctx key backing
+// WithSystemAgentAgentHomeOverride/systemAgentAgentHomeOverrideFromContext.
+// Package-local for the same reason systemAgentWorkspaceOverrideCtxKey is:
+// exactly one producer (verifier_adjudication.go's runVerifierAdjudication),
+// exactly one consumer (resolveTurnWorkDirOrRefuse above).
+type systemAgentAgentHomeOverrideCtxKey struct{}
+
+// WithSystemAgentAgentHomeOverride marks a System Agent's turn ctx as
+// explicitly agent-home-rooted rather than workspace-rooted (sign-off 14
+// MINOR-1 / architect F4). runVerifierAdjudication is the sole producer,
+// setting this exactly when an adjudication genuinely has no work-under-
+// review workspace to prefer among the Judge's (every) implicit workspace
+// memberships — an unbound chat /goal (JudgeCriteriaInput.Scope == goal,
+// WorkspaceID == ""). Without this override that case would fall through to
+// FindForAgentPreferring's ordinary sorted-first pick, which is a wrong
+// answer in kind (there is no work-under-review workspace at all for an
+// unbound /goal), not merely a low-risk one — even though it happens to be
+// harmless in today's single-tenant deployments. resolveTurnWorkDirOrRefuse
+// is the sole consumer: it checks this override BEFORE calling
+// FindForAgentPreferring at all, so it applies even when one or more
+// workspaces exist (unlike the pre-existing "no workspace exists yet"
+// fallback, which only fires when FindForAgentPreferring finds none).
+func WithSystemAgentAgentHomeOverride(ctx context.Context) context.Context {
+	return context.WithValue(ctx, systemAgentAgentHomeOverrideCtxKey{}, true)
+}
+
+// systemAgentAgentHomeOverrideFromContext reports whether
+// WithSystemAgentAgentHomeOverride was set on ctx.
+func systemAgentAgentHomeOverrideFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(systemAgentAgentHomeOverrideCtxKey{}).(bool)
 	return v
 }

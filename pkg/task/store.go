@@ -24,6 +24,19 @@ import (
 // ErrNotFound is returned when a task ID does not exist on disk.
 var ErrNotFound = errors.New("task not found")
 
+// ErrStatusConflict is returned by UpdateIfStatus when the on-disk task's
+// CURRENT status no longer matches the caller's `expected` status — i.e.
+// some OTHER writer (most commonly a concurrent user Stop landing via
+// PlanEngine.StopTask/StopPlan) already moved the task out of the state the
+// caller observed before it decided what to write. It is a control-flow
+// sentinel (mirrors ErrAlreadyClaimed/ErrAlreadyRunning/ErrNotRestartable),
+// deliberately NOT wrapping ErrValidation: this is an expected, legitimate
+// race outcome, not malformed caller input, so it must never map to the
+// same 400 the validation sentinels do. Callers use errors.Is to detect the
+// conflict and drop their own pending write rather than treating it as a
+// hard failure (ADR-052 FR-014/§6.4(b) — see UpdateIfStatus's doc comment).
+var ErrStatusConflict = errors.New("task: status conflict: task is no longer in the expected status")
+
 // ErrValidation is the sentinel wrapped by every user-facing field/transition
 // validation error the store returns (vs. an internal I/O failure). The REST
 // seam uses errors.Is(err, ErrValidation) to map to HTTP 400 rather than
@@ -607,6 +620,42 @@ func validateTransition(from, to Status, internal bool) error {
 	return nil
 }
 
+// validateStopGuard enforces the Stop guarantee's store-level backstop
+// (ADR-052 FR-014/§6.4(b)): once a task is failed WITH
+// CancelReason==stopped_by_user, no write may complete it as `done` — a
+// user-initiated Stop is a terminal outcome that no subsequent write
+// (engine or otherwise) is ever sanctioned to silently erase into a false
+// "done". This closes interleaving (b) from the FR-014 TOCTOU postmortem: a
+// judge verdict computed just before a Stop landed could otherwise still
+// resolve `failed[stopped_by_user] -> done` via a plain Update (the
+// lifecycle matrix has never frozen `failed` — a genuinely-failed task MUST
+// remain retryable, so `validateTransition` alone cannot distinguish "retry
+// a real failure" from "complete a cancelled one"). Re-queuing the task
+// (failed[stopped_by_user] -> next/in_progress, via the Play/restart route
+// — RestartReset, which bypasses this check entirely by writing fields
+// directly rather than going through Update/updateLocked — or the plain
+// PATCH "Run" re-run route) remains legal: a resumed/restarted task is no
+// longer "stopped", it is running again by the USER's own action, and
+// nothing here (or in validateTransition) blocks that direction.
+//
+// `current` is the ON-DISK task as loaded at the top of updateLocked,
+// before any patch field has been merged onto it — CancelReason is only
+// ever non-empty when Status==failed (normalize's own invariant, re-checked
+// post-patch by the cross-field guard further down in updateLocked), so
+// checking CancelReason alone is sufficient; the explicit Status==failed
+// check below is belt-and-suspenders documentation of that invariant, not
+// a load-bearing second condition.
+func validateStopGuard(current *Task, to Status) error {
+	if current.Status == StatusFailed && current.CancelReason == CancelReasonStoppedByUser && to == StatusDone {
+		return fmt.Errorf(
+			"%w: task is failed(stopped_by_user); done is not a permitted transition "+
+				"(a user-cancelled task can never be silently completed)",
+			ErrIllegalTransition,
+		)
+	}
+	return nil
+}
+
 // Update applies patch to the task identified by id and persists the result.
 // It validates field constraints and the blocked_by DAG (when blocked_by is
 // changed). It takes the per-task lock internally.
@@ -665,6 +714,14 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		if err := validateTransition(t.Status, *patch.Status, patch.allowBlockedSet); err != nil {
 			return nil, err
 		}
+		// ADR-052 FR-014/§6.4(b) Stop guarantee backstop: reject
+		// failed[stopped_by_user] -> done unconditionally, even though
+		// validateTransition's own matrix permits failed -> * generally (a
+		// genuine failure must stay retryable). See validateStopGuard's doc
+		// comment for the full TOCTOU rationale this closes.
+		if err := validateStopGuard(t, *patch.Status); err != nil {
+			return nil, err
+		}
 		// A genuine transition INTO in_progress (not a same-status no-op) stamps
 		// the task's real execution start, unless the caller already supplied an
 		// explicit StartedAt in this same patch (which wins). This is the single
@@ -700,6 +757,30 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	if patch.Status != nil && *patch.Status != StatusFailed && patch.CancelReason == nil {
 		t.CancelReason = ""
 	}
+	// Deliberate NON-decision on AttemptCount (ADR-052 spec, "Run vs. Restart
+	// split" deviation note #1): unlike CancelReason immediately above,
+	// AttemptCount is intentionally NOT reset when Status leaves failed via
+	// this (or any) plain Update-based patch. The spec's Run/Play split gives
+	// a genuinely-failed standalone task (attempts exhausted, NOT
+	// user-cancelled) only the "Run" route — a plain PATCH status:
+	// "in_progress" that lands exactly on this code path — never "Play"
+	// (POST /tasks/{id}/restart -> RestartReset, gated to
+	// failed[stopped_by_user] only by ValidateStandaloneRestart, which
+	// bypasses Update/updateLocked entirely and DOES reset AttemptCount to
+	// 0): "A genuinely-failed standalone task cannot Play — same 'author
+	// fresh' posture FR-018 gives plans" (genuine plan failures get no
+	// restart affordance at all). Resetting AttemptCount here would grant
+	// exactly the amnesty that posture denies — Run means "continue from
+	// here, at your own remaining/exhausted budget", Play/RestartReset is
+	// the ONLY "start over completely fresh" route (it alone also wipes
+	// Result/Artifacts/SessionID/timestamps, which this path deliberately
+	// preserves as re-run context for the worker). Concretely: a task that
+	// exhausted at AttemptCount==maxAttempts, re-run via this route and
+	// producing another unmet outcome, immediately re-exhausts in
+	// consumeAttemptOrExhaust (newAttempt==maxAttempts+1 already fails the
+	// `< maxAttempts` gate) — one supervised extra shot per Run click, never
+	// a free budget refill. This is judged defensible and is NOT changed;
+	// see TestAttemptCount_NotResetOnRunRoute for the pinned regression.
 	if patch.CancelReason != nil {
 		if *patch.CancelReason != "" && !IsValidCancelReason(*patch.CancelReason) {
 			return nil, verr("invalid cancel_reason %q", *patch.CancelReason)
@@ -844,6 +925,44 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		return nil, err
 	}
 	return t, nil
+}
+
+// UpdateIfStatus is the compare-and-swap write primitive that closes the
+// EXECUTOR-side half of the ADR-052 FR-014/§6.4(b) Stop guarantee's TOCTOU
+// window (see pkg/agent/task_executor.go's adjudicate/finish-path outcome
+// writers — completeTaskWithResult, consumeAttemptOrExhaust,
+// rejectBareEvidenceClaim). Those callers each re-read a task, decide an
+// outcome (possibly after an unlocked, potentially slow judge/verifier
+// call), and only THEN write it — a separate re-check (e.g.
+// taskVerdictStillApplicable) followed by a LATER, SEPARATE write leaves a
+// gap where a concurrent Stop can land in between the two and be silently
+// overwritten (reviving a stopped task, or completing one). UpdateIfStatus
+// closes that gap by making the re-check and the write ATOMIC under the
+// SAME per-task lock acquisition: it loads the task, verifies its CURRENT
+// on-disk status equals `expected`, and — only if so — applies patch via
+// the same validated updateLocked path Update uses (so the Stop guard,
+// transition matrix, and every other field validation still apply
+// identically). On a mismatch it writes nothing and returns
+// ErrStatusConflict (deliberately NOT ErrValidation — this is an expected
+// race outcome, not malformed input); the caller's documented contract is
+// to drop its own pending outcome (log + return, never re-dispatch) rather
+// than treat the conflict as a hard failure.
+func (s *Store) UpdateIfStatus(id string, expected Status, patch Patch) (*Task, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+	mu := s.lock.Get(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	current, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status != expected {
+		return nil, fmt.Errorf("%w: task %q is %q, expected %q", ErrStatusConflict, id, current.Status, expected)
+	}
+	return s.updateLocked(id, patch)
 }
 
 // ErrNotRestartable is returned by RestartReset when the task is not

@@ -90,7 +90,13 @@ func drivePlanToFailed(t *testing.T, api *restAPI, id string, reason plan.Failed
 // TestPlanPut_RejectsAnyStateField exercises the DS-3 table: every one of the
 // five plan states passed via PUT is rejected 400, a non-state field still
 // applies normally, and a mixed request (a legitimate field alongside state)
-// rejects the WHOLE request rather than partially applying it.
+// rejects the WHOLE request rather than partially applying it. Also covers
+// the sign-off P1 fix for the guard's prior raw-body-sniff shape (rest_plans.
+// go's handlePlanPut): a field VALUE (not key) equal to "state" — in title,
+// goal, and a dod entry's text — must apply normally rather than being
+// mistaken for the "state" key, and a unicode-escaped "state" key must still
+// 400 (the byte-sniff missed this; the current post-decode req.State != nil
+// check does not).
 func TestPlanPut_RejectsAnyStateField(t *testing.T) {
 	api := newTestRestAPIWithPlans(t)
 	wsID := createTestWorkspace(t, api, "PUT Lockdown WS")
@@ -129,6 +135,39 @@ func TestPlanPut_RejectsAnyStateField(t *testing.T) {
 	reloaded, gerr := api.planStore.Get(p.Id)
 	require.NoError(t, gerr)
 	assert.Equal(t, "Renamed", reloaded.Title, "title must NOT have been updated by the rejected mixed request")
+
+	// Sign-off P1 finding #2: a field VALUE equal to "state" (not the "state"
+	// KEY) must apply normally — the guard now checks decoded req.State
+	// presence, not a raw "state" byte sniff that over-matched any value.
+	wTitleValueState := putPlan(t, api, p.Id, `{"title":"state"}`)
+	require.Equal(t, http.StatusOK, wTitleValueState.Code, "body=%s", wTitleValueState.Body.String())
+	var afterTitleValueState gen.Plan
+	require.NoError(t, json.Unmarshal(wTitleValueState.Body.Bytes(), &afterTitleValueState))
+	assert.Equal(t, "state", afterTitleValueState.Title, "a title VALUE of \"state\" must apply, not be mistaken for the state key")
+
+	wGoalValueState := putPlan(t, api, p.Id, `{"goal":"state"}`)
+	require.Equal(t, http.StatusOK, wGoalValueState.Code, "body=%s", wGoalValueState.Body.String())
+	var afterGoalValueState gen.Plan
+	require.NoError(t, json.Unmarshal(wGoalValueState.Body.Bytes(), &afterGoalValueState))
+	require.NotNil(t, afterGoalValueState.Goal)
+	assert.Equal(t, "state", *afterGoalValueState.Goal, "a goal VALUE of \"state\" must apply")
+
+	wDoDValueState := putPlan(t, api, p.Id,
+		`{"dod":[{"kind":"prose","text":"state","author":{"kind":"user","id":"tester"}}]}`)
+	require.Equal(t, http.StatusOK, wDoDValueState.Code, "body=%s", wDoDValueState.Body.String())
+	var afterDoDValueState gen.Plan
+	require.NoError(t, json.Unmarshal(wDoDValueState.Body.Bytes(), &afterDoDValueState))
+	require.NotNil(t, afterDoDValueState.Dod)
+	require.Len(t, *afterDoDValueState.Dod, 1)
+	assert.Equal(t, "state", (*afterDoDValueState.Dod)[0].Text, "a dod entry text VALUE of \"state\" must apply")
+
+	// The unicode-escaped-key bypass the raw byte sniff missed: the JSON key
+	// below decodes to the literal "state" key exactly like Go's own
+	// json.Unmarshal handles it, so it must still 400 via the post-decode
+	// req.State != nil check even though the raw bytes never contain a
+	// literal `"state"` byte sequence.
+	wUnicodeState := putPlan(t, api, p.Id, `{"\u0073tate":"draft"}`)
+	assert.Equal(t, http.StatusBadRequest, wUnicodeState.Code, "body=%s", wUnicodeState.Body.String())
 }
 
 // --- FR-016/017/026: POST /plans/{id}/restart --------------------------------
@@ -184,12 +223,40 @@ func TestPlanRestart_HappyPath_ResetsNonDoneMembersAndReenters(t *testing.T) {
 
 	drivePlanToFailed(t, api, p.Id, plan.FailedReasonStoppedByUser)
 
+	// DS-5/A4: a restart also resets the plan-level JudgeRounds counter to 0
+	// (plan.Store.Update's restart branch) — otherwise a plan restarted near
+	// its judge-round cap would fail immediately. Seed a nonzero count
+	// directly (a separate patch — JudgeRounds cannot be set in the SAME
+	// patch as the restart transition itself, store.go's fix-wave finding
+	// #4 guard) so the assertion below actually exercises the reset rather
+	// than trivially observing an already-zero counter.
+	preRestartRounds := 2
+	_, jrErr := api.planStore.Update(p.Id, plan.Patch{JudgeRounds: &preRestartRounds})
+	require.NoError(t, jrErr)
+
+	// Confirm the seed actually took effect and is visible on the wire
+	// before restart (toWirePlan only sets JudgeRounds non-nil when > 0,
+	// rest_plans.go:173-174) — this makes the post-restart nil assertion
+	// below a genuine reset check, not a trivial "it was already zero" pass.
+	wPreRestart := getPlan(t, api, p.Id)
+	require.Equal(t, http.StatusOK, wPreRestart.Code)
+	var preRestart gen.Plan
+	require.NoError(t, json.Unmarshal(wPreRestart.Body.Bytes(), &preRestart))
+	require.NotNil(t, preRestart.JudgeRounds, "precondition: judge_rounds seed must be visible pre-restart")
+	require.Equal(t, 2, *preRestart.JudgeRounds)
+
 	wRestart := postPlanAction(t, api, p.Id, "restart")
 	require.Equal(t, http.StatusOK, wRestart.Code, "body=%s", wRestart.Body.String())
 	var restarted gen.Plan
 	require.NoError(t, json.Unmarshal(wRestart.Body.Bytes(), &restarted))
 	assert.Equal(t, gen.PlanStateApproved, restarted.State, "restart re-enters at approved, never running directly")
 	assert.Nil(t, restarted.FailedReason, "failed_reason must be cleared on restart")
+	// toWirePlan only renders JudgeRounds non-nil when > 0, so a genuine
+	// reset-to-0 is an OMITTED (nil) field on the wire, not a present *0 —
+	// the pre-restart check above proves the seed really was 2 and visible,
+	// so this nil is a real reset, not "it was already zero" through the
+	// REAL handler (DS-5/A4).
+	assert.Nil(t, restarted.JudgeRounds, "judge_rounds must reset to 0 on restart (DS-5/A4) — omitted on the wire since toWirePlan only renders JudgeRounds>0")
 
 	reloadedDone, derr := api.taskStore.Get(doneID)
 	require.NoError(t, derr)
@@ -283,6 +350,67 @@ func TestPlanRestart_NotFound404(t *testing.T) {
 	api := newTestRestAPIWithPlans(t)
 	w := postPlanAction(t, api, "01JXNOSUCHPLAN00000000001", "restart")
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestPlanRestart_PartialFailureSurfacesAsServerError verifies the sign-off
+// P1 fix mirroring TestPlanStop_PartialFailureSurfacesAsServerError's
+// honesty precedent: when a member's own task.Store.RestartReset write
+// fails, the handler must NOT report an unqualified 200 — even though the
+// plan's own state transition (a DIFFERENT store/directory) succeeds. Before
+// this fix, handlePlanRestart only slog.Error'd the reset failure and
+// proceeded to return 200, silently leaving the doomed member `failed` and
+// never re-run.
+func TestPlanRestart_PartialFailureSurfacesAsServerError(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Restart Partial Failure WS")
+	wCreate := postPlan(t, api, wsID,
+		`{"workspace_id":"`+wsID+`","title":"Partial restart failure","owner_agent_id":"`+testPlansAgentID+`"}`)
+	require.Equal(t, http.StatusCreated, wCreate.Code)
+	var p gen.Plan
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	m1 := mustCreateTask(t, api, wsID, "doomed member", p.Id)
+	failedStatus := task.StatusFailed
+	cancelReason := task.CancelReasonStoppedByUser
+	_, err := api.taskStore.Update(m1, task.Patch{Status: &failedStatus, CancelReason: &cancelReason})
+	require.NoError(t, err)
+
+	drivePlanToFailed(t, api, p.Id, plan.FailedReasonStoppedByUser)
+
+	// Force the member's RestartReset write to fail (same technique as
+	// TestPlanStop_PartialFailureSurfacesAsServerError — see
+	// blockNewFilesInDir's doc comment for why chmod-only and directory-
+	// substitution mocks were tried and rejected).
+	restoreDir := blockNewFilesInDir(t, api.taskStore.Dir())
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
+		restoreDir()
+	}
+	t.Cleanup(restore) // backstop before t.TempDir()'s own cleanup
+
+	wRestart := postPlanAction(t, api, p.Id, "restart")
+	assert.Equal(t, http.StatusInternalServerError, wRestart.Code,
+		"a partial member-reset failure must NOT report an unqualified 200; body=%s", wRestart.Body.String())
+
+	restore() // restore before further reads/cleanup
+
+	// The plan's OWN state transition lives in a different directory and
+	// must have succeeded regardless of the member reset failure.
+	reloadedPlan, perr := api.planStore.Get(p.Id)
+	require.NoError(t, perr)
+	assert.Equal(t, plan.StateApproved, reloadedPlan.State)
+	assert.Empty(t, reloadedPlan.FailedReason, "the plan-level restart transition itself must have succeeded and cleared failed_reason")
+
+	// The member's reset-write failed — it must still show its PRE-restart
+	// state, not be silently reported as reset back to next.
+	reloadedMember, terr := api.taskStore.Get(m1)
+	require.NoError(t, terr)
+	assert.Equal(t, task.StatusFailed, reloadedMember.Status,
+		"a member whose reset-write failed must not be silently reported as reset")
 }
 
 // --- FR-026: POST /tasks/{id}/restart (standalone only) ---------------------

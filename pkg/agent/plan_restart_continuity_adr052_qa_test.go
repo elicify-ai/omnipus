@@ -13,13 +13,19 @@
 // evidence), user-cancelled, genuinely-failed, and cancelled-but-blocked-on-
 // an-unmet-dependency.
 //
-// Wave 2's `POST /plans/{id}/restart` HTTP handler (spec FR-026/B2) lives in
-// a separate parallel worktree (wave2/rest) and is NOT present in this
-// checkout yet — this test therefore drives the exact store-level sequence
-// that handler will perform (plan.Store.Update restart transition + per-
-// member task.Store.RestartReset, skipping `done` members) directly, proving
-// the primitives the future handler will call already compose correctly. It
-// is the closest-to-e2e test achievable against MAIN's current state.
+// Wave 2's `POST /plans/{id}/restart` HTTP handler (spec FR-026/B2) has since
+// SHIPPED: handlePlanRestart (pkg/gateway/rest_plans.go) and its standalone-
+// task counterpart handleTaskRestart (pkg/gateway/rest_tasks.go) are both
+// live, with their own full HTTP-level coverage in
+// pkg/gateway/rest_plan_task_restart_test.go (TestPlanRestart_HappyPath_
+// ResetsNonDoneMembersAndReenters and siblings). This test predates that
+// handler landing and was written to drive the exact store-level sequence
+// the handler would go on to perform (plan.Store.Update restart transition +
+// per-member task.Store.RestartReset, skipping `done` members) directly —
+// proving the primitives the handler calls compose correctly BELOW the REST
+// layer, a property the gateway-level tests don't independently re-verify.
+// It remains valuable coverage alongside the shipped handler's own tests,
+// not a stand-in for them.
 //
 // Traces to: autonomous-agent-plan-execution-spec.md Test 11 (line 533),
 // DS-5 (line 600-606), FR-016/017 (line 672-673), SC-007 (line 706).
