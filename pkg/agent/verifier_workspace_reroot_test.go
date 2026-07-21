@@ -6,28 +6,41 @@
 // fresh-install smoke test, 2026-07): the Judge System Agent's verifier
 // turn was refused BEFORE it ever started, for all three JudgeCriteria
 // callers (task/plan/goal), because ADR-046 P1's resolveTurnWorkDirOrRefuse
-// (workspace_reroot.go) required every turn to resolve a workspace via
-// literal core_team membership, while pkg/gateway/rest_workspaces.go's
-// validateCoreTeamMembers (and the default-workspace seeder) DELIBERATELY,
-// PERMANENTLY forbid a System Agent from ever being added to any
-// workspace's core_team roster. The two rules collide: the Judge could
-// never satisfy the membership scan, so runVerifierAdjudication's
-// al.processTaskDirect dispatch always failed with
-// ErrAgentNotWorkspaceMember, surfacing as exactly the log lines a live
-// smoke test observed:
+// required every turn to resolve a workspace via literal core_team
+// membership, while pkg/gateway/rest_workspaces.go's validateCoreTeamMembers
+// (and the default-workspace seeder) DELIBERATELY, PERMANENTLY forbid a
+// System Agent from ever being ADDED to any workspace's core_team roster.
+//
+// Operator decision (2026-07-21, "make the judge a member of every
+// workspace, keep it simple"): the fix is a POSITIVE membership rule, not a
+// refusal bypass. System Agents (coreagent.IsSystemAgentID; today: the
+// Judge) are IMPLICIT members of EVERY workspace — this lives entirely in
+// pkg/workspace's isImplicitMember (consulted by
+// FindForAgent/FindForAgentPreferring), the single place membership itself
+// is decided. resolveTurnWorkDirOrRefuse (pkg/agent/workspace_reroot.go) no
+// longer special-cases System Agents before calling FindForAgentPreferring —
+// it calls it UNIFORMLY for every agent, and the check now genuinely
+// SUCCEEDS for the Judge instead of being skipped. The pre-fix refusal
+// surfaced as exactly the log lines a live smoke test observed:
 //
 //	WARN turn refused: agent is not a member of any workspace {agent_id: judge}
 //	WARN verifier: turn failed; pausing (D7 unavailability)
 //
-// The fix (workspace_reroot.go's System Agent exemption +
-// resolveSystemAgentTurnWorkDir, threaded via JudgeCriteriaInput.WorkspaceID
-// from all three JudgeCriteria callers) is BOTH exemption (Option i — the
-// membership scan is definitionally unsatisfiable for a System Agent, no
-// generalization of it can ever help) AND threading (Option ii — the
-// verifier's turn roots at the WORK-UNDER-REVIEW's own workspace so its
-// FR-012(c) read-only tools can actually reach the artifacts they exist to
-// inspect, not just the Judge's own private agent home). See
-// workspace_reroot.go's doc comments for the full grounding.
+// JudgeCriteriaInput.WorkspaceID (threaded from all 3 JudgeCriteria callers)
+// is UNCHANGED by this restructure: under universal implicit membership it
+// is the "preferring" SELECTOR that picks WHICH of the Judge's (every)
+// workspace memberships a given adjudication roots in — the work-under-
+// review's own workspace — via the exact same preferredWsID/optWorkspaceID
+// parameter FindForAgentPreferring already gives every other multi-
+// membership agent. When no selector is threaded, the Judge falls back
+// EXACTLY like any normal multi-workspace member does in
+// FindForAgentPreferring: sorted-first among its memberships (which, for an
+// implicit member, is sorted-first among EVERY existing workspace) — see
+// TestRunVerifierAdjudication_JudgeSystemAgent_NoOverride_MultipleWorkspacesExist_ResolvesSortedFirst.
+// The ONE remaining agent-home fallback branch fires only when genuinely NO
+// workspace exists at all yet (the pre-onboarding edge, before a default
+// workspace is seeded) — see
+// TestRunVerifierAdjudication_JudgeSystemAgent_NoWorkspaceExistsAtAll_FallsBackToAgentHome.
 //
 // These tests deliberately do NOT use this package's usual
 // mustNewAgentLoop/newGoalLoopTestLoop harnesses: ensureTestWorkspaceMembership
@@ -35,29 +48,25 @@
 // Type=system entry like "judge" — into one shared workspace's core_team via
 // raw JSON, entirely bypassing validateCoreTeamMembers. That is exactly why
 // this bug shipped past this whole package's pre-existing test suite: every
-// other verifier test accidentally gives "judge" a membership no production
-// install could ever produce. NewAgentLoop is called directly here so "judge"
-// gets ZERO workspace membership from any test harness — the real production
-// shape.
+// other verifier test accidentally gives "judge" an EXPLICIT membership no
+// production install could ever produce, masking the fact that implicit
+// membership was the only thing that could ever make it work. NewAgentLoop
+// is called directly here so "judge" gets ZERO explicit workspace membership
+// from any test harness — the real production shape — and every test below
+// still succeeds purely on implicit membership.
 //
-// Pre-fix evidence (captured 2026-07-21 via a stash of the 8 production
-// files + the 2 pre-existing test files this fix updated for the new
-// resolveTurnWorkDirOrRefuse signature, keeping only a reduced,
-// pre-fix-compatible copy of TestRunVerifierAdjudication_JudgeNotWorkspaceMember_NoOverrideStillSucceeds
-// — the one test here that references no new JudgeCriteriaInput field, so it
-// still compiles against the OLD struct): the test FAILED with
+// Pre-fix evidence (captured 2026-07-21, prior revision of this fix — the
+// mechanism has since been restructured per operator direction, but the
+// underlying refusal this regression pins is unchanged): a reduced,
+// pre-fix-compatible version of the "no workspace exists" test FAILED with
 //
 //	WRN workspace_reroot.go:59 > turn refused: agent is not a member of any workspace  agent_id=judge
 //	WRN verifier_adjudication.go:621 > verifier: turn failed; pausing (D7 unavailability)  error="agent is not a member of any workspace; turn refused: agent_id=judge"
 //	WRN judge.go:597 > judge: unavailable, backing off before retry  backoff_ms=60000 ...
-//	    verifier_workspace_reroot_test.go:96: unexpected Unavailable with no workspace override (must fall back to agent home): agent is not a member of any workspace; turn refused: agent_id=judge
 //	--- FAIL: TestRunVerifierAdjudication_JudgeNotWorkspaceMember_NoOverrideStillSucceeds (0.02s)
 //
 // — an exact match for the live fresh-install smoke test's observed log
-// lines. (Without overriding judgeSleepFn, the same pre-fix run instead
-// blocks for real on judge.go's D7 backoff schedule — 60s then 120s then
-// 300s, retried forever against context.Background() — which is itself
-// independent confirmation of "the exact flow that hangs today.")
+// lines.
 package agent
 
 import (
@@ -78,12 +87,13 @@ import (
 
 // newProductionShapeJudgeTestLoop builds an AgentLoop the way NewAgentLoop
 // itself would from a fresh install: a Judge System Agent + one native
-// worker agent, with NO workspace membership seeded for "judge" by any test
-// harness (unlike newGoalLoopTestLoop/mustNewAgentLoop). When
+// worker agent, with NO EXPLICIT workspace membership seeded for "judge" by
+// any test harness (unlike newGoalLoopTestLoop/mustNewAgentLoop) — the
+// Judge's only membership is the implicit, every-workspace kind. When
 // seedNativeAgentMembership is true, a real workspace ("ws-under-review")
-// is created with native-agent as its sole core_team member — mirroring a
-// real task's assignee, who legitimately CAN be a workspace member, in
-// contrast to the Judge, who never can.
+// is created with native-agent as its sole EXPLICIT core_team member —
+// mirroring a real task's assignee, who legitimately CAN be an explicit
+// workspace member, in contrast to the Judge, who never needs to be.
 func newProductionShapeJudgeTestLoop(
 	t *testing.T, seedNativeAgentMembership bool,
 ) (al *AgentLoop, judgeInst *AgentInstance, home, judgeHome string) {
@@ -133,7 +143,9 @@ func newProductionShapeJudgeTestLoop(
 // is the mandatory regression test: it reproduces the refusal shape with the
 // ADR-046 P1 workspace-membership enforcement genuinely ACTIVE (via
 // NewAgentLoop directly, no test-harness membership seeding for "judge" at
-// all) and asserts adjudication now SUCCEEDS.
+// all) and asserts adjudication now SUCCEEDS — resolved purely through
+// implicit membership + the threaded WorkspaceID selector, with the Judge
+// never appearing in the workspace's core_team at all.
 func TestRunVerifierAdjudication_JudgeNotWorkspaceMember_ProductionShapeRegression(t *testing.T) {
 	origSleep := judgeSleepFn
 	t.Cleanup(func() { judgeSleepFn = origSleep })
@@ -162,9 +174,9 @@ func TestRunVerifierAdjudication_JudgeNotWorkspaceMember_ProductionShapeRegressi
 
 	if result.Unavailable {
 		t.Fatalf(
-			"adjudication must SUCCEED once the Judge System Agent's turn is exempted from the literal "+
-				"core_team membership scan (ADR-052 fix) — got Unavailable=true, reason=%q. This is EXACTLY "+
-				"the live fresh-install failure shape: \"turn refused: agent is not a member of any "+
+			"adjudication must SUCCEED once the Judge System Agent is treated as an implicit member of "+
+				"every workspace (operator decision, ADR-052 fix) — got Unavailable=true, reason=%q. This is "+
+				"EXACTLY the live fresh-install failure shape: \"turn refused: agent is not a member of any "+
 				"workspace\" -> \"verifier: turn failed; pausing (D7 unavailability)\"",
 			result.Reason,
 		)
@@ -177,25 +189,24 @@ func TestRunVerifierAdjudication_JudgeNotWorkspaceMember_ProductionShapeRegressi
 	}
 }
 
-// TestRunVerifierAdjudication_JudgeNotWorkspaceMember_NoOverrideStillSucceeds
-// proves the exemption's OWN fallback branch (resolveSystemAgentTurnWorkDir)
-// in isolation: even with NO workspace threaded at all (WorkspaceID unset —
-// the goal-scope-on-an-unbound-chat case), the Judge's turn must still be
-// allowed to proceed, rooted at its own agent home, never refused.
+// TestRunVerifierAdjudication_JudgeSystemAgent_NoWorkspaceExistsAtAll_FallsBackToAgentHome
+// proves the ONE retained agent-home fallback branch: when genuinely NO
+// workspace exists yet at all (the pre-onboarding edge — implicit
+// membership over an empty set is still empty, so even the Judge can't
+// resolve one), the Judge's turn must still be allowed to proceed, rooted
+// at its own agent home, never refused. As soon as ANY workspace exists,
+// this branch never fires again (see the sibling test below).
 //
-// This is the specific test verified to FAIL on the pre-fix tree (see the
-// file doc comment for the captured evidence) — it is the one test in this
-// file that references no new JudgeCriteriaInput field, so a reduced copy of
-// it still compiled and ran unmodified against the OLD judge.go/
-// workspace_reroot.go/verifier_adjudication.go.
-func TestRunVerifierAdjudication_JudgeNotWorkspaceMember_NoOverrideStillSucceeds(t *testing.T) {
+// This is the specific property verified to FAIL on the pre-fix tree (see
+// the file doc comment for the captured evidence).
+func TestRunVerifierAdjudication_JudgeSystemAgent_NoWorkspaceExistsAtAll_FallsBackToAgentHome(t *testing.T) {
 	origSleep := judgeSleepFn
 	t.Cleanup(func() { judgeSleepFn = origSleep })
 	judgeSleepFn = func(context.Context, time.Duration) error {
 		return context.Canceled // give up immediately on D7 backoff — no real sleep
 	}
 
-	al, judgeInst, _, judgeHome := newProductionShapeJudgeTestLoop(t, false)
+	al, judgeInst, _, judgeHome := newProductionShapeJudgeTestLoop(t, false) // zero workspaces created
 
 	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		return &providers.LLMResponse{
@@ -211,10 +222,10 @@ func TestRunVerifierAdjudication_JudgeNotWorkspaceMember_NoOverrideStillSucceeds
 		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "ok")},
 		Attempt:         1,
 		ClaimText:       "done",
-		// WorkspaceID deliberately left empty — no workspace to thread.
+		// WorkspaceID deliberately left empty — no workspace to prefer.
 	})
 	if result.Unavailable {
-		t.Fatalf("unexpected Unavailable with no workspace override (must fall back to agent home): %s", result.Reason)
+		t.Fatalf("unexpected Unavailable with no workspace at all (must fall back to agent home): %s", result.Reason)
 	}
 	if result.Verdict == nil || !result.Verdict.Met {
 		t.Fatalf("expected a real, met verdict falling back to the Judge's own agent home; got %+v", result)
@@ -225,8 +236,77 @@ func TestRunVerifierAdjudication_JudgeNotWorkspaceMember_NoOverrideStillSucceeds
 		t.Fatal("the verifier's LLM call must have received a ctx")
 	}
 	if got := tools.TurnWorkspaceDir(capturedCtx); got != judgeHome {
-		t.Errorf("with no workspace override, the verifier turn must root at the Judge's own agent home %q, got %q",
+		t.Errorf("with no workspace existing at all, the verifier turn must root at the Judge's own agent home %q, got %q",
 			judgeHome, got)
+	}
+}
+
+// TestRunVerifierAdjudication_JudgeSystemAgent_NoOverride_MultipleWorkspacesExist_ResolvesSortedFirst
+// proves the "uniformity is the point" half of the operator's restructure:
+// with NO WorkspaceID selector threaded, but at least one workspace
+// existing, the Judge must resolve via implicit membership to SOME
+// workspace — the exact same sorted-first tie-break
+// workspace.FindForAgent's own doc comment documents for any ordinary agent
+// that happens to belong to more than one workspace's core_team — NOT the
+// agent-home fallback (which is reserved for the "zero workspaces at all"
+// case proven above).
+func TestRunVerifierAdjudication_JudgeSystemAgent_NoOverride_MultipleWorkspacesExist_ResolvesSortedFirst(t *testing.T) {
+	origSleep := judgeSleepFn
+	t.Cleanup(func() { judgeSleepFn = origSleep })
+	judgeSleepFn = func(context.Context, time.Duration) error {
+		return context.Canceled
+	}
+
+	al, judgeInst, home, judgeHome := newProductionShapeJudgeTestLoop(t, false)
+
+	// Two real workspaces, NEITHER listing "judge" in core_team — implicit
+	// membership alone must make both count. "ws-a" sorts before "ws-b".
+	workspacesDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(workspacesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspaces: %v", err)
+	}
+	for _, id := range []string{"ws-b", "ws-a"} { // deliberately created out of sorted order
+		wsJSON := `{"id":"` + id + `","core_team":["native-agent"]}`
+		if err := os.WriteFile(filepath.Join(workspacesDir, id+".json"), []byte(wsJSON), 0o644); err != nil {
+			t.Fatalf("write workspace record %s: %v", id, err)
+		}
+	}
+
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+	judgeInst.Provider = fake
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeGoal,
+		GoalSessionID:   "goal-sess-unbound-multi",
+		AssigneeAgentID: "native-agent",
+		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "ok")},
+		Attempt:         1,
+		ClaimText:       "done",
+		// WorkspaceID deliberately left empty.
+	})
+	if result.Unavailable {
+		t.Fatalf("unexpected Unavailable with workspaces present but no selector threaded: %s", result.Reason)
+	}
+
+	capturedCtx := fake.capturedCtx()
+	if capturedCtx == nil {
+		t.Fatal("the verifier's LLM call must have received a ctx")
+	}
+	wantWorkDir, wsErr := workspace.SafeWorkDir(home, "ws-a")
+	if wsErr != nil {
+		t.Fatalf("workspace.SafeWorkDir: %v", wsErr)
+	}
+	gotWorkDir := tools.TurnWorkspaceDir(capturedCtx)
+	if gotWorkDir != wantWorkDir {
+		t.Errorf("verifier turn's TurnWorkspaceDir = %q, want the sorted-first workspace %q (implicit membership, no selector)",
+			gotWorkDir, wantWorkDir)
+	}
+	if gotWorkDir == judgeHome {
+		t.Error("verifier turn must NOT fall back to agent home when at least one workspace exists")
 	}
 }
 
@@ -235,11 +315,11 @@ func TestRunVerifierAdjudication_JudgeNotWorkspaceMember_NoOverrideStillSucceeds
 // threaded — exactly as task_executor.go's real call site now does, from
 // task.Task.WorkspaceID (task.go:246-247, "every task belongs to a
 // workspace") — the verifier's OWN turn is rooted at the WORK-UNDER-REVIEW's
-// workspace work/ directory, NOT the Judge's own private agent home. This is
-// the functional payoff of threading (Option ii): without it, ADR-052
-// FR-012(c)'s read_file/list_directory grant to the verifier would be dead
-// weight — those tools would never be able to reach the artifacts under
-// review.
+// workspace work/ directory, NOT an arbitrary sorted-first one and NOT the
+// Judge's own private agent home. This is the functional payoff of the
+// WorkspaceID selector under universal implicit membership: without it,
+// ADR-052 FR-012(c)'s read_file/list_directory grant to the verifier would
+// still work, but against the wrong workspace's artifacts.
 func TestJudgeCriteria_TaskScope_VerifierTurnRootedAtWorkUnderReviewWorkspace(t *testing.T) {
 	al, judgeInst, home, judgeHome := newProductionShapeJudgeTestLoop(t, true)
 

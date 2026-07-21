@@ -11,8 +11,27 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
+
+// isImplicitMember reports whether agentID is IMPLICITLY a member of every
+// workspace (operator decision, 2026-07-21: "make the judge a member of
+// every workspace, keep it simple" — ADR-052's Judge/verifier fix). System
+// Agents (coreagent.IsSystemAgentID; today: the Judge, ADR-049 D3) are
+// permanently barred from ever being explicitly listed in a workspace's
+// core_team (pkg/gateway/rest_workspaces.go's validateCoreTeamMembers 400s
+// any attempt to add one) — rather than special-casing that as a refusal
+// bypass at the call site, this is the ONE place membership itself is
+// decided: a System Agent counts as a match for every workspace that
+// exists, exactly as if it were listed in every core_team. Everything
+// downstream (FindForAgent's ambiguous-membership tie-break,
+// FindForAgentPreferring's preferred-id fast path, and every caller of
+// either) sees a uniform, positive membership result — no separate
+// exemption/bypass branch anywhere else in the codebase.
+func isImplicitMember(agentID string) bool {
+	return coreagent.IsSystemAgentID(coreagent.CoreAgentID(agentID))
+}
 
 // teamRecord is the minimal subset of the on-disk workspace JSON FindForAgent
 // reads. Mirrors the package convention (see `record` in default.go and
@@ -46,6 +65,17 @@ type teamRecord struct {
 // operator adds the same agent to two workspaces' core teams via two
 // separate PUTs), not a defensive-only guard.
 //
+// A System Agent (isImplicitMember) is a match for EVERY workspace file
+// found, regardless of its CoreTeam contents — it is an implicit member of
+// all of them by design (see isImplicitMember's doc comment). It therefore
+// hits the exact same "more than one match" tie-break every genuinely
+// ambiguous multi-membership agent hits (sorted-first id wins) — no separate
+// resolution path. The one difference: the ambiguous-membership WARN is
+// suppressed for an implicit member, since having more than one match is the
+// NORMAL, EXPECTED state for it (fires on literally every call once a second
+// workspace exists) rather than the anomaly that WARN exists to surface for
+// an ordinary agent.
+//
 // Mirrors ResolveDefaultID's file-scanning pattern: entries are read via
 // os.ReadDir, non-JSON entries and directories are skipped, and a
 // malformed/unreadable workspace file is skipped rather than aborting the
@@ -60,6 +90,8 @@ func FindForAgent(home, agentID string) (string, bool) {
 		return "", false
 	}
 
+	implicit := isImplicitMember(agentID)
+
 	var matches []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -73,11 +105,13 @@ func FindForAgent(home, agentID string) (string, bool) {
 		if jerr := json.Unmarshal(data, &w); jerr != nil {
 			continue
 		}
-		member := false
-		for _, id := range w.CoreTeam {
-			if id == agentID {
-				member = true
-				break
+		member := implicit
+		if !member {
+			for _, id := range w.CoreTeam {
+				if id == agentID {
+					member = true
+					break
+				}
 			}
 		}
 		if !member {
@@ -94,7 +128,7 @@ func FindForAgent(home, agentID string) (string, bool) {
 		return "", false
 	}
 	sort.Strings(matches)
-	if len(matches) > 1 {
+	if len(matches) > 1 && !implicit {
 		logger.WarnCF(
 			"workspace",
 			"agent belongs to more than one workspace's core team; using the first by sorted id order",
@@ -122,6 +156,15 @@ func FindForAgent(home, agentID string) (string, bool) {
 // sub-turn, which spawnSubTurn never threads a workspace_id into) sees no
 // behavior change from FindForAgent.
 //
+// For a System Agent (isImplicitMember), preferredWsID resolving to any
+// real, readable workspace file is itself sufficient — its CoreTeam is never
+// consulted, since implicit membership already covers it. This is what makes
+// preferredWsID the genuine "which workspace does THIS adjudication root in"
+// selector for the Judge (ADR-052 JudgeCriteriaInput.WorkspaceID, threaded
+// via the verifier's turn ctx — pkg/agent/workspace_reroot.go): the SAME
+// preferredWsID parameter every other caller already uses to pick among its
+// own multiple memberships, not a second mechanism.
+//
 // Note: a successful preferredWsID match returns directly, WITHOUT running
 // FindForAgent's full scan — so FindForAgent's own ambiguous-membership WARN
 // (logged when an agent is found in more than one workspace) does NOT fire on
@@ -137,6 +180,9 @@ func FindForAgentPreferring(home, agentID, preferredWsID string) (string, bool) 
 	if safeID(preferredWsID) {
 		data, err := os.ReadFile(filepath.Join(dirFor(home), preferredWsID+".json"))
 		if err == nil {
+			if isImplicitMember(agentID) {
+				return preferredWsID, true
+			}
 			var w teamRecord
 			if json.Unmarshal(data, &w) == nil {
 				for _, id := range w.CoreTeam {

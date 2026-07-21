@@ -1369,6 +1369,15 @@ func deduplicateStrings(in []string) []string {
 // caller could silently add a System Agent (or a typo'd/nonexistent id) to a
 // workspace's core_team with zero validation. Returns nil for an empty
 // coreTeam (nothing to validate).
+//
+// This rejection stays exactly as it was even after ADR-052's Judge/verifier
+// fix made System Agents IMPLICIT members of EVERY workspace (operator
+// decision, 2026-07-21: "make the judge a member of every workspace, keep it
+// simple" — pkg/workspace's isImplicitMember, consulted by
+// FindForAgent/FindForAgentPreferring). Implicit membership everywhere makes
+// an EXPLICIT core_team entry for a System Agent strictly redundant, never
+// necessary — so this validation continues to reject one on write, rather
+// than being relaxed or repurposed.
 func validateCoreTeamMembers(cfg *config.Config, coreTeam []string) error {
 	if len(coreTeam) == 0 {
 		return nil
