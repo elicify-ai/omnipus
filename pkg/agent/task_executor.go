@@ -152,18 +152,98 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 	}
 	t = claimed
 
-	te.emitStatusChanged(claimed, task.StatusInProgress)
+	// M1 (ADR-052 FR-029): create the task session and persist its SessionID
+	// SYNCHRONOUSLY, in THIS call, before the task ever leaves ExecuteTask's
+	// own goroutine — not async inside the run goroutine as before. This
+	// closes the concurrent-dispatch race SC-005 requires: the plan engine's
+	// Stop fan-out (PlanEngine.StopPlan/StopTask) runs under planDecisionMu,
+	// the SAME lock dispatchReadyMembers dispatches under, so a member whose
+	// SessionID was only assigned asynchronously could be dispatched and
+	// then immediately escape a concurrently-running Stop fan-out (the fan-
+	// out's snapshot, taken microseconds earlier under the same lock, would
+	// have seen no SessionID for it yet). Mirrors StartTaskNow's existing
+	// synchronous pattern; unlike StartTaskNow (which aborts the whole call
+	// on a session-creation failure), this logs-and-continues — dispatch
+	// still proceeds session-less exactly as it always has when sessStore is
+	// nil (see createTaskSessionSync's own doc comment for why these two
+	// callers' error-handling divergence is intentional, not an oversight).
+	taskSessionID, sessErr := te.createTaskSessionSync(t)
+	if sessErr != nil {
+		logger.ErrorCF("task_executor",
+			"Could not create task session (dispatch continues without a session)",
+			map[string]any{"task_id": taskID, "agent_id": t.AgentID, "error": sessErr.Error()})
+	} else if taskSessionID != "" {
+		t.SessionID = taskSessionID
+	}
+
+	te.emitStatusChanged(t, task.StatusInProgress)
 
 	taskCtx, cancel := context.WithCancel(ctx)
 	te.mu.Lock()
 	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
 
-	go te.runTask(taskCtx, t, cancel, release)
+	go te.runTask(taskCtx, t, taskSessionID, cancel, release)
 	return nil
 }
 
+// createTaskSessionSync creates task t's session (SessionTypeTask), sets its
+// meta (Title/TaskID/WorkspaceID), persists SessionID on the task record via
+// te.store.Update, and appends the initial prompt transcript entry — all
+// synchronously, in the CALLER's own goroutine (M1/FR-029; see ExecuteTask's
+// doc comment for why this matters). Shared by ExecuteTask; StartTaskNow
+// performs the equivalent block inline (its own error-handling — abort the
+// whole call on failure — deliberately differs from ExecuteTask's log-and-
+// continue, so it is not routed through this helper; see finishTaskRun's own
+// doc comment on that intentional divergence).
+//
+// Returns ("", nil) when sessStore is nil (no agent store configured for
+// t.AgentID) — callers treat that as "no session", not an error, exactly as
+// before this refactor moved the block out of runTask's goroutine.
+func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	if sessStore == nil {
+		logger.ErrorCF("task_executor", "Agent store not found, task will have no session",
+			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
+		return "", nil
+	}
+	meta, err := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID)
+	if err != nil {
+		return "", fmt.Errorf("task_executor: create task session for %q: %w", t.ID, err)
+	}
+	taskSessionID := meta.ID
+	title := t.Title
+	taskID := t.ID
+	wsID := t.WorkspaceID
+	metaPatch := session.MetaPatch{Title: &title, TaskID: &taskID}
+	if wsID != "" {
+		metaPatch.WorkspaceID = &wsID
+	}
+	if setErr := sessStore.SetMeta(meta.ID, metaPatch); setErr != nil {
+		logger.ErrorCF("task_executor", "Could not set task session meta",
+			map[string]any{"task_id": t.ID, "error": setErr.Error()})
+	}
+	if _, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &taskSessionID}); updateErr != nil {
+		logger.ErrorCF("task_executor", "Could not persist session_id on task",
+			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": updateErr.Error()})
+	}
+	if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+		ID:        t.ID + "-prompt",
+		Role:      "user",
+		Content:   te.buildPrompt(t),
+		Timestamp: time.Now().UTC(),
+	}); appendErr != nil {
+		logger.ErrorCF("task_executor", "Transcript write failed",
+			map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+	}
+	return taskSessionID, nil
+}
+
 // runTask executes the agent prompt and updates the task on completion.
+// taskSessionID was already created and persisted SYNCHRONOUSLY by
+// ExecuteTask before this goroutine was launched (M1/FR-029 — see
+// ExecuteTask's and createTaskSessionSync's doc comments); this goroutine no
+// longer creates the session itself.
 //
 // Goal-loop re-dispatch (SD-B3): when finishTaskRun decides the attempt is
 // unmet with attempts remaining, it flips the task back to `next` and
@@ -174,7 +254,7 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 // already run: calling ExecuteTask while this goroutine still held its own
 // dispatch-sema slot would need two slots at once for an instant and could
 // spuriously hit the concurrency cap.
-func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel context.CancelFunc, release func()) {
+func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID string, cancel context.CancelFunc, release func()) {
 	var redispatchTaskID string
 	defer func() {
 		release()
@@ -191,47 +271,7 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, cancel contex
 	}()
 
 	logger.InfoCF("task_executor", "runTask started",
-		map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
-
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
-	if sessStore == nil {
-		logger.ErrorCF("task_executor", "Agent store not found, task will have no session",
-			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
-	}
-
-	var taskSessionID string
-	if sessStore != nil {
-		if meta, err := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID); err != nil {
-			logger.ErrorCF("task_executor", "Could not create task session",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
-		} else {
-			taskSessionID = meta.ID
-			title := t.Title
-			taskID := t.ID
-			wsID := t.WorkspaceID
-			metaPatch := session.MetaPatch{Title: &title, TaskID: &taskID}
-			if wsID != "" {
-				metaPatch.WorkspaceID = &wsID
-			}
-			if setErr := sessStore.SetMeta(meta.ID, metaPatch); setErr != nil {
-				logger.ErrorCF("task_executor", "Could not set task session meta",
-					map[string]any{"task_id": t.ID, "error": setErr.Error()})
-			}
-			if _, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &taskSessionID}); updateErr != nil {
-				logger.ErrorCF("task_executor", "Could not persist session_id on task",
-					map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": updateErr.Error()})
-			}
-			if err := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
-				ID:        t.ID + "-prompt",
-				Role:      "user",
-				Content:   te.buildPrompt(t),
-				Timestamp: time.Now().UTC(),
-			}); err != nil {
-				logger.ErrorCF("task_executor", "Transcript write failed",
-					map[string]any{"task_id": t.ID, "error": err.Error()})
-			}
-		}
-	}
+		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
