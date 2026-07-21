@@ -1,9 +1,9 @@
+// Package doctor implements the `omnipus doctor` command, which performs
+// pre-flight configuration safety checks per US-15.
+//
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
-
-// Package doctor implements the `omnipus doctor` command, which performs
-// pre-flight configuration safety checks per US-15.
 package doctor
 
 import (
@@ -422,8 +422,11 @@ func checkBrowserPackageChrome() []warning {
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return []warning{{
-			code:    "WARN-BROWSER-008",
-			message: fmt.Sprintf("package chrome root is a symlink (%s) — refusing to verify against a symlinked path. Replace the symlink with the real chromium/ directory.", root),
+			code: "WARN-BROWSER-008",
+			message: fmt.Sprintf(
+				"package chrome root is a symlink (%s) — refusing to verify against a symlinked path. Replace the symlink with the real chromium/ directory.",
+				root,
+			),
 		}}
 	}
 	if !info.IsDir() {
@@ -439,8 +442,11 @@ func checkBrowserPackageChrome() []warning {
 		// remediation: WARN-BROWSER-005 = install host libs; WARN-BROWSER-008
 		// = reinstall the omnipus package (the chrome payload itself is gone).
 		return []warning{{
-			code:    "WARN-BROWSER-008",
-			message: fmt.Sprintf("package chrome root present (%s) but chrome binary is missing — reinstall the omnipus package or remove the chromium/ directory.", root),
+			code: "WARN-BROWSER-008",
+			message: fmt.Sprintf(
+				"package chrome root present (%s) but chrome binary is missing — reinstall the omnipus package or remove the chromium/ directory.",
+				root,
+			),
 		}}
 	}
 
@@ -454,8 +460,11 @@ func checkBrowserPackageChrome() []warning {
 			// knows doctor couldn't run the check rather than seeing
 			// silence.
 			warnings = append(warnings, warning{
-				code:    "WARN-BROWSER-005",
-				message: fmt.Sprintf("could not parse bundled chrome ELF: %s — Chrome may not launch. Reinstall the omnipus package to recover the integrity-verified payload.", elfErr),
+				code: "WARN-BROWSER-005",
+				message: fmt.Sprintf(
+					"could not parse bundled chrome ELF: %s — Chrome may not launch. Reinstall the omnipus package to recover the integrity-verified payload.",
+					elfErr,
+				),
 			})
 		} else if len(missing) > 0 {
 			warnings = append(warnings, warning{
@@ -475,7 +484,8 @@ func checkBrowserPackageChrome() []warning {
 			code: "WARN-BROWSER-006",
 			message: fmt.Sprintf(
 				"bundled chrome hash mismatch — refusing to use the package chrome. expected=%s got=%s. Reinstall the omnipus package to recover the integrity-verified payload.",
-				want, got,
+				want,
+				got,
 			),
 		})
 	}

@@ -17,9 +17,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 )
 
 // writeSHA256Manifest writes a chrome.sha256 manifest in installRoot whose
@@ -101,7 +102,11 @@ func TestFindInstalledBuild_SHA256Mismatch_RejectsInstall(t *testing.T) {
 	writeSHA256Manifest(t, root, "0000000000000000000000000000000000000000000000000000000000000000")
 
 	got := findInstalledBuild(root, platform, fullChromeBuild())
-	assert.Empty(t, got, "findInstalledBuild must return \"\" when chrome.sha256 disagrees with the binary's actual SHA-256")
+	assert.Empty(
+		t,
+		got,
+		"findInstalledBuild must return \"\" when chrome.sha256 disagrees with the binary's actual SHA-256",
+	)
 	// Sanity: the mismatched binary is still on disk, just rejected.
 	_, statErr := os.Stat(binPath)
 	assert.NoError(t, statErr)
@@ -142,7 +147,12 @@ func TestFindInstalledBuild_SHAMissing_StillAccepts(t *testing.T) {
 	// Deliberately no chrome.sha256 in installRoot.
 
 	got := findInstalledBuild(root, platform, fullChromeBuild())
-	assert.Equal(t, binPath, got, "missing chrome.sha256 must NOT block findInstalledBuild (back-compat with pre-ADR-052 installs)")
+	assert.Equal(
+		t,
+		binPath,
+		got,
+		"missing chrome.sha256 must NOT block findInstalledBuild (back-compat with pre-ADR-052 installs)",
+	)
 }
 
 // TestFindInstalledBuild_SHAMalformed_RejectsInstall proves the malformed-
@@ -171,13 +181,15 @@ func TestFindInstalledBuild_SHAMalformed_RejectsInstall(t *testing.T) {
 // for the manifest's on-disk location; future relayouts update one method.
 func TestChromiumBuild_SHA256Path_HelperContract(t *testing.T) {
 	assert.Empty(t, fullChromeBuild().sha256Path(""))
-	assert.Equal(t,
+	assert.Equal(
+		t,
 		filepath.Join("/opt/omnipus", "chrome.sha256"),
 		fullChromeBuild().sha256Path("/opt/omnipus"),
 	)
 	// headlessShellBuild uses the same manifest (one manifest per
 	// installRoot, regardless of which build it accompanies).
-	assert.Equal(t,
+	assert.Equal(
+		t,
 		filepath.Join("/opt/omnipus", "chrome.sha256"),
 		headlessShellBuild().sha256Path("/opt/omnipus"),
 	)

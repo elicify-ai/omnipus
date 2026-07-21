@@ -424,13 +424,15 @@ func findInstalledBuild(installRoot, platform string, build chromiumBuild) strin
 				// so the back-compat case stays permissive. Any other
 				// error is a hard fail (mismatch, malformed, symlink).
 				if !errors.Is(verr, chromeintegrity.ErrSHA256ManifestMissing) {
-					logger.WarnCF("browser",
+					logger.WarnCF(
+						"browser",
 						"installed Chrome failed integrity verification — treating as not installed so managed download will retry",
 						map[string]any{
 							"binary":     best.path,
 							"sha256_man": shaPath,
 							"error":      verr.Error(),
-						})
+						},
+					)
 					return ""
 				}
 			}

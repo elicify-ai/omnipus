@@ -675,7 +675,8 @@ func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string) {
 	if c.totalOpenTabsLocked()+c.reservedTabs >= c.maxTotalTabs {
 		return false, fmt.Sprintf(
 			"global tab budget reached (tools.browser.max_total_tabs=%d); close a tab with browser_close_tab first",
-			c.maxTotalTabs)
+			c.maxTotalTabs,
+		)
 	}
 	c.reservedTabs++
 	return true, ""

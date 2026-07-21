@@ -111,9 +111,11 @@ const (
 func packageChromeRootProbe() (string, ProbeStatus) {
 	if runtime.GOOS == "windows" {
 		windowsPackageChromeDeferralLogged.Do(func() {
-			logger.WarnCF("browser",
+			logger.WarnCF(
+				"browser",
 				"Windows package-chrome path is deferred to Phase 4 (ADR-052); runtime falls through to managed download",
-				nil)
+				nil,
+			)
 		})
 		return "", ProbeUnsupportedOS
 	}
@@ -121,7 +123,7 @@ func packageChromeRootProbe() (string, ProbeStatus) {
 		return packageChromeRootForTest, packageChromeRootCandidateStatus(packageChromeRootForTest)
 	}
 	var firstIssuePath string
-	var firstIssueStatus = ProbeNotFound
+	firstIssueStatus := ProbeNotFound
 	for _, candidate := range packageChromeRootCandidates() {
 		status := packageChromeRootCandidateStatus(candidate)
 		if status == ProbeUsable {
@@ -159,9 +161,11 @@ func PackageChromeRoot() string {
 func PackageChromeRootProbe() (string, ProbeStatus) {
 	if runtime.GOOS == "windows" {
 		windowsPackageChromeDeferralLogged.Do(func() {
-			logger.WarnCF("browser",
+			logger.WarnCF(
+				"browser",
 				"Windows package-chrome path is deferred to Phase 4 (ADR-052); runtime falls through to managed download",
-				nil)
+				nil,
+			)
 		})
 		return "", ProbeUnsupportedOS
 	}

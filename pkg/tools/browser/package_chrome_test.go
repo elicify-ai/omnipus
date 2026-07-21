@@ -29,9 +29,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 )
 
 // TestBinaryLayoutsForRoot_AllOSes covers the SPEC-001 fix that
@@ -96,7 +97,8 @@ func TestFindPackageChrome_GoreleaserExtractionSubdir_Found(t *testing.T) {
 	sum := sha256.Sum256(contents)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(binDir, "chrome.sha256"),
-		[]byte(hex.EncodeToString(sum[:])+"\n"), 0o644))
+		[]byte(hex.EncodeToString(sum[:])+"\n"), 0o644,
+	))
 
 	gotBin, gotSHA := findPackageChrome(root)
 	assert.Equal(t, binPath, gotBin, "SPEC-001: chrome-linux64/chrome layout must be discovered")
@@ -433,9 +435,9 @@ func TestIsUsablePackageRoot(t *testing.T) {
 		assert.True(t, isUsablePackageRoot(d))
 	})
 	t.Run("symlinked dir is rejected", func(t *testing.T) {
-		real := t.TempDir()
+		realPath := t.TempDir()
 		link := filepath.Join(t.TempDir(), "link")
-		require.NoError(t, os.Symlink(real, link))
+		require.NoError(t, os.Symlink(realPath, link))
 		assert.False(t, isUsablePackageRoot(link))
 	})
 }

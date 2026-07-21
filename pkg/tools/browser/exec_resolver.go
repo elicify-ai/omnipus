@@ -174,7 +174,8 @@ func managedExecAllocatorOpts(cfg BrowserConfig) managedChromeCmdline {
 		args = append(args, "--headless", "--hide-scrollbars")
 	}
 	if cfg.ExtensionID != "" {
-		args = append(args,
+		args = append(
+			args,
 			"--allowlisted-extension-id="+cfg.ExtensionID,
 			"--enable-unsafe-extension-debugging",
 		)
@@ -308,13 +309,15 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 		}
 		if info.IsDir() {
 			return "", fmt.Errorf(
-				"configured exec_path %s is a directory, not an executable file", cfg.ExecPath)
+				"configured exec_path %s is a directory, not an executable file", cfg.ExecPath,
+			)
 		}
 		// Exec-bit check is POSIX-only: on Windows os.FileMode does not carry
 		// Unix execute bits, so this guard would wrongly reject every .exe.
 		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 			return "", fmt.Errorf(
-				"configured exec_path %s is not executable (check its file mode)", cfg.ExecPath)
+				"configured exec_path %s is not executable (check its file mode)", cfg.ExecPath,
+			)
 		}
 		return cfg.ExecPath, nil
 	}
@@ -382,12 +385,14 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// package Chrome. Operators who actually want a custom Chrome set
 	// trust_path_chrome: true (or set cfg.ExecPath, which always wins).
 	if pathResolved != "" && !cfg.TrustPathChrome {
-		logger.WarnCF("browser",
+		logger.WarnCF(
+			"browser",
 			"WARN-BROWSER-007: system Chrome on $PATH ignored — operator must set tools.browser.trust_path_chrome=true to use a non-package Chrome",
 			map[string]any{
 				"path_resolved": pathResolved,
 				"policy":        "trust_path_chrome=false",
-			})
+			},
+		)
 		pathResolved = ""
 	}
 

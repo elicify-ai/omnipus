@@ -35,9 +35,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 )
 
 // seedPackageChrome creates a fake package-managed Chrome at
@@ -228,7 +229,11 @@ func TestFindPackageChrome_BinaryPresentSHAMissing_Refused(t *testing.T) {
 	seedPackageChrome(t, root, false) // no chrome.sha256
 
 	bin, sha := findPackageChrome(root)
-	assert.Empty(t, bin, "SEC-ADR052-001: missing chrome.sha256 at the package root must cause findPackageChrome to refuse the binary")
+	assert.Empty(
+		t,
+		bin,
+		"SEC-ADR052-001: missing chrome.sha256 at the package root must cause findPackageChrome to refuse the binary",
+	)
 	assert.Empty(t, sha)
 }
 
@@ -281,7 +286,12 @@ func TestResolve_Step3_UsesPackageChromeWhenPATHMisses(t *testing.T) {
 
 	got, err := m.resolveExecPath(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, pkgBin, got, "step 3 must return the package Chrome when $PATH misses and a valid package Chrome exists")
+	assert.Equal(
+		t,
+		pkgBin,
+		got,
+		"step 3 must return the package Chrome when $PATH misses and a valid package Chrome exists",
+	)
 }
 
 // TestResolve_Step3_PreferPackagedOutranksPATH is the M1 toggle test:
@@ -314,7 +324,12 @@ func TestResolve_Step3_PreferPackagedOutranksPATH(t *testing.T) {
 
 	got, err := m.resolveExecPath(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, pkgBin, got, "PreferPackaged=true (with TrustPathChrome=true) must let the package Chrome outrank $PATH")
+	assert.Equal(
+		t,
+		pkgBin,
+		got,
+		"PreferPackaged=true (with TrustPathChrome=true) must let the package Chrome outrank $PATH",
+	)
 }
 
 // TestResolve_Step3_TrustPathChromeFalse_DiscardsPATH proves the
@@ -542,7 +557,11 @@ func TestVerifyChromeSHA256_EmptySHA_Refuses(t *testing.T) {
 	binPath, _ := seedPackageChrome(t, root, false)
 
 	err := chromeintegrity.VerifyChromeSHA256(binPath, "")
-	require.Error(t, err, "SEC-ADR052-001: empty shaPath must surface chromeintegrity.ErrSHA256ManifestMissing, not be a silent no-op")
+	require.Error(
+		t,
+		err,
+		"SEC-ADR052-001: empty shaPath must surface chromeintegrity.ErrSHA256ManifestMissing, not be a silent no-op",
+	)
 	assert.ErrorIs(t, err, chromeintegrity.ErrSHA256ManifestMissing)
 }
 

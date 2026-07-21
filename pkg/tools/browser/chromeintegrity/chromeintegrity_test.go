@@ -178,10 +178,10 @@ func TestVerifyChromeSHA256_DefensiveGuards(t *testing.T) {
 		if os.Getenv("GOOS") == "windows" {
 			t.Skip("os.Symlink requires elevated privileges on Windows")
 		}
-		real := filepath.Join(t.TempDir(), "real-sha")
-		require.NoError(t, os.WriteFile(real, []byte(validHex+"\n"), 0o644))
+		realPath := filepath.Join(t.TempDir(), "real-sha")
+		require.NoError(t, os.WriteFile(realPath, []byte(validHex+"\n"), 0o644))
 		link := filepath.Join(t.TempDir(), "sha-link")
-		require.NoError(t, os.Symlink(real, link))
+		require.NoError(t, os.Symlink(realPath, link))
 		err := VerifyChromeSHA256("/anywhere", link)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrSHA256ManifestMissing))

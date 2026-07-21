@@ -127,7 +127,8 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 
 	// 1. Navigate
 	var title string
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Navigate(srv.URL),
 		chromedp.Title(&title),
 	)
@@ -137,7 +138,8 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 
 	// 2. Get text from heading
 	var headingText string
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Text("#heading", &headingText, chromedp.ByQuery),
 	)
 	require.NoError(t, err, "get_text heading must succeed")
@@ -145,14 +147,16 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 	t.Log("2. get_text(heading): OK")
 
 	// 3. Click toggle button
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Click("#toggle", chromedp.ByQuery),
 	)
 	require.NoError(t, err, "click toggle must succeed")
 	t.Log("3. click(toggle): OK")
 
 	// 4. Wait for revealed element
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.WaitVisible("#result", chromedp.ByQuery),
 	)
 	require.NoError(t, err, "wait for #result must succeed")
@@ -160,7 +164,8 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 
 	// 5. Read revealed content
 	var resultText string
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Text("#result", &resultText, chromedp.ByQuery),
 	)
 	require.NoError(t, err, "get_text result must succeed")
@@ -168,14 +173,16 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 	t.Log("5. get_text(result): OK")
 
 	// 6. Type into form input
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.SendKeys("#name", "Omnipus", chromedp.ByQuery),
 	)
 	require.NoError(t, err, "type into #name must succeed")
 	t.Log("6. type(name): OK")
 
 	// 7. Submit form
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Click("#submit", chromedp.ByQuery),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 	)
@@ -184,7 +191,8 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 
 	// 8. Read greeting after form submission
 	var greeting string
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Text("#greeting", &greeting, chromedp.ByQuery),
 	)
 	require.NoError(t, err, "get_text greeting must succeed")
@@ -193,7 +201,8 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 
 	// 9. Screenshot
 	var screenshotBuf []byte
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.FullScreenshot(&screenshotBuf, 90),
 	)
 	require.NoError(t, err, "screenshot must succeed")
@@ -202,7 +211,8 @@ func TestBrowserTools_E2E_DirectChromedp(t *testing.T) {
 
 	// 10. Evaluate JS
 	var evalTitle string
-	err = chromedp.Run(tabCtx,
+	err = chromedp.Run(
+		tabCtx,
 		chromedp.Evaluate("document.title", &evalTitle),
 	)
 	require.NoError(t, err, "evaluate must succeed")

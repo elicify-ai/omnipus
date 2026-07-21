@@ -1,6 +1,8 @@
 //go:build linux
 
-// In-process ELF parser for WARN-BROWSER-005 (ADR-052 SEC-ADR052-007).
+package doctor
+
+// Package doctor contains the in-process ELF parser for WARN-BROWSER-005 (ADR-052 SEC-ADR052-007).
 // Replaces the previous `ldd`-via-os/exec implementation: HC #2 (pure Go,
 // no shelling out for security-critical paths) rules that out, and ldd
 // itself is not always present (Alpine-without-gcompat, BusyBox, stripped
@@ -34,7 +36,6 @@
 // 256–512 MB cgroup kills the process during materialization. This
 // version uses os.Open + chunked Seek/Read for the program-header table
 // and PT_DYNAMIC region only — the only bytes we actually need.
-package doctor
 
 import (
 	"bytes"
@@ -97,15 +98,15 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 	// ErrUnexpectedEOF for a 1-3 byte file and EOF for a 0 byte file;
 	// we treat both as "not an ELF" so a missing or zero-length binary
 	// surfaces a clean diagnostic rather than crashing.
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("seek to ELF magic: %w", err)
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		return nil, fmt.Errorf("seek to ELF magic: %w", seekErr)
 	}
 	var magic [4]byte
-	if _, err := io.ReadFull(f, magic[:]); err != nil {
-		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+	if _, readErr := io.ReadFull(f, magic[:]); readErr != nil {
+		if errors.Is(readErr, io.ErrUnexpectedEOF) || errors.Is(readErr, io.EOF) {
 			return []string{"not-an-elf-binary"}, nil
 		}
-		return nil, fmt.Errorf("read chrome binary magic: %w", err)
+		return nil, fmt.Errorf("read chrome binary magic: %w", readErr)
 	}
 	if !bytes.Equal(magic[:], []byte{0x7f, 'E', 'L', 'F'}) {
 		// Non-ELF (script, wrong-arch, partial download): surface a
@@ -120,22 +121,22 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 	phdrSz := uint64(phdrSize64)
 	dynEntry := uint64(dynEntrySize64)
 	var class [1]byte
-	if _, err := f.Seek(4, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("seek to EI_CLASS: %w", err)
+	if _, seekErr := f.Seek(4, io.SeekStart); seekErr != nil {
+		return nil, fmt.Errorf("seek to EI_CLASS: %w", seekErr)
 	}
-	if _, err := io.ReadFull(f, class[:]); err != nil {
-		return nil, fmt.Errorf("read EI_CLASS: %w", err)
+	if _, readErr := io.ReadFull(f, class[:]); readErr != nil {
+		return nil, fmt.Errorf("read EI_CLASS: %w", readErr)
 	}
 	if class[0] != 2 {
 		// Chrome-for-Testing is 64-bit on every supported platform.
 		return []string{"not-an-elf-binary"}, nil
 	}
 	var dataByte [1]byte
-	if _, err := f.Seek(5, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("seek to EI_DATA: %w", err)
+	if _, seekErr := f.Seek(5, io.SeekStart); seekErr != nil {
+		return nil, fmt.Errorf("seek to EI_DATA: %w", seekErr)
 	}
-	if _, err := io.ReadFull(f, dataByte[:]); err != nil {
-		return nil, fmt.Errorf("read EI_DATA: %w", err)
+	if _, readErr := io.ReadFull(f, dataByte[:]); readErr != nil {
+		return nil, fmt.Errorf("read EI_DATA: %w", readErr)
 	}
 	if dataByte[0] == 1 {
 		bo = binary.LittleEndian
@@ -144,15 +145,15 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 	}
 
 	// A deliberately truncated 64-bit binary MUST be rejected cleanly.
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("seek to ELF header: %w", err)
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		return nil, fmt.Errorf("seek to ELF header: %w", seekErr)
 	}
 	ehdr := make([]byte, ehdrSz)
-	if _, err := io.ReadFull(f, ehdr); err != nil {
-		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+	if _, readErr := io.ReadFull(f, ehdr); readErr != nil {
+		if errors.Is(readErr, io.ErrUnexpectedEOF) || errors.Is(readErr, io.EOF) {
 			return nil, fmt.Errorf("truncated ELF header: read %d bytes", len(ehdr))
 		}
-		return nil, fmt.Errorf("read ELF header: %w", err)
+		return nil, fmt.Errorf("read ELF header: %w", readErr)
 	}
 
 	// 64-bit ELF header field offsets: e_phoff @ 32, e_phentsz @ 54,
@@ -179,10 +180,10 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 	var dynOff, dynSize uint64
 	for i := uint64(0); i < ePhNum; i++ {
 		off := ePhOff + i*phdrSz
-		phdr, err := readChunked(f, off, phdrSz)
-		if err != nil {
+		phdr, chunkErr := readChunked(f, off, phdrSz)
+		if chunkErr != nil {
 			// EOF mid-table: a structural error — surface it.
-			return nil, fmt.Errorf("read program header %d: %w", i, err)
+			return nil, fmt.Errorf("read program header %d: %w", i, chunkErr)
 		}
 		pType := bo.Uint32(phdr[0:4])
 		if pType != 2 /* PT_DYNAMIC */ {
@@ -208,9 +209,9 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 	var needed []uint64
 	for i := uint64(0); i < dynCount; i++ {
 		base := dynOff + i*dynEntry
-		entry, err := readChunked(f, base, dynEntry)
-		if err != nil {
-			return nil, fmt.Errorf("read DT_DYNAMIC entry %d: %w", i, err)
+		entry, chunkErr := readChunked(f, base, dynEntry)
+		if chunkErr != nil {
+			return nil, fmt.Errorf("read DT_DYNAMIC entry %d: %w", i, chunkErr)
 		}
 		var tag, val uint64
 		tag = bo.Uint64(entry[0:8])

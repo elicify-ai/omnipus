@@ -96,7 +96,11 @@ func TestClassifyVideoCapability_PackageChromeLinux_NoSHA_Refused(t *testing.T) 
 
 	got := ClassifyVideoCapability(t.TempDir())
 	if got.Capable {
-		t.Fatalf("SEC-ADR052-001: package Chrome without chrome.sha256 must classify not-capable, got %+v (reason=%q)", got, got.Reason)
+		t.Fatalf(
+			"SEC-ADR052-001: package Chrome without chrome.sha256 must classify not-capable, got %+v (reason=%q)",
+			got,
+			got.Reason,
+		)
 	}
 	if got.Reason == "" {
 		t.Fatal("expected a non-empty operator-facing Reason (O-3) on not-capable")
@@ -149,7 +153,11 @@ func TestClassifyVideoCapability_PackageChromeNonLinux_NotCapable(t *testing.T) 
 
 			got := ClassifyVideoCapability(t.TempDir())
 			if got.Capable {
-				t.Fatalf("expected not-capable on GOOS=%s even with a valid package Chrome (Phase 1 gate stays strict), got %+v", goos, got)
+				t.Fatalf(
+					"expected not-capable on GOOS=%s even with a valid package Chrome (Phase 1 gate stays strict), got %+v",
+					goos,
+					got,
+				)
 			}
 			if got.Reason == "" {
 				t.Fatal("expected a non-empty operator-facing Reason (O-3) on not-capable")
@@ -178,7 +186,11 @@ func TestClassifyVideoCapabilityWithExec_PreferPackaged_NoEffectOnLinuxGate(t *t
 			execPath := filepath.Join(t.TempDir(), "chrome")
 			got := ClassifyVideoCapabilityWithExec(execPath, t.TempDir())
 			if got.Capable {
-				t.Fatalf("expected not-capable on GOOS=%s regardless of PreferPackaged (Phase 1 linux-gate stays strict), got %+v", goos, got)
+				t.Fatalf(
+					"expected not-capable on GOOS=%s regardless of PreferPackaged (Phase 1 linux-gate stays strict), got %+v",
+					goos,
+					got,
+				)
 			}
 		})
 	}

@@ -1154,7 +1154,8 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 func refreshTabMeta(tabCtx context.Context, timeout time.Duration) (title, url string) {
 	ctx, cancel := context.WithTimeout(tabCtx, timeout)
 	defer cancel()
-	_ = chromedp.Run(ctx,
+	_ = chromedp.Run(
+		ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_ = chromedp.Title(&title).Do(ctx)
 			_ = chromedp.Location(&url).Do(ctx)
@@ -1925,7 +1926,8 @@ func applyStealth(tabCtx context.Context, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(tabCtx, timeout)
 	defer cancel()
 	var ua string
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(
+		ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_ = chromedp.Evaluate(`navigator.userAgent`, &ua).Do(ctx)
 			if clean := deHeadlessUA(ua); clean != "" && clean != ua {

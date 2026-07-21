@@ -119,7 +119,7 @@ func ParseChromeSHA256Manifest(raw []byte) (string, error) {
 	return digest, nil
 }
 
-// Integrity comparison uses subtle.ConstantTimeCompare. The constant-time
+// VerifyChromeSHA256 uses subtle.ConstantTimeCompare for the integrity comparison. The constant-time
 // requirement is enforced by code review and static lint convention rather
 // than a timing-sensitive unit test.
 //
