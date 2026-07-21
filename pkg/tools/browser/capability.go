@@ -1,10 +1,14 @@
 package browser
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 )
 
 // VideoCapability is the classification of whether this host can run the
@@ -92,13 +96,22 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 		// ADR-052 Phase 1: fall through to the package-managed Chrome before
 		// classifying not-capable. The package root is computed at runtime
 		// from os.Executable(); when a valid full Chrome lives there
-		// (findInstalledBuild returns its binary path), the host is video-
-		// capable even when the per-profile installRoot is empty.
+		// (findPackageChrome returns its binary path AND the SHA verifies),
+		// the host is video-capable even when the per-profile installRoot
+		// is empty.
 		pkgRoot := packageChromeRoot()
 		if pkgRoot != "" {
 			if pkgBin, pkgSHA := findPackageChrome(pkgRoot); pkgBin != "" {
-				if pkgSHA == "" || verifyChromeSHA256(pkgBin, pkgSHA) == nil {
+				if err := cachedVerifyChromeSHA256(pkgBin, pkgSHA); err == nil {
 					return videoAndAudio()
+				} else if !errors.Is(err, chromeintegrity.ErrSHA256ManifestMissing) {
+					// SEC-ADR052-001 (strict): an empty OR mismatching manifest
+					// is a refusal. The previous "pkgSHA == "" short-circuit"
+					// accepted an unverifiable binary as Capable — that
+					// contradicted the resolver's strict fail-closed posture
+					// (SEC-NEW-005). Only a verified package Chrome counts.
+					logger.DebugCF("browser", "package chrome SHA-256 verification failed",
+						map[string]any{"binary": pkgBin, "error": err.Error()})
 				}
 			}
 		}

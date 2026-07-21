@@ -132,6 +132,20 @@ deliberately newer/patched `$PATH` Chrome still wins; (b) the classifier fix lan
 it stays live rather than becoming dead code. A `tools.browser.prefer_packaged` toggle (default
 **false**) is added for fleets that want the pinned package Chrome to win for reproducibility.
 
+[SEC-ADR052-002 deviation, applied during Phase 1 implementation] The
+implementation gates `$PATH` Chrome behind `tools.browser.trust_path_chrome`
+(default false in v0.1.x; security-hardened). Operators who want `$PATH`
+Chrome to win must set `trust_path_chrome: true` (or use the explicit
+`exec_path` override, which always wins). The `$PATH` resolution is still
+recorded at WARN-BROWSER-007 even when discarded, so the audit log shows
+the attempted resolution. Rationale: an unverified `$PATH` binary is a
+"trusted RCE-engine origin" risk on a multi-tenant developer box, a CI
+runner, or a compromised developer machine — a planted `google-chrome`
+script earlier on `$PATH` would otherwise execute before the verified
+package Chrome even gets considered. The `trust_path_chrome` opt-in
+preserves the legacy operator-autonomy path while making the secure
+default explicit.
+
 The package Chrome kills the "is a correct Chrome even present?" class of bug (the floor is now
 on-disk, not a network fetch), and `ClassifyVideoCapability`/`findInstalledBuild` learn the package
 root so **video capability is guaranteed wherever the package is installed AND the host OS is

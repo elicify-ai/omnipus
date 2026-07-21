@@ -5,10 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // integrity check only (matches the GCS-published Content-MD5), not a security signature — see verifyGoogHashMD5.
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +19,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 )
 
 const (
@@ -334,14 +332,39 @@ func findInstalledBinary(installRoot, platform string) string {
 // the runtime-download path doesn't ship one by default and older managed
 // installs predate ADR-052 entirely; refusing them would be a back-compat
 // regression. (The package Chrome path is stricter — see findPackageChrome
-// in exec_resolver.go, which requires chrome.sha256.)
+// in package_chrome.go, which requires chrome.sha256.)
 //
-// SEC-ADR052-005 symlink defense: each candidate binary is checked with
-// os.Lstat before being added to the candidate set, and the winning
-// candidate's manifest verification re-lstats both the binary and the
-// manifest (verifyChromeSHA256's own guards). A symlinked binary or a
-// symlinked manifest is rejected.
+// CORR-007 deliberate asymmetry: this permissive-missing-manifest posture
+// is INTENTIONAL and tracks the runtime-download-path contract. A future
+// PR will close the back-compat window — see the TODO at the bottom of
+// this function's body.
+//
+// SEC-ADR052-005/006 hardening: installRoot is Lstat-checked before any
+// candidate is read (refuses a symlinked install root, refuses a
+// world-writable install root — see TestFindInstalledBuild_*). Each
+// candidate binary is also Lstat-checked (refuses a symlinked leaf
+// binary). The winning candidate's manifest verification re-lstats both
+// the binary and the manifest (chromeintegrity.VerifyChromeSHA256's own
+// guards). A symlinked binary or a symlinked manifest is rejected.
 func findInstalledBuild(installRoot, platform string, build chromiumBuild) string {
+	// SEC-ADR052-005/006: refuse a symlinked or world-writable install
+	// root before walking its entries (the world-writable guard mirrors
+	// findPackageChrome's; the symlinked-root guard is new for this
+	// path so the managed install can't be redirected to an attacker-
+	// controlled tree).
+	rootInfo, lerr := os.Lstat(installRoot)
+	if lerr != nil {
+		return ""
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return ""
+	}
+	if rootInfo.Mode()&0o002 != 0 {
+		logger.WarnCF("browser",
+			"managed Chrome install root is world-writable — refusing to use it",
+			map[string]any{"install_root": installRoot})
+		return ""
+	}
 	entries, err := os.ReadDir(installRoot)
 	if err != nil {
 		return ""
@@ -391,16 +414,16 @@ func findInstalledBuild(installRoot, platform string, build chromiumBuild) strin
 	// see this function's doc comment for why missing is permissive here).
 	if shaPath != "" {
 		if _, statErr := os.Lstat(shaPath); statErr == nil {
-			if verr := verifyChromeSHA256(best.path, shaPath); verr != nil {
+			if verr := chromeintegrity.VerifyChromeSHA256(best.path, shaPath); verr != nil {
 				// A present-but-malformed/mismatching manifest hard-fails
 				// (SEC-ADR052-001 — no silent default). Missing manifests
 				// are NOT a failure on this path (the runtime-download
 				// path doesn't ship one); the sentinel
-				// errSHA256ManifestMissing is what verifyChromeSHA256
-				// returns, and we specifically accept it here so the
-				// back-compat case stays permissive. Any other error is a
-				// hard fail (mismatch, malformed, symlink).
-				if !errors.Is(verr, errSHA256ManifestMissing) {
+				// chromeintegrity.ErrSHA256ManifestMissing is what the
+				// verifier returns, and we specifically accept it here
+				// so the back-compat case stays permissive. Any other
+				// error is a hard fail (mismatch, malformed, symlink).
+				if !errors.Is(verr, chromeintegrity.ErrSHA256ManifestMissing) {
 					logger.WarnCF("browser",
 						"installed Chrome failed integrity verification — treating as not installed so managed download will retry",
 						map[string]any{
@@ -414,204 +437,52 @@ func findInstalledBuild(installRoot, platform string, build chromiumBuild) strin
 		}
 	}
 	return best.path
+	// TODO(corr-007-tracking): close the permissive-missing-manifest
+	// back-compat window once pre-ADR-052 installs have rolled past their
+	// retention horizon (operators currently relying on it will get an
+	// automatic managed re-download on first launch after this lands).
 }
 
-// errSHA256ManifestMissing is the sentinel returned by verifyChromeSHA256
-// when shaPath is empty OR the manifest cannot be read. The package Chrome
-// resolution path (exec_resolver.go's resolve step 3) uses this sentinel to
-// fail closed on a missing manifest (SEC-ADR052-001 — no silent default
-// fallback when integrity metadata is absent; per ADR-052 M2, "an attacker
-// who can write <installRoot>/chrome can also write <installRoot>/chrome.sha256,
-// so accepting the binary when the manifest is missing is identical to
-// accepting an unverifiable binary"). The managed install path
-// (findInstalledBuild) handles this sentinel differently — see its doc —
-// because the runtime-download path doesn't ship a manifest by default and
-// refusing those would be a back-compat regression on pre-Phase-1 installs.
-var errSHA256ManifestMissing = fmt.Errorf("chrome.sha256 integrity manifest missing or unreadable")
+// errSHA256ManifestMissing is an alias kept for legacy call sites — the
+// canonical sentinel now lives in pkg/tools/browser/chromeintegrity. All
+// new code should use errors.Is(err, chromeintegrity.ErrSHA256ManifestMissing)
+// directly; the alias here is `var`-shadowed to preserve the local
+// identity for any in-package test assertions (e.g. capability.go's
+// short-circuit checks) and to keep the same wrapping semantics that
+// callers relied on before the CORR-005 extraction.
+var errSHA256ManifestMissing = chromeintegrity.ErrSHA256ManifestMissing
 
-// verifyChromeSHA256 hashes binaryPath with crypto/sha256 and compares the
-// digest against the value in shaPath using crypto/subtle.ConstantTimeCompare
-// (constant-time to defeat timing-side-channel observation of the digest).
-//
-// SEC-ADR052-001 fail-closed contract: returns errSHA256ManifestMissing when
-// shaPath is empty OR the manifest cannot be read for any reason
-// (os.IsNotExist, permission denied, EIO, ...). The caller decides what to
-// do with that sentinel — for the package Chrome path (Phase 1 floor), the
-// resolver falls through to the managed download path; for the managed
-// install path, the verifier is only invoked when chrome.sha256 is present.
-//
-// SEC-ADR052-004 parser hardening: the manifest parser tolerates the
-// well-formed-but-noisy shapes real CfT / goreleaser / sha256sum pipelines
-// emit — leading UTF-8 BOM, CRLF line endings, leading "sha256:" / "SHA-256:"
-// prefix, leading "#"-prefixed comment lines, a single trailing whitespace
-// run, and the sha256sum(1) two-field "<digest>  <filename>" format.
-// Adversarial shapes that DO NOT survive the parser and produce explicit
-// errors: uppercase hex (toolchain mismatch — surfaced rather than
-// silently lowercased), digest length != 64 chars, NUL bytes / CR-only
-// separators INSIDE the digest, embedded binary garbage after the digest,
-// empty manifest, and any non-hex character outside a comment line.
-//
-// SEC-ADR052-005 TOCTOU + symlink defense: the binary is opened with leaf
-// symlink rejection via os.Lstat (refuses a symlink at binaryPath's leaf).
-// The manifest is read with the same guard. A TOCTOU swap between Lstat
-// and Open is bounded by the install-root-mode check at the call sites
-// (findPackageChrome in exec_resolver.go, findInstalledBuild below) —
-// those refuse to operate on a world-writable install root, so the
-// attacker who could race the open needs write access to the install
-// root's contents, which the mode check disallows.
+// verifyChromeSHA256 is the package-level convenience wrapper over
+// chromeintegrity.VerifyChromeSHA256. The full implementation moved to
+// the shared chromeintegrity package as part of CORR-005 (eliminating
+// the doctor command's duplicate parser); this thin wrapper preserves
+// the call-site shape that exec_resolver.go and capability.go use, and
+// the SHAVerify-cache keying (package_chrome.go's shaVerifyCache)
+// still keys on (binaryPath, shaPath) identically. Use the chromeintegrity
+// function directly from new code; this alias exists so the existing
+// callers don't need to change.
 func verifyChromeSHA256(binaryPath, shaPath string) error {
-	if shaPath == "" {
-		return errSHA256ManifestMissing
+	err := chromeintegrity.VerifyChromeSHA256(binaryPath, shaPath)
+	if err == nil {
+		return nil
 	}
-
-	// SEC-ADR052-005: refuse a symlinked manifest at the leaf.
-	if info, lerr := os.Lstat(shaPath); lerr != nil {
-		// Any error here — IsNotExist, EACCES, EIO, ... — is a refusal.
-		// Per SEC-ADR052-001, a manifest we can't read is the same as a
-		// manifest we can't trust.
-		return fmt.Errorf("%w: %s: %v", errSHA256ManifestMissing, shaPath, lerr)
-	} else if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%w: %s is a symlink", errSHA256ManifestMissing, shaPath)
-	} else if info.IsDir() {
-		return fmt.Errorf("%w: %s is a directory, not a file", errSHA256ManifestMissing, shaPath)
-	}
-
-	raw, readErr := os.ReadFile(shaPath)
-	if readErr != nil {
-		return fmt.Errorf("%w: read %s: %v", errSHA256ManifestMissing, shaPath, readErr)
-	}
-
-	want, parseErr := parseSHA256Manifest(raw)
-	if parseErr != nil {
-		return fmt.Errorf("parse sha256 manifest %s: %w", shaPath, parseErr)
-	}
-
-	// SEC-ADR052-005: refuse a symlinked binary at the leaf.
-	binInfo, lerr := os.Lstat(binaryPath)
-	if lerr != nil {
-		return fmt.Errorf("lstat binary %s: %w", binaryPath, lerr)
-	}
-	if binInfo.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to verify a symlinked binary at %s", binaryPath)
-	}
-	if binInfo.IsDir() {
-		return fmt.Errorf("binary path %s is a directory", binaryPath)
-	}
-
-	f, openErr := os.Open(binaryPath)
-	if openErr != nil {
-		return fmt.Errorf("open binary %s: %w", binaryPath, openErr)
-	}
-	defer f.Close()
-	hasher := sha256.New()
-	if _, copyErr := io.Copy(hasher, f); copyErr != nil {
-		return fmt.Errorf("hash binary %s: %w", binaryPath, copyErr)
-	}
-	got := hex.EncodeToString(hasher.Sum(nil))
-
-	// SEC-ADR052-004: constant-time comparison. Both sides are 64 hex chars
-	// by construction (parseSHA256Manifest enforces length), so this is a
-	// fixed-size compare — ConstantTimeCompare returns 1 iff equal and 0
-	// otherwise, with no early-exit on first-mismatch byte.
-	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-		return fmt.Errorf(
-			"sha256 mismatch: binary hashes to %s… but manifest %s declares %s…",
-			got[:16],
-			shaPath,
-			want[:16],
-		)
-	}
-	return nil
+	// Preserve the same wrapping semantics the in-package callers expect:
+	// the chromeintegrity call's sentinel already wraps
+	// ErrSHA256ManifestMissing via %w, so errors.Is works without
+	// re-wrapping. Nothing to do here beyond passing through.
+	return err
 }
 
-// parseSHA256Manifest extracts the canonical 64-char lowercase hex SHA-256
-// digest from raw. Tolerant of the well-formed-but-noisy shapes CfT /
-// goreleaser / sha256sum pipelines emit; refuses everything else as an
-// explicit parse error. See SEC-ADR052-004 for the full grammar.
-//
-// Recognized shapes:
-//
-//   - "<64-hex>\n"
-//   - "<64-hex>  chrome\n"                       — sha256sum(1) two-field form
-//   - "  <64-hex>  chrome\n"                      — leading whitespace
-//   - "# comment\n<64-hex>\n"                     — BusyBox-style comment prefix
-//   - "sha256:<64-hex>\n" or "SHA-256:<64-hex>\n" — algo-prefixed
-//   - "\xEF\xBB\xBF<64-hex>\n"                    — UTF-8 BOM at start of file
-//   - "<64-hex>\r\n"                              — CRLF line endings
-//
-// Rejected shapes (return explicit errors, never silent-coerce):
-//
-//   - uppercase hex digits                         — toolchain mismatch
-//   - digest length != 64 chars                    — corrupt / partial
-//   - NUL bytes or CR-only separators INSIDE digest
-//   - non-hex characters outside a comment line
-//   - empty manifest                               — no digest
-//   - embedded binary garbage after the digest line
+// parseSHA256Manifest is the in-package alias for
+// chromeintegrity.ParseChromeSHA256Manifest. Kept for the in-package
+// table-driven tests; new callers should use chromeintegrity directly.
 func parseSHA256Manifest(raw []byte) (string, error) {
-	// Strip a leading UTF-8 BOM (3 bytes) — present in some Windows-port
-	// emitters and harmless once removed.
-	if bytes.HasPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) {
-		raw = raw[3:]
-	}
-	// Normalize CRLF and lone CR to LF before line-splitting.
-	raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
-	raw = bytes.ReplaceAll(raw, []byte("\r"), []byte("\n"))
-
-	var digest string
-	for _, line := range bytes.Split(raw, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		if line[0] == '#' {
-			continue // comment line
-		}
-		// Tolerate a leading "sha256:" / "SHA-256:" prefix.
-		trimmed := line
-		if bytes.HasPrefix(trimmed, []byte("sha256:")) {
-			trimmed = trimmed[len("sha256:"):]
-		} else if bytes.HasPrefix(trimmed, []byte("SHA-256:")) {
-			trimmed = trimmed[len("SHA-256:"):]
-		}
-		// Tolerate the sha256sum(1) two-field "<digest>  <filename>" format.
-		// A single whitespace boundary between two whitespace-separated
-		// fields is treated as the separator; if the right field is the
-		// binary name and the left is a 64-hex digest, take the left.
-		fields := bytes.Fields(trimmed)
-		if len(fields) == 2 {
-			if isLowerHex(fields[0]) && !isLowerHex(fields[1]) {
-				trimmed = fields[0]
-			} else {
-				return "", fmt.Errorf("two-field line is not a <hex>  <name> pair: %q", line)
-			}
-		} else if len(fields) != 1 {
-			return "", fmt.Errorf("expected a single digest field, got %d: %q", len(fields), line)
-		} else {
-			trimmed = fields[0]
-		}
-		candidate := string(trimmed)
-		if len(candidate) != 64 {
-			return "", fmt.Errorf("digest length %d != 64: %q", len(candidate), candidate)
-		}
-		// SEC-ADR052-004: refuse uppercase hex — toolchain mismatch.
-		if !isLowerHex(trimmed) {
-			return "", fmt.Errorf("digest is not lowercase hex (toolchain mismatch): %q", candidate)
-		}
-		if digest != "" {
-			return "", fmt.Errorf("manifest declares multiple digests: %q and %q", digest, candidate)
-		}
-		digest = candidate
-	}
-	if digest == "" {
-		return "", fmt.Errorf("manifest contains no SHA-256 digest line")
-	}
-	return digest, nil
+	return chromeintegrity.ParseChromeSHA256Manifest(raw)
 }
 
-// isLowerHex reports whether b is non-empty and contains only lowercase hex
-// digits ([0-9a-f]). Used by parseSHA256Manifest — uppercase is an explicit
-// error (SEC-ADR052-004 — toolchain mismatch, surfaced rather than silently
-// lowercased).
+// isLowerHex reports whether b is non-empty and contains only lowercase
+// hex digits ([0-9a-f]). Kept for the in-package table-driven tests
+// that reference it directly; chromeintegrity owns its own copy.
 func isLowerHex(b []byte) bool {
 	if len(b) == 0 {
 		return false

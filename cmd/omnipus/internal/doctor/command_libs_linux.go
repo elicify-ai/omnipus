@@ -28,14 +28,45 @@
 //   - We parse only the soname. ld.so's full resolution (versioned
 //     dependencies, weak symbols, .symver) is not modeled — chrome's DT_NEEDED
 //     entries are unversioned sonames on every mainstream distro.
+//
+// Streaming (PERF-002): the previous implementation read the full binary
+// into the Go heap via os.ReadFile. Chrome's binary is ~400 MB and a
+// 256–512 MB cgroup kills the process during materialization. This
+// version uses os.Open + chunked Seek/Read for the program-header table
+// and PT_DYNAMIC region only — the only bytes we actually need.
 package doctor
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+)
+
+// ehdrSize64 is the 64-bit ELF header size: e_ident[16] + 12 fields (u16
+// u16 u32 u64 u64 u64 u32 u16 u16 u16 u16 u16 u16) = 64 bytes total.
+// CORR-002 fix: the prior constant was 52, which let any 53–57 byte file
+// pass the bounds check while data[54:56] / data[56:58] panicked.
+const ehdrSize64 = 64
+
+// ehdrSize32 is the 32-bit ELF header size: e_ident[16] + 12 fields
+// (u16 u16 u32 u32 u32 u32 u32 u16 u16 u16 u16 u16 u16) = 52 bytes.
+const ehdrSize32 = 52
+
+// phdrSize64 / phdrSize32 are the per-entry program-header sizes.
+const (
+	phdrSize64 = 56
+	phdrSize32 = 32
+)
+
+// dynEntrySize64 / dynEntrySize32 are the per-entry DT_DYNAMIC sizes
+// (Elf{64,32}_Dyn: d_tag + d_val).
+const (
+	dynEntrySize64 = 16
+	dynEntrySize32 = 8
 )
 
 // elfSearchPaths are the canonical library search directories probed in
@@ -50,91 +81,186 @@ var elfSearchPaths = []string{
 	"/usr/lib/aarch64-linux-gnu",
 }
 
+// maxELFOffset bounds the offsets we'll accept when walking an ELF — a
+// 64-bit binary on a clean 400 MB chrome install tops out well below
+// 4 GiB. Anything past 1 GiB is implausible and we treat it as a
+// structural error rather than risk the seek+read.
+const maxELFOffset uint64 = 1 << 30 // 1 GiB
+
 // missingChromeLibsELF walks binPath's ELF DT_NEEDED entries and returns
 // the soname of every dependency that is NOT present in any of the
 // canonical search paths. An empty result means every DT_NEEDED entry
 // resolved. A non-ELF file returns a single synthetic entry ("not-an-elf")
 // so the warning surfaces the diagnostic instead of silently passing.
 //
-// The parser is intentionally conservative: any structural error (truncated
-// header, bad magic, overflow) returns nil with an explanatory marker so
-// the caller can decide whether to surface a warning or stay silent.
+// The parser is intentionally conservative: any structural error
+// (truncated header, bad magic, overflow) returns a non-nil error with
+// a descriptive message so the caller can decide whether to surface a
+// warning or stay silent.
 func missingChromeLibsELF(binPath string) ([]string, error) {
-	data, err := os.ReadFile(binPath)
+	f, err := os.Open(binPath)
 	if err != nil {
 		return nil, fmt.Errorf("read chrome binary: %w", err)
 	}
-	if len(data) < 4 || !bytes.Equal(data[:4], []byte{0x7f, 'E', 'L', 'F'}) {
+	defer f.Close()
+
+	// Read just the first 4 bytes for the magic. io.ReadFull returns
+	// ErrUnexpectedEOF for a 1-3 byte file and EOF for a 0 byte file;
+	// we treat both as "not an ELF" so a missing or zero-length binary
+	// surfaces a clean diagnostic rather than crashing.
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek to ELF magic: %w", err)
+	}
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return []string{"not-an-elf-binary"}, nil
+		}
+		return nil, fmt.Errorf("read chrome binary magic: %w", err)
+	}
+	if !bytes.Equal(magic[:], []byte{0x7f, 'E', 'L', 'F'}) {
 		// Non-ELF (script, wrong-arch, partial download): surface a
 		// single synthetic entry so the operator sees the diagnostic.
 		return []string{"not-an-elf-binary"}, nil
 	}
 
-	// Identify 32-bit vs 64-bit from EI_CLASS at offset 4. Chrome-for-Testing
-	// ships only 64-bit; we still need the right struct widths.
-	is64 := data[4] == 2
-	isLE := data[5] == 1 // EI_DATA
-	var bo binary.ByteOrder
-	if isLE {
+	// Identify 32-bit vs 64-bit from EI_CLASS at offset 4, and
+	// endianness from EI_DATA at offset 5. Chrome-for-Testing ships
+	// only 64-bit; we still need the right struct widths.
+	var (
+		is64     bool
+		bo       binary.ByteOrder
+		ehdrSz   int
+		phdrSz   uint64
+		dynEntry uint64
+	)
+	var class [1]byte
+	if _, err := f.Seek(4, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek to EI_CLASS: %w", err)
+	}
+	if _, err := io.ReadFull(f, class[:]); err != nil {
+		return nil, fmt.Errorf("read EI_CLASS: %w", err)
+	}
+	is64 = class[0] == 2
+	if is64 {
+		ehdrSz = ehdrSize64
+		phdrSz = phdrSize64
+		dynEntry = dynEntrySize64
+	} else {
+		ehdrSz = ehdrSize32
+		phdrSz = phdrSize32
+		dynEntry = dynEntrySize32
+	}
+	var dataByte [1]byte
+	if _, err := f.Seek(5, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek to EI_DATA: %w", err)
+	}
+	if _, err := io.ReadFull(f, dataByte[:]); err != nil {
+		return nil, fmt.Errorf("read EI_DATA: %w", err)
+	}
+	if dataByte[0] == 1 {
 		bo = binary.LittleEndian
 	} else {
 		bo = binary.BigEndian
 	}
 
-	// ELF header layout: e_ident[16] + (u16 u16 u32 u64 u64 u32 u32 u16 u16 u16 u16 u16 u16) for 64-bit.
-	// Offset of e_phoff: 32 (32-bit) or 32 (64-bit, both start e_phoff at 32).
-	const ehdrSize = 52 // 64-bit ELF header size — we only ship 64-bit chrome.
-	if len(data) < ehdrSize {
-		return nil, fmt.Errorf("truncated ELF header")
+	// CORR-002 regression guard: a 32-bit ELF on a 32-bit host still
+	// needs its full 52-byte header read. A 64-bit host's chrome is
+	// always 64-bit; a deliberately-truncated 64-bit binary (53–57
+	// bytes) MUST be rejected cleanly, not panic.
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek to ELF header: %w", err)
 	}
-	e_phoff := bo.Uint64(data[32:40])
-	e_phentsize := bo.Uint16(data[54:56])
-	e_phnum := bo.Uint16(data[56:58])
-	if int(e_phoff)+int(e_phnum)*int(e_phentsize) > len(data) {
-		return nil, fmt.Errorf("program header table out of range")
+	ehdr := make([]byte, ehdrSz)
+	if _, err := io.ReadFull(f, ehdr); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("truncated ELF header: read %d bytes", len(ehdr))
+		}
+		return nil, fmt.Errorf("read ELF header: %w", err)
+	}
+
+	// 64-bit ELF header field offsets:
+	//   e_phoff   @ 32 (u64)
+	//   e_phentsz @ 54 (u16)
+	//   e_phnum   @ 56 (u16)
+	// 32-bit ELF header field offsets:
+	//   e_phoff   @ 28 (u32)
+	//   e_phentsz @ 42 (u16)
+	//   e_phnum   @ 44 (u16)
+	var ePhOff, ePhEntSize, ePhNum uint64
+	if is64 {
+		ePhOff = bo.Uint64(ehdr[32:40])
+		ePhEntSize = uint64(bo.Uint16(ehdr[54:56]))
+		ePhNum = uint64(bo.Uint16(ehdr[56:58]))
+	} else {
+		ePhOff = uint64(bo.Uint32(ehdr[28:32]))
+		ePhEntSize = uint64(bo.Uint16(ehdr[42:44]))
+		ePhNum = uint64(bo.Uint16(ehdr[44:46]))
+	}
+	if ePhEntSize != 0 && ePhEntSize != phdrSz {
+		// Some toolchains emit e_phentsize == 0 in stripped
+		// binaries; treat that as "use the canonical size" but
+		// reject anything else (mismatched sizes are a sign of a
+		// toolchain we don't understand).
+		return nil, fmt.Errorf("unexpected program-header entry size: %d", ePhEntSize)
+	}
+	if ePhNum == 0 {
+		return nil, nil // static binary, nothing to check
+	}
+	if ePhOff > maxELFOffset || ePhNum*phdrSz > maxELFOffset || ePhOff+ePhNum*phdrSz > maxELFOffset {
+		return nil, fmt.Errorf("program header table out of range (e_phoff=%d e_phnum=%d)", ePhOff, ePhNum)
 	}
 
 	// Walk program headers for PT_DYNAMIC.
 	var dynOff, dynSize uint64
-	for i := uint16(0); i < e_phnum; i++ {
-		off := e_phoff + uint64(i)*uint64(e_phentsize)
-		if off+uint64(e_phentsize) > uint64(len(data)) {
-			break
+	for i := uint64(0); i < ePhNum; i++ {
+		off := ePhOff + i*phdrSz
+		phdr, err := readChunked(f, off, phdrSz)
+		if err != nil {
+			// EOF mid-table: a structural error — surface it.
+			return nil, fmt.Errorf("read program header %d: %w", i, err)
 		}
-		p_type := bo.Uint32(data[off : off+4])
-		if p_type != 2 /* PT_DYNAMIC */ {
+		pType := bo.Uint32(phdr[0:4])
+		if pType != 2 /* PT_DYNAMIC */ {
 			continue
 		}
 		if is64 {
 			// 64-bit: p_offset=24, p_filesz=40 within the program header.
-			dynOff = bo.Uint64(data[off+24 : off+32])
-			dynSize = bo.Uint64(data[off+40 : off+48])
+			dynOff = bo.Uint64(phdr[24:32])
+			dynSize = bo.Uint64(phdr[40:48])
 		} else {
-			dynOff = uint64(bo.Uint32(data[off+4 : off+8]))
-			dynSize = uint64(bo.Uint32(data[off+16 : off+20]))
+			dynOff = uint64(bo.Uint32(phdr[4:8]))
+			dynSize = uint64(bo.Uint32(phdr[16:20]))
 		}
 		break
 	}
 	if dynSize == 0 {
 		return nil, nil // static binary, nothing to check
 	}
-	if dynOff+dynSize > uint64(len(data)) {
-		return nil, fmt.Errorf("PT_DYNAMIC segment out of range")
+	if dynOff > maxELFOffset || dynSize > maxELFOffset || dynOff+dynSize > maxELFOffset {
+		return nil, fmt.Errorf("PT_DYNAMIC segment out of range (off=%d size=%d)", dynOff, dynSize)
 	}
 
-	// Inside PT_DYNAMIC — we need DT_NEEDED (1) and DT_STRTAB (5) + DT_STRSZ (10).
-	// 64-bit Elf64_Dyn: d_tag(8) + d_val(8) = 16 bytes each.
-	dynEntry := uint64(16)
-	if !is64 {
-		dynEntry = 8
-	}
+	// Inside PT_DYNAMIC — we need DT_NEEDED (1) and DT_STRTAB (5) +
+	// DT_STRSZ (10). Walk the entries via chunked reads (no full
+	// slurp).
 	dynCount := dynSize / dynEntry
 	var strtabOff, strtabSize uint64
 	var needed []uint64
 	for i := uint64(0); i < dynCount; i++ {
 		base := dynOff + i*dynEntry
-		tag := bo.Uint64(data[base : base+8])
-		val := bo.Uint64(data[base+8 : base+16])
+		entry, err := readChunked(f, base, dynEntry)
+		if err != nil {
+			return nil, fmt.Errorf("read DT_DYNAMIC entry %d: %w", i, err)
+		}
+		var tag, val uint64
+		if is64 {
+			tag = bo.Uint64(entry[0:8])
+			val = bo.Uint64(entry[8:16])
+		} else {
+			tag = uint64(bo.Uint32(entry[0:4]))
+			val = uint64(bo.Uint32(entry[4:8]))
+		}
 		switch tag {
 		case 1: // DT_NEEDED
 			needed = append(needed, val)
@@ -144,29 +270,65 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 			strtabSize = val
 		}
 	}
-	if strtabOff == 0 || strtabSize == 0 || strtabOff+strtabSize > uint64(len(data)) {
+	if strtabOff == 0 || strtabSize == 0 ||
+		strtabOff > maxELFOffset || strtabSize > maxELFOffset ||
+		strtabOff+strtabSize > maxELFOffset {
 		return nil, nil
 	}
 
-	// Resolve each DT_NEEDED offset to its soname and probe the search paths.
+	// Resolve each DT_NEEDED offset to its soname and probe the search
+	// paths. The string-table is typically a few KB; reading it whole
+	// (capped at strtabSize) is safe — much smaller than the binary.
+	if strtabSize > 16*1024*1024 {
+		// 16 MiB string table is implausibly large for any sane
+		// binary — refuse rather than slurp.
+		return nil, fmt.Errorf("DT_STRTAB unreasonably large: %d bytes", strtabSize)
+	}
+	strtab, err := readChunked(f, strtabOff, strtabSize)
+	if err != nil {
+		return nil, fmt.Errorf("read DT_STRTAB: %w", err)
+	}
+
 	var missing []string
 	for _, n := range needed {
-		// Walk from strtabOff+n forward to NUL.
-		end := strtabOff + n
-		if end >= strtabOff+strtabSize {
+		end := n
+		if end >= strtabSize {
 			continue
 		}
-		limit := strtabOff + strtabSize
+		// Walk forward to NUL.
 		z := end
-		for z < limit && data[z] != 0 {
+		for z < strtabSize && strtab[z] != 0 {
 			z++
 		}
-		soname := string(data[end:z])
+		soname := string(strtab[end:z])
 		if !sonameExists(soname) {
 			missing = append(missing, soname)
 		}
 	}
 	return missing, nil
+}
+
+// readChunked reads exactly n bytes from f starting at offset, via a
+// bounded Seek + ReadFull. The bounded size means the OS page cache is
+// the only allocation the binary's contents hit — never the Go heap —
+// which is the whole point of the streaming refactor (PERF-002): the
+// pre-refactor os.ReadFile materialized the entire binary into the Go
+// heap, OOM-killing the gateway in 256–512 MB cgroups.
+func readChunked(f *os.File, offset, n uint64) ([]byte, error) {
+	if n == 0 {
+		return nil, nil
+	}
+	if _, err := f.Seek(int64(offset), io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek to %d: %w", offset, err)
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(f, buf); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, fmt.Errorf("truncated read at offset %d: wanted %d bytes", offset, n)
+		}
+		return nil, err
+	}
+	return buf, nil
 }
 
 // sonameExists returns true if soname resolves under any of the canonical

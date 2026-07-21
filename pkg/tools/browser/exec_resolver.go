@@ -50,137 +50,6 @@ func InstallRootForProfileDir(profileDir string) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(filepath.Clean(profileDir)), "..", "chromium"))
 }
 
-// packageChromeRootForTest is a test-only seam for packageChromeRoot.
-// When non-empty, packageChromeRoot returns its value verbatim; when empty
-// (the production default), packageChromeRoot falls back to its
-// os.Executable()-derived computation. Used by
-// exec_resolver_phase1_test.go's withPackageChromeRoot helper to pin the
-// package root to a temp directory without symlinking the test binary into
-// a realistic layout.
-var packageChromeRootForTest string
-
-// packageChromeRoot returns the directory the package-build pipeline is
-// contracted (ADR-052 D2) to drop the pinned full Chrome-for-Testing build
-// into — a SIBLING of the running binary, NOT a per-profile installRoot and
-// NOT something computed at build time via ldflags. Computed at runtime from
-// os.Executable() so the SAME binary works on every package layout (the
-// build-variance memory omnipus-build-variance-48mb.md warns against any
-// per-package variant of the binary itself).
-//
-// Layout decision (ADR-052 M5):
-//
-//   - Linux/macOS: <filepath>("..", "chromium") under os.Executable()'s dir.
-//     The goreleaser archive layout puts the binary at <archive>/omnipus and
-//     the chrome payload at <archive>/chromium/ — so this resolves to that
-//     chromium/ directory when the package is unpacked.
-//   - Windows: same shape ("..", "chromium") for Phase 1. Phase 4 (Windows
-//     Service / .msi packaging, ADR-052) may need to revisit — the .msi
-//     conventional layout nests under Program Files\Omnipus\, where
-//     filepath.Dir() lands one level above the binary's parent — but Phase
-//     1 is Linux-only and Phase 4 will land its own allocator work and
-//     archive re-layout. Keeping the shape identical across all three OSes
-//     in Phase 1 means there is ONE rule to document, not three.
-//
-// Returns the empty string on any os.Executable() error (defensive — never
-// panics; callers must treat "" as "no package Chrome available"). The result
-// is deterministic and idempotent: same process state → same path.
-func packageChromeRoot() string {
-	if packageChromeRootForTest != "" {
-		return packageChromeRootForTest
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(filepath.Dir(exe), "..", "chromium")
-}
-
-// findPackageChrome inspects root (typically from packageChromeRoot()) for a
-// pinned full Chrome-for-Testing binary and its companion chrome.sha256
-// integrity manifest. Returns the binary's absolute path and the manifest's
-// absolute path; either is the empty string when absent.
-//
-// SEC-ADR052-005/006 hardening:
-//   - root is Lstat-checked before anything inside it is touched (refuses a
-//     symlinked root, refuses a world-writable root per the install-root-
-//     ownership check below).
-//   - the binary is Lstat-checked (refuses a leaf symlink, refuses a non-
-//     executable POSIX file).
-//   - chrome.sha256 must EXIST and be readable (SEC-ADR052-001 fail-closed).
-//     Unlike findInstalledBuild's permissive-missing behavior on the
-//     managed install root (which has historical pre-Phase-1 installs
-//     without a manifest), the package Chrome is a Phase-1-only construct —
-//     the only legitimate reason for a missing manifest at the package root
-//     is a pipeline failure or tampering, both of which are release blockers
-//     (per the security review: "the only legitimate causes of a missing
-//     manifest are pipeline failures (already a release blocker) and
-//     operator tampering (already a hard-stop)").
-//
-// Returns "" for both halves on any refusal (including missing manifest) so
-// the caller falls through to the managed download path.
-func findPackageChrome(root string) (binaryPath, shaPath string) {
-	if root == "" {
-		return "", ""
-	}
-	rootInfo, err := os.Lstat(root)
-	if err != nil {
-		return "", ""
-	}
-	if rootInfo.Mode()&os.ModeSymlink != 0 {
-		// A symlinked package root is suspicious — refuse. Use Lstat (not
-		// Stat) so we see the leaf, not the target.
-		return "", ""
-	}
-	if !rootInfo.IsDir() {
-		return "", ""
-	}
-	// SEC-ADR052-005/006: refuse a world-writable install root. On a
-	// multi-tenant host a 0777 install root lets any local user substitute
-	// chrome / chrome.sha256 between resolve and launch; the package
-	// integrity guarantee collapses. The root-owned-by-a-package-manager
-	// invariant ADR-052 D4 names (systemd StateDirectory, /usr/bin/...) is
-	// what we're defending here.
-	if rootInfo.Mode()&0o002 != 0 {
-		return "", ""
-	}
-	// Use fullChromeBinaryRelPath() — the same per-OS naming
-	// EnsureChromiumBuild / findInstalledBuild use — so the package Chrome
-	// sits at exactly the on-disk layout ClassifyVideoCapability's
-	// findInstalledBuild already inspects (Linux: chromium/chrome; macOS:
-	// chromium/Google Chrome for Testing.app/...; Windows: chromium/chrome.exe).
-	// Phase 1 only validates the Linux layout.
-	bin := filepath.Join(root, fullChromeBinaryRelPath())
-	info, statErr := os.Lstat(bin)
-	if statErr != nil {
-		return "", ""
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return "", ""
-	}
-	if info.IsDir() {
-		return "", ""
-	}
-	// POSIX exec-bit check mirrors the resolve() ExecPath guard; Windows
-	// FileMode carries no Unix exec bits, so this guard is skipped there.
-	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
-		return "", ""
-	}
-	sha := filepath.Join(root, "chrome.sha256")
-	// SEC-ADR052-005: refuse a symlinked chrome.sha256 at the leaf (an
-	// attacker who can write the package root can symlink the manifest to
-	// a known-good digest elsewhere on disk, defeating the integrity check).
-	if shaInfo, shaErr := os.Lstat(sha); shaErr != nil {
-		// Fail-closed: chrome.sha256 must exist at the package root. Per
-		// SEC-ADR052-001, returning "" here is the explicit refusal signal —
-		// the caller treats it as "no package Chrome available" and falls
-		// through to the managed download path.
-		return "", ""
-	} else if shaInfo.Mode()&os.ModeSymlink != 0 {
-		return "", ""
-	}
-	return bin, sha
-}
-
 // managedChromeCmdline is the rendered command line + environment for a
 // managed Chrome launch over the CDP pipe transport (cdppipe). It REPLACES
 // the pre-pipe []chromedp.ExecAllocatorOption return: cdppipe drives Chrome
@@ -536,7 +405,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 				// for the package Chrome path (findPackageChrome refused
 				// the binary when the manifest is missing). Verify with
 				// the hardened parser + constant-time compare.
-				if verr := verifyChromeSHA256(pkgBin, pkgSHA); verr != nil {
+				if verr := cachedVerifyChromeSHA256(pkgBin, pkgSHA); verr != nil {
 					logger.WarnCF("browser",
 						"package Chrome failed integrity verification — falling through to managed download",
 						map[string]any{
