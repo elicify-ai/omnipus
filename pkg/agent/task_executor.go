@@ -434,6 +434,30 @@ func (te *TaskExecutor) finishTaskRun(
 		return te.adjudicateClaim(ctx, current, taskSessionID, claimText)
 	}
 
+	// ADR-052 FR-035 (evidence-marker gate, R3-13): scan resp for the gate
+	// BEFORE parseTaskCompletionSignal — checkEvidenceMarkerGate's own doc
+	// comment names this exact call order. A completion claim (marker line
+	// found, success OR failure — the gate does not distinguish) with no
+	// genuine [goal:evidence] line immediately preceding it is REJECTED
+	// pre-judge: the worker is re-prompted with the gate's steering text and
+	// NO verifier is ever dispatched for this run. Scratchpad tasks are
+	// exempt (FR-048 — they trust ANY found marker directly, success or
+	// failure, and never reach the judge/verifier either way, so the gate
+	// would have nothing to protect). Deliberately does NOT consume an
+	// attempt via rejectBareEvidenceClaim — forgetting the evidence marker
+	// is a mechanical formatting miss, not a genuine work-verification
+	// failure (contrast the "no signal at all" and judge-"unmet" paths
+	// below, both of which DO consume an attempt via
+	// consumeAttemptOrExhaust) — while still actively re-prompting (unlike
+	// the D7 judge-Unavailable case, which pauses silently with no
+	// redispatch): the fix here is mechanical and the worker is expected to
+	// self-correct on the very next attempt.
+	if !current.Scratchpad {
+		if gate := checkEvidenceMarkerGate(resp); gate.Applicable && !gate.Honored {
+			return te.rejectBareEvidenceClaim(current, taskSessionID, gate.SteeringText)
+		}
+	}
+
 	// Agent did not call task_update — no explicit signal, or an explicit
 	// non-terminal write. Parse the agent's final output for the standardized
 	// TASK_STATUS completion marker instead (ADR-043), uniform across native
@@ -672,6 +696,59 @@ func (te *TaskExecutor) writeSteeringPrompt(
 		logger.WarnCF("task_executor", "goal-loop: steering transcript write failed",
 			map[string]any{"task_id": t.ID, "error": appendErr.Error()})
 	}
+}
+
+// rejectBareEvidenceClaim (ADR-052 FR-035, R3-13) re-dispatches t with the
+// evidence-marker gate's steering text WITHOUT incrementing AttemptCount.
+// Unlike consumeAttemptOrExhaust's "no signal"/"judge unmet" paths, a
+// missing/empty [goal:evidence] line immediately before the completion
+// marker is a mechanical formatting miss, not a genuine work-verification
+// failure — it must not cost the worker a real attempt (this is the "does
+// not consume" side of the same D7 distinction JudgeCriteriaResult.
+// Unavailable relies on, kept deliberately separate from — and never
+// routed through — consumeAttemptOrExhaust, which is the sole writer of
+// AttemptCount). Unlike D7's silent pause (no redispatch at all while the
+// judge itself is down), this DOES actively redispatch: the fix is
+// mechanical and the worker is expected to self-correct on the very next
+// turn. Does not reuse writeSteeringPrompt's transcript-entry ID scheme
+// (`<task>-steering-<AttemptCount+1>`) — since AttemptCount is
+// deliberately left unchanged here, that scheme could collide with a
+// genuine attempt's steering entry recorded at the same AttemptCount+1
+// value; a nanosecond-timestamped ID keeps this entry collision-free
+// without needing a new persisted counter field.
+func (te *TaskExecutor) rejectBareEvidenceClaim(
+	t *task.Task, taskSessionID, steeringText string,
+) (redispatchTaskID string) {
+	nextStatus := task.StatusNext
+	updated, uerr := te.store.Update(t.ID, task.Patch{Status: &nextStatus})
+	if uerr != nil {
+		logger.ErrorCF("task_executor",
+			"evidence-marker gate: could not persist re-dispatch status; failing the run closed",
+			map[string]any{"task_id": t.ID, "error": uerr.Error()})
+		te.failTask(t.ID, fmt.Sprintf("evidence-marker gate: could not persist re-dispatch status: %v", uerr))
+		return ""
+	}
+
+	if _, uerr := te.store.Update(updated.ID, task.Patch{Result: &steeringText}); uerr != nil {
+		logger.WarnCF("task_executor",
+			"evidence-marker gate: could not persist steering for re-dispatch",
+			map[string]any{"task_id": updated.ID, "error": uerr.Error()})
+	}
+	if taskSessionID != "" {
+		if sessStore := te.agentLoop.GetAgentStore(updated.AgentID); sessStore != nil {
+			if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+				ID:        fmt.Sprintf("%s-evidence-gate-%d", updated.ID, time.Now().UnixNano()),
+				Role:      "system",
+				Content:   steeringText,
+				Timestamp: time.Now().UTC(),
+			}); appendErr != nil {
+				logger.WarnCF("task_executor",
+					"evidence-marker gate: steering transcript write failed",
+					map[string]any{"task_id": updated.ID, "error": appendErr.Error()})
+			}
+		}
+	}
+	return updated.ID
 }
 
 // buildSteeringText renders the feedback fed forward into the next attempt.
