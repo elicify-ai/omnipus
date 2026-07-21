@@ -18,13 +18,14 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 			t.Fatalf("expected nil for all-zero Planning config, got %v", err)
 		}
 		want := PlanningConfig{
-			TaskMaxAttempts:     DefaultTaskMaxAttempts,
-			GoalMaxRounds:       DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:  DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:         DefaultLoopMaxRuns,
-			IdleExpiryDays:      DefaultIdleExpiryDays,
-			GlobalActiveLoopCap: DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds: DefaultCheckTimeoutSeconds,
+			TaskMaxAttempts:      DefaultTaskMaxAttempts,
+			GoalMaxRounds:        DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:          DefaultLoopMaxRuns,
+			IdleExpiryDays:       DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens: DefaultVerifierWindowTokens,
 		}
 		if cfg.Planning != want {
 			t.Fatalf("defaults not applied: got %+v, want %+v", cfg.Planning, want)
@@ -47,13 +48,14 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 			t.Run(c.name, func(t *testing.T) {
 				cfg := minimalValidConfig()
 				cfg.Planning = PlanningConfig{
-					TaskMaxAttempts:     DefaultTaskMaxAttempts,
-					GoalMaxRounds:       DefaultGoalMaxRounds,
-					PlanJudgeMaxRounds:  DefaultPlanJudgeMaxRounds,
-					LoopMaxRuns:         DefaultLoopMaxRuns,
-					IdleExpiryDays:      DefaultIdleExpiryDays,
-					GlobalActiveLoopCap: DefaultGlobalActiveLoopCap,
-					CheckTimeoutSeconds: DefaultCheckTimeoutSeconds,
+					TaskMaxAttempts:      DefaultTaskMaxAttempts,
+					GoalMaxRounds:        DefaultGoalMaxRounds,
+					PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
+					LoopMaxRuns:          DefaultLoopMaxRuns,
+					IdleExpiryDays:       DefaultIdleExpiryDays,
+					GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
+					CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
+					VerifierWindowTokens: DefaultVerifierWindowTokens,
 				}
 				c.mutate(&cfg.Planning)
 				if err := validateBootConfig(cfg); err == nil {
@@ -90,19 +92,50 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 		}
 	})
 
+	// ADR-052 FR-032 — VerifierWindowTokens follows the same zero-value
+	// backfill / >=1 validation pattern as the other Planning fields.
+	t.Run("VerifierWindowTokens zero applies default", func(t *testing.T) {
+		cfg := minimalValidConfig()
+		cfg.Planning.VerifierWindowTokens = 0
+		if err := validateBootConfig(cfg); err != nil {
+			t.Fatalf("expected nil for VerifierWindowTokens=0, got %v", err)
+		}
+		if cfg.Planning.VerifierWindowTokens != DefaultVerifierWindowTokens {
+			t.Fatalf("expected default %d, got %d", DefaultVerifierWindowTokens, cfg.Planning.VerifierWindowTokens)
+		}
+	})
+
+	t.Run("VerifierWindowTokens negative rejected", func(t *testing.T) {
+		cfg := minimalValidConfig()
+		cfg.Planning = PlanningConfig{
+			TaskMaxAttempts:      DefaultTaskMaxAttempts,
+			GoalMaxRounds:        DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:          DefaultLoopMaxRuns,
+			IdleExpiryDays:       DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens: -1,
+		}
+		if err := validateBootConfig(cfg); err == nil {
+			t.Fatal("expected error for negative VerifierWindowTokens")
+		}
+	})
+
 	t.Run("DefaultConfig is already boot-valid", func(t *testing.T) {
 		cfg := DefaultConfig()
 		if err := validateBootConfig(cfg); err != nil {
 			t.Fatalf("DefaultConfig() must pass validateBootConfig, got %v", err)
 		}
 		want := PlanningConfig{
-			TaskMaxAttempts:     DefaultTaskMaxAttempts,
-			GoalMaxRounds:       DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:  DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:         DefaultLoopMaxRuns,
-			IdleExpiryDays:      DefaultIdleExpiryDays,
-			GlobalActiveLoopCap: DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds: DefaultCheckTimeoutSeconds,
+			TaskMaxAttempts:      DefaultTaskMaxAttempts,
+			GoalMaxRounds:        DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:          DefaultLoopMaxRuns,
+			IdleExpiryDays:       DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens: DefaultVerifierWindowTokens,
 		}
 		if cfg.Planning != want {
 			t.Fatalf("DefaultConfig().Planning = %+v, want %+v", cfg.Planning, want)
@@ -174,6 +207,16 @@ func TestBounds_PerEntityOverridesGlobal(t *testing.T) {
 		}
 		if got := zero.EffectiveIdleExpiryDays(nil); got != DefaultIdleExpiryDays {
 			t.Fatalf("EffectiveIdleExpiryDays on zero config = %d, want default %d", got, DefaultIdleExpiryDays)
+		}
+		if got := zero.EffectiveVerifierWindowTokens(); got != DefaultVerifierWindowTokens {
+			t.Fatalf("EffectiveVerifierWindowTokens on zero config = %d, want default %d", got, DefaultVerifierWindowTokens)
+		}
+	})
+
+	t.Run("VerifierWindowTokens set value wins over default", func(t *testing.T) {
+		g := PlanningConfig{VerifierWindowTokens: 5000}
+		if got := g.EffectiveVerifierWindowTokens(); got != 5000 {
+			t.Fatalf("EffectiveVerifierWindowTokens() = %d, want 5000", got)
 		}
 	})
 }

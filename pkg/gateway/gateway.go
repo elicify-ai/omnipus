@@ -702,6 +702,21 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, t := range systools.AllTools(nil, nil) {
 			out[t.Name()] = struct{}{}
 		}
+		// ADR-052 (autonomous agent plan execution, FR-027) — the four
+		// planning/verifier tool names (create_plan, execute_plan, run_task,
+		// inspect_session) are unioned in explicitly here, independent of
+		// their pkg/tools|pkg/sysagent/tools implementation landing, so the
+		// tool-policy coverage universe (config.ValidateToolPolicyCoverage /
+		// RepairIncompleteToolPolicyCoverage) recognizes them from the
+		// config-seeding side immediately. Mirrors
+		// pkg/coreagent/core.go's allStaticToolNames literal-for-literal
+		// (TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// enforces the two stay in sync). Once the real tool implementations
+		// register themselves via GeneralBuiltinMetadata/AllTools, this union
+		// is idempotent (same names, no duplicate entries in a set).
+		for _, name := range []string{"create_plan", "execute_plan", "run_task", "inspect_session"} {
+			out[name] = struct{}{}
+		}
 		knownBuiltinToolNamesCache = out
 	})
 	return knownBuiltinToolNamesCache

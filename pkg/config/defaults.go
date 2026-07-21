@@ -363,6 +363,34 @@ func DefaultConfig() *Config {
 				"create_agent":             "allow",
 				"update_agent":             "allow",
 				"delete_agent":             "ask", // irreversible delete
+
+				// --- ADR-052 (autonomous agent plan execution) planning/
+				// verifier tools --- Ceiling is explicit "ask" for the three
+				// plan-execution tools per FR-005/FR-027/DS-6 (Test 2) — never
+				// absent, never deny; this is the seeded DATA value, matching
+				// the spec's literal seed matrix. Worker (sparse ceiling-
+				// inheriting map, pkg/coreagent/core.go) resolves "ask" via
+				// this entry. NOTE (flagged for the ADR-052 owner/architect,
+				// not resolved here — outside this file's ownership): the
+				// runtime global×agent merge is strictest-wins, deny > ask >
+				// allow, applied whenever BOTH sides have an entry
+				// (pkg/tools/compositor.go:resolveEffectivePolicyWith) — so a
+				// ceiling "ask" here, combined with Jim's own seeded "allow"
+				// (pkg/coreagent/core.go's IDJim case), merges to "ask" for
+				// Jim too, not "allow". Seeding still matches the spec's
+				// literal data requirement; whether Jim's actual runtime
+				// resolution needs a call-site exemption from the global
+				// ceiling for these three tools is a cross-cutting resolution
+				// question outside pkg/config's ownership.
+				// inspect_session is verifier-role-only, not ask-able: ceiling
+				// stays explicit "deny" (only the Judge's own seeded "allow"
+				// grants it — same strictest-wins caveat does not apply here
+				// since Judge's own entry is the only non-empty side for
+				// every other agent).
+				"create_plan":     "ask",
+				"execute_plan":    "ask",
+				"run_task":        "ask",
+				"inspect_session": "deny",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds
@@ -371,13 +399,14 @@ func DefaultConfig() *Config {
 		// config.json is self-documenting; validateBootConfig still applies
 		// the same defaults for any field an operator zeroes out later.
 		Planning: PlanningConfig{
-			TaskMaxAttempts:     DefaultTaskMaxAttempts,
-			GoalMaxRounds:       DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:  DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:         DefaultLoopMaxRuns,
-			IdleExpiryDays:      DefaultIdleExpiryDays,
-			GlobalActiveLoopCap: DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds: DefaultCheckTimeoutSeconds,
+			TaskMaxAttempts:      DefaultTaskMaxAttempts,
+			GoalMaxRounds:        DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:          DefaultLoopMaxRuns,
+			IdleExpiryDays:       DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens: DefaultVerifierWindowTokens,
 		},
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,
