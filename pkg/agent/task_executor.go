@@ -639,6 +639,11 @@ func (te *TaskExecutor) adjudicateClaim(
 		Criteria:        criteria,
 		Attempt:         t.AttemptCount + 1,
 		ClaimText:       claimSummary,
+		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the task's
+		// own workspace — every task is required-scoped to one (task.go:246)
+		// — so the Judge's verifier turn roots at the WORK-UNDER-REVIEW's
+		// workspace, not its own agent home. See JudgeCriteriaInput.WorkspaceID.
+		WorkspaceID: t.WorkspaceID,
 	})
 
 	if result.Unavailable {

@@ -192,7 +192,7 @@ func runExternalCLISubTurn(
 	//    AGENT.md (Project Instructions) and the shared memory room (.omnipus/)
 	//    structurally unreachable — os.Root-confined tools cannot open a path
 	//    outside their root, not merely guarded against.
-	workDir, wsErr := resolveTurnWorkDirOrRefuse(agent.ID, childTS.opts.WorkspaceID)
+	workDir, wsErr := resolveTurnWorkDirOrRefuse(ctx, agent.ID, agent.Home, childTS.opts.WorkspaceID)
 	if wsErr != nil {
 		return nil, fmt.Errorf("external-cli dispatch: %w", wsErr)
 	}

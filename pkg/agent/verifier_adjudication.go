@@ -614,6 +614,16 @@ func (al *AgentLoop) runVerifierAdjudication(
 		// (WithVerifierSessionScope's own "empty is unset" contract), which
 		// correctly fails inspect_session closed for every session id.
 		callCtx = tools.WithVerifierSessionScope(callCtx, al.resolveVerifierSessionScope(in))
+		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1, see
+		// workspace_reroot.go's System Agent exemption /
+		// resolveSystemAgentTurnWorkDir): thread the work-under-review's own
+		// workspace onto the verifier's turn ctx so resolveTurnWorkDirOrRefuse
+		// roots the Judge's turn there instead of refusing outright (the
+		// Judge can never satisfy the literal core_team membership scan) or,
+		// absent this, silently falling back to the Judge's own agent home
+		// where its read-only escalation tools (FR-012(c)) could never reach
+		// the artifacts they exist to inspect.
+		callCtx = WithSystemAgentWorkspaceOverride(callCtx, in.WorkspaceID)
 		content, callErr := al.processTaskDirect(callCtx, judgeInst.ID, prompt, sessionKey, chatID)
 		cancel()
 

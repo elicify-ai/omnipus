@@ -144,6 +144,30 @@ type JudgeCriteriaInput struct {
 	// in-flight goal verifier, and sources the transcript window the goal
 	// verifier is fed. Empty for task/plan scopes.
 	GoalSessionID string
+	// WorkspaceID is the WORK-UNDER-REVIEW's own workspace id — task.go's
+	// WorkspaceID for a task-scope adjudication, plan.go's WorkspaceID for a
+	// plan-scope one, or the chat turn's own channel-bound
+	// processOptions.WorkspaceID for a goal-scope one (may legitimately be
+	// empty there — an unbound chat has no workspace).
+	//
+	// This is a product-blocker fix (fresh-install smoke test, 2026-07):
+	// runVerifierAdjudication threads it onto the verifier's own turn ctx
+	// (WithSystemAgentWorkspaceOverride, workspace_reroot.go) so
+	// resolveTurnWorkDirOrRefuse's System Agent exemption branch can root the
+	// Judge's turn at the ACTUAL workspace under review instead of its own
+	// private agent home. Without this, the Judge's seeded read-only tools
+	// (FR-012(c): read_file/list_directory) would be structurally unable to
+	// ever reach the artifacts they exist to inspect (ADR-052 FR-032's
+	// rubric-gated escalation) — see workspace_reroot.go's
+	// resolveSystemAgentTurnWorkDir doc comment for the full ADR-046 x
+	// ADR-052 grounding. Best-effort: an empty or unresolvable value falls
+	// back to the Judge's own agent home, never a hard failure — this field
+	// enriches WHERE the turn is rooted, it is not a correctness requirement
+	// for adjudication to proceed (mirrors ClaimText/ExtraContext's own
+	// best-effort framing above). Deliberately NOT part of validate()'s
+	// scope-correlation exclusivity rule below — it is orthogonal enrichment,
+	// not a scope-correlating id.
+	WorkspaceID string
 }
 
 // validate enforces JudgeCriteriaInput's scope invariant (7-reviewer gate

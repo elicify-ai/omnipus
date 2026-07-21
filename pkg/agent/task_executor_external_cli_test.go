@@ -119,7 +119,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_DispatchesViaExternalCLI(t *testing
 	// workspace's id here. SOUL.md above is still read from agent.Home
 	// (workspace) — persona resolution is a separate, unaffected mechanism
 	// from working-directory resolution.
-	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse("ext-agent", "")
+	wantWorkDir, wsErr := resolveTurnWorkDirOrRefuse(context.Background(), "ext-agent", workspace, "")
 	if wsErr != nil {
 		t.Fatalf("resolveTurnWorkDirOrRefuse: %v", wsErr)
 	}

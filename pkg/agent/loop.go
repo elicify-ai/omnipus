@@ -6379,7 +6379,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// and external-cli dispatch paths again (a prior review found
 	// runExternalCLISubTurn had its own, weaker copy that fell through to the
 	// agent's private home directory instead of refusing).
-	wsDir, wsErr := resolveTurnWorkDirOrRefuse(ts.agent.ID, ts.opts.WorkspaceID)
+	wsDir, wsErr := resolveTurnWorkDirOrRefuse(turnCtx, ts.agent.ID, ts.agent.Home, ts.opts.WorkspaceID)
 	if wsErr != nil {
 		return turnResult{}, wsErr
 	}
