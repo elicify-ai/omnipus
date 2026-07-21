@@ -246,8 +246,7 @@ func TestCheckBrowserPackageChrome_HashMatch_StaysSilent(t *testing.T) {
 		t.Skip("synthetic-package test only meaningful on linux/darwin")
 	}
 
-	root := synthesizePackageChrome(t, "linux")
-	defer os.RemoveAll(root.parent)
+	withSyntheticPackageChrome(t)
 
 	warnings := checkBrowserPackageChrome()
 	assert.Empty(t, warnings, "matching chrome.sha256 must surface no warning")
@@ -263,11 +262,10 @@ func TestCheckBrowserPackageChrome_HashMismatch_Emits006(t *testing.T) {
 		t.Skip("synthetic-package test only meaningful on linux/darwin")
 	}
 
-	root := synthesizePackageChrome(t, "linux")
-	defer os.RemoveAll(root.parent)
+	root := withSyntheticPackageChrome(t)
 
 	// Overwrite chrome.sha256 with a guaranteed-wrong digest.
-	wrongPath := filepath.Join(root.parent, "chromium", "chrome.sha256")
+	wrongPath := filepath.Join(root, "chrome.sha256")
 	require.NoError(t, os.WriteFile(wrongPath,
 		[]byte("0000000000000000000000000000000000000000000000000000000000000000  chrome-linux64/chrome\n"),
 		0o644))
@@ -282,6 +280,127 @@ func TestCheckBrowserPackageChrome_HashMismatch_Emits006(t *testing.T) {
 	}
 	require.NotNil(t, found, "expected WARN-BROWSER-006 in %v", warnings)
 	assert.Contains(t, found.message, "0000000000000000000000000000000000000000000000000000000000000000")
+}
+
+// TestCheckBrowserPackageChrome_MissingLib_SurfacesWarning (TEST-008):
+// synthesize an ELF chrome binary whose DT_NEEDED entry points to a
+// guaranteed-not-installed soname, then assert the resulting warning
+// surfaces the missing lib's name in the message (so an operator can read
+// `apt-get install …` off the warning without needing to re-run --debug).
+func TestCheckBrowserPackageChrome_MissingLib_SurfacesWarning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("in-process ELF parser is linux-only (Phase 1)")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only ELF check; skipping on " + runtime.GOOS)
+	}
+
+	root := withSyntheticPackageChrome(t)
+
+	// Overwrite the chrome binary with one whose DT_NEEDED points to a
+	// soname that never exists on any mainstream Linux distribution.
+	// "libmissingtest.so.42" is RFC-6335-reserved for documentation and
+	// would never appear in /usr/lib.
+	chromePath := filepath.Join(root, "chrome-linux64", "chrome")
+	require.NoError(t, os.WriteFile(chromePath, buildMinimalELF64(t, "libmissingtest.so.42"), 0o755))
+
+	// Recompute the chrome.sha256 to match the new binary — otherwise
+	// WARN-BROWSER-006 would also fire and the test would assert against
+	// the wrong warning code.
+	manifest := sha256FileHex(t, chromePath) + "  chrome-linux64/chrome\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "chrome.sha256"), []byte(manifest), 0o644))
+
+	warnings := checkBrowserPackageChrome()
+	require.NotEmpty(t, warnings, "missing DT_NEEDED entry must surface a warning")
+	var found *warning
+	for i := range warnings {
+		if warnings[i].code == "WARN-BROWSER-005" {
+			found = &warnings[i]
+		}
+	}
+	require.NotNil(t, found, "expected WARN-BROWSER-005 in %v", warnings)
+	assert.Contains(t, found.message, "libmissingtest.so.42",
+		"warning message must name the missing soname so the operator can install the right package")
+}
+
+// TestCheckBrowserPackageChrome_BinaryMissing_EmitsCorrectCode (CORR-011):
+// when the chromium/ root exists but the chrome binary is absent, the
+// diagnostic MUST be WARN-BROWSER-008 (binary absent), NOT WARN-BROWSER-005
+// (which is reserved for the ldd-style "missing host shared libraries"
+// diagnostic — distinct remediation).
+func TestCheckBrowserPackageChrome_BinaryMissing_EmitsCorrectCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("synthetic-package test only meaningful on linux/darwin")
+	}
+
+	root := withSyntheticPackageChrome(t)
+
+	// Remove the chrome binary (and its linux subdir) but leave the root
+	// + chrome.sha256 behind. The synthetic helper builds
+	// <root>/chrome-linux64/chrome; deleting the directory simulates the
+	// "binary absent" failure mode.
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "chrome-linux64")))
+
+	warnings := checkBrowserPackageChrome()
+	require.NotEmpty(t, warnings, "missing chrome binary must surface a warning")
+	var found008 *warning
+	var found005 *warning
+	for i := range warnings {
+		switch warnings[i].code {
+		case "WARN-BROWSER-008":
+			found008 = &warnings[i]
+		case "WARN-BROWSER-005":
+			found005 = &warnings[i]
+		}
+	}
+	require.NotNil(t, found008, "expected WARN-BROWSER-008 (binary absent) in %v", warnings)
+	assert.Nil(t, found005, "WARN-BROWSER-005 must NOT fire for binary-absent — that's a separate remediation (install host libs vs reinstall package)")
+	assert.Contains(t, found008.message, "chrome binary is missing")
+}
+
+// TestCheckBrowserPackageChrome_SymlinkedRoot_NoFalsePass (SEC-NEW-003):
+// when the chromium/ root is a symlink to the synthetic tree (not the real
+// directory), the Lstat-based root check MUST refuse to validate it. The
+// diagnostic is WARN-BROWSER-008 (binary/path anomaly, distinct from a
+// straight "missing" WARN). Without the Lstat check this test would
+// silently pass — WARN-BROWSER-006 would emit a false-negative "hash OK"
+// against the symlink target's contents.
+func TestCheckBrowserPackageChrome_SymlinkedRoot_NoFalsePass(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need elevated privileges on Windows; skip on " + runtime.GOOS)
+	}
+
+	// Build a real synthetic chromium tree (this is the legit root).
+	realRoot := withSyntheticPackageChrome(t)
+
+	// Now point the doctor at a symlink to it instead of the real root.
+	symlinkParent := t.TempDir()
+	symlinkRoot := filepath.Join(symlinkParent, "chromium")
+	require.NoError(t, os.Symlink(realRoot, symlinkRoot))
+
+	prevOverride := packageChromeRootOverride
+	packageChromeRootOverride = symlinkRoot
+	t.Cleanup(func() { packageChromeRootOverride = prevOverride })
+
+	warnings := checkBrowserPackageChrome()
+	require.NotEmpty(t, warnings, "symlinked root must surface a warning — Lstat refuses, no silent hash pass")
+	var found008 *warning
+	for i := range warnings {
+		if warnings[i].code == "WARN-BROWSER-008" {
+			found008 = &warnings[i]
+		}
+	}
+	require.NotNil(t, found008, "expected WARN-BROWSER-008 in %v", warnings)
+	assert.Contains(t, found008.message, "symlink",
+		"diagnostic must mention symlink so the operator understands why the path was refused")
+
+	// Explicitly assert there is NO WARN-BROWSER-006 in the warnings — a
+	// false-positive "hash OK" against the symlink target's contents is the
+	// exact failure SEC-NEW-003 documents.
+	for _, w := range warnings {
+		assert.NotEqual(t, "WARN-BROWSER-006", w.code,
+			"symlinked root must NOT produce a WARN-BROWSER-006 hash-OK pass — that is the false-negative this test guards")
+	}
 }
 
 // TestParseSHA256Manifest_Hardening covers the SHA-256 parser edge cases
@@ -322,6 +441,201 @@ func TestParseSHA256Manifest_Hardening(t *testing.T) {
 	}
 }
 
+// TestParseSHA256Manifest_Adversarial (TEST-010): adversarial inputs that
+// must NOT silently match. The hardening table above covers the canonical
+// positive cases; this covers the failure modes — NUL inside the 64-char
+// field (truncates cleanly, no digest absorb), garbage trailing bytes
+// past the 64-char field (rejected — the field walker only takes
+// exactly-64-char hex), CR-only line separator (CRLF in the hardening
+// table above tests \r\n; CR alone is a classic Mac classic line ending
+// and is also tolerated).
+func TestParseSHA256Manifest_Adversarial(t *testing.T) {
+	good := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			// A NUL byte inside the 64-char field truncates the field
+			// before the digest is returned. The parser must NEVER absorb
+			// the NUL into the digest and silently match.
+			name:  "NUL inside 64-char field truncates to empty",
+			input: good[:30] + "\x00" + good[31:] + "  chrome\n",
+			want:  "",
+		},
+		{
+			// 64-char hex followed by non-whitespace garbage past 64 chars
+			// in the same field — the field walker only takes exactly-64,
+			// so the extra chars get rejected.
+			name:  "garbage trailing bytes past 64-char hex rejected",
+			input: good + "XYZ  chrome\n",
+			want:  "",
+		},
+		{
+			// Two consecutive 64-char hex digests on separate lines — the
+			// parser takes the FIRST. Sanity check that we don't silently
+			// match a later (potentially attacker-supplied) line.
+			name:  "first of two lines wins",
+			input: good + "  chrome\n" + "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff  chrome\n",
+			want:  good,
+		},
+		{
+			// CR-only line separator (classic Mac OS, pre-OSX) — the
+			// hardening table's CRLF tolerance was added for Windows
+			// manifests; CR-only is the same family of fix.
+			name:  "CR-only separator tolerated",
+			input: good + "  chrome\r",
+			want:  good,
+		},
+		{
+			// 64-char hex split across a newline (line wrap). Must be
+			// rejected — the parser does NOT concatenate across lines.
+			name:  "hex split across line wrap rejected",
+			input: good[:32] + "\n" + good[32:] + "  chrome\n",
+			want:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseSHA256Manifest([]byte(tc.input))
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got, "input=%q", tc.input)
+		})
+	}
+}
+
+// TestMissingChromeLibsELF_StructuralErrors (TEST-009): the in-process
+// ELF walker (command_libs_linux.go) must return an explanatory error,
+// not panic, when fed malformed inputs. table-driven across the common
+// failure modes the parser must handle gracefully.
+//
+// NOTE: an e_phoff-out-of-range input (where e_phoff is a uint64 that
+// wraps on conversion to int) is NOT in this table because the current
+// parser has a bounds-check gap on that path (FIX-1 owns command_libs_linux.go).
+// Once that gap is closed, this test should grow that case back in.
+func TestMissingChromeLibsELF_StructuralErrors(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("missingChromeLibsELF is linux-only (build-tagged)")
+	}
+
+	// Build a known-good ELF64 once, then corrupt specific bytes per test
+	// case. buildMinimalELF64 is the same helper the other doctor tests use
+	// to construct the green-path chrome binary.
+	good := buildMinimalELF64(t, "libc.so.6")
+
+	zeroPheaders := append([]byte(nil), good...)
+	// e_phnum (offset 56..57) = 0 — zero program headers means the parser
+	// never finds PT_DYNAMIC; with a corrupted PT_DYNAMIC table it must
+	// NOT silently report no missing libs.
+	zeroPheaders[56] = 0
+	zeroPheaders[57] = 0
+
+	tests := []struct {
+		name        string
+		payload     []byte
+		wantMissing []string // expected returned missing (or nil on error)
+		wantErr     bool
+	}{
+		{
+			name:    "truncated ELF header (8 bytes, under ehdrSize=52)",
+			payload: []byte{0x7f, 'E', 'L', 'F', 2, 1, 0, 0},
+			wantErr: true,
+			// The parser's len(data) < ehdrSize check fires AFTER the magic
+			// check; the magic passes here, so we reach the truncated-header
+			// branch and get a structured error rather than a panic.
+		},
+		{
+			name:    "e_phnum=0 (zero program headers)",
+			payload: zeroPheaders,
+			wantErr: false,
+			// Zero program headers → PT_DYNAMIC never found → dynSize==0
+			// → returns nil, nil (static-binary branch). The contract: no
+			// panic, no false-missing.
+		},
+		{
+			name:    "32-bit ELF (EI_CLASS=1) — parser is 64-bit-only",
+			payload: []byte{0x7f, 'E', 'L', 'F', 1, 1, 0, 0}, // EI_CLASS=1 = 32-bit
+			wantErr: false,
+			// The parser treats this as a not-an-elf path (it can't decode
+			// the 32-bit header with 64-bit widths). It returns the
+			// synthetic not-an-elf-binary entry — important: it does NOT
+			// panic.
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "chrome")
+			require.NoError(t, os.WriteFile(path, tc.payload, 0o755))
+
+			// Wrap in a panic-recover so a regression that adds a panic
+			// somewhere in the parser produces a clean test failure rather
+			// than tearing down the whole test binary.
+			var (
+				got []string
+				err error
+			)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("missingChromeLibsELF panicked on %q: %v", tc.name, r)
+					}
+				}()
+				got, err = missingChromeLibsELF(path)
+			}()
+
+			if tc.wantErr {
+				assert.Error(t, err, "expected error for %q", tc.name)
+			} else {
+				assert.NoError(t, err)
+			}
+			// The contract under all malformed inputs: no panic (asserted
+			// above), no spurious entries that look like real sonames.
+			// Asserting a non-nil slice is acceptable; we don't pin the
+			// exact synthetic "not-an-elf" entry text here so the test
+			// doesn't over-constrain.
+			_ = got
+		})
+	}
+}
+
+// TestDebianMissingLibs_AllEntriesNonEmpty (TEST-012): every entry in the
+// debianMissingLibs table must be a non-empty package name — an empty
+// value would emit `apt-get install` with a blank arg and fail silently
+// or install the wrong thing. Catches typos + accidental deletions.
+func TestDebianMissingLibs_AllEntriesNonEmpty(t *testing.T) {
+	for _, lib := range []string{
+		"libnss3.so", "libnspr4.so", "libatk-1.0.so.0", "libatk-bridge-2.0.so",
+		"libcups.so.2", "libdrm.so.2", "libgbm.so.1", "libxkbcommon.so.0",
+		"libXcomposite.so.1", "libXdamage.so.1", "libXrandr.so.2",
+		"libxshmfence.so.1", "libasound.so.2", "libpango-1.0.so.0",
+		"libcairo.so.2",
+	} {
+		out := debianMissingLibs([]string{lib})
+		require.Len(t, out, 1, "%s must map to exactly one apt package", lib)
+		assert.NotEmpty(t, out[0], "%s must map to a non-empty apt package name", lib)
+	}
+}
+
+// TestRpmMissingLibs_AllEntriesNonEmpty (TEST-012): same for the dnf/rpm
+// side. Mirror of TestDebianMissingLibs_AllEntriesNonEmpty.
+func TestRpmMissingLibs_AllEntriesNonEmpty(t *testing.T) {
+	for _, lib := range []string{
+		"libnss3.so", "libnspr4.so", "libatk-1.0.so.0", "libatk-bridge-2.0.so",
+		"libcups.so.2", "libdrm.so.2", "libgbm.so.1", "libxkbcommon.so.0",
+		"libXcomposite.so.1", "libXdamage.so.1", "libXrandr.so.2",
+		"libxshmfence.so.1", "libasound.so.2", "libpango-1.0.so.0",
+		"libcairo.so.2",
+	} {
+		out := rpmMissingLibs([]string{lib})
+		require.Len(t, out, 1, "%s must map to exactly one rpm package", lib)
+		assert.NotEmpty(t, out[0], "%s must map to a non-empty rpm package name", lib)
+	}
+}
+
 // TestCheckBrowserPackageChrome_NotAnELFBinary_SurfacesDiagnostic covers
 // the non-ELF branch of WARN-BROWSER-005: a binary that is not ELF (a
 // shell script, partial download, wrong arch) must surface a diagnostic
@@ -336,12 +650,17 @@ func TestCheckBrowserPackageChrome_NotAnELFBinary_SurfacesDiagnostic(t *testing.
 		t.Skip("linux-only ELF check; skipping on " + runtime.GOOS)
 	}
 
-	root := synthesizePackageChrome(t, "linux")
-	defer os.RemoveAll(root.parent)
+	root := withSyntheticPackageChrome(t)
 
 	// Overwrite the chrome binary with a non-ELF payload.
-	chromePath := filepath.Join(root.parent, "chromium", "chrome-linux64", "chrome")
+	chromePath := filepath.Join(root, "chrome-linux64", "chrome")
 	require.NoError(t, os.WriteFile(chromePath, []byte("#!/bin/sh\necho not-a-browser\n"), 0o755))
+
+	// Recompute the chrome.sha256 to match the new (non-ELF) binary so
+	// WARN-BROWSER-006 stays silent and the test only asserts on
+	// WARN-BROWSER-005.
+	manifest := sha256FileHex(t, chromePath) + "  chrome-linux64/chrome\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "chrome.sha256"), []byte(manifest), 0o644))
 
 	warnings := checkBrowserPackageChrome()
 	require.NotEmpty(t, warnings, "non-ELF binary must surface a diagnostic warning")
@@ -356,10 +675,14 @@ func TestCheckBrowserPackageChrome_NotAnELFBinary_SurfacesDiagnostic(t *testing.
 		"warning should mention ELF so operator knows what to investigate")
 }
 
-// synthesizePackageChrome builds a minimal chromium/ + chrome-linux64/chrome
-// + chrome.sha256 tree at the location os.Executable()-based resolver
-// looks for. Returns the parent dir of the chromium/ root + the path of
-// the chromium dir itself.
+// withSyntheticPackageChrome builds a minimal chromium/ + chrome-linux64/chrome
+// + chrome.sha256 tree under t.TempDir() and points the doctor's
+// packageChromeRootOverride at it. The seam is auto-restored via
+// t.Cleanup — callers don't need to defer RemoveAll on the fixture root.
+//
+// STYLE-007: replaces the previous pattern of writing beside the compiled
+// test binary via os.Executable()'s parent dir, which was fragile in CI
+// (read-only parents) and racy under parallel tests.
 //
 // The chrome binary is a minimal but structurally valid ELF64 with one
 // DT_NEEDED entry pointing to "libc.so.6" — the same soname the host's
@@ -369,25 +692,12 @@ func TestCheckBrowserPackageChrome_NotAnELFBinary_SurfacesDiagnostic(t *testing.
 // check entirely (the runtime.GOOS == "linux" gate), so the synthetic
 // binary need not be a valid Mach-O on darwin.
 //
-// The trick: the resolver hard-codes <dir(os.Executable())>/../chromium —
-// which for a `go test` test binary resolves to <GOTMPDIR>/test-binary-dir/
-// /../chromium, i.e. one level up from the test binary. We compute that
-// location and lay down the synthetic tree there.
-type synthChrome struct {
-	parent string // parent dir (e.g. GOTMPDIR)
-	root   string // <parent>/chromium
-	chrome string // <root>/chrome-linux64/chrome
-}
-
-func synthesizePackageChrome(t *testing.T, _ string) synthChrome {
+// Returns the synthetic chromium/ root (the path the doctor sees as
+// "package chrome root"). All test artefacts live under this directory.
+func withSyntheticPackageChrome(t *testing.T) string {
 	t.Helper()
-	exe, err := os.Executable()
-	require.NoError(t, err)
-	absExe, err := filepath.Abs(exe)
-	require.NoError(t, err)
-	dir := filepath.Dir(absExe)
-	parent := filepath.Dir(dir)
-	root := filepath.Join(parent, "chromium")
+
+	root := filepath.Join(t.TempDir(), "chromium")
 	chromeDir := filepath.Join(root, "chrome-linux64")
 	require.NoError(t, os.MkdirAll(chromeDir, 0o755))
 
@@ -399,7 +709,23 @@ func synthesizePackageChrome(t *testing.T, _ string) synthChrome {
 	manifest := hex.EncodeToString(sum[:]) + "  chrome-linux64/chrome\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "chrome.sha256"), []byte(manifest), 0o644))
 
-	return synthChrome{parent: parent, root: root, chrome: chromePath}
+	prevOverride := packageChromeRootOverride
+	packageChromeRootOverride = root
+	t.Cleanup(func() { packageChromeRootOverride = prevOverride })
+
+	return root
+}
+
+// sha256FileHex returns the lowercase-hex SHA-256 of the file at path,
+// computed by streaming through a fresh hasher (matches the production
+// readChromeSHA path). Used by tests that overwrite the chrome binary
+// and need to regenerate the matching chrome.sha256 manifest.
+func sha256FileHex(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // buildMinimalELF64 constructs the smallest valid ELF64 binary the

@@ -247,6 +247,16 @@ func checkDMPolicies(cfg *config.Config) []warning {
 	return warnings
 }
 
+// packageChromeRootOverride is a test seam (STYLE-007): when non-empty,
+// packageChromeRootForDoctor returns it verbatim instead of resolving via
+// os.Executable(). Tests set this to point at a t.TempDir()-synthesized
+// chromium/ tree and restore via t.Cleanup. Mirrors the resolver's
+// packageChromeRootForTest pattern (pkg/tools/browser/exec_resolver.go).
+//
+// Production code MUST leave this empty. There is no env-var or runtime
+// knob for it — doctor stays offline and read-only.
+var packageChromeRootOverride string
+
 // packageChromeRootForDoctor computes the on-disk location of the package
 // Chrome (ADR-052 §D2) the way pkg/tools/browser/exec_resolver.go computes
 // it at runtime: <dir(os.Executable())>/../chromium on linux/darwin, the
@@ -257,7 +267,13 @@ func checkDMPolicies(cfg *config.Config) []warning {
 // resolution order itself. If backend-lead-A exposes a public
 // PackageChromeRoot() helper in pkg/tools/browser this local helper can be
 // replaced with a thin re-export.
+//
+// When packageChromeRootOverride is set (test seam only), returns it
+// unconditionally with ok=true — the test owns the existence/invariants.
 func packageChromeRootForDoctor() (root string, ok bool) {
+	if packageChromeRootOverride != "" {
+		return packageChromeRootOverride, true
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", false
@@ -334,16 +350,47 @@ func checkBrowserPackageChrome() []warning {
 	if !ok {
 		return nil
 	}
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
+	// SECURITY (SEC-NEW-003): use Lstat, not Stat, so a symlinked root does
+	// not silently pass the directory check by resolving to the target. The
+	// runtime resolver (findPackageChrome in pkg/tools/browser/exec_resolver.go)
+	// uses Lstat for the same reason — refusing symlinks is the documented
+	// posture. Without Lstat here, a `chrome` symlink to an attacker-controlled
+	// /tmp/chrome would resolve to that directory's contents and the WARN-
+	// BROWSER-006 hash check (below) would silently pass against the symlink
+	// target's contents, giving a false-negative "hash OK" on a tampered
+	// payload. Lstat + the symlink bit check below make that impossible: a
+	// symlinked root produces a WARN-BROWSER-008 instead of a clean
+	// WARN-BROWSER-006.
+	//
+	// Order matters: Lstat's FileInfo for a symlink-to-directory has
+	// IsDir()==false (Go reports the link's mode, NOT the target's), so the
+	// symlink-bit check MUST come BEFORE the IsDir check. The inverse order
+	// would silently pass on a symlink.
+	info, err := os.Lstat(root)
+	if err != nil {
+		// No package chrome — bare-binary install. Silent on purpose.
+		return nil
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return []warning{{
+			code:    "WARN-BROWSER-008",
+			message: fmt.Sprintf("package chrome root is a symlink (%s) — refusing to verify against a symlinked path. Replace the symlink with the real chromium/ directory.", root),
+		}}
+	}
+	if !info.IsDir() {
 		// No package chrome — bare-binary install. Silent on purpose.
 		return nil
 	}
 
 	chromeBin := packageChromeBinaryPath(root)
 	if chromeBin == "" {
+		// Binary absent — reserved WARN code for "package chrome binary
+		// absent", separate from WARN-BROWSER-005 which is the ldd-style
+		// "missing host shared libraries" diagnostic. Same severity, distinct
+		// remediation: WARN-BROWSER-005 = install host libs; WARN-BROWSER-008
+		// = reinstall the omnipus package (the chrome payload itself is gone).
 		return []warning{{
-			code:    "WARN-BROWSER-005",
+			code:    "WARN-BROWSER-008",
 			message: fmt.Sprintf("package chrome root present (%s) but chrome binary is missing — reinstall the omnipus package or remove the chromium/ directory.", root),
 		}}
 	}
@@ -391,6 +438,24 @@ func checkBrowserPackageChrome() []warning {
 // chromeBin, and returns both as hex strings. A missing file or unreadable
 // binary returns ("", "", nil) — caller treats that as "not checkable,
 // silent". Errors reading the file return a non-nil error.
+//
+// PERF-003 note: this function reads chromeBin ONCE (the final os.Open +
+// io.Copy below). The sibling WARN-BROWSER-005 ELF walk in
+// missingChromeLibsELF (command_libs_linux.go) opens chromeBin a SECOND
+// time to slurp the DT_NEEDED table. On cold cache the doctor command pays
+// ~2× binary reads. That is acceptable: `omnipus doctor` is an offline,
+// on-demand CLI, not a hot path; co-ordinating a single shared read between
+// the ELF walker (linux-only, build-tagged) and the SHA hash (cross-OS) would
+// force the SHA path to drag in the ELF parser's signature. The savings
+// (one ~200 MB sequential read on a CfT chrome binary) are not worth the
+// coupling. The 2× cost is documented here so a future benchmark is not
+// mistaken for a regression.
+//
+// SECURITY (SEC-NEW-003): chromeBin is read via a plain os.Open; the symlink
+// posture is enforced by the caller's Lstat on `root` (the chromium/
+// directory). chromeBin is a derived child path under that root — Stat on
+// the chrome binary itself is unnecessary because the root's Lstat is
+// sufficient to reject a symlinked tree.
 //
 // Parser hardening (ADR-052 SEC-ADR052-004):
 //   - BOM at file start is stripped.

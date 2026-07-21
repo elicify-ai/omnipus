@@ -3063,13 +3063,25 @@ type BrowserToolConfig struct {
 	// (ADR-047 D7) and behave as if this were false regardless of its
 	// configured value (reason:"lite_build").
 	WebRTCEnabled bool `json:"webrtc_enabled" env:"OMNIPUS_TOOLS_BROWSER_WEBRTC_ENABLED"`
-	// PreferPackaged (ADR-052 D2) makes the runtime package-managed Chrome
-	// (sibling chromium/ dir next to the binary) outrank system Chrome on $PATH
-	// for reproducibility across fleets. Default false preserves operator
-	// autonomy: a deliberately newer/patched $PATH Chrome still wins. When
-	// true, the package Chrome — verified at package build via verifyGoogHashMD5
-	// and stamped with chrome.sha256 — wins over both $PATH and the runtime
-	// chrome-for-testing download path.
+	// PreferPackaged (ADR-052 D2/M1) makes the runtime package-managed Chrome
+	// (sibling chromium/ dir next to the binary) outrank system Chrome on
+	// $PATH for reproducibility across fleets.
+	//
+	// INTERACTION WITH TrustPathChrome: this preference only takes effect
+	// when TrustPathChrome is ALSO true. With TrustPathChrome=false (the
+	// SEC-ADR052-002 default), a $PATH Chrome is RECORDED by the resolver
+	// (so operators can see what's happening) but the launch is REFUSED
+	// and the gateway emits WARN-BROWSER-007 — the package Chrome becomes
+	// the only candidate regardless of PreferPackaged's value. Set BOTH
+	// fields together if you want a deliberately-newer $PATH Chrome to
+	// outrank the package Chrome.
+	//
+	// Default false preserves operator autonomy: a deliberately
+	// newer/patched $PATH Chrome still wins when TrustPathChrome is also
+	// true. When PreferPackaged is true (and TrustPathChrome is also true),
+	// the package Chrome — verified at package build via verifyGoogHashMD5
+	// and stamped with chrome.sha256 — wins over both $PATH and the
+	// runtime chrome-for-testing download path.
 	PreferPackaged bool `json:"prefer_packaged" env:"OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED"`
 	// TrustPathChrome (ADR-052 SEC-ADR052-002) gates whether the resolver
 	// HONORS a system Chrome on $PATH when it outranks the verified package
